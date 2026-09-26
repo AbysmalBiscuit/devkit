@@ -1,4 +1,4 @@
-//! Per-library store: one bare (ideally blobless) clone plus detached
+//! Per-library store: one bare (ideally treeless) clone plus detached
 //! worktrees per resolved version, all under
 //! `~/.local/share/devkit/docs/<name>/`.
 
@@ -259,8 +259,10 @@ impl LibCache {
         self.bare().is_dir()
     }
 
-    /// Bare clone, blobless when the transport supports it. Filter support is
-    /// best-effort: any failure retries as a plain bare clone.
+    /// Bare clone, treeless when the transport supports it: history arrives
+    /// as commits alone, and each checkout fetches only the trees and blobs
+    /// of its own commit. Filter support is best-effort: any failure retries
+    /// as a plain bare clone.
     pub fn ensure_clone(&self, repo: &str, meta: &mut Meta) -> Result<()> {
         if self.cloned() {
             let actual = match meta.origin.clone() {
@@ -285,7 +287,7 @@ impl LibCache {
         self.ensure_dir()?;
         let dest = self.bare_str();
         let filtered = Git::bare()
-            .args(["clone", "--bare", "--filter=blob:none", repo, dest.as_str()])
+            .args(["clone", "--bare", "--filter=tree:0", repo, dest.as_str()])
             .network()
             .success()
             .context("failed to spawn `git` for filtered bare clone")?;

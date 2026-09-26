@@ -79,6 +79,30 @@ fn clone_tags_and_ref_named_worktrees() {
 }
 
 #[test]
+fn a_clone_holds_no_trees_until_a_checkout_needs_them() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
+    let upstream = tmp.join("upstream");
+    fixture_repo(&upstream);
+    let repo = common::serve_partial(&upstream);
+    let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
+    let mut meta = Meta::default();
+
+    lib.ensure_clone(&repo, &mut meta).unwrap();
+
+    assert_eq!(
+        common::local_objects(&lib.bare(), "tree"),
+        Vec::<String>::new()
+    );
+    let (_, commit) = lib.resolve_ref("v1.0.0").unwrap();
+    let (wt, _) = lib.ensure_at("v1.0.0", &commit, &[]).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(wt.join("src/lib.rs")).unwrap(),
+        "// v1"
+    );
+}
+
+#[test]
 fn a_branch_checkout_follows_new_commits_after_fetch() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let tmp = tmp_dir.path();

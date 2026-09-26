@@ -35,6 +35,8 @@ Each checkout is measured when it is materialized or re-pointed, and the size is
 
 ## Disk use
 
+Each library keeps one treeless clone: it holds commits, and a checkout fetches only the trees and files of its own commit. History commands that walk trees, like `git log -- <path>` or `git blame`, fetch from the remote one commit at a time, so read the checked-out files instead. A clone made by an older docm still carries every tree. Delete the library's directory under `~/.local/share/devkit/docs/` and the next `docm` command re-clones it treeless.
+
 `exclude` in a global manifest entry (`docm add --exclude <pattern>`, repeatable) takes gitignore-style patterns for paths no checkout of that library holds. Their content is never downloaded. Changing the list re-applies it to existing checkouts on their next resolve. A project's `[[docs.libs]]` cannot set it, because every project shares the same checkouts.
 
 ## Reserved names
