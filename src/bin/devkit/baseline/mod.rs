@@ -475,7 +475,7 @@ fn create(primary: &Path, path: &Path, sha: &str, steps: &Steps) -> Result<()> {
     steps.during_result("Creating baseline worktree...", || {
         Git::at(primary)
             .args(["worktree", "add", "--detach", path_s, sha])
-            .timeout(devkit_common::git::SLOW_TIMEOUT)
+            .network()
             .output()
     })?;
     Ok(())

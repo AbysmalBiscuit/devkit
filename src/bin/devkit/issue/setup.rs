@@ -575,7 +575,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
                 worktree.to_str().unwrap(),
                 &baseline_target,
             ])
-            .timeout(devkit_common::git::SLOW_TIMEOUT)
+            .network()
             .output()
     })?;
 

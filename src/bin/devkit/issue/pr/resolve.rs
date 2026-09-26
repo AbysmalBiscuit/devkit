@@ -163,7 +163,7 @@ pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found> {
             .during_result("Pushing branch...", || {
                 Git::at(Path::new(args.start))
                     .args(["push", "-u", "origin", args.branch])
-                    .timeout(devkit_common::git::SLOW_TIMEOUT)
+                    .network()
                     .output()
             })
             .context("git push failed (refusing to force-push)")?;

@@ -100,7 +100,7 @@ pub fn fetch(remote: &str, cwd: &str) -> Result<()> {
     fetch_gated(&marker, ttl_secs(), now_secs(), || {
         Git::at(Path::new(cwd))
             .args(["fetch", remote])
-            .timeout(crate::git::SLOW_TIMEOUT)
+            .network()
             .output()
             .map(|_| ())
     })?;
@@ -182,6 +182,51 @@ mod tests {
             !p.exists(),
             "no marker written on failure -> next call retries"
         );
+    }
+
+    /// A locked ssh key makes ssh prompt for its passphrase on the terminal,
+    /// where a progress spinner draws over it. The fake ssh behaves like the
+    /// real one: in batch mode it fails, otherwise it stalls on the prompt.
+    #[cfg(unix)]
+    #[test]
+    fn a_locked_ssh_key_fails_fast_and_names_the_remedy() {
+        use std::{os::unix::fs::PermissionsExt, time::Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let ssh = dir.path().join("ssh");
+        std::fs::write(
+            &ssh,
+            "#!/bin/sh\n\
+             case \" $* \" in\n\
+             *' BatchMode=yes '*)\n\
+             \techo 'git@example.invalid: Permission denied (publickey).' >&2\n\
+             \texit 255 ;;\n\
+             esac\n\
+             sleep 5\n\
+             echo 'stalled on the passphrase prompt' >&2\n\
+             exit 255\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["remote", "add", "origin", "ssh://git@example.invalid/x.git"],
+            vec!["config", "core.sshCommand", ssh.to_str().unwrap()],
+        ] {
+            Git::fixture(&repo).args(args).output().unwrap();
+        }
+
+        let started = Instant::now();
+        let err = fetch("origin", repo.to_str().unwrap()).unwrap_err();
+        let message = format!("{err:#}");
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(4),
+            "fetch reached the terminal: {message}"
+        );
+        assert!(message.contains("ssh-add"), "{message}");
     }
 
     #[test]

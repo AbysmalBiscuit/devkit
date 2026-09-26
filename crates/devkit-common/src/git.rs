@@ -58,6 +58,7 @@ pub struct Git {
     command: Command,
     args: Vec<String>,
     timeout: Duration,
+    cwd: Option<PathBuf>,
 }
 
 impl Git {
@@ -75,6 +76,7 @@ impl Git {
         git.command.arg("-C").arg(cwd);
         git.args.push("-C".to_string());
         git.args.push(cwd.to_string_lossy().into_owned());
+        git.cwd = Some(cwd.to_path_buf());
         git
     }
 
@@ -96,6 +98,7 @@ impl Git {
             command,
             args: Vec::new(),
             timeout: TIMEOUT,
+            cwd: None,
         }
     }
 
@@ -132,13 +135,28 @@ impl Git {
         self
     }
 
-    /// Override the default timeout. Pass `SLOW_TIMEOUT` for a call that
-    /// reaches the network or writes a whole working tree; every quick query
-    /// (`rev-parse`, `status`, `config`, and the like) keeps the default — it
+    /// Override the default timeout. Pass `SLOW_TIMEOUT` for a call that writes
+    /// a whole working tree; use [`Git::network`] for one that can reach a
+    /// remote. Every quick query (`rev-parse`, `status`, `config`, and the
+    /// like) keeps the default — it
     /// is what protects the PreToolUse hook path from a wedged git, and
     /// widening it there defeats that.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Mark a call that can reach a remote: `fetch`, `push`, `clone`, and a
+    /// `worktree add` or `checkout` that fetches missing blobs. It gets
+    /// `SLOW_TIMEOUT`, and neither ssh nor git prompts: a locked key or an
+    /// unknown host fails with a remedy instead of prompting on the terminal,
+    /// where a progress spinner hides the prompt.
+    pub fn network(mut self) -> Self {
+        self.timeout = SLOW_TIMEOUT;
+        if let Some(ssh) = batch_ssh_command(self.cwd.as_deref()) {
+            self.command.env("GIT_SSH_COMMAND", ssh);
+        }
+        self.command.env("GIT_TERMINAL_PROMPT", "0");
         self
     }
 
@@ -147,10 +165,12 @@ impl Git {
         let command_line = self.command_line();
         let out = self.wait()?;
         if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stderr = stderr.trim();
+            let remedy = ssh_remedy(stderr).map_or(String::new(), |r| format!("\n\n{r}"));
             bail!(
-                "`{command_line}` failed ({}):\n{}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
+                "`{command_line}` failed ({}):\n{stderr}{remedy}",
+                out.status
             );
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -233,6 +253,61 @@ impl Git {
             stdout,
             stderr,
         })
+    }
+}
+
+/// The ssh command git would run from `cwd`, in git's own order of
+/// precedence, with `-o BatchMode=yes` added. `None` when it is not OpenSSH
+/// (plink takes other flags) or `GIT_SSH` names a bare program, and when
+/// the lookup fails: the call then runs as configured.
+fn batch_ssh_command(cwd: Option<&Path>) -> Option<String> {
+    let command = match std::env::var("GIT_SSH_COMMAND") {
+        Ok(command) => command,
+        Err(_) => {
+            let configured = cwd
+                .map_or_else(Git::bare, Git::at)
+                .args(["config", "--get", "core.sshCommand"])
+                .wait()
+                .ok()?;
+            if configured.status.success() {
+                String::from_utf8_lossy(&configured.stdout)
+                    .trim()
+                    .to_owned()
+            } else if std::env::var_os("GIT_SSH").is_some() {
+                return None;
+            } else {
+                "ssh".to_owned()
+            }
+        }
+    };
+    with_batch_mode(&command)
+}
+
+fn with_batch_mode(ssh_command: &str) -> Option<String> {
+    let program = ssh_command
+        .split_whitespace()
+        .next()?
+        .trim_matches(['\'', '"']);
+    (Path::new(program).file_stem()? == "ssh").then(|| format!("{ssh_command} -o BatchMode=yes"))
+}
+
+/// What to do about an ssh failure that batch mode turns a prompt into, or
+/// `None` when `stderr` shows neither.
+fn ssh_remedy(stderr: &str) -> Option<&'static str> {
+    if stderr.contains("Permission denied (publickey") {
+        Some(
+            "ssh could not authenticate, most likely because the key is locked and devkit runs \
+             ssh in batch mode, which never prompts. Unlock it with `ssh-add` in a terminal \
+             (an agent asks the user to), then rerun.",
+        )
+    } else if stderr.contains("Host key verification failed") {
+        Some(
+            "ssh does not know this host yet, and devkit runs ssh in batch mode, which never \
+             prompts to confirm it. Connect to the remote once with `ssh` in a terminal \
+             (an agent asks the user to), then rerun.",
+        )
+    } else {
+        None
     }
 }
 
@@ -766,6 +841,26 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("rev-parse --show-toplevel"), "{message}");
         assert!(message.contains("128"), "{message}");
+    }
+
+    #[test]
+    fn an_unknown_host_key_names_the_remedy() {
+        let stderr = "Host key verification failed.\nfatal: Could not read from remote repository.";
+        assert!(ssh_remedy(stderr).is_some_and(|r| r.contains("`ssh`")));
+        assert_eq!(ssh_remedy("fatal: not a git repository"), None);
+    }
+
+    #[test]
+    fn batch_mode_extends_openssh_and_leaves_other_clients_alone() {
+        assert_eq!(
+            with_batch_mode("ssh.exe -i key").as_deref(),
+            Some("ssh.exe -i key -o BatchMode=yes")
+        );
+        assert_eq!(
+            with_batch_mode("'/usr/bin/ssh'").as_deref(),
+            Some("'/usr/bin/ssh' -o BatchMode=yes")
+        );
+        assert_eq!(with_batch_mode("plink -batch"), None);
     }
 
     /// `success` answers a question; a non-zero exit is one of the answers.

@@ -424,7 +424,7 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
         let path_str = lib_dir.join(checkout).to_string_lossy().into_owned();
         Git::at(&bare)
             .args(["worktree", "add", "--detach", path_str.as_str(), commit])
-            .timeout(SLOW_TIMEOUT)
+            .network()
             .output()
             .with_context(|| {
                 format!(
