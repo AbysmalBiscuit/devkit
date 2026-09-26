@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use strum::IntoEnumIterator;
 
 /// Which importer graph resolves a library's version, and therefore which
 /// lockfile is consulted.
@@ -318,19 +319,22 @@ fn atomic_write(path: &Path, contents: String) -> Result<()> {
     std::fs::rename(&tmp, path).with_context(|| format!("replacing manifest {}", path.display()))
 }
 
-/// Every key `LibEntry` models. A `[[docs.libs]]` table may carry others; an
-/// upsert owns only these, so anything else the file holds stays as written.
-const ENTRY_KEYS: [&str; 9] = [
-    "name",
-    "ecosystem",
-    "package",
-    "repo",
-    "ref",
-    "src_dir",
-    "docs_dir",
-    "exclude",
-    "notes",
-];
+/// Every key `LibEntry` models, in its serialization order. A `[[docs.libs]]`
+/// table may carry others; an upsert owns only these, so anything else the
+/// file holds stays as written.
+#[derive(strum::EnumIter, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+enum EntryKey {
+    Name,
+    Ecosystem,
+    Package,
+    Repo,
+    Ref,
+    SrcDir,
+    DocsDir,
+    Exclude,
+    Notes,
+}
 
 /// devkit.toml is hand-maintained — edit via toml_edit so comments and
 /// formatting survive, and patch the existing entry rather than replacing it,
@@ -354,7 +358,7 @@ pub fn upsert_project(devkit_toml: &Path, entry: &LibEntry, cache_root: &Path) -
 /// entry already has in place so its comments and position hold, append one it
 /// lacks, and drop one the registration no longer sets.
 fn patch_entry(entry: &mut toml_edit::Table, fresh: &toml_edit::Table) {
-    for key in ENTRY_KEYS {
+    for key in EntryKey::iter().map(<&str>::from) {
         let Some(item) = fresh.get(key) else {
             entry.remove(key);
             continue;
@@ -714,7 +718,8 @@ mod tests {
         };
         let serialized = toml_edit::ser::to_document(&full).unwrap();
         let keys: Vec<&str> = serialized.as_table().iter().map(|(key, _)| key).collect();
-        assert_eq!(keys, ENTRY_KEYS);
+        let modeled: Vec<&str> = EntryKey::iter().map(<&str>::from).collect();
+        assert_eq!(keys, modeled);
     }
 
     #[test]
