@@ -157,13 +157,14 @@ pub fn run(args: DashboardArgs) -> Result<()> {
             }
         }
 
+        let unit = if args.mode == "proportional" { "%" } else { "" };
         let title = format!(
             "My {} issues by status — per {b}, {}",
             tracker.kind(),
             args.mode
         );
         if args.chart == "line" {
-            chart::render_lines(&title, &series, &names, &colors);
+            chart::render_lines(&title, &series, &names, &colors, unit);
         } else {
             chart::render_stacked_bars(
                 &title,
@@ -173,6 +174,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
                 &colors,
                 &starts,
                 b == "day",
+                unit,
             );
         }
     }
@@ -241,12 +243,14 @@ pub fn run(args: DashboardArgs) -> Result<()> {
                 std::slice::from_ref(&c_commits),
                 &["commits".into()],
                 &[cyan],
+                "",
             );
             chart::render_lines(
                 &format!("PRs per {b}"),
                 &[c_opened.clone(), c_merged.clone()],
                 &["opened".into(), "merged".into()],
                 &[orange, green],
+                "",
             );
         } else {
             chart::render_stacked_bars(
@@ -257,6 +261,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
                 &[cyan],
                 &starts,
                 b == "day",
+                "",
             );
             chart::render_stacked_bars(
                 &format!("PRs opened/merged per {b}"),
@@ -266,6 +271,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
                 &[orange, green],
                 &starts,
                 b == "day",
+                "",
             );
         }
     }
