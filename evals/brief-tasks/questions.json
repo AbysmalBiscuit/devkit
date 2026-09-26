@@ -1,0 +1,65 @@
+[
+  {
+    "id": "test-all",
+    "question": "What command runs every unit test suite in the repo?",
+    "kind": "command",
+    "expect": ["devrun task test"],
+    "proof": "devrun task test --dry-run runs bunx turbo run test"
+  },
+  {
+    "id": "test-api",
+    "question": "What command runs only the API service's unit tests?",
+    "kind": "command",
+    "expect": ["devrun task test-api"],
+    "proof": "devrun task test-api --dry-run runs bun test in services/api"
+  },
+  {
+    "id": "start-web",
+    "question": "What command starts the web app's dev server?",
+    "kind": "command",
+    "expect": ["devrun up web"]
+  },
+  {
+    "id": "e2e",
+    "question": "You need to run the Playwright end-to-end tests. List every command you would run, including any that start something that must already be running.",
+    "kind": "set",
+    "expect": ["devrun up web", "devrun up api", "devrun task e2e-web"],
+    "proof": "devrun task e2e-web with nothing live fails: require_live: `web` has no live server in this worktree (devrun up web)"
+  },
+  {
+    "id": "migrate",
+    "question": "Write the exact command that applies pending database migrations to your local database. Pass only the args you must or want to set.",
+    "kind": "tokens",
+    "expect": "devrun task db-migrate --arg env=local",
+    "proof": "devrun task db-migrate --dry-run as an agent fails: needs --arg env=... (required for agents)"
+  },
+  {
+    "id": "seed-dir",
+    "question": "In which directory does the db-seed task run?",
+    "kind": "text",
+    "expect": ["services/api", "services/api/"],
+    "proof": "devrun task db-seed --dry-run prints cwd services/api"
+  },
+  {
+    "id": "gateway-test",
+    "question": "You are in services/gateway and about to run `go test ./...`. What should you run instead?",
+    "kind": "command",
+    "expect": ["devrun task test-gateway"],
+    "proof": "devkit hook pre-tool-use denies go test ./... in services/gateway and names devrun task test-gateway"
+  },
+  {
+    "id": "locks",
+    "question": "Before you edit a file in this repo, what must you do about file locks?",
+    "kind": "enum",
+    "values": ["nothing, devkit claims it automatically", "claim it with lockm first", "check lockm status first"],
+    "expect": "nothing, devkit claims it automatically",
+    "proof": "tests/harness_shell_writes.rs a_free_redirect_target_is_claimed_for_the_session"
+  },
+  {
+    "id": "rollback-detail",
+    "question": "Without running the task, what single command shows what db-rollback runs and which args it takes?",
+    "kind": "command",
+    "expect": ["devkit config tasks db-rollback"],
+    "proof": "devkit config tasks db-rollback prints its run line and its env and steps args"
+  }
+]
