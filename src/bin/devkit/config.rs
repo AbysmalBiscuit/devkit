@@ -6,15 +6,16 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use devkit_common::ui;
-use devkit_config::{self as config, Config, Provenance};
+use devkit_common::{caller::Caller, required, ui};
+use devkit_config::{self as config, Config, Provenance, RunAction, RunArg, Step, TaskConfig};
 use devkit_ports::{
     apps::App,
     load,
-    task::{self, TaskRow},
+    task::{self, TaskArg, TaskRow},
 };
 
-/// Show the resolved config, or list configured apps or tasks.
+/// Show the resolved config, or list configured apps, tasks or template
+/// variables.
 #[derive(Parser)]
 pub struct ConfigCli {
     #[command(subcommand)]
@@ -52,8 +53,22 @@ enum ConfigCmd {
         #[arg(long)]
         json: bool,
     },
-    /// List the configured tasks from the merged config.
+    /// List the configured tasks, or describe one and the args it takes.
+    ///
+    /// A described task shows what it runs and, for each arg, whether this
+    /// caller must pass it, its default, and its description.
     Tasks {
+        /// Task to describe; omit to list them all.
+        name: Option<String>,
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the template variables, with defaults and descriptions.
+    ///
+    /// These are the `[templates.variables]` entries every template renders
+    /// over, and the names `--arg` may set.
+    Variables {
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -74,7 +89,12 @@ pub fn run(cli: ConfigCli) -> Result<()> {
             show(explicit, cwd, cli.origin || origin, cli.json || json)
         }
         Some(ConfigCmd::Apps { json }) => apps(explicit, cwd, cli.json || json),
-        Some(ConfigCmd::Tasks { json }) => tasks(explicit, cwd, cli.json || json),
+        Some(ConfigCmd::Tasks { name: None, json }) => tasks(explicit, cwd, cli.json || json),
+        Some(ConfigCmd::Tasks {
+            name: Some(name),
+            json,
+        }) => describe_task(explicit, cwd, &name, cli.json || json),
+        Some(ConfigCmd::Variables { json }) => variables(explicit, cwd, cli.json || json),
     }
 }
 
@@ -135,22 +155,155 @@ fn tasks_json(rows: &[TaskRow]) -> serde_json::Value {
                 "name": r.name,
                 "kind": r.kind,
                 "app": r.app,
-                "args": r
-                    .args
-                    .iter()
-                    .map(|a| {
-                        serde_json::json!({
-                            "name": a.name,
-                            "required": a.required,
-                            "description": a.description,
-                        })
-                    })
-                    .collect::<Vec<_>>(),
+                "args": args_json(&r.args),
                 "description": r.description,
             })
         })
         .collect();
     serde_json::Value::Array(items)
+}
+
+fn args_json(args: &[TaskArg]) -> serde_json::Value {
+    args.iter()
+        .map(|a| {
+            serde_json::json!({
+                "name": a.name,
+                "required": a.required,
+                "default": a.default,
+                "description": a.description,
+            })
+        })
+        .collect()
+}
+
+/// `devkit config tasks <name> [--json]`: one task's templates and args, so
+/// a caller learns what to pass without a failing `--dry-run`.
+fn describe_task(explicit: Option<&Path>, cwd: &str, name: &str, json: bool) -> Result<()> {
+    let loaded = load::load(explicit, Path::new(cwd))?;
+    let row = task::describe(&loaded.config, name, devkit_common::caller::caller())?;
+    let t = &loaded.config.tasks[name];
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "name": row.name,
+                "kind": row.kind,
+                "app": row.app,
+                "description": row.description,
+                "run": t.run,
+                "steps": t.steps,
+                "env": t.env,
+                "args": args_json(&row.args),
+            }))?
+        );
+    } else {
+        print!("{}", task_text(&row, t));
+    }
+    Ok(())
+}
+
+/// A task's fields as label/value lines, then its args as a table.
+fn task_text(row: &TaskRow, t: &TaskConfig) -> String {
+    let mut head = vec![("name", row.name.clone())];
+    if !row.description.is_empty() {
+        head.push(("description", row.description.clone()));
+    }
+    head.push(("kind", row.kind.to_string()));
+    if t.app.is_some() {
+        head.push(("app", row.app.clone()));
+    }
+    if !t.run.is_empty() {
+        head.push((
+            "run",
+            t.run.iter().map(run_arg_text).collect::<Vec<_>>().join(" "),
+        ));
+    }
+    push_list(
+        &mut head,
+        "steps",
+        t.steps.iter().map(|s| match s {
+            Step::Task(r) => format!("task {r}"),
+            Step::Up(app) => format!("up {app}"),
+        }),
+    );
+    push_list(
+        &mut head,
+        "env",
+        t.env.iter().map(|(k, v)| format!("{k}={v}")),
+    );
+    let args = if row.args.is_empty() {
+        "takes no args\n".to_string()
+    } else {
+        args_table(&row.args)
+    };
+    format!("{}\n\n{args}", ui::kv_table(&head))
+}
+
+/// One row per value, the label on the first only.
+fn push_list(
+    rows: &mut Vec<(&'static str, String)>,
+    label: &'static str,
+    values: impl Iterator<Item = String>,
+) {
+    for (i, v) in values.enumerate() {
+        rows.push((if i == 0 { label } else { "" }, v));
+    }
+}
+
+/// A `run` entry as it is written in `devkit.toml`.
+fn run_arg_text(a: &RunArg) -> String {
+    match a {
+        RunArg::Scalar(s) => s.clone(),
+        RunArg::Action(RunAction::Split { split, on }) => {
+            format!("{{ split = {split:?}, on = {on:?} }}")
+        }
+    }
+}
+
+/// `devkit config variables [--json]`: the declared template variables,
+/// required or not for this caller outside any one task.
+fn variables(explicit: Option<&Path>, cwd: &str, json: bool) -> Result<()> {
+    let loaded = load::load(explicit, Path::new(cwd))?;
+    let vars = declared_variables(&loaded.config, devkit_common::caller::caller());
+    if json {
+        println!("{}", serde_json::to_string_pretty(&args_json(&vars))?);
+    } else if vars.is_empty() {
+        println!("no variables declared (add [templates.variables] to devkit.toml)");
+    } else {
+        print!("{}", args_table(&vars));
+    }
+    Ok(())
+}
+
+fn declared_variables(cfg: &Config, caller: Caller) -> Vec<TaskArg> {
+    cfg.templates
+        .variables
+        .iter()
+        .map(|(name, d)| TaskArg {
+            name: name.clone(),
+            required: required::is_required(cfg, None, name, caller),
+            default: d.default_value().map(str::to_string),
+            description: d.description().map(str::to_string),
+        })
+        .collect()
+}
+
+/// Args as a table. An empty default is quoted so it reads apart from none.
+fn args_table(args: &[TaskArg]) -> String {
+    let mut t = ui::table(&["NAME", "REQUIRED", "DEFAULT", "DESCRIPTION"]);
+    for a in args {
+        t.add_row(vec![
+            a.name.clone(),
+            if a.required { "yes" } else { "no" }.to_string(),
+            match a.default.as_deref() {
+                None => "-".to_string(),
+                Some("") => "\"\"".to_string(),
+                Some(d) => d.to_string(),
+            },
+            a.description.clone().unwrap_or_default(),
+        ]);
+    }
+    format!("{t}\n")
 }
 
 /// Catalog apps sorted by name, as a JSON array of their resolved fields.
@@ -457,6 +610,7 @@ mod tests {
                 args: vec![devkit_ports::task::TaskArg {
                     name: "path".into(),
                     required: true,
+                    default: None,
                     description: Some("file or directory to lint".into()),
                 }],
                 description: String::new(),
@@ -477,6 +631,7 @@ mod tests {
             serde_json::json!([{
                 "name": "path",
                 "required": true,
+                "default": null,
                 "description": "file or directory to lint",
             }])
         );

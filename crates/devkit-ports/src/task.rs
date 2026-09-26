@@ -62,6 +62,8 @@ pub struct TaskArg {
     /// the same task lists a name bare for the caller it binds and bracketed
     /// for the one it does not.
     pub required: bool,
+    /// The `[templates.variables]` value used when no `--arg` is given.
+    pub default: Option<String>,
     pub description: Option<String>,
 }
 
@@ -148,10 +150,7 @@ const ISSUE_FIELDS: [&str; 3] = ["issue", "slug", "branch"];
 /// its steps for a sequence. An app's `static_env` renders for `devrun up`
 /// too, where no `--arg` exists, so it is left out.
 fn read_names(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
-    let t = cfg
-        .tasks
-        .get(name)
-        .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
+    let t = lookup(cfg, name)?;
     let mut names = command_reads(t)?;
     for step in &t.steps {
         if let Step::Task(r) = step
@@ -186,10 +185,56 @@ pub fn task_args(cfg: &Config, name: &str, caller: Caller) -> Result<Vec<TaskArg
         .into_iter()
         .map(|name| TaskArg {
             required: required.contains(&name),
+            default: cfg
+                .templates
+                .variables
+                .get(&name)
+                .and_then(|d| d.default_value())
+                .map(str::to_string),
             description: devkit_common::required::description(cfg, &name),
             name,
         })
         .collect())
+}
+
+/// Task `name`'s listing row, refusing what [`resolve`] would refuse about
+/// its shape or args instead of listing it as `invalid`.
+pub fn describe(cfg: &Config, name: &str, caller: Caller) -> Result<TaskRow> {
+    let t = lookup(cfg, name)?;
+    let kind = if is_sequence(name, t)? {
+        "sequence"
+    } else {
+        "command"
+    };
+    Ok(TaskRow {
+        name: name.to_string(),
+        kind,
+        app: t.app.clone().unwrap_or_else(|| "-".into()),
+        args: task_args(cfg, name, caller)?,
+        description: t.description.clone().unwrap_or_default(),
+    })
+}
+
+fn lookup<'a>(cfg: &'a Config, name: &str) -> Result<&'a TaskConfig> {
+    cfg.tasks
+        .get(name)
+        .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))
+}
+
+/// Whether task `name` is a sequence, refusing a task that is neither a
+/// well-formed command nor a well-formed sequence.
+fn is_sequence(name: &str, t: &TaskConfig) -> Result<bool> {
+    let is_sequence = match (!t.run.is_empty(), !t.steps.is_empty()) {
+        (true, true) => bail!("task `{name}` sets both `run` and `steps`"),
+        (false, false) => bail!("task `{name}` sets neither `run` nor `steps`"),
+        (true, false) => false,
+        (false, true) => true,
+    };
+    ensure!(
+        !is_sequence || (t.app.is_none() && t.env.is_empty() && t.require_live.is_empty()),
+        "sequence task `{name}` may only set `description`, `steps`, and `required_args`"
+    );
+    Ok(is_sequence)
 }
 
 /// Refuse a `required_args` entry naming something the task never reads: an
@@ -197,10 +242,7 @@ pub fn task_args(cfg: &Config, name: &str, caller: Caller) -> Result<Vec<TaskArg
 /// The task's own entries count, and so do those of every command task its
 /// steps name.
 fn check_required_names(cfg: &Config, name: &str, args: &BTreeSet<String>) -> Result<()> {
-    let t = cfg
-        .tasks
-        .get(name)
-        .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
+    let t = lookup(cfg, name)?;
     let steps = t.steps.iter().filter_map(|step| match step {
         Step::Task(r) => cfg.tasks.get(r),
         Step::Up(_) => None,
@@ -296,20 +338,8 @@ pub fn resolve(
     args: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<Resolved> {
-    let t = cfg
-        .tasks
-        .get(name)
-        .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
-    let is_sequence = match (!t.run.is_empty(), !t.steps.is_empty()) {
-        (true, true) => bail!("task `{name}` sets both `run` and `steps`"),
-        (false, false) => bail!("task `{name}` sets neither `run` nor `steps`"),
-        (true, false) => false,
-        (false, true) => true,
-    };
-    ensure!(
-        !is_sequence || (t.app.is_none() && t.env.is_empty() && t.require_live.is_empty()),
-        "sequence task `{name}` may only set `description`, `steps`, and `required_args`"
-    );
+    let t = lookup(cfg, name)?;
+    let is_sequence = is_sequence(name, t)?;
     check_args(cfg, name, args, caller)?;
     let vars = variables(cfg, worktree_root, args);
     if !is_sequence {
@@ -520,10 +550,7 @@ pub fn resolve_step(
     user_env: &BTreeMap<String, String>,
     args: &BTreeMap<String, String>,
 ) -> Result<CommandPlan> {
-    let t = cfg
-        .tasks
-        .get(name)
-        .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
+    let t = lookup(cfg, name)?;
     ensure!(
         !t.run.is_empty() && t.steps.is_empty(),
         "task `{name}` is not a command task"

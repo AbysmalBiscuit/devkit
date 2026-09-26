@@ -790,6 +790,7 @@ fn devrun_text(sections: &DevrunBrief) -> String {
         out.push_str(
             "- `devrun task <name> [--dry-run]` — run a canned project task (table below)\n",
         );
+        out.push_str("- `devkit config tasks <name>`: what a task runs and the args it takes\n");
     }
     let mut tools = Vec::new();
     if facilities.ports() {

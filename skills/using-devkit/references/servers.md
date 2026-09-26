@@ -16,7 +16,8 @@ devrun reap [--all]                                   # kill servers running OUT
 devrun logs <app> [--role …] [-f]                     # print or follow one app's log
 devkit config [--origin] [--json]                     # resolved config + its layers
 devkit config apps [--json]
-devkit config tasks [--json]
+devkit config tasks [name] [--json]
+devkit config variables [--json]
 ```
 
 ### `up`

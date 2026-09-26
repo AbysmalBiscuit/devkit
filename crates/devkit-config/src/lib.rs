@@ -1157,9 +1157,9 @@ pub enum VariableDecl {
         required: Option<Required>,
         /// What to pass for this arg, shown beside it where devkit asks for
         /// it: a missing-arg error (`issue pr create` and `issue review`
-        /// included), a command-guard redirect to a task that reads it, and
-        /// `devkit config tasks --json`. Explain an arg here rather than in a
-        /// guard rule's `reason`.
+        /// included), a command-guard redirect to a task that reads it,
+        /// `devkit config tasks <name>` and `devkit config variables`.
+        /// Explain an arg here rather than in a guard rule's `reason`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },

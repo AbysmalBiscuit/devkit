@@ -4,6 +4,7 @@ Projects define oneshot tasks in `[tasks]`: builds, profiling flows, assertions,
 
 ```sh
 devrun task                                   # list configured tasks (name, kind, app, args, description)
+devkit config tasks <name>                    # what one task runs, and each arg's default and description
 devrun task <name> --dry-run                  # print the rendered plan(s) — argv, cwd, env — without running
 devrun task <name>                            # run it
 devrun task <name> --arg KEY=value            # set a template variable the task reads
@@ -25,7 +26,8 @@ devrun task commit --arg msg="fix login redirect"
 - An `--arg` the task never reads is rejected, so a mistyped key fails loudly.
 - `issue`, `slug` and `branch` come from the worktree's `.devkit/issue.toml` and git. Outside an issue worktree they are undefined; supply one with `--arg issue=<id>` when the task reads it.
 - When the command guard redirects a command you typed to a task, its message spells out the required `--arg` flags, then describes each arg that has a description, optional ones bracketed. Run the task with them, and fill an optional arg when its description says it applies.
-- `devkit config tasks --json` lists every arg with its `required` flag and `description`.
+- `devkit config tasks <name>` describes one task before you run it: its `run` or `steps` templates, then every arg it reads with whether you must pass it, its default and its description. `--json` emits the same as one object. Reach for it instead of a `--dry-run` that fails on a missing arg.
+- `devkit config variables` lists every `[templates.variables]` entry the same way. Those are the names `--arg` may set on `devrun task`, `issue pr create` and `issue review`.
 
 An arg can spread into several arguments by declaring a delimiter to split on:
 
