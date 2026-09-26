@@ -87,7 +87,7 @@ fn parse_flag(v: &str) -> Option<bool> {
 /// Render `label` as an OSC8 hyperlink to `url` when `supported`, else the bare
 /// label. Split from `link` so the formatting is testable without depending on
 /// ambient terminal or `FORCE_HYPERLINK` detection.
-fn link_styled(supported: bool, label: &str, url: &str) -> String {
+pub(crate) fn link_styled(supported: bool, label: &str, url: &str) -> String {
     if supported {
         format!("\x1b]8;;{url}\x1b\\{label}\x1b]8;;\x1b\\")
     } else {
@@ -237,30 +237,40 @@ fn url_label(url: &str, budget: usize) -> String {
     truncate(bare, budget)
 }
 
+/// Strip OSC escapes (OSC 8 hyperlinks among them), keeping the label and any
+/// colour. `console` measures an OSC's target as visible text, so a linked
+/// line handed to indicatif is reckoned wider than it draws.
+pub(crate) fn strip_hyperlinks(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("\x1b]") {
+        out.push_str(&rest[..start]);
+        let body = &rest[start + 2..];
+        // An OSC ends at ST (`ESC \`) or BEL; an unterminated one runs to the
+        // end.
+        let end = [
+            body.find("\x1b\\").map(|i| i + 2),
+            body.find('\x07').map(|i| i + 1),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(body.len());
+        rest = &body[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Strip ANSI SGR and OSC 8 hyperlink escapes, leaving only the visible
-/// glyphs — the width comfy-table measures a styled or linked cell at.
+/// glyphs, which is the width comfy-table measures a styled or linked cell at.
 fn visible(s: &str) -> String {
-    let bytes = s.as_bytes();
+    let unlinked = strip_hyperlinks(s);
+    let bytes = unlinked.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == 0x1b {
-            // OSC: ESC ] ... (ST = ESC \ or BEL)
-            if i + 1 < bytes.len() && bytes[i + 1] == b']' {
-                i += 2;
-                while i < bytes.len() {
-                    if bytes[i] == 0x07 {
-                        i += 1;
-                        break;
-                    }
-                    if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                        i += 2;
-                        break;
-                    }
-                    i += 1;
-                }
-                continue;
-            }
             // CSI/SGR: ESC [ ... letter
             if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
                 i += 2;
