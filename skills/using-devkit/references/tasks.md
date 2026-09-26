@@ -21,10 +21,11 @@ A task's templates can read variables as well as ports. The ARGS column of `devr
 devrun task commit --arg msg="fix login redirect"
 ```
 
-- A missing required arg fails before any step runs, naming the flag: ``task `commit` needs --arg msg=...``. A sequence checks every step's args up front.
+- A missing required arg fails before any step runs, naming the flag: ``task `commit` needs --arg msg=...``. A sequence checks every step's args up front. When the arg has a `description` in `[templates.variables]`, a line under the error says what to pass.
 - An `--arg` the task never reads is rejected, so a mistyped key fails loudly.
 - `issue`, `slug` and `branch` come from the worktree's `.devkit/issue.toml` and git. Outside an issue worktree they are undefined; supply one with `--arg issue=<id>` when the task reads it.
-- When the command guard redirects a command you typed to a task, its message spells out the required `--arg` flags. Run the task with them.
+- When the command guard redirects a command you typed to a task, its message spells out the required `--arg` flags, then describes each arg that has a description, optional ones bracketed. Run the task with them, and fill an optional arg when its description says it applies.
+- `devkit config tasks --json` lists every arg with its `required` flag and `description`.
 
 An arg can spread into several arguments by declaring a delimiter to split on:
 

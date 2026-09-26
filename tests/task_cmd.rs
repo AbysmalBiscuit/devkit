@@ -51,7 +51,8 @@ run = ["git", "definitely-not-a-subcommand"]
 steps = [{ up = "api" }, { task = "hello" }]
 
 [templates.variables]
-scope = "devkit"
+scope = { default = "devkit", description = "area of the codebase the commit touches" }
+msg = { description = "imperative summary of the change" }
 
 [tasks.commit]
 description = "commit with a scope"
@@ -291,6 +292,22 @@ fn a_missing_required_arg_fails_the_sequence_before_any_step_runs() {
     assert!(
         !stderr.contains("\u{2192} hello"),
         "the first step ran before the missing arg was reported: {stderr}"
+    );
+}
+
+#[test]
+fn a_missing_arg_error_describes_what_to_pass() {
+    let dir = setup();
+    let out = run_in(dir.path(), &["task", "commit"]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("msg: imperative summary of the change"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("area of the codebase"),
+        "only the missing args are described: {stderr}"
     );
 }
 

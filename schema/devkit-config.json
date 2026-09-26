@@ -1204,7 +1204,7 @@
             "$ref": "#/$defs/VariableDecl"
           },
           "default": {},
-          "description": "Constants available to every template above. A context field of the same\nname wins, and `--arg key=value` overrides either. An entry may instead\nbe a table carrying a `default` and a `required` marking. `role` and\n`sha` are reserved and rejected here.",
+          "description": "Constants available to every template above. A context field of the same\nname wins, and `--arg key=value` overrides either. An entry may instead\nbe a table carrying a `default`, a `required` marking and a\n`description` of what to pass. `role` and `sha` are reserved and\nrejected here.",
           "type": "object"
         },
         "worktree_dir": {
@@ -1267,6 +1267,13 @@
                 "null"
               ]
             },
+            "description": {
+              "description": "What to pass for this arg, shown beside it where devkit asks for\nit: a missing-arg error, a command-guard redirect to a task that\nreads it, and `devkit config tasks --json`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "required": {
               "anyOf": [
                 {
@@ -1282,7 +1289,7 @@
           "type": "object"
         }
       ],
-      "description": "One `[templates.variables]` entry: a bare string, or a table carrying a\n`default` and a `required` marking.\n\n`deny_unknown_fields` for the reason `RunAction` documents: under untagged\nmatching a misspelled key beside a well-formed pair deserializes silently,\nand the author sees no diagnostic while their guard does nothing.\n\n```toml\n[templates.variables]\nteam = \"platform\"                              # a constant, never required\nmsg = { default = \"wip\", required = \"agents\" } # defaulted, but agents must pass it\nticket = { required = \"always\" }               # declared, no default, always required\n```\n\n`default` is the fallback used when nothing else supplies the name, which\nis what these entries have always been: `template::render` merges them\nunderneath the context, and `--arg` overwrites them. Note that minijinja's\nown `default` filter is a different thing and does not affect whether an\narg is required."
+      "description": "One `[templates.variables]` entry: a bare string, or a table carrying a\n`default`, a `required` marking and a `description`.\n\n`deny_unknown_fields` for the reason `RunAction` documents: under untagged\nmatching a misspelled key beside a well-formed pair deserializes silently,\nand the author sees no diagnostic while their guard does nothing.\n\n```toml\n[templates.variables]\nteam = \"platform\"                              # a constant, never required\nmsg = { default = \"wip\", required = \"agents\" } # defaulted, but agents must pass it\nticket = { required = \"always\" }               # declared, no default, always required\nbody = { default = \"\", description = \"why the change was made, if the subject does not say\" }\n```\n\n`default` is the fallback used when nothing else supplies the name, which\nis what these entries have always been: `template::render` merges them\nunderneath the context, and `--arg` overwrites them. Note that minijinja's\nown `default` filter is a different thing and does not affect whether an\narg is required."
     }
   },
   "$id": "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json",

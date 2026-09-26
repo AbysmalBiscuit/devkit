@@ -62,6 +62,19 @@ pub struct TaskArg {
     /// the same task lists a name bare for the caller it binds and bracketed
     /// for the one it does not.
     pub required: bool,
+    pub description: Option<String>,
+}
+
+impl TaskArg {
+    /// The name as the listing prints it: bare when required, bracketed when
+    /// optional.
+    pub fn label(&self) -> String {
+        if self.required {
+            self.name.clone()
+        } else {
+            format!("[{}]", self.name)
+        }
+    }
 }
 
 /// Configured tasks sorted by name. `kind` reflects the shape on disk; an
@@ -119,13 +132,7 @@ pub fn args_text(args: &[TaskArg]) -> String {
         return "-".into();
     }
     args.iter()
-        .map(|a| {
-            if a.required {
-                a.name.clone()
-            } else {
-                format!("[{}]", a.name)
-            }
-        })
+        .map(TaskArg::label)
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -179,6 +186,7 @@ pub fn task_args(cfg: &Config, name: &str, caller: Caller) -> Result<Vec<TaskArg
         .into_iter()
         .map(|name| TaskArg {
             required: required.contains(&name),
+            description: devkit_common::required::description(cfg, &name),
             name,
         })
         .collect())
