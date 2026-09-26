@@ -92,6 +92,12 @@ impl Git {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // ssh prompts on `/dev/tty`, not stdin, and a spinner hides the prompt.
+        // In a session with no terminal ssh fails at once instead.
+        crate::sys::detach(&mut command);
+        command
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("SSH_ASKPASS_REQUIRE", "never");
         Self {
             command,
             args: Vec::new(),
@@ -147,10 +153,12 @@ impl Git {
         let command_line = self.command_line();
         let out = self.wait()?;
         if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stderr = stderr.trim();
+            let remedy = ssh_remedy(stderr).map_or(String::new(), |r| format!("\n\n{r}"));
             bail!(
-                "`{command_line}` failed ({}):\n{}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
+                "`{command_line}` failed ({}):\n{stderr}{remedy}",
+                out.status
             );
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -233,6 +241,26 @@ impl Git {
             stdout,
             stderr,
         })
+    }
+}
+
+/// What to do about an ssh failure that git has no terminal to resolve by
+/// prompting, or `None` when `stderr` shows neither.
+fn ssh_remedy(stderr: &str) -> Option<&'static str> {
+    if stderr.contains("Permission denied (publickey") {
+        Some(
+            "ssh could not authenticate, most likely because the key is locked and devkit gives \
+             git no terminal to prompt on. Unlock it with `ssh-add` in a terminal (an agent asks \
+             the user to), then rerun.",
+        )
+    } else if stderr.contains("Host key verification failed") {
+        Some(
+            "ssh does not know this host yet, and devkit gives git no terminal to confirm it on. \
+             Connect to the remote once with `ssh` in a terminal (an agent asks the user to), then \
+             rerun.",
+        )
+    } else {
+        None
     }
 }
 
@@ -766,6 +794,13 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("rev-parse --show-toplevel"), "{message}");
         assert!(message.contains("128"), "{message}");
+    }
+
+    #[test]
+    fn an_unknown_host_key_names_the_remedy() {
+        let stderr = "Host key verification failed.\nfatal: Could not read from remote repository.";
+        assert!(ssh_remedy(stderr).is_some_and(|r| r.contains("`ssh`")));
+        assert_eq!(ssh_remedy("fatal: not a git repository"), None);
     }
 
     /// `success` answers a question; a non-zero exit is one of the answers.

@@ -184,6 +184,55 @@ mod tests {
         );
     }
 
+    /// A locked ssh key makes ssh prompt for its passphrase on the caller's
+    /// terminal, where a progress spinner draws over it and the fetch waits
+    /// out `SLOW_TIMEOUT`. The fake ssh stands in for that: sharing the test's
+    /// session means it could reach the test's terminal, so it stalls the way
+    /// the prompt does; outside it, it fails the way ssh does with no terminal.
+    #[cfg(unix)]
+    #[test]
+    fn a_locked_ssh_key_fails_fast_and_names_the_remedy() {
+        use std::{os::unix::fs::PermissionsExt, time::Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let sid = nix::unistd::getsid(None).unwrap();
+        let ssh = dir.path().join("fake-ssh");
+        std::fs::write(
+            &ssh,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$(ps -o sid= -p $$ | tr -d ' ')\" = \"{sid}\" ]; then\n\
+                 \tsleep 5\n\
+                 \techo 'stalled on the terminal prompt' >&2\n\
+                 \texit 255\n\
+                 fi\n\
+                 echo 'git@example.invalid: Permission denied (publickey).' >&2\n\
+                 exit 255\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["remote", "add", "origin", "ssh://git@example.invalid/x.git"],
+            vec!["config", "core.sshCommand", ssh.to_str().unwrap()],
+        ] {
+            Git::fixture(&repo).args(args).output().unwrap();
+        }
+
+        let started = Instant::now();
+        let err = fetch("origin", repo.to_str().unwrap()).unwrap_err();
+        let message = format!("{err:#}");
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(4),
+            "fetch reached the terminal: {message}"
+        );
+        assert!(message.contains("ssh-add"), "{message}");
+    }
+
     #[test]
     fn marker_path_distinguishes_targets() {
         let a = marker_path("/repo/one", "origin");
