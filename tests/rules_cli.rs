@@ -150,6 +150,114 @@ fn query_rejects_unknown_tasks_with_and_without_a_task_filter() {
     }
 }
 
+/// A repository holding `rule_count` rules in `index.json`, whose `repo`
+/// field points back at it, with `.agents/repo-rules-agent.toml` set to
+/// `config` when given.
+fn repo_with_rule_config(rule_count: usize, config: Option<&str>) -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    if let Some(config) = config {
+        std::fs::create_dir(repo.path().join(".agents")).unwrap();
+        std::fs::write(repo.path().join(".agents/repo-rules-agent.toml"), config).unwrap();
+    }
+    let rules: Vec<_> = (0..rule_count)
+        .map(|i| serde_json::json!({"id": format!("r{i}"), "title": format!("Rule {i}")}))
+        .collect();
+    let index = serde_json::json!({"repo": repo.path(), "rules": rules});
+    std::fs::write(repo.path().join("index.json"), index.to_string()).unwrap();
+    repo
+}
+
+fn query_repo(repo: &std::path::Path, args: &[&str]) -> std::process::Output {
+    let state = tempfile::tempdir().unwrap();
+    let mut cmd = devkit();
+    cmd.args(["rules", "query", "index.json", "--format", "json"])
+        .args(args)
+        .current_dir(repo)
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env_remove("DEVKIT_CONFIG");
+    testenv::scrub_identity(&mut cmd);
+    cmd.output().unwrap()
+}
+
+fn printed_count(out: &std::process::Output) -> usize {
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout)
+        .unwrap()
+        .len()
+}
+
+#[test]
+fn query_limit_comes_from_the_cli_then_the_repo_config_then_the_default() {
+    for (config, args, shown) in [
+        (None, &[][..], 50),
+        (Some("[query]\nlimit = 3\n"), &[][..], 3),
+        (Some("[query]\nlimit = 3\n"), &["--limit", "5"][..], 5),
+        (Some("[query]\nlimit = 3\n"), &["--limit", "0"][..], 60),
+        (Some("[query]\nlimit = 0\n"), &[][..], 60),
+    ] {
+        let repo = repo_with_rule_config(60, config);
+        let out = query_repo(repo.path(), args);
+        assert_eq!(printed_count(&out), shown, "{config:?} {args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            stderr.contains(&format!("showing {shown} of 60 rules")),
+            shown < 60,
+            "{config:?} {args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn query_warns_about_a_topic_the_repo_config_does_not_define() {
+    let config = "[vocabulary.topics]\nKysely = \"Kysely query builders\"\n";
+    let repo = repo_with_rule_config(1, Some(config));
+
+    let out = query_repo(repo.path(), &["--topic", "rls"]);
+    assert_eq!(printed_count(&out), 1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("topic \"rls\" is not in the repo config (kysely)"),
+        "{stderr}"
+    );
+
+    let out = query_repo(repo.path(), &["--topic", "kysely"]);
+    assert_eq!(printed_count(&out), 1);
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// With no topics defined, every topic is text-only and a warning would say
+/// nothing the repository could act on.
+#[test]
+fn query_does_not_warn_about_topics_when_the_repo_defines_none() {
+    let repo = repo_with_rule_config(1, None);
+    let out = query_repo(repo.path(), &["--topic", "rls"]);
+    assert_eq!(printed_count(&out), 1);
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn query_fails_on_a_malformed_repo_config_naming_it() {
+    let repo = repo_with_rule_config(1, Some("[query\n"));
+    let out = query_repo(repo.path(), &[]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("repo-rules-agent.toml"), "{stderr}");
+}
+
 #[test]
 fn stats_reports_counts_and_breakdowns() {
     let dir = tempfile::tempdir().unwrap();
