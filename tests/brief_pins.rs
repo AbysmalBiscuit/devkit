@@ -404,6 +404,12 @@ fn leaving_a_project_says_so_once() {
     );
 }
 
+/// The brief wraps its prose to the terminal width, and a long temp path (as
+/// on macOS) moves the line breaks, so phrases are matched with them undone.
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// `brief --if-changed` from an arbitrary directory, with the project's home
 /// and isolated state so the watermark from a previous run is visible.
 fn brief_from(project: &Project, cwd: &Path, stdin: &str) -> Output {
@@ -488,7 +494,7 @@ fn a_pins_only_brief_makes_no_devrun_claim() {
     let project = Project::docs_only();
     std::fs::remove_file(project.root.join("devkit.toml")).unwrap();
 
-    let text = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
+    let text = unwrapped(&String::from_utf8_lossy(&project.brief(&[]).stdout));
     assert!(text.contains("serde"), "{text}");
     assert!(
         !text.contains("is a devkit project"),
@@ -505,7 +511,7 @@ fn a_devrun_brief_still_makes_the_devrun_claim() {
         "[config]\nroot = true\n\n{DEFAULTS}[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
 
-    let text = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
+    let text = unwrapped(&String::from_utf8_lossy(&project.brief(&[]).stdout));
     assert!(text.contains("is a devkit project"), "{text}");
 }
 
@@ -634,7 +640,7 @@ fn every_devrun_section_switched_off_drops_the_devrun_half() {
         "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\napps = false\ntasks = false\nlocks = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
     let out = project.brief(&[]);
-    let text = String::from_utf8_lossy(&out.stdout);
+    let text = unwrapped(&String::from_utf8_lossy(&out.stdout));
     assert!(
         !text.contains("is a devkit project"),
         "the devrun claim goes with the half it introduces: {text}"
