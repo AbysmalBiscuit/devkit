@@ -1,6 +1,8 @@
 use chrono::{DateTime, Datelike, Utc};
 use devkit_common::ui::term_width;
-use textplots::{Chart, ColorPlot, Shape};
+use textplots::{
+    Chart, ColorPlot, LabelBuilder, LabelFormat, Shape, TickDisplay, TickDisplayBuilder,
+};
 
 /// (r,g,b) parsed from a Linear `#rrggbb` hex; falls back to mid-grey.
 pub fn hex_rgb(hex: &str) -> (u8, u8, u8) {
@@ -51,6 +53,25 @@ pub fn stack_column(values: &[u32], max_total: u32, rows: usize) -> Vec<usize> {
 }
 
 const BLOCK_HEIGHT: usize = 12;
+const Y_TICK_EVERY: usize = 4;
+
+/// Y-axis tick labels for the bar rows, top->bottom. Every `Y_TICK_EVERY`th
+/// row from the top carries the value its top edge reaches; a tick that would
+/// repeat the one above it, or the baseline's 0, stays blank.
+fn y_ticks(max_total: u32, unit: &str) -> Vec<Option<String>> {
+    let mut last = 0;
+    (0..BLOCK_HEIGHT)
+        .map(|from_top| {
+            let row = BLOCK_HEIGHT - from_top;
+            let value = (max_total as f64 * row as f64 / BLOCK_HEIGHT as f64).round() as u32;
+            let show = from_top % Y_TICK_EVERY == 0 && value != 0 && value != last;
+            show.then(|| {
+                last = value;
+                format!("{value}{unit}")
+            })
+        })
+        .collect()
+}
 
 fn ansi(rgb: (u8, u8, u8), s: &str) -> String {
     format!("\x1b[38;2;{};{};{}m{s}\x1b[0m", rgb.0, rgb.1, rgb.2)
@@ -58,6 +79,7 @@ fn ansi(rgb: (u8, u8, u8), s: &str) -> String {
 
 /// Render stacked vertical bars. `series[k][b]` = value of status k in bucket
 /// b.
+#[allow(clippy::too_many_arguments)]
 pub fn render_stacked_bars(
     title: &str,
     labels: &[String],
@@ -66,8 +88,35 @@ pub fn render_stacked_bars(
     colors: &[(u8, u8, u8)],
     starts: &[DateTime<Utc>],
     daily_gridlines: bool,
+    unit: &str,
 ) {
-    println!("\n{title}");
+    print!(
+        "{}",
+        stacked_bars(
+            title,
+            labels,
+            series,
+            names,
+            colors,
+            starts,
+            daily_gridlines,
+            unit
+        )
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stacked_bars(
+    title: &str,
+    labels: &[String],
+    series: &[Vec<u32>],
+    names: &[String],
+    colors: &[(u8, u8, u8)],
+    starts: &[DateTime<Utc>],
+    daily_gridlines: bool,
+    unit: &str,
+) -> String {
+    let mut out = format!("\n{title}\n");
     let n = labels.len();
     let max_total: u32 = (0..n)
         .map(|b| series.iter().map(|s| s[b]).sum::<u32>())
@@ -83,8 +132,18 @@ pub fn render_stacked_bars(
             )
         })
         .collect();
-    for row in (0..BLOCK_HEIGHT).rev() {
-        let mut line = String::new();
+    let ticks = y_ticks(max_total, unit);
+    let baseline = format!("0{unit}");
+    let gutter = ticks
+        .iter()
+        .flatten()
+        .map(String::len)
+        .fold(baseline.len(), usize::max);
+    for (row, tick) in (0..BLOCK_HEIGHT).rev().zip(&ticks) {
+        let mut line = match tick {
+            Some(t) => format!("{t:>gutter$} ┤"),
+            None => format!("{:gutter$} │", ""),
+        };
         for (b, col) in columns.iter().enumerate() {
             // A faint separator just before each Monday in daily resolution.
             if daily_gridlines && b > 0 && starts[b].weekday() == chrono::Weekday::Mon {
@@ -97,28 +156,41 @@ pub fn render_stacked_bars(
                 None => line.push(' '),
             }
         }
-        println!("{line}");
+        out.push_str(&line);
+        out.push('\n');
     }
+    let width = (2 * n).saturating_sub(1);
+    out.push_str(&format!("{baseline:>gutter$} └{}\n", "─".repeat(width)));
     // Sparse x labels (~every tenth) and a legend.
     let step = std::cmp::max(1, n / 10);
-    let mut axis = String::new();
+    let mut axis = " ".repeat(gutter + 2);
     for (b, lab) in labels.iter().enumerate() {
         if b % step == 0 {
             axis.push_str(lab);
             axis.push(' ');
         }
     }
-    println!("{axis}");
+    out.push_str(&axis);
+    out.push('\n');
     let legend: Vec<String> = names
         .iter()
         .zip(colors)
         .map(|(nm, c)| ansi(*c, &format!("■ {nm}")))
         .collect();
-    println!("{}", legend.join("  "));
+    out.push_str(&" ".repeat(gutter + 2));
+    out.push_str(&legend.join("  "));
+    out.push('\n');
+    out
 }
 
 /// Render one non-stacked line per series via textplots (braille canvas).
-pub fn render_lines(title: &str, series: &[Vec<u32>], names: &[String], colors: &[(u8, u8, u8)]) {
+pub fn render_lines(
+    title: &str,
+    series: &[Vec<u32>],
+    names: &[String],
+    colors: &[(u8, u8, u8)],
+    unit: &str,
+) {
     println!("\n{title}");
     let n = series.first().map(|s| s.len()).unwrap_or(0);
     if n == 0 {
@@ -136,9 +208,14 @@ pub fn render_lines(title: &str, series: &[Vec<u32>], names: &[String], colors: 
         })
         .collect();
     let mut chart = Chart::new(width * 2, 60, 0.0, (n.saturating_sub(1)) as f32);
+    let unit = unit.to_owned();
     // textplots' builder borrows each Shape for the chart's lifetime.
     let shapes: Vec<Shape> = points.iter().map(|p| Shape::Lines(p)).collect();
-    let mut plot = &mut chart;
+    let mut plot = chart
+        .y_label_format(LabelFormat::Custom(Box::new(move |v| {
+            format!("{}{unit}", v.round())
+        })))
+        .y_tick_display(TickDisplay::Sparse);
     for (sh, col) in shapes.iter().zip(colors) {
         plot = plot.linecolorplot(sh, rgb::RGB8::new(col.0, col.1, col.2));
     }
@@ -168,6 +245,46 @@ mod tests {
         // Two segments split proportionally, indices bottom->top.
         assert_eq!(stack_column(&[2, 2], 4, 4), vec![0, 0, 1, 1]);
     }
+
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                chars.by_ref().find(|&c| c == 'm');
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn stacked_bars_label_the_y_axis() {
+        let starts: Vec<DateTime<Utc>> = (1..=3)
+            .map(|d| format!("2026-09-0{d}T00:00:00Z").parse().unwrap())
+            .collect();
+        let out = strip_ansi(&stacked_bars(
+            "t",
+            &["a".into(), "b".into(), "c".into()],
+            &[vec![1, 2, 3], vec![0, 1, 2]],
+            &["x".into(), "y".into()],
+            &[(0, 0, 0), (0, 0, 0)],
+            &starts,
+            false,
+            "",
+        ));
+        let lines: Vec<&str> = out.lines().skip(2).collect();
+        let (plot, rest) = lines.split_at(BLOCK_HEIGHT + 1);
+        assert!(plot[0].starts_with("5 ┤"), "{out}");
+        assert!(plot[BLOCK_HEIGHT].starts_with("0 └"), "{out}");
+        for row in plot {
+            let axis = row.chars().nth(2);
+            assert!(matches!(axis, Some('┤' | '│' | '└')), "{out}");
+        }
+        assert!(rest[0].starts_with("   a"), "{out}");
+    }
+
     #[test]
     fn stack_column_empty_when_zero() {
         assert!(stack_column(&[0, 0], 4, 4).is_empty());
