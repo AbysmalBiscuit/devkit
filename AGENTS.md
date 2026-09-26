@@ -13,6 +13,15 @@ devrun task fmt                                         # nightly rustfmt; stabl
 
 Run all of them before committing. CI runs them on ubuntu, macos and windows.
 
+Text written for agents (the brief, hook injections, help an agent reads) also has an opt-in eval, since CI cannot judge whether an agent understands it. It needs a logged-in `claude`, and every run is billed:
+
+```sh
+devrun task eval --arg eval_case=brief                   # this checkout, 3 runs
+evals/run.sh brief main=/path/to/old/devkit new=target/debug/devkit   # compare builds
+```
+
+A case under `evals/` is a `render.sh` that prints the text from a devkit binary, a `preamble.md`, and a `questions.json` answer key. Each question takes its expected answer from real behavior, and `proof` names the test that pins that behavior. The runner asks isolated agents for structured answers and prints a table per label: questions answered correctly, how many of those the text stated outright, confidence, and cost. `EVAL_REPS` and `EVAL_MODEL` override the run count and model. Results, including every spot the agents flagged as ambiguous, land in `target/evals/`.
+
 ## Layout
 
 The root package is the `devkit` binary (`src/bin/devkit/`, one module per subcommand). `devkitd` (`src/bin/devkitd/`) is the supervisor daemon.
