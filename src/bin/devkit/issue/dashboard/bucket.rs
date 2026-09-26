@@ -129,15 +129,32 @@ pub fn type_rank(k: StateKind) -> u8 {
     }
 }
 
+/// Hex colour for a status whose tracker supplies none (GitHub), on GitHub's
+/// own open-green / closed-purple scheme.
+fn kind_color(k: StateKind) -> &'static str {
+    match k {
+        StateKind::Triage => "#f78166",
+        StateKind::Backlog => "#8b949e",
+        StateKind::Unstarted => "#58a6ff",
+        StateKind::Started => "#3fb950",
+        StateKind::Completed => "#a371f7",
+        StateKind::Canceled => "#6e7681",
+    }
+}
+
 /// Build a `Replay` and record every state's (kind, color) into `meta`.
 pub fn parse_issue(iss: &AssignedIssue, meta: &mut HashMap<String, (StateKind, String)>) -> Replay {
-    meta.entry(iss.state.name.clone())
-        .or_insert((iss.state.kind, iss.state.color.clone().unwrap_or_default()));
+    let mut record = |s: &State| {
+        meta.entry(s.name.clone()).or_insert_with(|| {
+            let color = s.color.clone();
+            (s.kind, color.unwrap_or_else(|| kind_color(s.kind).into()))
+        });
+    };
+    record(&iss.state);
     let mut raw: Vec<(DateTime<Utc>, Option<String>, String)> = Vec::new();
     for (when, from, to) in &iss.history {
         for s in [from, to].into_iter().flatten() {
-            meta.entry(s.name.clone())
-                .or_insert((s.kind, s.color.clone().unwrap_or_default()));
+            record(s);
         }
         if let (Some(t), Some(to_state)) = (parse_ts(when), to) {
             raw.push((
@@ -246,6 +263,26 @@ mod tests {
             name: name.into(),
             color: Some(color.into()),
         }
+    }
+
+    /// GitHub reports no state colours, so each status is coloured by its
+    /// kind rather than every band falling back to the same grey.
+    #[test]
+    fn uncoloured_states_get_distinct_colours() {
+        use devkit_common::tracker::github::map_state;
+        let open = map_state("OPEN", None);
+        let done = map_state("CLOSED", Some("COMPLETED"));
+        let iss = AssignedIssue {
+            identifier: "1".into(),
+            created_at: "2026-09-01T00:00:00Z".into(),
+            state: done.clone(),
+            history: vec![("2026-09-02T00:00:00Z".into(), Some(open), Some(done))],
+        };
+        let mut meta = HashMap::new();
+        parse_issue(&iss, &mut meta);
+        let (open, done) = (&meta["Open"].1, &meta["Done"].1);
+        assert!(!open.is_empty() && !done.is_empty(), "{meta:?}");
+        assert_ne!(open, done);
     }
 
     /// The chart stacks statuses in lifecycle order, keyed off `StateKind`
