@@ -49,15 +49,11 @@ Takes a path from its current holder. Reserve it for a holder you have confirmed
 
 Some checkouts turn on write enforcement, where the devkit plugin's `PreToolUse` hook owns the protocol.
 
-Enforcement turns on from any of these, with the env var overriding the files:
-
-- `DEVKIT_ENFORCE_WRITES=1` — machine-wide master switch (`0`/`false` forces off).
-- `[harness] enforce_writes = true` in the global config (`$DEVKIT_CONFIG`, else `~/.config/devkit/config.toml`) — every checkout.
-- `[harness] enforce_writes = true` in a checkout's own `devkit.toml` — that one.
+Enforcement turns on with `[harness] enforce_writes = true` in a checkout's `devkit.toml` (that checkout) or in the global config (every checkout), or with `DEVKIT_ENFORCE_WRITES=1`. The key's `devkit schema` description gives the full resolution order. With the global default on, `DEVKIT_ENFORCE_WRITES=off` opts one session out.
 
 Mechanics:
 
-- **Auto-acquire on first write.** Before the first `Edit`/`MultiEdit`/`Write`/`NotebookEdit` to a file, the hook locks it for the session. Later writes to the same file by the same session, or by a sub-agent it delegates to, need no re-acquire.
+- **Auto-acquire on first write.** Before the first `Edit`/`MultiEdit`/`Write`/`NotebookEdit` (or Codex's `apply_patch`) to a file, the hook locks it for the session. Later writes to the same file by the same session, or by a sub-agent it delegates to, need no re-acquire.
 - **Holder identity.** Top-level writes are held under the session id; sub-agent writes under `session_id/agent_id`. A Claude Code fork (an `agent_id` with no `agent_type`, such as a background summary) writes under the session id, because it can end without a `SubagentStop` to release it. A parent holding a file implicitly covers its sub-agents.
 - **A blocked write returns a deny** naming the holder:
   ```
@@ -65,9 +61,17 @@ Mechanics:
   agent; coordinate or wait for it to finish
   ```
 - **Automatic release.** Sub-agent locks release on `SubagentStop`; all session locks release on `SessionEnd`, whether that is a normal exit, Ctrl-C, or an error. The 30-min TTL backstops a hard kill.
-- **Fail-open when off or when `lockm` is absent.** The hook exits without blocking and takes no locks.
-- **Fail-closed on registry errors.** With `lockm` present but the registry erroring (corruption, permissions), the hook denies the write rather than allowing it silently.
+- **Fail-open when off or when `devkit` is not on `PATH`.** The hook exits without blocking and takes no locks.
+- **Fail-closed on registry errors.** With enforcement on but the registry erroring (corruption, permissions), the hook denies the write rather than allowing it silently.
 
 ## Shell writes
 
-`devkit hook pre-tool-use` claims the targets of a shell command before it runs, with the same holder, TTL, and release as `Edit`/`Write`. A conflict is refused naming the holder. A whole-tree writer (`cargo fmt`, `git checkout`, `rm -r dir`) claims nothing and is refused while another session holds any lock under the tree. What devkit cannot resolve follows `[harness] unresolved_writes`, `unsupported_language`, and `script_files` (`block`, `warn`, or `allow`); the defaults block the first two and allow script files. A refused unresolved write is fixed by making the target explicit, not by acquiring a lock.
+`devkit hook pre-tool-use` claims the targets of a shell command before it runs, with the same holder, TTL, and release as `Edit`/`Write`. A conflict is refused naming the holder.
+
+- The shell tools are `Bash`, Claude Code's `PowerShell`, and Cursor's `Shell`. devkit parses the command and the scripts it runs.
+- Redirects, `tee`, `cp`, `mv`, `rm`, `touch`, `dd`, `sed -i`, `perl -i`, the git verbs that rewrite files, common formatters, inline Python/JavaScript/TypeScript file APIs (a target from `sys.argv`/`process.argv` included) and PowerShell's content and item cmdlets all resolve to targets.
+- A whole-tree writer (`cargo fmt`, `git checkout`, `rm -r dir`) claims nothing and is refused while another session holds any lock under the tree.
+- Build tools and package managers are not treated as writers. `devrun task <name>` is not expanded, so a task that formats the tree goes unchecked.
+- Cursor gets the command guard only; its shell calls claim nothing.
+
+What devkit cannot resolve follows `[harness] unresolved_writes`, `unsupported_language`, and `script_files` (`block`, `warn`, or `allow`); the defaults block the first two and allow script files. A refused unresolved write is fixed by making the target explicit, not by acquiring a lock.

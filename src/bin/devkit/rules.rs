@@ -35,6 +35,8 @@ pub enum RulesCommand {
     /// Add a rule to the index and print its id.
     Add(AddArgs),
     /// Change a rule and pin it against a rebuild of the index.
+    ///
+    /// The rule keeps its id even when its title changes.
     Edit(EditArgs),
     /// Remove a rule, leaving a pinned tombstone for an extracted one.
     ///
@@ -65,12 +67,13 @@ pub struct QueryArgs {
     #[arg(long = "path", short = 'p')]
     pub paths: Vec<String>,
     /// Rank rules about this topic first. Topics come from the repo's
-    /// .agents/repo-rules-agent.toml. Repeatable.
+    /// .agents/repo-rules-agent.toml. One the file does not define matches
+    /// rule text only, and warns on stderr if the file defines any. Repeatable.
     #[arg(long = "topic")]
     pub topics: Vec<String>,
     /// Print at most this many rules, most useful first. 0 prints all.
     /// Defaults to query.limit in the repo's .agents/repo-rules-agent.toml,
-    /// then to 50.
+    /// then to 50. A capped result says so on stderr.
     #[arg(long, short = 'n')]
     pub limit: Option<usize>,
     #[arg(long, short = 'f', value_enum, default_value_t = Format::Table)]
