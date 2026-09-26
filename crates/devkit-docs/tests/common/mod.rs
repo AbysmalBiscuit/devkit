@@ -28,6 +28,39 @@ pub fn fixture_repo(dir: &Path) -> String {
     dir.to_str().unwrap().to_string()
 }
 
+/// Serve an already-built fixture the way a hosting service does, as a
+/// `file://` URL that honors `--filter`. git ignores `--filter` for a clone from
+/// a plain path, so a partial clone needs this URL to be partial at all.
+#[allow(dead_code)]
+pub fn serve_partial(dir: &Path) -> String {
+    sh(&["config", "uploadpack.allowFilter", "true"], dir);
+    sh(&["config", "uploadpack.allowAnySHA1InWant", "true"], dir);
+    let path = dir.to_str().unwrap().replace('\\', "/");
+    match path.strip_prefix('/') {
+        Some(rooted) => format!("file:///{rooted}"),
+        None => format!("file:///{path}"),
+    }
+}
+
+/// Object ids of one type (`tree`, `blob`) held locally by `repo`, leaving out
+/// what a partial clone could still fetch on demand.
+#[allow(dead_code)]
+pub fn local_objects(repo: &Path, kind: &str) -> Vec<String> {
+    devkit_common::git::Git::fixture(repo)
+        .args([
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectname) %(objecttype)",
+        ])
+        .output()
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(_, object_kind)| *object_kind == kind)
+        .map(|(id, _)| id.to_string())
+        .collect()
+}
+
 /// `anyhow`'s `{:?}` appends a captured backtrace whenever `RUST_BACKTRACE` is
 /// set — CI sets it globally. Two errors raised at different call sites capture
 /// different ones, and the frames name registry paths and rustc hashes that no

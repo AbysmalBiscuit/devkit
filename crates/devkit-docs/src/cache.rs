@@ -138,6 +138,74 @@ fn assert_dir_exact(parent: &Path, name: &str) -> Result<()> {
     );
 }
 
+/// Non-cone sparse-checkout patterns that keep everything except `exclude`,
+/// or `None` when nothing is excluded and the checkout stays whole.
+fn sparse_patterns(exclude: &[String]) -> Result<Option<Vec<String>>> {
+    if exclude.is_empty() {
+        return Ok(None);
+    }
+    let mut patterns = vec!["/*".to_string()];
+    for raw in exclude {
+        let pattern = raw.trim();
+        if pattern.is_empty() || pattern.starts_with('!') || pattern.contains(['\n', '\r']) {
+            bail!(
+                "exclude pattern `{raw}` must name paths to leave out; blank, multi-line and \
+                 `!` re-include patterns are not supported"
+            );
+        }
+        patterns.push(format!("!{pattern}"));
+    }
+    Ok(Some(patterns))
+}
+
+/// Fill a worktree added with `--no-checkout`, applying `sparse` first so
+/// only what it keeps is fetched and written.
+fn populate(path: &Path, sparse: Option<&[String]>) -> Result<()> {
+    if let Some(patterns) = sparse {
+        set_sparse(path, patterns)?;
+    }
+    Git::at(path)
+        .args(["read-tree", "-mu", "HEAD"])
+        .network()
+        .output()?;
+    Ok(())
+}
+
+/// Bring an existing worktree's sparse patterns in line with `sparse`,
+/// reporting whether anything had to change.
+fn resparse(path: &Path, sparse: Option<&[String]>) -> Result<bool> {
+    // `list` fails on a worktree that is not sparse.
+    let current = Git::at(path)
+        .args(["sparse-checkout", "list"])
+        .output()
+        .ok();
+    let current: Option<Vec<&str>> = current.as_deref().map(|out| out.lines().collect());
+    let wanted: Option<Vec<&str>> =
+        sparse.map(|patterns| patterns.iter().map(String::as_str).collect());
+    if current == wanted {
+        return Ok(false);
+    }
+    match sparse {
+        Some(patterns) => set_sparse(path, patterns)?,
+        None => {
+            Git::at(path)
+                .args(["sparse-checkout", "disable"])
+                .network()
+                .output()?;
+        }
+    }
+    Ok(true)
+}
+
+fn set_sparse(path: &Path, patterns: &[String]) -> Result<()> {
+    Git::at(path)
+        .args(["sparse-checkout", "set", "--no-cone"])
+        .args(patterns.iter().map(String::as_str))
+        .network()
+        .output()?;
+    Ok(())
+}
+
 fn read_dir_entries(parent: &Path) -> Result<Vec<std::fs::DirEntry>> {
     let entries =
         std::fs::read_dir(parent).with_context(|| format!("reading {}", parent.display()))?;
@@ -351,35 +419,51 @@ impl LibCache {
         Ok(Some(commit))
     }
 
-    /// Materialize at `commit`, re-pointing an existing worktree that drifted.
-    pub fn ensure_at(&self, dirname: &str, commit: &str) -> Result<(PathBuf, bool)> {
+    /// Materialize at `commit` without the paths `exclude` names, re-pointing
+    /// an existing worktree that drifted and re-applying exclusions that
+    /// changed. Exclusions are in place before any file is written, so a
+    /// partial clone never fetches what they leave out.
+    pub fn ensure_at(
+        &self,
+        dirname: &str,
+        commit: &str,
+        exclude: &[String],
+    ) -> Result<(PathBuf, bool)> {
+        let sparse = sparse_patterns(exclude)?;
         let path = self.worktree_path(dirname);
         if !path.is_dir() {
             let path_string = path.to_string_lossy().into_owned();
             Git::at(&self.bare())
-                .args(["worktree", "add", "--detach", path_string.as_str(), commit])
-                .network()
+                .args([
+                    "worktree",
+                    "add",
+                    "--detach",
+                    "--no-checkout",
+                    path_string.as_str(),
+                    commit,
+                ])
                 .output()
-                .with_context(|| format!("materializing {dirname} at {commit}"))?;
-            if let Err(exact_error) = assert_dir_exact(&self.dir, dirname) {
+                .with_context(|| format!("adding worktree {dirname} at {commit}"))?;
+            if let Err(error) = assert_dir_exact(&self.dir, dirname).and_then(|()| {
+                populate(&path, sparse.as_deref())
+                    .with_context(|| format!("materializing {dirname} at {commit}"))
+            }) {
                 Git::at(&self.bare())
                     .args(["worktree", "remove", "--force", path_string.as_str()])
                     .timeout(SLOW_TIMEOUT)
                     .output()
-                    .with_context(|| {
-                        format!("cleaning up inexact worktree {dirname} after: {exact_error}")
-                    })?;
+                    .with_context(|| format!("cleaning up worktree {dirname} after: {error:#}"))?;
                 Git::at(&self.bare())
                     .args(["worktree", "prune"])
                     .output()
-                    .with_context(|| {
-                        format!("pruning inexact worktree {dirname} after: {exact_error}")
-                    })?;
-                return Err(exact_error);
+                    .with_context(|| format!("pruning worktree {dirname} after: {error:#}"))?;
+                return Err(error);
             }
             return Ok((path, false));
         }
         assert_dir_exact(&self.dir, dirname)?;
+        let resparsed = resparse(&path, sparse.as_deref())
+            .with_context(|| format!("applying exclude patterns to {dirname}"))?;
         let head = Git::at(&path)
             .args(["rev-parse", "HEAD"])
             .output()
@@ -387,7 +471,7 @@ impl LibCache {
             .trim()
             .to_string();
         if head == commit {
-            return Ok((path, false));
+            return Ok((path, resparsed));
         }
         Git::at(&path)
             .args(["checkout", "--detach", commit])

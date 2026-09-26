@@ -4,7 +4,7 @@ use common::fixture_repo;
 use devkit_docs::{
     manifest::{Ecosystem, LibEntry},
     refs::RefStore,
-    resolve::{Options, resolve},
+    resolve::{Options, Status, resolve},
 };
 
 /// A follow-up git operation against an already-built `fixture_repo`.
@@ -128,6 +128,64 @@ fn layout_override_applies_and_meta_caches_detection() {
     let meta = devkit_docs::cache::read_meta(&cache_root.join("mylib")).unwrap();
     // meta stores the DETECTED layout (docs), not the override.
     assert_eq!(meta.layouts["v1.0.0"].docs_dir.as_deref(), Some("docs"));
+}
+
+#[test]
+fn excluded_paths_are_neither_fetched_nor_checked_out() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
+    let upstream = tmp.join("upstream");
+    let upstream_path = fixture_repo(&upstream);
+    let guide_blob = git(&["rev-parse", "v1.0.0:docs/guide.md"], &upstream_path);
+    let cache_root = tmp.join("cache");
+    let mut entry = LibEntry {
+        name: "mylib".into(),
+        repo: Some(common::serve_partial(&upstream)),
+        r#ref: Some("v1.0.0".into()),
+        exclude: Some(vec!["docs/".into()]),
+        ..Default::default()
+    };
+
+    let r = resolve(&entry, tmp, &cache_root, &Options::default()).unwrap();
+
+    assert!(!r.path.join("docs/guide.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(r.path.join("src/lib.rs")).unwrap(),
+        "// v1"
+    );
+    let bare = cache_root.join("mylib/repo.git");
+    assert!(!common::local_objects(&bare, "blob").contains(&guide_blob.trim().to_string()));
+
+    entry.exclude = None;
+    let r = resolve(&entry, tmp, &cache_root, &Options::default()).unwrap();
+    assert!(r.path.join("docs/guide.md").is_file());
+    assert_eq!(r.status, Status::Repaired);
+
+    entry.exclude = Some(vec!["*.md".into()]);
+    let r = resolve(&entry, tmp, &cache_root, &Options::default()).unwrap();
+    assert!(!r.path.join("docs/guide.md").exists());
+    assert!(r.path.join("src/lib.rs").is_file());
+    assert_eq!(r.status, Status::Repaired);
+
+    let r = resolve(&entry, tmp, &cache_root, &Options::default()).unwrap();
+    assert_eq!(r.status, Status::Ok);
+}
+
+#[test]
+fn a_negated_exclude_pattern_is_refused() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
+    let entry = LibEntry {
+        name: "mylib".into(),
+        repo: Some(fixture_repo(&tmp.join("upstream"))),
+        r#ref: Some("v1.0.0".into()),
+        exclude: Some(vec!["!docs/".into()]),
+        ..Default::default()
+    };
+
+    let error = resolve(&entry, tmp, &tmp.join("cache"), &Options::default()).unwrap_err();
+
+    assert!(format!("{error:#}").contains("!docs/"), "{error:#}");
 }
 
 #[test]

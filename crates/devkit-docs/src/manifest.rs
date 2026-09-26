@@ -62,6 +62,12 @@ pub struct LibEntry {
     /// Docs directory inside the checkout, overriding layout detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub docs_dir: Option<String>,
+    /// Gitignore-style patterns every checkout leaves out, neither downloaded
+    /// nor written (e.g. `["testdata/", "*.json"]`). Global manifest only: a
+    /// checkout is shared by every project, so a project layer that set its
+    /// own list would rewrite the tree under the others.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
     /// Freeform note surfaced by `docm info` and `docm list`: what this
     /// library is here for.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,6 +197,7 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
 
     let main = devkit_common::git::main_checkout(start).ok().flatten();
     let mut nearest: Option<PathBuf> = None;
+    let mut problems: Vec<String> = Vec::new();
     for layer in devkit_config::project_layers(start, main.as_deref())? {
         if layer.kind != devkit_config::LayerKind::MainCheckout
             && layer.path.file_name() == Some(std::ffi::OsStr::new(devkit_config::CONFIG_FILE))
@@ -198,11 +205,19 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
             nearest = Some(layer.path.clone());
         }
         if let Some(mut docs) = docs_layer(&layer.path)? {
+            for lib in docs.libs.iter().filter(|lib| lib.exclude.is_some()) {
+                problems.push(format!(
+                    "library `{}` sets `exclude` in {}; checkouts are shared by every \
+                     project, so exclusions belong in the global manifest (`docm add \
+                     --exclude`)",
+                    lib.name,
+                    layer.path.display()
+                ));
+            }
             stamp(&mut docs, &layer.path);
             manifest = merge(manifest, docs);
         }
     }
-    let mut problems: Vec<String> = Vec::new();
     let mut seen: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for l in &manifest.libs {
         let dir = crate::names::encode(&l.name);
@@ -305,7 +320,7 @@ fn atomic_write(path: &Path, contents: String) -> Result<()> {
 
 /// Every key `LibEntry` models. A `[[docs.libs]]` table may carry others; an
 /// upsert owns only these, so anything else the file holds stays as written.
-const ENTRY_KEYS: [&str; 8] = [
+const ENTRY_KEYS: [&str; 9] = [
     "name",
     "ecosystem",
     "package",
@@ -313,6 +328,7 @@ const ENTRY_KEYS: [&str; 8] = [
     "ref",
     "src_dir",
     "docs_dir",
+    "exclude",
     "notes",
 ];
 
@@ -636,6 +652,25 @@ mod tests {
     }
 
     #[test]
+    fn a_project_layer_cannot_set_exclude() {
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("docs.toml");
+        std::fs::write(&global, "[[libs]]\nname='ts'\nexclude=['testdata/']\n").unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[[docs.libs]]\nname='ts'\nexclude=[]\n",
+        )
+        .unwrap();
+
+        let error = discover(dir.path(), Some(&global)).unwrap_err();
+
+        assert!(error.to_string().contains("`ts` sets `exclude`"), "{error}");
+        std::fs::write(dir.path().join("devkit.toml"), "[[docs.libs]]\nname='ts'\n").unwrap();
+        let d = discover(dir.path(), Some(&global)).unwrap();
+        assert_eq!(d.manifest.libs[0].exclude, Some(vec!["testdata/".into()]));
+    }
+
+    #[test]
     fn upsert_global_creates_replaces_and_remove_deletes() {
         let root_dir = tempfile::tempdir().unwrap();
         let root = root_dir.path();
@@ -673,6 +708,7 @@ mod tests {
             r#ref: Some("v".into()),
             src_dir: Some("s".into()),
             docs_dir: Some("d".into()),
+            exclude: Some(vec!["*.json".into()]),
             notes: Some("note".into()),
             origin_file: Some("/ignored".into()),
         };

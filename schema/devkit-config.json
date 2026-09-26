@@ -624,6 +624,16 @@
           ],
           "description": "Which importer graph resolves the version. Omit to detect it from the\nproject's lockfiles."
         },
+        "exclude": {
+          "description": "Gitignore-style patterns every checkout leaves out, neither downloaded\nnor written (e.g. `[\"testdata/\", \"*.json\"]`). Global manifest only: a\ncheckout is shared by every project, so a project layer that set its\nown list would rewrite the tree under the others.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "name": {
           "description": "Id this library is addressed by on the `docm` command line, and the\nkey an overlay entry merges onto.",
           "type": "string"

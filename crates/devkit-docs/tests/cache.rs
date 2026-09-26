@@ -51,16 +51,16 @@ fn clone_tags_and_ref_named_worktrees() {
     assert_eq!(lib.default_branch().unwrap(), "main");
 
     let (_, tag_commit) = lib.resolve_ref("v1.0.0").unwrap();
-    let (wt, repaired) = lib.ensure_at("v1.0.0", &tag_commit).unwrap();
+    let (wt, repaired) = lib.ensure_at("v1.0.0", &tag_commit, &[]).unwrap();
     assert!(!repaired);
     assert_eq!(
         std::fs::read_to_string(wt.join("src/lib.rs")).unwrap(),
         "// v1"
     );
-    assert!(!lib.ensure_at("v1.0.0", &tag_commit).unwrap().1);
+    assert!(!lib.ensure_at("v1.0.0", &tag_commit, &[]).unwrap().1);
 
     let (_, main_commit) = lib.resolve_ref("main").unwrap();
-    let (main, _) = lib.ensure_at("main", &main_commit).unwrap();
+    let (main, _) = lib.ensure_at("main", &main_commit, &[]).unwrap();
     assert_eq!(
         std::fs::read_to_string(main.join("src/lib.rs")).unwrap(),
         "// v2"
@@ -88,7 +88,7 @@ fn a_branch_checkout_follows_new_commits_after_fetch() {
     let mut meta = Meta::default();
     lib.ensure_clone(&repo, &mut meta).unwrap();
     let (_, first_commit) = lib.resolve_ref("main").unwrap();
-    let (main, _) = lib.ensure_at("main", &first_commit).unwrap();
+    let (main, _) = lib.ensure_at("main", &first_commit, &[]).unwrap();
     assert_eq!(
         std::fs::read_to_string(main.join("src/lib.rs")).unwrap(),
         "// v2"
@@ -99,7 +99,7 @@ fn a_branch_checkout_follows_new_commits_after_fetch() {
     git(&["commit", "-m", "v3"], &upstream);
     lib.fetch().unwrap();
     let (_, next_commit) = lib.resolve_ref("main").unwrap();
-    let (main, repaired) = lib.ensure_at("main", &next_commit).unwrap();
+    let (main, repaired) = lib.ensure_at("main", &next_commit, &[]).unwrap();
     assert!(repaired);
     assert_eq!(
         std::fs::read_to_string(main.join("src/lib.rs")).unwrap(),
