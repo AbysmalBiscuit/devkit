@@ -1,10 +1,11 @@
 //! `devkit brief` — a compact project orientation for coding-agent session
 //! hooks. Prints the configured apps, canned tasks, and any live servers for
 //! the current worktree when the working directory belongs to a
-//! devkit-managed project, plus a library-versions table for any registered
-//! library this checkout evidences — the two sections are independent, so a
-//! docs-only checkout with no devrun setup still gets the latter. Prints
-//! nothing when neither applies, so a SessionStart hook can call it
+//! devkit-managed project, a rules section when the write hook has a rule
+//! index to inject from, and a library-versions table for any registered
+//! library this checkout evidences. The sections are independent, so a
+//! docs-only checkout with no devrun setup still gets the last. Prints
+//! nothing when none applies, so a SessionStart hook can call it
 //! unconditionally from any repository.
 //!
 //! Silence is for a checkout with nothing to say, never for one that cannot be
@@ -48,6 +49,7 @@ use devkit_common::git::Checkout;
 use devkit_config as config;
 use devkit_config::BriefConfig;
 use devkit_ports::{apps::App, load, registry, task};
+use devkit_rules::vocab::Severity;
 
 /// How the brief reaches the session. Claude Code injects a hook's plain
 /// stdout; Codex and Cursor read it out of a JSON field instead, and spell that
@@ -78,11 +80,14 @@ impl Emit {
 /// `CURSOR_PROJECT_DIR` is the variable Cursor documents as passed to every
 /// hook process; `CURSOR_PLUGIN_ROOT` is accepted alongside it but is not
 /// documented anywhere.
-pub(crate) fn envelope(text: &str) -> serde_json::Value {
-    let cursor = ["CURSOR_PROJECT_DIR", "CURSOR_PLUGIN_ROOT"]
+fn cursor_host() -> bool {
+    ["CURSOR_PROJECT_DIR", "CURSOR_PLUGIN_ROOT"]
         .iter()
-        .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()));
-    if cursor {
+        .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+}
+
+pub(crate) fn envelope(text: &str) -> serde_json::Value {
+    if cursor_host() {
         serde_json::json!({ "additional_context": text })
     } else {
         serde_json::json!({
@@ -185,6 +190,7 @@ struct BriefSnapshot {
     locks: bool,
     enforced: bool,
     pins: Vec<PinKey>,
+    rules: Option<Severity>,
     /// Why the config does not load, so that fixing it is a change
     /// `--if-changed` can see — otherwise the session that was told about the
     /// fault would never be told it is over.
@@ -288,6 +294,9 @@ impl BriefSnapshot {
                 p.outcome,
                 p.resolved.as_deref().unwrap_or("-")
             ));
+        }
+        if let Some(floor) = self.rules {
+            out.push_str(&format!("rules\t{floor}\n"));
         }
         if let Some(fault) = &self.config_fault {
             out.push_str(&format!("config-fault\t{fault}\n"));
@@ -459,7 +468,8 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
         enforced,
     };
     let config_fault = config_fault(cwd, checkout);
-    if pin_keys.is_empty() && !facilities.any() && config_fault.is_none() {
+    let rules = rules_floor(checkout, cwd, settings);
+    if pin_keys.is_empty() && !facilities.any() && config_fault.is_none() && rules.is_none() {
         return None;
     }
 
@@ -471,6 +481,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
         locks,
         enforced,
         pins: pin_keys,
+        rules,
         config_fault,
     })
 }
@@ -523,7 +534,8 @@ fn render(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<Str
     let pins = pins_section(&checkout_pins(cwd, settings));
     let devrun = devrun_sections(checkout, &root, cwd, settings);
     let fault = config_fault(cwd, checkout);
-    if pins.is_none() && devrun.is_none() && fault.is_none() {
+    let rules = rules_floor(checkout, cwd, settings);
+    if pins.is_none() && devrun.is_none() && fault.is_none() && rules.is_none() {
         return None;
     }
 
@@ -552,6 +564,9 @@ fn render(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<Str
     }
     if let Some(sections) = &devrun {
         out.push_str(&devrun_text(sections));
+    }
+    if let Some(floor) = rules {
+        out.push_str(&rules_text(floor));
     }
     if let Some(section) = pins {
         out.push_str(&section);
@@ -612,6 +627,41 @@ fn join_and(items: &[&str]) -> String {
         [a, b] => format!("{a} and {b}"),
         [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
+}
+
+/// The least severe rule the write hook injects, or `None` when the brief has
+/// no rules section: switched off, `[rules]` disabled, or no index loads. An
+/// unparseable floor reads as `should`, the same fallback the hook takes.
+fn rules_floor(checkout: &Checkout, cwd: &Path, settings: &BriefConfig) -> Option<Severity> {
+    if !settings.rules {
+        return None;
+    }
+    let (rules, _) = crate::rules::enabled_index(checkout, cwd)?;
+    Some(rules.min_severity.parse().unwrap_or(Severity::Should))
+}
+
+/// What the write hook does with the index, as the reading host sees it. The
+/// hook injects before edit-tool writes only, so shell writes get nothing, and
+/// under Cursor, whose hooks never see an edit tool, nothing does.
+fn rules_text(floor: Severity) -> String {
+    let body = if cursor_host() {
+        "This repository has a rule index. Cursor edits get no rules added automatically, so run \
+         `devkit rules query --path <file>` before editing a file to see the rules that govern it."
+            .to_string()
+    } else {
+        let injected = match floor {
+            Severity::Must => "`must` rules",
+            Severity::Should => "`must` and `should` rules",
+            Severity::Can => "rules of every severity",
+        };
+        format!(
+            "This repository has a rule index. Before an edit tool writes a file, devkit adds that \
+             file's {injected} to your context, each rule once per session; shell writes (`sed \
+             -i`, `>`, heredocs) get none. `devkit rules query --path <file>` lists all of a \
+             file's rules, whatever their severity."
+        )
+    };
+    format!("\n### Rules\n\n{}\n", wrap(&body))
 }
 
 /// Every registered library's pin for this checkout, empty when the `[brief]`

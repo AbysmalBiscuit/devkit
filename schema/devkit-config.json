@@ -130,6 +130,11 @@
           "description": "The library-versions section.",
           "type": "boolean"
         },
+        "rules": {
+          "default": true,
+          "description": "The rules section: which of a file's rules reach the session on their\nown and how to list the rest. It appears only while `[rules]` is\nenabled and its index loads.",
+          "type": "boolean"
+        },
         "tasks": {
           "default": true,
           "description": "The task table and the `devrun task` bullet.",
@@ -1321,6 +1326,7 @@
         "enabled": true,
         "locks": true,
         "pins": true,
+        "rules": true,
         "tasks": true
       },
       "description": "Which sections `devkit brief` emits at session start."
