@@ -1,0 +1,24 @@
+# A small monorepo for the brief's claim tests and `evals/brief`. Setup appends
+# a `[rules]` table pointing `index` at this directory's index.json.
+
+[apps.web]
+base_port = 41000
+path = "apps/web"
+launch = ["pnpm", "--filter", "web", "dev", "--port", "{{ port }}"]
+
+[apps.api]
+base_port = 41100
+path = "apps/api"
+launch = ["pnpm", "--filter", "api", "dev", "--port", "{{ port }}"]
+
+[tasks.test]
+description = "Run the vitest suite across the workspace"
+run = ["pnpm", "vitest", "run"]
+
+[tasks.lint]
+description = "Lint and typecheck every package"
+run = ["pnpm", "-r", "lint"]
+
+[tasks.migrate]
+description = "Apply pending database migrations"
+run = ["pnpm", "--filter", "db", "prisma", "migrate", "deploy"]
