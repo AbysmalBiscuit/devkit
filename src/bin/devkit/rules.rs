@@ -320,7 +320,15 @@ fn query_cmd(args: QueryArgs) -> Result<()> {
     }
     match args.format {
         Format::Json => println!("{}", serde_json::to_string_pretty(&rules)?),
-        Format::Prompt => print!("{}", devkit_rules::render::block(&rules, &[], usize::MAX)),
+        Format::Prompt => print!(
+            "{}",
+            devkit_rules::render::block(
+                devkit_rules::render::EDIT_HEADING,
+                &rules,
+                &[],
+                usize::MAX
+            )
+        ),
         Format::Table => {
             let mut table =
                 devkit_common::ui::table(&["ID", "SEVERITY", "DIRECTORY", "TITLE", "SOURCE"]);
@@ -479,7 +487,12 @@ fn context_cmd(args: ContextArgs) -> Result<()> {
     let Some(budget) = project.rules.max_event_bytes.checked_sub(footer.len()) else {
         return Ok(());
     };
-    let rendered = devkit_rules::render::fit(matched, Vec::new(), budget);
+    let rendered = devkit_rules::render::fit(
+        "Rules for all code in this repository",
+        matched,
+        Vec::new(),
+        budget,
+    );
     let mut text = rendered.text;
     text.push_str(footer);
     if args.additional_context {

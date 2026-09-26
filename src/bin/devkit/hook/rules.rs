@@ -237,7 +237,12 @@ fn run(
     let budget = settings.per_event_limit.saturating_sub(files.len());
     chosen.truncate(budget);
 
-    let rendered = render::fit(chosen, files, settings.max_event_bytes);
+    let rendered = render::fit(
+        render::EDIT_HEADING,
+        chosen,
+        files,
+        settings.max_event_bytes,
+    );
     if rendered.text.is_empty() {
         return;
     }
