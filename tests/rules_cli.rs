@@ -483,3 +483,207 @@ fn additional_context_wraps_the_block_in_the_json_envelope() {
         .expect("additionalContext");
     assert!(text.contains("Root must"), "{text}");
 }
+
+fn rules_cmd(
+    project: &std::path::Path,
+    state: &std::path::Path,
+    args: &[&str],
+) -> std::process::Output {
+    let mut cmd = devkit();
+    cmd.arg("rules")
+        .args(args)
+        .current_dir(project)
+        .env("HOME", state)
+        .env("XDG_STATE_HOME", state)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env_remove("DEVKIT_CONFIG");
+    testenv::scrub_identity(&mut cmd);
+    cmd.output().unwrap()
+}
+
+fn rules_ok(project: &std::path::Path, state: &std::path::Path, args: &[&str]) -> String {
+    let out = rules_cmd(project, state, args);
+    assert!(
+        out.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+fn raw_rule(project: &std::path::Path, id: &str) -> Option<serde_json::Value> {
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(project.join("index.json")).unwrap())
+            .unwrap();
+    raw["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == id)
+        .cloned()
+}
+
+#[test]
+fn add_writes_a_pinned_rule_into_the_configured_index() {
+    let (proj, state) = context_project();
+    let id = rules_ok(proj.path(), state.path(), &[
+        "add",
+        "--title",
+        "Log with tracing",
+        "--description",
+        "Use tracing, never println.",
+        "--severity",
+        "must",
+        "--task",
+        "code-generation",
+        "--lang",
+        "rs",
+        "--directory",
+        "crates/foo/",
+    ]);
+    let id = id.trim();
+    assert!(!id.is_empty());
+
+    let rule = raw_rule(proj.path(), id).expect("the added rule is in the index");
+    assert_eq!(rule["pinned"], true);
+    assert_eq!(rule["directory"], "crates/foo");
+    assert_eq!(rule["scope"], "directory");
+    assert_eq!(rule["languages"], serde_json::json!(["rust"]));
+
+    let ids = query_ids(proj.path(), state.path(), &["crates/foo/a.rs"], &[]);
+    assert!(ids.iter().any(|i| i == id), "{ids:?}");
+    let ids = query_ids(proj.path(), state.path(), &["crates/bar/a.rs"], &[]);
+    assert!(!ids.iter().any(|i| i == id), "{ids:?}");
+}
+
+#[test]
+fn add_creates_the_index_when_none_exists() {
+    let (proj, state) = context_project();
+    std::fs::remove_file(proj.path().join("index.json")).unwrap();
+    let id = rules_ok(proj.path(), state.path(), &["add", "--title", "First"]);
+    assert!(raw_rule(proj.path(), id.trim()).is_some());
+    assert_eq!(query_ids(proj.path(), state.path(), &[], &[]), [id.trim()]);
+}
+
+#[test]
+fn add_refuses_a_rule_that_already_exists() {
+    let (proj, state) = context_project();
+    rules_ok(proj.path(), state.path(), &["add", "--title", "Twice"]);
+    let out = rules_cmd(proj.path(), state.path(), &["add", "--title", "Twice"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("already exists"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The extractor's output carries fields devkit never reads. Rewriting the
+/// index must not drop them.
+#[test]
+fn edit_pins_an_extracted_rule_keeps_its_id_and_preserves_unknown_fields() {
+    let (proj, state) = context_project();
+    let path = proj.path().join("index.json");
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    raw["source_sha"] = "abc".into();
+    raw["rules"][1]["future_field"] = 7.into();
+    std::fs::write(&path, raw.to_string()).unwrap();
+
+    rules_ok(proj.path(), state.path(), &[
+        "edit",
+        "r-foo-should",
+        "--title",
+        "Foo must now",
+        "--severity",
+        "must",
+    ]);
+
+    let rule = raw_rule(proj.path(), "r-foo-should").unwrap();
+    assert_eq!(rule["title"], "Foo must now");
+    assert_eq!(rule["severity"], "must");
+    assert_eq!(rule["pinned"], true);
+    assert_eq!(rule["description"], "Rust only, under crates/foo.");
+    assert_eq!(rule["future_field"], 7);
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(raw["source_sha"], "abc");
+    assert_eq!(raw["files"].as_array().unwrap().len(), 2);
+
+    let ids = query_ids(proj.path(), state.path(), &[], &["--severity", "must"]);
+    assert!(ids.iter().any(|i| i == "r-foo-should"), "{ids:?}");
+}
+
+#[test]
+fn edit_with_nothing_to_change_or_an_unknown_id_fails() {
+    let (proj, state) = context_project();
+    for args in [vec!["edit", "r-foo-should"], vec![
+        "edit",
+        "no-such-rule",
+        "--title",
+        "x",
+    ]] {
+        let out = rules_cmd(proj.path(), state.path(), &args);
+        assert!(!out.status.success(), "{args:?}");
+    }
+    assert!(raw_rule(proj.path(), "r-foo-should").unwrap()["pinned"].is_null());
+}
+
+/// Deleting an extracted rule outright would let the next extraction bring it
+/// back, so it stays behind as a pinned tombstone that readers skip.
+#[test]
+fn remove_leaves_a_tombstone_for_an_extracted_rule() {
+    let (proj, state) = context_project();
+    rules_ok(proj.path(), state.path(), &["remove", "r-root-must"]);
+
+    let rule = raw_rule(proj.path(), "r-root-must").expect("the tombstone stays");
+    assert_eq!(rule["removed"], true);
+    assert_eq!(rule["pinned"], true);
+    assert!(!query_ids(proj.path(), state.path(), &[], &[]).contains(&"r-root-must".to_string()));
+    let context = String::from_utf8(run_context(proj.path(), state.path(), &[]).stdout).unwrap();
+    assert!(!context.contains("Root must"), "{context}");
+
+    let out = rules_cmd(proj.path(), state.path(), &["remove", "r-root-must"]);
+    assert!(!out.status.success(), "a removed rule is gone");
+}
+
+#[test]
+fn remove_deletes_an_added_rule_outright() {
+    let (proj, state) = context_project();
+    let id = rules_ok(proj.path(), state.path(), &[
+        "add",
+        "--title",
+        "Short-lived",
+    ]);
+    rules_ok(proj.path(), state.path(), &["rm", id.trim()]);
+    assert!(raw_rule(proj.path(), id.trim()).is_none());
+}
+
+#[test]
+fn a_value_outside_the_vocabulary_names_the_accepted_ones() {
+    let (proj, state) = context_project();
+    for (args, accepted) in [
+        (
+            vec!["query", "--task", "nope"],
+            "code-review, code-generation, code-questions",
+        ),
+        (
+            vec!["query", "--scope", "nope"],
+            "repo, directory, file-pattern",
+        ),
+        (vec!["query", "--min-severity", "nope"], "must, should, can"),
+        (
+            vec!["add", "--title", "x", "--severity", "nope"],
+            "must, should, can",
+        ),
+        (
+            vec!["edit", "r-root-must", "--task", "nope"],
+            "code-review, code-generation, code-questions",
+        ),
+    ] {
+        let out = rules_cmd(proj.path(), state.path(), &args);
+        assert!(!out.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(accepted), "{args:?}: {stderr}");
+    }
+}

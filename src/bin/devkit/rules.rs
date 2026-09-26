@@ -1,15 +1,22 @@
-//! `devkit rules`: read the rule index the hooks inject from.
+//! `devkit rules`: read the rule index the hooks inject from, and change it by
+//! hand.
 //!
 //! The filters mirror `repo-rules-agent query` so the two agree on what a given
 //! query means, with `--min-severity` added: the hook asks for a floor, and a
 //! flag the hook uses is a flag a person can reproduce by hand.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use devkit_common::git::Checkout;
-use devkit_rules::{index, model::RuleIndex, query, vocab};
+use devkit_rules::{
+    edit, index,
+    model::RuleIndex,
+    query,
+    vocab::{self, Scope, Severity, Task},
+};
+use strum::VariantNames;
 
 #[derive(Args)]
 pub struct RulesCli {
@@ -25,24 +32,35 @@ pub enum RulesCommand {
     Stats(StatsArgs),
     /// Print the session-start context block.
     Context(ContextArgs),
+    /// Add a rule to the index and print its id.
+    Add(AddArgs),
+    /// Change a rule and pin it against a rebuild of the index.
+    Edit(EditArgs),
+    /// Remove a rule, leaving a pinned tombstone for an extracted one.
+    ///
+    /// Every reader skips the tombstone, and a rebuild that keeps pinned rules
+    /// does not extract the rule again. A rule made with `add` is deleted
+    /// outright.
+    #[command(visible_aliases = ["rm", "delete"])]
+    Remove(RemoveArgs),
 }
 
 #[derive(Args)]
 pub struct QueryArgs {
     /// The index file. Defaults to the one built for this checkout.
     pub index_path: Option<PathBuf>,
-    #[arg(long, short = 't')]
-    pub task: Option<String>,
+    #[arg(long, short = 't', value_parser = parse_vocab::<Task>)]
+    pub task: Option<Task>,
     #[arg(long = "lang", short = 'l')]
     pub language: Option<String>,
-    #[arg(long, short = 's')]
-    pub scope: Option<String>,
+    #[arg(long, short = 's', value_parser = parse_vocab::<Scope>)]
+    pub scope: Option<Scope>,
     /// Exact severity: must, should or can.
-    #[arg(long)]
-    pub severity: Option<String>,
+    #[arg(long, value_parser = parse_vocab::<Severity>)]
+    pub severity: Option<Severity>,
     /// Least severe value still printed.
-    #[arg(long)]
-    pub min_severity: Option<String>,
+    #[arg(long, value_parser = parse_vocab::<Severity>)]
+    pub min_severity: Option<Severity>,
     /// Keep repo-wide rules plus those governing this path. Repeatable.
     #[arg(long = "path", short = 'p')]
     pub paths: Vec<String>,
@@ -67,6 +85,94 @@ pub struct ContextArgs {
     pub additional_context: bool,
 }
 
+#[derive(Args)]
+pub struct AddArgs {
+    #[arg(long)]
+    pub title: String,
+    #[command(flatten)]
+    pub fields: FieldArgs,
+}
+
+#[derive(Args)]
+pub struct EditArgs {
+    /// The rule's id, from the ID column of `devkit rules query`.
+    pub id: String,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[command(flatten)]
+    pub fields: FieldArgs,
+}
+
+#[derive(Args)]
+pub struct RemoveArgs {
+    /// The rule's id, from the ID column of `devkit rules query`.
+    pub id: String,
+}
+
+/// The rule fields `add` and `edit` share. On `edit`, a list flag replaces the
+/// rule's whole list.
+#[derive(Args)]
+pub struct FieldArgs {
+    #[arg(long)]
+    pub description: Option<String>,
+    #[arg(long)]
+    pub category: Option<String>,
+    /// must, should or can.
+    #[arg(long, value_parser = parse_vocab::<Severity>)]
+    pub severity: Option<Severity>,
+    /// code-review, code-generation or code-questions. Repeatable; none applies
+    /// to every task.
+    #[arg(long = "task", short = 't', value_parser = parse_vocab::<Task>)]
+    pub tasks: Vec<Task>,
+    /// Repeatable; none applies to every language.
+    #[arg(long = "lang", short = 'l')]
+    pub languages: Vec<String>,
+    /// Repeatable.
+    #[arg(long = "topic")]
+    pub topics: Vec<String>,
+    /// Directory the rule governs, relative to the current directory. The
+    /// repository root governs everything.
+    #[arg(long)]
+    pub directory: Option<PathBuf>,
+}
+
+/// A vocabulary value off the command line, with the accepted values named on
+/// failure. A person mistyping `--severity` gets the list, not a parse error.
+fn parse_vocab<T: std::str::FromStr + VariantNames>(raw: &str) -> Result<T, String> {
+    raw.parse()
+        .map_err(|_| format!("accepted: {}", T::VARIANTS.join(", ")))
+}
+
+impl FieldArgs {
+    fn into_fields(self, title: Option<String>, here: &Here) -> Result<edit::Fields> {
+        let directory = match self.directory {
+            None => None,
+            Some(dir) => {
+                let rel =
+                    devkit_rules::context::relativize_target(here.root(), &here.cwd.join(&dir))
+                        .with_context(|| format!("{} is outside the repository", dir.display()))?;
+                Some(if rel == "." { String::new() } else { rel })
+            }
+        };
+        Ok(edit::Fields {
+            title,
+            description: self.description,
+            category: self.category,
+            severity: self.severity,
+            tasks: non_empty(self.tasks),
+            languages: non_empty(self.languages),
+            topics: non_empty(self.topics),
+            directory,
+        })
+    }
+}
+
+/// `None` for an empty list: a list flag nobody passed leaves the rule's list
+/// alone.
+fn non_empty<T>(values: Vec<T>) -> Option<Vec<T>> {
+    (!values.is_empty()).then_some(values)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Format {
     Table,
@@ -77,9 +183,9 @@ pub enum Format {
 /// The index path for this checkout: an explicit path (`--index`, or the
 /// positional argument `query` and `stats` take) wins outright; otherwise the
 /// project's own `[rules] index`; otherwise the path `repo-rules-agent` would
-/// have written for the checkout's main worktree. `query`, `stats` and
-/// `devkit rules context` all resolve it this way, so a project that sets
-/// `[rules] index` gets the same answer everywhere.
+/// have written for the checkout's main worktree. Every `devkit rules`
+/// subcommand resolves it this way, so a project that sets `[rules] index`
+/// reads and edits the same file everywhere.
 fn resolve_index_path(
     explicit: Option<PathBuf>,
     index: Option<&str>,
@@ -91,23 +197,50 @@ fn resolve_index_path(
     if let Some(index) = index {
         return PathBuf::from(index);
     }
-    let repo = checkout
+    index::default_index_path(repo_of(checkout))
+}
+
+/// The repository an index describes: the main worktree, so every worktree
+/// shares one index.
+fn repo_of(checkout: &Checkout) -> &Path {
+    checkout
         .main_worktree()
         .or_else(|| checkout.root())
-        .unwrap_or_else(|| checkout.dir());
-    index::default_index_path(repo)
+        .unwrap_or_else(|| checkout.dir())
+}
+
+/// Where a `devkit rules` run stands: its directory, checkout and index path.
+struct Here {
+    cwd: PathBuf,
+    checkout: Checkout,
+    index: PathBuf,
+}
+
+impl Here {
+    fn resolve(explicit: Option<PathBuf>) -> Result<Here> {
+        let cwd = std::env::current_dir().context("getting current dir")?;
+        let checkout = Checkout::at(&cwd);
+        let configured = devkit_common::config::resolve_in(&checkout, None, &cwd)
+            .ok()
+            .and_then(|(project, _)| project.rules.index);
+        let index = resolve_index_path(explicit, configured.as_deref(), &checkout);
+        Ok(Here {
+            cwd,
+            checkout,
+            index,
+        })
+    }
+
+    fn root(&self) -> &Path {
+        self.checkout.root().unwrap_or(&self.cwd)
+    }
 }
 
 /// The index for this checkout, or the one named. Errors name the path tried,
 /// because a `devkit rules` run is a person asking a question and silence would
 /// read as "no rules" rather than "no index".
 fn load_or_default(explicit: Option<PathBuf>) -> Result<(PathBuf, RuleIndex)> {
-    let cwd = std::env::current_dir().context("getting current dir")?;
-    let checkout = Checkout::at(&cwd);
-    let configured = devkit_common::config::resolve_in(&checkout, None, &cwd)
-        .ok()
-        .and_then(|(project, _)| project.rules.index);
-    let path = resolve_index_path(explicit, configured.as_deref(), &checkout);
+    let path = Here::resolve(explicit)?.index;
     let loaded =
         index::load(&path).with_context(|| format!("no rules index at {}", path.display()))?;
     Ok((path, loaded))
@@ -118,18 +251,28 @@ pub fn run(cli: RulesCli) -> Result<()> {
         RulesCommand::Query(args) => query_cmd(args),
         RulesCommand::Stats(args) => stats_cmd(args),
         RulesCommand::Context(args) => context_cmd(args),
+        RulesCommand::Add(args) => {
+            let here = Here::resolve(None)?;
+            let fields = args.fields.into_fields(Some(args.title), &here)?;
+            let repo = repo_of(&here.checkout).display().to_string();
+            let id = edit::update(&here.index, |doc| doc.add(&repo, fields))?;
+            println!("{id}");
+            Ok(())
+        }
+        RulesCommand::Edit(args) => {
+            let here = Here::resolve(None)?;
+            let fields = args.fields.into_fields(args.title, &here)?;
+            edit::update(&here.index, |doc| doc.edit(&args.id, fields))?;
+            println!("edited {}", args.id);
+            Ok(())
+        }
+        RulesCommand::Remove(args) => {
+            let here = Here::resolve(None)?;
+            edit::update(&here.index, |doc| doc.remove(&args.id))?;
+            println!("removed {}", args.id);
+            Ok(())
+        }
     }
-}
-
-/// A vocabulary value off the command line, with the accepted values named on
-/// failure. A person mistyping `--severity` gets the list, not a parse error.
-fn parse_vocab<T: std::str::FromStr>(value: Option<&str>, accepted: &str) -> Result<Option<T>> {
-    let Some(raw) = value else {
-        return Ok(None);
-    };
-    raw.parse()
-        .map(Some)
-        .map_err(|_| anyhow::anyhow!("unknown value {raw:?}; accepted: {accepted}"))
 }
 
 fn query_cmd(args: QueryArgs) -> Result<()> {
@@ -138,14 +281,11 @@ fn query_cmd(args: QueryArgs) -> Result<()> {
     let checkout = Checkout::at(&cwd);
     let root = checkout.root().unwrap_or(&cwd);
     let filter = query::Filter {
-        task: parse_vocab(
-            args.task.as_deref(),
-            "code-review, code-generation, code-questions",
-        )?,
+        task: args.task,
         language: args.language.map(|l| vocab::canonical_language(&l)),
-        scope: parse_vocab(args.scope.as_deref(), "repo, directory, file-pattern")?,
-        severity: parse_vocab(args.severity.as_deref(), "must, should, can")?,
-        min_severity: parse_vocab(args.min_severity.as_deref(), "must, should, can")?,
+        scope: args.scope,
+        severity: args.severity,
+        min_severity: args.min_severity,
         paths: args
             .paths
             .iter()
@@ -165,7 +305,8 @@ fn query_cmd(args: QueryArgs) -> Result<()> {
         Format::Json => println!("{}", serde_json::to_string_pretty(&rules)?),
         Format::Prompt => print!("{}", devkit_rules::render::block(&rules, &[], usize::MAX)),
         Format::Table => {
-            let mut table = devkit_common::ui::table(&["SEVERITY", "DIRECTORY", "TITLE", "SOURCE"]);
+            let mut table =
+                devkit_common::ui::table(&["ID", "SEVERITY", "DIRECTORY", "TITLE", "SOURCE"]);
             for rule in &rules {
                 let directory = if rule.directory.is_empty() {
                     "."
@@ -173,6 +314,7 @@ fn query_cmd(args: QueryArgs) -> Result<()> {
                     &rule.directory
                 };
                 table.add_row([
+                    &rule.id,
                     &rule.severity_raw,
                     directory,
                     &rule.title,

@@ -49,6 +49,20 @@ pub struct Rule {
     pub source_file: String,
     #[serde(default)]
     pub directory: String,
+    /// Owned by a person rather than the extractor. Whatever rebuilds the
+    /// index must keep a pinned rule as written, id included, and drop the
+    /// extracted rule with the same id. `devkit rules add`, `edit` and
+    /// `remove` set it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
+    /// A pinned tombstone: the rule stays in the file so a rebuild that keeps
+    /// pinned rules does not extract it again, and every reader skips it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub removed: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 impl Rule {
