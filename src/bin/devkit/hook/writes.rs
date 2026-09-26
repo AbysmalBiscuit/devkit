@@ -19,8 +19,38 @@ pub struct Evaluation {
     pub warnings: Vec<String>,
     /// Absolute write targets, in order, without repeats.
     pub claims: Vec<String>,
+    /// Absolute directories to claim whole, each bounding a write that
+    /// reaches paths under it no one can list. In order, without repeats or
+    /// one another's subdirectories.
+    pub trees: Vec<String>,
     /// Directories to check without claiming, in order, without repeats.
     pub scopes: Vec<ScopeCheck>,
+}
+
+/// What the registry stage adds to the evaluation's own findings.
+#[derive(Debug, Default)]
+pub struct Findings {
+    pub blocks: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+impl Findings {
+    fn apply(&mut self, action: PolicyAction, message: String) {
+        file_finding(action, message, &mut self.blocks, &mut self.warnings);
+    }
+}
+
+fn file_finding(
+    action: PolicyAction,
+    message: String,
+    blocks: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    match action {
+        PolicyAction::Block => blocks.push(message),
+        PolicyAction::Warn => warnings.push(message),
+        PolicyAction::Allow => {}
+    }
 }
 
 /// A directory the registry is asked about, and which question to ask of it.
@@ -36,7 +66,7 @@ pub enum ScopeCheck {
 
 impl Evaluation {
     pub fn needs_registry(&self) -> bool {
-        !self.claims.is_empty() || !self.scopes.is_empty()
+        !self.claims.is_empty() || !self.trees.is_empty() || !self.scopes.is_empty()
     }
 
     fn scope(&mut self, check: ScopeCheck) {
@@ -45,12 +75,22 @@ impl Evaluation {
         }
     }
 
-    fn apply(&mut self, action: PolicyAction, message: String) {
-        match action {
-            PolicyAction::Block => self.blocks.push(message),
-            PolicyAction::Warn => self.warnings.push(message),
-            PolicyAction::Allow => {}
+    fn tree(&mut self, dir: &str) {
+        let under = |inner: &str, outer: &str| {
+            inner == outer
+                || inner
+                    .strip_prefix(outer)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        };
+        if self.trees.iter().any(|t| under(dir, t)) {
+            return;
         }
+        self.trees.retain(|t| !under(t, dir));
+        self.trees.push(dir.to_string());
+    }
+
+    fn apply(&mut self, action: PolicyAction, message: String) {
+        file_finding(action, message, &mut self.blocks, &mut self.warnings);
     }
 }
 
@@ -66,7 +106,8 @@ fn unresolved_fix(action: PolicyAction) -> &'static str {
         PolicyAction::Block | PolicyAction::Allow => {
             "Name a literal path, or a variable assigned a literal earlier in the same command, \
              or make the edit with a structured edit tool; those targets are claimed for you. \
-             `lockm acquire` does not lift this block."
+             A glob, or `find` from one directory, below the checkout root claims that \
+             directory instead. `lockm acquire` does not lift this block."
         }
     }
 }
@@ -80,6 +121,7 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
                     e.claims.push(p.clone());
                 }
             }
+            Target::Within(dir) => e.tree(dir),
             Target::Unresolved => e.apply(
                 policy.unresolved_writes,
                 format!(
@@ -138,7 +180,7 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     for script in &analysis.script_files {
         let name = match &script.script {
             Value::Known(s) => format!("`{s}`"),
-            Value::Unknown | Value::Ephemeral(_) => "a script".to_string(),
+            Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => "a script".to_string(),
         };
         e.apply(
             policy.script_files,
@@ -161,15 +203,18 @@ fn op_name(op: FileOp) -> &'static str {
     }
 }
 
-/// Check every scope, then claim every target. A scope conflict stops before
-/// any claim; a claim conflict leaves the claims already made to the normal
-/// release lifecycle.
+/// Check every scope, then claim every target and every tree. A scope
+/// conflict stops before any claim; a claim conflict leaves the claims
+/// already made to the normal release lifecycle. A tree no claim can stand
+/// for is an unresolved write, which `unresolved` decides.
 pub fn enforce(
     evaluation: &Evaluation,
     holder: &str,
     checkout: Checkout,
-) -> anyhow::Result<Vec<Conflict>> {
+    unresolved: PolicyAction,
+) -> anyhow::Result<Findings> {
     let mut resolver = devkit_locks::WriteResolver::with_checkout(checkout);
+    let mut findings = Findings::default();
     let mut conflicts = Vec::new();
     for check in &evaluation.scopes {
         conflicts.extend(match check {
@@ -181,7 +226,8 @@ pub fn enforce(
         });
     }
     if !conflicts.is_empty() {
-        return Ok(conflicts);
+        findings.blocks.push(conflict_message(&conflicts));
+        return Ok(findings);
     }
     for path in &evaluation.claims {
         if let WriteDecision::Denied(c) =
@@ -190,10 +236,27 @@ pub fn enforce(
             conflicts.extend(c);
         }
     }
-    Ok(conflicts)
+    for dir in &evaluation.trees {
+        match resolver.claim_tree(dir, holder, Some("shell-harness"), 1800)? {
+            Some(WriteDecision::Denied(c)) => conflicts.extend(c),
+            Some(WriteDecision::Acquired | WriteDecision::AllowedByOwnership) => {}
+            None => findings.apply(
+                unresolved,
+                format!(
+                    "{PREFIX} a write reaches paths under `{dir}` that could not be listed, and \
+                     devkit claims such a set only in a directory below a checkout root. {}",
+                    unresolved_fix(unresolved)
+                ),
+            ),
+        }
+    }
+    if !conflicts.is_empty() {
+        findings.blocks.push(conflict_message(&conflicts));
+    }
+    Ok(findings)
 }
 
-pub fn conflict_message(conflicts: &[Conflict]) -> String {
+fn conflict_message(conflicts: &[Conflict]) -> String {
     let who = conflicts
         .iter()
         .map(|c| format!("{} (held by {})", c.path, c.held_by))
@@ -259,6 +322,17 @@ mod tests {
             whole_checkout: true,
         }]);
         assert!(e.blocks.is_empty());
+    }
+
+    #[test]
+    fn a_bounded_write_claims_its_outermost_directory_once() {
+        let e = eval(
+            "rm -f src/gen/*.rs; sed -i s/a/b/ src/*.rs; rm -f src/*.o docs/*.md",
+            HarnessPolicy::default(),
+        );
+        assert_eq!(e.trees, ["/repo/src", "/repo/docs"]);
+        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert!(e.blocks.is_empty(), "{:?}", e.blocks);
     }
 
     #[test]

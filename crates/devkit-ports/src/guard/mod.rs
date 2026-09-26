@@ -103,7 +103,7 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let here = match arg {
         Value::Known(actual) if wildcard_matches(pattern, actual) => Match::Yes,
         Value::Known(_) => return Match::No,
-        Value::Unknown | Value::Ephemeral(_) => Match::Possible,
+        Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => Match::Possible,
     };
     here.min(args_match(patterns, args))
 }

@@ -351,9 +351,9 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
                 };
                 cwd = match paths::resolve(&value, current_cwd.as_deref(), a.ctx.path_style) {
                     crate::model::Target::Path(dir) => CwdChange::To(dir),
-                    crate::model::Target::Unresolved | crate::model::Target::Ephemeral { .. } => {
-                        CwdChange::Unknown
-                    }
+                    crate::model::Target::Unresolved
+                    | crate::model::Target::Ephemeral { .. }
+                    | crate::model::Target::Within(_) => CwdChange::Unknown,
                 };
                 current_cwd = cwd.apply(current_cwd.clone());
             } else if wrapper.value_flags.contains(&flag) && inline.is_none() {
@@ -366,9 +366,9 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
         {
             cwd = match paths::resolve(&dir.value, current_cwd.as_deref(), a.ctx.path_style) {
                 crate::model::Target::Path(path) => CwdChange::To(path),
-                crate::model::Target::Unresolved | crate::model::Target::Ephemeral { .. } => {
-                    CwdChange::Unknown
-                }
+                crate::model::Target::Unresolved
+                | crate::model::Target::Ephemeral { .. }
+                | crate::model::Target::Within(_) => CwdChange::Unknown,
             };
             current_cwd = cwd.apply(current_cwd.clone());
         }
@@ -480,6 +480,7 @@ fn run_find_exec(
     argv: &[Word],
     cwd: Option<String>,
 ) {
+    let found = found_path(argv);
     let mut i = 1;
     while i < argv.len() {
         if matches!(
@@ -493,15 +494,16 @@ fn run_find_exec(
                 .map_or(argv.len(), |p| start + p);
             let words = argv[start..end]
                 .iter()
-                .map(|w| {
-                    if w.value.known() == Some("{}") {
-                        Word {
-                            value: Value::Unknown,
-                            ..w.clone()
-                        }
-                    } else {
-                        w.clone()
-                    }
+                .map(|w| match w.value.known() {
+                    Some("{}") => Word {
+                        value: found.clone(),
+                        ..w.clone()
+                    },
+                    Some(t) if t.contains("{}") => Word {
+                        value: Value::Unknown,
+                        ..w.clone()
+                    },
+                    _ => w.clone(),
                 })
                 .collect();
             a.invocation(
@@ -517,6 +519,44 @@ fn run_find_exec(
             i = end;
         }
         i += 1;
+    }
+}
+
+/// What `{}` stands for in a `find` action: a path under its one starting
+/// point, or the starting point itself. Several starting points share no
+/// bound, and following links walks trees the starting point does not
+/// contain.
+fn found_path(argv: &[Word]) -> Value {
+    let args: Vec<&Value> = argv[1..].iter().map(|w| &w.value).collect();
+    if args
+        .iter()
+        .any(|v| matches!(v.known(), Some("-L" | "-follow")))
+    {
+        return Value::Unknown;
+    }
+    let mut i = 0;
+    while let Some(option) = args.get(i).and_then(|v| v.known()) {
+        match option {
+            "-H" | "-P" => i += 1,
+            "-D" => i += 2,
+            o if o.starts_with("-O") => i += 1,
+            _ => break,
+        }
+    }
+    let starts: Vec<&Value> = args
+        .get(i..)
+        .unwrap_or_default()
+        .iter()
+        .copied()
+        .take_while(|v| {
+            !v.known()
+                .is_some_and(|t| t.starts_with('-') || matches!(t, "(" | "!"))
+        })
+        .collect();
+    match starts.as_slice() {
+        [] => Value::Within(".".into()),
+        [Value::Known(dir) | Value::Within(dir)] => Value::Within(dir.clone()),
+        _ => Value::Unknown,
     }
 }
 
@@ -578,9 +618,9 @@ pub(crate) fn program_options(
             if matches!(flag, "-C" | "--work-tree") {
                 change = match paths::resolve(&value, current.as_deref(), style) {
                     crate::model::Target::Path(dir) => CwdChange::To(dir),
-                    crate::model::Target::Unresolved | crate::model::Target::Ephemeral { .. } => {
-                        CwdChange::Unknown
-                    }
+                    crate::model::Target::Unresolved
+                    | crate::model::Target::Ephemeral { .. }
+                    | crate::model::Target::Within(_) => CwdChange::Unknown,
                 };
                 current = change.apply(current.clone());
             }
@@ -597,7 +637,7 @@ pub(crate) fn program_options(
 mod tests {
     use crate::{
         model::Value,
-        testutil::{bash, programs},
+        testutil::{bash, programs, writes},
     };
 
     fn k(s: &str) -> Value {
@@ -744,5 +784,31 @@ mod tests {
 
         let b = bash("find . -name '*.bak' -exec rm {} \\;");
         assert_eq!(programs(&b), ["rm", "find"]);
+    }
+
+    #[test]
+    fn a_find_exec_path_is_bounded_by_its_one_starting_point() {
+        for (source, expected) in [
+            (
+                "find src -name '*.rs' -exec sed -i s/a/b/ {} +",
+                "/repo/src/**",
+            ),
+            ("find -P src -type f -execdir rm {} \\;", "/repo/src/**"),
+            ("find -exec rm {} +", "/repo/**"),
+            ("find src/* -exec rm {} +", "/repo/src/**"),
+            ("find -L src -exec rm {} +", "?"),
+            ("find src -follow -exec rm {} +", "?"),
+            ("find src lib -exec rm {} +", "?"),
+            ("find \"$X\" -exec rm {} +", "?"),
+        ] {
+            assert_eq!(writes(&bash(source)), [expected], "{source}");
+        }
+    }
+
+    /// find replaces `{}` anywhere in an argument, so a word carrying it is
+    /// not the literal it spells.
+    #[test]
+    fn a_find_exec_word_carrying_the_path_is_not_a_literal() {
+        assert_eq!(writes(&bash("find src -exec cp {} {}.bak \\;")), ["?"]);
     }
 }

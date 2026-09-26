@@ -391,7 +391,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 self.value_limit(node);
                 None
             }
-            crate::model::Target::Unresolved | crate::model::Target::Ephemeral { .. } => None,
+            crate::model::Target::Unresolved
+            | crate::model::Target::Ephemeral { .. }
+            | crate::model::Target::Within(_) => None,
         }
     }
 
@@ -1034,7 +1036,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                                 None
                             }
                             crate::model::Target::Unresolved
-                            | crate::model::Target::Ephemeral { .. } => None,
+                            | crate::model::Target::Ephemeral { .. }
+                            | crate::model::Target::Within(_) => None,
                         },
                         _ => None,
                     };

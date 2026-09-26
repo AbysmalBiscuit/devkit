@@ -73,11 +73,16 @@ pub(crate) fn join(base: &str, rel: &str, style: PathStyle) -> String {
 }
 
 pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Target {
-    if let Value::Ephemeral(at) = value {
-        return Target::Ephemeral { at: at.clone() };
-    }
-    let Some(p) = value.known() else {
-        return Target::Unresolved;
+    let p = match value {
+        Value::Known(p) => p,
+        Value::Unknown => return Target::Unresolved,
+        Value::Ephemeral(at) => return Target::Ephemeral { at: at.clone() },
+        Value::Within(dir) => {
+            return match resolve(&Value::Known(dir.clone()), cwd, style) {
+                Target::Path(dir) => Target::Within(dir),
+                _ => Target::Unresolved,
+            };
+        }
     };
     if p.is_empty() || p.starts_with('~') || p.contains(['*', '?', '[']) {
         return Target::Unresolved;

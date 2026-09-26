@@ -616,6 +616,32 @@ impl WriteResolver {
         check_covering_resolved(&root, holder, &[rel])
     }
 
+    /// Claim `dir` whole for a write reaching an unenumerated set of paths
+    /// under it, with the same decision [`decide_write`] makes for one file.
+    /// `None` when `dir` is not below the root of a checkout: a claim on a
+    /// checkout root would stall every other session in it, and a directory
+    /// no checkout contains may hold one whose rows are keyed elsewhere.
+    pub fn claim_tree(
+        &mut self,
+        dir: &str,
+        holder: &str,
+        note: Option<&str>,
+        ttl: u64,
+    ) -> Result<Option<model::WriteDecision>> {
+        let (root, rel) = self.scope_key(dir, false)?;
+        if rel == "." || !self.is_checkout(Path::new(&root)) {
+            return Ok(None);
+        }
+        decide_write_at(&root, &rel, holder, note, ttl).map(Some)
+    }
+
+    fn is_checkout(&self, root: &Path) -> bool {
+        self.checkout
+            .as_ref()
+            .is_some_and(|c| c.checkout_of(root).is_some())
+            || matches!(devkit_common::git::checkout_root_opt(root), Ok(Some(_)))
+    }
+
     /// Same decision as [`decide_write`], but sharing this resolver's cache.
     pub fn decide_write(
         &mut self,

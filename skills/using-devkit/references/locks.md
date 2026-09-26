@@ -71,6 +71,7 @@ Mechanics:
 - The shell tools are `Bash`, Claude Code's `PowerShell`, and Cursor's `Shell`. devkit parses the command and the scripts it runs.
 - Redirects, `tee`, `cp`, `mv`, `rm`, `touch`, `dd`, `sed -i`, `perl -i`, the git verbs that rewrite files, common formatters, inline Python/JavaScript/TypeScript file APIs (a target from `sys.argv`/`process.argv` included) and PowerShell's content and item cmdlets all resolve to targets.
 - A whole-tree writer (`cargo fmt`, `git checkout`, `rm -r dir`) claims nothing and is refused while another session holds any lock under the tree.
+- A write to files no one can list but one directory bounds (a glob, a quoted loop variable over one, or `{}` from a `find` with one starting point) claims that directory. It is refused while another session, or one of your own sub-agents, holds a lock on, under, or above that directory. Such a bound at the checkout root, or outside any checkout, is an unresolved write.
 - Build tools and package managers are not treated as writers. `devrun task <name>` is not expanded, so a task that formats the tree goes unchecked.
 - Cursor gets the command guard only; its shell calls claim nothing.
 

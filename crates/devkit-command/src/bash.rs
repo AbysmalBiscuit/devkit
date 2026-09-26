@@ -413,7 +413,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 .map(|n| self.word(n, scope).value)
                 .map(|v| match v {
                     Value::Known(s) => Value::Known(format!("{s}\n")),
-                    Value::Unknown | Value::Ephemeral(_) => Value::Unknown,
+                    Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => Value::Unknown,
                 })
                 .unwrap_or(Value::Unknown);
             return Stdin::Source { value, span };
@@ -496,7 +496,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
             .collect();
         let literal = !values.is_empty()
             && values.len() <= MAX_LOOP_WORDS
-            && values.iter().all(|v| v.known().is_some());
+            && values
+                .iter()
+                .all(|v| matches!(v, Value::Known(_) | Value::Within(_)));
         let mut after = scope.clone();
         if literal {
             for value in values {
@@ -534,7 +536,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         match paths::resolve(v, scope.cwd.as_deref(), self.a.ctx.path_style) {
                             crate::model::Target::Path(dir) => Some(dir),
                             crate::model::Target::Unresolved
-                            | crate::model::Target::Ephemeral { .. } => None,
+                            | crate::model::Target::Ephemeral { .. }
+                            | crate::model::Target::Within(_) => None,
                         }
                     }
                     _ => None,
@@ -609,11 +612,11 @@ impl<'t> Walker<'_, '_, '_, 't> {
         let text = ts::text(node, self.source);
         match node.kind() {
             "word" | "number" | "command_name" => {
-                if text.starts_with('~')
-                    || has_unescaped(text, &['*', '?', '['])
-                    || (text.contains('{') && text.contains(','))
-                {
+                if text.starts_with('~') || (text.contains('{') && text.contains(',')) {
                     return Value::Unknown;
+                }
+                if has_unescaped(text, GLOB) {
+                    return glob_bound(text);
                 }
                 if let Some(inner) = ts::named_children(node).into_iter().next() {
                     return self.value(inner, scope);
@@ -627,29 +630,31 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "string" => {
                 let mut out = String::new();
                 let mut known = true;
-                let mut ephemeral = None;
+                let mut whole_word = None;
                 let mut parts = 0;
                 let mut last = node.start_byte() + 1;
                 for part in ts::named_children(node) {
                     out.push_str(&unescape_dquoted(&self.source[last..part.start_byte()]));
                     last = part.end_byte();
                     parts += 1;
-                    match self.value(part, scope) {
+                    let value = match part.kind() {
+                        "simple_expansion" | "expansion" => self.expansion(part, scope),
+                        _ => self.value(part, scope),
+                    };
+                    match value {
                         Value::Known(s) => out.push_str(&s),
                         Value::Unknown => known = false,
-                        Value::Ephemeral(at) => ephemeral = Some(at),
+                        v @ (Value::Ephemeral(_) | Value::Within(_)) => whole_word = Some(v),
                     }
                 }
                 out.push_str(&unescape_dquoted(
                     &self.source[last..node.end_byte().saturating_sub(1).max(last)],
                 ));
-                match ephemeral {
-                    // A temp path stays uncontendable only while it is the
-                    // whole word. Anything appended can climb back out, and a
-                    // `mktemp` that failed leaves the variable empty, so the
-                    // rest of the word would stand on its own as an absolute
-                    // path.
-                    Some(at) if parts == 1 && out.is_empty() => Value::Ephemeral(at),
+                match whole_word {
+                    // A temp path or a match stays bounded only as the whole
+                    // word: anything appended can climb out, and a failed
+                    // `mktemp` leaves the rest standing alone as a path.
+                    Some(v) if parts == 1 && out.is_empty() => v,
                     Some(_) => Value::Unknown,
                     None if known => Value::Known(out),
                     None => Value::Unknown,
@@ -657,27 +662,38 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             "string_content" => Value::Known(unescape_dquoted(text)),
             "concatenation" => {
+                let parts = ts::named_children(node);
+                if parts
+                    .iter()
+                    .any(|p| p.kind() == "word" && has_unescaped(ts::text(*p, self.source), GLOB))
+                {
+                    // A brace expansion spans several parts.
+                    if text.contains('{') && text.contains(',') {
+                        self.substitutions(node, scope);
+                        return Value::Unknown;
+                    }
+                    return self.glob_concatenation(&parts, scope);
+                }
                 let mut out = String::new();
-                for part in ts::named_children(node) {
+                for part in parts {
                     match self.value(part, scope) {
                         Value::Known(s) => out.push_str(&s),
                         // A concatenation always has something beside the temp
-                        // path, which is exactly what stops it being bounded.
-                        Value::Unknown | Value::Ephemeral(_) => return Value::Unknown,
+                        // path or the match, which is exactly what stops it
+                        // being bounded.
+                        Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => {
+                            return Value::Unknown;
+                        }
                     }
                 }
                 Value::Known(out)
             }
-            "simple_expansion" => self.lookup(&text[1..], scope),
-            "expansion" => {
-                let inner = &text[2..text.len() - 1];
-                if inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                    self.lookup(inner, scope)
-                } else {
-                    self.substitutions(node, scope);
-                    Value::Unknown
-                }
-            }
+            // Word splitting can cut an unquoted match into pieces that lie
+            // outside its bound.
+            "simple_expansion" | "expansion" => match self.expansion(node, scope) {
+                Value::Within(_) => Value::Unknown,
+                v => v,
+            },
             "command_substitution" => {
                 let mut inner = scope.clone();
                 self.statements(node, &mut inner);
@@ -696,6 +712,45 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 Value::Unknown
             }
         }
+    }
+
+    /// What a parameter expansion stands for, before word splitting.
+    fn expansion(&mut self, node: Node<'t>, scope: &mut Scope) -> Value {
+        let text = ts::text(node, self.source);
+        if node.kind() == "simple_expansion" {
+            return self.lookup(&text[1..], scope);
+        }
+        let inner = &text[2..text.len() - 1];
+        if inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            self.lookup(inner, scope)
+        } else {
+            self.substitutions(node, scope);
+            Value::Unknown
+        }
+    }
+
+    /// A word joining quoted text to an unquoted glob, such as `"$d"/*.rs`.
+    /// The quoted parts stay literal, so they are escaped before the pattern
+    /// is bounded. An unquoted expansion is split and matched by the shell, so
+    /// it leaves the word unknown.
+    fn glob_concatenation(&mut self, parts: &[Node<'t>], scope: &mut Scope) -> Value {
+        let mut pattern = String::new();
+        for (i, part) in parts.iter().enumerate() {
+            let text = ts::text(*part, self.source);
+            match part.kind() {
+                "word" if i == 0 && text.starts_with('~') => return Value::Unknown,
+                "word" => pattern.push_str(text),
+                "string" | "raw_string" | "ansi_c_string" => match self.value(*part, scope) {
+                    Value::Known(s) => pattern.push_str(&escape_glob(&s)),
+                    _ => return Value::Unknown,
+                },
+                _ => {
+                    self.value(*part, scope);
+                    return Value::Unknown;
+                }
+            }
+        }
+        glob_bound(&pattern)
     }
 
     /// Where a lone `mktemp` substitution creates its entry, when the
@@ -793,6 +848,42 @@ fn is_dry_run(arg: &str) -> bool {
     arg == "--dry-run" || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('u'))
 }
 
+const GLOB: &[char] = &['*', '?', '['];
+
+/// The directory every match of an unquoted glob lies under: the components
+/// before the first one that pattern-matches. A later `..` climbs back out,
+/// and so can a pattern starting with a dot, which matches `..`.
+fn glob_bound(pattern: &str) -> Value {
+    let components: Vec<&str> = pattern.split('/').collect();
+    let Some(first) = components.iter().position(|c| has_unescaped(c, GLOB)) else {
+        return Value::Known(unescape(pattern));
+    };
+    let climbs = |c: &&str| {
+        let literal = unescape(c);
+        literal == ".." || (literal.starts_with('.') && has_unescaped(c, GLOB))
+    };
+    if components[first..].iter().any(climbs) {
+        return Value::Unknown;
+    }
+    let dir = unescape(&components[..first].join("/"));
+    Value::Within(match (dir.is_empty(), first) {
+        (false, _) => dir,
+        (true, 0) => ".".to_string(),
+        (true, _) => "/".to_string(),
+    })
+}
+
+fn escape_glob(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c == '\\' || GLOB.contains(&c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn has_unescaped(text: &str, chars: &[char]) -> bool {
     let mut escaped = false;
     text.chars().any(|c| {
@@ -871,7 +962,7 @@ mod shapes {
 mod tests {
     use crate::{
         model::{FileOp, Target, UncertaintyKind, Value},
-        testutil::{bash, programs, targets},
+        testutil::{bash, programs, targets, writes},
     };
 
     #[test]
@@ -1013,9 +1104,57 @@ mod tests {
     }
 
     #[test]
-    fn globs_and_brace_expansion_are_unresolved() {
-        assert_eq!(targets(&bash("echo x > *.txt")), ["?"]);
+    fn brace_expansion_is_unresolved() {
         assert_eq!(targets(&bash("echo x > {a,b}.txt")), ["?"]);
+        assert_eq!(writes(&bash("rm -f {a,b}/*.rs")), ["?"]);
+    }
+
+    #[test]
+    fn a_glob_is_bounded_by_the_directory_before_its_first_pattern() {
+        for (source, bound) in [
+            ("sed -i s/a/b/ src/*.rs", "/repo/src/**"),
+            ("echo x > *.txt", "/repo/**"),
+            ("rm -f src/gen/*/x.rs", "/repo/src/gen/**"),
+            ("rm -f /var/log/app/*.log", "/var/log/app/**"),
+            ("rm -rf build/*", "/repo/build/**"),
+            ("d=src; rm -f \"$d\"/*.orig", "/repo/src/**"),
+            ("rm -f 'my dir'/*.orig", "/repo/my dir/**"),
+        ] {
+            assert_eq!(writes(&bash(source)), [bound], "{source}");
+        }
+    }
+
+    #[test]
+    fn a_glob_whose_matches_can_leave_its_directory_is_unresolved() {
+        for source in [
+            "rm -f src/*/../x",
+            "rm -f src/.*",
+            "rm -f ~/src/*.rs",
+            "rm -f \"$X\"/*.rs",
+            "d=src; rm -f $d/*.rs",
+        ] {
+            assert_eq!(writes(&bash(source)), ["?"], "{source}");
+        }
+    }
+
+    #[test]
+    fn a_loop_over_a_glob_binds_each_match_within_its_bound() {
+        for (source, expected) in [
+            (
+                "for f in src/*.rs; do sed -i x \"$f\"; done",
+                &["/repo/src/**"][..],
+            ),
+            ("for f in a.txt src/*; do rm -f \"$f\"; done", &[
+                "/repo/a.txt",
+                "/repo/src/**",
+            ]),
+            // Word splitting can cut an unquoted match into pieces outside the
+            // bound, and anything appended can climb out of it.
+            ("for f in src/*.rs; do rm -f $f; done", &["?"]),
+            ("for f in src/*.rs; do rm -f \"$f/../x\"; done", &["?"]),
+        ] {
+            assert_eq!(writes(&bash(source)), expected, "{source}");
+        }
     }
 
     #[test]

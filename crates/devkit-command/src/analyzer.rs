@@ -300,6 +300,17 @@ impl<'c> Analyzer<'c> {
                 format!("`{by}` rewrites a directory that could not be determined"),
                 location,
             ),
+            // Every directory the pattern can name lies under the bound, and so
+            // does everything the writer reaches from one, so the bound is a
+            // write target like any other rather than a scope to check.
+            target @ crate::model::Target::Within(_) => self.out.file_effects.push(FileEffect {
+                op: match fresh {
+                    Fresh::Places => FileOp::Overwrite,
+                    Fresh::Writes | Fresh::RemovesRoot => FileOp::Delete,
+                },
+                target,
+                location,
+            }),
             // A tree writer rooted at a freshly created temp directory reaches
             // no path another session could name, but a claim on the directory
             // that one was made in covers the whole fresh subtree.

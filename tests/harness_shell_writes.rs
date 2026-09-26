@@ -706,6 +706,133 @@ fn a_tree_writer_is_checked_and_claims_nothing() {
     assert_eq!(rows(&e), [("src/lib.rs".to_string(), "S2".to_string())]);
 }
 
+fn subagent_hook(e: &Env, session: &str, agent: &str, command: &str) -> Output {
+    let mut p: serde_json::Value =
+        serde_json::from_str(&payload(e, Some(session), "Bash", command)).unwrap();
+    p["agent_id"] = agent.into();
+    p["agent_type"] = "general-purpose".into();
+    devkit(e, &["harness", "shell"], Some(&p.to_string()), &[])
+}
+
+fn src_row(holder: &str) -> Vec<(String, String)> {
+    vec![("src".to_string(), holder.to_string())]
+}
+
+/// Every path a glob or a `find` can hand the command lies under one
+/// directory, so that directory is claimed, and the claim reserves it: a
+/// later write under it by another session is refused.
+#[test]
+fn a_bounded_file_set_claims_its_directory() {
+    for command in [
+        "sed -i 's/a/b/' src/*.rs",
+        "rm -f src/gen/*.rs src/*.rs",
+        "for f in src/*.rs; do sed -i 's/a/b/' \"$f\"; done",
+        "find src -name '*.rs' -exec sed -i 's/a/b/' {} +",
+        "d=src; rm -f \"$d\"/*.orig",
+    ] {
+        let e = env(WRITES);
+        assert_eq!(denial(&hook(&e, Some("S1"), command)), None, "{command}");
+        assert_eq!(rows(&e), src_row("S1"), "{command}");
+        let reason = denial(&hook(&e, Some("S2"), "echo x > src/new.rs")).expect(command);
+        assert!(reason.contains("S1"), "{command}: {reason}");
+    }
+}
+
+#[test]
+fn a_bounded_file_set_is_denied_by_a_claim_on_either_side_of_its_directory() {
+    for held in ["src/a.rs", "src", "."] {
+        let e = env(WRITES);
+        acquire(&e, "S2", held);
+        let reason = denial(&hook(&e, Some("S1"), "sed -i 's/a/b/' src/*.rs")).expect(held);
+        assert!(reason.contains("S2"), "{held}: {reason}");
+        assert_eq!(rows(&e), [(held.to_string(), "S2".to_string())]);
+    }
+}
+
+/// A session may write through its own claim or an ancestor's, never through
+/// a sub-agent's.
+#[test]
+fn a_bounded_file_set_follows_write_ownership() {
+    let e = env(WRITES);
+    assert_eq!(
+        denial(&subagent_hook(&e, "S1", "a1", "echo x > src/a.rs")),
+        None
+    );
+    assert!(denial(&hook(&e, Some("S1"), "sed -i 's/a/b/' src/*.rs")).is_some());
+
+    let e = env(WRITES);
+    acquire(&e, "S1", "src");
+    let out = subagent_hook(&e, "S1", "a1", "sed -i 's/a/b/' src/*.rs");
+    assert_eq!(denial(&out), None);
+    assert_eq!(rows(&e), src_row("S1"));
+}
+
+/// A session's own claim on one file under the directory does not reserve
+/// the rest of it, so the directory is claimed as well.
+#[test]
+fn an_own_claim_below_the_directory_does_not_cover_it() {
+    let e = env(WRITES);
+    acquire(&e, "S1", "src/a.rs");
+    assert_eq!(
+        denial(&hook(&e, Some("S1"), "sed -i 's/a/b/' src/*.rs")),
+        None
+    );
+    assert_eq!(rows(&e), [
+        ("src".to_string(), "S1".to_string()),
+        ("src/a.rs".to_string(), "S1".to_string()),
+    ]);
+    assert!(denial(&hook(&e, Some("S2"), "echo x > src/b.rs")).is_some());
+}
+
+/// A bound that is the whole checkout, or that no checkout contains, would
+/// need a claim nobody should hold for a session, so the write stays under
+/// `unresolved_writes`.
+#[test]
+fn a_bound_that_is_not_a_directory_below_a_checkout_root_is_unresolved() {
+    let outside = tempfile::tempdir().unwrap();
+    let outside = outside.path().to_string_lossy().into_owned();
+    for command in [
+        "rm -f *.log".to_string(),
+        "find . -name '*.orig' -exec rm {} +".to_string(),
+        format!("rm -f {outside}/sub/*.log"),
+    ] {
+        let e = env(WRITES);
+        let reason = denial(&hook(&e, Some("S1"), &command)).expect(&command);
+        assert!(reason.contains("literal path"), "{command}: {reason}");
+        assert!(rows(&e).is_empty(), "{command}: {:?}", rows(&e));
+
+        let w = env("[harness]\nenforce_writes = true\nunresolved_writes = \"warn\"\n");
+        let v = envelope(&hook(&w, Some("S1"), &command)).expect("a warning envelope");
+        assert!(
+            v["hookSpecificOutput"].get("permissionDecision").is_none(),
+            "{command}: {v}"
+        );
+        assert!(rows(&w).is_empty(), "{command}: {:?}", rows(&w));
+    }
+}
+
+/// Shapes whose matches can leave the directory the pattern names stay
+/// unresolved.
+#[test]
+fn a_file_set_that_can_leave_its_directory_is_unresolved() {
+    let e = env(WRITES);
+    for command in [
+        "rm -f src/*/../../victim.txt",
+        "rm -f src/.*",
+        "for f in src/*.rs; do rm -f $f; done",
+        "for f in src/*.rs; do rm -f \"$f.bak\"; done",
+        "find -L src -exec rm {} +",
+        "find src lib -exec rm {} +",
+    ] {
+        let reason = denial(&hook(&e, Some("S1"), command)).expect(command);
+        assert!(
+            reason.contains("could not be determined"),
+            "{command}: {reason}"
+        );
+    }
+    assert!(rows(&e).is_empty(), "{:?}", rows(&e));
+}
+
 #[test]
 fn unsupported_language_and_script_file_policies() {
     let e = env(WRITES);
