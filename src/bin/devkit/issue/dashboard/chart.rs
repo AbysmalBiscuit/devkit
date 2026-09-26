@@ -161,13 +161,21 @@ fn stacked_bars(
     }
     let width = (2 * n).saturating_sub(1);
     out.push_str(&format!("{baseline:>gutter$} └{}\n", "─".repeat(width)));
-    // Sparse x labels (~every tenth) and a legend.
-    let step = std::cmp::max(1, n / 10);
-    let mut axis = " ".repeat(gutter + 2);
+    // Each label centers on its bar, or on the Monday gridline in daily
+    // charts, which label only Mondays. A label that would run into the
+    // previous one is skipped.
+    let mut axis = String::new();
     for (b, lab) in labels.iter().enumerate() {
-        if b % step == 0 {
+        let bar = gutter + 2 + 2 * b;
+        let monday = starts[b].weekday() == chrono::Weekday::Mon;
+        if daily_gridlines && !monday {
+            continue;
+        }
+        let anchor = if daily_gridlines { bar - 1 } else { bar };
+        let col = anchor.saturating_sub(lab.len() / 2);
+        if axis.is_empty() || col > axis.len() {
+            axis.push_str(&" ".repeat(col - axis.len()));
             axis.push_str(lab);
-            axis.push(' ');
         }
     }
     out.push_str(&axis);
@@ -283,6 +291,48 @@ mod tests {
             assert!(matches!(axis, Some('┤' | '│' | '└')), "{out}");
         }
         assert!(rest[0].starts_with("   a"), "{out}");
+    }
+
+    fn x_axis(labels: &[String], starts: &[DateTime<Utc>], daily_gridlines: bool) -> String {
+        let series = vec![vec![1; labels.len()]];
+        let out = strip_ansi(&stacked_bars(
+            "t",
+            labels,
+            &series,
+            &["x".into()],
+            &[(0, 0, 0)],
+            starts,
+            daily_gridlines,
+            "",
+        ));
+        out.lines().nth(2 + BLOCK_HEIGHT + 1).unwrap().to_string()
+    }
+
+    fn days(from: &str, n: i64) -> Vec<DateTime<Utc>> {
+        let first: DateTime<Utc> = from.parse().unwrap();
+        (0..n).map(|d| first + chrono::Duration::days(d)).collect()
+    }
+
+    #[test]
+    fn x_labels_center_on_their_bar() {
+        let starts = days("2026-09-02T00:00:00Z", 12);
+        let labels: Vec<String> = (0..12).map(|b| format!("L{b:02}")).collect();
+        // Gutter "1 " plus the axis glyph puts bar b at column 3 + 2b.
+        assert_eq!(x_axis(&labels, &starts, false), "  L00 L02 L04 L06 L08 L10");
+    }
+
+    #[test]
+    fn daily_x_labels_center_on_the_monday_gridlines() {
+        let starts = days("2026-09-02T00:00:00Z", 21);
+        let labels: Vec<String> = starts
+            .iter()
+            .map(|s| s.format("%b %d").to_string())
+            .collect();
+        assert_eq!(
+            x_axis(&labels, &starts, true),
+            // Gridlines at columns 12, 26 and 40 land on each label's space.
+            format!("{}Sep 07        Sep 14        Sep 21", " ".repeat(9))
+        );
     }
 
     #[test]
