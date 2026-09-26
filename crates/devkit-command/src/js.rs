@@ -502,7 +502,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             self.value_limit(node);
                             Js::Unknown
                         }
-                        Value::Unknown => Js::Unknown,
+                        Value::Unknown | Value::Within(_) => Js::Unknown,
                         Value::Ephemeral(at) => Js::Ephemeral(at.clone()),
                     }),
                 (Js::Array(items), Js::Num(i)) => usize::try_from(i)
@@ -686,7 +686,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             self.value_limit(node);
                             None
                         }
-                        crate::Target::Unresolved | crate::Target::Ephemeral { .. } => None,
+                        crate::Target::Unresolved
+                        | crate::Target::Ephemeral { .. }
+                        | crate::Target::Within(_) => None,
                     },
                     _ => None,
                 };

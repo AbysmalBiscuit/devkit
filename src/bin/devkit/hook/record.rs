@@ -257,7 +257,7 @@ pub fn projection(analysis: &Analysis, analyze_micros: u64) -> AnalysisProjectio
         .iter()
         .filter_map(|e| match &e.target {
             Target::Path(p) => Some(p.clone()),
-            Target::Unresolved | Target::Ephemeral { .. } => None,
+            Target::Unresolved | Target::Ephemeral { .. } | Target::Within(_) => None,
         })
         .collect();
     // An unresolved write is not an `Uncertainty` — the analyser records it as
@@ -302,7 +302,7 @@ pub fn projection(analysis: &Analysis, analyze_micros: u64) -> AnalysisProjectio
             .iter()
             .map(|i| match &i.program {
                 Value::Known(p) => p.clone(),
-                Value::Unknown => "<unknown>".to_string(),
+                Value::Unknown | Value::Within(_) => "<unknown>".to_string(),
                 Value::Ephemeral(_) => "<ephemeral>".to_string(),
             })
             .collect(),

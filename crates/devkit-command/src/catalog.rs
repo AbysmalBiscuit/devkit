@@ -138,14 +138,14 @@ fn each(op: FileOp, operands: &[Value]) -> Vec<Hit> {
 
 fn file(op: FileOp, v: &Value) -> Hit {
     match v {
-        Value::Known(_) | Value::Ephemeral(_) => Hit::File(op, v.clone()),
+        Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => Hit::File(op, v.clone()),
         Value::Unknown => Hit::Unresolved(format!("a {op:?} target could not be determined")),
     }
 }
 
 fn rename_into(sources: &[Value], dest: &Value) -> Hit {
     match dest {
-        Value::Known(_) | Value::Ephemeral(_) => Hit::RenameInto {
+        Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => Hit::RenameInto {
             sources: sources.to_vec(),
             dest: dest.clone(),
         },
@@ -201,12 +201,15 @@ fn formatter_operands(operands: &[Value], by: &str) -> Vec<Hit> {
     }
     operands
         .iter()
-        .map(|v| match v.known() {
-            Some(p) if crate::normalize::basename(p).contains('.') && !p.ends_with('.') => {
+        .map(|v| match v {
+            // A match may be a directory, which the formatter rewrites
+            // throughout, and that stays within the bound too.
+            Value::Within(_) => Hit::File(FileOp::Overwrite, v.clone()),
+            Value::Known(p) if crate::normalize::basename(p).contains('.') && !p.ends_with('.') => {
                 Hit::File(FileOp::Overwrite, v.clone())
             }
-            Some(_) => tree(v, false, by),
-            None => Hit::Unresolved(format!(
+            Value::Known(_) => tree(v, false, by),
+            Value::Unknown | Value::Ephemeral(_) => Hit::Unresolved(format!(
                 "`{by}` rewrites a path that could not be determined"
             )),
         })
@@ -254,7 +257,9 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 p.operands
                     .iter()
                     .map(|v| match v {
-                        Value::Known(_) | Value::Ephemeral(_) => removal(v, "rm -r"),
+                        Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => {
+                            removal(v, "rm -r")
+                        }
                         Value::Unknown => Hit::Unresolved(
                             "`rm -r` removes a path that could not be determined".into(),
                         ),
@@ -297,7 +302,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                         let target = join_name(dir, s);
                         if recursive {
                             match target {
-                                Value::Known(_) | Value::Ephemeral(_) => {
+                                Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => {
                                     tree(&target, false, "cp -r")
                                 }
                                 Value::Unknown => Hit::Unresolved(
@@ -314,7 +319,9 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 Some((dest, sources)) if !sources.is_empty() => {
                     if recursive {
                         vec![match dest {
-                            Value::Known(_) | Value::Ephemeral(_) => tree(dest, false, "cp -r"),
+                            Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => {
+                                tree(dest, false, "cp -r")
+                            }
                             Value::Unknown => Hit::Unresolved(
                                 "`cp -r` destination could not be determined".into(),
                             ),
@@ -683,7 +690,9 @@ fn git(args: &[Value]) -> Vec<Hit> {
                 p.operands
                     .iter()
                     .map(|v| match v {
-                        Value::Known(_) | Value::Ephemeral(_) => removal(v, "git rm -r"),
+                        Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => {
+                            removal(v, "git rm -r")
+                        }
                         Value::Unknown => {
                             Hit::Unresolved("`git rm -r` path could not be determined".into())
                         }
@@ -830,6 +839,14 @@ mod tests {
         assert_eq!(hits("ruff", &["check", "--fix", "a.py"]), [
             "Overwrite a.py"
         ]);
+    }
+
+    #[test]
+    fn a_formatter_writes_within_a_globbed_operands_bound() {
+        assert_eq!(targets(&bash("prettier --write src/*.ts")), [
+            "/repo/src/**"
+        ]);
+        assert_eq!(targets(&bash("black src/*")), ["/repo/src/**"]);
     }
 
     #[test]

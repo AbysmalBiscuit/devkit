@@ -374,8 +374,9 @@ impl Data {
         out
     }
 
-    /// Decide one write, renewing the overlapping row that permits it: the
-    /// writer's own, or an ancestor's. The row's holder is never rewritten.
+    /// Decide one write, renewing the writer's own and ancestors' overlapping
+    /// rows. Only a row at or above `path` permits it without a new row: one
+    /// below a directory reserves none of the directory's other paths.
     #[allow(clippy::too_many_arguments)]
     pub fn decide_write(
         &mut self,
@@ -391,20 +392,14 @@ impl Data {
         if !blockers.is_empty() {
             return WriteDecision::Denied(blockers);
         }
-        let overlaps = self
-            .locks
-            .values()
-            .any(|e| e.root == root && !entry_dead(e, now) && paths_overlap(&e.path, path));
-        if overlaps {
-            for e in self.locks.values_mut() {
-                if e.root == root
-                    && !entry_dead(e, now)
-                    && paths_overlap(&e.path, path)
-                    && is_ancestor_or_self(&e.holder, writer)
-                {
-                    e.ts = now;
-                }
+        let mut covered = false;
+        for e in self.locks.values_mut() {
+            if e.root == root && !entry_dead(e, now) && paths_overlap(&e.path, path) {
+                e.ts = now;
+                covered |= covers_children(&e.path, path);
             }
+        }
+        if covered {
             return WriteDecision::AllowedByOwnership;
         }
         self.locks.insert(key_for(root, path), LockEntry {
@@ -736,6 +731,40 @@ mod tests {
             !entry_dead(e, 900),
             "the write carries the directory lock past its original lease"
         );
+    }
+
+    #[test]
+    fn decide_write_claims_a_directory_its_own_rows_below_do_not_cover() {
+        let mut d = Data::default();
+        d.locks
+            .extend([entry("/repo", "src/a.rs", "S", 1, 1800, None)]);
+        let r = d.decide_write("/repo", "src", "S", None, None, 1800, 100);
+        assert_eq!(r, WriteDecision::Acquired);
+        assert_eq!(d.locks[&key_for("/repo", "src")].holder, "S");
+        assert!(matches!(
+            d.decide_write("/repo", "src/b.rs", "T", None, None, 1800, 110),
+            WriteDecision::Denied(_)
+        ));
+    }
+
+    #[test]
+    fn decide_write_takes_no_ownership_from_an_expired_row() {
+        let mut d = Data::default();
+        d.locks.extend([entry("/repo", "src", "S", 0, 60, None)]);
+        let r = d.decide_write("/repo", "src", "S", None, None, 1800, 1000);
+        assert_eq!(r, WriteDecision::Acquired);
+        assert_eq!(d.locks[&key_for("/repo", "src")].ttl, 1800);
+    }
+
+    #[test]
+    fn decide_write_denies_a_parent_writing_through_a_subagents_row() {
+        let mut d = Data::default();
+        d.locks
+            .extend([entry("/repo", "src/a.rs", "S/a1", 1, 1800, None)]);
+        assert!(matches!(
+            d.decide_write("/repo", "src", "S", None, None, 1800, 100),
+            WriteDecision::Denied(_)
+        ));
     }
 
     #[test]

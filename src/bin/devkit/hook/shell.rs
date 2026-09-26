@@ -382,11 +382,14 @@ fn respond(
             // The stage runs on its own thread, so it takes a clone of the
             // already-resolved checkout rather than a borrow.
             let checkout = checkout.clone();
+            let unresolved = rules.policy.unresolved_writes;
             match writes::with_deadline(WRITE_STAGE_DEADLINE, move || {
-                writes::enforce(&evaluation, &holder, checkout)
+                writes::enforce(&evaluation, &holder, checkout, unresolved)
             }) {
-                Ok(Ok(conflicts)) if conflicts.is_empty() => {}
-                Ok(Ok(conflicts)) => blocks.push(writes::conflict_message(&conflicts)),
+                Ok(Ok(findings)) => {
+                    blocks.extend(findings.blocks);
+                    notes.extend(findings.warnings);
+                }
                 Ok(Err(e)) => {
                     blocks.push(format!(
                         "devkit write-harness: registry error (fail-closed): {e:#}"

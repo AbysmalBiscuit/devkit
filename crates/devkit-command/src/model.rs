@@ -35,13 +35,17 @@ pub enum Value {
     /// where it was created. Resolves to [`Target::Ephemeral`]; see its
     /// documentation for why that is not [`Value::Unknown`].
     Ephemeral(TempLocation),
+    /// Some path under this directory, or the directory itself: a glob match,
+    /// or a path `find` found. The directory is unresolved, like a
+    /// [`Value::Known`] path.
+    Within(String),
 }
 
 impl Value {
     pub fn known(&self) -> Option<&str> {
         match self {
             Value::Known(s) => Some(s),
-            Value::Unknown | Value::Ephemeral(_) => None,
+            Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => None,
         }
     }
 }
@@ -110,6 +114,10 @@ pub enum Target {
     Ephemeral {
         at: TempLocation,
     },
+    /// An unenumerated set of paths, every one of them under this absolute
+    /// directory or the directory itself. Unlike `Unresolved`, the directory
+    /// bounds what the write can reach, so a claim on it covers the write.
+    Within(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

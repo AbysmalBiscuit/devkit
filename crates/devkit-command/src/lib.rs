@@ -36,7 +36,7 @@ pub use model::{
 /// release-please, so that number moves on every release whether the parser
 /// changed or not, and a regression diff keyed on it would call the whole
 /// corpus stale at each one.
-pub const ANALYZER_VERSION: u32 = 2;
+pub const ANALYZER_VERSION: u32 = 3;
 
 /// Analyze a command in `ctx.dialect`.
 pub fn analyze(source: &str, ctx: &Context) -> Analysis {
@@ -78,8 +78,19 @@ pub(crate) mod testutil {
                 Target::Path(p) => p.clone(),
                 Target::Unresolved => "?".into(),
                 Target::Ephemeral { .. } => "<ephemeral>".into(),
+                Target::Within(dir) => format!("{dir}/**"),
             })
             .collect()
+    }
+
+    /// [`targets`], then a `?` for each write recorded as an uncertainty.
+    pub(crate) fn writes(a: &Analysis) -> Vec<String> {
+        let unresolved = a
+            .uncertainties
+            .iter()
+            .filter(|u| u.kind == crate::UncertaintyKind::UnresolvedWrite)
+            .map(|_| "?".to_string());
+        targets(a).into_iter().chain(unresolved).collect()
     }
 
     pub(crate) fn programs(a: &Analysis) -> Vec<String> {
