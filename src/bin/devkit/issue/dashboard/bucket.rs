@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
 use devkit_common::tracker::{AssignedIssue, State, StateKind};
 
+use super::Aggregate;
+
 /// Parse an RFC3339 timestamp to UTC. Linear uses `…Z`; git `%aI` uses
 /// `+01:00`.
 pub fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
@@ -92,6 +94,16 @@ pub fn tally(starts: &[DateTime<Utc>], dates: &[DateTime<Utc>]) -> Vec<u32> {
     counts
 }
 
+/// Per-bucket counts turned into the running total up to each bucket.
+pub fn running_total(mut counts: Vec<u32>) -> Vec<u32> {
+    let mut sum = 0;
+    for c in &mut counts {
+        sum += *c;
+        *c = sum;
+    }
+    counts
+}
+
 // --- issue state replay
 // ---------------------------------------------------------
 
@@ -162,6 +174,60 @@ pub fn state_at(r: &Replay, t: DateTime<Utc>) -> Option<String> {
         }
     }
     Some(state)
+}
+
+/// Each time the issue entered a status: creation enters the initial status,
+/// then every transition enters its target.
+fn entries(r: &Replay) -> impl Iterator<Item = (DateTime<Utc>, &str)> {
+    r.created
+        .map(|c| (c, r.initial.as_str()))
+        .into_iter()
+        .chain(r.transitions.iter().map(|(t, to)| (*t, to.as_str())))
+}
+
+/// `series[k][b]`: issues counted under status `names[k]` in bucket `b`.
+/// Cumulative counts the issues sitting in the status at the bucket's end
+/// (the last bucket ends at `now`); period counts entries into it during the
+/// bucket.
+pub fn status_series(
+    replays: &[Replay],
+    names: &[String],
+    starts: &[DateTime<Utc>],
+    now: DateTime<Utc>,
+    aggregate: Aggregate,
+) -> Vec<Vec<u32>> {
+    match aggregate {
+        Aggregate::Cumulative => {
+            let ends: Vec<_> = (0..starts.len())
+                .map(|i| std::cmp::min(*starts.get(i + 1).unwrap_or(&now), now))
+                .collect();
+            names
+                .iter()
+                .map(|name| {
+                    ends.iter()
+                        .map(|end| {
+                            replays
+                                .iter()
+                                .filter(|r| state_at(r, *end).as_deref() == Some(name.as_str()))
+                                .count() as u32
+                        })
+                        .collect()
+                })
+                .collect()
+        }
+        Aggregate::Period => names
+            .iter()
+            .map(|name| {
+                let dates: Vec<_> = replays
+                    .iter()
+                    .flat_map(entries)
+                    .filter(|(_, s)| *s == name)
+                    .map(|(t, _)| t)
+                    .collect();
+                tally(starts, &dates)
+            })
+            .collect(),
+    }
 }
 
 #[cfg(test)]
@@ -308,5 +374,50 @@ mod tests {
             Some("Done")
         );
         assert!(meta.contains_key("In Progress"));
+    }
+
+    #[test]
+    fn running_total_accumulates_each_bucket() {
+        assert_eq!(running_total(vec![2, 0, 1, 3]), vec![2, 2, 3, 6]);
+    }
+
+    /// Created Jan 01 in Todo, In Progress mid Jan 02, Done mid Jan 04; the
+    /// timeline runs Jan 01..Jan 04 18:00 in daily buckets.
+    fn lifecycle() -> (Vec<Replay>, Vec<String>, Vec<DateTime<Utc>>, DateTime<Utc>) {
+        let r = Replay {
+            created: Some(dt("2026-01-01T00:00:00Z")),
+            initial: "Todo".into(),
+            transitions: vec![
+                (dt("2026-01-02T12:00:00Z"), "In Progress".into()),
+                (dt("2026-01-04T12:00:00Z"), "Done".into()),
+            ],
+        };
+        let now = dt("2026-01-04T18:00:00Z");
+        let starts = bucket_starts(dt("2026-01-01T00:00:00Z"), now, "day");
+        let names = ["Todo", "In Progress", "Done"].map(String::from).to_vec();
+        (vec![r], names, starts, now)
+    }
+
+    /// Cumulative is a snapshot: the issue counts under its status at the end
+    /// of every bucket, so it stays In Progress through Jan 03.
+    #[test]
+    fn cumulative_status_series_is_a_snapshot_at_each_bucket_end() {
+        let (replays, names, starts, now) = lifecycle();
+        let got = status_series(&replays, &names, &starts, now, Aggregate::Cumulative);
+        assert_eq!(got, vec![vec![1, 0, 0, 0], vec![0, 1, 1, 0], vec![
+            0, 0, 0, 1
+        ]]);
+    }
+
+    /// Period counts entries into each status: creation enters the initial
+    /// status, each transition enters its target, and the quiet Jan 03 is
+    /// empty.
+    #[test]
+    fn period_status_series_counts_entries_per_bucket() {
+        let (replays, names, starts, now) = lifecycle();
+        let got = status_series(&replays, &names, &starts, now, Aggregate::Period);
+        assert_eq!(got, vec![vec![1, 0, 0, 0], vec![0, 1, 0, 0], vec![
+            0, 0, 0, 1
+        ]]);
     }
 }

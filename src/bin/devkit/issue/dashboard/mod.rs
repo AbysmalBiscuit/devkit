@@ -7,10 +7,31 @@ mod cache;
 mod chart;
 mod data;
 
+/// How a timeline folds events into its buckets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Aggregate {
+    /// Everything up to each bucket's end: running totals of commits and PRs,
+    /// and each issue's status as of the bucket's end.
+    Cumulative,
+    /// Only what happened inside each bucket: commits and PRs in it, and
+    /// issues entering each status in it.
+    Period,
+}
+
+impl Aggregate {
+    fn label(self) -> &'static str {
+        match self {
+            Aggregate::Cumulative => "cumulative",
+            Aggregate::Period => "per period",
+        }
+    }
+}
+
 pub struct DashboardArgs {
     pub bucket: String,
     pub chart: String,
     pub mode: String,
+    pub aggregate: Option<Aggregate>,
     pub all_roles: bool,
     pub author: Option<String>,
     pub no_plots: bool,
@@ -110,9 +131,6 @@ pub fn run(args: DashboardArgs) -> Result<()> {
             args.bucket.clone()
         };
         let starts = bucket::bucket_starts(first, now, &b);
-        let ends: Vec<_> = (0..starts.len())
-            .map(|i| std::cmp::min(*starts.get(i + 1).unwrap_or(&now), now))
-            .collect();
         let labels: Vec<String> = starts.iter().map(|s| bucket::label_for(*s, &b)).collect();
 
         let mut meta: HashMap<String, (devkit_common::tracker::StateKind, String)> = HashMap::new();
@@ -129,15 +147,8 @@ pub fn run(args: DashboardArgs) -> Result<()> {
                 .then_with(|| a.cmp(b))
         });
 
-        let mut series: Vec<Vec<u32>> = names.iter().map(|_| vec![0u32; starts.len()]).collect();
-        for (si, name) in names.iter().enumerate() {
-            for (bi, end) in ends.iter().enumerate() {
-                series[si][bi] = replays
-                    .iter()
-                    .filter(|r| bucket::state_at(r, *end).as_deref() == Some(name.as_str()))
-                    .count() as u32;
-            }
-        }
+        let aggregate = args.aggregate.unwrap_or(Aggregate::Cumulative);
+        let series = bucket::status_series(&replays, &names, &starts, now, aggregate);
         // Drop statuses that never appear.
         let keep: Vec<usize> = (0..names.len())
             .filter(|&i| series[i].iter().any(|&v| v > 0))
@@ -159,9 +170,10 @@ pub fn run(args: DashboardArgs) -> Result<()> {
 
         let unit = if args.mode == "proportional" { "%" } else { "" };
         let title = format!(
-            "My {} issues by status — per {b}, {}",
+            "My {} issues by status, per {b}, {}, {}",
             tracker.kind(),
-            args.mode
+            args.mode,
+            aggregate.label()
         );
         if args.chart == "line" {
             chart::render_lines(&title, &series, &names, &colors, unit);
@@ -230,23 +242,35 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         };
         let starts = bucket::bucket_starts(first, now, &b);
         let labels: Vec<String> = starts.iter().map(|s| bucket::label_for(*s, &b)).collect();
-        let c_commits = bucket::tally(&starts, &commits);
-        let c_opened = bucket::tally(&starts, &opened);
-        let c_merged = bucket::tally(&starts, &merged);
+        let aggregate = args.aggregate.unwrap_or(Aggregate::Period);
+        let count = |dates: &[chrono::DateTime<Utc>]| {
+            let per_bucket = bucket::tally(&starts, dates);
+            match aggregate {
+                Aggregate::Cumulative => bucket::running_total(per_bucket),
+                Aggregate::Period => per_bucket,
+            }
+        };
+        let c_commits = count(&commits);
+        let c_opened = count(&opened);
+        let c_merged = count(&merged);
+        let suffix = match aggregate {
+            Aggregate::Cumulative => ", cumulative",
+            Aggregate::Period => "",
+        };
 
         let cyan = (0u8, 200u8, 200u8);
         let orange = (255u8, 150u8, 0u8);
         let green = (0u8, 200u8, 0u8);
         if args.chart == "line" {
             chart::render_lines(
-                &format!("Commits per {b}"),
+                &format!("Commits per {b}{suffix}"),
                 std::slice::from_ref(&c_commits),
                 &["commits".into()],
                 &[cyan],
                 "",
             );
             chart::render_lines(
-                &format!("PRs per {b}"),
+                &format!("PRs per {b}{suffix}"),
                 &[c_opened.clone(), c_merged.clone()],
                 &["opened".into(), "merged".into()],
                 &[orange, green],
@@ -254,7 +278,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
             );
         } else {
             chart::render_stacked_bars(
-                &format!("Commits per {b}"),
+                &format!("Commits per {b}{suffix}"),
                 &labels,
                 std::slice::from_ref(&c_commits),
                 &["commits".into()],
@@ -264,7 +288,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
                 "",
             );
             chart::render_stacked_bars(
-                &format!("PRs opened/merged per {b}"),
+                &format!("PRs opened/merged per {b}{suffix}"),
                 &labels,
                 &[c_opened.clone(), c_merged.clone()],
                 &["opened".into(), "merged".into()],
