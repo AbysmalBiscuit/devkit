@@ -111,7 +111,8 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
 }
 
 /// Decide over an analysis. Every invocation is checked, nested ones
-/// included; findings keep invocation order, then rule name order.
+/// included; findings keep invocation order, then rule name order, and each
+/// distinct finding appears once however many times a loop repeats it.
 pub fn decide(
     analysis: &Analysis,
     rules: &BTreeMap<String, CommandRule>,
@@ -141,8 +142,8 @@ pub fn decide(
                         message: rule.reason.clone(),
                     };
                     match rule.action {
-                        RuleAction::Block => verdict.blocks.push(finding),
-                        RuleAction::Warn => verdict.warnings.push(finding),
+                        RuleAction::Block => push_once(&mut verdict.blocks, finding),
+                        RuleAction::Warn => push_once(&mut verdict.warnings, finding),
                     }
                 }
                 Match::Possible => undetermined = true,
@@ -150,10 +151,12 @@ pub fn decide(
             }
         }
         if undetermined {
-            verdict.warnings.push(Finding {
+            push_once(&mut verdict.warnings, Finding {
                 rule: None,
                 severity: Severity::Warning,
-                message: format!("`{typed}` could not be fully resolved, so devkit could not tell whether a `[harness.commands]` rule applies; it was allowed."),
+                message: format!(
+                    "`{typed}` could not be fully resolved, so devkit could not tell whether a `[harness.commands]` rule applies; it was allowed."
+                ),
             });
         }
         let Some(project) = project else { continue };
@@ -162,24 +165,50 @@ pub fn decide(
                 let program = basename(&known.argv[0]).to_string();
                 let normalized = norm_view(&known);
                 if let Some(message) = project_hit(&inv.typed, &normalized, &program, project) {
-                    verdict.blocks.push(Finding {
+                    push_once(&mut verdict.blocks, Finding {
                         rule: None,
                         severity: Severity::Error,
                         message,
                     });
                 }
             }
-            None if !project.config.tasks.is_empty() || !project.catalog.is_empty() => {
-                verdict.warnings.push(Finding {
+            None if project_could_claim(inv.program.known(), project) => {
+                push_once(&mut verdict.warnings, Finding {
                     rule: None,
                     severity: Severity::Info,
-                    message: format!("`{typed}` could not be fully resolved, so devkit did not check it against the project's tasks and apps."),
+                    message: format!(
+                        "`{typed}` could not be fully resolved, so devkit did not check it against the project's tasks and apps."
+                    ),
                 })
             }
             None => {}
         }
     }
     verdict
+}
+
+fn push_once(findings: &mut Vec<Finding>, finding: Finding) {
+    if !findings.contains(&finding) {
+        findings.push(finding);
+    }
+}
+
+/// Whether a task, an app or the catalog could claim an invocation of
+/// `program` once its arguments resolve. An unresolved program word could be
+/// anything, so it counts whenever the project has a task or app at all.
+fn project_could_claim(program: Option<&str>, p: &Project) -> bool {
+    let Some(program) = program.map(basename) else {
+        return !p.config.tasks.is_empty() || !p.catalog.is_empty();
+    };
+    let runs_program = |run: Option<Known>| run.is_some_and(|k| basename(&k.argv[0]) == program);
+    catalog::is_known_program(program)
+        || p.config
+            .tasks
+            .values()
+            .any(|t| runs_program(configured_task(&t.run)))
+        || p.catalog
+            .values()
+            .any(|a| runs_program(configured(&a.launch)))
 }
 
 /// Kept for callers holding a bash command string: the first block, if any.
