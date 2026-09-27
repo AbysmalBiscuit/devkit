@@ -57,12 +57,12 @@ Mechanics:
 - **Holder identity.** Top-level writes are held under the session id; sub-agent writes under `session_id/agent_id`. A Claude Code fork (an `agent_id` with no `agent_type`, such as a background summary) writes under the session id, because it can end without a `SubagentStop` to release it. A parent holding a file implicitly covers its sub-agents.
 - **A blocked write returns a deny** naming the holder:
   ```
-  devkit write-harness: src/auth.rs (held by <holder>) — locked by another
-  agent; coordinate or wait for it to finish
+  devkit write-harness: src/auth.rs (held by <holder>) is locked by another
+  agent; edit a different file or wait for it to finish
   ```
 - **Automatic release.** Sub-agent locks release on `SubagentStop`; all session locks release on `SessionEnd`, whether that is a normal exit, Ctrl-C, or an error. The 30-min TTL backstops a hard kill.
 - **Fail-open when off or when `devkit` is not on `PATH`.** The hook exits without blocking and takes no locks.
-- **Fail-closed on registry errors.** With enforcement on but the registry erroring (corruption, permissions), the hook denies the write rather than allowing it silently.
+- **Fail-closed on registry errors.** With enforcement on, a registry that errors (corruption, permissions) or does not answer in time, and a hook that panics, deny the write rather than allowing it silently. Edits and shell writes go through the same gate.
 
 ## Shell writes
 
@@ -74,6 +74,6 @@ Mechanics:
 - A permission change (`chmod`, `chown`, `chgrp`, `icacls`, `Set-Acl`, `Set-ItemProperty -Name IsReadOnly`, and the `chmod`/`chown` file APIs in Python and JavaScript) claims nothing. It is refused while another session holds a lock on the path or above it. A recursive one (`-R`, `/T`) or one on a glob is also refused by a lock anywhere under the directory.
 - A write to files no one can list but one directory bounds (a glob, a quoted loop variable over one, or `{}` from a `find` with one starting point) claims that directory. It is refused while another session, or one of your own sub-agents, holds a lock on, under, or above that directory. Such a bound at the checkout root, or outside any checkout, is an unresolved write.
 - Build tools and package managers are not treated as writers. `devrun task <name>` is not expanded, so a task that formats the tree goes unchecked.
-- Cursor gets the command guard only; its shell calls claim nothing.
+- Cursor gets the command guard only; nothing a Cursor session writes is claimed.
 
 What devkit cannot resolve follows `[harness] unresolved_writes`, `unsupported_language`, and `script_files` (`block`, `warn`, or `allow`); the defaults block the first two and allow script files. A refused unresolved write is fixed by making the target explicit, not by acquiring a lock.

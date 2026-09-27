@@ -21,6 +21,7 @@
 
 mod dialect;
 mod edit;
+mod gate;
 mod mcp;
 mod payload;
 pub mod record;
@@ -28,7 +29,7 @@ pub(crate) mod rules;
 mod shell;
 mod writes;
 
-use std::io::Read;
+use std::io::{Read, Write};
 
 use anyhow::Result;
 use clap::{Args, ValueEnum};
@@ -205,4 +206,11 @@ pub(crate) fn pre_tool_use(harness: Option<Harness>) -> Result<()> {
         Some(pabal::Tool::Mcp { .. }) => mcp::guard(&payload),
         _ => shell::guard(&payload),
     }
+}
+
+/// Write a `pre-tool-use` envelope to stdout. A closed pipe or a full disk on
+/// the other end must not turn a denial into a crash, so the write error is
+/// discarded rather than let the `print!` family's internal panic through.
+fn print_envelope(envelope: &str) {
+    let _ = writeln!(std::io::stdout(), "{envelope}");
 }

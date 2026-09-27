@@ -132,6 +132,54 @@ fn an_unconflicted_write_emits_nothing() {
     assert_eq!(one_object(&out), None, "an allow is silent");
 }
 
+/// A harness allows the call when the hook times out, so a registry that never
+/// answers has to be a denial the hook reaches on its own.
+#[test]
+fn an_edit_against_a_stalled_registry_denies_within_the_deadline() {
+    let proj = project();
+    let state = tempfile::tempdir().unwrap();
+    let registry_lock = state.path().join("devkit/locks.lock");
+    std::fs::create_dir_all(registry_lock.parent().unwrap()).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&registry_lock)
+        .unwrap();
+    let mut lock = fd_lock::RwLock::new(file);
+    let _held = lock.write().unwrap();
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.args(["hook", "pre-tool-use", "--harness", "claude-code"])
+        .current_dir(proj.path())
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env_remove("DEVKIT_CONFIG")
+        .env_remove("DEVKIT_ENFORCE_WRITES")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    testenv::scrub_identity(&mut cmd);
+    let mut child = cmd.spawn().expect("spawn the devkit hook");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(write_payload("S", None, proj.path(), "src/a.rs").as_bytes())
+        .unwrap();
+    let start = std::time::Instant::now();
+    while child.try_wait().unwrap().is_none() {
+        if start.elapsed() > std::time::Duration::from_secs(15) {
+            child.kill().unwrap();
+            panic!("the hook was still waiting on the registry after 15s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let reason = deny_reason(&child.wait_with_output().unwrap());
+    assert!(reason.contains("did not answer"), "{reason}");
+}
+
 fn deny_reason(out: &Output) -> String {
     let v = one_object(out).expect("the call is denied");
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");

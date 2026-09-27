@@ -13,7 +13,7 @@
 //! `inject` returns `()`. With no `Result` and no `?` it has no path to an exit
 //! code.
 //!
-//! It runs under `catch_unwind`, the profile `shell.rs` pins with a
+//! It runs under `catch_unwind`, the profile `gate.rs` pins with a
 //! `compile_error!` against an aborting panic strategy.
 //!
 //! It emits one write and flush before the log record, because the envelope has
@@ -39,7 +39,7 @@ use devkit_rules::{
     vocab::{Severity, Task, canonical_language},
 };
 
-use super::{payload::Payload, shell::print_envelope};
+use super::{payload::Payload, print_envelope};
 
 /// The fired-set for one holder.
 ///

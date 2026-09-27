@@ -509,6 +509,94 @@ pub fn decide_write(
     decide_write_at(&root, &path, holder, note, ttl)
 }
 
+/// What a hook's write gate asks of the lock registry.
+///
+/// [`Live`] is the registry every session shares. A [`store::MemoryStore`]
+/// answers the same questions from memory, for a gate run against a registry
+/// of its own.
+pub trait Registry {
+    /// Decide a write to `path` under `root`, claiming it when it is free.
+    fn write_decide(
+        &self,
+        root: &str,
+        path: &str,
+        holder: &str,
+        note: Option<&str>,
+        ttl: u64,
+    ) -> Result<model::WriteDecision>;
+    /// Rows another holder has on, under, or above `paths`. Prunes nothing.
+    fn check_scope(&self, root: &str, holder: &str, paths: &[String]) -> Result<Vec<Conflict>>;
+    /// Rows another holder has on or above each of `dirs`.
+    fn check_covering(&self, root: &str, holder: &str, dirs: &[String]) -> Result<Vec<Conflict>>;
+}
+
+/// A running daemon when one is up, else the flock file.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Live;
+
+impl Registry for Live {
+    fn write_decide(
+        &self,
+        root: &str,
+        path: &str,
+        holder: &str,
+        note: Option<&str>,
+        ttl: u64,
+    ) -> Result<model::WriteDecision> {
+        decide_write_at(root, path, holder, note, ttl)
+    }
+
+    fn check_scope(&self, root: &str, holder: &str, paths: &[String]) -> Result<Vec<Conflict>> {
+        check_scope_resolved(root, holder, paths)
+    }
+
+    fn check_covering(&self, root: &str, holder: &str, dirs: &[String]) -> Result<Vec<Conflict>> {
+        check_covering_resolved(root, holder, dirs)
+    }
+}
+
+impl Registry for store::MemoryStore {
+    fn write_decide(
+        &self,
+        root: &str,
+        path: &str,
+        holder: &str,
+        note: Option<&str>,
+        ttl: u64,
+    ) -> Result<model::WriteDecision> {
+        store::write_decide_with(self, root, holder, path, None, note, ttl, now())
+    }
+
+    fn check_scope(&self, root: &str, holder: &str, paths: &[String]) -> Result<Vec<Conflict>> {
+        store::check_read_only_with(self, root, holder, paths, now())
+    }
+
+    fn check_covering(&self, root: &str, holder: &str, dirs: &[String]) -> Result<Vec<Conflict>> {
+        store::check_covering_with(self, root, holder, dirs, now())
+    }
+}
+
+impl<R: Registry + ?Sized> Registry for std::sync::Arc<R> {
+    fn write_decide(
+        &self,
+        root: &str,
+        path: &str,
+        holder: &str,
+        note: Option<&str>,
+        ttl: u64,
+    ) -> Result<model::WriteDecision> {
+        (**self).write_decide(root, path, holder, note, ttl)
+    }
+
+    fn check_scope(&self, root: &str, holder: &str, paths: &[String]) -> Result<Vec<Conflict>> {
+        (**self).check_scope(root, holder, paths)
+    }
+
+    fn check_covering(&self, root: &str, holder: &str, dirs: &[String]) -> Result<Vec<Conflict>> {
+        (**self).check_covering(root, holder, dirs)
+    }
+}
+
 /// Decides write requests for a batch of paths handled in one hook invocation.
 /// Each path's checkout root is resolved from that file's own directory, not
 /// the process's cwd — a batch can touch files that belong to different
@@ -518,13 +606,14 @@ pub fn decide_write(
 /// the same directory, so a batch of files that share a directory pays for
 /// one `git` call instead of one per file.
 #[derive(Default)]
-pub struct WriteResolver {
+pub struct WriteResolver<R = Live> {
     roots: std::collections::HashMap<PathBuf, PathBuf>,
     /// The checkout the hook already resolved for its own working directory.
     /// Every path in a batch that lands inside it is answered from here, so
     /// the common batch — files in the worktree the agent is working in —
     /// costs no `git` call of its own.
     checkout: Option<Checkout>,
+    registry: R,
 }
 
 impl WriteResolver {
@@ -534,9 +623,18 @@ impl WriteResolver {
 
     /// A resolver that answers from `checkout` wherever it can.
     pub fn with_checkout(checkout: Checkout) -> Self {
+        Self::with_registry(checkout, Live)
+    }
+}
+
+impl<R: Registry> WriteResolver<R> {
+    /// A resolver that answers from `checkout` wherever it can, and decides
+    /// against `registry`.
+    pub fn with_registry(checkout: Checkout, registry: R) -> Self {
         Self {
+            roots: std::collections::HashMap::new(),
             checkout: Some(checkout),
-            ..Self::default()
+            registry,
         }
     }
 
@@ -600,7 +698,7 @@ impl WriteResolver {
         holder: &str,
     ) -> Result<Vec<Conflict>> {
         let (root, rel) = self.scope_key(dir, whole_checkout)?;
-        check_scope_resolved(&root, holder, &[rel])
+        self.registry.check_scope(&root, holder, &[rel])
     }
 
     /// Live rows another session holds that cover a name created fresh under
@@ -615,7 +713,7 @@ impl WriteResolver {
     /// as well.
     pub fn check_covering(&mut self, dir: &str, holder: &str) -> Result<Vec<Conflict>> {
         let (root, rel) = self.scope_key(dir, false)?;
-        check_covering_resolved(&root, holder, &[rel])
+        self.registry.check_covering(&root, holder, &[rel])
     }
 
     /// Claim `dir` whole for a write reaching an unenumerated set of paths
@@ -634,7 +732,9 @@ impl WriteResolver {
         if rel == "." || !self.is_checkout(Path::new(&root)) {
             return Ok(None);
         }
-        decide_write_at(&root, &rel, holder, note, ttl).map(Some)
+        self.registry
+            .write_decide(&root, &rel, holder, note, ttl)
+            .map(Some)
     }
 
     fn is_checkout(&self, root: &Path) -> bool {
@@ -653,7 +753,7 @@ impl WriteResolver {
         ttl: u64,
     ) -> Result<model::WriteDecision> {
         let (root, path) = self.ctx(path_in)?;
-        decide_write_at(&root, &path, holder, note, ttl)
+        self.registry.write_decide(&root, &path, holder, note, ttl)
     }
 }
 

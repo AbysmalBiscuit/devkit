@@ -21,7 +21,7 @@ acceptance = { required = "agents", description = "observable outcomes that mean
 
 fn project() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(p.path())
+    devkit_git::Git::fixture(p.path())
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();

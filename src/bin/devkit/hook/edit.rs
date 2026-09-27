@@ -1,24 +1,29 @@
 //! The edit path of `devkit hook pre-tool-use`, and the two release verbs.
 //!
 //! A structured edit names its targets in the payload, so there is nothing to
-//! analyse: the targets are claimed as they stand. Fails closed, the same as
-//! the shell path's write stage. A payload this cannot evaluate denies rather
-//! than allows, because an unevaluable write must not open the window.
+//! analyse: the write gate claims the targets as they stand, and fails closed
+//! the way it does for a shell write. A payload this cannot evaluate denies
+//! rather than allows, because an unevaluable write must not open the window.
 //!
 //! The release verbs carry no permission decision at all. Nothing they can
 //! answer would be read.
+
+use std::path::Path;
 
 use devkit_common::{
     harness_log::{self, Decision, EditPre, Kind, Verdict},
     vcs::Checkout,
 };
-use devkit_locks::{
-    hook,
-    model::{Conflict, WriteDecision},
-};
+use devkit_config::PolicyAction;
+use devkit_locks::{Registry, hook};
 use pabal::Tool;
 
-use super::{HookEvent, payload::Payload, record, rules, shell};
+use super::{
+    HookEvent,
+    gate::{self, Armed, Claims, WriteGate},
+    payload::Payload,
+    print_envelope, record, rules,
+};
 
 /// Tools pabal reads write targets from. One that arrives without a readable
 /// target is a harness format change, so it is a write to deny rather than a
@@ -64,41 +69,44 @@ pub fn write(payload: &Payload) -> Option<Write> {
 }
 
 /// Claim the write targets a structured-edit payload names, before the tool
-/// runs.
-///
-/// This is the edit path's single emission site. Anything appended to stdout
-/// after a denial makes the whole output unparseable, and a harness that
-/// cannot parse a hook's stdout proceeds with the call it was asked to gate.
+/// runs. A panic once the gate applies denies the call.
 pub fn guard(payload: &Payload, write: Write) -> anyhow::Result<()> {
+    let _ = gate::guarded(|armed| respond(payload, write, &WriteGate::live(), armed));
+    Ok(())
+}
+
+/// The edit path's single emission site. Anything appended to stdout after a
+/// denial makes the whole output unparseable, and a harness that cannot parse
+/// a hook's stdout proceeds with the call it was asked to gate.
+fn respond(payload: &Payload, write: Write, gate: &WriteGate, armed: &Armed) {
     let cwd = record::payload_cwd(payload);
     // One `git worktree list` for the whole invocation, shared by the
     // enforcement gate, the lock scoping and the log settings. It resolves
     // lazily, so a tool that writes nothing spawns nothing.
     let checkout = Checkout::at(&cwd);
-    let (targets, blocks) = match write {
-        Write::Targets { paths, holder } => {
-            let blocks = match claim(payload, &checkout, &cwd, &paths, &holder) {
-                Some(reason) => vec![reason],
-                None => {
-                    rules::inject(payload, &checkout, &cwd, &paths, &holder);
-                    Vec::new()
-                }
-            };
-            (paths, blocks)
-        }
-        Write::Unusable(reason) => {
-            let message = format!("devkit write-harness: {reason} (fail-closed)");
-            let blocks = if hook::enforcement_enabled_in(&checkout, &cwd) {
-                vec![message]
-            } else {
-                Vec::new()
-            };
-            (Vec::new(), blocks)
-        }
-    };
-    if let Some(reason) = blocks.first() {
-        shell::print_envelope(&payload.harness().deny(reason));
+    let harness = payload.harness();
+    let enabled = gate::enabled(harness, &checkout, &cwd);
+    if enabled {
+        armed.arm(harness);
     }
+    let blocks = if enabled {
+        blocks(&write, gate, &checkout, &cwd)
+    } else {
+        Vec::new()
+    };
+    let targets = match write {
+        Write::Targets { paths, holder } => {
+            if blocks.is_empty() {
+                rules::inject(payload, &checkout, &cwd, &paths, &holder);
+            }
+            paths
+        }
+        Write::Unusable(_) => Vec::new(),
+    };
+    if !blocks.is_empty() {
+        print_envelope(&harness.deny(&blocks.join("\n")));
+    }
+    armed.disarm();
     // Envelope first, then the record: a stall on the log directory before the
     // envelope exists runs into the manifest timeout, and a harness timeout
     // allows the call.
@@ -125,37 +133,28 @@ pub fn guard(payload: &Payload, write: Write) -> anyhow::Result<()> {
         );
         harness_log::record(&settings, &rec);
     }
-    Ok(())
 }
 
-/// Claim each target, returning the reason the write is denied, if it is.
-/// Nothing here prints; `guard` is the only site that emits.
-fn claim(
-    payload: &Payload,
-    checkout: &Checkout,
-    cwd: &std::path::Path,
-    file_paths: &[String],
-    holder: &str,
-) -> Option<String> {
-    if !hook::enforcement_enabled_in(checkout, cwd) {
-        return None; // no opt-in (env, project layers, or global config) -> no enforcement
-    }
-    let mut conflicts = Vec::new();
-    let mut resolver = devkit_locks::WriteResolver::with_checkout(checkout.clone());
-    for path in file_paths {
-        let target = resolve_against(payload, path);
-        match resolver.decide_write(&target, holder, Some("write-harness"), 1800) {
-            Ok(WriteDecision::Denied(c)) => conflicts.extend(c),
-            Ok(_) => {}
-            // fail closed: a registry error must not silently reopen the window
-            Err(e) => {
-                return Some(format!(
-                    "devkit write-harness: registry error (fail-closed): {e:#}"
-                ));
-            }
+/// Why the gate refuses `write`, or nothing when it may proceed.
+fn blocks<R>(write: &Write, gate: &WriteGate<R>, checkout: &Checkout, cwd: &Path) -> Vec<String>
+where
+    R: Registry + Send + Sync + 'static,
+{
+    match write {
+        Write::Targets { paths, holder } => {
+            // A structured edit names no tree, so the unresolved-write policy
+            // has nothing to decide.
+            gate.decide(
+                &Claims::paths(paths.clone()),
+                holder,
+                checkout,
+                cwd,
+                PolicyAction::Block,
+            )
+            .blocks
         }
+        Write::Unusable(reason) => vec![format!("{} {reason} (fail-closed)", gate::PREFIX)],
     }
-    (!conflicts.is_empty()).then(|| conflict_reason(&conflicts))
 }
 
 pub fn release_subagent(payload: &Payload) {
@@ -179,38 +178,11 @@ fn release(holder: &str) {
     }
 }
 
-/// The deny reason naming every holder in the way.
-fn conflict_reason(conflicts: &[Conflict]) -> String {
-    let who = conflicts
-        .iter()
-        .map(|c| format!("{} (held by {})", c.path, c.held_by))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "devkit write-harness: {who}, locked by another agent; \
-         coordinate or wait for it to finish"
-    )
-}
-
-/// Resolve a payload path against the session's own working directory, so a
-/// relative target names the file the session meant rather than one relative to
-/// wherever the harness spawned the hook process.
-fn resolve_against(payload: &Payload, path: &str) -> String {
-    let p = std::path::Path::new(path);
-    if p.is_absolute() {
-        return path.to_string();
-    }
-    payload
-        .cwd()
-        .map(|cwd| cwd.join(p).to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::*;
+    use super::{super::gate::fixture::Project, *};
 
     fn payload(raw: serde_json::Value) -> Payload {
         Payload::new(None, raw).unwrap()
@@ -296,38 +268,118 @@ mod tests {
         assert_eq!(paths, vec!["a.rs", "c.rs", "b.rs"]);
     }
 
+    fn write_to(path: &str, holder: &str) -> Write {
+        Write::Targets {
+            paths: vec![path.to_string()],
+            holder: holder.to_string(),
+        }
+    }
+
+    /// A registry whose every call runs `fail`, which never returns.
+    struct Broken(fn() -> !);
+
+    fn stall() -> ! {
+        loop {
+            std::thread::park();
+        }
+    }
+
+    fn explode() -> ! {
+        panic!("the registry panicked")
+    }
+
+    impl Registry for Broken {
+        fn write_decide(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+            _: u64,
+        ) -> anyhow::Result<devkit_locks::model::WriteDecision> {
+            (self.0)()
+        }
+
+        fn check_scope(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[String],
+        ) -> anyhow::Result<Vec<devkit_locks::model::Conflict>> {
+            (self.0)()
+        }
+
+        fn check_covering(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[String],
+        ) -> anyhow::Result<Vec<devkit_locks::model::Conflict>> {
+            (self.0)()
+        }
+    }
+
     #[test]
-    fn a_denial_names_the_path_and_its_holder() {
-        let reason = conflict_reason(&[Conflict {
-            path: "src/a.rs".into(),
-            held_by: "S/b2".into(),
-            age_secs: 5,
-            note: None,
-        }]);
-        assert!(reason.contains("S/b2"), "reason names the holder: {reason}");
+    fn a_stalled_registry_denies_the_edit() {
+        let p = Project::new();
+        let gate = WriteGate::new(Broken(stall), std::time::Duration::from_millis(100));
+        let blocks = blocks(&write_to("a.rs", "S"), &gate, &p.checkout(), p.path());
         assert!(
-            reason.contains("src/a.rs"),
-            "reason names the path: {reason}"
+            blocks.iter().any(|b| b.contains("did not answer")),
+            "{blocks:?}"
         );
     }
 
     #[test]
-    fn an_absolute_target_is_left_alone() {
-        let p = payload(json!({ "cwd": "/repo" }));
-        assert_eq!(resolve_against(&p, "/tmp/a.rs"), "/tmp/a.rs");
+    fn a_panicking_registry_denies_the_edit() {
+        let p = Project::new();
+        let gate = WriteGate::new(Broken(explode), std::time::Duration::from_secs(10));
+        let blocks = blocks(&write_to("a.rs", "S"), &gate, &p.checkout(), p.path());
+        assert!(
+            blocks.iter().any(|b| b.contains("internal failure")),
+            "{blocks:?}"
+        );
     }
 
     #[test]
-    fn a_relative_target_resolves_against_the_sessions_cwd() {
-        let p = payload(json!({ "cwd": "/repo" }));
-        let got = resolve_against(&p, "src/a.rs");
-        // Compared as paths, not as strings: `join` writes the platform's
-        // separator, so a hand-spelled `/repo/src/a.rs` matches on Unix and
-        // not on Windows. `Path` equality is component-wise, and Windows
-        // treats both separators as one.
-        assert_eq!(
-            std::path::Path::new(&got),
-            std::path::Path::new("/repo").join("src/a.rs")
+    fn a_relative_target_is_claimed_under_the_sessions_cwd() {
+        let p = Project::new();
+        let blocks = blocks(
+            &write_to("src/a.rs", "S"),
+            &p.gate(),
+            &p.checkout(),
+            p.path(),
         );
+        assert!(blocks.is_empty(), "{blocks:?}");
+        assert_eq!(p.rows(), [("src/a.rs".to_string(), "S".to_string())]);
+    }
+
+    #[test]
+    fn another_sessions_claim_denies_the_edit_and_names_it() {
+        let p = Project::new();
+        p.hold("T", "src/a.rs");
+        let blocks = blocks(
+            &write_to("src/a.rs", "S"),
+            &p.gate(),
+            &p.checkout(),
+            p.path(),
+        );
+        assert!(
+            blocks.iter().any(|b| b.contains("src/a.rs (held by T)")),
+            "{blocks:?}"
+        );
+    }
+
+    #[test]
+    fn an_unusable_write_is_denied_by_the_gate() {
+        let p = Project::new();
+        let blocks = blocks(
+            &Write::Unusable("write payload names no target".into()),
+            &p.gate(),
+            &p.checkout(),
+            p.path(),
+        );
+        assert!(blocks[0].contains("fail-closed"), "{blocks:?}");
+        assert!(p.rows().is_empty());
     }
 }
