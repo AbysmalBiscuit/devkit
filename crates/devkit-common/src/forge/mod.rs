@@ -13,8 +13,10 @@ use devkit_config::{ForgeConfig, GithubConfig};
 use serde::{Deserialize, Serialize};
 
 pub mod github;
+pub mod gitlab;
 pub mod none;
 pub mod remote;
+pub mod rest;
 
 /// One resolved repository on one forge host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -613,9 +615,7 @@ pub fn resolve(
     let repos = build(github, cfg, pr_override, &hosts, &origin_slug);
     let forge: Box<dyn Forge> = match choice.kind {
         ForgeKind::Github => Box::new(github::GithubForge::new(&choice.host)),
-        ForgeKind::Gitlab => Box::new(none::NoForge::new(
-            "the gitlab backend is not built yet".into(),
-        )),
+        ForgeKind::Gitlab => Box::new(gitlab::GitlabForge::new(&choice.host)),
         ForgeKind::Forgejo => Box::new(none::NoForge::new(
             "the forgejo backend is not built yet".into(),
         )),
