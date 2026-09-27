@@ -61,15 +61,59 @@ fn call(action: &str, args: Value) -> Value {
     serde_json::from_str(text).unwrap()
 }
 
+/// A `DEVKIT_CONFIG` in the environment is the sole config layer, which would
+/// hide each fixture's own file. Every test calls this before touching
+/// anything else, and `Once` holds the others until the removal is done, so
+/// no thread reads the environment while it changes.
+fn clear_devkit_config() {
+    static CLEAR: std::sync::Once = std::sync::Once::new();
+    CLEAR.call_once(|| unsafe { std::env::remove_var("DEVKIT_CONFIG") });
+}
+
+/// A `doppler.yaml` devkit cannot parse says nothing about `devkit.toml`, so
+/// the tracker that file declares still decides the report. Doppler's
+/// single-project form writes `setup` as a mapping where the app catalog
+/// expects a list.
+#[test]
+fn an_unparseable_doppler_yaml_keeps_the_declared_tracker() {
+    clear_devkit_config();
+
+    let dir = fixture(None);
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        "[config]\n\
+         root = true\n\
+         [defaults]\n\
+         worktree_root = \"wts\"\n\
+         branch_prefix = \"lev/\"\n\
+         baseline_ref = \"origin/main\"\n\
+         doppler_yaml = \"doppler.yaml\"\n\
+         \n\
+         [tracker]\n\
+         kind = \"none\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("doppler.yaml"),
+        "setup:\n  project: api\n  config: dev\n  path: apps/api\n",
+    )
+    .unwrap();
+
+    let report = call(
+        "issue.status",
+        json!({ "root": dir.path().to_str().unwrap(), "ids": ["NOPE-1"] }),
+    );
+
+    assert_eq!(report["tracker"]["kind"], "none");
+    assert_eq!(report["tracker"]["declared"], true);
+}
+
 /// Two repos alike but for the kind their config names, and the report follows
 /// the config both times. Detection cannot tell the two apart — same shape,
 /// same environment — so only the config can account for the difference.
 #[test]
 fn the_status_action_reports_the_configured_tracker_kind() {
-    // A `DEVKIT_CONFIG` in the environment is the sole config layer, which
-    // would hide the fixture's own file. This test binary holds one test,
-    // so clearing it races no other thread.
-    unsafe { std::env::remove_var("DEVKIT_CONFIG") };
+    clear_devkit_config();
 
     for kind in ["linear", "none"] {
         let dir = fixture(Some(kind));

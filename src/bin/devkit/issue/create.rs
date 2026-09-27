@@ -18,7 +18,11 @@ pub(crate) struct CreateArgs {
 
 pub(crate) fn run(args: CreateArgs) -> Result<()> {
     let start = super::start(&args.dir);
-    let sel = super::tracker::select_full(args.config.as_deref(), &start, None);
+    let sel = devkit_common::tracker::select(
+        args.config.as_deref().map(std::path::Path::new),
+        &start,
+        None,
+    );
     let cfg = sel
         .config
         .context("`issue create` needs a loadable devkit.toml")?;

@@ -8,12 +8,13 @@ use anyhow::{Context, Result};
 use devkit_common::{
     progress::Steps,
     record::RecordState,
+    tracker::Selected,
     vcs::{Vcs, VersionControl},
     worktree::IssueId,
 };
 use devkit_issue::status::{IssueWorktree, Tree, gather_with, label, tree_of};
 
-use crate::issue::{tracker::Selected, triage::render};
+use crate::issue::triage::render;
 
 fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWorktree> {
     let mut chosen = Vec::new();
@@ -341,7 +342,7 @@ fn end_context(
 }
 
 pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -> Result<()> {
-    let sel = crate::issue::tracker::select_full(config, start, None);
+    let sel = devkit_common::tracker::select(config.map(Path::new), start, None);
     run_selected(start, ids, flags, sel)
 }
 

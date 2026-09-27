@@ -1,6 +1,6 @@
 //! `issue end` without `--clean-worktree`: the finished gate decides what is
-//! removed. The project declares no forge and no tracker, so a worktree whose
-//! commits are on a remote is finished with no network involved.
+//! removed. The project declares no forge, so a worktree whose commits are on
+//! a remote passes the PR gate with no network involved.
 
 #[path = "common/baselinetest.rs"]
 mod baselinetest;
@@ -10,17 +10,19 @@ use std::path::{Path, PathBuf};
 use baselinetest::{devkit, git, project};
 
 /// A project with a local `origin` and worktree `eng-1-fix`, whose one commit
-/// past `main` is pushed.
+/// past `main` is pushed. It declares no tracker, so nothing else holds the
+/// worktree.
 fn pushed_worktree(root: &Path) -> (PathBuf, PathBuf) {
+    pushed_worktree_with(root, "[tracker]\nkind = 'none'\n")
+}
+
+/// [`pushed_worktree`] with `tables` in place of its `[tracker]` table.
+fn pushed_worktree_with(root: &Path, tables: &str) -> (PathBuf, PathBuf) {
     let repo = root.join("proj");
     project(&repo);
     let toml = repo.join("devkit.toml");
     let body = std::fs::read_to_string(&toml).unwrap();
-    std::fs::write(
-        &toml,
-        format!("{body}[forge]\nkind = 'none'\n[tracker]\nkind = 'none'\n"),
-    )
-    .unwrap();
+    std::fs::write(&toml, format!("{body}[forge]\nkind = 'none'\n{tables}")).unwrap();
     git(&repo, &["commit", "-qam", "no forge"]);
 
     let origin = root.join("origin.git");
@@ -90,4 +92,32 @@ fn an_unreadable_record_holds_the_worktree_in_status_and_end() {
 
     assert!(wt.exists(), "the worktree was removed: {output}");
     assert!(output.contains("Nothing finished"), "{output}");
+}
+
+/// With no `[tracker]` table and no Linear key, detection finds no tracker, so
+/// the worktree is held for want of an issue state. `--pr-only` skips that
+/// gate, and the table `end` prints must call the worktree finished, since
+/// that is the verdict `end` acts on.
+#[test]
+fn pr_only_renders_the_verdict_it_removes_by() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let (repo, wt) = pushed_worktree_with(tmp.path(), "");
+
+    let out = devkit(&repo, &state, &[
+        "issue",
+        "end",
+        "--pr-only",
+        "--yes",
+        "--no-preserve",
+    ]);
+    let output =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+
+    assert!(!wt.exists(), "--pr-only kept the worktree: {output}");
+    assert!(
+        output.contains("FINISHED") && !output.contains("no tracker key"),
+        "the table disagrees with the removal: {output}"
+    );
 }

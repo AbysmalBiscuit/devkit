@@ -1,14 +1,16 @@
-//! Which tracker and forge this project's commands talk to.
+//! Which tracker and forge a project's `issue` commands talk to, from one
+//! config load.
 
 use std::path::Path;
 
-use devkit_common::{forge, tracker::Resolved};
+use super::Resolved;
+use crate::forge;
 
-/// Everything one config load yields for an `issue` command: the tracker and
-/// forge `select` returns, plus the config itself and how its load went.
-/// `issue end` needs the last two — its preserve entries live in the config,
-/// and acting on an empty table because the config is broken would remove a
-/// worktree having archived nothing.
+/// Everything one config load yields for an `issue` command: the tracker, the
+/// forge and its repositories, the config itself and how its load went.
+/// `issue end` needs the last two, since its preserve entries live in the
+/// config, and acting on an empty table because the config is broken would
+/// remove a worktree having archived nothing.
 pub struct Selected {
     pub tracker: Resolved,
     pub forge: forge::Resolved,
@@ -16,16 +18,16 @@ pub struct Selected {
     pub health: devkit_config::Health,
 }
 
-/// `select` with the config itself and a health verdict attached. Both come
-/// from one `devkit_common::config::resolve`, so `Health::Ok` alongside a
-/// missing config cannot happen — `issue end` reads its preserve table from the
-/// same result its gate approved. Resolving the config alone rather than
-/// through `devkit_ports::load` is what keeps a `doppler.yaml` devkit cannot
-/// parse from reading as a broken config: the tracker and repositories need
-/// neither the doppler map nor the app catalog.
-pub fn select_full(config: Option<&str>, start: &str, pr_override: Option<&str>) -> Selected {
+/// Resolve `config` (or the layers found from `start`) and the `origin` remote
+/// into a tracker and forge. A missing or broken config falls back to
+/// detection, so the tracker choice never fails a command. `pr_override` is
+/// `issue prs --repo`.
+///
+/// Only `devkit.toml` is loaded, not `devkit_ports::load`, so an unparseable
+/// `doppler.yaml` cannot discard the declared tracker.
+pub fn select(config: Option<&Path>, start: &str, pr_override: Option<&str>) -> Selected {
     let dir = Path::new(start);
-    let resolved = devkit_common::config::resolve(config.map(Path::new), dir);
+    let resolved = crate::config::resolve(config, dir);
     let health = devkit_config::Health::of(&resolved);
     let cfg = resolved.ok().map(|(c, _)| c);
     let (kind, forge_cfg, github) = match &cfg {
@@ -33,7 +35,7 @@ pub fn select_full(config: Option<&str>, start: &str, pr_override: Option<&str>)
         None => (None, Default::default(), Default::default()),
     };
     let forge = forge::resolve(&forge_cfg, &github, start, pr_override);
-    let tracker = devkit_common::tracker::resolve(kind, dir, &forge.repos);
+    let tracker = super::resolve(kind, dir, &forge.repos);
     Selected {
         tracker,
         forge,
@@ -42,30 +44,10 @@ pub fn select_full(config: Option<&str>, start: &str, pr_override: Option<&str>)
     }
 }
 
-/// The tracker this project talks to and the forge and repositories its
-/// commands work against, resolved from `config` (or the layers discovered from
-/// `start`) plus the `origin` remote. The two come back together because they
-/// come from one config load: resolving the tracker needs the issues repository
-/// to build a GitHub adapter.
-///
-/// A project without a `devkit.toml` — or with one that fails to load — still
-/// gets its tracker from detection and its repositories from origin alone: the
-/// tracker choice must never be what fails a command that would otherwise work.
-/// `pr_override` is `issue prs --repo`.
-pub fn select(
-    config: Option<&str>,
-    start: &str,
-    pr_override: Option<&str>,
-) -> (Resolved, forge::Resolved) {
-    let sel = select_full(config, start, pr_override);
-    (sel.tracker, sel.forge)
-}
-
 #[cfg(test)]
 mod tests {
-    use devkit_common::tracker::TrackerKind;
-
     use super::*;
+    use crate::tracker::TrackerKind;
 
     fn write_config(path: &Path, kind: &str) {
         std::fs::write(
@@ -97,7 +79,7 @@ mod tests {
             let path = dir.path().join(format!("{named}.toml"));
             write_config(&path, named);
             assert_eq!(
-                select(path.to_str(), start, None).0.tracker.kind(),
+                select(Some(&path), start, None).tracker.tracker.kind(),
                 kind,
                 "config naming {named}"
             );
@@ -111,7 +93,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("devkit.toml"), "[defaults\n").unwrap();
 
-        let sel = select_full(None, dir.path().to_str().unwrap(), None);
+        let sel = select(None, dir.path().to_str().unwrap(), None);
 
         assert!(matches!(sel.health, devkit_config::Health::Broken(_)));
         assert!(sel.config.is_none());
@@ -137,7 +119,7 @@ mod tests {
         let explicit = dir.path().join("explicit.toml");
         std::fs::write(&explicit, "[defaults\n").unwrap();
 
-        let sel = select_full(explicit.to_str(), dir.path().to_str().unwrap(), None);
+        let sel = select(Some(&explicit), dir.path().to_str().unwrap(), None);
 
         assert!(
             matches!(sel.health, devkit_config::Health::Broken(_)),
@@ -168,7 +150,7 @@ mod tests {
         )
         .unwrap();
 
-        let sel = select_full(None, dir.path().to_str().unwrap(), None);
+        let sel = select(None, dir.path().to_str().unwrap(), None);
 
         let cfg = sel.config.expect("config loaded");
         assert_eq!(cfg.preserve["notes"].to, "/archive");
@@ -201,7 +183,7 @@ mod tests {
         )
         .unwrap();
 
-        let sel = select_full(None, dir.path().to_str().unwrap(), None);
+        let sel = select(None, dir.path().to_str().unwrap(), None);
 
         assert_eq!(sel.health, devkit_config::Health::Ok);
         let cfg = sel.config.expect("config loaded");

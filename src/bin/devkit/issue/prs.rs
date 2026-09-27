@@ -312,29 +312,24 @@ pub fn run(
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
 
-    // Check-name globs to discount from the CHECK verdict, and the Linear
-    // PR-link opt-in. Absent or unreadable config means no checks are ignored
-    // and no Linear lookup — triage still works repo-wide.
-    let loaded = devkit_ports::load::load(config.as_deref().map(Path::new), Path::new(".")).ok();
-    let ignored_checks = loaded
-        .as_ref()
-        .map(|l| l.config.defaults.ignored_checks.clone())
-        .unwrap_or_default();
-    let resolve_pr_links = loaded
-        .as_ref()
-        .is_some_and(|l| l.config.linear.resolve_pr_links);
-
     // Resolve the repo up front: the snapshot cache is keyed by it and the
     // stale table must render before the fetch starts.
-    let (forge_cfg, github_cfg) = match &loaded {
-        Some(l) => (l.config.forge.clone(), l.config.github.clone()),
-        None => Default::default(),
-    };
-    let forge = devkit_common::forge::resolve(&forge_cfg, &github_cfg, ".", repo.as_deref());
+    let devkit_common::tracker::Selected {
+        tracker,
+        forge,
+        config: loaded,
+        ..
+    } = devkit_common::tracker::select(config.as_deref().map(Path::new), ".", repo.as_deref());
+    // Check-name globs to discount from the CHECK verdict, and the Linear
+    // PR-link opt-in. Absent or unreadable config means no checks are ignored
+    // and no Linear lookup, so triage still works repo-wide.
+    let ignored_checks = loaded
+        .as_ref()
+        .map(|c| c.defaults.ignored_checks.clone())
+        .unwrap_or_default();
+    let resolve_pr_links = loaded.as_ref().is_some_and(|c| c.linear.resolve_pr_links);
     let pr_repo = forge.repos.prs()?;
     let resolved = pr_repo.slug.clone();
-    let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
-    let tracker = devkit_common::tracker::resolve(kind, Path::new("."), &forge.repos);
     let repo_key = if no_cache {
         None
     } else {

@@ -60,7 +60,11 @@ pub fn run(
     // batch, so narrowing it would not save a round trip.
     let d = st::discover(start, &[])?;
     let top = current_top(start);
-    let (resolved, forge) = crate::issue::tracker::select(config, start, None);
+    let devkit_common::tracker::Selected {
+        tracker: resolved,
+        forge,
+        ..
+    } = devkit_common::tracker::select(config.map(Path::new), start, None);
     let tracker = resolved.tracker.as_ref();
     let mut info = TrackerInfo::of(&resolved);
 
@@ -79,13 +83,12 @@ pub fn run(
         },
     };
 
-    let recorded_pr = devkit_common::record::read(Path::new(&row.worktree)).and_then(|r| r.pr);
-    let cached_pr = seedable_cached_pr(
-        crate::issue::info_cache::read(Path::new(&row.worktree)),
-        recorded_pr.as_ref(),
-    );
-
     if cache_only {
+        let recorded_pr = devkit_common::record::read(Path::new(&row.worktree)).and_then(|r| r.pr);
+        let cached_pr = seedable_cached_pr(
+            crate::issue::info_cache::read(Path::new(&row.worktree)),
+            recorded_pr.as_ref(),
+        );
         if let Some(pr) = cached_pr {
             apply_cached_pr(&mut row, pr);
         } else if discovered {
@@ -95,13 +98,6 @@ pub fn run(
             row.verdict = st::verdict(&row, &info, false);
         }
     } else if discovered {
-        // Seed the row from any cached PR before the live fetch lands, so the
-        // live table's first paint shows a number instead of a spinner;
-        // `live_enrich` reconciles it against the live lookup once that
-        // arrives.
-        if let Some(pr) = cached_pr {
-            apply_cached_pr(&mut row, pr);
-        }
         info.link_base = live_enrich(&mut row, &d, &resolved, !json, &forge)?;
 
         if let PrStatus::Unique {
@@ -190,11 +186,6 @@ fn live_enrich(
     lt.redraw();
 
     let mut link_base = None;
-    // Whether the row already carries a cached PR, seeded before this call —
-    // the live update below reconciles against it instead of blindly
-    // replacing it, so a live lookup that still agrees it's unique doesn't
-    // discard the cache's answer.
-    let had_cache = matches!(row.pr, PrStatus::Unique { .. });
     // The verdict never reads the link base, so it can be computed the moment
     // the PR and state land — before the link base has arrived.
     let verdict_tracker = TrackerInfo::of(resolved);
@@ -226,14 +217,7 @@ fn live_enrich(
         lt.drive(&rx, |lt, msg| {
             match msg {
                 Update::Prs(res) => {
-                    let prs = res?;
-                    if had_cache {
-                        let mut live = row.clone();
-                        prs.apply(&mut live);
-                        reconcile_cache(row, &live.pr);
-                    } else {
-                        prs.apply(row);
-                    }
+                    res?.apply(row);
                     got_prs = true;
                     lt.set(0, 3, Cell::Ready(crate::issue::triage::pr_cell(row)));
                 }
@@ -284,11 +268,9 @@ fn local_row(top: &str) -> Result<IssueWorktree> {
     })
 }
 
-/// The cached PR a row may be seeded with. A worktree record that binds a
-/// different pull request discards the cache: that cache was written before the
-/// binding, from a branch lookup the record has since superseded, and a live
-/// answer of "the recorded PR does not resolve" would otherwise leave the
-/// superseded PR on the row — with its own state driving the verdict.
+/// The cached PR a `--cache-only` row may show. A worktree record that binds a
+/// different pull request discards the cache: that cache was written before
+/// the binding, from a branch lookup the record has since superseded.
 fn seedable_cached_pr(
     cached: Option<crate::issue::info_cache::CachedPr>,
     recorded: Option<&devkit_common::forge::PrLocator>,
@@ -312,15 +294,6 @@ fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::issue::info_cache::Cached
         ahead: None,
     };
     row.verdict = Default::default();
-}
-
-/// Reconcile a cache-seeded row against the live lookup. The live answer wins;
-/// the cached PR survives only when the lookup could not be made at all, where
-/// it is the better of the two available answers.
-fn reconcile_cache(row: &mut IssueWorktree, live: &PrStatus) {
-    if !matches!(live, PrStatus::Unknown { .. }) {
-        row.pr = live.clone();
-    }
 }
 
 #[cfg(test)]
@@ -434,77 +407,5 @@ mod tests {
         assert_eq!(pick_index(&rows, Some("eng-9"), None), None);
         assert_eq!(pick_index(&rows, None, Some("/elsewhere")), None);
         assert_eq!(pick_index(&rows, None, None), None);
-    }
-
-    #[test]
-    fn a_cached_unique_pr_yields_to_a_live_ambiguous_lookup() {
-        let mut r = row("/a", "lev/eng-1-x", "ENG-1");
-        apply_cached_pr(&mut r, crate::issue::info_cache::CachedPr {
-            number: 7,
-            state: "OPEN".into(),
-            url: "https://github.com/o/r/pull/7".into(),
-            is_draft: false,
-        });
-        assert!(matches!(r.pr, PrStatus::Unique { number: 7, .. }));
-
-        let live = PrStatus::Ambiguous {
-            candidates: vec![
-                devkit_common::tracker::PrRef {
-                    number: 7,
-                    url: "https://github.com/o/r/pull/7".into(),
-                },
-                devkit_common::tracker::PrRef {
-                    number: 9,
-                    url: "https://github.com/o/r/pull/9".into(),
-                },
-            ],
-        };
-        reconcile_cache(&mut r, &live);
-
-        assert!(
-            matches!(r.pr, PrStatus::Ambiguous { .. }),
-            "a live ambiguous lookup must clear the cached unique PR, got {:?}",
-            r.pr
-        );
-    }
-
-    #[test]
-    fn a_cached_unique_pr_survives_a_live_unique_lookup() {
-        let mut r = row("/a", "lev/eng-1-x", "ENG-1");
-        apply_cached_pr(&mut r, crate::issue::info_cache::CachedPr {
-            number: 7,
-            state: "OPEN".into(),
-            url: "https://github.com/o/r/pull/7".into(),
-            is_draft: false,
-        });
-        let live = PrStatus::Unique {
-            number: 7,
-            state: "OPEN".into(),
-            url: "https://github.com/o/r/pull/7".into(),
-            is_draft: false,
-            ahead: None,
-        };
-        reconcile_cache(&mut r, &live);
-        assert!(matches!(r.pr, PrStatus::Unique { number: 7, .. }));
-    }
-
-    #[test]
-    fn a_cached_unique_pr_survives_an_unavailable_live_lookup() {
-        let mut r = row("/a", "lev/eng-1-x", "ENG-1");
-        apply_cached_pr(&mut r, crate::issue::info_cache::CachedPr {
-            number: 7,
-            state: "OPEN".into(),
-            url: "https://github.com/o/r/pull/7".into(),
-            is_draft: false,
-        });
-        let live = PrStatus::Unknown {
-            reason: "GitHub unreachable".into(),
-        };
-        reconcile_cache(&mut r, &live);
-        assert!(
-            matches!(r.pr, PrStatus::Unique { number: 7, .. }),
-            "an unreachable live lookup must not discard the cached PR, got {:?}",
-            r.pr
-        );
     }
 }
