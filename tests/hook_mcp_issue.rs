@@ -295,3 +295,37 @@ fn codex_payloads_are_gated_too() {
     let after = hook("codex", "pre-tool-use", p.path(), &payload(&t, &b));
     assert_eq!(denial(&after), None);
 }
+
+fn session_end(project: &Path, session: &str) -> Output {
+    let payload = json!({
+        "hook_event_name": "SessionEnd",
+        "session_id": session,
+        "cwd": project,
+    });
+    hook("claude-code", "session-end", project, &payload)
+}
+
+fn receipts_dir(project: &Path, session: &str) -> std::path::PathBuf {
+    project.join(".devkit").join("issue-receipts").join(session)
+}
+
+#[test]
+fn session_end_clears_only_its_receipts() {
+    let p = project();
+    render(p.path(), "S1", "T", "B");
+    render(p.path(), "S2", "T", "B");
+    let out = session_end(p.path(), "S1");
+    assert!(out.stdout.is_empty());
+    assert!(!receipts_dir(p.path(), "S1").exists());
+    assert!(receipts_dir(p.path(), "S2").exists());
+}
+
+#[test]
+fn session_end_ignores_a_traversal_id() {
+    let p = project();
+    render(p.path(), "S1", "T", "B");
+    let out = session_end(p.path(), "..");
+    assert!(out.stdout.is_empty());
+    assert!(receipts_dir(p.path(), "S1").exists());
+    assert!(p.path().join("devkit.toml").exists());
+}

@@ -89,6 +89,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // the only one that can be skipped without loss.
         HookEvent::SessionEnd => with_payload(harness, |p| {
             edit::release_session(p);
+            clear_issue_receipts(p);
             let settings = record_only(p, cli.event);
             if settings.auto_prune && settings.enabled {
                 // A retention cap nothing enforces is not a promise. Fail-open:
@@ -114,6 +115,18 @@ pub fn run(cli: HookCli) -> Result<()> {
             record_only(p, event);
             Ok(())
         }),
+    }
+}
+
+/// Delete the ending session's `issue render` receipts in the payload's
+/// checkout. Best-effort: a receipt left behind is swept by a later render.
+fn clear_issue_receipts(payload: &Payload) {
+    let cwd = record::payload_cwd(payload);
+    if let (Some(session), Some(root)) = (
+        payload.session_id(),
+        devkit_common::git::Checkout::at(&cwd).root(),
+    ) {
+        let _ = crate::issue::receipt::clear_session(root, session);
     }
 }
 
