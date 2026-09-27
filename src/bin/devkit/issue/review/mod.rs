@@ -166,21 +166,6 @@ pub(crate) fn with_fields(
     serde_json::Value::Object(m)
 }
 
-/// Base context shared by every review template: branch + issue record fields.
-pub(crate) fn base_ctx(
-    record: Option<&devkit_common::record::IssueRecord>,
-    branch: &str,
-) -> serde_json::Value {
-    let mut m = serde_json::Map::new();
-    m.insert("branch".into(), serde_json::json!(branch));
-    if let Some(r) = record {
-        m.insert("issue".into(), serde_json::json!(r.issue));
-        m.insert("slug".into(), serde_json::json!(r.slug));
-        m.insert("apps".into(), serde_json::json!(r.apps));
-    }
-    serde_json::Value::Object(m)
-}
-
 /// Per-recipient context: `name` + `slack_id` bound on top of `base`.
 pub(crate) fn recipient_ctx(base: &serde_json::Value, t: &Target) -> serde_json::Value {
     with_fields(base, &[
@@ -249,6 +234,7 @@ mod tests {
     use std::collections::{BTreeSet, HashMap};
 
     use devkit_config::Person;
+    use devkit_ports::templates::worktree_context;
 
     use super::*;
 
@@ -377,9 +363,9 @@ mod tests {
         let expected =
             |k: &[&str]| -> BTreeSet<String> { k.iter().map(|s| s.to_string()).collect() };
 
-        // `issue pr` renders pr_title and pr_body directly off base_ctx, with
-        // `input` on both and `pr_title` bound for the body.
-        let base = base_ctx(Some(&record), "lev/eng-1-fix");
+        // `issue pr` renders pr_title and pr_body directly off the worktree
+        // context, with `input` on both and `pr_title` bound for the body.
+        let base = worktree_context(Some(&record), Some("lev/eng-1-fix"));
         let pr = with_fields(&base, &[
             ("input", serde_json::json!("x")),
             ("pr_title", serde_json::json!("t")),

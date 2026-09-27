@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, bail};
 use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
 use devkit_config::Person;
+use devkit_ports::templates::worktree_context;
 
 use super::{
-    REVIEW_REQUEST_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, guard_branch, is_human_login,
+    REVIEW_REQUEST_CONTEXT_KEYS, Target, check_required, deliver, guard_branch, is_human_login,
     parse_args, person_by_login, resolve_target, target_from_person, with_fields,
 };
 use crate::{
@@ -136,7 +137,7 @@ pub fn run(args: Args) -> Result<()> {
         None
     };
 
-    let base = base_ctx(record.as_ref(), &branch);
+    let base = worktree_context(record.as_ref(), Some(&branch));
 
     let head = Git::at(std::path::Path::new(&start))
         .args(["rev-parse", "HEAD"])

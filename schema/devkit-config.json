@@ -223,6 +223,27 @@
       ],
       "type": "object"
     },
+    "CustomTemplate": {
+      "additionalProperties": false,
+      "description": "One `[templates.custom]` entry: a template a project writes once and an\nagent renders with `devkit template render <name> --arg key=value`. It\nreads `[templates.variables]` like every other template, plus `branch`,\nand `issue`, `slug` and `apps` from the worktree's `.devkit/issue.toml`.\n\n```toml\n[templates.custom.standup]\ndescription = \"Daily update for #eng-standup\"\nbody = \"\"\"\n**Yesterday:** {{ yesterday }}\n**Today:** {{ today }}\n{% if blockers %}**Blocked on:** {{ blockers }}{% endif %}\n\"\"\"\n\n[templates.variables]\nyesterday = { required = \"always\", description = \"what shipped, one line per item\" }\ntoday = { required = \"always\" }\nblockers = { default = \"\" }\n```",
+      "properties": {
+        "body": {
+          "description": "The minijinja source. Rendering is strict: a variable nothing supplies\nis an error, and a trailing newline is kept.",
+          "type": "string"
+        },
+        "description": {
+          "description": "What the template is for, shown by `devkit template list` so a caller\ncan pick the right one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "body"
+      ],
+      "type": "object"
+    },
     "DaemonConfig": {
       "description": "The `devkitd` supervisor: whether it starts, how long it lingers, and the\ncrash-loop, memory, and health policies it applies to supervised servers.\n\n```toml\n[daemon]\nenabled         = true\nmemory_warn_mb  = 1024\nmemory_limit_mb = 2048   # soft: SIGTERM, then the crash path respawns\nmemory_action   = \"restart\"\nmemory_max_mb   = 4096   # hard: the kernel OOM-kills the tree\n```\n\nThe ordering in that example is the one to keep: the soft action is the\ngraceful first responder, and the kernel cap is the backstop for a spike\ntoo fast for the poll loop.",
       "properties": {
@@ -1172,6 +1193,14 @@
             "null"
           ]
         },
+        "custom": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CustomTemplate"
+          },
+          "default": {},
+          "description": "Templates no command sends, rendered by `devkit template render\n<name>` for the caller to deliver itself. A built-in template never\ntakes one's name: `render` looks here first.",
+          "type": "object"
+        },
         "issue_summary": {
           "description": "Body of the file `issue setup --summary` writes when the tracker keeps\nno summary of its own; a GitHub issue's non-empty body is written\nverbatim instead. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps`. A field the tracker left empty renders as the empty\nstring, so `{% if parent %}` drops its line.",
           "type": [
@@ -1474,6 +1503,7 @@
         "branch_max": null,
         "checkout_worktree_dir": null,
         "checkout_worktree_dir_max": null,
+        "custom": {},
         "issue_summary": null,
         "issue_summary_path": null,
         "pr_body": null,

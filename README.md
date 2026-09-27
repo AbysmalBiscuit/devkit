@@ -33,10 +33,11 @@ Running `devkit` once installs the old command names (`portm`, `devrun`, `issue`
 | `devkit issue` / `issue` | Issue lifecycle: worktree setup, PR checkout, triage, cleanup, review requests, dashboard. |
 | `devkit locks` / `lockm` | Advisory file locks, so parallel sessions in one checkout don't edit the same files. |
 | `devkit docs` / `docm` | Version-correct local library checkouts, resolved from your own lockfiles. |
-| `devkit mcp` / `devkit-mcp` | The MCP server exposing ports, locks, devrun, and issue triage to coding agents. |
+| `devkit mcp` / `devkit-mcp` | The MCP server exposing ports, locks, devrun, issue triage, and templates to coding agents. |
 | `devkit auth` / `devkit doctor` | Store a Linear or Slack credential; report where every credential resolves from. |
 | `devkit brief` | Compact project orientation for a session-start hook. |
 | `devkit rules` / `devrules` | Query the rule index that write-time rule injection reads. |
+| `devkit template` | Render a project's templates, custom or built-in, for the caller to deliver itself. |
 | `devkit config` / `devkit schema` | Print the merged config and where each value came from; print or install the config's JSON Schema. |
 
 `-h` always prints the full flag list. `--help` matches it at a terminal but prints the whole command tree when piped, so one call shows an agent every verb; `--help --full` asks for the tree anywhere, and `DEVKIT_HELP=terse|full` pins either view. The behavior behind the flags (resolution rules, TTY gates, what refuses and why) is in the [`using-devkit` skill's references](plugin/skills/using-devkit/references/), which is where an agent reads it.

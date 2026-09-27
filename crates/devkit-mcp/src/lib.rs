@@ -4,6 +4,7 @@ mod issue;
 mod jsonrpc;
 mod locks;
 mod ports;
+mod templates;
 
 use std::io::{BufRead, Write};
 

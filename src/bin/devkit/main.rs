@@ -147,6 +147,9 @@ enum Cmd {
     /// Query and summarize the rule index the hooks inject from.
     #[command(display_name = "devkit rules")]
     Rules(rules::RulesCli),
+    /// List, show and render templates for the caller to deliver itself.
+    #[command(display_name = "devkit template")]
+    Template(template::TemplateCli),
     /// Install the old command names as hardlinks beside this binary.
     ///
     /// Creates hardlinks such as `issue` and `devrun` beside this
@@ -418,6 +421,7 @@ fn main() -> Result<()> {
                 Cmd::Hook(c) => run_hook_guarded(c),
                 Cmd::HookLog(c) => hook_log::run(c),
                 Cmd::Rules(c) => rules::run(c),
+                Cmd::Template(c) => template::run(c),
                 Cmd::InstallLinks(a) => links::run(a),
             }
         }

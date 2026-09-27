@@ -25,6 +25,7 @@ Before running a project build, profiling flow, or verification command by hand,
 | `references/locks.md` | full `lockm` flags, holder identity, TTL, or an enforced-write hook denied your edit |
 | `references/servers.md` | starting or stopping dev servers, allocating ports, reading logs, another worktree's servers |
 | `references/tasks.md` | a `devrun task` needs an `--arg` or a multi-line value, hit a `require_live` gate, or you need to override its env |
+| `references/templates.md` | text for a tool devkit does not send to (a Linear update, a Jira comment, a release note), a branch or worktree named by the project's template, or a PR body or Slack message to read before it goes out |
 | `references/issues.md` | starting an issue worktree, checking out a PR, shipping for review, tearing down |
 | `references/config.md` | writing or changing a `devkit.toml`: how layers merge, reading a table's rules before editing it, checking the edit |
 | `references/diagnostics.md` | a `devkit.toml` key's name, type or default is in question, a credential is missing, or you need `doctor` or `brief` |

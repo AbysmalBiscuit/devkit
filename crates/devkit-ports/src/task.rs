@@ -55,7 +55,9 @@ pub struct TaskRow {
     pub description: String,
 }
 
-/// A variable a task's templates read, set with `--arg name=value`.
+/// A variable a task's or template's source reads, set with `--arg
+/// name=value`.
+#[derive(Debug, serde::Serialize)]
 pub struct TaskArg {
     pub name: String,
     /// This caller cannot run the task without the `--arg`. Caller-relative:
@@ -179,15 +181,26 @@ fn args_among(mut reads: BTreeSet<String>) -> BTreeSet<String> {
 pub fn task_args(cfg: &Config, name: &str, caller: Caller) -> Result<Vec<TaskArg>> {
     let all = args(cfg, name)?;
     check_required_names(cfg, name, &all)?;
-    let required: BTreeSet<String> = missing_args(cfg, Some(name), &all, &BTreeMap::new(), caller)
+    Ok(arg_rows(cfg, Some(name), all, caller))
+}
+
+/// `names` as arg rows, each marked required or not for this caller under
+/// `task`'s markings, or the variables' own when `task` is `None`.
+pub fn arg_rows(
+    cfg: &Config,
+    task: Option<&str>,
+    names: BTreeSet<String>,
+    caller: Caller,
+) -> Vec<TaskArg> {
+    let required: BTreeSet<String> = missing_args(cfg, task, &names, &BTreeMap::new(), caller)
         .into_iter()
         .map(|m| m.name)
         .collect();
-    Ok(all
+    names
         .into_iter()
         .map(|arg| TaskArg {
             required: required.contains(&arg),
-            required_of: required_of(cfg, Some(name), &arg),
+            required_of: required_of(cfg, task, &arg),
             default: cfg
                 .templates
                 .variables
@@ -197,7 +210,7 @@ pub fn task_args(cfg: &Config, name: &str, caller: Caller) -> Result<Vec<TaskArg
             description: devkit_common::required::description(cfg, &arg),
             name: arg,
         })
-        .collect())
+        .collect()
 }
 
 /// Task `name`'s listing row, refusing what [`resolve`] would refuse about
