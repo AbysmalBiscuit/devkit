@@ -113,7 +113,6 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
-    use crate::git::Git;
 
     /// A marker path that does not exist yet: `fetch_gated` stamps it, and the
     /// tests turn on whether it is there and how old it is. The guard comes
@@ -193,6 +192,8 @@ mod tests {
     #[test]
     fn a_locked_ssh_key_fails_fast_and_names_the_remedy() {
         use std::{os::unix::fs::PermissionsExt, time::Instant};
+
+        use crate::git::Git;
 
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
