@@ -203,6 +203,7 @@ mod tests {
             vendor_event: Some("Stop".into()),
             session_id: Some("s1".into()),
             agent_id: None,
+            holder: None,
             tool_use_id: None,
             cwd: None,
             project_root: None,

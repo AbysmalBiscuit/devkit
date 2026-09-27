@@ -95,6 +95,7 @@ pub fn envelope(
         vendor_event: payload.event_name(),
         session_id: owned(payload.session_id()),
         agent_id: owned(payload.agent_id()),
+        holder: payload.holder().ok().map(|holder| holder.to_string()),
         tool_use_id: owned(payload.tool_use_id()),
         cwd: Some(checkout.dir().to_path_buf()),
         project_root: checkout.root().map(std::path::Path::to_path_buf),

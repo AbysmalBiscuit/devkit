@@ -385,6 +385,25 @@ fn a_subagent_writes_beside_its_session_not_into_it() {
     assert_eq!(names, ["s1-a1.jsonl", "s1.jsonl"]);
 }
 
+/// A record keeps the raw `agent_id` and names the lock holder beside it, since
+/// a Claude Code fork carries an `agent_id` but holds its locks as its session.
+#[test]
+fn a_record_names_the_lock_holder_beside_the_raw_agent_id() {
+    for (agent_type, holder) in [(Some("general-purpose"), "s1/a1"), (None, "s1")] {
+        let e = enabled_project();
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&claude_payload(&e, "ls")).unwrap();
+        payload["agent_id"] = "a1".into();
+        if let Some(agent_type) = agent_type {
+            payload["agent_type"] = agent_type.into();
+        }
+        run_argv(&e, &["hook", "pre-tool-use"], &payload.to_string());
+        let rec = sole_record(&e.log_dir());
+        assert_eq!(rec["agent_id"], "a1", "{agent_type:?}");
+        assert_eq!(rec["holder"], holder, "{agent_type:?}");
+    }
+}
+
 /// Every `git` the hook spawns, one argument line per spawn, read through a
 /// wrapper that logs and then hands off to the real git. Unix-only: the wrapper
 /// is a shell script, and a Windows spawn of `git` looks only for `git.exe`.
