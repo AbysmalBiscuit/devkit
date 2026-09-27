@@ -1,46 +1,20 @@
-//! The shell hook's write stage: turn an analysis into claims, scope checks
-//! and policy findings, and claim through the same registry path structured
-//! edits use.
-
-#![allow(dead_code)]
-
-use std::{sync::mpsc, time::Duration};
+//! The shell hook's write evaluation: turn an analysis into the claims the
+//! write gate takes to the registry, and the policy findings it cannot.
 
 use devkit_command::{Analysis, FileOp, Target, TreeReach, UncertaintyKind, Value};
-use devkit_common::{harness::HarnessPolicy, vcs::Checkout};
+use devkit_common::harness::HarnessPolicy;
 use devkit_config::PolicyAction;
-use devkit_locks::model::{Conflict, WriteDecision};
 
-const PREFIX: &str = "devkit write-harness:";
+use super::gate::{Claims, PREFIX, ScopeCheck};
 
 #[derive(Debug, Default)]
 pub struct Evaluation {
     pub blocks: Vec<String>,
     pub warnings: Vec<String>,
-    /// Absolute write targets, in order, without repeats.
-    pub claims: Vec<String>,
-    /// Absolute directories to claim whole, each bounding a write that
-    /// reaches paths under it no one can list. In order, without repeats or
-    /// one another's subdirectories.
-    pub trees: Vec<String>,
-    /// Directories to check without claiming, in order, without repeats.
-    pub scopes: Vec<ScopeCheck>,
+    pub claims: Claims,
 }
 
-/// What the registry stage adds to the evaluation's own findings.
-#[derive(Debug, Default)]
-pub struct Findings {
-    pub blocks: Vec<String>,
-    pub warnings: Vec<String>,
-}
-
-impl Findings {
-    fn apply(&mut self, action: PolicyAction, message: String) {
-        file_finding(action, message, &mut self.blocks, &mut self.warnings);
-    }
-}
-
-fn file_finding(
+pub(super) fn file_finding(
     action: PolicyAction,
     message: String,
     blocks: &mut Vec<String>,
@@ -53,45 +27,7 @@ fn file_finding(
     }
 }
 
-/// A directory the registry is asked about, and which question to ask of it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScopeCheck {
-    /// A writer rewrites an unenumerated set of files under this directory, so
-    /// any claim overlapping it conflicts.
-    Tree { dir: String, whole_checkout: bool },
-    /// A name was created fresh under this directory. Nobody else can produce
-    /// that name, so only a claim covering the directory's children conflicts.
-    Fresh { dir: String },
-    /// Only this path's metadata changes, so a claim on it or on a directory
-    /// above it conflicts, and a claim below it does not.
-    Covering { path: String },
-}
-
 impl Evaluation {
-    pub fn needs_registry(&self) -> bool {
-        !self.claims.is_empty() || !self.trees.is_empty() || !self.scopes.is_empty()
-    }
-
-    fn scope(&mut self, check: ScopeCheck) {
-        if !self.scopes.contains(&check) {
-            self.scopes.push(check);
-        }
-    }
-
-    fn tree(&mut self, dir: &str) {
-        let under = |inner: &str, outer: &str| {
-            inner == outer
-                || inner
-                    .strip_prefix(outer)
-                    .is_some_and(|rest| rest.starts_with('/'))
-        };
-        if self.trees.iter().any(|t| under(dir, t)) {
-            return;
-        }
-        self.trees.retain(|t| !under(t, dir));
-        self.trees.push(dir.to_string());
-    }
-
     fn apply(&mut self, action: PolicyAction, message: String) {
         file_finding(action, message, &mut self.blocks, &mut self.warnings);
     }
@@ -100,7 +36,7 @@ impl Evaluation {
 /// The correction, which differs by what the policy does with the finding: a
 /// blocked command has to be rewritten, a warned one runs and leaves the agent
 /// to claim what devkit could not name.
-fn unresolved_fix(action: PolicyAction) -> &'static str {
+pub(super) fn unresolved_fix(action: PolicyAction) -> &'static str {
     match action {
         PolicyAction::Warn => {
             "Claim the destinations with `lockm acquire` before writing, or name a literal path \
@@ -124,19 +60,15 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
         let permissions = effect.op == FileOp::Permissions;
         match &effect.target {
             Target::Path(path) if permissions => {
-                e.scope(ScopeCheck::Covering { path: path.clone() })
+                e.claims.scope(ScopeCheck::Covering { path: path.clone() })
             }
-            Target::Within(dir) if permissions => e.scope(ScopeCheck::Tree {
+            Target::Within(dir) if permissions => e.claims.scope(ScopeCheck::Tree {
                 dir: dir.clone(),
                 whole_checkout: false,
             }),
             Target::Ephemeral { .. } if permissions => {}
-            Target::Path(p) => {
-                if !e.claims.contains(p) {
-                    e.claims.push(p.clone());
-                }
-            }
-            Target::Within(dir) => e.tree(dir),
+            Target::Path(p) => e.claims.path(p),
+            Target::Within(dir) => e.claims.tree(dir),
             Target::Unresolved => e.apply(
                 policy.unresolved_writes,
                 format!(
@@ -152,7 +84,7 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
             // every path born under it, so that is checked like any other scope.
             Target::Ephemeral { at } => {
                 if let Some(dir) = at.named() {
-                    e.scope(ScopeCheck::Fresh {
+                    e.claims.scope(ScopeCheck::Fresh {
                         dir: dir.to_string(),
                     });
                 }
@@ -162,7 +94,7 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     for tree in &analysis.tree_effects {
         let dir = tree.scope.clone();
         let whole_checkout = tree.whole_checkout;
-        e.scope(match tree.reach {
+        e.claims.scope(match tree.reach {
             TreeReach::All => ScopeCheck::Tree {
                 dir,
                 whole_checkout,
@@ -219,98 +151,8 @@ fn op_name(op: FileOp) -> &'static str {
     }
 }
 
-/// Check every scope, then claim every target and every tree. A scope
-/// conflict stops before any claim; a claim conflict leaves the claims
-/// already made to the normal release lifecycle. A tree no claim can stand
-/// for is an unresolved write, which `unresolved` decides.
-pub fn enforce(
-    evaluation: &Evaluation,
-    holder: &str,
-    checkout: Checkout,
-    unresolved: PolicyAction,
-) -> anyhow::Result<Findings> {
-    let mut resolver = devkit_locks::WriteResolver::with_checkout(checkout);
-    let mut findings = Findings::default();
-    let mut conflicts = Vec::new();
-    for check in &evaluation.scopes {
-        conflicts.extend(match check {
-            ScopeCheck::Tree {
-                dir,
-                whole_checkout,
-            } => resolver.check_scope(dir, *whole_checkout, holder)?,
-            ScopeCheck::Fresh { dir } => resolver.check_covering(dir, holder)?,
-            ScopeCheck::Covering { path } => resolver.check_covering(path, holder)?,
-        });
-    }
-    if !conflicts.is_empty() {
-        findings.blocks.push(conflict_message(&conflicts));
-        return Ok(findings);
-    }
-    for path in &evaluation.claims {
-        if let WriteDecision::Denied(c) =
-            resolver.decide_write(path, holder, Some("shell-harness"), 1800)?
-        {
-            conflicts.extend(c);
-        }
-    }
-    for dir in &evaluation.trees {
-        match resolver.claim_tree(dir, holder, Some("shell-harness"), 1800)? {
-            Some(WriteDecision::Denied(c)) => conflicts.extend(c),
-            Some(WriteDecision::Acquired | WriteDecision::AllowedByOwnership) => {}
-            None => findings.apply(
-                unresolved,
-                format!(
-                    "{PREFIX} a write reaches paths under `{dir}` that could not be listed, and \
-                     devkit claims such a set only in a directory below a checkout root. {}",
-                    unresolved_fix(unresolved)
-                ),
-            ),
-        }
-    }
-    if !conflicts.is_empty() {
-        findings.blocks.push(conflict_message(&conflicts));
-    }
-    Ok(findings)
-}
-
-fn conflict_message(conflicts: &[Conflict]) -> String {
-    let who = conflicts
-        .iter()
-        .map(|c| format!("{} (held by {})", c.path, c.held_by))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "{PREFIX} {who} is locked by another agent; edit a different file or wait for it to finish"
-    )
-}
-
-#[derive(Debug)]
-pub enum StageError {
-    TimedOut,
-    Panicked,
-}
-
-/// Run `work` on its own thread and wait at most `deadline`. On a timeout the
-/// thread is left running; the caller exits the process, which ends it.
-pub fn with_deadline<T: Send + 'static>(
-    deadline: Duration,
-    work: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, StageError> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(work());
-    });
-    match rx.recv_timeout(deadline) {
-        Ok(value) => Ok(value),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(StageError::TimedOut),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(StageError::Panicked),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
     use devkit_command::{Context, Dialect, Limits, PathStyle};
     use devkit_common::harness::HarnessPolicy;
     use devkit_config::PolicyAction;
@@ -333,8 +175,12 @@ mod tests {
             "echo x > a.txt; mv b.txt c.txt; cargo fmt",
             HarnessPolicy::default(),
         );
-        assert_eq!(e.claims, ["/repo/a.txt", "/repo/b.txt", "/repo/c.txt"]);
-        assert_eq!(e.scopes, [ScopeCheck::Tree {
+        assert_eq!(e.claims.paths, [
+            "/repo/a.txt",
+            "/repo/b.txt",
+            "/repo/c.txt"
+        ]);
+        assert_eq!(e.claims.scopes, [ScopeCheck::Tree {
             dir: "/repo".to_string(),
             whole_checkout: true,
         }]);
@@ -347,10 +193,10 @@ mod tests {
             "chmod +x run.sh; chmod -R 755 bin; chown me src/*.rs; T=$(mktemp); chmod 600 \"$T\"",
             HarnessPolicy::default(),
         );
-        assert!(e.claims.is_empty(), "{:?}", e.claims);
-        assert!(e.trees.is_empty(), "{:?}", e.trees);
+        assert!(e.claims.paths.is_empty(), "{:?}", e.claims.paths);
+        assert!(e.claims.trees.is_empty(), "{:?}", e.claims.trees);
         assert!(e.blocks.is_empty(), "{:?}", e.blocks);
-        assert_eq!(e.scopes, [
+        assert_eq!(e.claims.scopes, [
             ScopeCheck::Covering {
                 path: "/repo/run.sh".to_string(),
             },
@@ -377,8 +223,8 @@ mod tests {
             "rm -f src/gen/*.rs; sed -i s/a/b/ src/*.rs; rm -f src/*.o docs/*.md",
             HarnessPolicy::default(),
         );
-        assert_eq!(e.trees, ["/repo/src", "/repo/docs"]);
-        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert_eq!(e.claims.trees, ["/repo/src", "/repo/docs"]);
+        assert!(e.claims.paths.is_empty(), "{:?}", e.claims.paths);
         assert!(e.blocks.is_empty(), "{:?}", e.blocks);
     }
 
@@ -425,7 +271,7 @@ mod tests {
             ..HarnessPolicy::default()
         };
         let e = eval("echo x > a.txt; echo y > \"$OUT\"", allow);
-        assert_eq!(e.claims, ["/repo/a.txt"]);
+        assert_eq!(e.claims.paths, ["/repo/a.txt"]);
     }
 
     #[test]
@@ -434,7 +280,7 @@ mod tests {
             "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
             HarnessPolicy::default(),
         );
-        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert!(e.claims.paths.is_empty(), "{:?}", e.claims.paths);
         assert!(e.blocks.is_empty(), "{:?}", e.blocks);
         assert!(e.warnings.is_empty(), "{:?}", e.warnings);
     }
@@ -442,10 +288,10 @@ mod tests {
     #[test]
     fn an_mktemp_write_claims_nothing_and_blocks_nothing() {
         let e = eval("T=$(mktemp); echo x > \"$T\"", HarnessPolicy::default());
-        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert!(e.claims.paths.is_empty(), "{:?}", e.claims.paths);
         assert!(e.blocks.is_empty(), "{:?}", e.blocks);
         assert!(e.warnings.is_empty(), "{:?}", e.warnings);
-        assert!(e.scopes.is_empty(), "{:?}", e.scopes);
+        assert!(e.claims.scopes.is_empty(), "{:?}", e.claims.scopes);
     }
 
     #[test]
@@ -454,8 +300,8 @@ mod tests {
             "T=$(mktemp -p sub); echo x > \"$T\"",
             HarnessPolicy::default(),
         );
-        assert!(e.claims.is_empty(), "{:?}", e.claims);
-        assert_eq!(e.scopes, [ScopeCheck::Fresh {
+        assert!(e.claims.paths.is_empty(), "{:?}", e.claims.paths);
+        assert_eq!(e.claims.scopes, [ScopeCheck::Fresh {
             dir: "/repo/sub".to_string(),
         }]);
 
@@ -463,7 +309,7 @@ mod tests {
             "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(dir='.'); f.write(b'x')\"",
             HarnessPolicy::default(),
         );
-        assert_eq!(e.scopes, [ScopeCheck::Fresh {
+        assert_eq!(e.claims.scopes, [ScopeCheck::Fresh {
             dir: "/repo".to_string(),
         }]);
     }
@@ -484,20 +330,5 @@ mod tests {
         };
         let e = eval("echo x > \"$OUT\"", warn);
         assert!(e.warnings[0].contains("lockm acquire"), "{}", e.warnings[0]);
-    }
-
-    #[test]
-    fn the_deadline_returns_before_slow_work_finishes() {
-        let start = Instant::now();
-        let r = with_deadline(Duration::from_millis(50), || {
-            std::thread::sleep(Duration::from_secs(5))
-        });
-        assert!(matches!(r, Err(StageError::TimedOut)));
-        assert!(start.elapsed() < Duration::from_secs(2));
-        assert!(matches!(with_deadline(Duration::from_secs(5), || 7), Ok(7)));
-        assert!(matches!(
-            with_deadline(Duration::from_secs(5), || -> u8 { panic!("boom") }),
-            Err(StageError::Panicked)
-        ));
     }
 }

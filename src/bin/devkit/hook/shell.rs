@@ -1,20 +1,19 @@
 //! The shell path of `devkit hook pre-tool-use`.
 //!
 //! One analysis of the command feeds two stages. The command guard fails
-//! open: its own failures allow the command. The write stage, active for
-//! Claude Code and Codex when `enforce_writes` is on, fails closed: a write it
-//! cannot evaluate, a registry it cannot reach, or a deadline it misses is a
-//! denial.
+//! open: its own failures allow the command. The write stage fails closed: a
+//! write it cannot evaluate is a denial, and the claims it can evaluate go
+//! through the write gate, which denies on the registry's failures too.
 //!
 //! The payload arrives already read and parsed: the verb dispatch owns the
 //! stdin read, because it is what decides between this path and the edit one.
 
-use std::{io::Write, sync::OnceLock, time::Duration};
+use std::{io::Write, path::Path, sync::OnceLock};
 
 use anyhow::Result;
-use devkit_command::{Context, Limits, PathStyle};
+use devkit_command::{Analysis, Context, Dialect, Limits, PathStyle};
 use devkit_common::{
-    harness,
+    harness::{self, HarnessPolicy},
     harness_log::{self, Decision, Kind, Record, ShellPre, Verdict},
     vcs::Checkout,
 };
@@ -24,22 +23,11 @@ use serde_json::Value;
 
 use super::{
     HookEvent, dialect,
+    gate::{self, Armed, WriteGate, WriteVerdict},
     payload::{Harness, Payload},
-    record, writes,
+    print_envelope, record, writes,
 };
 
-// The fail-open contract below is `catch_unwind`, which catches nothing under
-// an aborting panic strategy. Nothing else ties the compile profile to this
-// file, so the dependency is stated where it is relied on.
-#[cfg(panic = "abort")]
-compile_error!(
-    "`devkit hook pre-tool-use` fails open through catch_unwind; the release profile must unwind"
-);
-
-/// Far longer than a healthy registry takes, and below the manifest timeout,
-/// which allows the call when it fires. Keep the manifest at this plus the
-/// record deadline plus a second or two of process startup.
-const WRITE_STAGE_DEADLINE: Duration = Duration::from_secs(2);
 const UNUSABLE_SHELL_REASON: &str =
     "devkit write-harness: shell payload could not be evaluated (fail-closed)";
 /// Tool names that run shell commands, `Shell` being Cursor's. One that
@@ -84,24 +72,18 @@ struct PanicContext {
 /// Guard a shell command about to run. Never returns an error: a panic allows
 /// the command unless the write stage had started, in which case it denies.
 pub fn guard(payload: &Payload) -> Result<()> {
-    let write_stage: OnceLock<Harness> = OnceLock::new();
     let panic_ctx: OnceLock<PanicContext> = OnceLock::new();
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        respond(payload, &write_stage, &panic_ctx)
-    }));
-    match outcome {
+    let gate = WriteGate::live();
+    match gate::guarded(|armed| respond(payload, &gate, armed, &panic_ctx)) {
         Ok(out) => {
             if let Response::Envelope(v) = &out.response {
                 print_envelope(v);
             }
             finish(out.record.as_deref(), panic_ctx.get().map(|c| &c.settings));
         }
-        Err(_) => {
-            match write_stage.get() {
-                Some(h) => print_envelope(&h.deny(
-                    "devkit write-harness: internal failure while evaluating a shell write (fail-closed)",
-                )),
-                None => warn("command guard panicked; allowing the command"),
+        Err(panicked) => {
+            if !panicked.denied {
+                warn("command guard panicked; allowing the command");
             }
             let ctx = panic_ctx.get();
             let panicked = ctx.map(|ctx| {
@@ -227,7 +209,8 @@ fn deny_unusable_shell(payload: &Payload, checkout: &Checkout) -> Response {
 
 fn respond(
     payload: &Payload,
-    write_stage: &OnceLock<Harness>,
+    gate: &WriteGate,
+    armed: &Armed,
     panic_ctx: &OnceLock<PanicContext>,
 ) -> Outcome {
     let Some(Tool::Shell {
@@ -275,7 +258,7 @@ fn respond(
     });
 
     let commands_on = harness::commands_enabled(&checkout, &cwd);
-    let writes_on = which != Harness::Cursor && harness::writes_enabled(&checkout, &cwd);
+    let writes_on = gate::enabled(which, &checkout, &cwd);
     // With logging on and both gates off, the analysis runs anyway and this
     // early return is skipped: a record with an empty verdict is half a record.
     // That is the accepted trade, bounded by logging being off by default and
@@ -284,7 +267,7 @@ fn respond(
         return Outcome::silent();
     }
     if writes_on {
-        let _ = write_stage.set(which);
+        armed.arm(which);
     }
 
     let (rules, warnings) = harness::resolve_rules_in(&checkout, &cwd);
@@ -292,18 +275,8 @@ fn respond(
         warn(w);
     }
     let dialect = dialect::resolve(rules.policy.shell, which, shell.as_ref(), cfg!(windows));
-    let ctx = Context {
-        dialect,
-        cwd: shell_cwd.map(|p| p.to_string_lossy().into_owned()),
-        path_style: if cfg!(windows) {
-            PathStyle::Windows
-        } else {
-            PathStyle::Unix
-        },
-        limits: Limits::default(),
-    };
     let started = std::time::Instant::now();
-    let analysis = devkit_command::analyze(command, &ctx);
+    let analysis = devkit_command::analyze(command, &context(dialect, shell_cwd));
     let analyze_micros = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
 
     let mut blocks: Vec<String> = Vec::new();
@@ -333,55 +306,20 @@ fn respond(
         })
     };
     if writes_on {
-        let evaluation = writes::evaluate(&analysis, &rules.policy);
-        blocks.extend(evaluation.blocks.iter().cloned());
-        notes.extend(evaluation.warnings.iter().cloned());
-        if blocks.is_empty() && evaluation.needs_registry() {
-            let Some(session) = payload.session_id() else {
-                let reason =
-                    "devkit write-harness: shell write payload carries no session_id (fail-closed)"
-                        .to_string();
-                let rec = shell_record(Decision::Deny, std::slice::from_ref(&reason), &notes);
-                return deny(which, &[reason]).with(rec);
-            };
-            let holder = devkit_locks::hook::holder_from_fields(session, payload.agent());
-            // The stage runs on its own thread, so it takes a clone of the
-            // already-resolved checkout rather than a borrow.
-            let checkout = checkout.clone();
-            let unresolved = rules.policy.unresolved_writes;
-            match writes::with_deadline(WRITE_STAGE_DEADLINE, move || {
-                writes::enforce(&evaluation, &holder, checkout, unresolved)
-            }) {
-                Ok(Ok(findings)) => {
-                    blocks.extend(findings.blocks);
-                    notes.extend(findings.warnings);
-                }
-                Ok(Err(e)) => {
-                    blocks.push(format!(
-                        "devkit write-harness: registry error (fail-closed): {e:#}"
-                    ));
-                }
-                Err(writes::StageError::Panicked) => blocks.push(
-                    "devkit write-harness: internal failure while claiming shell write targets (fail-closed)"
-                        .into(),
-                ),
-                Err(writes::StageError::TimedOut) => {
-                    let reason = format!(
-                        "devkit write-harness: the lock registry did not answer within {}s (fail-closed). Retry; if it persists, check `lockm status` and `devkit doctor`.",
-                        WRITE_STAGE_DEADLINE.as_secs()
-                    );
-                    print_envelope(&which.deny(&reason));
-                    // A deadline miss is one of the operational signals this
-                    // log exists to collect, and the one path that would
-                    // otherwise never reach it. Envelope, then record, then
-                    // exit: the worker is still blocked on the registry, and
-                    // exiting the process is what ends it.
-                    let rec = shell_record(Decision::Deny, std::slice::from_ref(&reason), &notes);
-                    finish(rec.as_deref(), Some(&settings));
-                    std::process::exit(0);
-                }
-            }
-        }
+        let holder = payload
+            .session_id()
+            .map(|session| devkit_locks::hook::holder_from_fields(session, payload.agent()));
+        let verdict = write_stage(
+            &analysis,
+            &rules.policy,
+            !blocks.is_empty(),
+            holder.as_deref(),
+            gate,
+            &checkout,
+            &cwd,
+        );
+        blocks.extend(verdict.blocks);
+        notes.extend(verdict.warnings);
     }
     if !blocks.is_empty() {
         let rec = shell_record(Decision::Deny, &blocks, &notes);
@@ -398,6 +336,60 @@ fn respond(
         response,
         record: rec,
     }
+}
+
+fn context(dialect: Dialect, cwd: Option<&Path>) -> Context {
+    Context {
+        dialect,
+        cwd: cwd.map(|p| p.to_string_lossy().into_owned()),
+        path_style: if cfg!(windows) {
+            PathStyle::Windows
+        } else {
+            PathStyle::Unix
+        },
+        limits: Limits::default(),
+    }
+}
+
+/// The write stage: the evaluation's own findings, then, when nothing has
+/// blocked the command yet, the gate's.
+fn write_stage<R>(
+    analysis: &Analysis,
+    policy: &HarnessPolicy,
+    blocked: bool,
+    holder: Option<&str>,
+    gate: &WriteGate<R>,
+    checkout: &Checkout,
+    cwd: &Path,
+) -> WriteVerdict
+where
+    R: devkit_locks::Registry + Send + Sync + 'static,
+{
+    let evaluation = writes::evaluate(analysis, policy);
+    let mut verdict = WriteVerdict {
+        blocks: evaluation.blocks,
+        warnings: evaluation.warnings,
+    };
+    if blocked || !verdict.blocks.is_empty() || evaluation.claims.is_empty() {
+        return verdict;
+    }
+    let Some(holder) = holder else {
+        verdict.blocks.push(format!(
+            "{} shell write payload carries no session_id (fail-closed)",
+            gate::PREFIX
+        ));
+        return verdict;
+    };
+    let found = gate.decide(
+        &evaluation.claims,
+        holder,
+        checkout,
+        cwd,
+        policy.unresolved_writes,
+    );
+    verdict.blocks.extend(found.blocks);
+    verdict.warnings.extend(found.warnings);
+    verdict
 }
 
 /// The `shell_pre` record for a call the guard actually evaluated.
@@ -426,13 +418,6 @@ fn shell_pre_record(
             verdict,
         })),
     )
-}
-
-/// Write a deny envelope to stdout. A closed pipe or a full disk on the
-/// other end must not turn a denial into a crash, so the write error is
-/// discarded rather than let the `print!` family's internal panic through.
-pub(super) fn print_envelope(envelope: &str) {
-    let _ = writeln!(std::io::stdout(), "{envelope}");
 }
 
 /// Write a diagnostic to stderr, ignoring a write failure for the same reason
@@ -485,3 +470,6 @@ fn load_project(
         app_match,
     })
 }
+
+#[cfg(test)]
+mod tests;

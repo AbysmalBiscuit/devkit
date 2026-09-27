@@ -10,7 +10,7 @@ use devkit_config::IssueToolRule;
 use pabal::Tool;
 use serde_json::Value;
 
-use super::{payload::Payload, record, shell::print_envelope};
+use super::{payload::Payload, print_envelope, record};
 use crate::issue::{
     receipt::{self, Field},
     render,
