@@ -56,11 +56,11 @@ mod tests {
             worktree: "/home/u/wt/eng-7-fix".into(),
             branch: "lev/eng-7-fix".into(),
             issue_id: "ENG-7".parse().unwrap(),
-            dirty: false,
+            record_unreadable: false,
+            tree: devkit_issue::status::Tree::Clean,
             pr: PrStatus::None,
             state: None,
-            finished: false,
-            reason_not_finished: None,
+            verdict: Default::default(),
         }
     }
 
@@ -105,6 +105,7 @@ mod tests {
                 state: "OPEN".into(),
                 url: "".into(),
                 is_draft: false,
+                ahead: None,
             },
             ..row()
         }

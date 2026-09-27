@@ -3,6 +3,7 @@ use std::{collections::HashMap, path::Path};
 use anyhow::Result;
 use devkit_common::{
     forge::{self, ForgeKind, HeadLookup, PrBrief, PrLocator, PrLookup, Repo},
+    record::{self, RecordState},
     tracker::{Resolved, State, StateKind, TrackerKind},
     vcs::{Changes, Vcs, VersionControl},
     worktree::{self, IssueId},
@@ -25,6 +26,12 @@ pub enum PrStatus {
         /// and deliberately does not try: consumers read `pr_state` and
         /// a changed string there breaks them.
         is_draft: bool,
+        /// Commits at the worktree's HEAD that a merged PR's head does not
+        /// reach: work that exists only on the branch `issue end` deletes.
+        /// `None` for a PR that has not merged, and for a merged one whose
+        /// head could not be compared.
+        #[serde(default)]
+        ahead: Option<u32>,
     },
     /// Several PRs share this head branch. The verdict stays closed: `issue
     /// end` reads it to decide whether a worktree may be deleted, and a
@@ -75,40 +82,112 @@ impl PrStatus {
     }
 }
 
+/// Whether a worktree holds uncommitted changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Tree {
+    Clean,
+    Dirty,
+    /// The status could not be read, or has not been yet. Carries why.
+    Unknown(String),
+}
+
+/// Whether a worktree may be removed. `Unknown` counts as held: it means an
+/// input could not be read, and a removal on a guess can discard work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    Finished,
+    Held(Vec<String>),
+    Unknown(Vec<String>),
+}
+
+impl Default for Verdict {
+    /// A row nobody has judged yet.
+    fn default() -> Self {
+        Verdict::Unknown(Vec::new())
+    }
+}
+
+impl Verdict {
+    pub fn is_finished(&self) -> bool {
+        matches!(self, Verdict::Finished)
+    }
+
+    /// Every reason the worktree is not finished, joined, or `None` when there
+    /// is none to give.
+    pub fn reason(&self) -> Option<String> {
+        match self {
+            Verdict::Finished => None,
+            Verdict::Held(reasons) | Verdict::Unknown(reasons) if !reasons.is_empty() => {
+                Some(reasons.join(", "))
+            }
+            Verdict::Held(_) | Verdict::Unknown(_) => None,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Verdict::Finished => "finished",
+            Verdict::Held(_) => "held",
+            Verdict::Unknown(_) => "unknown",
+        }
+    }
+}
+
 /// One issue worktree with its PR + tracker state and the finished verdict.
 #[derive(Debug, Clone)]
 pub struct IssueWorktree {
     pub worktree: String,
     pub branch: String,
     pub issue_id: IssueId,
-    pub dirty: bool,
+    /// The setup record exists and cannot be read. The issue id then comes
+    /// from the branch, which the record would have overruled.
+    pub record_unreadable: bool,
+    pub tree: Tree,
     /// The PR, tagged. `pr_number`, `pr_state` and `pr_url` below are derived
     /// from it for the serialized shape consumers already read.
     pub pr: PrStatus,
     /// The tracker's state for this issue, absent when the tracker has no row
     /// for it or there is no tracker.
     pub state: Option<State>,
-    pub finished: bool,
-    pub reason_not_finished: Option<String>,
+    pub verdict: Verdict,
+}
+
+impl IssueWorktree {
+    /// The row for the worktree at `path` on `branch`, before its tree, PR and
+    /// tracker state are read.
+    pub fn at(path: &Path, branch: &str) -> IssueWorktree {
+        IssueWorktree {
+            worktree: path.to_string_lossy().into_owned(),
+            branch: branch.to_string(),
+            issue_id: worktree::issue_id_of(path, branch),
+            record_unreadable: matches!(record::read_state(path), RecordState::Unusable),
+            tree: Tree::Unknown("not checked".into()),
+            pr: PrStatus::None,
+            state: None,
+            verdict: Verdict::default(),
+        }
+    }
 }
 
 impl Serialize for IssueWorktree {
     /// Emits `pr` alongside the three legacy fields, so an MCP consumer reading
     /// `pr_state` keeps working while a new one can read the candidates.
+    /// `dirty` is true whenever the tree is not known to be clean.
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("IssueWorktree", 11)?;
+        let mut st = s.serialize_struct("IssueWorktree", 12)?;
         st.serialize_field("worktree", &self.worktree)?;
         st.serialize_field("branch", &self.branch)?;
         st.serialize_field("issue_id", &self.issue_id)?;
-        st.serialize_field("dirty", &self.dirty)?;
+        st.serialize_field("dirty", &(self.tree != Tree::Clean))?;
         st.serialize_field("pr", &self.pr)?;
         st.serialize_field("pr_number", &self.pr.number())?;
         st.serialize_field("pr_state", self.pr.state_label())?;
         st.serialize_field("pr_url", &self.pr.url())?;
         st.serialize_field("state", &self.state)?;
-        st.serialize_field("finished", &self.finished)?;
-        st.serialize_field("reason_not_finished", &self.reason_not_finished)?;
+        st.serialize_field("verdict", self.verdict.kind())?;
+        st.serialize_field("finished", &self.verdict.is_finished())?;
+        st.serialize_field("reason_not_finished", &self.verdict.reason())?;
         st.end()
     }
 }
@@ -207,11 +286,26 @@ impl Prs {
         Prs(HashMap::new())
     }
 
-    /// Head-branch lookups, tagged as the report's `PrStatus`.
-    pub fn from_lookups(lookups: HashMap<String, HeadLookup>) -> Prs {
+    /// Head-branch lookups, tagged as the report's `PrStatus`, with each merged
+    /// PR's head compared against the row checked out on its branch.
+    fn of(lookups: HashMap<String, HeadLookup>, rows: &[IssueWorktree]) -> Prs {
+        let worktree_on: HashMap<&str, &str> = rows
+            .iter()
+            .map(|r| (r.branch.as_str(), r.worktree.as_str()))
+            .collect();
         Prs(lookups
             .into_iter()
-            .map(|(b, l)| (b, pr_status_of(&l)))
+            .map(|(branch, lookup)| {
+                let mut status = pr_status_of(&lookup);
+                if let (HeadLookup::Unique(pr), PrStatus::Unique { state, ahead, .. }) =
+                    (&lookup, &mut status)
+                    && state == "MERGED"
+                    && let Some(wt) = worktree_on.get(branch.as_str())
+                {
+                    *ahead = ahead_of(Path::new(wt), &pr.head_ref_oid);
+                }
+                (branch, status)
+            })
             .collect())
     }
 
@@ -237,6 +331,7 @@ fn pr_status_of(lookup: &HeadLookup) -> PrStatus {
             state: pr.state.clone(),
             url: pr.url.clone(),
             is_draft: pr.is_draft,
+            ahead: None,
         },
         HeadLookup::NoMatch => PrStatus::None,
         HeadLookup::Ambiguous(candidates) => PrStatus::Ambiguous {
@@ -255,28 +350,20 @@ fn pr_status_of(lookup: &HeadLookup) -> PrStatus {
 }
 
 /// Discover worktrees and their issue ids, filtered to `ids` when non-empty.
-/// Rows carry `dirty = false` placeholders; the dirty check is a separate step
-/// so callers can drive it with a progress bar.
+/// Rows carry an unchecked tree; the tree check is a separate step so callers
+/// can drive it with a progress bar.
 pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
     let (_main, others) = worktree::discover(start)?;
     let mut rows = Vec::new();
     for wt in &others {
-        let iid = worktree::issue_id_of(&wt.path, &wt.branch);
+        let row = IssueWorktree::at(&wt.path, &wt.branch);
         // An issue id is case-insensitive in every tracker that has one, and
         // the record holds whichever spelling the tracker was given.
-        if !ids.is_empty() && !ids.iter().any(|w| w.eq_ignore_ascii_case(&iid.to_string())) {
+        let id = row.issue_id.to_string();
+        if !ids.is_empty() && !ids.iter().any(|w| w.eq_ignore_ascii_case(&id)) {
             continue;
         }
-        rows.push(IssueWorktree {
-            worktree: wt.path.to_string_lossy().into_owned(),
-            branch: wt.branch.clone(),
-            issue_id: iid,
-            dirty: false,
-            pr: PrStatus::None,
-            state: None,
-            finished: false,
-            reason_not_finished: None,
-        });
+        rows.push(row);
     }
     let issue_ids = rows
         .iter()
@@ -285,31 +372,33 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
     Ok(Discovered { rows, issue_ids })
 }
 
-/// True when a worktree has uncommitted changes. A `git status` that fails to
-/// run — a timeout, or a path git cannot read as a repository — is reported
-/// dirty rather than clean, since a wrong "clean" here would let a caller
-/// discard real work.
-pub fn dirty_of(path: &str) -> bool {
-    let path = Path::new(path);
-    Vcs::at(path).dirty(path, Changes::All).unwrap_or(true)
+/// Whether a worktree has uncommitted changes, untracked files included. The
+/// one place a removal's dirty gate is decided: a status that could not be
+/// read is `Unknown`, which holds the worktree like any other unknown.
+pub fn tree_of(path: &Path) -> Tree {
+    match Vcs::at(path).dirty(path, Changes::All) {
+        Ok(true) => Tree::Dirty,
+        Ok(false) => Tree::Clean,
+        Err(e) => Tree::Unknown(format!("{e:#}")),
+    }
 }
 
-/// `dirty_of` for many worktrees, run on a bounded thread pool with order
+/// `tree_of` for many worktrees, run on a bounded thread pool with order
 /// preserved. Each check is an independent, I/O-bound `git status` walk, so
 /// fanning them across cores turns N serial walks into roughly one walk's
-/// latency. The batch form of [`dirty_stream`]: results land in a slot per
+/// latency. The batch form of [`tree_stream`]: results land in a slot per
 /// input index, keeping the output aligned with `paths`.
-pub fn dirty_many(paths: &[String]) -> Vec<bool> {
-    let out = std::sync::Mutex::new(vec![false; paths.len()]);
-    dirty_stream(paths, |i, d| out.lock().unwrap()[i] = d);
+pub fn tree_many(paths: &[String]) -> Vec<Tree> {
+    let out = std::sync::Mutex::new(vec![Tree::Clean; paths.len()]);
+    tree_stream(paths, |i, t| out.lock().unwrap()[i] = t);
     out.into_inner().unwrap()
 }
 
-/// `dirty_of` for many worktrees, reporting each result as soon as it is
-/// known. `report(i, dirty)` is invoked exactly once per input index, from
+/// `tree_of` for many worktrees, reporting each result as soon as it is
+/// known. `report(i, tree)` is invoked exactly once per input index, from
 /// worker threads on a bounded pool over contiguous chunks; callers that
-/// want the batch form should keep using [`dirty_many`].
-pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clone) {
+/// want the batch form should keep using [`tree_many`].
+pub fn tree_stream(paths: &[String], report: impl Fn(usize, Tree) + Send + Clone) {
     if paths.is_empty() {
         return;
     }
@@ -324,7 +413,7 @@ pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clon
             let report = report.clone();
             s.spawn(move || {
                 for (j, p) in c.iter().enumerate() {
-                    report(ci * chunk + j, dirty_of(p));
+                    report(ci * chunk + j, tree_of(Path::new(p)));
                 }
             });
         }
@@ -337,6 +426,16 @@ pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clon
 pub fn pushed_of(path: &str) -> bool {
     let path = Path::new(path);
     Vcs::at(path).pushed(path).unwrap_or(false)
+}
+
+/// How many commits at `worktree`'s HEAD the commit `oid` does not reach, or
+/// `None` when that cannot be worked out: an `oid` the local repository has
+/// never fetched, or none at all from a forge that omitted it.
+pub fn ahead_of(worktree: &Path, oid: &str) -> Option<u32> {
+    if oid.is_empty() || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Vcs::at(worktree).ahead(worktree, oid).ok()
 }
 
 /// Every branch marked `Unavailable` with the same `reason`: the whole batch
@@ -478,7 +577,7 @@ pub fn fetch_prs(d: &Discovered, f: &forge::Resolved) -> Result<Prs> {
         (ForgeKind::None, false) => {
             let branches: Vec<String> = rows.map(|r| r.branch.clone()).collect();
             let reason = format!("no forge: {}", f.reason);
-            return Ok(Prs::from_lookups(unavailable_all(&branches, &reason)));
+            return Ok(Prs::of(unavailable_all(&branches, &reason), &d.rows));
         }
         (ForgeKind::Github | ForgeKind::Gitlab | ForgeKind::Forgejo, _) => {}
     }
@@ -489,34 +588,33 @@ pub fn fetch_prs(d: &Discovered, f: &forge::Resolved) -> Result<Prs> {
     });
     let recorded = recorded_lookups(bound, repo, forge);
     let batch = forge.prs_by_head(repo, &branches);
-    Ok(Prs::from_lookups(merge_lookups(recorded, batch)))
+    Ok(Prs::of(merge_lookups(recorded, batch), &d.rows))
 }
 
-/// Attach dirty flags (in row order), the branch's PR, tracker state, and the
-/// finished verdict. `tracker` is carried through to the report for link
-/// building and to tell a blank state column from an unreachable tracker.
+/// Attach trees (in row order), the branch's PR, tracker state, and the
+/// verdict. `tracker` is carried through to the report for link building and
+/// to tell a blank state column from an unreachable tracker. `pr_only` is
+/// [`verdict`]'s.
 pub fn assemble(
     d: Discovered,
-    dirty: Vec<bool>,
+    trees: Vec<Tree>,
     prs: Prs,
     states: HashMap<String, State>,
     tracker: TrackerInfo,
+    pr_only: bool,
 ) -> StatusReport {
     let mut rows = d.rows;
-    let mut finished_count = 0;
     for (i, wt) in rows.iter_mut().enumerate() {
-        wt.dirty = dirty.get(i).copied().unwrap_or(false);
+        if let Some(tree) = trees.get(i) {
+            wt.tree = tree.clone();
+        }
         prs.apply(wt);
         if let Some(st) = wt.issue_id.tracker().and_then(|id| states.get(id)) {
             wt.state = Some(st.clone());
         }
-        let reason = reason_not_finished(wt, &tracker, false);
-        wt.finished = reason.is_none();
-        if wt.finished {
-            finished_count += 1;
-        }
-        wt.reason_not_finished = reason;
+        wt.verdict = verdict(wt, &tracker, pr_only);
     }
+    let finished_count = rows.iter().filter(|r| r.verdict.is_finished()).count();
     StatusReport {
         worktrees: rows,
         finished_count,
@@ -535,39 +633,52 @@ pub fn label(kind: TrackerKind) -> &'static str {
     }
 }
 
-/// None when finished; otherwise a short reason it is not.
+/// Whether the worktree may be removed, and every reason it may not. This is
+/// the whole deletion gate: `issue end` removes exactly the rows it calls
+/// finished.
+///
+/// A reason is `Unknown` when an input could not be read: the record, the
+/// tree, the PR, the merged PR's head against HEAD, or the tracker's state.
+/// One such reason makes the whole verdict `Unknown`.
 ///
 /// The state gate has four shapes. A project that declared it has no tracker
 /// has no state to wait for, so its verdict rests on the PR and a clean tree. A
 /// tracker that answered gates on the issue having reached a completed state. A
 /// tracker that is configured but did not answer holds the gate open, so an
-/// unset key or an unreachable API never promotes a worktree to finished — and
-/// so does the no-tracker stand-in devkit falls back to, which is devkit having
+/// unset key or an unreachable API never promotes a worktree to finished. So
+/// does the no-tracker stand-in devkit falls back to, which is devkit having
 /// found nothing to ask rather than the project saying there is nothing.
 ///
 /// With `pr_only` both the state and issue-id gates are dropped (finished = PR
 /// merged + clean), so repos whose branches carry no issue id still qualify.
-pub fn reason_not_finished(
-    wt: &IssueWorktree,
-    tracker: &TrackerInfo,
-    pr_only: bool,
-) -> Option<String> {
-    if !pr_only && wt.issue_id == IssueId::Unknown {
-        return Some("not an issue worktree".into());
+pub fn verdict(wt: &IssueWorktree, tracker: &TrackerInfo, pr_only: bool) -> Verdict {
+    let mut held: Vec<String> = Vec::new();
+    let mut unknown = false;
+    let mut doubt = |held: &mut Vec<String>, reason: String| {
+        unknown = true;
+        held.push(reason);
+    };
+    if wt.record_unreadable {
+        doubt(&mut held, "issue record unreadable".into());
+    } else if !pr_only && wt.issue_id == IssueId::Unknown {
+        return Verdict::Held(vec!["not an issue worktree".into()]);
     }
-    let mut bits: Vec<String> = Vec::new();
     match &wt.pr {
-        PrStatus::Unique { state, .. } if state == "MERGED" => {}
-        PrStatus::Unique { .. } => bits.push("PR not merged".into()),
-        PrStatus::None => bits.push("no PR".into()),
-        PrStatus::Ambiguous { .. } => bits.push("PR ambiguous".into()),
-        PrStatus::Unknown { reason } => bits.push(format!("PR unknown: {reason}")),
+        PrStatus::Unique { state, ahead, .. } if state == "MERGED" => match ahead {
+            Some(0) => {}
+            Some(n) => held.push(format!("{n} commit(s) past the merged PR")),
+            None => doubt(&mut held, "HEAD not compared with the merged PR".into()),
+        },
+        PrStatus::Unique { .. } => held.push("PR not merged".into()),
+        PrStatus::None => held.push("no PR".into()),
+        PrStatus::Ambiguous { .. } => held.push("PR ambiguous".into()),
+        PrStatus::Unknown { reason } => doubt(&mut held, format!("PR unknown: {reason}")),
         PrStatus::Untracked { pushed: true } => {}
-        PrStatus::Untracked { pushed: false } => bits.push("commits not on a remote".into()),
+        PrStatus::Untracked { pushed: false } => held.push("commits not on a remote".into()),
     }
-    // A project that declared it has no tracker has no state to wait for; every
+    // A project that declared it has no tracker has no state to wait for. Every
     // other tracker gates on the issue's state and says so when it could not
-    // read one — the fallback stand-in included, since it stands in for a
+    // read one, the fallback stand-in included, since it stands in for a
     // tracker devkit could not resolve. A worktree set up with no issue has no
     // state either.
     let nothing_to_wait_for =
@@ -575,33 +686,36 @@ pub fn reason_not_finished(
     if !pr_only && !nothing_to_wait_for {
         match wt.state.as_ref() {
             Some(s) if s.kind != StateKind::Completed => {
-                bits.push(format!("{} {}", label(tracker.kind), s.name))
+                held.push(format!("{} {}", label(tracker.kind), s.name))
             }
             Some(_) => {}
-            None if tracker.ready => bits.push("tracker state unknown".into()),
-            None => bits.push("no tracker key".into()),
+            None if tracker.ready => doubt(&mut held, "tracker state unknown".into()),
+            None => doubt(&mut held, "no tracker key".into()),
         }
     }
-    if wt.dirty {
-        bits.push("dirty".into());
+    match &wt.tree {
+        Tree::Clean => {}
+        Tree::Dirty => held.push("dirty".into()),
+        Tree::Unknown(why) => doubt(&mut held, format!("tree unknown: {why}")),
     }
-    if bits.is_empty() {
-        None
-    } else {
-        Some(bits.join(", "))
+    match (held.is_empty(), unknown) {
+        (true, _) => Verdict::Finished,
+        (false, true) => Verdict::Unknown(held),
+        (false, false) => Verdict::Held(held),
     }
 }
 
 /// Discover worktrees, fetch PRs + tracker state concurrently, and compute the
-/// finished verdict against a caller-supplied tracker. Silent — no progress
-/// output (the CLI re-orchestrates the same pieces with bars). This crate reads
-/// no config, so the caller that loaded one resolves the tracker and repos and
-/// injects them; tests inject a fake.
+/// verdict against a caller-supplied tracker. Silent, with no progress output
+/// (the CLI re-orchestrates the same pieces with bars). This crate reads no
+/// config, so the caller that loaded one resolves the tracker and repos and
+/// injects them; tests inject a fake. `pr_only` is [`verdict`]'s.
 pub fn gather_with(
     start: &str,
     ids: &[String],
     t: &Resolved,
     f: &forge::Resolved,
+    pr_only: bool,
 ) -> Result<StatusReport> {
     let d = discover(start, ids)?;
     let info = TrackerInfo::of(t);
@@ -609,28 +723,33 @@ pub fn gather_with(
     if d.is_empty() {
         // No worktrees means no ids to look up and no rows to link, and no PR
         // repository is needed either.
-        return Ok(assemble(d, Vec::new(), Prs::empty(), HashMap::new(), info));
+        return Ok(assemble(
+            d,
+            Vec::new(),
+            Prs::empty(),
+            HashMap::new(),
+            info,
+            pr_only,
+        ));
     }
     let paths = d.worktree_paths();
     let ids_v: Vec<String> = d.issue_ids().to_vec();
-    let (dirty, prs, states, link_base) = std::thread::scope(|s| {
-        let dt = s.spawn(|| dirty_many(&paths));
+    let (trees, prs, states, link_base) = std::thread::scope(|s| {
+        let dt = s.spawn(|| tree_many(&paths));
         let pt = s.spawn(|| fetch_prs(&d, f));
         // The state fetch and the link base share a thread: both go through the
         // tracker, and both can reach the network.
         let tt = s.spawn(|| (t.states(&ids_v), t.issue_url("")));
-        let dirty = dt.join().expect("dirty thread panicked");
+        let trees = dt.join().expect("tree thread panicked");
         let prs = pt.join().expect("prs thread panicked")?;
         let (states, link_base) = tt.join().expect("tracker thread panicked");
-        Ok::<_, anyhow::Error>((dirty, prs, states, link_base))
+        Ok::<_, anyhow::Error>((trees, prs, states, link_base))
     })?;
-    Ok(assemble(d, dirty, prs, states, TrackerInfo {
-        link_base,
-        ..info
-    }))
+    let info = TrackerInfo { link_base, ..info };
+    Ok(assemble(d, trees, prs, states, info, pr_only))
 }
 
-/// Local-only status: discovery + dirty checks, with no `gh`/tracker network.
+/// Local-only status: discovery + tree checks, with no `gh`/tracker network.
 /// PRs stay `NO_PR` and the state stays unknown; callers (e.g. `issue info
 /// --cache-only`) overlay cached data themselves.
 ///
@@ -647,13 +766,14 @@ pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
         None,
     );
     let t = devkit_common::tracker::resolve(None, Path::new(start), &f.repos);
-    let dirty = dirty_many(&d.worktree_paths());
+    let trees = tree_many(&d.worktree_paths());
     Ok(assemble(
         d,
-        dirty,
+        trees,
         Prs::empty(),
         HashMap::new(),
         TrackerInfo::of(&t),
+        false,
     ))
 }
 
@@ -708,16 +828,17 @@ mod tests {
         let t = FakeTracker::with_states([("ENG-1", done("Done"))]);
         let report = assemble(
             discovered("ENG-1", "lev/eng-1-fix"),
-            vec![false],
+            vec![Tree::Clean],
             Prs::for_test(vec![pr(10, "MERGED", "lev/eng-1-fix")]),
             t.states(&["ENG-1".into()]),
             tracker(TrackerKind::Linear, true),
+            false,
         );
         assert_eq!(
             report.worktrees[0].state.as_ref().map(|s| s.kind),
             Some(StateKind::Completed)
         );
-        assert!(report.worktrees[0].finished);
+        assert!(report.worktrees[0].verdict.is_finished());
         assert_eq!(report.finished_count, 1);
     }
 
@@ -727,13 +848,14 @@ mod tests {
         st.kind = StateKind::Started;
         let report = assemble(
             discovered("ENG-2", "lev/eng-2-wip"),
-            vec![false],
+            vec![Tree::Clean],
             Prs::for_test(vec![pr(11, "MERGED", "lev/eng-2-wip")]),
             HashMap::from([("ENG-2".to_string(), st)]),
             tracker(TrackerKind::Linear, true),
+            false,
         );
-        assert!(!report.worktrees[0].finished);
-        let why = report.worktrees[0].reason_not_finished.as_deref().unwrap();
+        assert!(!report.worktrees[0].verdict.is_finished());
+        let why = report.worktrees[0].verdict.reason().unwrap();
         assert!(
             why.contains("In Progress"),
             "the reason names the state: {why}"
@@ -744,15 +866,16 @@ mod tests {
     fn with_no_tracker_a_merged_clean_worktree_is_finished_without_a_state() {
         let report = assemble(
             discovered("ENG-3", "lev/some-branch"),
-            vec![false],
+            vec![Tree::Clean],
             Prs::for_test(vec![pr(12, "MERGED", "lev/some-branch")]),
             HashMap::new(),
             tracker(TrackerKind::None, false),
+            false,
         );
         let row = &report.worktrees[0];
         assert!(row.state.is_none());
         assert!(
-            row.finished,
+            row.verdict.is_finished(),
             "a project with no tracker still finishes on PR merged + clean"
         );
     }
@@ -761,15 +884,16 @@ mod tests {
     fn with_a_fallback_tracker_a_merged_clean_worktree_is_not_finished() {
         let report = assemble(
             discovered("ENG-6", "lev/fallback-branch"),
-            vec![false],
+            vec![Tree::Clean],
             Prs::for_test(vec![pr(14, "MERGED", "lev/fallback-branch")]),
             HashMap::new(),
             fallback_none(),
+            false,
         );
         let row = &report.worktrees[0];
-        assert!(!row.finished);
+        assert!(!row.verdict.is_finished());
         assert_eq!(
-            row.reason_not_finished.as_deref(),
+            row.verdict.reason().as_deref(),
             Some("no tracker key"),
             "landing on the no-tracker stand-in means devkit found no tracker to \
              ask, which holds the gate exactly as an unreadable one does"
@@ -780,26 +904,26 @@ mod tests {
     fn with_a_tracker_and_no_key_a_merged_clean_worktree_is_not_finished() {
         let report = assemble(
             discovered("ENG-4", "lev/other-branch"),
-            vec![false],
+            vec![Tree::Clean],
             Prs::for_test(vec![pr(13, "MERGED", "lev/other-branch")]),
             HashMap::new(),
             tracker(TrackerKind::Linear, false),
+            false,
         );
         let row = &report.worktrees[0];
-        assert!(!row.finished);
+        assert!(!row.verdict.is_finished());
         assert_eq!(
-            row.reason_not_finished.as_deref(),
+            row.verdict.reason().as_deref(),
             Some("no tracker key"),
             "a configured tracker that cannot answer holds the gate, so an unset \
              key never promotes a worktree to finished"
         );
     }
 
-    // assemble zips dirty flags onto rows in order, attaches the branch's PR,
-    // applies tracker state, and computes the finished verdict — the same
-    // result the old monolithic gather produced.
+    // assemble zips trees onto rows in order, attaches the branch's PR,
+    // applies tracker state, and computes the verdict.
     #[test]
-    fn assemble_attaches_pr_dirty_and_verdict() {
+    fn assemble_attaches_pr_tree_and_verdict() {
         let d = discovered("ENG-1", "lev/eng-1-foo");
         let prs = Prs::for_test(vec![pr(7, "MERGED", "lev/eng-1-foo")]);
         let states = HashMap::from([("ENG-1".to_string(), done("Done"))]);
@@ -810,12 +934,12 @@ mod tests {
             reason: "[tracker] kind = \"linear\"".into(),
             link_base: Some("https://linear.app/acme/issue/".into()),
         };
-        let report = assemble(d, vec![false], prs, states, info);
+        let report = assemble(d, vec![Tree::Clean], prs, states, info, false);
         let row = &report.worktrees[0];
         assert_eq!(row.pr.number(), Some(7));
         assert_eq!(row.pr.state_label(), "MERGED");
-        assert!(!row.dirty);
-        assert!(row.finished);
+        assert_eq!(row.tree, Tree::Clean);
+        assert!(row.verdict.is_finished());
         assert_eq!(report.finished_count, 1);
         assert_eq!(
             report.tracker.link_base.as_deref(),
@@ -824,16 +948,17 @@ mod tests {
     }
 
     #[test]
-    fn assemble_marks_dirty_from_flags() {
+    fn assemble_marks_dirty_from_trees() {
         let report = assemble(
             discovered("ENG-2", "lev/eng-2-bar"),
-            vec![true],
+            vec![Tree::Dirty],
             Prs::for_test(vec![]),
             HashMap::new(),
             tracker(TrackerKind::None, false),
+            false,
         );
-        assert!(report.worktrees[0].dirty);
-        assert!(!report.worktrees[0].finished);
+        assert_eq!(report.worktrees[0].tree, Tree::Dirty);
+        assert!(!report.worktrees[0].verdict.is_finished());
     }
 
     impl Discovered {
@@ -842,13 +967,21 @@ mod tests {
         }
     }
     impl Prs {
+        /// Each PR as its head branch's status, a merged one with HEAD at its
+        /// head.
         fn for_test(briefs: Vec<PrBrief>) -> Self {
-            Prs::from_lookups(
-                briefs
-                    .into_iter()
-                    .map(|b| (b.head_ref_name.clone(), HeadLookup::Unique(b)))
-                    .collect(),
-            )
+            Prs(briefs
+                .into_iter()
+                .map(|b| {
+                    let mut status = pr_status_of(&HeadLookup::Unique(b.clone()));
+                    if let PrStatus::Unique { state, ahead, .. } = &mut status
+                        && state == "MERGED"
+                    {
+                        *ahead = Some(0);
+                    }
+                    (b.head_ref_name, status)
+                })
+                .collect())
         }
     }
 
@@ -921,7 +1054,7 @@ mod tests {
             "feat/x".to_string(),
             recorded_result(Ok(Some(pr(12, "MERGED", "feat/x"))), 12),
         )]);
-        let prs = Prs::from_lookups(merge_lookups(recorded, batch));
+        let prs = Prs::of(merge_lookups(recorded, batch), &[]);
         prs.apply(&mut row);
         assert_eq!(row.pr.number(), Some(12), "got {:?}", row.pr);
     }
@@ -986,6 +1119,11 @@ mod tests {
         }
     }
 
+    fn reason_of(wt: &IssueWorktree, tracker: &TrackerInfo, pr_only: bool) -> Option<String> {
+        verdict(wt, tracker, pr_only).reason()
+    }
+
+    /// A row whose merged PR, if any, has HEAD at its head.
     fn wt(issue_id: &str, pr_state: &str, dirty: bool, kind: Option<StateKind>) -> IssueWorktree {
         let pr = if pr_state == "NO_PR" {
             PrStatus::None
@@ -995,21 +1133,22 @@ mod tests {
                 state: pr_state.into(),
                 url: "https://x/1".into(),
                 is_draft: false,
+                ahead: (pr_state == "MERGED").then_some(0),
             }
         };
         IssueWorktree {
             worktree: "/w".into(),
             branch: "b".into(),
             issue_id: issue_id.parse().unwrap(),
-            dirty,
+            record_unreadable: false,
+            tree: if dirty { Tree::Dirty } else { Tree::Clean },
             pr,
             state: kind.map(|kind| State {
                 kind,
                 name: "Done".into(),
                 color: None,
             }),
-            finished: false,
-            reason_not_finished: None,
+            verdict: Verdict::default(),
         }
     }
 
@@ -1032,7 +1171,7 @@ mod tests {
     #[test]
     fn finished_when_merged_done_clean() {
         assert!(
-            reason_not_finished(
+            reason_of(
                 &wt("ENG-1", "MERGED", false, Some(StateKind::Completed)),
                 &tracker(TrackerKind::Linear, true),
                 false
@@ -1044,7 +1183,7 @@ mod tests {
     #[test]
     fn not_finished_when_dirty() {
         assert_eq!(
-            reason_not_finished(
+            reason_of(
                 &wt("ENG-1", "MERGED", true, Some(StateKind::Completed)),
                 &tracker(TrackerKind::Linear, true),
                 false
@@ -1058,7 +1197,7 @@ mod tests {
     fn pr_only_ignores_tracker_state() {
         // No state, no tracker, but pr_only drops the state gate.
         assert!(
-            reason_not_finished(
+            reason_of(
                 &wt("ENG-1", "MERGED", false, None),
                 &tracker(TrackerKind::None, false),
                 true
@@ -1072,7 +1211,7 @@ mod tests {
         // A repo without issue-id branch names has UNKNOWN issue ids; with
         // pr_only a merged + clean worktree is still finished.
         assert!(
-            reason_not_finished(
+            reason_of(
                 &wt("UNKNOWN", "MERGED", false, None),
                 &tracker(TrackerKind::None, false),
                 true
@@ -1086,9 +1225,9 @@ mod tests {
     #[test]
     fn an_issueless_worktree_skips_the_tracker_gate() {
         let linear = tracker(TrackerKind::Linear, true);
-        assert!(reason_not_finished(&wt("NONE", "MERGED", false, None), &linear, false).is_none());
+        assert!(reason_of(&wt("NONE", "MERGED", false, None), &linear, false).is_none());
         assert_eq!(
-            reason_not_finished(&wt("NONE", "NO_PR", true, None), &linear, false).as_deref(),
+            reason_of(&wt("NONE", "NO_PR", true, None), &linear, false).as_deref(),
             Some("no PR, dirty")
         );
     }
@@ -1096,7 +1235,7 @@ mod tests {
     #[test]
     fn pr_only_unknown_still_gated_on_pr() {
         assert_eq!(
-            reason_not_finished(
+            reason_of(
                 &wt("UNKNOWN", "NO_PR", false, None),
                 &tracker(TrackerKind::None, false),
                 true
@@ -1111,7 +1250,7 @@ mod tests {
         let linear = tracker(TrackerKind::Linear, true);
         // Unknown id is never an issue worktree.
         assert_eq!(
-            reason_not_finished(
+            reason_of(
                 &wt("UNKNOWN", "MERGED", false, Some(StateKind::Completed)),
                 &linear,
                 false
@@ -1121,7 +1260,7 @@ mod tests {
         );
         // No PR + a tracker with no key, all reasons join with ", ".
         assert_eq!(
-            reason_not_finished(
+            reason_of(
                 &wt("ENG-2", "NO_PR", false, None),
                 &tracker(TrackerKind::Linear, false),
                 false
@@ -1131,7 +1270,7 @@ mod tests {
         );
         // Open PR + started state + dirty; the reason names the tracker.
         assert_eq!(
-            reason_not_finished(
+            reason_of(
                 &wt("ENG-3", "OPEN", true, Some(StateKind::Started)),
                 &linear,
                 false
@@ -1141,7 +1280,7 @@ mod tests {
         );
         // A ready tracker with no row for the issue.
         assert_eq!(
-            reason_not_finished(&wt("ENG-4", "MERGED", false, None), &linear, false).as_deref(),
+            reason_of(&wt("ENG-4", "MERGED", false, None), &linear, false).as_deref(),
             Some("tracker state unknown")
         );
     }
@@ -1150,7 +1289,7 @@ mod tests {
     fn the_reason_names_whichever_tracker_produced_the_state() {
         let row = wt("ENG-5", "MERGED", false, Some(StateKind::Started));
         assert_eq!(
-            reason_not_finished(&row, &tracker(TrackerKind::Github, true), false).as_deref(),
+            reason_of(&row, &tracker(TrackerKind::Github, true), false).as_deref(),
             Some("GitHub Done")
         );
     }
@@ -1170,6 +1309,7 @@ mod tests {
             state: "MERGED".into(),
             url: "https://github.com/o/r/pull/12".into(),
             is_draft: false,
+            ahead: Some(0),
         };
         assert_eq!(u.number(), Some(12));
         assert_eq!(u.state_label(), "MERGED");
@@ -1201,7 +1341,7 @@ mod tests {
             },
             ..wt("ENG-1", "NO_PR", false, Some(StateKind::Completed))
         };
-        let reason = reason_not_finished(&ambiguous, &linear, false).expect("must name a reason");
+        let reason = reason_of(&ambiguous, &linear, false).expect("must name a reason");
         assert!(reason.contains("PR ambiguous"), "{reason}");
 
         let unknown = IssueWorktree {
@@ -1210,19 +1350,99 @@ mod tests {
             },
             ..wt("ENG-2", "NO_PR", false, Some(StateKind::Completed))
         };
-        let reason = reason_not_finished(&unknown, &linear, false).expect("must name a reason");
+        let v = verdict(&unknown, &linear, false);
+        assert!(matches!(v, Verdict::Unknown(_)), "{v:?}");
+        let reason = v.reason().expect("must name a reason");
         assert!(
             reason.contains("recorded PR no longer resolves"),
             "{reason}"
         );
     }
 
-    // dirty_stream must report each index exactly once with the same result
-    // dirty_many computes. Every dir is a clean git repo except one, which
-    // carries an untracked file, so exactly one index is true and the value
+    /// A merged PR finishes the worktree only when HEAD holds nothing the PR's
+    /// head lacks, since `issue end` deletes the branch those commits are on.
+    #[test]
+    fn a_merged_pr_finishes_only_a_worktree_with_nothing_past_its_head() {
+        let linear = tracker(TrackerKind::Linear, true);
+        let merged = |ahead| IssueWorktree {
+            pr: PrStatus::Unique {
+                number: 1,
+                state: "MERGED".into(),
+                url: "https://x/1".into(),
+                is_draft: false,
+                ahead,
+            },
+            ..wt("ENG-1", "NO_PR", false, Some(StateKind::Completed))
+        };
+        assert_eq!(verdict(&merged(Some(0)), &linear, false), Verdict::Finished);
+        assert_eq!(
+            verdict(&merged(Some(2)), &linear, false),
+            Verdict::Held(vec!["2 commit(s) past the merged PR".into()])
+        );
+        assert!(matches!(
+            verdict(&merged(None), &linear, false),
+            Verdict::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn an_unreadable_record_or_tree_makes_the_verdict_unknown() {
+        let linear = tracker(TrackerKind::Linear, true);
+        let finished = wt("ENG-1", "MERGED", false, Some(StateKind::Completed));
+        assert_eq!(verdict(&finished, &linear, false), Verdict::Finished);
+
+        let record = IssueWorktree {
+            record_unreadable: true,
+            ..finished.clone()
+        };
+        assert_eq!(
+            verdict(&record, &linear, false),
+            Verdict::Unknown(vec!["issue record unreadable".into()])
+        );
+
+        let tree = IssueWorktree {
+            tree: Tree::Unknown("git status timed out".into()),
+            ..finished
+        };
+        assert_eq!(
+            verdict(&tree, &linear, false),
+            Verdict::Unknown(vec!["tree unknown: git status timed out".into()])
+        );
+    }
+
+    #[test]
+    fn ahead_of_counts_commits_the_oid_does_not_reach() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            Git::fixture(dir.path())
+                .args(args.iter().copied())
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        let one = git(&["rev-parse", "HEAD"]).trim().to_string();
+        git(&["commit", "-q", "--allow-empty", "-m", "two"]);
+
+        assert_eq!(ahead_of(dir.path(), &one), Some(1));
+        assert_eq!(
+            ahead_of(dir.path(), "",),
+            None,
+            "a forge that reported no head commit"
+        );
+        assert_eq!(
+            ahead_of(dir.path(), &"f".repeat(40)),
+            None,
+            "a head commit this clone never fetched"
+        );
+    }
+
+    // tree_stream must report each index exactly once with the same result
+    // tree_many computes. Every dir is a clean git repo except one, which
+    // carries an untracked file, so exactly one index is dirty and the value
     // comparison catches wrong-value or wrong-index bugs.
     #[test]
-    fn dirty_stream_reports_every_index_once() {
+    fn tree_stream_reports_every_index_once() {
         use std::sync::Mutex;
         let base = tempfile::tempdir().unwrap();
         let paths: Vec<String> = (0..7)
@@ -1239,17 +1459,18 @@ mod tests {
         // A repo with an untracked file: `git status --porcelain` is non-empty.
         std::fs::write(std::path::Path::new(&paths[3]).join("f"), "x").unwrap();
 
-        let got: Mutex<Vec<Option<bool>>> = Mutex::new(vec![None; paths.len()]);
-        dirty_stream(&paths, |i, d| {
+        let got: Mutex<Vec<Option<Tree>>> = Mutex::new(vec![None; paths.len()]);
+        tree_stream(&paths, |i, t| {
             let mut g = got.lock().unwrap();
             assert!(g[i].is_none(), "index {i} reported twice");
-            g[i] = Some(d);
+            g[i] = Some(t);
         });
         let got = got.into_inner().unwrap();
-        let want = dirty_many(&paths);
+        let want = tree_many(&paths);
+        let mut expected = vec![Tree::Clean; 7];
+        expected[3] = Tree::Dirty;
         assert_eq!(
-            want,
-            vec![false, false, false, true, false, false, false],
+            want, expected,
             "only the repo with the untracked file is dirty"
         );
         assert_eq!(
@@ -1260,16 +1481,13 @@ mod tests {
         );
     }
 
-    /// `dirty_of` cannot distinguish a wedged git from a clean worktree — both
-    /// surface as `Err` from `git status --porcelain` — so a path git cannot
-    /// read is reported dirty rather than clean: `issue end` uses this to
-    /// decide whether removing a worktree is safe, and a wrong "clean" would
-    /// discard real work, while a wrong "dirty" only asks for `--force`.
+    /// A path git cannot read is neither clean nor dirty. `--force` waives a
+    /// dirty tree, and it must not waive one nobody could look at.
     #[test]
-    fn dirty_of_reports_dirty_when_git_cannot_answer() {
+    fn tree_of_is_unknown_when_git_cannot_answer() {
         let dir = tempfile::tempdir().unwrap();
         // Not a git repository: `git status --porcelain` fails to run here.
-        assert!(dirty_of(dir.path().to_str().unwrap()));
+        assert!(matches!(tree_of(dir.path()), Tree::Unknown(_)));
     }
 
     /// A project that declared no forge has no PR to wait for, so its commits
@@ -1281,9 +1499,9 @@ mod tests {
             pr: PrStatus::Untracked { pushed },
             ..wt("ENG-1", "NO_PR", false, None)
         };
-        assert_eq!(reason_not_finished(&row(true), &none, false), None);
+        assert_eq!(reason_of(&row(true), &none, false), None);
         assert_eq!(
-            reason_not_finished(&row(false), &none, false).as_deref(),
+            reason_of(&row(false), &none, false).as_deref(),
             Some("commits not on a remote")
         );
         assert_eq!(row(true).pr.state_label(), "NO_FORGE");
@@ -1354,6 +1572,7 @@ mod tests {
             state: "OPEN".into(),
             url: "u7".into(),
             is_draft: true,
+            ahead: None,
         });
     }
 
@@ -1364,6 +1583,7 @@ mod tests {
             state: "OPEN".into(),
             url: "u7".into(),
             is_draft: true,
+            ahead: None,
         };
         assert_eq!(status.state_label(), "OPEN");
     }

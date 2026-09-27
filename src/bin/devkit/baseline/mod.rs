@@ -879,20 +879,7 @@ fn decide(
             BASELINE_MARKER
         ),
     }
-    // Both sides resolve or the guard refuses. A side that fell back to its
-    // unresolved spelling would be compared against a resolved one, and on
-    // Windows the two can never match at all — `canonicalize` returns a
-    // `\\?\`-prefixed path and `current_dir` does not — so a fallback here
-    // silently disarms the one check standing between the sweep and the
-    // caller's own directory.
-    let here = std::fs::canonicalize(baseline)
-        .with_context(|| format!("resolving {}", baseline.display()))?;
-    let cwd = std::env::current_dir().context("resolving the current directory")?;
-    let cwd = std::fs::canonicalize(&cwd)
-        .with_context(|| format!("resolving the current directory {}", cwd.display()))?;
-    if cwd == here || cwd.starts_with(&here) {
-        anyhow::bail!("cd out of {} before removing it", baseline.display());
-    }
+    devkit_common::paths::refuse_if_inside(baseline)?;
     // A live server in the tree is the one thing worth refusing for even when
     // nobody has touched it.
     if !gates.force && live_rows_hold(baseline, ports) {

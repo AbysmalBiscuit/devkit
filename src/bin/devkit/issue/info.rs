@@ -67,7 +67,7 @@ pub fn run(
     let (mut row, discovered) = match pick_index(d.rows(), selector, top.as_deref()) {
         Some(i) => {
             let mut r = d.rows()[i].clone();
-            r.dirty = st::dirty_of(&r.worktree);
+            r.tree = st::tree_of(Path::new(&r.worktree));
             (r, true)
         }
         // No selector and the current worktree isn't in the triage rows (the
@@ -92,9 +92,7 @@ pub fn run(
             // Offline verdict from local signal only — PR stays NO_PR and the
             // issue state stays unknown. The main-clone row keeps its empty
             // verdict.
-            let reason = st::reason_not_finished(&row, &info, false);
-            row.finished = reason.is_none();
-            row.reason_not_finished = reason;
+            row.verdict = st::verdict(&row, &info, false);
         }
     } else if discovered {
         // Seed the row from any cached PR before the live fetch lands, so the
@@ -111,6 +109,7 @@ pub fn run(
             state,
             url,
             is_draft,
+            ..
         } = &row.pr
         {
             let _ = crate::issue::info_cache::write(
@@ -134,7 +133,7 @@ pub fn run(
         println!("{}", serde_json::to_string(&row)?);
     } else {
         let one = StatusReport {
-            finished_count: usize::from(row.finished),
+            finished_count: usize::from(row.verdict.is_finished()),
             tracker: info,
             worktrees: vec![row],
         };
@@ -174,7 +173,7 @@ fn live_enrich(
     lt.set(
         0,
         2,
-        Cell::Ready(crate::issue::triage::tree_cell(row.dirty)),
+        Cell::Ready(crate::issue::triage::tree_cell(&row.tree)),
     );
     let tracker_id = row.issue_id.tracker().map(str::to_owned);
     let want_state = tracker_id.is_some();
@@ -255,9 +254,7 @@ fn live_enrich(
                 }
             }
             if got_prs && got_state {
-                let reason = st::reason_not_finished(row, &verdict_tracker, false);
-                row.finished = reason.is_none();
-                row.reason_not_finished = reason;
+                row.verdict = st::verdict(row, &verdict_tracker, false);
                 lt.set(
                     0,
                     5,
@@ -281,16 +278,9 @@ fn live_enrich(
 fn local_row(top: &str) -> Result<IssueWorktree> {
     let top_path = Path::new(top);
     let branch = Vcs::at(top_path).branch(top_path)?;
-    let issue_id = devkit_common::worktree::issue_id_of(Path::new(top), &branch);
     Ok(IssueWorktree {
-        worktree: top.to_string(),
-        branch,
-        issue_id,
-        dirty: st::dirty_of(top),
-        pr: PrStatus::None,
-        state: None,
-        finished: false,
-        reason_not_finished: None,
+        tree: st::tree_of(top_path),
+        ..IssueWorktree::at(top_path, &branch)
     })
 }
 
@@ -319,9 +309,9 @@ fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::issue::info_cache::Cached
         state: pr.state,
         url: pr.url,
         is_draft: pr.is_draft,
+        ahead: None,
     };
-    row.finished = false;
-    row.reason_not_finished = None;
+    row.verdict = Default::default();
 }
 
 /// Reconcile a cache-seeded row against the live lookup. The live answer wins;
@@ -344,16 +334,16 @@ mod tests {
             worktree: worktree.into(),
             branch: branch.into(),
             issue_id: id.parse().unwrap(),
-            dirty: false,
+            record_unreadable: false,
+            tree: st::Tree::Clean,
             pr: PrStatus::None,
             state: None,
-            finished: false,
-            reason_not_finished: None,
+            verdict: Default::default(),
         }
     }
 
     #[test]
-    fn local_row_reads_branch_id_and_dirty() {
+    fn local_row_reads_branch_id_and_tree() {
         let base = tempfile::tempdir().unwrap();
         let run = |args: &[&str]| {
             devkit_git::Git::fixture(base.path())
@@ -371,10 +361,10 @@ mod tests {
         assert_eq!(r.issue_id, IssueId::Tracker("ENG-9".into()));
         assert_eq!(r.branch, "lev/eng-9-foo");
         assert_eq!(r.pr.number(), None);
-        assert!(!r.dirty);
+        assert_eq!(r.tree, st::Tree::Clean);
 
         std::fs::write(base.path().join("g"), "y").unwrap();
-        assert!(local_row(top).unwrap().dirty);
+        assert_eq!(local_row(top).unwrap().tree, st::Tree::Dirty);
     }
 
     #[test]
@@ -424,7 +414,7 @@ mod tests {
     #[test]
     fn cache_overlay_sets_pr_and_clears_verdict() {
         let mut r = row("/a", "lev/eng-1-x", "ENG-1");
-        r.reason_not_finished = Some("no PR, tracker state unknown".into());
+        r.verdict = st::Verdict::Unknown(vec!["no PR".into(), "tracker state unknown".into()]);
         apply_cached_pr(&mut r, crate::issue::info_cache::CachedPr {
             number: 123,
             state: "OPEN".into(),
@@ -434,8 +424,8 @@ mod tests {
         assert_eq!(r.pr.number(), Some(123));
         assert_eq!(r.pr.state_label(), "OPEN");
         assert_eq!(r.pr.url(), Some("https://x/pr/123"));
-        assert!(!r.finished);
-        assert_eq!(r.reason_not_finished, None);
+        assert!(!r.verdict.is_finished());
+        assert_eq!(r.verdict.reason(), None);
     }
 
     #[test]
@@ -492,6 +482,7 @@ mod tests {
             state: "OPEN".into(),
             url: "https://github.com/o/r/pull/7".into(),
             is_draft: false,
+            ahead: None,
         };
         reconcile_cache(&mut r, &live);
         assert!(matches!(r.pr, PrStatus::Unique { number: 7, .. }));

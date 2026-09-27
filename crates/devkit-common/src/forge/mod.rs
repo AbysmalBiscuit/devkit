@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::vcs::{Vcs, VersionControl};
 
+pub mod fake;
 pub mod forgejo;
 pub mod github;
 pub mod gitlab;

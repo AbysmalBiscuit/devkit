@@ -6,7 +6,7 @@ use devkit_common::{
     tracker::{State, TrackerKind},
     ui,
 };
-use devkit_issue::status::{self as st, IssueWorktree, StatusReport, TrackerInfo};
+use devkit_issue::status::{self as st, IssueWorktree, StatusReport, TrackerInfo, Tree};
 
 use crate::issue::triage::{self, render};
 
@@ -36,8 +36,8 @@ struct LiveState {
     /// Working copies for cell rendering; the final report is recomputed by
     /// `assemble` from the raw parts — never feed these rows to the report.
     rows: Vec<IssueWorktree>,
-    dirty: Vec<bool>,
-    dirty_seen: Vec<bool>,
+    trees: Vec<Tree>,
+    tree_seen: Vec<bool>,
     prs: Option<st::Prs>,
     states: Option<HashMap<String, State>>,
     tracker: TrackerInfo,
@@ -45,11 +45,12 @@ struct LiveState {
 
 impl LiveState {
     fn new(rows: Vec<IssueWorktree>, tracker: TrackerInfo) -> LiveState {
+        let trees = rows.iter().map(|r| r.tree.clone()).collect();
         let n = rows.len();
         LiveState {
             rows,
-            dirty: vec![false; n],
-            dirty_seen: vec![false; n],
+            trees,
+            tree_seen: vec![false; n],
             prs: None,
             states: None,
             tracker,
@@ -57,25 +58,23 @@ impl LiveState {
     }
 
     fn done(&self) -> bool {
-        self.dirty_seen.iter().all(|&s| s) && self.prs.is_some() && self.states.is_some()
+        self.tree_seen.iter().all(|&s| s) && self.prs.is_some() && self.states.is_some()
     }
 
     /// VERDICT write for row `i` if all its inputs are now present.
     fn verdict_write(&mut self, i: usize, out: &mut Vec<(usize, usize, String)>) {
-        if !(self.dirty_seen[i] && self.prs.is_some() && self.states.is_some()) {
+        if !(self.tree_seen[i] && self.prs.is_some() && self.states.is_some()) {
             return;
         }
-        let reason = st::reason_not_finished(&self.rows[i], &self.tracker, false);
-        self.rows[i].finished = reason.is_none();
-        self.rows[i].reason_not_finished = reason;
+        self.rows[i].verdict = st::verdict(&self.rows[i], &self.tracker, false);
         out.push((i, COL_VERDICT, triage::verdict_cell(&self.rows[i], false)));
     }
 
-    fn apply_dirty(&mut self, i: usize, dirty: bool) -> Vec<(usize, usize, String)> {
-        self.dirty[i] = dirty;
-        self.dirty_seen[i] = true;
-        self.rows[i].dirty = dirty;
-        let mut out = vec![(i, COL_TREE, triage::tree_cell(dirty))];
+    fn apply_tree(&mut self, i: usize, tree: Tree) -> Vec<(usize, usize, String)> {
+        let mut out = vec![(i, COL_TREE, triage::tree_cell(&tree))];
+        self.trees[i] = tree.clone();
+        self.tree_seen[i] = true;
+        self.rows[i].tree = tree;
         self.verdict_write(i, &mut out);
         out
     }
@@ -122,9 +121,9 @@ impl LiveState {
     }
 
     /// The raw collected results, for `st::assemble`.
-    fn into_parts(self) -> (Vec<bool>, st::Prs, HashMap<String, State>, TrackerInfo) {
+    fn into_parts(self) -> (Vec<Tree>, st::Prs, HashMap<String, State>, TrackerInfo) {
         (
-            self.dirty,
+            self.trees,
             self.prs.expect("apply_prs ran"),
             self.states.expect("apply_states ran"),
             self.tracker,
@@ -133,7 +132,7 @@ impl LiveState {
 }
 
 enum Update {
-    Dirty(usize, bool),
+    Tree(usize, Tree),
     Prs(Result<st::Prs>),
     States(HashMap<String, State>, Option<String>),
 }
@@ -170,6 +169,7 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
             st::Prs::empty(),
             HashMap::new(),
             info,
+            false,
         ));
     }
 
@@ -196,8 +196,8 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
             let tx = tx.clone();
             let paths = &paths;
             s.spawn(move || {
-                st::dirty_stream(paths, move |i, dirty| {
-                    let _ = tx.send(Update::Dirty(i, dirty));
+                st::tree_stream(paths, move |i, tree| {
+                    let _ = tx.send(Update::Tree(i, tree));
                 });
             });
         }
@@ -230,9 +230,9 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
         let mut states_done = false;
         lt.drive(&rx, |lt, msg| {
             let writes = match msg {
-                Update::Dirty(i, dirty) => {
+                Update::Tree(i, tree) => {
                     progress.inc(1);
-                    state.apply_dirty(i, dirty)
+                    state.apply_tree(i, tree)
                 }
                 Update::Prs(res) => {
                     prs_done = true;
@@ -256,8 +256,8 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
     lt.finish();
     looped?;
 
-    let (dirty, prs, states, info) = state.into_parts();
-    Ok(st::assemble(d, dirty, prs, states, info))
+    let (trees, prs, states, info) = state.into_parts();
+    Ok(st::assemble(d, trees, prs, states, info, false))
 }
 
 /// The note printed under the table for a tracker that could not answer, or
@@ -350,16 +350,16 @@ mod tests {
             worktree: format!("/w/{id}"),
             branch: format!("lev/{}-x", id.to_lowercase()),
             issue_id: id.parse().unwrap(),
-            dirty: false,
+            record_unreadable: false,
+            tree: Tree::Clean,
             pr: PrStatus::None,
             state: None,
-            finished: false,
-            reason_not_finished: None,
+            verdict: Default::default(),
         }
     }
 
-    /// A worktree whose only remaining gate is the tracker's: merged PR, clean
-    /// tree, real issue id.
+    /// A worktree whose only remaining gate is the tracker's: merged PR at
+    /// HEAD, clean tree, real issue id.
     fn merged_clean(id: &str) -> IssueWorktree {
         let mut r = row(id);
         r.pr = PrStatus::Unique {
@@ -367,6 +367,7 @@ mod tests {
             state: "MERGED".into(),
             url: "".into(),
             is_draft: false,
+            ahead: Some(0),
         };
         r
     }
@@ -383,7 +384,7 @@ mod tests {
         ] {
             let t = info(kind, false, declared);
             assert!(
-                st::reason_not_finished(&merged_clean("ENG-1"), &t, false).is_some(),
+                !st::verdict(&merged_clean("ENG-1"), &t, false).is_finished(),
                 "{kind:?} holds the gate"
             );
             let hint = tracker_hint(&t).unwrap_or_else(|| panic!("{kind:?} needs a hint"));
@@ -397,7 +398,7 @@ mod tests {
     #[test]
     fn a_declared_absence_of_a_tracker_gets_no_hint() {
         let t = info(TrackerKind::None, false, true);
-        assert!(st::reason_not_finished(&merged_clean("ENG-1"), &t, false).is_none());
+        assert!(st::verdict(&merged_clean("ENG-1"), &t, false).is_finished());
         assert_eq!(tracker_hint(&t), None);
     }
 
@@ -477,7 +478,7 @@ mod tests {
     fn verdicts_wait_for_all_sources() {
         let mut state = LiveState::new(vec![row("ENG-1"), row("ENG-2")], tracker(false));
 
-        let w1 = state.apply_dirty(0, true);
+        let w1 = state.apply_tree(0, Tree::Dirty);
         assert!(w1.iter().any(|(r, c, _)| (*r, *c) == (0, COL_TREE)));
         assert!(!w1.iter().any(|(_, c, _)| *c == COL_VERDICT));
 
@@ -486,13 +487,13 @@ mod tests {
         assert!(!w2.iter().any(|(_, c, _)| *c == COL_VERDICT));
 
         let w3 = state.apply_states(std::collections::HashMap::new(), None);
-        // The tracker was the last input for row 0 (dirty done); row 1's dirty
+        // The tracker was the last input for row 0 (tree done); row 1's tree
         // is still missing, so only row 0 gains a verdict.
         assert!(w3.iter().any(|(r, c, _)| (*r, *c) == (0, COL_VERDICT)));
         assert!(!w3.iter().any(|(r, c, _)| (*r, *c) == (1, COL_VERDICT)));
         assert!(!state.done());
 
-        let w4 = state.apply_dirty(1, false);
+        let w4 = state.apply_tree(1, Tree::Clean);
         assert!(w4.iter().any(|(r, c, _)| (*r, *c) == (1, COL_VERDICT)));
         assert!(state.done());
     }
@@ -502,8 +503,8 @@ mod tests {
     #[test]
     fn prs_last_emits_all_verdicts() {
         let mut state = LiveState::new(vec![row("ENG-1"), row("ENG-2")], tracker(false));
-        state.apply_dirty(0, false);
-        state.apply_dirty(1, true);
+        state.apply_tree(0, Tree::Clean);
+        state.apply_tree(1, Tree::Dirty);
         let w = state.apply_states(std::collections::HashMap::new(), None);
         assert!(!w.iter().any(|(_, c, _)| *c == COL_VERDICT));
         assert!(!state.done());
@@ -517,11 +518,11 @@ mod tests {
     #[test]
     fn collected_parts_match_inputs() {
         let mut state = LiveState::new(vec![row("ENG-1")], tracker(true));
-        state.apply_dirty(0, true);
+        state.apply_tree(0, Tree::Dirty);
         state.apply_prs(st::Prs::empty());
         state.apply_states(std::collections::HashMap::new(), Some(LINK_BASE.into()));
-        let (dirty, _prs, _states, info) = state.into_parts();
-        assert_eq!(dirty, vec![true]);
+        let (trees, _prs, _states, info) = state.into_parts();
+        assert_eq!(trees, vec![Tree::Dirty]);
         assert_eq!(info.link_base.as_deref(), Some(LINK_BASE));
     }
 
@@ -532,7 +533,7 @@ mod tests {
     #[test]
     fn live_state_matches_assemble() {
         let rows = vec![row("ENG-1"), row("ENG-2"), row("ENG-3")];
-        let dirty = vec![false, false, true];
+        let trees = vec![Tree::Clean, Tree::Clean, Tree::Dirty];
         let mut states = std::collections::HashMap::new();
         states.insert("ENG-1".to_string(), State {
             kind: StateKind::Completed,
@@ -546,27 +547,24 @@ mod tests {
         });
 
         let mut state = LiveState::new(rows.clone(), tracker(true));
-        for (i, &dt) in dirty.iter().enumerate() {
-            state.apply_dirty(i, dt);
+        for (i, tree) in trees.iter().enumerate() {
+            state.apply_tree(i, tree.clone());
         }
         state.apply_prs(st::Prs::empty());
         state.apply_states(states.clone(), Some(LINK_BASE.into()));
 
         let ids = vec!["ENG-1".into(), "ENG-2".into(), "ENG-3".into()];
         let d = st::Discovered::from_parts(rows, ids);
-        let report = st::assemble(d, dirty, st::Prs::empty(), states, TrackerInfo {
+        let info = TrackerInfo {
             link_base: Some(LINK_BASE.into()),
             ..tracker(true)
-        });
+        };
+        let report = st::assemble(d, trees, st::Prs::empty(), states, info, false);
 
         assert_eq!(state.rows.len(), report.worktrees.len());
         for (live, assembled) in state.rows.iter().zip(&report.worktrees) {
             let id = &assembled.issue_id;
-            assert_eq!(live.finished, assembled.finished, "finished for {id}");
-            assert_eq!(
-                live.reason_not_finished, assembled.reason_not_finished,
-                "reason for {id}"
-            );
+            assert_eq!(live.verdict, assembled.verdict, "verdict for {id}");
             assert_eq!(live.state, assembled.state, "state for {id}");
         }
     }

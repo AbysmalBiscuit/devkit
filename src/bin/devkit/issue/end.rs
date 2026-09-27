@@ -8,12 +8,12 @@ use anyhow::{Context, Result};
 use devkit_common::{
     progress::Steps,
     record::RecordState,
-    vcs::{Changes, Vcs, VersionControl},
+    vcs::{Vcs, VersionControl},
     worktree::IssueId,
 };
-use devkit_issue::status::{IssueWorktree, gather_with, label, reason_not_finished};
+use devkit_issue::status::{IssueWorktree, Tree, gather_with, label, tree_of};
 
-use crate::issue::triage::render;
+use crate::issue::{tracker::Selected, triage::render};
 
 fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWorktree> {
     let mut chosen = Vec::new();
@@ -166,24 +166,18 @@ fn cleanup(
     force: bool,
     branch_lock: &Mutex<()>,
 ) -> Result<()> {
-    let wt = std::fs::canonicalize(worktree_path)?;
-    let wt_s = wt.to_string_lossy().into_owned();
-    // Both sides resolve or the guard refuses. A side that fell back to its
-    // unresolved spelling would be compared against a resolved one, and on
-    // Windows the two can never match at all — `canonicalize` returns a
-    // `\\?\`-prefixed path and `current_dir` does not — so a fallback here
-    // silently disarms the one check standing between the removal and the
-    // caller's own directory.
-    let cwd = std::env::current_dir().context("resolving the current directory")?;
-    let cwd_c = std::fs::canonicalize(&cwd)
-        .with_context(|| format!("resolving the current directory {}", cwd.display()))?;
-    if cwd_c == wt || cwd_c.starts_with(&wt) {
-        anyhow::bail!("cd out of {wt_s} before removing it");
+    let wt = devkit_common::paths::refuse_if_inside(Path::new(worktree_path))?;
+    // Checked again here, not read from the report: the prompts can take
+    // minutes, and `--clean-worktree` skips the verdict altogether.
+    match tree_of(&wt) {
+        Tree::Clean => {}
+        Tree::Dirty if force => {}
+        Tree::Dirty => return Err(Dirty.into()),
+        Tree::Unknown(why) => {
+            anyhow::bail!("could not read the working tree of {}: {why}", wt.display())
+        }
     }
     let vcs = Vcs::at(&wt);
-    if vcs.dirty(&wt, Changes::All)? && !force {
-        return Err(Dirty.into());
-    }
     let (summary, baseline) = recorded_leftovers(&wt, force)?;
 
     let main = devkit_common::vcs::primary_checkout(&wt)?;
@@ -347,6 +341,13 @@ fn end_context(
 }
 
 pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -> Result<()> {
+    let sel = crate::issue::tracker::select_full(config, start, None);
+    run_selected(start, ids, flags, sel)
+}
+
+/// `run` against a tracker, forge and config already chosen, so a test can
+/// drive the finished gate with fakes.
+fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> Result<()> {
     let EndFlags {
         yes,
         force,
@@ -355,7 +356,6 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
         no_preserve,
     } = flags;
     let steps = Steps::persistent();
-    let sel = crate::issue::tracker::select_full(config, start, None);
     // A config that does not load reads as an empty [preserve] table, which
     // would remove a worktree having archived nothing it was asked to keep.
     if !no_preserve && let devkit_config::Health::Broken(why) = &sel.health {
@@ -371,7 +371,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
         let report = steps.during_result("Fetching PR + issue status...", || {
-            gather_with(start, &[], &tracker, &forge)
+            gather_with(start, &[], &tracker, &forge, pr_only)
         })?;
         render(&report, false);
         let t = select_explicit(&report.worktrees, ids);
@@ -386,7 +386,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
         t
     } else {
         let report = steps.during_result("Fetching PR + issue status...", || {
-            gather_with(start, ids, &tracker, &forge)
+            gather_with(start, ids, &tracker, &forge, pr_only)
         })?;
         render(&report, false);
         if pr_only {
@@ -397,9 +397,8 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
         }
         let t: Vec<IssueWorktree> = report
             .worktrees
-            .iter()
-            .filter(|r| reason_not_finished(r, &report.tracker, pr_only).is_none())
-            .cloned()
+            .into_iter()
+            .filter(|r| r.verdict.is_finished())
             .collect();
         if t.is_empty() {
             println!("\nNothing finished to clean up.");
@@ -1115,16 +1114,136 @@ mod tests {
         assert!(!branches.trim().is_empty(), "branch untouched");
     }
 
+    /// A tracker that calls ENG-1 done and a forge whose one PR, #1 from
+    /// `eng-1-fix`, merged at `head`: every gate `issue end` reads, except the
+    /// worktree's own tree and history.
+    fn merged_at(head: &str) -> Selected {
+        use devkit_common::{forge, tracker};
+        let done = tracker::State {
+            kind: tracker::StateKind::Completed,
+            name: "Done".into(),
+            color: None,
+        };
+        let pr = forge::PrBrief {
+            number: 1,
+            state: "MERGED".into(),
+            url: "https://github.com/o/r/pull/1".into(),
+            title: String::new(),
+            head_ref_name: "eng-1-fix".into(),
+            head_ref_oid: head.into(),
+            head_repo_owner: None,
+            is_draft: false,
+            author_login: None,
+        };
+        Selected {
+            tracker: tracker::Resolved {
+                tracker: Box::new(tracker::fake::FakeTracker::with_states([("ENG-1", done)])),
+                declared: true,
+                reason: "fake".into(),
+            },
+            forge: forge::Resolved {
+                forge: Box::new(forge::fake::FakeForge::new().with_pr(pr)),
+                declared: true,
+                reason: "fake".into(),
+                repos: forge::Repos::from_parts(
+                    &Default::default(),
+                    &Default::default(),
+                    Some("o/r".into()),
+                    None,
+                ),
+            },
+            config: None,
+            health: devkit_config::Health::Absent,
+        }
+    }
+
+    fn end_everything_finished(main: &std::path::Path, sel: Selected) {
+        run_selected(
+            main.to_str().unwrap(),
+            &[],
+            EndFlags {
+                yes: true,
+                force: false,
+                pr_only: false,
+                clean_worktree: false,
+                no_preserve: true,
+            },
+            sel,
+        )
+        .unwrap();
+    }
+
+    fn rev_parse(cwd: &std::path::Path, rev: &str) -> String {
+        devkit_git::Git::fixture(cwd)
+            .args(["rev-parse", rev])
+            .output()
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    /// A worktree on `eng-1-fix` with one commit past the primary checkout.
+    fn worktree_with_a_commit(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let main = repo_with_one_commit(dir);
+        let wt = dir.join("wt-eng-1");
+        fixture_git(&main, &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "eng-1-fix",
+            wt.to_str().unwrap(),
+        ]);
+        fixture_git(&wt, &["commit", "-q", "--allow-empty", "-m", "the fix"]);
+        (main, wt)
+    }
+
+    #[test]
+    fn a_worktree_at_its_merged_prs_head_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt) = worktree_with_a_commit(dir.path());
+
+        end_everything_finished(&main, merged_at(&rev_parse(&wt, "HEAD")));
+
+        assert!(!wt.exists(), "a finished worktree is removed");
+    }
+
+    /// Work committed after the merge and never pushed lives only on the local
+    /// branch, and removal deletes that branch with `git branch -D`.
+    #[test]
+    fn a_worktree_with_commits_past_its_merged_prs_head_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt) = worktree_with_a_commit(dir.path());
+        let merged = rev_parse(&wt, "HEAD");
+        fixture_git(&wt, &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "after the merge",
+        ]);
+        let unpushed = rev_parse(&wt, "HEAD");
+
+        end_everything_finished(&main, merged_at(&merged));
+
+        assert!(wt.exists(), "the worktree survives");
+        assert_eq!(
+            rev_parse(&main, "eng-1-fix"),
+            unpushed,
+            "the branch still carries the unpushed commit"
+        );
+    }
+
     fn approved_row(worktree: &str, branch: &str, issue_id: &str) -> IssueWorktree {
         IssueWorktree {
             worktree: worktree.into(),
             branch: branch.into(),
             issue_id: issue_id.parse().unwrap(),
-            dirty: false,
+            record_unreadable: false,
+            tree: Tree::Clean,
             pr: devkit_issue::status::PrStatus::None,
             state: None,
-            finished: true,
-            reason_not_finished: None,
+            verdict: devkit_issue::status::Verdict::Finished,
         }
     }
 
