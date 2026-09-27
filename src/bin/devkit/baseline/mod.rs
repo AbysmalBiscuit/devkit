@@ -1303,7 +1303,7 @@ pub fn write_pin(worktree: &Path, sha: &str, path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use devkit_common::git::GitBackend;
+    use devkit_git::GitBackend;
 
     use super::*;
 
@@ -1395,7 +1395,7 @@ mod tests {
     }
 
     fn fixture_git(cwd: &Path, args: &[&str]) -> String {
-        devkit_common::git::Git::fixture(cwd)
+        devkit_git::Git::fixture(cwd)
             .args(args.iter().copied())
             .output()
             .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"))
@@ -1633,7 +1633,7 @@ mod tests {
         assert_eq!(path, root.join(short(&sha)));
         assert!(matches!(read_marker(&path), MarkerState::Ok(m) if m.sha == sha));
         assert!(
-            !devkit_common::git::Git::fixture(&path)
+            !devkit_git::Git::fixture(&path)
                 .args(["symbolic-ref", "-q", "HEAD"])
                 .success()
                 .unwrap(),
@@ -2072,7 +2072,7 @@ mod tests {
     #[test]
     fn an_undetectable_target_names_both_fixes() {
         let tmp = tempfile::tempdir().unwrap();
-        devkit_common::git::Git::fixture(tmp.path())
+        devkit_git::Git::fixture(tmp.path())
             .args(["init", "-q"])
             .output()
             .unwrap();
@@ -2089,7 +2089,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path();
         let git = |args: &[&str]| {
-            devkit_common::git::Git::fixture(p)
+            devkit_git::Git::fixture(p)
                 .args(args.iter().copied())
                 .output()
                 .unwrap()
@@ -2121,7 +2121,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path();
         let git = |args: &[&str]| {
-            devkit_common::git::Git::fixture(p)
+            devkit_git::Git::fixture(p)
                 .args(args.iter().copied())
                 .output()
                 .unwrap()
@@ -2156,7 +2156,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path();
         let git = |args: &[&str]| {
-            devkit_common::git::Git::fixture(p)
+            devkit_git::Git::fixture(p)
                 .args(args.iter().copied())
                 .output()
                 .unwrap()

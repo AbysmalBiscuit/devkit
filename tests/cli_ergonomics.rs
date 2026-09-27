@@ -14,7 +14,7 @@ use std::{
 /// A real git repo (so `--show-toplevel` resolves) with a two-app devkit.toml.
 fn project() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(p.path())
+    devkit_git::Git::fixture(p.path())
         .args(["init", "-q"])
         .output()
         .unwrap();

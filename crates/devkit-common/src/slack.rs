@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 /// Post a message to a Slack channel/user id via chat.postMessage.
 pub fn post_message(token: &str, channel: &str, text: &str) -> Result<()> {
-    let _span = crate::timing::io_span("slack", "chat.postMessage").entered();
+    let _span = devkit_timing::io_span("slack", "chat.postMessage").entered();
     let resp: serde_json::Value = crate::http::agent()
         .post("https://slack.com/api/chat.postMessage")
         .set("Authorization", &format!("Bearer {token}"))
@@ -35,7 +35,7 @@ pub struct SlackIdentity {
 /// error is preserved as the top-level error (no `.context`) so a caller can
 /// downcast it to tell an unreachable host from a rejected token.
 pub fn validate(token: &str) -> Result<SlackIdentity> {
-    let _span = crate::timing::io_span("slack", "auth.test").entered();
+    let _span = devkit_timing::io_span("slack", "auth.test").entered();
     let resp: serde_json::Value = crate::http::agent()
         .post("https://slack.com/api/auth.test")
         .set("Authorization", &format!("Bearer {token}"))

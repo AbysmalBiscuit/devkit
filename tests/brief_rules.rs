@@ -15,7 +15,7 @@ use std::{
 /// fixture index beside it when `with_index`.
 fn project(extra: &str, with_index: bool) -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(p.path())
+    devkit_git::Git::fixture(p.path())
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();

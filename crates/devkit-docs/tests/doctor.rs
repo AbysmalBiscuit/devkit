@@ -26,7 +26,7 @@ fn materialize(git_ref: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    devkit_common::git::Git::fixture(cwd)
+    devkit_git::Git::fixture(cwd)
         .args(args.iter().copied())
         .output()
         .unwrap();

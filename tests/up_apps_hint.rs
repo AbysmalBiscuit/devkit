@@ -15,7 +15,7 @@ fn setup() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     let git = |args: &[&str]| {
-        devkit_common::git::Git::fixture(root)
+        devkit_git::Git::fixture(root)
             .args(args.iter().copied())
             .output()
             .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));

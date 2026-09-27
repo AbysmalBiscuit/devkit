@@ -712,7 +712,7 @@ mod tests {
         let main = dir.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
         let g = |args: &[&str], cwd: &std::path::Path| {
-            devkit_common::git::Git::fixture(cwd)
+            devkit_git::Git::fixture(cwd)
                 .args(args.iter().copied())
                 .output()
                 .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
@@ -754,7 +754,7 @@ mod tests {
 
         assert!(!wt.exists(), "worktree removed");
         assert!(!summary.exists(), "recorded summary removed");
-        let branches = devkit_common::git::Git::fixture(&main)
+        let branches = devkit_git::Git::fixture(&main)
             .args(["branch", "--list", "eng-1"])
             .output()
             .unwrap();
@@ -767,7 +767,7 @@ mod tests {
         let main = dir.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
         let g = |args: &[&str], cwd: &std::path::Path| {
-            devkit_common::git::Git::fixture(cwd)
+            devkit_git::Git::fixture(cwd)
                 .args(args.iter().copied())
                 .output()
                 .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
@@ -888,7 +888,7 @@ mod tests {
     }
 
     fn fixture_git(cwd: &std::path::Path, args: &[&str]) {
-        devkit_common::git::Git::fixture(cwd)
+        devkit_git::Git::fixture(cwd)
             .args(args.iter().copied())
             .output()
             .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
@@ -1015,7 +1015,7 @@ mod tests {
         let main = dir.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
         let g = |args: &[&str], cwd: &std::path::Path| {
-            devkit_common::git::Git::fixture(cwd)
+            devkit_git::Git::fixture(cwd)
                 .args(args.iter().copied())
                 .output()
                 .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
@@ -1074,7 +1074,7 @@ mod tests {
         let main = dir.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
         let g = |args: &[&str], cwd: &std::path::Path| {
-            devkit_common::git::Git::fixture(cwd)
+            devkit_git::Git::fixture(cwd)
                 .args(args.iter().copied())
                 .output()
                 .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
@@ -1108,7 +1108,7 @@ mod tests {
         assert!(out.required_failure.is_some());
         assert!(wt.exists(), "worktree untouched");
         assert!(summary.exists(), "summary untouched");
-        let branches = devkit_common::git::Git::fixture(&main)
+        let branches = devkit_git::Git::fixture(&main)
             .args(["branch", "--list", "eng-3"])
             .output()
             .unwrap();

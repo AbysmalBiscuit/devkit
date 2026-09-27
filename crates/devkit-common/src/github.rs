@@ -149,7 +149,7 @@ impl Api {
     /// [`Api::graphql`] and [`Api::graphql_partial`] each apply their own
     /// acceptance rule to the same request.
     fn graphql_request(&self, query: &str) -> Result<Value> {
-        let _span = crate::timing::io_span("github graphql", "graphql").entered();
+        let _span = devkit_timing::io_span("github graphql", "graphql").entered();
         Ok(agent()
             .post(&self.graphql_url())
             .set("Authorization", &self.bearer()?)
@@ -186,7 +186,7 @@ impl Api {
     /// 404 (a clean "absent" the caller can act on), `Err` on any other status
     /// or transport error.
     pub fn rest_get_opt(&self, path: &str) -> Result<Option<Value>> {
-        let _span = crate::timing::io_span("github REST", path).entered();
+        let _span = devkit_timing::io_span("github REST", path).entered();
         let resp = agent()
             .get(&format!("{}{path}", self.rest_base()))
             .set("Authorization", &self.bearer()?)

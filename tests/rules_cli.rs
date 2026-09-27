@@ -342,7 +342,7 @@ fn a_missing_index_exits_nonzero_with_a_reason() {
 fn context_project() -> (tempfile::TempDir, tempfile::TempDir) {
     let state = tempfile::tempdir().unwrap();
     let p = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(p.path())
+    devkit_git::Git::fixture(p.path())
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();
@@ -363,7 +363,7 @@ fn context_project() -> (tempfile::TempDir, tempfile::TempDir) {
 fn context_project_with_cap(max_event_bytes: usize) -> (tempfile::TempDir, tempfile::TempDir) {
     let state = tempfile::tempdir().unwrap();
     let p = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(p.path())
+    devkit_git::Git::fixture(p.path())
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();

@@ -232,11 +232,11 @@ pub fn issues_by_number(n: u64, key: &str) -> Result<Vec<LinearIssueRef>> {
 
 /// The single transport for every Linear GraphQL call: POST the body, decode
 /// the JSON envelope. `detail` labels the call for timing (see
-/// [`crate::timing`]). GraphQL-level error interpretation stays with each
+/// [`devkit_timing`]). GraphQL-level error interpretation stays with each
 /// caller — this preserves the raw `ureq` error so `validate` can downcast to
 /// distinguish an unreachable host from a rejected key.
 fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value> {
-    let _span = crate::timing::io_span("linear graphql", detail).entered();
+    let _span = devkit_timing::io_span("linear graphql", detail).entered();
     let v: serde_json::Value = crate::http::agent()
         .post("https://api.linear.app/graphql")
         .set("Authorization", key)

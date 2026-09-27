@@ -521,7 +521,7 @@ mod tests {
     use super::*;
 
     fn git_cmd(args: &[&str], cwd: &std::path::Path) {
-        devkit_common::git::Git::fixture(cwd)
+        devkit_git::Git::fixture(cwd)
             .args(args.iter().copied())
             .output()
             .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));

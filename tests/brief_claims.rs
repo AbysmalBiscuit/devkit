@@ -27,7 +27,7 @@ struct Monorepo {
 impl Monorepo {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        devkit_common::git::Git::fixture(root.path())
+        devkit_git::Git::fixture(root.path())
             .args(["init", "-q", "-b", "main"])
             .output()
             .unwrap();

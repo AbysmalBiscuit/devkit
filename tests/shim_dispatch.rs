@@ -156,7 +156,7 @@ fn devrun_shim_still_refuses_reap_without_a_terminal() {
     let port = listener.local_addr().expect("listener addr").port();
 
     let project = tempfile::tempdir().expect("project dir");
-    devkit_common::git::Git::fixture(project.path())
+    devkit_git::Git::fixture(project.path())
         .args(["init", "-q"])
         .output()
         .expect("git init");
@@ -206,7 +206,7 @@ launch = ["git", "version"]
 /// bare-`issue` test that skipped the repo would never reach `status::run`.
 fn empty_repo() -> tempfile::TempDir {
     let project = tempfile::tempdir().expect("project dir");
-    devkit_common::git::Git::fixture(project.path())
+    devkit_git::Git::fixture(project.path())
         .args(["init", "-q"])
         .output()
         .expect("git init");
@@ -358,7 +358,7 @@ fn bare_pr_matches_info() {
     let project = empty_repo();
     // `info`/`pr status` resolve the current branch, unlike `status`, which
     // `empty_repo` alone suffices for; give it a HEAD to resolve.
-    devkit_common::git::Git::fixture(project.path())
+    devkit_git::Git::fixture(project.path())
         .args(["commit", "--allow-empty", "-q", "-m", "init"])
         .output()
         .expect("git commit");

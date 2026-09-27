@@ -8,7 +8,7 @@
 //! caller finish it with `output()`, which has no timeout — and this runs on
 //! the write path.
 //!
-//! The project's repository is reached through [`crate::vcs`] instead.
+//! The project's repository is reached through `devkit_common::vcs` instead.
 
 mod backend;
 
@@ -202,7 +202,7 @@ impl Git {
     fn wait(mut self) -> Result<Output> {
         let command_line = self.command_line();
         let arg_refs: Vec<&str> = self.args.iter().map(String::as_str).collect();
-        let _span = crate::timing::subprocess_span("git", &arg_refs).entered();
+        let _span = devkit_timing::subprocess_span("git", &arg_refs).entered();
 
         let mut child = self
             .command

@@ -5,12 +5,10 @@ mod common;
 /// `cwd` is `None` for a clone, which has no repository to run inside yet.
 fn git(args: &[&str], cwd: Option<&str>) -> anyhow::Result<String> {
     match cwd {
-        Some(dir) => devkit_common::git::Git::fixture(std::path::Path::new(dir))
+        Some(dir) => devkit_git::Git::fixture(std::path::Path::new(dir))
             .args(args.iter().copied())
             .output(),
-        None => devkit_common::git::Git::bare()
-            .args(args.iter().copied())
-            .output(),
+        None => devkit_git::Git::bare().args(args.iter().copied()).output(),
     }
 }
 

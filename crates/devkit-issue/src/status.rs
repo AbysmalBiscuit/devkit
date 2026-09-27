@@ -661,10 +661,8 @@ pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
 mod tests {
     use std::collections::HashMap;
 
-    use devkit_common::{
-        git::Git,
-        tracker::{StateKind, Tracker, TrackerKind, fake::FakeTracker},
-    };
+    use devkit_common::tracker::{StateKind, Tracker, TrackerKind, fake::FakeTracker};
+    use devkit_git::Git;
 
     use super::*;
 

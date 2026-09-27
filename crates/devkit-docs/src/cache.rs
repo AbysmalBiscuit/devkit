@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use devkit_common::git::{Git, SLOW_TIMEOUT};
+use devkit_git::{Git, SLOW_TIMEOUT};
 use serde::{Deserialize, Serialize};
 
 use crate::{layout::Layout, locks, refs::RefStore, tags::TagPattern};

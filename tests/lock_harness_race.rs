@@ -24,7 +24,7 @@ fn concurrent_write_decide_yields_one_winner() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-    devkit_common::git::Git::fixture(&repo)
+    devkit_git::Git::fixture(&repo)
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();

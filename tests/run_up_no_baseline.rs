@@ -18,7 +18,7 @@ fn devkit_run() -> Command {
 fn setup() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
-    devkit_common::git::Git::fixture(root)
+    devkit_git::Git::fixture(root)
         .args(["init", "-q"])
         .output()
         .unwrap();

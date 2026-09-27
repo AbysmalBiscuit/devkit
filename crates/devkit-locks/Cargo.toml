@@ -18,4 +18,4 @@ daemon = ["dep:interprocess", "devkit-common/daemon"]
 
 [dev-dependencies]
 tempfile.workspace = true
-devkit-common = { workspace = true, features = ["test-support"] }
+devkit-git = { workspace = true, features = ["test-support"] }

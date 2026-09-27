@@ -17,7 +17,7 @@ fn devkit_run() -> Command {
 fn setup() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
-    devkit_common::git::Git::fixture(root)
+    devkit_git::Git::fixture(root)
         .args(["init", "-q"])
         .output()
         .unwrap();
@@ -79,7 +79,7 @@ fn run_in_with_state(dir: &Path, state: &Path, args: &[&str]) -> std::process::O
 fn setup_with_web_app(base_port: u16, url: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
-    devkit_common::git::Git::fixture(root)
+    devkit_git::Git::fixture(root)
         .args(["init", "-q"])
         .output()
         .unwrap();

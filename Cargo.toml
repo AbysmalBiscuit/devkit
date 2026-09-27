@@ -43,6 +43,7 @@ devkit-issue.workspace = true
 devkit-mcp.workspace = true
 devkit-docs.workspace = true
 devkit-rules.workspace = true
+devkit-timing.workspace = true
 pabal.workspace = true
 same-file.workspace = true
 strum.workspace = true
@@ -52,6 +53,7 @@ tempfile.workspace = true
 # A collapsed diff when the committed JSON schema drifts from the config types.
 similar = "2"
 devkit-common = { workspace = true, features = ["test-support"] }
+devkit-git = { workspace = true, features = ["test-support"] }
 same-file.workspace = true
 serde_yaml_ng.workspace = true
 
@@ -61,7 +63,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing"]
 
 [workspace.package]
 edition = "2024"
@@ -128,6 +130,8 @@ devkit-docs = { path = "crates/devkit-docs" }
 devkit-rules = { path = "crates/devkit-rules" }
 devkit-command = { path = "crates/devkit-command" }
 devkit-vcs = { path = "crates/devkit-vcs" }
+devkit-git = { path = "crates/devkit-git" }
+devkit-timing = { path = "crates/devkit-timing" }
 tree-sitter = "0.27"
 tree-sitter-bash = "0.25"
 tree-sitter-powershell = "0.26"

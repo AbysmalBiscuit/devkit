@@ -42,7 +42,7 @@ fn needs_devkit(contents: &str) -> bool {
 /// Ensure `.devkit/` is in the global excludes file. Idempotent; append-only.
 /// Returns an error on IO failure — the caller decides whether to ignore it.
 pub fn ensure_devkit_ignored() -> Result<()> {
-    let configured = crate::git::Git::bare()
+    let configured = devkit_git::Git::bare()
         .args(["config", "--global", "core.excludesfile"])
         .output()
         .ok()

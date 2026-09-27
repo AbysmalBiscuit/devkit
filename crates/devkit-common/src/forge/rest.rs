@@ -52,7 +52,7 @@ impl Rest {
 
     /// GET `path`. `Ok(None)` on 404, a clean "absent" the caller can act on.
     pub fn get_opt(&self, path: &str) -> Result<Option<Value>> {
-        let _span = crate::timing::io_span("forge REST", path).entered();
+        let _span = devkit_timing::io_span("forge REST", path).entered();
         match self.request("GET", path).call() {
             Ok(r) => Ok(Some(r.into_json().context("parsing a forge response")?)),
             Err(ureq::Error::Status(404, _)) => Ok(None),
@@ -68,7 +68,7 @@ impl Rest {
 
     /// GET one page of a list endpoint, with the number of the next page.
     pub fn get_page(&self, path: &str) -> Result<Page> {
-        let _span = crate::timing::io_span("forge REST", path).entered();
+        let _span = devkit_timing::io_span("forge REST", path).entered();
         let resp = self
             .request("GET", path)
             .call()
@@ -84,7 +84,7 @@ impl Rest {
     /// Send `body` with `method` (`POST`, `PUT`, `PATCH`) and return the
     /// response body, or `Value::Null` when the forge answers with none.
     pub fn send(&self, method: &str, path: &str, body: &Value) -> Result<Value> {
-        let _span = crate::timing::io_span("forge REST", path).entered();
+        let _span = devkit_timing::io_span("forge REST", path).entered();
         let resp = self
             .request(method, path)
             .send_json(body)

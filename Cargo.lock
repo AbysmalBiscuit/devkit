@@ -350,11 +350,13 @@ dependencies = [
  "devkit-common",
  "devkit-config",
  "devkit-docs",
+ "devkit-git",
  "devkit-issue",
  "devkit-locks",
  "devkit-mcp",
  "devkit-ports",
  "devkit-rules",
+ "devkit-timing",
  "fd-lock",
  "indicatif",
  "interprocess",
@@ -400,8 +402,9 @@ dependencies = [
  "chrono",
  "comfy-table",
  "console 0.15.11",
- "devkit-common",
  "devkit-config",
+ "devkit-git",
+ "devkit-timing",
  "devkit-vcs",
  "fd-lock",
  "glob",
@@ -421,7 +424,6 @@ dependencies = [
  "tempfile",
  "toml",
  "tracing",
- "tracing-subscriber",
  "ureq",
  "webpki-roots 0.26.11",
  "windows-sys 0.59.0",
@@ -433,6 +435,7 @@ version = "0.14.6"
 dependencies = [
  "anyhow",
  "devkit-common",
+ "devkit-git",
  "schemars",
  "serde",
  "tempfile",
@@ -447,6 +450,7 @@ dependencies = [
  "clap",
  "devkit-common",
  "devkit-config",
+ "devkit-git",
  "fd-lock",
  "jsonc-parser",
  "rayon",
@@ -462,12 +466,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "devkit-git"
+version = "0.14.6"
+dependencies = [
+ "anyhow",
+ "devkit-git",
+ "devkit-timing",
+ "devkit-vcs",
+ "tempfile",
+]
+
+[[package]]
 name = "devkit-issue"
 version = "0.14.6"
 dependencies = [
  "anyhow",
  "devkit-common",
  "devkit-config",
+ "devkit-git",
  "serde",
  "serde_json",
  "tempfile",
@@ -479,6 +495,7 @@ version = "0.14.6"
 dependencies = [
  "anyhow",
  "devkit-common",
+ "devkit-git",
  "fd-lock",
  "interprocess",
  "schemars",
@@ -495,6 +512,7 @@ dependencies = [
  "anyhow",
  "devkit-common",
  "devkit-config",
+ "devkit-git",
  "devkit-issue",
  "devkit-locks",
  "devkit-ports",
@@ -538,6 +556,15 @@ dependencies = [
  "strum 0.27.2",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "devkit-timing"
+version = "0.14.6"
+dependencies = [
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

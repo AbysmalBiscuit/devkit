@@ -910,7 +910,7 @@ mod tests {
     #[test]
     fn a_published_pr_ref_checks_out_as_the_heads_branch() {
         let git = |dir: &Path, args: &[&str]| {
-            crate::git::Git::fixture(dir)
+            devkit_git::Git::fixture(dir)
                 .args(args.iter().copied())
                 .output()
                 .unwrap()

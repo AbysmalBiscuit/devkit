@@ -310,7 +310,7 @@ fn sweep(checkouts: &[Checkout]) -> Vec<String> {
 /// status reports only the inspection error. No repairs are attempted.
 fn inspect(label: &str, path: &Path, recorded: Option<&cache::WorktreeMeta>) -> Vec<String> {
     let mut problems = Vec::new();
-    let status = match devkit_common::git::Git::at(path)
+    let status = match devkit_git::Git::at(path)
         .args(["status", "--porcelain=v2", "--branch"])
         .output()
     {

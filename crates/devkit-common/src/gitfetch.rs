@@ -193,7 +193,7 @@ mod tests {
     fn a_locked_ssh_key_fails_fast_and_names_the_remedy() {
         use std::{os::unix::fs::PermissionsExt, time::Instant};
 
-        use crate::git::Git;
+        use devkit_git::Git;
 
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");

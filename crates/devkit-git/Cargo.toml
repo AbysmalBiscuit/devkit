@@ -1,0 +1,21 @@
+[package]
+name = "devkit-git"
+description = "The git builder and the git backend of devkit's version control"
+edition.workspace = true
+version = "0.14.6" # x-release-please-version
+
+[dependencies]
+anyhow.workspace = true
+devkit-timing.workspace = true
+devkit-vcs.workspace = true
+
+[features]
+# `Git::fixture`, for other crates' test fixtures.
+test-support = []
+
+[dev-dependencies]
+tempfile.workspace = true
+# Enables `test-support` on the lib build linked into this crate's own
+# integration tests (tests/*.rs links the lib as an ordinary, non-`cfg(test)`
+# dependency, so `Git::fixture` is otherwise compiled out there).
+devkit-git = { workspace = true, features = ["test-support"] }

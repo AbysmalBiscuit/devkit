@@ -61,7 +61,7 @@ fn down_all_without_tty_refuses() {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    devkit_common::git::Git::fixture(dir)
+    devkit_git::Git::fixture(dir)
         .args(args.iter().copied())
         .output()
         .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));

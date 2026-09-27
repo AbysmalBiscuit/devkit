@@ -65,7 +65,7 @@ impl Fake {
 
     fn build(extra_defaults: &str, pr: Option<&Pr>, origin: Option<&str>) -> Self {
         let project = tempfile::tempdir().expect("project dir");
-        let git = || devkit_common::git::Git::fixture(project.path());
+        let git = || devkit_git::Git::fixture(project.path());
         git()
             .args(["init", "-q", "-b", "lev/eng-1-fix"])
             .output()

@@ -35,12 +35,12 @@ pub(crate) enum TimingFlag {
 
 /// Resolve the timing mode: the flag wins; otherwise fall back to
 /// `DEVKIT_TIMING`.
-fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
-    use devkit_common::timing::Mode;
+fn timing_mode(flag: Option<TimingFlag>) -> devkit_timing::Mode {
+    use devkit_timing::Mode;
     match flag {
         Some(TimingFlag::Summary) => Mode::Summary,
         Some(TimingFlag::Trace) => Mode::Trace,
-        None => devkit_common::timing::mode_from_env(),
+        None => devkit_timing::mode_from_env(),
     }
 }
 
@@ -407,7 +407,7 @@ fn start(dir: &Option<String>) -> String {
 }
 
 pub fn run(cli: IssueCli) -> Result<()> {
-    let _timing = devkit_common::timing::init(timing_mode(cli.timing), cli.timing_log.clone());
+    let _timing = devkit_timing::init(timing_mode(cli.timing), cli.timing_log.clone());
     match cli.cmd {
         Some(Cmd::Setup {
             issue_pos,

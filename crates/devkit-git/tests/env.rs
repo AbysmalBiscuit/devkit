@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use devkit_common::git::Git;
+use devkit_git::Git;
 
 /// Every variable in `REDIRECTING_VARS` that could repoint a git call at
 /// another repository, or inject config into it, must have no effect on what
