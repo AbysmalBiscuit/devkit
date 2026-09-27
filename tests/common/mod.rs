@@ -81,8 +81,9 @@ while True:
 "#;
 
 /// Launch argv for a server that accepts TCP connections on `port`, which is
-/// all `supervise::probe_port` checks.
-pub fn tcp_server_argv(port: u16) -> Vec<String> {
+/// all `supervise::probe_port` checks. `port` may be a template such as
+/// `{{ port }}` when the argv goes into a `launch`.
+pub fn tcp_server_argv(port: impl std::fmt::Display) -> Vec<String> {
     vec![
         "python3".into(),
         "-c".into(),

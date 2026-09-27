@@ -3,6 +3,8 @@
 //! directly (not the `devrun` shim). Uses an isolated HOME/XDG_STATE_HOME so
 //! the port registry never touches the real one.
 
+mod common;
+
 use std::{path::Path, process::Command};
 
 /// A temp dir that is a git repo (cmd_task resolves the worktree root) with a
@@ -87,6 +89,12 @@ fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
         .args(args)
         .output()
         .expect("run devkit run")
+}
+
+/// Whether a real run executed command step `step`, judged by the exec marker
+/// `devrun task` writes to stderr right before it spawns one.
+fn ran(stderr: &str, step: &str) -> bool {
+    stderr.contains(&format!("-> {step}: "))
 }
 
 fn config_in(dir: &Path, args: &[&str]) -> std::process::Output {
@@ -180,11 +188,10 @@ fn task_seq_dry_run_renders_up_step_plan() {
         "no unrendered templates in dry-run: {stdout}"
     );
 
-    // Sanity: dry-run never executes; `run_task_step`'s real-run branch is the
-    // only place that prints an exec-marker line.
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stdout.contains("-> "),
-        "dry-run must not execute steps: {stdout}"
+        !ran(&stderr, "hello"),
+        "dry-run must not execute steps: {stderr}"
     );
 }
 
@@ -298,7 +305,7 @@ fn a_missing_required_arg_fails_the_sequence_before_any_step_runs() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("--arg msg="), "{stderr}");
     assert!(
-        !stderr.contains("\u{2192} hello"),
+        !ran(&stderr, "hello"),
         "the first step ran before the missing arg was reported: {stderr}"
     );
 }
@@ -704,6 +711,125 @@ fn task_runs_and_propagates_exit_codes() {
         String::from_utf8_lossy(&missing.stderr).contains("unknown task"),
         "{missing:?}"
     );
+}
+
+/// Command tasks that each append a value to `probe.step` in the `observed`
+/// file when they run, one of them gated on a live `api`, and sequences over
+/// them. `api` launches a real TCP server on its allocated port.
+fn recording_setup() -> tempfile::TempDir {
+    let dir = setup();
+    let launch = serde_json::to_string(&common::tcp_server_argv("{{ port }}")).unwrap();
+    let config = r#"[apps.api]
+base_port = @PORT@
+path = "."
+launch = @LAUNCH@
+[tasks.first]
+run = ["git", "config", "--file", "observed", "--add", "probe.step", "first"]
+[tasks.second]
+run = ["git", "config", "--file", "observed", "--add", "probe.step", "second"]
+[tasks.gated]
+run = ["git", "config", "--file", "observed", "--add", "probe.step", "gated:{{ ports['api'] }}"]
+require_live = ["api"]
+[tasks.reversed]
+steps = [{ task = "second" }, { task = "first" }]
+[tasks.check]
+steps = [{ task = "first" }, { task = "gated" }, { task = "second" }]
+[tasks.ship]
+steps = [{ up = "api" }, { task = "gated" }]
+"#
+    .replace("@PORT@", &common::free_port().to_string())
+    .replace("@LAUNCH@", &launch);
+    std::fs::write(dir.path().join("devkit.toml"), config).unwrap();
+    dir
+}
+
+/// The values the run steps appended to `observed`, in the order they ran.
+fn recorded(dir: &Path) -> Vec<String> {
+    if !dir.join("observed").exists() {
+        return Vec::new();
+    }
+    devkit_git::Git::fixture(dir)
+        .args(["config", "--file", "observed", "--get-all", "probe.step"])
+        .output()
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn a_sequence_runs_its_steps_in_the_order_it_lists_them() {
+    let dir = recording_setup();
+    let out = run_in(dir.path(), &["task", "reversed"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(recorded(dir.path()), ["second", "first"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(ran(&stderr, "second") && ran(&stderr, "first"), "{stderr}");
+}
+
+#[test]
+fn a_gated_task_with_no_live_server_runs_nothing() {
+    let dir = recording_setup();
+    let out = run_in(dir.path(), &["task", "gated"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no live server"),
+        "{out:?}"
+    );
+    assert_eq!(recorded(dir.path()), Vec::<String>::new());
+}
+
+#[test]
+fn a_gated_step_with_no_live_server_stops_the_sequence_where_it_stands() {
+    let dir = recording_setup();
+    let out = run_in(dir.path(), &["task", "check"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no live server"),
+        "{out:?}"
+    );
+    assert_eq!(recorded(dir.path()), ["first"]);
+}
+
+/// Stops the servers a test brought up, including when the test fails.
+#[cfg(unix)]
+struct StopServers<'a>(&'a Path);
+
+#[cfg(unix)]
+impl Drop for StopServers<'_> {
+    fn drop(&mut self) {
+        let _ = run_in(self.0, &["down"]);
+    }
+}
+
+/// The port the registry records a live `app` server on.
+#[cfg(unix)]
+fn live_port(dir: &Path, app: &str) -> String {
+    let body = std::fs::read_to_string(dir.join("state/devkit/ports.json")).unwrap();
+    let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+    data["entries"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find(|(_, e)| e["app"] == app && e["pid"].is_u64())
+        .unwrap_or_else(|| panic!("no live `{app}` row: {body}"))
+        .0
+        .clone()
+}
+
+// The fixture server runs on `python3`, which only Unix runners are assumed to
+// have, as in `supervision.rs`.
+#[cfg(unix)]
+#[test]
+fn a_step_after_up_passes_its_gate_and_renders_the_port_up_bound() {
+    let dir = recording_setup();
+    let _stop = StopServers(dir.path());
+    let out = run_in(dir.path(), &["task", "ship"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(recorded(dir.path()), [format!(
+        "gated:{}",
+        live_port(dir.path(), "api")
+    )]);
 }
 
 #[test]
