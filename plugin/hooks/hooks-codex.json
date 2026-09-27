@@ -63,7 +63,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "apply_patch|Write|Edit|Bash",
+        "matcher": "apply_patch|Write|Edit|Bash|mcp__.*",
         "hooks": [
           {
             "type": "command",

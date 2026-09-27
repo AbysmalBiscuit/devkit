@@ -119,8 +119,8 @@ fn every_cursor_tool_hook_keeps_a_matcher() {
     }
 }
 
-/// The merged `PreToolUse` block needs a matcher covering both tool families,
-/// or it spawns on every Read, Grep, Glob, MCP and Agent call as well.
+/// The merged `PreToolUse` block needs a matcher covering the tool families it
+/// guards, or it spawns on every Read, Grep, Glob and Agent call as well.
 #[test]
 fn the_merged_pre_tool_use_block_keeps_a_matcher() {
     for (f, _) in MANIFESTS {
@@ -134,6 +134,23 @@ fn the_merged_pre_tool_use_block_keeps_a_matcher() {
         let matcher = blocks[0]["matcher"].as_str().unwrap_or_default();
         assert!(matcher.contains("Bash"), "{f}: {matcher}");
         assert!(matcher.contains("Write"), "{f}: {matcher}");
+    }
+}
+
+/// An issue write through a tracker's MCP tool is gated in `pre-tool-use`, so
+/// both harnesses must route `mcp__` tools there.
+#[test]
+fn mcp_tools_reach_pre_tool_use() {
+    for f in ["plugin/hooks/hooks.json", "plugin/hooks/hooks-codex.json"] {
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
+        let blocks = v["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1, "{f}");
+        let matcher = blocks[0]["matcher"].as_str().unwrap_or_default();
+        let alternatives: Vec<&str> = matcher.split('|').collect();
+        assert!(alternatives.contains(&"mcp__.*"), "{f}: {matcher}");
+        assert!(alternatives.contains(&"Bash"), "{f}: {matcher}");
+        assert!(alternatives.contains(&"Write"), "{f}: {matcher}");
     }
 }
 
