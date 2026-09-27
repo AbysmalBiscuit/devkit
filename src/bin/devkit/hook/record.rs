@@ -13,7 +13,6 @@ use devkit_command::{
 };
 use devkit_common::{
     git::Checkout,
-    harness::Harness,
     harness_log::{
         self, AnalysisProjection, Counts, FrameEnd, Kind, Permission, Prompt, Record,
         SCHEMA_VERSION, SessionFrame, ShellPost, UnresolvedWrite, Worktree, WorktreeChange,
@@ -23,7 +22,7 @@ use devkit_common::{
 use devkit_config::{Fidelity, PromptFidelity};
 use serde_json::Value as Json;
 
-use super::HookEvent;
+use super::{HookEvent, payload::Payload};
 
 /// A command over this is truncated with a flag in the record. A heredoc
 /// carrying a whole file is not corpus signal.
@@ -59,14 +58,6 @@ impl HookEvent {
     }
 }
 
-fn harness_name(h: Harness) -> &'static str {
-    match h {
-        Harness::ClaudeCode => "claude-code",
-        Harness::Codex => "codex",
-        Harness::Cursor => "cursor",
-    }
-}
-
 fn text(p: &Json, key: &str) -> Option<String> {
     p.get(key)
         .and_then(Json::as_str)
@@ -74,18 +65,11 @@ fn text(p: &Json, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Where the hook fired: the payload's `cwd`, else Cursor's
-/// `tool_input.working_directory`, else this process's own directory.
-pub fn payload_cwd(payload: &Json) -> std::path::PathBuf {
-    text(payload, "cwd")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            payload
-                .get("tool_input")?
-                .get("working_directory")?
-                .as_str()
-                .map(std::path::PathBuf::from)
-        })
+/// Where the hook fired: the payload's own directory, else this process's.
+pub fn payload_cwd(payload: &Payload) -> std::path::PathBuf {
+    payload
+        .cwd()
+        .map(std::path::Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
@@ -95,25 +79,23 @@ pub fn payload_cwd(payload: &Json) -> std::path::PathBuf {
 /// caller's `checkout`, which the rest of the invocation already resolved, so
 /// the record costs no git of its own.
 pub fn envelope(
-    payload: &Json,
+    payload: &Payload,
     event: HookEvent,
-    harness: Option<Harness>,
     checkout: &Checkout,
     kind: Kind,
 ) -> Box<Record> {
+    let owned = |s: Option<&str>| s.map(str::to_string);
     Box::new(Record {
         schema_version: SCHEMA_VERSION,
         recorded_at: now_rfc3339(),
         devkit_version: env!("CARGO_PKG_VERSION").to_string(),
         analyzer_version: ANALYZER_VERSION,
-        harness: harness
-            .or_else(|| Some(devkit_common::harness::infer_harness(payload)))
-            .map(|h| harness_name(h).to_string()),
+        harness: Some(payload.harness().name().to_string()),
         event: event.as_str().to_string(),
-        vendor_event: text(payload, "hook_event_name"),
-        session_id: text(payload, "session_id").or_else(|| text(payload, "conversation_id")),
-        agent_id: text(payload, "agent_id").or_else(|| text(payload, "parent_conversation_id")),
-        tool_use_id: text(payload, "tool_use_id").or_else(|| text(payload, "tool_call_id")),
+        vendor_event: payload.event_name(),
+        session_id: owned(payload.session_id()),
+        agent_id: owned(payload.agent_id()),
+        tool_use_id: owned(payload.tool_use_id()),
         cwd: Some(checkout.dir().to_path_buf()),
         project_root: checkout.root().map(std::path::Path::to_path_buf),
         kind,
@@ -123,7 +105,8 @@ pub fn envelope(
 /// The record a verb beyond `pre-tool-use` writes: a thin mapping from the
 /// payload, with no analysis and no action. `None` when the verb records
 /// nothing of its own.
-pub fn record_only(payload: &Json, event: HookEvent, settings: &harness_log::Settings) -> Kind {
+pub fn record_only(payload: &Payload, event: HookEvent, settings: &harness_log::Settings) -> Kind {
+    let payload = payload.raw();
     match event {
         HookEvent::PostToolUse | HookEvent::PostToolUseFailure => {
             Kind::ShellPost(shell_post(payload, event))
@@ -344,6 +327,7 @@ mod tests {
     use devkit_command::{Context, Dialect, Limits, PathStyle};
 
     use super::*;
+    use crate::hook::payload::Harness;
 
     fn ctx() -> Context {
         Context {
@@ -413,15 +397,18 @@ mod tests {
     /// event produced a record cannot recover it from the verb alone.
     #[test]
     fn every_record_names_both_its_verb_and_its_vendor_event() {
-        let payload = serde_json::json!({
-            "hook_event_name": "Interrupt",
-            "session_id": "s1",
-            "turn_id": "t1"
-        });
+        let payload = Payload::new(
+            Some(Harness::Codex),
+            serde_json::json!({
+                "hook_event_name": "Interrupt",
+                "session_id": "s1",
+                "turn_id": "t1"
+            }),
+        )
+        .unwrap();
         let r = envelope(
             &payload,
             HookEvent::Stop,
-            Some(Harness::Codex),
             &Checkout::at(&payload_cwd(&payload)),
             Kind::Lifecycle,
         );
@@ -433,18 +420,21 @@ mod tests {
 
     #[test]
     fn cursors_spellings_of_the_ids_reach_the_envelope() {
-        let payload = serde_json::json!({
-            "hook_event_name": "preToolUse",
-            "cursor_version": "1.7.0",
-            "conversation_id": "c1",
-            "parent_conversation_id": "p1",
-            "tool_use_id": "u1",
-            "tool_input": { "working_directory": "/w" }
-        });
+        let payload = Payload::new(
+            None,
+            serde_json::json!({
+                "hook_event_name": "preToolUse",
+                "cursor_version": "1.7.0",
+                "conversation_id": "c1",
+                "parent_conversation_id": "p1",
+                "tool_use_id": "u1",
+                "tool_input": { "working_directory": "/w" }
+            }),
+        )
+        .unwrap();
         let r = envelope(
             &payload,
             HookEvent::PreToolUse,
-            None,
             &Checkout::at(&payload_cwd(&payload)),
             Kind::Lifecycle,
         );

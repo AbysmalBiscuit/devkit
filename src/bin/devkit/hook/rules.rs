@@ -30,7 +30,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use devkit_common::{git::Checkout, harness, harness::Harness, paths};
+use devkit_common::{git::Checkout, paths};
 use devkit_rules::{
     context::{self, Subject},
     index,
@@ -38,9 +38,8 @@ use devkit_rules::{
     render,
     vocab::{Severity, Task, canonical_language},
 };
-use serde_json::Value;
 
-use super::shell::print_envelope;
+use super::{payload::Payload, shell::print_envelope};
 
 /// The fired-set for one holder.
 ///
@@ -112,30 +111,18 @@ fn language_of(path: &str) -> Option<String> {
 /// there is nothing this can report that would be worth the risk of reporting
 /// it.
 pub fn inject(
-    payload: &Value,
+    payload: &Payload,
     checkout: &Checkout,
     cwd: &Path,
-    declared: Option<Harness>,
     targets: &[String],
     holder: &str,
 ) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run(payload, checkout, cwd, declared, targets, holder);
+        run(payload, checkout, cwd, targets, holder);
     }));
 }
 
-fn run(
-    payload: &Value,
-    checkout: &Checkout,
-    cwd: &Path,
-    declared: Option<Harness>,
-    targets: &[String],
-    holder: &str,
-) {
-    // Every shipped manifest passes `--harness`, but the retired
-    // `lockm hook pretooluse` spelling does not, and the shell path infers
-    // rather than giving up. Match it.
-    let harness_name = declared.unwrap_or_else(|| harness::infer_harness(payload));
+fn run(payload: &Payload, checkout: &Checkout, cwd: &Path, targets: &[String], holder: &str) {
     // `devkit_common::config::resolve_in` is the only permitted door to the
     // merged config: `tests/no_stray_config.rs` fails the build when anything
     // else calls `devkit_config::resolve`. `enforcement_enabled_in` reads raw
@@ -172,7 +159,7 @@ fn run(
     let subject = Subject {
         root: root_canon.clone(),
         targets: relative.clone(),
-        harness: Some(harness_slug(harness_name).to_string()),
+        harness: Some(payload.harness().name().to_string()),
     };
 
     let floor: Severity = settings.min_severity.parse().unwrap_or(Severity::Should);
@@ -246,7 +233,7 @@ fn run(
     if rendered.text.is_empty() {
         return;
     }
-    let Some(envelope) = harness::warn_shell_json(harness_name, &rendered.text) else {
+    let Some(envelope) = payload.pre_tool_use_context(&rendered.text) else {
         return;
     };
     print_envelope(&envelope);
@@ -260,16 +247,14 @@ fn run(
 /// A payload path as an absolute one. Mirrors `edit::resolve_against`, which is
 /// private to that module and runs only inside `claim`, which returns before
 /// reaching it when enforcement is off.
-fn resolve(payload: &Value, path: &str) -> PathBuf {
+fn resolve(payload: &Payload, path: &str) -> PathBuf {
     let p = Path::new(path);
     if p.is_absolute() {
         return p.to_path_buf();
     }
     payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(|cwd| {
-            let base = Path::new(cwd);
+        .cwd()
+        .map(|base| {
             // The payload's cwd is the spelling the session was started with,
             // which on macOS is the symlink rather than the resolved path the
             // checkout root carries.
@@ -278,14 +263,6 @@ fn resolve(payload: &Value, path: &str) -> PathBuf {
                 .join(p)
         })
         .unwrap_or_else(|| p.to_path_buf())
-}
-
-fn harness_slug(harness: Harness) -> &'static str {
-    match harness {
-        Harness::ClaudeCode => "claude-code",
-        Harness::Codex => "codex",
-        Harness::Cursor => "cursor",
-    }
 }
 
 #[cfg(test)]
@@ -328,7 +305,7 @@ mod tests {
 
     #[test]
     fn resolve_falls_back_to_the_raw_path_with_no_cwd() {
-        let payload = serde_json::json!({});
+        let payload = Payload::empty(None);
         assert_eq!(
             resolve(&payload, "relative/b.rs"),
             PathBuf::from("relative/b.rs")
@@ -338,17 +315,10 @@ mod tests {
 
     #[test]
     fn resolve_joins_a_relative_target_against_the_payloads_cwd() {
-        let payload = serde_json::json!({ "cwd": "/repo" });
+        let payload = Payload::new(None, serde_json::json!({ "cwd": "/repo" })).unwrap();
         assert_eq!(
             resolve(&payload, "src/a.rs"),
             Path::new("/repo").join("src/a.rs")
         );
-    }
-
-    #[test]
-    fn harness_slug_matches_the_manifest_spelling() {
-        assert_eq!(harness_slug(Harness::ClaudeCode), "claude-code");
-        assert_eq!(harness_slug(Harness::Codex), "codex");
-        assert_eq!(harness_slug(Harness::Cursor), "cursor");
     }
 }
