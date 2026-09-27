@@ -394,6 +394,7 @@ dependencies = [
 name = "devkit-common"
 version = "0.14.6"
 dependencies = [
+ "ambassador",
  "anstyle",
  "anyhow",
  "chrono",
@@ -401,6 +402,7 @@ dependencies = [
  "console 0.15.11",
  "devkit-common",
  "devkit-config",
+ "devkit-vcs",
  "fd-lock",
  "glob",
  "indicatif",
@@ -536,6 +538,14 @@ dependencies = [
  "strum 0.27.2",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "devkit-vcs"
+version = "0.14.6"
+dependencies = [
+ "ambassador",
+ "anyhow",
 ]
 
 [[package]]

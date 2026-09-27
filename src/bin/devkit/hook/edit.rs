@@ -9,8 +9,8 @@
 //! answer would be read.
 
 use devkit_common::{
-    git::Checkout,
     harness_log::{self, Decision, EditPre, Kind, Verdict},
+    vcs::Checkout,
 };
 use devkit_locks::{
     hook,

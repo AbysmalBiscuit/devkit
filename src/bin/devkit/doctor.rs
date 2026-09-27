@@ -137,7 +137,7 @@ fn baseline_orphans() -> (usize, u64, usize) {
     let Ok(dir) = crate::baseline::dir(&loaded.config) else {
         return (0, 0, 0);
     };
-    let Ok(repo) = devkit_common::git::primary_checkout(std::path::Path::new(".")) else {
+    let Ok(repo) = devkit_common::vcs::primary_checkout(std::path::Path::new(".")) else {
         return (0, 0, 0);
     };
     crate::baseline::orphaned(&dir, &repo.to_string_lossy()).unwrap_or((0, 0, 0))
@@ -194,7 +194,7 @@ fn tracker_check(r: &Resolved) -> Check {
 /// rather than a warning; having none at all is how any non-devkit directory
 /// looks and is reported without complaint.
 fn config_check(start: &std::path::Path) -> Check {
-    let main_checkout = devkit_common::git::main_checkout(start).ok().flatten();
+    let main_checkout = devkit_common::vcs::main_checkout(start).ok().flatten();
     match devkit_config::health(start, main_checkout.as_deref()) {
         devkit_config::Health::Ok => Check::Ok("devkit.toml loads".into()),
         devkit_config::Health::Absent => Check::Ok("no devkit.toml — not a devkit project".into()),

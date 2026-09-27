@@ -18,7 +18,7 @@ use devkit_config::{Fidelity, LogSection, PromptFidelity};
 use serde::{Deserialize, Serialize};
 pub use writer::{now_rfc3339, record};
 
-use crate::{git::Checkout, harness::parse_env_override, paths};
+use crate::{harness::parse_env_override, paths, vcs::Checkout};
 
 /// Bumped when the record envelope changes shape. Every record carries it, so
 /// a reader meeting an unfamiliar one knows it rather than guessing.

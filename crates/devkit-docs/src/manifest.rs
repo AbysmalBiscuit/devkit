@@ -196,7 +196,7 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
     };
     stamp(&mut manifest, &global_path);
 
-    let main = devkit_common::git::main_checkout(start).ok().flatten();
+    let main = devkit_common::vcs::main_checkout(start).ok().flatten();
     let mut nearest: Option<PathBuf> = None;
     let mut problems: Vec<String> = Vec::new();
     for layer in devkit_config::project_layers(start, main.as_deref())? {

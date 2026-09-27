@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::Result;
 use devkit_common::{
-    git::Worktree,
+    vcs::Worktree,
     worktree::{self, IncludePlan, IssueId},
 };
 use devkit_ports::load;

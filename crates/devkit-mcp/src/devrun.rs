@@ -171,7 +171,7 @@ fn assert_own_worktree(action: &str, own: Option<&Path>, given: &str) -> Result<
         );
     };
     anyhow::ensure!(
-        devkit_common::git::same_path(Path::new(given), own),
+        devkit_common::paths::same_path(Path::new(given), own),
         "{action} is scoped to {}, so it will not act on {}. Reaching another worktree needs \
          the `devrun` CLI at a terminal.",
         own.display(),

@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
-use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
+use devkit_common::{
+    cmd::gh_capture,
+    github,
+    progress::Steps,
+    vcs::{Vcs, VersionControl},
+};
 use devkit_config::Person;
 use devkit_ports::templates::worktree_context;
 
@@ -114,7 +119,9 @@ pub fn run(args: Args) -> Result<()> {
     )?;
     vars.extend(given);
 
-    let branch = devkit_common::git::branch(std::path::Path::new(&start))?;
+    let here = std::path::Path::new(&start);
+    let vcs = Vcs::at(here);
+    let branch = vcs.branch(here)?;
     guard_branch(&branch)?;
 
     let explicit: Vec<Target> = args
@@ -127,7 +134,7 @@ pub fn run(args: Args) -> Result<()> {
         eprintln!("warning: {w}");
     }
 
-    let toplevel = devkit_common::git::checkout_root(std::path::Path::new(&start))?
+    let toplevel = devkit_common::vcs::checkout_root(std::path::Path::new(&start))?
         .to_string_lossy()
         .into_owned();
     let record = devkit_common::record::read(std::path::Path::new(&toplevel));
@@ -139,11 +146,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let base = worktree_context(record.as_ref(), Some(&branch));
 
-    let head = Git::at(std::path::Path::new(&start))
-        .args(["rev-parse", "HEAD"])
-        .output()?
-        .trim()
-        .to_string();
+    let head = vcs.revision(here)?;
 
     let steps = Steps::persistent();
     let found = resolve_existing(&Existing {

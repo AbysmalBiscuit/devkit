@@ -7,7 +7,7 @@
 use std::{sync::mpsc, time::Duration};
 
 use devkit_command::{Analysis, FileOp, Target, TreeReach, UncertaintyKind, Value};
-use devkit_common::{git::Checkout, harness::HarnessPolicy};
+use devkit_common::{harness::HarnessPolicy, vcs::Checkout};
 use devkit_config::PolicyAction;
 use devkit_locks::model::{Conflict, WriteDecision};
 

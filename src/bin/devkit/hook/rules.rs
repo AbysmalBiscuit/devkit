@@ -30,7 +30,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use devkit_common::{git::Checkout, paths};
+use devkit_common::{paths, vcs::Checkout};
 use devkit_rules::{
     context::{self, Subject},
     index,

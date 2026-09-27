@@ -6,10 +6,10 @@ use std::{
 use anyhow::{Context, Result};
 use devkit_common::{
     cmd::{gh_capture, gh_json_in},
-    git::Git,
     gitfetch, github,
     progress::Steps,
     tracker::{IssueRef, Tracker, TrackerKind},
+    vcs::{NewWorktree, Vcs, VersionControl},
 };
 use devkit_config::expand_tilde;
 use devkit_ports::load;
@@ -305,15 +305,8 @@ pub(crate) fn with_cleanup<T>(
     match f() {
         Ok(v) => Ok(v),
         Err(e) => {
-            let _ = Git::at(Path::new(primary))
-                .args([
-                    "worktree",
-                    "remove",
-                    "--force",
-                    worktree.to_str().unwrap_or_default(),
-                ])
-                .timeout(devkit_common::git::SLOW_TIMEOUT)
-                .output();
+            let primary = Path::new(primary);
+            let _ = Vcs::at(primary).remove_worktree(primary, worktree, true);
             Err(e)
         }
     }
@@ -385,7 +378,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
     }
 
-    let primary = devkit_common::git::primary_checkout(Path::new(&start))?;
+    let primary = devkit_common::vcs::primary_checkout(Path::new(&start))?;
     let primary_s = primary
         .to_str()
         .context("primary checkout path not UTF-8")?;
@@ -441,11 +434,14 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     steps.during_result("Fetching from origin...", || {
         gitfetch::fetch("origin", primary_s)
     })?;
+    let vcs = Vcs::at(&primary);
     steps.during_result("Creating worktree...", || {
-        Git::at(Path::new(primary_s))
-            .args(["worktree", "add", "--detach", worktree_s, &baseline_target])
-            .network()
-            .output()
+        vcs.create_worktree(&NewWorktree {
+            main: &primary,
+            path: &worktree,
+            start: &baseline_target,
+            branch: None,
+        })
     })?;
 
     // Once the worktree exists, any failure through record::write leaves an
@@ -466,11 +462,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         // The worktree is built *from* the PR, so it has no head to compare
         // until the checkout lands — validated immediately after, before the
         // record is written, rather than pre-gated.
-        let head = Git::at(Path::new(worktree_s))
-            .args(["rev-parse", "HEAD"])
-            .output()?
-            .trim()
-            .to_string();
+        let head = vcs.revision(&worktree)?;
         let checked_out = github::pr_meta_full(&pr_repo, meta.number)
             .with_context(|| format!("verifying PR #{}", meta.number))?;
         crate::issue::review::finish::assert_belongs(&checked_out, &head)?;

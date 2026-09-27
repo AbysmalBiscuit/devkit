@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::Result;
 use devkit_config::{Config, Provenance};
 
-use crate::git::Checkout;
+use crate::vcs::Checkout;
 
 /// Resolve the `devkit.toml` layers discovered from `start` — or the single
 /// file `explicit` names — and size the shared worker pool from the result.
@@ -39,7 +39,7 @@ pub fn resolve_in(
     // checkout would give every linked worktree a different root.
     let derived = checkout
         .main_worktree()
-        .and_then(crate::git::derived_worktree_root);
+        .and_then(crate::vcs::derived_worktree_root);
     let resolved = devkit_config::resolve(
         explicit,
         start,

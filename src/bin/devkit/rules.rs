@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use devkit_common::git::Checkout;
+use devkit_common::vcs::Checkout;
 use devkit_config::RulesConfig;
 use devkit_rules::{
     edit, index,

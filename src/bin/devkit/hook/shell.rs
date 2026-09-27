@@ -14,9 +14,9 @@ use std::{io::Write, sync::OnceLock, time::Duration};
 use anyhow::Result;
 use devkit_command::{Context, Limits, PathStyle};
 use devkit_common::{
-    git::Checkout,
     harness,
     harness_log::{self, Decision, Kind, Record, ShellPre, Verdict},
+    vcs::Checkout,
 };
 use devkit_ports::guard::{self, Project};
 use pabal::Tool;

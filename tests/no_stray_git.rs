@@ -17,7 +17,7 @@ fn git_is_only_spawned_by_the_git_module() {
 fn scan(needles: &[&str]) -> Vec<String> {
     let mut found = Vec::new();
     walk(Path::new(env!("CARGO_MANIFEST_DIR")), &mut |path, body| {
-        if path.ends_with("crates/devkit-common/src/git.rs")
+        if path.ends_with("crates/devkit-common/src/git/mod.rs")
             || path.ends_with("tests/no_stray_git.rs")
         {
             return;

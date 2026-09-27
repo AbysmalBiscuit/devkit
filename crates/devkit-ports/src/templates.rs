@@ -10,10 +10,10 @@ use std::{
 use anyhow::{Context, Result, anyhow, ensure};
 use devkit_common::{
     caller::Caller,
-    git,
     record::{self, IssueRecord},
     required::{ensure_supplied, missing_args},
     template,
+    vcs::{self, Vcs, VersionControl},
 };
 use devkit_config::{Config, Templates};
 use serde::Serialize;
@@ -122,8 +122,8 @@ pub fn worktree_context(record: Option<&IssueRecord>, branch: Option<&str>) -> s
 /// What the checkout holding `start` supplies every template: `prefix` from
 /// config, then [`worktree_context`]. A name it leaves out is an arg.
 fn checkout_context(cfg: &Config, start: &Path) -> serde_json::Map<String, serde_json::Value> {
-    let root = git::checkout_root(start).unwrap_or_else(|_| start.to_path_buf());
-    let branch = git::branch(&root).ok();
+    let root = vcs::checkout_root(start).unwrap_or_else(|_| start.to_path_buf());
+    let branch = Vcs::at(&root).branch(&root).ok();
     let serde_json::Value::Object(mut m) =
         worktree_context(record::read(&root).as_ref(), branch.as_deref())
     else {

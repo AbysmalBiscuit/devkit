@@ -38,7 +38,7 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | Crate | Role |
 |---|---|
 | `devkit-config` | `devkit.toml` types, layer discovery and merge, JSON Schema |
-| `devkit-common` | shared IO: `git`, `config`, `args`, `pool`, `cmd`/`github`, `tracker`, `worktree`, `harness`, `caller`, `required`, `harness_log`, `store`, `sys` |
+| `devkit-common` | shared IO: `vcs`, `git`, `config`, `args`, `pool`, `cmd`/`github`, `tracker`, `worktree`, `harness`, `caller`, `required`, `harness_log`, `store`, `sys` |
 | `devkit-ports` | port registry, app catalog, server lifecycle, tasks, named templates, command guard |
 | `devkit-locks` | file-lock registry |
 | `devkit-rules` | rule-index matching and context rendering |
@@ -46,6 +46,7 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | `devkit-issue` | read-only issue and PR triage |
 | `devkit-mcp` | stdio MCP server over the facades above |
 | `devkit-docs` | version-matched library source checkouts |
+| `devkit-vcs` | the `VersionControl` trait: what devkit asks of a project's repository |
 
 ## Rules
 
@@ -57,8 +58,8 @@ Each rule's reasoning is documented at the named site. Read it before changing t
 - **Launches** whose doppler config resolves to `prd` are refused (`run::assert_not_prd`). Sequence task steps re-resolve right before they run (`task::resolve_step`).
 - **Parallel work** goes through `devkit_common::pool`, never rayon's global pool.
 - **Deletion needs certainty.** Baseline and worktree classifications are three-valued, and `Unknown` counts as held. The directory lock is taken before a slot lock (`src/bin/devkit/baseline/`).
-- **Hooks**: no `hook` verb exits 2, only `pre-tool-use` writes stdout, and logging can never change a verdict (`src/bin/devkit/main.rs`, `hook/`, `harness_log::writer`). The shell guard fails open and its write stage fails closed. A hook invocation resolves one `git::Checkout` and passes it down. Payloads are read and answered through the `pabal` crate; `hook/payload.rs` adds only the Cursor spellings it does not model.
-- **External tools**: git goes through `devkit_common::git`, and repository-scoped `gh` calls go through `cmd::gh_json_in` / `cmd::gh_capture`.
+- **Hooks**: no `hook` verb exits 2, only `pre-tool-use` writes stdout, and logging can never change a verdict (`src/bin/devkit/main.rs`, `hook/`, `harness_log::writer`). The shell guard fails open and its write stage fails closed. A hook invocation resolves one `vcs::Checkout` and passes it down. Payloads are read and answered through the `pabal` crate; `hook/payload.rs` adds only the Cursor spellings it does not model.
+- **External tools**: the project's repository is reached through `devkit_common::vcs`, whose backends implement `devkit_vcs::VersionControl`. Only the git backend, third-party checkouts and test fixtures spawn git, through `devkit_common::git::Git`. Repository-scoped `gh` calls go through `cmd::gh_json_in` / `cmd::gh_capture`.
 - Match `Role` and `StateKind` exhaustively.
 
 ## Conventions

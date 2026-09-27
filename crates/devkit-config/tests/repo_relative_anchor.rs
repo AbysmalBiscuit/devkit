@@ -32,7 +32,7 @@ fn repository_relative_paths_anchor_to_the_checkout_root() {
         .unwrap();
     let start = checkout.path().join("apps/web");
     std::fs::create_dir_all(&start).unwrap();
-    let checkout_root = devkit_common::git::checkout_root(&start).unwrap();
+    let checkout_root = devkit_common::vcs::checkout_root(&start).unwrap();
 
     let (cfg, _) = devkit_config::resolve(
         None,

@@ -30,4 +30,5 @@ pub mod template;
 pub mod timing;
 pub mod tracker;
 pub mod ui;
+pub mod vcs;
 pub mod worktree;

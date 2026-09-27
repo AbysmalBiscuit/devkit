@@ -46,7 +46,7 @@ use std::{
 };
 
 use anyhow::Result;
-use devkit_common::git::Checkout;
+use devkit_common::vcs::Checkout;
 use devkit_config as config;
 use devkit_config::BriefConfig;
 use devkit_ports::{apps::App, load, registry, task};

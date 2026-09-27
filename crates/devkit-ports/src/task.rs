@@ -11,9 +11,10 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use devkit_common::{
     caller::Caller,
-    git, record,
+    record,
     required::{ensure_supplied, missing_args, required_of},
     template,
+    vcs::{Vcs, VersionControl},
 };
 use devkit_config::{Config, Required, RunAction, RunArg, Step, TaskConfig};
 
@@ -306,8 +307,8 @@ fn check_args(
 
 /// The variables task templates render over, lowest first:
 /// `[templates.variables]`, `issue`/`slug` from `.devkit/issue.toml` and
-/// `branch` from git, then `--arg`. An issue field with no source stays
-/// undefined rather than empty.
+/// `branch` from the repository, then `--arg`. An issue field with no source
+/// stays undefined rather than empty.
 fn variables(
     cfg: &Config,
     worktree_root: &Path,
@@ -318,7 +319,7 @@ fn variables(
         vars.insert("issue".into(), r.issue);
         vars.insert("slug".into(), r.slug);
     }
-    if let Ok(branch) = git::branch(worktree_root) {
+    if let Ok(branch) = Vcs::at(worktree_root).branch(worktree_root) {
         vars.insert("branch".into(), branch);
     }
     vars.extend(args.iter().map(|(k, v)| (k.clone(), v.clone())));
