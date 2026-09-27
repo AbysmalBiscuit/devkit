@@ -381,6 +381,69 @@ guard = true
     assert!(stdout.contains("devrun task commit --arg msg="), "{stdout}");
 }
 
+const WORKSPACE_TASKS: &str = r#"
+[tasks.build]
+run = ["cargo", "build", "--workspace", "--locked"]
+guard = true
+
+[tasks.check]
+run = ["cargo", "check", "--workspace", "--all-targets", "--all-features", "--locked"]
+guard = true
+
+[tasks.test]
+run = ["cargo", "nextest", "run", "--workspace", "--all-features", "--locked", "--no-fail-fast"]
+guard = true
+
+[tasks.test-doc]
+run = ["cargo", "test", "--doc", "--workspace", "--all-features", "--locked"]
+guard = true
+
+[tasks.lint]
+run = ["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--locked", "--", "-D", "warnings"]
+guard = true
+"#;
+
+#[test]
+fn a_command_asking_for_more_than_a_task_does_is_not_redirected() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(&(GUARDED.to_string() + WORKSPACE_TASKS));
+    for typed in [
+        "cargo test -p devkit-locks --test registry",
+        "cargo build -p devkit-locks",
+        "cargo check -p devkit-locks",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(typed));
+        assert!(
+            !denied(&out),
+            "{typed}: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
+#[test]
+fn a_command_within_a_task_is_redirected_to_it() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(&(GUARDED.to_string() + WORKSPACE_TASKS));
+    for (typed, task) in [
+        ("cargo test --workspace --doc", "test-doc"),
+        ("cargo build", "build"),
+        ("cargo nextest run --workspace", "test"),
+        (
+            "cargo clippy --workspace --all-targets -- -D warnings",
+            "lint",
+        ),
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(typed));
+        assert!(denied(&out), "{typed} was allowed");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(&format!("devrun task {task}`")),
+            "{typed}: {stdout}"
+        );
+    }
+}
+
 #[test]
 fn the_cwd_names_the_app_for_a_catalog_hit() {
     let home = tempfile::tempdir().unwrap();

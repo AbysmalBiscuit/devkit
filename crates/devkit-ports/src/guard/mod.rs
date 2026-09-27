@@ -404,7 +404,7 @@ fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
             if task.guard.is_none() && s.len() < min_sig {
                 return None;
             }
-            if !sig::matches(&s, &n.argv) {
+            if !sig::matches(&s, &n.argv) || !sig::within(&cfg.argv, &s, &n.argv) {
                 return None;
             }
             tasks::redirect_worth_it(
