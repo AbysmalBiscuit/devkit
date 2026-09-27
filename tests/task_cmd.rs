@@ -542,6 +542,153 @@ fn a_required_args_name_the_task_never_reads_is_invalid() {
     assert!(row.contains("invalid"), "{row}");
 }
 
+/// Tasks whose shape `devrun task <name>` refuses, each with a fragment of
+/// the refusal.
+const MALFORMED: [(&str, &str); 3] = [
+    ("seq-with-app", "may only set"),
+    ("empty-split", "split with an empty `on`"),
+    ("unknown-step", "unknown task `nope`"),
+];
+
+fn malformed_setup() -> tempfile::TempDir {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[apps.api]
+base_port = 39140
+path = "."
+launch = ["git", "version"]
+[tasks.hello]
+run = ["git", "version"]
+[tasks.seq-with-app]
+app = "api"
+steps = [{ task = "hello" }]
+[tasks.empty-split]
+run = ["git", "add", { split = "{{ files }}", on = "" }]
+[tasks.unknown-step]
+steps = [{ task = "nope" }]
+"#,
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn every_listing_marks_a_malformed_task_invalid_with_the_reason_resolve_gives() {
+    let dir = malformed_setup();
+    let listing = run_in(dir.path(), &["task"]);
+    assert!(listing.status.success(), "{listing:?}");
+    let listing = String::from_utf8_lossy(&listing.stdout);
+    let json = config_in(dir.path(), &["tasks", "--json"]);
+    assert!(json.status.success(), "{json:?}");
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).expect("json");
+
+    for (name, reason) in MALFORMED {
+        let resolved = run_in(dir.path(), &["task", name, "--arg", "files=a", "--dry-run"]);
+        assert!(!resolved.status.success(), "{name}: {resolved:?}");
+        assert!(
+            String::from_utf8_lossy(&resolved.stderr).contains(reason),
+            "{name}: {resolved:?}"
+        );
+
+        assert_eq!(row(&listing, name)[1], "invalid", "{name}: {listing}");
+
+        let entry = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("{name} missing: {json}"));
+        assert_eq!(entry["kind"], "invalid", "{entry}");
+        assert!(
+            entry["error"].as_str().is_some_and(|e| e.contains(reason)),
+            "{entry}"
+        );
+    }
+    assert_eq!(row(&listing, "hello")[1], "command", "{listing}");
+}
+
+#[test]
+fn doctor_names_each_malformed_task() {
+    let dir = malformed_setup();
+    let out = devkit_in(dir.path())
+        .args(["doctor", "--json"])
+        .env_remove("DEVKIT_CONFIG")
+        .env_remove("LINEAR_API_KEY")
+        .env_remove("SLACK_TOKEN")
+        .output()
+        .expect("run devkit doctor");
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    let tasks = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "tasks")
+        .unwrap_or_else(|| panic!("no tasks row: {rows}"));
+    assert_eq!(tasks["status"], "invalid", "{tasks}");
+    let detail = tasks["detail"].as_str().unwrap_or_default();
+    for (name, _) in MALFORMED {
+        assert!(detail.contains(name), "{name}: {tasks}");
+    }
+    assert!(!detail.contains("hello"), "{tasks}");
+}
+
+/// A sequence gated only through its step: the brief and `devkit config
+/// tasks` both name the server it needs.
+#[test]
+fn the_brief_and_the_description_agree_on_a_sequences_live_needs() {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[apps.api]
+base_port = 39140
+path = "."
+launch = ["git", "version"]
+[tasks.e2e]
+run = ["git", "--url=http://localhost:{{ ports['api'] }}", "version"]
+require_live = ["api"]
+[tasks.check]
+description = "end to end"
+steps = [{ task = "e2e" }]
+[tasks.ship]
+steps = [{ up = "api" }, { task = "e2e" }]
+"#,
+    )
+    .unwrap();
+
+    let described = config_in(dir.path(), &["tasks", "check"]);
+    assert!(described.status.success(), "{described:?}");
+    let described = String::from_utf8_lossy(&described.stdout);
+    assert_eq!(
+        row(&described, "needs"),
+        ["needs", "live", "api", "(devrun", "up", "api)"],
+        "{described}"
+    );
+
+    let brief = devkit_in(dir.path())
+        .arg("brief")
+        .env_remove("DEVKIT_CONFIG")
+        .output()
+        .expect("run devkit brief");
+    assert!(brief.status.success(), "{brief:?}");
+    let brief = String::from_utf8_lossy(&brief.stdout);
+    let check = brief
+        .lines()
+        .find(|l| l.contains("check: end to end"))
+        .unwrap_or_else(|| panic!("check line missing: {brief}"));
+    assert!(check.contains("`devrun up api`"), "{brief}");
+
+    // A sequence that brings the server up itself needs nothing beforehand.
+    let ship = config_in(dir.path(), &["tasks", "ship", "--json"]);
+    let ship: serde_json::Value = serde_json::from_slice(&ship.stdout).expect("json");
+    assert_eq!(ship["require_live"], serde_json::json!([]), "{ship}");
+    let ship_line = brief
+        .lines()
+        .find(|l| l.contains("ship"))
+        .unwrap_or_else(|| panic!("ship line missing: {brief}"));
+    assert!(!ship_line.contains("needs"), "{brief}");
+}
+
 #[test]
 fn task_runs_and_propagates_exit_codes() {
     let dir = setup();

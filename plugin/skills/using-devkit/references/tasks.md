@@ -15,6 +15,8 @@ devrun task <name> --env-file F
 
 A **command** task runs in the foreground and propagates its exit code. A **sequence** task runs `{ task = … }` / `{ up = … }` steps in order, stopping at the first failure. The `--env`/`--env-file` overlay applies to every step: command steps layer it above the task's `env`, `up` steps above the app's `static_env`, the same as `devrun up --env`.
 
+A task `devrun task <name>` would refuse for its shape still lists, with KIND `invalid` and the refusal in place of its description; `devkit config tasks --json` carries it as `error`. Refusals include both or neither of `run` and `steps`, a template that does not compile, an app the catalog lacks, a split on an empty `on`, a sequence setting `app`, `env` or `require_live`, and a step naming an unknown, malformed or sequence task. Port references are found by rendering, so a problem with one surfaces only when the task runs.
+
 ## Args
 
 A task's templates can read variables as well as ports. The ARGS column of `devrun task` names them: a bare name is required, a bracketed one is optional. The column answers for whoever runs it, since an arg can be required of agents only; `DEVKIT_CALLER=agent devrun task` shows a human the agent's view. Pass each with `--arg`:
@@ -28,7 +30,7 @@ devrun task commit --arg msg="fix login redirect"
 - A multi-line value (a commit body, a PR description) goes through `--arg-file KEY=path`, which passes the file's contents unchanged, trailing newline included. `KEY=-` reads stdin, so a heredoc works. Every command that takes `--arg` takes it: `devrun task`, `issue pr create`, `issue review request|finish` and `devkit template render`. A key given through both flags is refused. It is unrelated to `--env-file`, which reads `K=V` lines into env overrides.
 - `issue`, `slug` and `branch` come from the worktree's `.devkit/issue.toml` and git. Outside an issue worktree they are undefined; supply one with `--arg issue=<id>` when the task reads it.
 - When the command guard redirects a command you typed to a task, its message spells out the required `--arg` flags, then describes each arg that has a description, optional ones bracketed. Run the task with them, and fill an optional arg when its description says it applies.
-- `devkit config tasks <name>` describes one task before you run it: its `run` or `steps` templates, the servers it needs live and the command that starts each, a `usage` line with every `--arg` you must pass, then every arg it reads with who must pass it (`always`, `agents`, `humans` or `no`), its default (`none` when it has none) and its description. `--json` emits the same as one object. Reach for it instead of a `--dry-run` that fails on a missing arg.
+- `devkit config tasks <name>` describes one task before you run it: its `run` or `steps` templates, the servers it needs live and the command that starts each (for a sequence, those its steps need that no earlier `up` step starts), a `usage` line with every `--arg` you must pass, then every arg it reads with who must pass it (`always`, `agents`, `humans` or `no`), its default (`none` when it has none) and its description. `--json` emits the same as one object. Reach for it instead of a `--dry-run` that fails on a missing arg.
 - `devkit config variables` lists every `[templates.variables]` entry the same way. Those are the names `--arg` may set on `devrun task`, `issue pr create` and `issue review`.
 
 An arg can spread into several arguments by declaring a delimiter to split on:

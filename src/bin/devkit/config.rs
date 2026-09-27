@@ -141,7 +141,11 @@ fn apps(explicit: Option<&Path>, cwd: &str, json: bool) -> Result<()> {
 /// `devkit config tasks [--json]` — a pure readout of the merged `[tasks]`.
 fn tasks(explicit: Option<&Path>, cwd: &str, json: bool) -> Result<()> {
     let loaded = load::load(explicit, Path::new(cwd))?;
-    let rows = task::list(&loaded.config, devkit_common::caller::caller());
+    let rows = task::list(
+        &loaded.config,
+        &loaded.catalog,
+        devkit_common::caller::caller(),
+    );
     if json {
         println!("{}", serde_json::to_string_pretty(&tasks_json(&rows))?);
     } else {
@@ -151,7 +155,8 @@ fn tasks(explicit: Option<&Path>, cwd: &str, json: bool) -> Result<()> {
 }
 
 /// Configured tasks as a JSON array of their listing fields. `required` is
-/// whether this caller must pass the arg.
+/// whether this caller must pass the arg, and `error` why an invalid task
+/// cannot run.
 fn tasks_json(rows: &[TaskRow]) -> serde_json::Value {
     let items: Vec<serde_json::Value> = rows
         .iter()
@@ -170,7 +175,8 @@ fn tasks_json(rows: &[TaskRow]) -> serde_json::Value {
                 .collect();
             serde_json::json!({
                 "name": r.name,
-                "kind": r.kind,
+                "kind": r.kind_label(),
+                "error": r.kind.as_ref().err(),
                 "app": r.app,
                 "args": args,
                 "description": r.description,
@@ -200,32 +206,32 @@ fn args_json(args: &[TaskArg]) -> serde_json::Value {
 fn describe_task(explicit: Option<&Path>, cwd: &str, name: &str, json: bool) -> Result<()> {
     let loaded = load::load(explicit, Path::new(cwd))?;
     let cfg = &loaded.config;
-    let row = task::describe(cfg, name, devkit_common::caller::caller())?;
+    let row = task::describe(cfg, &loaded.catalog, name, devkit_common::caller::caller())?;
     let t = &cfg.tasks[name];
     if json {
         let steps: Vec<serde_json::Value> = t
             .steps
             .iter()
-            .map(|s| match (s, step_command(cfg, s)) {
-                (Step::Task(r), Some(sub)) => serde_json::json!({
+            .map(|s| match s {
+                Step::Task(r) => serde_json::json!({
                     "task": r,
-                    "run": sub.run,
-                    "require_live": live_json(&sub.require_live),
+                    "run": cfg.tasks[r].run,
+                    "require_live": live_json(&cfg.tasks[r].require_live),
                 }),
-                _ => serde_json::json!(s),
+                Step::Up(_) => serde_json::json!(s),
             })
             .collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "name": row.name,
-                "kind": row.kind,
+                "kind": row.kind_label(),
                 "app": t.app,
                 "description": row.description,
                 "run": t.run,
                 "steps": steps,
                 "env": t.env,
-                "require_live": live_json(&t.require_live),
+                "require_live": live_json(&row.require_live),
                 "usage": usage(&row),
                 "args": args_json(&row.args),
             }))?
@@ -234,14 +240,6 @@ fn describe_task(explicit: Option<&Path>, cwd: &str, name: &str, json: bool) -> 
         print!("{}", task_text(cfg, &row, t));
     }
     Ok(())
-}
-
-/// The command task a `task` step runs, if it names one.
-fn step_command<'a>(cfg: &'a Config, s: &Step) -> Option<&'a TaskConfig> {
-    match s {
-        Step::Task(r) => cfg.tasks.get(r).filter(|sub| !sub.run.is_empty()),
-        Step::Up(_) => None,
-    }
 }
 
 fn live_json(apps: &[String]) -> serde_json::Value {
@@ -269,7 +267,7 @@ fn task_text(cfg: &Config, row: &TaskRow, t: &TaskConfig) -> String {
     if !row.description.is_empty() {
         head.push(("description", row.description.clone()));
     }
-    head.push(("kind", row.kind.to_string()));
+    head.push(("kind", row.kind_label().to_string()));
     if t.app.is_some() {
         head.push(("app", row.app.clone()));
     }
@@ -279,18 +277,20 @@ fn task_text(cfg: &Config, row: &TaskRow, t: &TaskConfig) -> String {
     push_list(
         &mut head,
         "steps",
-        t.steps.iter().map(|s| match (s, step_command(cfg, s)) {
-            (Step::Task(r), Some(sub)) => format!(
-                "task {r}: {}{}",
-                run_text(&sub.run),
-                if sub.require_live.is_empty() {
-                    String::new()
-                } else {
-                    format!(" (needs live {})", sub.require_live.join(", "))
-                }
-            ),
-            (Step::Task(r), None) => format!("task {r}"),
-            (Step::Up(app), _) => format!("up {app}"),
+        t.steps.iter().map(|s| match s {
+            Step::Task(r) => {
+                let sub = &cfg.tasks[r];
+                format!(
+                    "task {r}: {}{}",
+                    run_text(&sub.run),
+                    if sub.require_live.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (needs live {})", sub.require_live.join(", "))
+                    }
+                )
+            }
+            Step::Up(app) => format!("up {app}"),
         }),
     );
     push_list(
@@ -301,7 +301,7 @@ fn task_text(cfg: &Config, row: &TaskRow, t: &TaskConfig) -> String {
     push_list(
         &mut head,
         "needs live",
-        t.require_live
+        row.require_live
             .iter()
             .map(|a| format!("{a} (devrun up {a})")),
     );
@@ -684,15 +684,17 @@ mod tests {
         vec![
             TaskRow {
                 name: "check".into(),
-                kind: "sequence",
+                kind: Ok(devkit_ports::task::TaskKind::Sequence),
                 app: "-".into(),
                 args: vec![],
+                require_live: vec![],
                 description: "lint then test".into(),
             },
             TaskRow {
                 name: "lint".into(),
-                kind: "command",
+                kind: Ok(devkit_ports::task::TaskKind::Command),
                 app: "api".into(),
+                require_live: vec![],
                 args: vec![devkit_ports::task::TaskArg {
                     name: "path".into(),
                     required: true,
