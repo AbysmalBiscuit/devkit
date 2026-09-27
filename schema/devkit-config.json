@@ -582,7 +582,7 @@
         },
         "enforce_writes": {
           "default": false,
-          "description": "Claim a lock on every file an agent's edit or resolvable shell write\ntouches, and deny a write another session holds. Resolves per\ncheckout, first answer wins: `DEVKIT_ENFORCE_WRITES` (`1`/`true`/`yes`/\n`on` or `0`/`false`/`no`/`off`; anything else falls through), then any\nproject layer for the written path (`devkit.local.toml` and a linked\nworktree's main-checkout layer included), then the global config. Fails\nclosed on a registry error.",
+          "description": "Claim a lock on every file an agent's edit or resolvable shell write\ntouches, and deny a write another session holds. Resolves per\ncheckout, first answer wins: `DEVKIT_ENFORCE_WRITES` (`1`/`true`/`yes`/\n`on` or `0`/`false`/`no`/`off`; anything else falls through), then any\nproject layer for the written path (`devkit.local.toml` and a linked\nworktree's main-checkout layer included), then the global config. A\nproject layer that does not parse is skipped, so it cannot switch off\nanother layer's opt-in. Fails closed on a registry error.",
           "type": "boolean"
         },
         "issue_tools": {

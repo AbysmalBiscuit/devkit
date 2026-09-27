@@ -350,7 +350,10 @@ fn read_section(path: &Path) -> Option<LogSection> {
 }
 
 fn section_in(body: &str) -> Option<LogSection> {
-    let table: toml::Table = toml::from_str(body).ok()?;
+    section_of(&toml::from_str(body).ok()?)
+}
+
+fn section_of(table: &toml::Table) -> Option<LogSection> {
     table.get("harness")?.get("log")?.clone().try_into().ok()
 }
 
@@ -368,12 +371,10 @@ fn anchor_dir(mut section: LogSection, anchor: Option<&Path>) -> LogSection {
 /// not matter to any key here — the two a project may set resolve by `min` and
 /// by `any` — but it is what `resolve_rules` produces, so the two agree.
 fn project_sections(checkout: &Checkout, cwd: &Path) -> Vec<LogSection> {
-    let Ok(layers) = devkit_config::project_layers(cwd, checkout.main_checkout()) else {
-        return Vec::new();
-    };
-    layers
+    devkit_config::read_project_layers(cwd, checkout.main_checkout())
+        .layers
         .iter()
-        .filter_map(|layer| Some(anchor_dir(read_section(&layer.path)?, layer.path.parent())))
+        .filter_map(|(layer, table)| Some(anchor_dir(section_of(table)?, layer.path.parent())))
         .collect()
 }
 

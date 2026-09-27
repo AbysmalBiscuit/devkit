@@ -6,7 +6,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use devkit_config::{AppMatch, CommandRule, IssueToolRule, PolicyAction, ShellSetting};
+use devkit_config::{
+    AppMatch, CommandRule, HarnessSection, IssueToolRule, PolicyAction, ShellSetting,
+};
 use serde::de::DeserializeOwned;
 
 use crate::vcs::Checkout;
@@ -17,9 +19,13 @@ use crate::vcs::Checkout;
 /// unrelated sibling key cannot change this answer. A body that is not valid
 /// TOML, a missing table, and a key of the wrong type all read as off.
 pub fn harness_flag_in(body: &str, flag: &str) -> bool {
-    toml::from_str::<toml::Table>(body)
-        .ok()
-        .and_then(|t| t.get("harness")?.get(flag)?.as_bool())
+    toml::from_str::<toml::Table>(body).is_ok_and(|t| flag_in(&t, flag))
+}
+
+fn flag_in(table: &toml::Table, flag: &str) -> bool {
+    table
+        .get("harness")
+        .and_then(|h| h.get(flag)?.as_bool())
         .unwrap_or(false)
 }
 
@@ -33,16 +39,13 @@ pub fn parse_env_override(val: Option<&str>) -> Option<bool> {
     }
 }
 
-/// The global devkit config file: `$DEVKIT_CONFIG`, else
-/// `~/.config/devkit/config.toml`. Mirrors the `~/.config/devkit/config.toml`
-/// base layer the resolver loads, so the harness reads the same global config
-/// the other binaries do.
+/// The global devkit config file: `$DEVKIT_CONFIG`, else the home config
+/// layer the resolver loads, so the harness reads the same global config the
+/// other binaries do.
 pub fn global_config_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
-        return Some(PathBuf::from(p));
-    }
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".config/devkit/config.toml"))
+    std::env::var_os("DEVKIT_CONFIG")
+        .map(PathBuf::from)
+        .or_else(devkit_config::home_config_path)
 }
 
 /// Combine the enforcement opt-in sources. The env override is an explicit
@@ -64,16 +67,13 @@ pub fn resolve_enforcement(
 /// True iff any project layer applying at `cwd` sets `[harness] <flag>`.
 /// Combined with `any` rather than by precedence: enforcement ratchets on, and
 /// only the env override turns it off, so one layer opting in must win even if
-/// a closer layer leaves the flag unset.
+/// a closer layer leaves the flag unset. For the same reason a layer that will
+/// not parse costs only its own opt-in.
 fn harness_enabled(checkout: &Checkout, cwd: &Path, flag: &str) -> bool {
-    let Ok(layers) = devkit_config::project_layers(cwd, checkout.main_checkout()) else {
-        return false;
-    };
-    layers.iter().any(|layer| {
-        std::fs::read_to_string(&layer.path)
-            .map(|b| harness_flag_in(&b, flag))
-            .unwrap_or(false)
-    })
+    devkit_config::read_project_layers(cwd, checkout.main_checkout())
+        .layers
+        .iter()
+        .any(|(_, table)| flag_in(table, flag))
 }
 
 fn global_harness_enabled(flag: &str) -> bool {
@@ -115,11 +115,12 @@ pub struct HarnessPolicy {
 
 impl Default for HarnessPolicy {
     fn default() -> Self {
+        let section = HarnessSection::default();
         Self {
-            shell: ShellSetting::Auto,
-            unresolved_writes: PolicyAction::Block,
-            unsupported_language: PolicyAction::Block,
-            script_files: PolicyAction::Allow,
+            shell: section.shell,
+            unresolved_writes: section.unresolved_writes,
+            unsupported_language: section.unsupported_language,
+            script_files: section.script_files,
         }
     }
 }
@@ -277,7 +278,8 @@ fn value_names_programs(v: &toml::Value) -> bool {
 }
 
 /// The merged `[harness]` command-guard tables applying at `cwd`, lowest
-/// precedence first: the global config, then every project layer.
+/// precedence first: the global config, then every project layer. A project
+/// layer that will not parse is left out with a warning naming it.
 ///
 /// Warnings are returned rather than printed. This runs inside the shared gate,
 /// which `lockm hook pretooluse` also calls, and a rule warning printed here
@@ -290,16 +292,13 @@ pub fn resolve_rules_in(checkout: &Checkout, cwd: &Path) -> (HarnessRules, Vec<S
     {
         layers.push((p, t));
     }
-    if let Ok(project) = devkit_config::project_layers(cwd, checkout.main_checkout()) {
-        for layer in project {
-            if let Ok(body) = std::fs::read_to_string(&layer.path)
-                && let Ok(t) = toml::from_str::<toml::Table>(&body)
-            {
-                layers.push((layer.path, t));
-            }
-        }
+    let project = devkit_config::read_project_layers(cwd, checkout.main_checkout());
+    layers.extend(project.layers.into_iter().map(|(l, t)| (l.path, t)));
+    let (rules, mut warnings) = merge_rules(&layers);
+    for broken in project.broken {
+        warnings.push(format!("ignoring a project layer: {:#}", broken.error));
     }
-    merge_rules(&layers)
+    (rules, warnings)
 }
 
 /// [`resolve_rules_in`] for a caller with no checkout of its own.
@@ -501,6 +500,24 @@ mod tests {
             &linked,
             "enforce_writes"
         ));
+    }
+
+    #[test]
+    fn a_broken_layer_keeps_its_siblings_rules_and_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[harness.commands.no-curl]\nprograms = [\"curl\"]\nreason = \"use ureq\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("devkit.local.toml"), "[[[ not toml").unwrap();
+
+        let (rules, warnings) = resolve_rules_in(&Checkout::at(dir.path()), dir.path());
+        assert!(rules.commands.contains_key("no-curl"));
+        assert!(
+            warnings.iter().any(|w| w.contains("devkit.local.toml")),
+            "{warnings:?}"
+        );
     }
 
     #[test]

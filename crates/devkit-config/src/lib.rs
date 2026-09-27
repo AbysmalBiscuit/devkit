@@ -8,7 +8,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 mod layers;
-pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
+pub use layers::{
+    BrokenLayer, CONFIG_FILE, Layer, LayerKind, ReadLayers, project_layers, read_project_layers,
+};
 pub mod harness;
 pub use harness::{
     AppMatch, CommandRule, Fidelity, HarnessSection, IssueToolRule, LogSection, PolicyAction,

@@ -456,8 +456,9 @@ pub struct HarnessSection {
     /// checkout, first answer wins: `DEVKIT_ENFORCE_WRITES` (`1`/`true`/`yes`/
     /// `on` or `0`/`false`/`no`/`off`; anything else falls through), then any
     /// project layer for the written path (`devkit.local.toml` and a linked
-    /// worktree's main-checkout layer included), then the global config. Fails
-    /// closed on a registry error.
+    /// worktree's main-checkout layer included), then the global config. A
+    /// project layer that does not parse is skipped, so it cannot switch off
+    /// another layer's opt-in. Fails closed on a registry error.
     #[serde(default)]
     pub enforce_writes: bool,
     /// Refuse shell commands devkit already has a wired-up path for: a

@@ -133,6 +133,20 @@ fn a_conflicting_write_denies_with_one_object() {
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
 }
 
+/// Enforcement only ratchets on, so a layer that will not parse cannot switch
+/// off the opt-in a readable layer beside it declares.
+#[test]
+fn a_broken_local_layer_keeps_the_tracked_opt_in() {
+    let proj = project();
+    std::fs::write(proj.path().join("devkit.local.toml"), "[[[ not toml").unwrap();
+    let state = tempfile::tempdir().unwrap();
+    hold(proj.path(), state.path(), "src/a.rs", "other-session");
+
+    let payload = write_payload("S", None, proj.path(), "src/a.rs");
+    let reason = deny_reason(&run_hook(proj.path(), state.path(), &payload));
+    assert!(reason.contains("other-session"), "{reason}");
+}
+
 #[test]
 fn an_unconflicted_write_emits_nothing() {
     let proj = project();
