@@ -329,3 +329,40 @@ fn session_end_ignores_a_traversal_id() {
     assert!(receipts_dir(p.path(), "S1").exists());
     assert!(p.path().join("devkit.toml").exists());
 }
+
+/// Claude Code's payload `cwd` is where the session started, which need not be
+/// the worktree the agent `cd`ed into to render, so every worktree of one
+/// repository shares one receipt store.
+#[test]
+fn a_render_in_a_linked_worktree_counts_at_the_primary() {
+    let p = project();
+    let git = || devkit_common::git::Git::fixture(p.path());
+    git().args(["add", "-A"]).output().unwrap();
+    git().args(["commit", "-q", "-m", "init"]).output().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let wt = parent.path().join("wt");
+    git()
+        .args(["worktree", "add", "-q", "-b", "feat", &wt.to_string_lossy()])
+        .output()
+        .unwrap();
+    assert!(wt.join("devkit.toml").exists(), "worktree created");
+
+    let (t, b) = render(&wt, "S1", "T", "B");
+    let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, create(&t, &b)));
+    assert_eq!(denial(&out), None);
+
+    let (t, b) = render(p.path(), "S2", "T2", "B2");
+    let out = pre_tool_use(&wt, &claude(&wt, "S2", LINEAR, create(&t, &b)));
+    assert_eq!(denial(&out), None);
+}
+
+#[test]
+fn a_create_missing_its_body_is_told_to_add_it() {
+    let p = project();
+    let (t, _) = render(p.path(), "S1", "T", "B");
+    let input = json!({"title": t, "teamId": "T1"});
+    let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, input));
+    let reason = denial(&out).expect("denied");
+    assert!(reason.contains("no `description`"), "{reason}");
+    assert!(!reason.contains("differs"), "{reason}");
+}

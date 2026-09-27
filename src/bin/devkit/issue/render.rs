@@ -4,7 +4,7 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use devkit_common::{caller::Caller, required::Missing};
 use devkit_config::Config;
 use serde::Serialize;
@@ -118,7 +118,8 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
     if sessions.is_empty() {
         eprintln!("no agent session: no receipt written");
     } else {
-        let checkout = devkit_common::git::checkout_root(Path::new(&start))?;
+        let checkout = receipt::store_root(&devkit_common::git::Checkout::at(Path::new(&start)))
+            .with_context(|| format!("not inside a git checkout: {start}"))?;
         let _ = receipt::sweep_stale(&checkout, receipt::STALE_AFTER);
         for session in &sessions {
             receipt::write(&checkout, session, &rendered.title, &rendered.body)?;

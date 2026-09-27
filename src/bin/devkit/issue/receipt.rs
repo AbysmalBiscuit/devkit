@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use devkit_common::{caller::HARNESS_SESSION_VARS, gitignore, harness_log::redact};
+use devkit_common::{caller::HARNESS_SESSION_VARS, git::Checkout, gitignore, harness_log::redact};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Field {
@@ -76,6 +76,17 @@ pub(crate) fn sessions_from_env() -> Vec<String> {
         }
     }
     ids
+}
+
+/// Where receipts for a directory in `checkout` live: the repository's main
+/// worktree, else the checkout root. Every worktree of one repository shares
+/// the store, because a harness reports the directory its session started in,
+/// not the worktree its shell `cd`ed into to render.
+pub(crate) fn store_root(checkout: &Checkout) -> Option<PathBuf> {
+    checkout
+        .main_worktree()
+        .or_else(|| checkout.root())
+        .map(Path::to_path_buf)
 }
 
 fn receipts_root(checkout: &Path) -> PathBuf {

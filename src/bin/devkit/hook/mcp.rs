@@ -88,7 +88,7 @@ fn respond(payload: &Payload, matched: &OnceLock<()>) -> Verdict {
              no `devkit issue render` receipt can match it."
         ));
     }
-    let Some(root) = checkout.root() else {
+    let Some(root) = receipt::store_root(&checkout) else {
         return Verdict::Deny(format!(
             "devkit issue guard: {} is not inside a git checkout, where `devkit issue render` \
              keeps its receipts.",
@@ -98,11 +98,11 @@ fn respond(payload: &Payload, matched: &OnceLock<()>) -> Verdict {
     let hint = required_hint(&checkout, &cwd);
     let ctx = Context {
         hint: &hint,
-        session_seen: receipt::session_dir(root, session).is_dir(),
+        session_seen: receipt::session_dir(&root, session).is_dir(),
     };
     let server = server.unwrap_or(tool);
     decide(rule, server, tool, input, &ctx, &|field, text| {
-        receipt::has(root, session, field, text)
+        receipt::has(&root, session, field, text)
     })
     .unwrap_or_else(|e| Verdict::Deny(format!("devkit issue guard: {e:#}")))
 }
@@ -160,10 +160,10 @@ pub(super) fn decide(
         )));
     }
     for (field, key) in [(Field::Title, &rule.title), (Field::Body, &rule.body)] {
-        let text = match input.get(key.as_str()) {
-            None | Some(Value::Null) if create => "",
+        let (text, absent) = match input.get(key.as_str()) {
+            None | Some(Value::Null) if create => ("", true),
             None | Some(Value::Null) => continue,
-            Some(Value::String(s)) => s.as_str(),
+            Some(Value::String(s)) => (s.as_str(), false),
             Some(_) => {
                 return Ok(Verdict::Deny(format!(
                     "`{key}` is not a string, so `devkit issue render` cannot have produced it."
@@ -171,7 +171,16 @@ pub(super) fn decide(
             }
         };
         if !receipt(field, text)? {
-            let opening = if ctx.session_seen {
+            let output = match field {
+                Field::Title => "title",
+                Field::Body => "body",
+            };
+            let opening = if absent {
+                format!(
+                    "This call creates an issue with no `{key}`. Pass the `{output}` output of \
+                     `devkit issue render` as `{key}`."
+                )
+            } else if ctx.session_seen {
                 format!(
                     "This call's `{key}` differs from what `devkit issue render` produced in \
                      this session."
