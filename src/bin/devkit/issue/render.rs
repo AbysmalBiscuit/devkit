@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use super::{
     receipt,
-    review::{parse_args, render_review, with_fields},
+    review::{missing_required, parse_args, render_review, with_fields},
 };
 use crate::template::VarArgs;
 
@@ -34,13 +34,13 @@ pub(crate) fn missing(
     caller: Caller,
 ) -> Result<Vec<Missing>> {
     let tmpls = &cfg.templates;
-    let declared = tmpls.declared();
-    let mut reads =
-        devkit_common::template::undeclared(&[tmpls.issue_title(), tmpls.issue_body()])?;
-    reads.retain(|n| declared.contains(n) && !ISSUE_CONTEXT_KEYS.contains(&n.as_str()));
-    Ok(devkit_common::required::missing_args(
-        cfg, None, &reads, given, caller,
-    ))
+    missing_required(
+        cfg,
+        &[tmpls.issue_title(), tmpls.issue_body()],
+        ISSUE_CONTEXT_KEYS,
+        given,
+        caller,
+    )
 }
 
 fn title_context(title: &str) -> serde_json::Value {

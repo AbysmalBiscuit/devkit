@@ -147,11 +147,24 @@ pub(crate) fn check_required(
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<()> {
+    let missing = missing_required(cfg, templates, context_keys, given, caller)?;
+    devkit_common::required::ensure_supplied(surface, &missing)
+}
+
+/// The required `--arg`s [`check_required`] would refuse over.
+pub(crate) fn missing_required(
+    cfg: &Config,
+    templates: &[&str],
+    context_keys: &[&str],
+    given: &BTreeMap<String, String>,
+    caller: Caller,
+) -> Result<Vec<devkit_common::required::Missing>> {
     let declared = cfg.templates.declared();
     let mut reads = devkit_common::template::undeclared(templates)?;
     reads.retain(|n| declared.contains(n) && !context_keys.contains(&n.as_str()));
-    let missing = devkit_common::required::missing_args(cfg, None, &reads, given, caller);
-    devkit_common::required::ensure_supplied(surface, &missing)
+    Ok(devkit_common::required::missing_args(
+        cfg, None, &reads, given, caller,
+    ))
 }
 
 /// Clone `base` and add extra fields for a single template render.
