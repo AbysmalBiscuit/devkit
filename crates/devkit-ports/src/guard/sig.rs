@@ -82,6 +82,15 @@ pub fn within(config_argv: &[String], sig: &[String], typed: &[String]) -> bool 
         && typed_trailing.is_none_or(|t| trailing == Some(t))
 }
 
+/// How many words past `sig` in `config_argv` the typed command leaves out.
+pub fn omitted(config_argv: &[String], sig: &[String], typed: &[String]) -> usize {
+    let typed_rest = &typed[sig.len()..];
+    config_argv[sig.len()..]
+        .iter()
+        .filter(|w| !typed_rest.contains(w))
+        .count()
+}
+
 /// `words` split at the first `--` into what comes before it and, when there
 /// is one, what comes after it.
 fn split_trailing(words: &[String]) -> (&[String], Option<&[String]>) {
