@@ -17,6 +17,7 @@ mod preserve;
 mod prs;
 #[allow(dead_code)]
 pub(crate) mod receipt;
+pub(crate) mod render;
 mod review;
 mod select;
 pub(crate) mod setup;
@@ -136,6 +137,22 @@ pub(crate) enum Cmd {
     Pr {
         #[command(subcommand)]
         cmd: Option<PrCmd>,
+    },
+    /// Render an issue title and body for a tracker MCP call.
+    ///
+    /// Uses the `issue_title` and `issue_body` templates. Prints {"title": ...,
+    /// "body": ...}. Pass both unchanged to the tracker's MCP tool: inside
+    /// an agent session this records a receipt, and the pre-tool-use hook
+    /// denies an issue write whose text has none.
+    Render {
+        /// Issue title, the `input` of the `issue_title` template.
+        #[arg(long)]
+        title: String,
+        /// Issue body, the `input` of the `issue_body` template.
+        #[arg(long)]
+        body: Option<String>,
+        #[command(flatten)]
+        vars: VarArgs,
     },
     /// Read-only report of every issue worktree (optionally filtered by ID).
     Status {
@@ -456,6 +473,13 @@ pub fn run(cli: IssueCli) -> Result<()> {
             cache_only,
             cli.config.as_deref(),
         ),
+        Some(Cmd::Render { title, body, vars }) => render::run(render::RenderArgs {
+            title,
+            body,
+            vars,
+            dir: cli.dir,
+            config: cli.config,
+        }),
         Some(Cmd::Pr { cmd }) => {
             let cmd = cmd.unwrap_or(PrCmd::Status {
                 selector: None,
