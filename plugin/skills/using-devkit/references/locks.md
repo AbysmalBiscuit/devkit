@@ -31,7 +31,7 @@ A long-lived shell can outlive the session that seeded its environment: a `tmux`
 
 A claim made by hand inside a sub-agent is recorded at session granularity, because no harness exposes a sub-agent id to a subprocess. It blocks every other session and does not block sibling sub-agents of your own; that isolation comes from the write hook, which does have sub-agent ids. A path your own sub-agent's hook already holds is reported as `already held on this session line` and left as it is: yours to write, but released by the lifecycle hook rather than by a `release` of your own.
 
-`lockm release --all` frees every row this project holds under the bare session id — the session's manual claims and its top-level write-hook claims alike — whether you run it from the top level or from a sub-agent. Rows recorded as `session/agent`, which is how the hook records a sub-agent's writes, are left for `SubagentStop`.
+`lockm release --all` frees every row held under the bare session id in every checkout, not only the one you run it from. That covers the session's manual claims and its top-level write-hook claims alike, whether you run it from the top level or from a sub-agent. Rows recorded as `session/agent`, which is how the hook records a sub-agent's writes, are left for `SubagentStop`.
 
 ## TTL
 

@@ -394,7 +394,10 @@ pub fn release_all(as_flag: Option<&str>) -> Result<Vec<String>> {
     release_all_resolved(&c.root, &c.holder)
 }
 
-/// Release every lock held by `holder` under `root` (pre-resolved).
+/// Release every lock held by exactly `holder` (pre-resolved), in every root.
+/// Holder ids are globally unique, and the write hook claims in whichever
+/// checkout a write lands in, so a root filter would strand rows. `root` is
+/// the caller's checkout; it only fills the daemon's `ReleaseAll` request.
 pub fn release_all_resolved(root: &str, holder: &str) -> Result<Vec<String>> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::ReleaseAll {
@@ -407,7 +410,7 @@ pub fn release_all_resolved(root: &str, holder: &str) -> Result<Vec<String>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::release_all_with(&store::FlockStore::new(), root, holder)
+    store::release_all_with(&store::FlockStore::new(), holder)
 }
 
 /// Live locks for the current project root, or every project when `all`.
@@ -837,8 +840,8 @@ mod tests {
     #[test]
     fn resolved_fns_roundtrip_via_flock_path() {
         // No daemon runs in unit tests, so the `_resolved` fns fall through to
-        // the FlockStore path. A unique root namespaces these lock
-        // rows.
+        // the FlockStore path. A unique root and holder namespace these lock
+        // rows, since release_all spans every root.
         let root = tempfile::tempdir().unwrap();
         devkit_git::Git::fixture(root.path())
             .args(["init", "-q", "-b", "main"])
@@ -846,30 +849,31 @@ mod tests {
             .unwrap();
         let r = root.path().to_string_lossy().into_owned();
         let paths = vec!["a.rs".to_string()];
+        let holder = format!("roundtrip-{}", std::process::id());
 
-        let out = acquire_resolved(&r, "holder-a", &paths, None, None, 60).expect("acquire");
+        let out = acquire_resolved(&r, &holder, &paths, None, None, 60).expect("acquire");
         assert_eq!(out.acquired.len(), 1);
         assert_eq!(out.acquired[0].path, "a.rs");
         assert!(out.conflicts.is_empty());
 
         let conflicts = check_resolved(&r, "holder-b", &paths).expect("check");
         assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0].held_by, "holder-a");
+        assert_eq!(conflicts[0].held_by, holder);
 
         let entries = status_resolved(&r, false).expect("status");
         assert!(
             entries
                 .iter()
-                .any(|e| e.path == "a.rs" && e.holder == "holder-a")
+                .any(|e| e.path == "a.rs" && e.holder == holder)
         );
 
-        let (released, refused) = release_resolved(&r, "holder-a", &paths, false).expect("release");
+        let (released, refused) = release_resolved(&r, &holder, &paths, false).expect("release");
         assert_eq!(released, vec!["a.rs".to_string()]);
         assert!(refused.is_empty());
 
-        // release_all on a now-empty root is a no-op but must succeed.
+        // release_all with nothing held is a no-op but must succeed.
         assert!(
-            release_all_resolved(&r, "holder-a")
+            release_all_resolved(&r, &holder)
                 .expect("release_all")
                 .is_empty()
         );
@@ -1082,6 +1086,5 @@ mod tests {
         assert!(matches!(b, model::WriteDecision::Acquired));
 
         let _ = release_all_resolved(&repo_a.path().to_string_lossy(), &holder);
-        let _ = release_all_resolved(&repo_b.path().to_string_lossy(), &holder);
     }
 }

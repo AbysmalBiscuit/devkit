@@ -339,17 +339,17 @@ impl Data {
             .collect()
     }
 
-    /// Release every lock held by `holder` in `root`; returns the freed paths.
-    pub fn release_all(&mut self, root: &str, holder: &str) -> Vec<String> {
-        let freed: Vec<String> = self
-            .locks
-            .values()
-            .filter(|e| e.root == root && e.holder == holder)
-            .map(|e| e.path.clone())
-            .collect();
-        for p in &freed {
-            self.locks.remove(&key_for(root, p));
-        }
+    /// Release every lock held by exactly `holder`, in every root; returns
+    /// the freed paths. Its sub-agents' rows (`holder/agent`) stay.
+    pub fn release_all(&mut self, holder: &str) -> Vec<String> {
+        let mut freed = Vec::new();
+        self.locks.retain(|_, e| {
+            let mine = e.holder == holder;
+            if mine {
+                freed.push(e.path.clone());
+            }
+            !mine
+        });
         freed
     }
 
@@ -639,17 +639,19 @@ mod tests {
     }
 
     #[test]
-    fn release_all_clears_only_callers_locks_in_root() {
+    fn release_all_clears_only_callers_locks_in_every_root() {
         let mut d = Data::default();
         d.locks.extend([
             entry("/repo", "a", "alice", 1, 0, None),
             entry("/repo", "b", "bob", 1, 0, None),
             entry("/other", "c", "alice", 1, 0, None),
+            entry("/other", "d", "alice/agent", 1, 0, None),
         ]);
-        let rel = d.release_all("/repo", "alice");
-        assert_eq!(rel, vec!["a".to_string()]);
+        let mut rel = d.release_all("alice");
+        rel.sort();
+        assert_eq!(rel, ["a", "c"]);
         assert!(d.locks.contains_key(&key_for("/repo", "b")));
-        assert!(d.locks.contains_key(&key_for("/other", "c")));
+        assert!(d.locks.contains_key(&key_for("/other", "d")));
     }
 
     #[test]

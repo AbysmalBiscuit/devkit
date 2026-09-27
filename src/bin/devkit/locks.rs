@@ -54,7 +54,8 @@ pub(crate) enum Cmd {
         /// pid.
         #[arg(long = "as")]
         holder: Option<String>,
-        /// Release every path this holder claims.
+        /// Release every path this holder claims, in every checkout, not only
+        /// this one. Rows its sub-agents hold (`holder/agent`) stay.
         #[arg(long)]
         all: bool,
         /// Release even a path held by another session.

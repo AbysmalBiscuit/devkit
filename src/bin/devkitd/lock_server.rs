@@ -67,7 +67,7 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> Response {
             Ok((released, refused)) => Response::Released { released, refused },
             Err(e) => Response::Err(format!("{e:#}")),
         },
-        Request::ReleaseAll { root, holder } => match store::release_all_with(&s, &root, &holder) {
+        Request::ReleaseAll { holder, .. } => match store::release_all_with(&s, &holder) {
             Ok(v) => Response::Freed(v),
             Err(e) => Response::Err(format!("{e:#}")),
         },

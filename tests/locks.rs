@@ -96,6 +96,46 @@ fn release_frees_for_other_holder() {
     assert!(b.status.success(), "bob can acquire after alice releases");
 }
 
+/// The write hook claims in whichever checkout a write lands in, so one
+/// session's rows span several roots.
+#[test]
+fn release_all_frees_the_holder_in_every_root() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let (here, elsewhere) = (project(), project());
+    let state = tempfile::tempdir().unwrap();
+    for proj in [&here, &elsewhere] {
+        for holder in ["alice", "alice/agent", "bob"] {
+            let path = format!("{}.rs", holder.replace('/', "-"));
+            let a = run(&link, proj.path(), state.path(), &[
+                "acquire", &path, "--as", holder,
+            ]);
+            assert!(a.status.success(), "{holder} acquires {path}");
+        }
+    }
+
+    let r = run(&link, here.path(), state.path(), &[
+        "release", "--all", "--as", "alice",
+    ]);
+    assert!(r.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&r.stdout).trim(),
+        "released 2 lock(s)"
+    );
+
+    let s = run(&link, here.path(), state.path(), &[
+        "status", "--all", "--json",
+    ]);
+    let v: serde_json::Value = serde_json::from_slice(&s.stdout).expect("json on stdout");
+    let mut left: Vec<&str> = v["locks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["holder"].as_str().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["alice/agent", "alice/agent", "bob", "bob"]);
+}
+
 #[test]
 fn same_holder_reacquire_is_ok() {
     let (_dir, link) = shimtest::linked("lockm");

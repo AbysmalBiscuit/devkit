@@ -230,9 +230,9 @@ pub fn release_with(
     s.commit(|d| Ok(d.do_release(root, paths, holder, force)))
 }
 
-/// Release every lock held by `holder` in `root` (explicit mutation).
-pub fn release_all_with(s: &impl Store, root: &str, holder: &str) -> Result<Vec<String>> {
-    s.commit(|d| Ok(d.release_all(root, holder)))
+/// Release every lock held by `holder`, in every root (explicit mutation).
+pub fn release_all_with(s: &impl Store, holder: &str) -> Result<Vec<String>> {
+    s.commit(|d| Ok(d.release_all(holder)))
 }
 
 /// Live locks (ungated read), best-effort prune. `all` ignores the root filter.
