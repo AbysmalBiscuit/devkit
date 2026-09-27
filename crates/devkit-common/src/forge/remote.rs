@@ -157,7 +157,6 @@ pub fn origin_url(cwd: &str) -> Result<String> {
     let cwd = Path::new(cwd);
     Vcs::at(cwd)
         .remote_url(cwd, "origin")
-        .map(|u| u.trim().to_string())
         .context("reading the `origin` remote")
 }
 

@@ -3,7 +3,6 @@ use std::{collections::HashMap, path::Path};
 use anyhow::Result;
 use devkit_common::{
     forge::{self, ForgeKind, HeadLookup, PrBrief, PrLocator, PrLookup, Repo},
-    git::Git,
     tracker::{Resolved, State, StateKind, TrackerKind},
     vcs::{Changes, Vcs, VersionControl},
     worktree::{self, IssueId},
@@ -333,13 +332,11 @@ pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clon
 }
 
 /// Whether the commit checked out at `path` is on some remote-tracking branch.
-/// A `git` that cannot answer reads as not pushed, since this stands in for a
-/// merged PR before `issue end` deletes the branch.
+/// A repository that cannot answer reads as not pushed, since this stands in
+/// for a merged PR before `issue end` deletes the branch.
 pub fn pushed_of(path: &str) -> bool {
-    Git::at(Path::new(path))
-        .args(["branch", "--remotes", "--contains", "HEAD"])
-        .output()
-        .is_ok_and(|out| !out.trim().is_empty())
+    let path = Path::new(path);
+    Vcs::at(path).pushed(path).unwrap_or(false)
 }
 
 /// Every branch marked `Unavailable` with the same `reason`: the whole batch

@@ -7,10 +7,12 @@
 
 use std::{collections::HashMap, path::Path};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 pub use devkit_config::ForgeKind;
 use devkit_config::{ForgeConfig, GithubConfig};
 use serde::{Deserialize, Serialize};
+
+use crate::vcs::{Vcs, VersionControl};
 
 pub mod forgejo;
 pub mod github;
@@ -114,16 +116,7 @@ pub fn pr_number_from_url(url: &str) -> Option<u64> {
 /// for a forge with no CLI that does it. The ref lives on the base repository,
 /// so this works for a PR from a fork the local clone has no remote for.
 pub fn checkout_ref(dir: &Path, remote_ref: &str, branch: &str) -> Result<()> {
-    crate::git::Git::at(dir)
-        .args(["fetch", "origin", remote_ref])
-        .network()
-        .output()
-        .with_context(|| format!("fetching {remote_ref} from origin"))?;
-    crate::git::Git::at(dir)
-        .args(["checkout", "-B", branch, "FETCH_HEAD"])
-        .output()
-        .with_context(|| format!("checking out {branch}"))?;
-    Ok(())
+    Vcs::at(dir).checkout_remote_ref(dir, "origin", remote_ref, branch)
 }
 
 /// The repositories one command works against, resolved once and threaded to

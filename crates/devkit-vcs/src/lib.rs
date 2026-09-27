@@ -150,6 +150,21 @@ pub trait VersionControl {
     /// Publishes `branch` to `remote` and tracks it there. Never forces.
     fn push(&self, dir: &::std::path::Path, remote: &str, branch: &str) -> ::anyhow::Result<()>;
 
+    /// Whether the commit checked out at `dir` is on some remote branch, as of
+    /// the last fetch.
+    fn pushed(&self, dir: &::std::path::Path) -> ::anyhow::Result<bool>;
+
+    /// Fetches `remote_ref` from `remote` and checks it out at `dir` as
+    /// `branch`, replacing any local branch of that name. The ref need not
+    /// sit under a branch namespace, as a forge's `refs/pull/7/head` does not.
+    fn checkout_remote_ref(
+        &self,
+        dir: &::std::path::Path,
+        remote: &str,
+        remote_ref: &str,
+        branch: &str,
+    ) -> ::anyhow::Result<()>;
+
     fn remote_url(
         &self,
         dir: &::std::path::Path,
