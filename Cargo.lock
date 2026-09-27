@@ -366,6 +366,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "similar",
  "strum 0.27.2",
  "tempfile",
