@@ -1254,6 +1254,13 @@
           "description": "Templates no command sends, rendered by `devkit template render\n<name>` for the caller to deliver itself. A built-in template never\ntakes one's name: `render` looks here first.",
           "type": "object"
         },
+        "issue_body": {
+          "description": "Body of an issue rendered by `issue render` or created by `issue\ncreate`. `{{ input }}` is the `--body` argument and `issue_title` is the\nrendered title. A `[templates.variables]` entry either template reads,\nmarked `required`, must be passed as `--arg`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "issue_summary": {
           "description": "Body of the file `issue setup --summary` writes when the tracker keeps\nno summary of its own; a GitHub issue's non-empty body is written\nverbatim instead. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps`. A field the tracker left empty renders as the empty\nstring, so `{% if parent %}` drops its line.",
           "type": [
@@ -1263,6 +1270,13 @@
         },
         "issue_summary_path": {
           "description": "Where `issue setup --summary` writes the issue summary file. A relative\npath is taken from `defaults.worktree_root`, so the file outlives the\nworktree; render `{{ worktree }}` into it to keep it inside instead.\nContext: the `issue_summary` context below.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issue_title": {
+          "description": "Title of an issue rendered by `issue render` or created by `issue\ncreate`. `{{ input }}` is the `--title` argument; the rendered title\nmust not be empty.",
           "type": [
             "string",
             "null"
@@ -1565,8 +1579,10 @@
         "checkout_worktree_dir": null,
         "checkout_worktree_dir_max": null,
         "custom": {},
+        "issue_body": null,
         "issue_summary": null,
         "issue_summary_path": null,
+        "issue_title": null,
         "pr_body": null,
         "pr_title": null,
         "review_finish": null,
