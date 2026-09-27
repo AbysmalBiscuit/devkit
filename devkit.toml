@@ -78,8 +78,13 @@ guard = true
 description = "Grade isolated Claude agents on a case's agent-facing text (billed)"
 run = ["bash", "evals/run.sh", "{{ eval_case }}"]
 
+[tasks.eval-scenario]
+description = "Grade isolated Claude agents on what they do with the plugin loaded (billed)"
+run = ["bash", "evals/scenario.sh", "{{ scenario }}"]
+
 [templates.variables]
 eval_case = "brief"
+scenario = "all"
 
 [tasks.fmt]
 description = "Format the workspace with nightly rustfmt"

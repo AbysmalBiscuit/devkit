@@ -20,7 +20,16 @@ devrun task eval --arg eval_case=brief                   # this checkout, 3 runs
 evals/run.sh brief main=/path/to/old/devkit new=target/debug/devkit   # compare builds
 ```
 
-A case under `evals/` is a `render.sh` that prints the text from a devkit binary, a `preamble.md`, and a `questions.json` answer key. Each question takes its expected answer from real behavior, and `proof` names the test that pins that behavior. The runner asks isolated agents for structured answers and prints a table per label: questions answered correctly, how many of those the text stated outright, confidence, and cost. `EVAL_REPS` and `EVAL_MODEL` override the run count and model. Results, including every spot the agents flagged as ambiguous, land in `target/evals/`.
+A text case under `evals/` is a `render.sh` that prints the text from a devkit binary, a `preamble.md`, and a `questions.json` answer key. Each question takes its expected answer from real behavior, and `proof` names the test that pins that behavior. The runner asks isolated agents for structured answers and prints a table per label: questions answered correctly, how many of those the text stated outright, confidence, and cost. `EVAL_REPS` and `EVAL_MODEL` override the run count and model. Results, including every spot the agents flagged as ambiguous, land in `target/evals/`.
+
+Scenario evals grade what agents do rather than what they understand. Each run is a headless `claude` session with `plugin/` loaded, its hooks calling that checkout's build, in a fresh repository whose devkit state and git config stay in a scratch directory:
+
+```sh
+devrun task eval-scenario                                # every scenario, this checkout, 3 runs each
+evals/scenario.sh held-lock main=/path/to/old/checkout new=.   # compare checkouts
+```
+
+A scenario under `evals/scenarios/` is a `prompt.md`, an optional `fixture/` copied in as the first commit, optional `setup.sh` and `teardown.sh` run in the repository, and a `scenario.json` holding `max_turns` and the checks. `evals/lib/transcript.jq` documents the check kinds: a tool call, the final reply, or a path the run changed. The table gives each check's pass count per label, how many runs passed every check, and the mean turns, guard denials and seconds, plus total cost. Transcripts land in `target/evals/scenarios/`.
 
 ## Layout
 

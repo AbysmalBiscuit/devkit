@@ -1,0 +1,1 @@
+In src/lib.rs, `Settings.retries` has `#[serde(default)]`. When the input omits `retries`, does serde fill it with `u32::default()` or with the value from `Settings::default()`? Answer for the serde version this project pins.

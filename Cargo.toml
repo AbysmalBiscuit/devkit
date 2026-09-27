@@ -53,6 +53,7 @@ tempfile.workspace = true
 similar = "2"
 devkit-common = { workspace = true, features = ["test-support"] }
 same-file.workspace = true
+serde_yaml_ng.workspace = true
 
 # Used only by the Unix-only supervision integration test (POSIX signals).
 [target.'cfg(unix)'.dev-dependencies]
