@@ -163,7 +163,7 @@ fn release_schema() -> Value {
         "properties": {
             "root": { "type": "string", "description": "Absolute path to the project root." },
             "paths": { "type": "array", "items": { "type": "string" }, "description": "Paths to release (required unless all=true)." },
-            "all": { "type": "boolean", "description": "Release every lock held by this holder in the project." },
+            "all": { "type": "boolean", "description": "Release every lock held by exactly this holder, in every project. Rows its sub-agents hold stay." },
             "force": { "type": "boolean", "description": "Release even locks held by another holder." },
             "holder": { "type": "string", "description": "Override the session holder id." }
         },

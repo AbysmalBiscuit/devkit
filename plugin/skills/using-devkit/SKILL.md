@@ -77,7 +77,7 @@ lockm release src/auth/session.rs src/auth/mod.rs
 lockm release --all                           # or: drop everything you hold
 ```
 
-`release --all` also drops the write hook's automatic claims for this session, so it belongs at the end of a work unit rather than between edits.
+`release --all` drops every claim this session holds in every checkout, not only the one you run it from, and that includes the write hook's automatic claims. Claims your sub-agents hold stay until they stop. It belongs at the end of a work unit rather than between edits.
 
 ### When a claim conflicts
 
