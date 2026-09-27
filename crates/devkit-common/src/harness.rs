@@ -6,7 +6,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use devkit_config::{AppMatch, CommandRule, IssueToolRule, PolicyAction, ShellSetting};
+use devkit_config::{
+    AppMatch, CommandRule, HarnessSection, IssueToolRule, PolicyAction, ShellSetting,
+};
 use serde::de::DeserializeOwned;
 
 use crate::vcs::Checkout;
@@ -112,11 +114,12 @@ pub struct HarnessPolicy {
 
 impl Default for HarnessPolicy {
     fn default() -> Self {
+        let section = HarnessSection::default();
         Self {
-            shell: ShellSetting::Auto,
-            unresolved_writes: PolicyAction::Block,
-            unsupported_language: PolicyAction::Block,
-            script_files: PolicyAction::Allow,
+            shell: section.shell,
+            unresolved_writes: section.unresolved_writes,
+            unsupported_language: section.unsupported_language,
+            script_files: section.script_files,
         }
     }
 }
