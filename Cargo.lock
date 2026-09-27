@@ -1086,11 +1086,12 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "pabal"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "804405665f5e62e84e5c657cd95f19b7d43bba0ab4cd81ff2c8af099e78e487d"
+checksum = "81ee84f095a420060ecc56f85aa4ebe08edca8d83b5120bf557a5a77c98b9e39"
 dependencies = [
  "ambassador",
+ "clap",
  "serde_json",
  "strum 0.28.0",
  "thiserror",

@@ -159,7 +159,7 @@ fn run(payload: &Payload, checkout: &Checkout, cwd: &Path, targets: &[String], h
     let subject = Subject {
         root: root_canon.clone(),
         targets: relative.clone(),
-        harness: Some(payload.harness().name().to_string()),
+        harness: Some(payload.harness().to_string()),
     };
 
     let floor: Severity = settings.min_severity.parse().unwrap_or(Severity::Should);
@@ -268,6 +268,7 @@ fn resolve(payload: &Payload, path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hook::HookEvent;
 
     #[test]
     fn fired_path_is_stable_and_holder_specific() {
@@ -305,7 +306,7 @@ mod tests {
 
     #[test]
     fn resolve_falls_back_to_the_raw_path_with_no_cwd() {
-        let payload = Payload::empty(None);
+        let payload = Payload::empty(None, HookEvent::PreToolUse);
         assert_eq!(
             resolve(&payload, "relative/b.rs"),
             PathBuf::from("relative/b.rs")
@@ -315,7 +316,12 @@ mod tests {
 
     #[test]
     fn resolve_joins_a_relative_target_against_the_payloads_cwd() {
-        let payload = Payload::new(None, serde_json::json!({ "cwd": "/repo" })).unwrap();
+        let payload = Payload::new(
+            None,
+            HookEvent::PreToolUse,
+            serde_json::json!({ "cwd": "/repo" }),
+        )
+        .unwrap();
         assert_eq!(
             resolve(&payload, "src/a.rs"),
             Path::new("/repo").join("src/a.rs")

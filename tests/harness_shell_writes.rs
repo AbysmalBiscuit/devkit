@@ -335,6 +335,33 @@ fn a_cursor_payload_never_claims() {
     assert!(rows(&e).is_empty());
 }
 
+/// Antigravity sends no session-end event, so a claim from its session would
+/// hold files until the TTL.
+#[test]
+fn an_antigravity_payload_never_claims() {
+    let e = env(WRITES);
+    let project = e.project.path().to_string_lossy();
+    for tool_call in [
+        serde_json::json!({"name": "run_command", "args": {"CommandLine": "echo x > a.txt", "Cwd": project}}),
+        serde_json::json!({"name": "write_to_file", "args": {"TargetFile": format!("{project}/b.txt")}}),
+    ] {
+        let p = serde_json::json!({"conversationId": "ag1", "toolCall": tool_call});
+        let out = devkit(
+            &e,
+            &["hook", "pre-tool-use", "--harness", "antigravity"],
+            Some(&p.to_string()),
+            &[],
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
+    }
+    assert!(rows(&e).is_empty());
+}
+
 #[test]
 fn an_unusable_claude_shell_payload_denies_when_writes_are_enabled() {
     let e = env(WRITES);

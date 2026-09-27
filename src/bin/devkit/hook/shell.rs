@@ -18,21 +18,22 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_ports::guard::{self, Project};
-use pabal::Tool;
+use pabal::{AnyHarness, Tool};
 use serde_json::Value;
 
 use super::{
     HookEvent, dialect,
     gate::{self, Armed, WriteGate, WriteVerdict},
-    payload::{Harness, MissingSession, Payload},
+    payload::{self, MissingSession, Payload},
     print_envelope, record, writes,
 };
 
 const UNUSABLE_SHELL_REASON: &str =
     "devkit write-harness: shell payload could not be evaluated (fail-closed)";
-/// Tool names that run shell commands, `Shell` being Cursor's. One that
-/// arrives without a readable command is a harness format change.
-const SHELL_TOOLS: [&str; 3] = ["Bash", "PowerShell", "Shell"];
+/// Tool names that run shell commands, `Shell` being Cursor's and
+/// `run_command` Antigravity's. One that arrives without a readable command
+/// is a harness format change.
+const SHELL_TOOLS: [&str; 4] = ["Bash", "PowerShell", "Shell", "run_command"];
 
 enum Response {
     Silent,
@@ -123,12 +124,12 @@ fn finish(rec: Option<&Record>, settings: Option<&harness_log::Settings>) {
 ///
 /// A payload devkit could not read is precisely what the log exists for, so
 /// this is a log-then-return rather than a bare return.
-pub fn deny_unreadable_payload(declared: Option<Harness>) -> Result<()> {
+pub fn deny_unreadable_payload(declared: Option<AnyHarness>) -> Result<()> {
     let cwd = current_cwd();
     let checkout = Checkout::at(&cwd);
-    let payload = Payload::empty(declared);
+    let payload = Payload::empty(declared, HookEvent::PreToolUse);
     if harness::writes_enabled(&checkout, &cwd) {
-        print_envelope(&payload.harness().deny(UNUSABLE_SHELL_REASON));
+        print_envelope(&payload::deny(payload.harness(), UNUSABLE_SHELL_REASON));
     }
     let settings = harness_log::resolve_in(&checkout, &cwd);
     let rec = settings.enabled.then(|| {
@@ -182,9 +183,9 @@ fn undecided_record(
     )
 }
 
-fn deny(which: Harness, reasons: &[String]) -> Outcome {
+fn deny(which: AnyHarness, reasons: &[String]) -> Outcome {
     Outcome {
-        response: Response::Envelope(which.deny(&reasons.join("\n"))),
+        response: Response::Envelope(payload::deny(which, &reasons.join("\n"))),
         record: None,
     }
 }
@@ -201,7 +202,7 @@ fn deny_unusable_shell(payload: &Payload, checkout: &Checkout) -> Response {
             .tool_name()
             .is_some_and(|tool| SHELL_TOOLS.contains(&tool));
     if shell_event && harness::writes_enabled(checkout, checkout.dir()) {
-        Response::Envelope(payload.harness().deny(UNUSABLE_SHELL_REASON))
+        Response::Envelope(payload::deny(payload.harness(), UNUSABLE_SHELL_REASON))
     } else {
         Response::Silent
     }

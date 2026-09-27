@@ -86,7 +86,9 @@ fn denied(out: &Output) -> bool {
         return false;
     }
     let v: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
-    v["hookSpecificOutput"]["permissionDecision"] == "deny" || v["permission"] == "deny"
+    v["hookSpecificOutput"]["permissionDecision"] == "deny"
+        || v["permission"] == "deny"
+        || v["decision"] == "deny"
 }
 
 const GUARDED: &str = r#"
@@ -219,6 +221,68 @@ fn a_cursor_payload_gets_the_cursor_envelope() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
     assert_eq!(v["permission"], "deny");
     assert!(v["agent_message"].is_string());
+}
+
+/// Cursor runs hooks configured for Claude Code and sends them its own
+/// camelCase payload, so the payload's shape beats the Claude Code manifest.
+#[test]
+fn a_cursor_payload_through_the_claude_code_manifest_gets_the_cursor_envelope() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GUARDED);
+    let payload = serde_json::json!({
+        "conversation_id": "c1",
+        "session_id": "c1",
+        "hook_event_name": "preToolUse",
+        "cursor_version": "2026.09.26-dd393fe",
+        "tool_name": "Shell",
+        "tool_input": { "command": "node server.js", "cwd": "" },
+        "tool_use_id": "u1",
+        "cwd": ""
+    })
+    .to_string();
+    let out = run_argv(
+        proj.path(),
+        home.path(),
+        &["hook", "pre-tool-use", "--harness", "claude-code"],
+        &payload,
+        &[],
+    );
+    assert!(denied(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+    assert_eq!(v["permission"], "deny");
+}
+
+/// Antigravity sends no `hook_event_name`, so the verb names the event.
+#[test]
+fn an_antigravity_run_command_gets_the_antigravity_envelope() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GUARDED);
+    let payload = serde_json::json!({
+        "conversationId": "b1aed54b-b201-4432-aaa4-c4403f2863e6",
+        "modelName": "gemini-3.8-flash-low",
+        "stepIdx": 2,
+        "toolCall": {
+            "name": "run_command",
+            "args": {
+                "CommandLine": "node server.js",
+                "Cwd": proj.path().to_string_lossy(),
+                "WaitMsBeforeAsync": 5000
+            }
+        },
+        "workspacePaths": [proj.path().to_string_lossy()]
+    })
+    .to_string();
+    let out = run_argv(
+        proj.path(),
+        home.path(),
+        &["hook", "pre-tool-use", "--harness", "antigravity"],
+        &payload,
+        &[],
+    );
+    assert!(denied(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+    assert_eq!(v["decision"], "deny");
+    assert!(v["reason"].as_str().unwrap().contains("bun-only"), "{v}");
 }
 
 #[test]
@@ -400,13 +464,18 @@ fn the_one_word_alias_answers_the_same_way() {
 fn the_declared_harness_picks_the_envelope() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(GUARDED);
-    // A Claude Code-shaped payload, answered as Cursor because the manifest
-    // said so. Inference alone would read this as Claude Code.
+    // Cursor's tool fields with neither its event nor `cursor_version`, which
+    // inference alone reads as Claude Code.
+    let payload = serde_json::json!({
+        "tool_name": "Shell",
+        "tool_input": { "command": "node server.js" }
+    })
+    .to_string();
     let out = run_argv(
         proj.path(),
         home.path(),
         &["hook", "pre-tool-use", "--harness", "cursor"],
-        &claude_payload("node server.js"),
+        &payload,
         &[("DEVKIT_ENFORCE_COMMANDS", "1")],
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
