@@ -51,7 +51,7 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
             "--body",
             &rendered.body,
         ],
-        sel.repos.issues()?,
+        sel.forge.repos.issues()?,
         &start,
     )?;
     let url = out
