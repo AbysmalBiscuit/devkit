@@ -146,6 +146,13 @@ pub(super) fn decide(
     ctx: &Context<'_>,
     receipt: &dyn Fn(Field, &str) -> Result<bool>,
 ) -> Result<Verdict> {
+    if !input.is_object() {
+        return Ok(Verdict::Deny(format!(
+            "This `{server}` `{tool}` call's input is not a JSON object, so its `{}` and `{}` \
+             cannot be checked against `devkit issue render`.",
+            rule.title, rule.body
+        )));
+    }
     let create = rule.is_create(input);
     if !create
         && let Some(patch) = rule
@@ -286,6 +293,14 @@ mod tests {
     fn a_non_string_field_is_denied() {
         let v = run(&linear(), json!({"title": 5}), &[(Field::Body, "")]);
         assert!(denied_mentioning(&v, "`title` is not a string"), "{v:?}");
+    }
+
+    #[test]
+    fn a_non_object_input_is_denied_as_such() {
+        for rule in [linear(), github()] {
+            let v = run(&rule, json!("T"), &[]);
+            assert!(denied_mentioning(&v, "not a JSON object"), "{v:?}");
+        }
     }
 
     #[test]
