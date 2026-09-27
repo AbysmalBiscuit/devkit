@@ -45,6 +45,19 @@ const WRITES: &[(&str, FileOp, usize)] = &[
     ("symlink", FileOp::Create, 1),
     ("linkSync", FileOp::Create, 1),
     ("link", FileOp::Create, 1),
+    ("chmodSync", FileOp::Permissions, 0),
+    ("chmod", FileOp::Permissions, 0),
+    ("lchmodSync", FileOp::Permissions, 0),
+    ("lchmod", FileOp::Permissions, 0),
+    ("chownSync", FileOp::Permissions, 0),
+    ("chown", FileOp::Permissions, 0),
+    ("lchownSync", FileOp::Permissions, 0),
+    ("lchown", FileOp::Permissions, 0),
+    // A descriptor never resolves to a path, so these stay unresolved.
+    ("fchmodSync", FileOp::Permissions, 0),
+    ("fchmod", FileOp::Permissions, 0),
+    ("fchownSync", FileOp::Permissions, 0),
+    ("fchown", FileOp::Permissions, 0),
 ];
 const WRITE_METHOD_NAMES: &[&str] = &[
     "writeFileSync",
@@ -64,6 +77,10 @@ const WRITE_METHOD_NAMES: &[&str] = &[
     "cp",
     "write",
     "writeTextFile",
+    "chmodSync",
+    "chmod",
+    "chownSync",
+    "chown",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -797,6 +814,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         );
                     }
                     "copyFile" => self.a.copy_content(&arg(1).as_value(), cwd.as_deref(), at),
+                    "chmod" | "chmodSync" | "chown" | "chownSync" => {
+                        self.js_effect(FileOp::Permissions, &arg(0), cwd.as_deref(), at)
+                    }
                     _ => {}
                 }
                 Js::Data
@@ -960,6 +980,42 @@ mod tests {
             )),
             ["/repo/out.txt"]
         );
+    }
+
+    #[test]
+    fn permission_changes_name_the_path_they_change() {
+        let a = bash(
+            "node -e \"const fs = require('fs'); const fsp = require('fs/promises'); \
+             fs.chmodSync('a', 0o755); fs.chmod('b', 0o755, () => {}); fs.lchmodSync('c', 0o755); \
+             fs.chownSync('d', 1, 1); fs.lchown('e', 1, 1, () => {}); fsp.chmod('f', 0o755); \
+             fsp.lchown('g', 1, 1)\"",
+        );
+        assert_eq!(targets(&a), [
+            "/repo/a", "/repo/b", "/repo/c", "/repo/d", "/repo/e", "/repo/f", "/repo/g"
+        ]);
+        assert!(
+            a.file_effects
+                .iter()
+                .all(|e| e.op == crate::FileOp::Permissions),
+            "{:?}",
+            a.file_effects
+        );
+        assert_eq!(
+            targets(&bash(
+                "deno eval \"await Deno.chmod('h', 0o755); Deno.chownSync('i', 1, 1)\""
+            )),
+            ["/repo/h", "/repo/i"]
+        );
+    }
+
+    #[test]
+    fn a_permission_change_through_a_descriptor_or_lost_receiver_is_unresolved() {
+        for source in [
+            "node -e \"require('fs').fchmodSync(3, 0o755)\"",
+            "node -e \"thing.chown('a', 1, 1)\"",
+        ] {
+            assert!(unresolved(&bash(source)), "{source}");
+        }
     }
 
     #[test]

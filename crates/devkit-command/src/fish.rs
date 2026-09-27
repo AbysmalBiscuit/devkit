@@ -511,6 +511,14 @@ mod tests {
     }
 
     #[test]
+    fn a_permission_change_names_its_path() {
+        let a = fish("set f run.sh; chmod +x $f; and chown -R me bin");
+        assert_eq!(targets(&a), ["/repo/run.sh"]);
+        assert_eq!(a.file_effects[0].op, crate::FileOp::Permissions);
+        assert_eq!(a.tree_effects[0].scope, "/repo/bin");
+    }
+
+    #[test]
     fn conditional_cwd_is_merged_as_uncertain() {
         assert_eq!(targets(&fish("false; and cd sub; touch a.txt")), ["?"]);
     }

@@ -106,6 +106,9 @@ enum Verb {
     CopyItem,
     #[strum(serialize = "export-csv", serialize = "export-clixml")]
     ExportFile,
+    #[strum(serialize = "set-itemproperty", serialize = "sp")]
+    SetItemProperty,
+    SetAcl,
     ExpandArchive,
     #[strum(
         serialize = "invoke-webrequest",
@@ -177,6 +180,10 @@ fn cmdlet(name: &str) -> Option<Cmdlet> {
             &["path"],
             &["append", "force", "notypeinformation"],
         ),
+        Verb::SetItemProperty => (&["path", "name", "value"], &["path", "name", "value"], &[
+            "force",
+        ]),
+        Verb::SetAcl => (&["path", "aclobject"], &["path", "aclobject"], &[]),
         Verb::ExpandArchive => (
             &["path", "destinationpath"],
             &["path", "destinationpath"],
@@ -1329,6 +1336,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     file(self, FileOp::Copy, get("destination"), true);
                 }
             }
+            // Every other property name is a registry value or a timestamp.
+            Verb::SetItemProperty => {
+                let name = get("name").and_then(|v| v.known().map(str::to_ascii_lowercase));
+                if matches!(name.as_deref(), Some("isreadonly" | "attributes")) {
+                    file(self, FileOp::Permissions, get("path"), literal);
+                }
+            }
+            Verb::SetAcl => file(self, FileOp::Permissions, get("path"), literal),
             Verb::ExpandArchive => tree(
                 self,
                 get("destinationpath").unwrap_or(Value::Known(".".into())),
@@ -1770,6 +1785,37 @@ mod tests {
         assert!(
             targets(&a).iter().all(|target| target.len() <= 64 * 1024),
             "{a:?}"
+        );
+    }
+
+    #[test]
+    fn permission_changes_name_the_path_they_change() {
+        let a = ps(
+            "Set-ItemProperty -Path a.txt -Name IsReadOnly -Value $true; \
+             sp b.txt Attributes ReadOnly; Set-Acl c.txt $acl; icacls d.txt /grant 'me:F'",
+        );
+        assert_eq!(targets(&a), [
+            "C:/repo/a.txt",
+            "C:/repo/b.txt",
+            "C:/repo/c.txt",
+            "C:/repo/d.txt"
+        ]);
+        assert!(
+            a.file_effects
+                .iter()
+                .all(|e| e.op == crate::FileOp::Permissions),
+            "{:?}",
+            a.file_effects
+        );
+        assert!(
+            targets(&ps(
+                "Set-ItemProperty HKCU:/Software/x -Name Level -Value 1"
+            ))
+            .is_empty()
+        );
+        assert_eq!(
+            targets(&ps("Set-ItemProperty $p -Name IsReadOnly $true")),
+            ["?"]
         );
     }
 

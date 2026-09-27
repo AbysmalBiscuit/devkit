@@ -706,6 +706,58 @@ fn a_tree_writer_is_checked_and_claims_nothing() {
     assert_eq!(rows(&e), [("src/lib.rs".to_string(), "S2".to_string())]);
 }
 
+/// A mode or owner change leaves the contents alone, so it claims nothing, but
+/// it still changes a file another session may hold.
+#[test]
+fn a_permission_change_is_checked_and_claims_nothing() {
+    let commands = [
+        "chmod +x run.sh",
+        "chmod -x run.sh",
+        "chown me:staff run.sh",
+        "python3 -c \"import os; os.chmod('run.sh', 0o755)\"",
+        "python3 -c \"import pathlib; pathlib.Path('run.sh').chmod(0o755)\"",
+        "node -e \"require('fs').chmodSync('run.sh', 0o755)\"",
+        "bun -e \"import { chown } from 'node:fs/promises'; await chown('run.sh', 1, 1)\"",
+    ];
+    let e = env(WRITES);
+    for command in commands {
+        assert_eq!(denial(&hook(&e, Some("S1"), command)), None, "{command}");
+    }
+    assert!(rows(&e).is_empty(), "{:?}", rows(&e));
+    for held in ["run.sh", "."] {
+        let e = env(WRITES);
+        acquire(&e, "S2", held);
+        for command in commands {
+            let reason = denial(&hook(&e, Some("S1"), command))
+                .unwrap_or_else(|| panic!("{held}: allowed: {command}"));
+            assert!(reason.contains("S2"), "{held}: {command}: {reason}");
+        }
+        assert_eq!(rows(&e), [(held.to_string(), "S2".to_string())]);
+    }
+}
+
+/// Only a recursive or globbed change reaches the paths under a directory.
+#[test]
+fn a_permission_change_reaches_under_a_directory_only_when_recursive() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("bin")).unwrap();
+    acquire(&e, "S2", "bin/tool");
+    assert_eq!(denial(&hook(&e, Some("S1"), "chmod 755 bin")), None);
+    for command in ["chmod -R 755 bin", "chown -R me bin", "chmod +x bin/*"] {
+        let reason =
+            denial(&hook(&e, Some("S1"), command)).unwrap_or_else(|| panic!("allowed: {command}"));
+        assert!(reason.contains("S2"), "{command}: {reason}");
+    }
+    assert_eq!(rows(&e), [("bin/tool".to_string(), "S2".to_string())]);
+}
+
+#[test]
+fn a_permission_change_on_an_undetermined_path_is_unresolved() {
+    let e = env(WRITES);
+    let reason = denial(&hook(&e, Some("S1"), "chmod +x \"$F\"")).expect("denied");
+    assert!(reason.contains("could not be determined"), "{reason}");
+}
+
 fn subagent_hook(e: &Env, session: &str, agent: &str, command: &str) -> Output {
     let mut p: serde_json::Value =
         serde_json::from_str(&payload(e, Some(session), "Bash", command)).unwrap();

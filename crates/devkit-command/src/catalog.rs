@@ -67,6 +67,10 @@ enum Program {
     Wget,
     Tar,
     Unzip,
+    Chmod,
+    Chown,
+    Chgrp,
+    Icacls,
 }
 
 pub(crate) fn is_cataloged(name: &str) -> bool {
@@ -593,6 +597,75 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
             }
         }
         Program::Mkdir => Vec::new(),
+        Program::Chmod | Program::Chown | Program::Chgrp => {
+            let p = parse(args, &[]);
+            // A symbolic mode that takes permissions away (`-x`, `-w,o-r`)
+            // reads as an option, which leaves no mode among the operands.
+            let mode_as_flag = program == Program::Chmod
+                && p.flags.iter().any(|f| {
+                    !f.starts_with("--")
+                        && f[1..].chars().all(|c| "rwxXstugoa=+-,01234567".contains(c))
+                });
+            let paths = if mode_as_flag || p.value(&["--reference"]).is_some() {
+                &p.operands[..]
+            } else {
+                p.operands.get(1..).unwrap_or(&[])
+            };
+            let recursive = p.has_short('R') || p.has("--recursive");
+            let by = format!("{} -R", <&str>::from(program));
+            paths
+                .iter()
+                .map(|v| match v {
+                    Value::Known(_) if recursive => tree(v, false, &by),
+                    _ => file(FileOp::Permissions, v),
+                })
+                .collect()
+        }
+        Program::Icacls => icacls(args),
+    }
+}
+
+/// `icacls NAME SWITCH...` prints the ACL of NAME unless a switch changes it.
+/// `/T` extends a change to everything under NAME, and `/restore` applies
+/// saved ACLs to files under it.
+fn icacls(args: &[Value]) -> Vec<Hit> {
+    let Some((name, rest)) = args.split_first() else {
+        return Vec::new();
+    };
+    let switches: Vec<Option<String>> = rest
+        .iter()
+        .map(|a| a.known().map(str::to_ascii_lowercase))
+        .collect();
+    let has = |s: &str| switches.iter().flatten().any(|a| a == s);
+    if let Some(i) = switches.iter().position(|a| a.as_deref() == Some("/save")) {
+        return vec![file(
+            FileOp::Overwrite,
+            rest.get(i + 1).unwrap_or(&Value::Unknown),
+        )];
+    }
+    if has("/restore") {
+        return vec![tree(name, false, "icacls /restore")];
+    }
+    let changes = switches.iter().any(|a| {
+        a.as_deref().is_none_or(|a| {
+            [
+                "/grant",
+                "/deny",
+                "/remove",
+                "/setowner",
+                "/reset",
+                "/setintegritylevel",
+                "/inheritance",
+                "/substitute",
+            ]
+            .iter()
+            .any(|s| a.starts_with(s))
+        })
+    });
+    match name {
+        _ if !changes => Vec::new(),
+        Value::Known(_) if has("/t") => vec![tree(name, false, "icacls /T")],
+        _ => vec![file(FileOp::Permissions, name)],
     }
 }
 
@@ -765,6 +838,42 @@ mod tests {
         ]);
         assert!(hits("mkdir", &["-p", "src"]).is_empty());
         assert!(hits("cat", &["a"]).is_empty());
+    }
+
+    #[test]
+    fn permission_changes_name_the_paths_they_change() {
+        assert_eq!(hits("chmod", &["+x", "run.sh"]), ["Permissions run.sh"]);
+        assert_eq!(hits("chmod", &["-x", "a", "b"]), [
+            "Permissions a",
+            "Permissions b"
+        ]);
+        assert_eq!(hits("chmod", &["-v", "u+x,g-w", "a"]), ["Permissions a"]);
+        assert_eq!(hits("chmod", &["--reference=ref", "a"]), ["Permissions a"]);
+        assert_eq!(hits("chmod", &["-R", "755", "bin"]), [
+            "Tree bin false chmod -R"
+        ]);
+        assert_eq!(hits("chown", &["me:staff", "a"]), ["Permissions a"]);
+        assert_eq!(hits("chown", &["--recursive", "me", "bin"]), [
+            "Tree bin false chown -R"
+        ]);
+        assert_eq!(hits("chgrp", &["-h", "staff", "a"]), ["Permissions a"]);
+        assert!(hits("chmod", &["755"]).is_empty());
+    }
+
+    #[test]
+    fn icacls_changes_only_with_a_modifying_switch() {
+        assert_eq!(hits("icacls", &["a", "/grant", "me:F"]), ["Permissions a"]);
+        assert_eq!(hits("icacls", &["bin", "/RESET", "/T"]), [
+            "Tree bin false icacls /T"
+        ]);
+        assert_eq!(hits("icacls", &["bin", "/save", "acl.txt"]), [
+            "Overwrite acl.txt"
+        ]);
+        assert_eq!(hits("icacls", &["bin", "/restore", "acl.txt"]), [
+            "Tree bin false icacls /restore"
+        ]);
+        assert!(hits("icacls", &["a"]).is_empty());
+        assert!(hits("icacls", &["a", "/q"]).is_empty());
     }
 
     #[test]
