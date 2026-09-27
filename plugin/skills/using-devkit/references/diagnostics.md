@@ -17,11 +17,11 @@ devkit schema init [<path>]                    # point a devkit.toml at the publ
 
 ## `doctor`
 
-One row per credential (source `env`/`file`/`unset`, and live validity), plus a `config` row. It exits non-zero when a set credential fails validation or a `devkit.toml` exists that does not load; no `devkit.toml` at all is fine. It also warns about installed binaries older than the newest plugin checkout, servers running outside devrun, baselines nothing references, unreferenced docs checkouts, and missing or foreign old-name shims (a shim problem never changes the exit code). The `tracker` row names the tracker and whether `[tracker] kind` or detection chose it. The `harness_log` row shows the logging mode in force.
+One row per credential (source `env`/`file`/`unset`, and live validity), plus a `config` row. It exits non-zero when a set credential fails validation or a `devkit.toml` exists that does not load; no `devkit.toml` at all is fine. It also warns about installed binaries older than the newest plugin checkout, servers running outside devrun, baselines nothing references, unreferenced docs checkouts, and missing or foreign old-name shims (a shim problem never changes the exit code). The `tracker` row names the tracker and whether `[tracker] kind` or detection chose it, and the `forge` row does the same for the forge and its host, warning when no forge was found or no token resolves. The `harness_log` row shows the logging mode in force.
 
 ## `auth github` reports, it stores nothing
 
-devkit keeps no GitHub credential of its own, because `gh auth login`, `GH_TOKEN` and `GITHUB_TOKEN` already cover it. Resolution order: `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth token`.
+devkit keeps no GitHub credential of its own, because `gh auth login`, `GH_TOKEN` and `GITHUB_TOKEN` already cover it. Resolution order: `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth token`. On a project whose `[forge]` is a GitHub Enterprise host, the command reports that host instead, and the variables are `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN`.
 
 The command prints the identity behind the token devkit would send, names which of the three supplied it, then lists `gh`'s own accounts below. Those two can differ, and the token's identity is the one devkit uses. A `--token` passed here is refused rather than silently discarded.
 
