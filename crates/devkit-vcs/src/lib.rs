@@ -100,6 +100,10 @@ pub trait VersionControl {
     /// The full id of the commit checked out at `dir`.
     fn revision(&self, dir: &::std::path::Path) -> ::anyhow::Result<::std::string::String>;
 
+    /// How many commits at `dir`'s head `base` does not reach. `Err` when
+    /// `base` is not a commit the local repository has.
+    fn ahead(&self, dir: &::std::path::Path, base: &str) -> ::anyhow::Result<u32>;
+
     fn has_branch(&self, repo: &::std::path::Path, name: &str) -> ::anyhow::Result<bool>;
 
     /// Deletes `name` whether or not it has landed anywhere.

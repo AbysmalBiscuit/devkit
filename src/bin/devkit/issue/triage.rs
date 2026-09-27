@@ -1,5 +1,5 @@
 use devkit_common::{tracker::StateKind, ui};
-use devkit_issue::status::{IssueWorktree, PrStatus, StatusReport};
+use devkit_issue::status::{IssueWorktree, PrStatus, StatusReport, Tree};
 
 fn pr_label(row: &IssueWorktree) -> String {
     match &row.pr {
@@ -53,11 +53,11 @@ pub(crate) fn branch_cell(branch: &str) -> String {
     ui::dim(&ui::truncate(branch, BRANCH_MAX))
 }
 
-pub(crate) fn tree_cell(dirty: bool) -> String {
-    if dirty {
-        ui::red("dirty")
-    } else {
-        ui::dim("clean")
+pub(crate) fn tree_cell(tree: &Tree) -> String {
+    match tree {
+        Tree::Clean => ui::dim("clean"),
+        Tree::Dirty => ui::red("dirty"),
+        Tree::Unknown(_) => ui::yellow("unknown"),
     }
 }
 
@@ -102,14 +102,14 @@ pub(crate) fn state_cell(row: &IssueWorktree, ready: bool) -> String {
 pub(crate) fn verdict_cell(row: &IssueWorktree, offline: bool) -> String {
     if offline {
         ui::dim("—")
-    } else if row.finished {
+    } else if row.verdict.is_finished() {
         ui::bold_green("FINISHED")
     } else {
         // The only "ball in your court" reason is a dirty tree; flag it
         // yellow, leave the rest (waiting on PR/tracker) dim.
-        match row.reason_not_finished.as_deref() {
-            Some(r) if r.contains("dirty") => ui::yellow(r),
-            Some(r) => ui::dim(r),
+        match row.verdict.reason() {
+            Some(r) if r.contains("dirty") => ui::yellow(&r),
+            Some(r) => ui::dim(&r),
             None => ui::dim(""),
         }
     }
@@ -136,7 +136,7 @@ pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
         t.add_row(vec![
             issue_cell(row, report.tracker.link_base.as_deref()),
             branch_cell(&row.branch),
-            tree_cell(row.dirty),
+            tree_cell(&row.tree),
             pr_cell(row),
             state_disp,
             verdict_cell(row, offline),
@@ -149,7 +149,7 @@ pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
 #[cfg(test)]
 mod tests {
     use devkit_common::worktree::IssueId;
-    use devkit_issue::status::IssueWorktree;
+    use devkit_issue::status::{IssueWorktree, Verdict};
 
     use super::*;
 
@@ -158,11 +158,11 @@ mod tests {
             worktree: "/w".into(),
             branch: "lev/eng-1-x".into(),
             issue_id: "ENG-1".parse().unwrap(),
-            dirty: false,
+            record_unreadable: false,
+            tree: Tree::Clean,
             pr,
             state: None,
-            finished: false,
-            reason_not_finished: None,
+            verdict: Default::default(),
         }
     }
 
@@ -175,6 +175,7 @@ mod tests {
                 state: pr_state.into(),
                 url: "".into(),
                 is_draft: false,
+                ahead: None,
             }
         };
         row_with(pr)
@@ -225,6 +226,7 @@ mod tests {
                 state: "MERGED".into(),
                 url: "u".into(),
                 is_draft: false,
+                ahead: Some(0),
             })),
             "MERGED #12"
         );
@@ -232,8 +234,12 @@ mod tests {
 
     #[test]
     fn tree_cell_states() {
-        assert_eq!(tree_cell(false), ui::dim("clean"));
-        assert_eq!(tree_cell(true), ui::red("dirty"));
+        assert_eq!(tree_cell(&Tree::Clean), ui::dim("clean"));
+        assert_eq!(tree_cell(&Tree::Dirty), ui::red("dirty"));
+        assert_eq!(
+            tree_cell(&Tree::Unknown("timed out".into())),
+            ui::yellow("unknown")
+        );
     }
 
     #[test]
@@ -253,10 +259,10 @@ mod tests {
     fn verdict_cell_variants() {
         assert_eq!(verdict_cell(&row("OPEN"), true), ui::dim("—"));
         let mut r = row("MERGED");
-        r.finished = true;
+        r.verdict = Verdict::Finished;
         assert_eq!(verdict_cell(&r, false), ui::bold_green("FINISHED"));
         let mut r = row("OPEN");
-        r.reason_not_finished = Some("PR not merged, dirty".into());
+        r.verdict = Verdict::Held(vec!["PR not merged".into(), "dirty".into()]);
         assert_eq!(
             verdict_cell(&r, false),
             ui::yellow("PR not merged, dirty"),
@@ -292,6 +298,7 @@ mod tests {
             state: "OPEN".into(),
             url: "u7".into(),
             is_draft: true,
+            ahead: None,
         });
         assert_eq!(pr_label(&row), "DRAFT #7");
         assert_eq!(pr_cell(&row), ui::link(&ui::dim("DRAFT #7"), "u7"));
@@ -307,6 +314,7 @@ mod tests {
             state: "CLOSED".into(),
             url: "u7".into(),
             is_draft: true,
+            ahead: None,
         });
         assert_eq!(pr_label(&row), "CLOSED #7");
         assert_eq!(pr_cell(&row), ui::link(&ui::red("CLOSED #7"), "u7"));
@@ -319,6 +327,7 @@ mod tests {
             state: "OPEN".into(),
             url: "u7".into(),
             is_draft: false,
+            ahead: None,
         });
         assert_eq!(pr_label(&row), "OPEN #7");
     }

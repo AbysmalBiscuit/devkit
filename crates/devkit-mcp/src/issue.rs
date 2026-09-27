@@ -48,7 +48,7 @@ fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let forge = resolve_forge(loaded.as_ref(), &root, None);
     let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
     let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root), &forge.repos);
-    let report = status::gather_with(&root, &a.ids, &tracker, &forge)?;
+    let report = status::gather_with(&root, &a.ids, &tracker, &forge, false)?;
     Ok(serde_json::to_value(report)?)
 }
 

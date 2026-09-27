@@ -64,6 +64,16 @@ impl VersionControl for GitBackend {
             .to_string())
     }
 
+    fn ahead(&self, dir: &Path, base: &str) -> Result<u32> {
+        let range = format!("{base}..HEAD");
+        let out = Git::at(dir)
+            .args(["rev-list", "--count", "--end-of-options", &range])
+            .output()?;
+        out.trim()
+            .parse()
+            .with_context(|| format!("`git rev-list --count {range}` printed {out:?}"))
+    }
+
     fn has_branch(&self, repo: &Path, name: &str) -> Result<bool> {
         Git::at(repo)
             .args([

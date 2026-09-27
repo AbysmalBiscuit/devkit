@@ -53,7 +53,7 @@ fn gather_local_returns_offline_rows_without_network() {
     assert_eq!(row.pr.state_label(), "NO_PR");
     assert_eq!(row.pr.number(), None);
     assert!(row.state.is_none());
-    assert!(!row.dirty);
+    assert_eq!(row.tree, devkit_issue::status::Tree::Clean);
 }
 
 #[test]
@@ -83,6 +83,7 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
         &["NOPE-1".into()],
         &injected,
         &forge,
+        false,
     )
     .unwrap();
     assert!(report.worktrees.is_empty());
