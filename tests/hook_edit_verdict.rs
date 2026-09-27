@@ -33,8 +33,18 @@ pub fn project() -> tempfile::TempDir {
 /// `devkit hook pre-tool-use` against a private HOME and state home, so a run
 /// started from inside a coding agent resolves the same holder CI does.
 pub fn run_hook(project: &Path, state: &Path, payload: &str) -> Output {
+    run_hook_as("claude-code", project, state, payload)
+}
+
+/// [`run_hook`] as Codex, the harness whose `apply_patch` the patch payloads
+/// model.
+fn run_codex_hook(project: &Path, state: &Path, payload: &str) -> Output {
+    run_hook_as("codex", project, state, payload)
+}
+
+fn run_hook_as(harness: &str, project: &Path, state: &Path, payload: &str) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
-    cmd.args(["hook", "pre-tool-use", "--harness", "claude-code"])
+    cmd.args(["hook", "pre-tool-use", "--harness", harness])
         .current_dir(project)
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
@@ -120,6 +130,77 @@ fn an_unconflicted_write_emits_nothing() {
     let payload = write_payload("S", None, proj.path(), "src/a.rs");
     let out = run_hook(proj.path(), state.path(), &payload);
     assert_eq!(one_object(&out), None, "an allow is silent");
+}
+
+fn deny_reason(out: &Output) -> String {
+    let v = one_object(out).expect("the call is denied");
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+    v["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Claude Code's `NotebookEdit` names its target `notebook_path`, not the
+/// `file_path` every other edit tool uses.
+#[test]
+fn a_notebook_edit_claims_its_notebook_path() {
+    let proj = project();
+    let state = tempfile::tempdir().unwrap();
+    hold(proj.path(), state.path(), "n.ipynb", "other-session");
+
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "NotebookEdit",
+        "session_id": "S",
+        "cwd": proj.path().to_string_lossy(),
+        "tool_input": { "notebook_path": "n.ipynb", "new_source": "x" }
+    })
+    .to_string();
+    let reason = deny_reason(&run_hook(proj.path(), state.path(), &payload));
+    assert!(
+        reason.contains("other-session"),
+        "the notebook's holder blocks it: {reason}"
+    );
+}
+
+/// A patch body line starting with a space is context, whatever it says.
+#[test]
+fn a_patch_context_line_shaped_like_a_header_claims_nothing() {
+    let proj = project();
+    let state = tempfile::tempdir().unwrap();
+    hold(proj.path(), state.path(), "other.rs", "other-session");
+
+    let patch =
+        "*** Begin Patch\n*** Update File: a.rs\n@@\n *** Add File: other.rs\n*** End Patch\n";
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "session_id": "S",
+        "cwd": proj.path().to_string_lossy(),
+        "tool_input": { "command": patch }
+    })
+    .to_string();
+    let out = run_codex_hook(proj.path(), state.path(), &payload);
+    assert_eq!(one_object(&out), None, "only a.rs is claimed");
+}
+
+/// A patch without its `*** Begin Patch` line names no target, and a write
+/// whose targets cannot be read fails closed.
+#[test]
+fn a_patch_outside_its_envelope_is_denied() {
+    let proj = project();
+    let state = tempfile::tempdir().unwrap();
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "session_id": "S",
+        "cwd": proj.path().to_string_lossy(),
+        "tool_input": { "command": "*** Update File: a.rs\n*** End Patch\n" }
+    })
+    .to_string();
+    let reason = deny_reason(&run_codex_hook(proj.path(), state.path(), &payload));
+    assert!(reason.contains("names no target"), "{reason}");
 }
 
 /// A project whose `[rules]` are on, carrying an index at a known path and a
@@ -348,7 +429,7 @@ fn cwd_drop_project(state: &Path) -> tempfile::TempDir {
 }
 
 /// No `cwd` key, so a relative target cannot be resolved.
-/// `apply_patch_paths` takes paths verbatim, relative to the session's cwd.
+/// A patch names its paths verbatim, relative to the session's cwd.
 /// The relative target's own directory carries a rule the absolute target's
 /// directory does not, so a resolver that failed to drop it would surface
 /// that rule here rather than passing for an unrelated reason.
@@ -360,7 +441,7 @@ fn a_payload_without_cwd_drops_relative_targets_and_keeps_absolute_ones() {
     let absolute = absolute.to_string_lossy().into_owned();
     let payload = patch_payload("S", None, &["relative/b.rs", &absolute]);
 
-    let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    let text = injected_text(&run_codex_hook(proj.path(), state.path(), &payload));
     assert!(
         text.contains("Foo should"),
         "the absolute target still matches: {text}"
@@ -405,7 +486,7 @@ fn a_multi_target_call_unions_the_rules_for_every_target() {
         "README.md",
     ]);
 
-    let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    let text = injected_text(&run_codex_hook(proj.path(), state.path(), &payload));
     assert!(text.contains("Foo should"), "the crates/foo target: {text}");
     assert!(text.contains("Root must"), "the root target: {text}");
 }
@@ -437,10 +518,10 @@ fn a_multi_target_call_ranks_the_union_before_the_limit() {
         "README.md",
         "crates/foo/src/a.rs",
     ]);
-    let first = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    let first = injected_text(&run_codex_hook(proj.path(), state.path(), &payload));
     assert!(first.contains("Deep rule"), "{first}");
     assert!(!first.contains("Root rule"), "{first}");
-    let second = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    let second = injected_text(&run_codex_hook(proj.path(), state.path(), &payload));
     assert!(second.contains("Root rule"), "{second}");
     assert!(!second.contains("Deep rule"), "{second}");
 }

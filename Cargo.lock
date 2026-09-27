@@ -18,6 +18,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ambassador"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd3d4da7fddbc6567cbd7b5c30364f91313701b1857ab5b925eb3acf06162eed"
+dependencies = [
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "ansi-str"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -347,6 +359,7 @@ dependencies = [
  "indicatif",
  "interprocess",
  "nix",
+ "pabal",
  "rgb",
  "rpassword",
  "same-file",
@@ -354,7 +367,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
- "strum",
+ "strum 0.27.2",
  "tempfile",
  "textplots",
  "toml",
@@ -366,7 +379,7 @@ name = "devkit-command"
 version = "0.14.6"
 dependencies = [
  "serde_json",
- "strum",
+ "strum 0.27.2",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-fish",
@@ -400,7 +413,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
- "strum",
+ "strum 0.27.2",
  "supports-hyperlinks",
  "tempfile",
  "toml",
@@ -438,7 +451,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "strum",
+ "strum 0.27.2",
  "tempfile",
  "toml",
  "toml_edit",
@@ -519,7 +532,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "strum",
+ "strum 0.27.2",
  "tempfile",
  "toml",
 ]
@@ -856,6 +869,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1022,6 +1044,18 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "pabal"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "804405665f5e62e84e5c657cd95f19b7d43bba0ab4cd81ff2c8af099e78e487d"
+dependencies = [
+ "ambassador",
+ "serde_json",
+ "strum 0.28.0",
+ "thiserror",
+]
 
 [[package]]
 name = "parking_lot"
@@ -1503,7 +1537,16 @@ version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.27.2",
+]
+
+[[package]]
+name = "strum"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
+dependencies = [
+ "strum_macros 0.28.0",
 ]
 
 [[package]]
@@ -1511,6 +1554,18 @@ name = "strum_macros"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -1594,6 +1649,26 @@ checksum = "8f7657a0066c9f9663659db0665319adff8b0943305fc73eddf1010e5a2072b1"
 dependencies = [
  "drawille",
  "rgb",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]

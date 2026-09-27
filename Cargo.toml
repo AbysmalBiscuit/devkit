@@ -43,6 +43,7 @@ devkit-issue.workspace = true
 devkit-mcp.workspace = true
 devkit-docs.workspace = true
 devkit-rules.workspace = true
+pabal.workspace = true
 same-file.workspace = true
 strum.workspace = true
 
@@ -101,6 +102,7 @@ indicatif = "0.17"
 console = "0.15"
 supports-hyperlinks = "3"
 strum = { version = "0.27", features = ["derive"] }
+pabal = "0.1"
 ureq = { version = "2", features = ["json"] }
 # ureq's TLS stack. Default features off: they pull aws-lc-rs, ureq uses ring.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }

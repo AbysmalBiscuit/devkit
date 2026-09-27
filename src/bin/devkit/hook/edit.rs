@@ -2,83 +2,102 @@
 //!
 //! A structured edit names its targets in the payload, so there is nothing to
 //! analyse: the targets are claimed as they stand. Fails closed, the same as
-//! the shell path's write stage — a payload this cannot evaluate denies rather
+//! the shell path's write stage. A payload this cannot evaluate denies rather
 //! than allows, because an unevaluable write must not open the window.
 //!
 //! The release verbs carry no permission decision at all. Nothing they can
 //! answer would be read.
 
-use anyhow::Result;
 use devkit_common::{
     git::Checkout,
-    harness::Harness,
     harness_log::{self, Decision, EditPre, Kind, Verdict},
 };
 use devkit_locks::{
-    hook::{self, LockAction},
+    hook,
     model::{Conflict, WriteDecision},
 };
-use serde_json::Value;
+use pabal::Tool;
 
-use super::{HookEvent, record, rules, shell};
+use super::{HookEvent, payload::Payload, record, rules, shell};
 
-/// What the write stage decided.
-///
-/// `claim` returns this rather than printing, so `guard` owns the edit path's
-/// single emission site. Anything appended to stdout after a denial makes the
-/// whole output unparseable, and a harness that cannot parse a hook's stdout
-/// proceeds with the call it was asked to gate.
-enum WriteOutcome {
-    Allow,
-    Deny {
-        envelope: serde_json::Value,
-        reasons: Vec<String>,
+/// Tools pabal reads write targets from. One that arrives without a readable
+/// target is a harness format change, so it is a write to deny rather than a
+/// tool to ignore.
+const WRITE_TOOLS: [&str; 5] = ["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"];
+
+/// What a `PreToolUse` call asks to write.
+pub enum Write {
+    Targets {
+        paths: Vec<String>,
+        holder: String,
     },
+    /// A write this hook cannot evaluate.
+    Unusable(String),
+}
+
+/// The call's write intent. `None` when the tool does not write, which is the
+/// common case and not a failure.
+pub fn write(payload: &Payload) -> Option<Write> {
+    let name = payload.tool_name().unwrap_or_default();
+    let paths = match payload.tool() {
+        Some(Tool::Edit(edit)) => edit.paths(),
+        _ if WRITE_TOOLS.contains(&name) => Vec::new(),
+        _ => return None,
+    };
+    let Some(session) = payload.session_id() else {
+        return Some(Write::Unusable(
+            "write payload carries no session_id".into(),
+        ));
+    };
+    if paths.is_empty() {
+        return Some(Write::Unusable(format!(
+            "write payload for {name} names no target"
+        )));
+    }
+    Some(Write::Targets {
+        paths: paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect(),
+        holder: hook::holder_from_fields(session, payload.agent()),
+    })
 }
 
 /// Claim the write targets a structured-edit payload names, before the tool
 /// runs.
-pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
+///
+/// This is the edit path's single emission site. Anything appended to stdout
+/// after a denial makes the whole output unparseable, and a harness that
+/// cannot parse a hook's stdout proceeds with the call it was asked to gate.
+pub fn guard(payload: &Payload, write: Write) -> anyhow::Result<()> {
     let cwd = record::payload_cwd(payload);
     // One `git worktree list` for the whole invocation, shared by the
     // enforcement gate, the lock scoping and the log settings. It resolves
     // lazily, so a tool that writes nothing spawns nothing.
     let checkout = Checkout::at(&cwd);
-    let (targets, _holder, reasons, outcome) = match hook::parse_write(payload) {
-        Some(LockAction::Write {
-            file_paths, holder, ..
-        }) => {
-            let outcome = claim(payload, &checkout, &cwd, &file_paths, &holder);
-            let reasons = match &outcome {
-                WriteOutcome::Allow => {
-                    rules::inject(payload, &checkout, &cwd, declared, &file_paths, &holder);
+    let (targets, blocks) = match write {
+        Write::Targets { paths, holder } => {
+            let blocks = match claim(payload, &checkout, &cwd, &paths, &holder) {
+                Some(reason) => vec![reason],
+                None => {
+                    rules::inject(payload, &checkout, &cwd, &paths, &holder);
                     Vec::new()
                 }
-                WriteOutcome::Deny { reasons, .. } => reasons.clone(),
             };
-            (file_paths, holder, reasons, outcome)
+            (paths, blocks)
         }
-        Some(LockAction::Unusable { reason }) => {
+        Write::Unusable(reason) => {
             let message = format!("devkit write-harness: {reason} (fail-closed)");
-            let outcome = if hook::enforcement_enabled_in(&checkout, &cwd) {
-                WriteOutcome::Deny {
-                    envelope: hook::deny_json(&message),
-                    reasons: vec![message.clone()],
-                }
+            let blocks = if hook::enforcement_enabled_in(&checkout, &cwd) {
+                vec![message]
             } else {
-                WriteOutcome::Allow
+                Vec::new()
             };
-            (Vec::new(), String::new(), vec![message], outcome)
-        }
-        // A tool that does not write, which is the common case. The release
-        // variants never come back from `parse_write`.
-        Some(LockAction::ReleaseSubagent { .. } | LockAction::ReleaseSession { .. }) | None => {
-            return Ok(());
+            (Vec::new(), blocks)
         }
     };
-    let blocks = reasons;
-    if let WriteOutcome::Deny { envelope, .. } = &outcome {
-        shell::print_envelope(envelope);
+    if let Some(reason) = blocks.first() {
+        shell::print_envelope(&payload.harness().deny(reason));
     }
     // Envelope first, then the record: a stall on the log directory before the
     // envelope exists runs into the manifest timeout, and a harness timeout
@@ -89,13 +108,9 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
         let rec = record::envelope(
             payload,
             HookEvent::PreToolUse,
-            declared,
             &checkout,
             Kind::EditPre(EditPre {
-                tool_name: payload
-                    .get("tool_name")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                tool_name: payload.tool_name().map(str::to_string),
                 targets,
                 verdict: Verdict {
                     decision: if blocks.is_empty() {
@@ -113,17 +128,17 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
     Ok(())
 }
 
-/// Claim each target, deciding the write. Nothing here prints; `guard` is the
-/// only site that emits.
+/// Claim each target, returning the reason the write is denied, if it is.
+/// Nothing here prints; `guard` is the only site that emits.
 fn claim(
-    payload: &Value,
+    payload: &Payload,
     checkout: &Checkout,
     cwd: &std::path::Path,
     file_paths: &[String],
     holder: &str,
-) -> WriteOutcome {
+) -> Option<String> {
     if !hook::enforcement_enabled_in(checkout, cwd) {
-        return WriteOutcome::Allow; // no opt-in (env, project layers, or global config) -> no enforcement
+        return None; // no opt-in (env, project layers, or global config) -> no enforcement
     }
     let mut conflicts = Vec::new();
     let mut resolver = devkit_locks::WriteResolver::with_checkout(checkout.clone());
@@ -132,100 +147,163 @@ fn claim(
         match resolver.decide_write(&target, holder, Some("write-harness"), 1800) {
             Ok(WriteDecision::Denied(c)) => conflicts.extend(c),
             Ok(_) => {}
+            // fail closed: a registry error must not silently reopen the window
             Err(e) => {
-                // fail closed: a registry error must not silently reopen the
-                // window
-                let message = format!("devkit write-harness: registry error (fail-closed): {e:#}");
-                return WriteOutcome::Deny {
-                    envelope: hook::deny_json(&message),
-                    reasons: vec![message],
-                };
+                return Some(format!(
+                    "devkit write-harness: registry error (fail-closed): {e:#}"
+                ));
             }
         }
     }
-    if conflicts.is_empty() {
-        return WriteOutcome::Allow;
-    }
-    let envelope = conflict_envelope(&conflicts);
-    let reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    WriteOutcome::Deny {
-        envelope,
-        reasons: vec![reason],
+    (!conflicts.is_empty()).then(|| conflict_reason(&conflicts))
+}
+
+pub fn release_subagent(payload: &Payload) {
+    // Releasing the bare session holder here would free the parent's and every
+    // sibling's locks, so an unattributable stop, a fork's included, releases
+    // nothing.
+    if let (Some(session), Some(agent)) = (payload.session_id(), payload.agent()) {
+        release(&hook::holder_from_fields(session, Some(agent)));
     }
 }
 
-pub fn release_subagent(payload: &Value) -> Result<()> {
-    release(hook::parse_subagent_stop(payload));
-    Ok(())
-}
-
-pub fn release_session(payload: &Value) -> Result<()> {
-    release(hook::parse_session_end(payload));
-    Ok(())
-}
-
-fn release(action: Option<LockAction>) {
-    if let Some(LockAction::ReleaseSubagent { holder } | LockAction::ReleaseSession { holder }) =
-        action
-        && devkit_locks::release_prefix(&holder).is_ok()
-    {
-        rules::clear_for_holder(&holder);
+pub fn release_session(payload: &Payload) {
+    if let Some(session) = payload.session_id() {
+        release(session);
     }
 }
 
-/// The deny envelope naming every holder in the way. `Acquired` and
-/// `AllowedByOwnership` emit nothing: an allow is silence.
-fn conflict_envelope(conflicts: &[Conflict]) -> serde_json::Value {
+fn release(holder: &str) {
+    if devkit_locks::release_prefix(holder).is_ok() {
+        rules::clear_for_holder(holder);
+    }
+}
+
+/// The deny reason naming every holder in the way.
+fn conflict_reason(conflicts: &[Conflict]) -> String {
     let who = conflicts
         .iter()
         .map(|c| format!("{} (held by {})", c.path, c.held_by))
         .collect::<Vec<_>>()
         .join(", ");
-    hook::deny_json(&format!(
-        "devkit write-harness: {who} — locked by another agent; \
+    format!(
+        "devkit write-harness: {who}, locked by another agent; \
          coordinate or wait for it to finish"
-    ))
+    )
 }
 
 /// Resolve a payload path against the session's own working directory, so a
 /// relative target names the file the session meant rather than one relative to
 /// wherever the harness spawned the hook process.
-fn resolve_against(payload: &Value, path: &str) -> String {
+fn resolve_against(payload: &Payload, path: &str) -> String {
     let p = std::path::Path::new(path);
     if p.is_absolute() {
         return path.to_string();
     }
     payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(|cwd| {
-            std::path::Path::new(cwd)
-                .join(p)
-                .to_string_lossy()
-                .into_owned()
-        })
+        .cwd()
+        .map(|cwd| cwd.join(p).to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
+    fn payload(raw: serde_json::Value) -> Payload {
+        Payload::new(None, raw).unwrap()
+    }
+
+    fn targets(raw: serde_json::Value) -> (Vec<String>, String) {
+        match write(&payload(raw)) {
+            Some(Write::Targets { paths, holder }) => (paths, holder),
+            Some(Write::Unusable(reason)) => panic!("expected targets, got Unusable({reason})"),
+            None => panic!("expected targets, got no write"),
+        }
+    }
+
+    fn unusable(raw: serde_json::Value) -> String {
+        match write(&payload(raw)) {
+            Some(Write::Unusable(reason)) => reason,
+            _ => panic!("expected Unusable"),
+        }
+    }
+
     #[test]
-    fn a_denied_decision_names_the_path_and_its_holder() {
-        let out = conflict_envelope(&[Conflict {
+    fn a_write_names_its_file_and_its_session() {
+        let (paths, holder) = targets(json!({
+            "hook_event_name": "PreToolUse", "session_id": "S",
+            "tool_name": "Edit", "tool_input": { "file_path": "/repo/src/a.rs" }
+        }));
+        assert_eq!(paths, vec!["/repo/src/a.rs"]);
+        assert_eq!(holder, "S");
+    }
+
+    #[test]
+    fn a_subagents_write_is_held_by_session_slash_agent() {
+        let (_, holder) = targets(json!({
+            "session_id": "S", "agent_id": "a1", "agent_type": "general-purpose",
+            "tool_name": "Write", "tool_input": { "file_path": "/repo/x" }
+        }));
+        assert_eq!(holder, "S/a1");
+    }
+
+    #[test]
+    fn a_forks_write_is_held_by_its_session() {
+        let (_, holder) = targets(json!({
+            "session_id": "S", "agent_id": "afork",
+            "tool_name": "Write", "tool_input": { "file_path": "/repo/x" }
+        }));
+        assert_eq!(holder, "S");
+    }
+
+    #[test]
+    fn a_tool_that_does_not_write_is_not_a_write() {
+        assert!(write(&payload(json!({"tool_name": "Read", "session_id": "s1"}))).is_none());
+        assert!(
+            write(&payload(
+                json!({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_write_with_no_session_names_the_missing_field() {
+        let reason = unusable(json!({
+            "tool_name": "Edit", "tool_input": { "file_path": "/repo/src/a.rs" }
+        }));
+        assert!(reason.contains("session_id"), "{reason}");
+    }
+
+    #[test]
+    fn a_write_with_no_readable_target_is_unusable() {
+        let reason = unusable(json!({ "session_id": "S", "tool_name": "Edit", "tool_input": {} }));
+        assert!(reason.contains("target"), "{reason}");
+    }
+
+    #[test]
+    fn a_patch_claims_every_file_it_names() {
+        let (paths, _) = targets(json!({
+            "hook_event_name": "PreToolUse", "turn_id": "t1", "session_id": "S",
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": "*** Begin Patch\n*** Update File: a.rs\n*** Move to: c.rs\n*** Add File: b.rs\n*** End Patch\n"
+            }
+        }));
+        assert_eq!(paths, vec!["a.rs", "c.rs", "b.rs"]);
+    }
+
+    #[test]
+    fn a_denial_names_the_path_and_its_holder() {
+        let reason = conflict_reason(&[Conflict {
             path: "src/a.rs".into(),
             held_by: "S/b2".into(),
             age_secs: 5,
             note: None,
         }]);
-        assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
-        let reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-            .as_str()
-            .unwrap();
         assert!(reason.contains("S/b2"), "reason names the holder: {reason}");
         assert!(
             reason.contains("src/a.rs"),
@@ -235,15 +313,14 @@ mod tests {
 
     #[test]
     fn an_absolute_target_is_left_alone() {
-        let p = serde_json::json!({ "cwd": "/repo" });
+        let p = payload(json!({ "cwd": "/repo" }));
         assert_eq!(resolve_against(&p, "/tmp/a.rs"), "/tmp/a.rs");
     }
 
     #[test]
     fn a_relative_target_resolves_against_the_sessions_cwd() {
-        let p = serde_json::json!({ "cwd": "/repo" });
+        let p = payload(json!({ "cwd": "/repo" }));
         let got = resolve_against(&p, "src/a.rs");
-        assert_ne!(got, "src/a.rs", "a relative target is not left as it came");
         // Compared as paths, not as strings: `join` writes the platform's
         // separator, so a hand-spelled `/repo/src/a.rs` matches on Unix and
         // not on Windows. `Path` equality is component-wise, and Windows

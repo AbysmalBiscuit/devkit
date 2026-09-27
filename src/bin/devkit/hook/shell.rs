@@ -15,13 +15,18 @@ use anyhow::Result;
 use devkit_command::{Context, Limits, PathStyle};
 use devkit_common::{
     git::Checkout,
-    harness::{self, Harness, ShellPayload},
+    harness,
     harness_log::{self, Decision, Kind, Record, ShellPre, Verdict},
 };
 use devkit_ports::guard::{self, Project};
+use pabal::Tool;
 use serde_json::Value;
 
-use super::{HookEvent, dialect, record, writes};
+use super::{
+    HookEvent, dialect,
+    payload::{Harness, Payload},
+    record, writes,
+};
 
 // The fail-open contract below is `catch_unwind`, which catches nothing under
 // an aborting panic strategy. Nothing else ties the compile profile to this
@@ -37,10 +42,13 @@ compile_error!(
 const WRITE_STAGE_DEADLINE: Duration = Duration::from_secs(2);
 const UNUSABLE_SHELL_REASON: &str =
     "devkit write-harness: shell payload could not be evaluated (fail-closed)";
+/// Tool names that run shell commands, `Shell` being Cursor's. One that
+/// arrives without a readable command is a harness format change.
+const SHELL_TOOLS: [&str; 3] = ["Bash", "PowerShell", "Shell"];
 
 enum Response {
     Silent,
-    Envelope(serde_json::Value),
+    Envelope(String),
 }
 
 /// What the guard decided, and the record of it. The record is `None` when
@@ -69,25 +77,17 @@ impl Outcome {
 /// resolved once.
 #[derive(Clone)]
 struct PanicContext {
-    harness: Option<Harness>,
     checkout: Checkout,
     settings: harness_log::Settings,
 }
 
-/// The harness the manifest named, else the payload's own shape. A manifest
-/// devkit wrote already knows which harness reads it, so passing that in beats
-/// inferring it from which fields a vendor happens to send this release.
-fn resolve_harness(declared: Option<Harness>, shell: &ShellPayload) -> Harness {
-    declared.unwrap_or(shell.harness)
-}
-
 /// Guard a shell command about to run. Never returns an error: a panic allows
 /// the command unless the write stage had started, in which case it denies.
-pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
+pub fn guard(payload: &Payload) -> Result<()> {
     let write_stage: OnceLock<Harness> = OnceLock::new();
     let panic_ctx: OnceLock<PanicContext> = OnceLock::new();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        respond(payload, declared, &write_stage, &panic_ctx)
+        respond(payload, &write_stage, &panic_ctx)
     }));
     match outcome {
         Ok(out) => {
@@ -98,8 +98,7 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
         }
         Err(_) => {
             match write_stage.get() {
-                Some(h) => print_envelope(&harness::deny_shell_json(
-                    *h,
+                Some(h) => print_envelope(&h.deny(
                     "devkit write-harness: internal failure while evaluating a shell write (fail-closed)",
                 )),
                 None => warn("command guard panicked; allowing the command"),
@@ -108,7 +107,6 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
             let panicked = ctx.map(|ctx| {
                 undecided_record(
                     payload,
-                    ctx.harness,
                     &ctx.checkout,
                     &ctx.settings,
                     "the command guard panicked while evaluating this command",
@@ -137,30 +135,26 @@ fn finish(rec: Option<&Record>, settings: Option<&harness_log::Settings>) {
     }
 }
 
-/// A payload devkit could not read at all: an unreadable pipe or text that is
-/// not JSON. The signature of a harness format change, and an unevaluable write
-/// fails closed.
+/// A payload devkit could not read at all: an unreadable pipe, text that is
+/// not JSON, or JSON that is not an object. The signature of a harness format
+/// change, and an unevaluable write fails closed.
 ///
 /// A payload devkit could not read is precisely what the log exists for, so
 /// this is a log-then-return rather than a bare return.
 pub fn deny_unreadable_payload(declared: Option<Harness>) -> Result<()> {
     let cwd = current_cwd();
     let checkout = Checkout::at(&cwd);
+    let payload = Payload::empty(declared);
     if harness::writes_enabled(&checkout, &cwd) {
-        let envelope = match declared {
-            Some(h) => harness::deny_shell_json(h, UNUSABLE_SHELL_REASON),
-            None => harness::deny_json(UNUSABLE_SHELL_REASON),
-        };
-        print_envelope(&envelope);
+        print_envelope(&payload.harness().deny(UNUSABLE_SHELL_REASON));
     }
     let settings = harness_log::resolve_in(&checkout, &cwd);
     let rec = settings.enabled.then(|| {
         undecided_record(
-            &Value::Null,
-            declared,
+            &payload,
             &checkout,
             &settings,
-            "the hook payload could not be read as JSON",
+            "the hook payload could not be read as a JSON object",
         )
     });
     finish(rec.as_deref(), Some(&settings));
@@ -172,16 +166,16 @@ pub fn deny_unreadable_payload(declared: Option<Harness>) -> Result<()> {
 /// the operational signals the log exists to collect, and each would otherwise
 /// leave at most one stderr line that scrolls away.
 fn undecided_record(
-    payload: &Value,
-    declared: Option<Harness>,
+    payload: &Payload,
     checkout: &Checkout,
     settings: &harness_log::Settings,
     reason: &str,
 ) -> Box<Record> {
-    let command = payload
+    let raw = payload.raw();
+    let command = raw
         .get("tool_input")
         .and_then(|ti| ti.get("command"))
-        .or_else(|| payload.get("command"))
+        .or_else(|| raw.get("command"))
         .and_then(Value::as_str)
         .unwrap_or_default();
     let (command, truncated) = record::truncate(command);
@@ -189,16 +183,12 @@ fn undecided_record(
     record::envelope(
         payload,
         HookEvent::PreToolUse,
-        declared,
         checkout,
         Kind::ShellPre(Box::new(ShellPre {
             command,
             redacted,
             truncated,
-            tool_name: payload
-                .get("tool_name")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            tool_name: payload.tool_name().map(str::to_string),
             dialect: None,
             analysis: None,
             verdict: Verdict {
@@ -212,7 +202,7 @@ fn undecided_record(
 
 fn deny(which: Harness, reasons: &[String]) -> Outcome {
     Outcome {
-        response: Response::Envelope(harness::deny_shell_json(which, &reasons.join("\n"))),
+        response: Response::Envelope(which.deny(&reasons.join("\n"))),
         record: None,
     }
 }
@@ -221,69 +211,53 @@ fn current_cwd() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
 }
 
-/// Recover a shell identity from a payload that parsed as JSON but not as a
-/// shell payload. With `--harness` the identity half is already settled, so
-/// this is left deciding only whether the event is about a shell command at
-/// all, and where it would have run.
-fn raw_shell_context(payload: &serde_json::Value, declared: Option<Harness>) -> Option<Harness> {
-    payload
-        .get("hook_event_name")
-        .and_then(serde_json::Value::as_str)?;
-    let tool = payload
-        .get("tool_name")
-        .and_then(serde_json::Value::as_str)?;
-    if !harness::SHELL_TOOLS.contains(&tool) {
-        return None;
-    }
-    Some(declared.unwrap_or_else(|| harness::infer_harness(payload)))
-}
-
-fn deny_unusable_shell(
-    payload: &serde_json::Value,
-    declared: Option<Harness>,
-    checkout: &Checkout,
-) -> Response {
-    let Some(which) = raw_shell_context(payload, declared) else {
-        return Response::Silent;
-    };
-    if harness::writes_enabled(checkout, checkout.dir()) {
-        Response::Envelope(harness::deny_shell_json(which, UNUSABLE_SHELL_REASON))
+/// A shell-tool event whose command could not be read, as opposed to an event
+/// about some other tool, which this path has no business judging.
+fn deny_unusable_shell(payload: &Payload, checkout: &Checkout) -> Response {
+    let shell_event = payload.event_name().is_some()
+        && payload
+            .tool_name()
+            .is_some_and(|tool| SHELL_TOOLS.contains(&tool));
+    if shell_event && harness::writes_enabled(checkout, checkout.dir()) {
+        Response::Envelope(payload.harness().deny(UNUSABLE_SHELL_REASON))
     } else {
         Response::Silent
     }
 }
 
 fn respond(
-    payload: &Value,
-    declared: Option<Harness>,
+    payload: &Payload,
     write_stage: &OnceLock<Harness>,
     panic_ctx: &OnceLock<PanicContext>,
 ) -> Outcome {
-    let Some(shell) = harness::parse_shell_payload(payload) else {
+    let Some(Tool::Shell {
+        command,
+        cwd: shell_cwd,
+        shell,
+    }) = payload.tool()
+    else {
         let checkout = Checkout::at(&record::payload_cwd(payload));
-        let response = deny_unusable_shell(payload, declared, &checkout);
+        let response = deny_unusable_shell(payload, &checkout);
         let settings = harness_log::resolve_in(&checkout, checkout.dir());
         let rec = settings.enabled.then(|| {
             undecided_record(
                 payload,
-                declared,
                 &checkout,
                 &settings,
                 "the payload did not parse as a shell command",
             )
         });
-        let _ = panic_ctx.set(PanicContext {
-            harness: declared,
-            checkout,
-            settings,
-        });
+        let _ = panic_ctx.set(PanicContext { checkout, settings });
         return Outcome {
             response,
             record: rec,
         };
     };
-    let which = resolve_harness(declared, &shell);
-    let Some(cwd) = shell.cwd.clone().or_else(|| std::env::current_dir().ok()) else {
+    let which = payload.harness();
+    let Some(cwd) = shell_cwd
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok())
+    else {
         // There is no directory to resolve config against, so there is nothing
         // to log to either: `resolve` needs one to find the project layers.
         return Outcome::silent();
@@ -296,7 +270,6 @@ fn respond(
     let checkout = Checkout::at(&cwd);
     let settings = harness_log::resolve_in(&checkout, &cwd);
     let _ = panic_ctx.set(PanicContext {
-        harness: Some(which),
         checkout: checkout.clone(),
         settings: settings.clone(),
     });
@@ -318,15 +291,10 @@ fn respond(
     for w in &warnings {
         warn(w);
     }
-    let dialect = dialect::resolve(
-        rules.policy.shell,
-        which,
-        shell.tool_name.as_deref(),
-        cfg!(windows),
-    );
+    let dialect = dialect::resolve(rules.policy.shell, which, shell.as_ref(), cfg!(windows));
     let ctx = Context {
         dialect,
-        cwd: shell.cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        cwd: shell_cwd.map(|p| p.to_string_lossy().into_owned()),
         path_style: if cfg!(windows) {
             PathStyle::Windows
         } else {
@@ -335,7 +303,7 @@ fn respond(
         limits: Limits::default(),
     };
     let started = std::time::Instant::now();
-    let analysis = devkit_command::analyze(&shell.command, &ctx);
+    let analysis = devkit_command::analyze(command, &ctx);
     let analyze_micros = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
 
     let mut blocks: Vec<String> = Vec::new();
@@ -351,8 +319,7 @@ fn respond(
         settings.enabled.then(|| {
             shell_pre_record(
                 payload,
-                &shell,
-                declared,
+                command,
                 &checkout,
                 &settings,
                 dialect,
@@ -370,15 +337,14 @@ fn respond(
         blocks.extend(evaluation.blocks.iter().cloned());
         notes.extend(evaluation.warnings.iter().cloned());
         if blocks.is_empty() && evaluation.needs_registry() {
-            let Some(session) = shell.session_id.clone() else {
+            let Some(session) = payload.session_id() else {
                 let reason =
                     "devkit write-harness: shell write payload carries no session_id (fail-closed)"
                         .to_string();
                 let rec = shell_record(Decision::Deny, std::slice::from_ref(&reason), &notes);
                 return deny(which, &[reason]).with(rec);
             };
-            let holder =
-                devkit_locks::hook::holder_from_fields(&session, shell.agent_id.as_deref());
+            let holder = devkit_locks::hook::holder_from_fields(session, payload.agent());
             // The stage runs on its own thread, so it takes a clone of the
             // already-resolved checkout rather than a borrow.
             let checkout = checkout.clone();
@@ -404,7 +370,7 @@ fn respond(
                         "devkit write-harness: the lock registry did not answer within {}s (fail-closed). Retry; if it persists, check `lockm status` and `devkit doctor`.",
                         WRITE_STAGE_DEADLINE.as_secs()
                     );
-                    print_envelope(&harness::deny_shell_json(which, &reason));
+                    print_envelope(&which.deny(&reason));
                     // A deadline miss is one of the operational signals this
                     // log exists to collect, and the one path that would
                     // otherwise never reach it. Envelope, then record, then
@@ -425,7 +391,8 @@ fn respond(
     if notes.is_empty() {
         return Outcome::silent().with(rec);
     }
-    let response = harness::warn_shell_json(which, &notes.join("\n"))
+    let response = payload
+        .pre_tool_use_context(&notes.join("\n"))
         .map_or(Response::Silent, Response::Envelope);
     Outcome {
         response,
@@ -434,29 +401,26 @@ fn respond(
 }
 
 /// The `shell_pre` record for a call the guard actually evaluated.
-#[allow(clippy::too_many_arguments)]
 fn shell_pre_record(
-    payload: &Value,
-    shell: &ShellPayload,
-    declared: Option<Harness>,
+    payload: &Payload,
+    command: &str,
     checkout: &Checkout,
     settings: &harness_log::Settings,
     dialect: devkit_command::Dialect,
     analysis: Option<devkit_common::harness_log::AnalysisProjection>,
     verdict: Verdict,
 ) -> Box<Record> {
-    let (command, truncated) = record::truncate(&shell.command);
+    let (command, truncated) = record::truncate(command);
     let (command, redacted) = harness_log::redact::apply(&command, settings.command);
     record::envelope(
         payload,
         HookEvent::PreToolUse,
-        declared,
         checkout,
         Kind::ShellPre(Box::new(ShellPre {
             command,
             redacted,
             truncated,
-            tool_name: shell.tool_name.clone(),
+            tool_name: payload.tool_name().map(str::to_string),
             dialect: Some(dialect.name().to_string()),
             analysis,
             verdict,
@@ -467,7 +431,7 @@ fn shell_pre_record(
 /// Write a deny envelope to stdout. A closed pipe or a full disk on the
 /// other end must not turn a denial into a crash, so the write error is
 /// discarded rather than let the `print!` family's internal panic through.
-pub(super) fn print_envelope(envelope: &serde_json::Value) {
+pub(super) fn print_envelope(envelope: &str) {
     let _ = writeln!(std::io::stdout(), "{envelope}");
 }
 
