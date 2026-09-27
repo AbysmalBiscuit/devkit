@@ -197,6 +197,30 @@ pub fn same_path(a: &Path, b: &Path) -> bool {
     path_identity(a, b) == PathIdentity::Same
 }
 
+/// `dir` resolved, or an error when the current directory is `dir` or inside
+/// it: the guard every removal runs so it never deletes where its caller
+/// stands.
+///
+/// Both sides resolve or the guard refuses. A side that fell back to its
+/// unresolved spelling would be compared against a resolved one, and on
+/// Windows the two can never match at all, since `canonicalize` returns a
+/// `\\?\`-prefixed path and `current_dir` does not. A fallback here silently
+/// disarms the check.
+pub fn refuse_if_inside(dir: &Path) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    let here =
+        std::fs::canonicalize(dir).with_context(|| format!("resolving {}", dir.display()))?;
+    let cwd = std::env::current_dir().context("resolving the current directory")?;
+    let cwd = std::fs::canonicalize(&cwd)
+        .with_context(|| format!("resolving the current directory {}", cwd.display()))?;
+    anyhow::ensure!(
+        !cwd.starts_with(&here),
+        "cd out of {} before removing it",
+        dir.display()
+    );
+    Ok(here)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
