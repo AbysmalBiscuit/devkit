@@ -119,24 +119,21 @@ pub fn run(args: Args) -> Result<()> {
         .ok()
         .and_then(|top| devkit_common::record::read(&top));
 
-    // Explicit `--pr`, then the record, then the worktree branch's PR (best
-    // effort). A recorded locator can name a repository other than `pr_repo`.
+    // Explicit `--pr`, then the record, then the worktree branch's PR. A
+    // recorded locator can name a repository other than `pr_repo`.
     let explicit_loc = args.pr.map(|number| PrLocator { repo: None, number });
     let record_loc = record.as_ref().and_then(|r| r.pr.clone());
     let resolved_loc = resolve_locator(explicit_loc.as_ref(), record_loc.as_ref());
     let (number, repo) = match &resolved_loc {
         Some(loc) => (loc.number, loc.resolve(&forge.repos)?),
         None => {
-            let branch_pr = branch.as_deref().and_then(|b| {
-                steps
-                    .during_result("Looking up PR for branch...", || {
-                        resolve_acting(&f.pr_by_head(pr_repo, b))
-                    })
-                    .ok()
-                    .flatten()
-                    .map(|p| p.number)
-            });
-            (resolve_pr(branch_pr)?, pr_repo.clone())
+            let branch_pr = match branch.as_deref() {
+                Some(b) => steps.during_result("Looking up PR for branch...", || {
+                    resolve_acting(&f.pr_by_head(pr_repo, b))
+                })?,
+                None => None,
+            };
+            (resolve_pr(branch_pr.map(|p| p.number))?, pr_repo.clone())
         }
     };
 
