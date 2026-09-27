@@ -21,14 +21,23 @@ use pabal::Tool;
 use super::{
     HookEvent,
     gate::{self, Armed, Claims, WriteGate},
-    payload::{Holder, Payload},
+    payload::{self, Holder, Payload},
     print_envelope, record, rules,
 };
 
-/// Tools pabal reads write targets from. One that arrives without a readable
-/// target is a harness format change, so it is a write to deny rather than a
-/// tool to ignore.
-const WRITE_TOOLS: [&str; 5] = ["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"];
+/// Tools pabal reads write targets from, the last three being Antigravity's.
+/// One that arrives without a readable target is a harness format change, so
+/// it is a write to deny rather than a tool to ignore.
+const WRITE_TOOLS: [&str; 8] = [
+    "Edit",
+    "MultiEdit",
+    "Write",
+    "NotebookEdit",
+    "apply_patch",
+    "write_to_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+];
 
 /// What a `PreToolUse` call asks to write.
 pub enum Write {
@@ -103,7 +112,7 @@ fn respond(payload: &Payload, write: Write, gate: &WriteGate, armed: &Armed) {
         Write::Unusable(_) => Vec::new(),
     };
     if !blocks.is_empty() {
-        print_envelope(&harness.deny(&blocks.join("\n")));
+        print_envelope(&payload::deny(harness, &blocks.join("\n")));
     }
     armed.disarm();
     // Envelope first, then the record: a stall on the log directory before the
@@ -184,7 +193,7 @@ mod tests {
     use super::{super::gate::fixture::Project, *};
 
     fn payload(raw: serde_json::Value) -> Payload {
-        Payload::new(None, raw).unwrap()
+        Payload::new(None, HookEvent::PreToolUse, raw).unwrap()
     }
 
     fn targets(raw: serde_json::Value) -> (Vec<String>, String) {

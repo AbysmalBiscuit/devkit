@@ -20,8 +20,9 @@ use devkit_locks::{
     Live, Registry, WriteResolver,
     model::{Conflict, WriteDecision},
 };
+use pabal::AnyHarness;
 
-use super::{payload::Harness, print_envelope, writes};
+use super::{payload, print_envelope, writes};
 
 // A panic denies through `catch_unwind`, which catches nothing under an
 // aborting panic strategy. Nothing else ties the compile profile to this
@@ -43,13 +44,16 @@ const PANIC_REASON: &str =
     "devkit write-harness: internal failure while evaluating a write (fail-closed)";
 
 /// Whether writes from `harness` at `cwd` go through the gate.
-///
-/// Cursor's never do. devkit wires only Cursor's shell event, and its Tab
-/// completions edit through a post-only hook, so claims from a Cursor session
-/// would cover a fraction of what it writes while holding files against
-/// sessions whose claims are complete.
-pub fn enabled(harness: Harness, checkout: &Checkout, cwd: &Path) -> bool {
-    harness != Harness::Cursor && devkit_common::harness::writes_enabled(checkout, cwd)
+pub fn enabled(harness: AnyHarness, checkout: &Checkout, cwd: &Path) -> bool {
+    let claims = match harness {
+        AnyHarness::ClaudeCode | AnyHarness::Codex => true,
+        // Cursor's Tab completions edit through a post-only hook, so its
+        // claims would cover a fraction of what it writes.
+        AnyHarness::Cursor => false,
+        // Antigravity sends no session-end event to release claims on.
+        AnyHarness::Antigravity => false,
+    };
+    claims && devkit_common::harness::writes_enabled(checkout, cwd)
 }
 
 /// What a write asks of the registry. A relative path is resolved against the
@@ -310,10 +314,10 @@ fn with_deadline<T: Send + 'static>(
 /// Armed once the gate applies to a call, so that a panic denies it, and
 /// disarmed once the call's verdict is on stdout, since a second envelope
 /// after it would make stdout unparseable and lose the verdict.
-pub struct Armed(Cell<Option<Harness>>);
+pub struct Armed(Cell<Option<AnyHarness>>);
 
 impl Armed {
-    pub fn arm(&self, harness: Harness) {
+    pub fn arm(&self, harness: AnyHarness) {
         self.0.set(Some(harness));
     }
 
@@ -334,7 +338,7 @@ pub fn guarded<T>(work: impl FnOnce(&Armed) -> T) -> Result<T, Panicked> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&armed))).map_err(|_| {
         let armed = armed.0.get();
         if let Some(harness) = armed {
-            print_envelope(&harness.deny(PANIC_REASON));
+            print_envelope(&payload::deny(harness, PANIC_REASON));
         }
         Panicked {
             denied: armed.is_some(),
@@ -495,12 +499,12 @@ mod tests {
         let before = guarded(|_| -> () { panic!("before the gate") });
         assert!(matches!(before, Err(Panicked { denied: false })));
         let after = guarded(|armed| -> () {
-            armed.arm(Harness::ClaudeCode);
+            armed.arm(AnyHarness::ClaudeCode);
             panic!("inside the gate")
         });
         assert!(matches!(after, Err(Panicked { denied: true })));
         let answered = guarded(|armed| -> () {
-            armed.arm(Harness::ClaudeCode);
+            armed.arm(AnyHarness::ClaudeCode);
             armed.disarm();
             panic!("after the verdict")
         });

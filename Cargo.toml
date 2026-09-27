@@ -105,7 +105,7 @@ indicatif = "0.17"
 console = "0.15"
 supports-hyperlinks = "3"
 strum = { version = "0.27", features = ["derive"] }
-pabal = "0.1"
+pabal = { version = "0.2", features = ["clap"] }
 ambassador = "0.5.1"
 ureq = { version = "2", features = ["json"] }
 # ureq's TLS stack. Default features off: they pull aws-lc-rs, ureq uses ring.

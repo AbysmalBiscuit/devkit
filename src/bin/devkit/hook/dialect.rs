@@ -2,9 +2,7 @@
 
 use devkit_command::Dialect;
 use devkit_config::ShellSetting;
-use pabal::ShellKind;
-
-use super::payload::Harness;
+use pabal::{AnyHarness, ShellKind};
 
 /// Resolve the dialect from what the payload and the platform establish.
 ///
@@ -13,7 +11,7 @@ use super::payload::Harness;
 /// `SHELL` and `MSYSTEM` describe devkit's process, not the command's.
 pub fn resolve(
     setting: ShellSetting,
-    harness: Harness,
+    harness: AnyHarness,
     shell: Option<&ShellKind>,
     windows: bool,
 ) -> Dialect {
@@ -22,10 +20,16 @@ pub fn resolve(
         ShellSetting::Powershell => Dialect::PowerShell,
         ShellSetting::Auto => match (shell, harness) {
             (Some(ShellKind::PowerShell), _) => Dialect::PowerShell,
-            // Codex names every shell tool `Bash`, so only the platform says
-            // which shell ran it.
-            (_, Harness::Codex) if windows => Dialect::PowerShell,
-            (_, Harness::ClaudeCode | Harness::Codex | Harness::Cursor) => Dialect::Bash,
+            // Codex names every shell tool `Bash` and Antigravity names its
+            // `run_command`, so only the platform says which shell ran it.
+            (_, AnyHarness::Codex | AnyHarness::Antigravity) if windows => Dialect::PowerShell,
+            (
+                _,
+                AnyHarness::ClaudeCode
+                | AnyHarness::Codex
+                | AnyHarness::Cursor
+                | AnyHarness::Antigravity,
+            ) => Dialect::Bash,
         },
     }
 }
@@ -39,7 +43,7 @@ mod tests {
         assert_eq!(
             resolve(
                 ShellSetting::Bash,
-                Harness::Codex,
+                AnyHarness::Codex,
                 Some(&ShellKind::PowerShell),
                 true
             ),
@@ -48,7 +52,7 @@ mod tests {
         assert_eq!(
             resolve(
                 ShellSetting::Powershell,
-                Harness::ClaudeCode,
+                AnyHarness::ClaudeCode,
                 Some(&ShellKind::Bash),
                 false
             ),
@@ -61,24 +65,24 @@ mod tests {
         assert_eq!(
             resolve(
                 ShellSetting::Auto,
-                Harness::ClaudeCode,
+                AnyHarness::ClaudeCode,
                 Some(&ShellKind::PowerShell),
                 true
             ),
             Dialect::PowerShell
         );
         assert_eq!(
-            resolve(ShellSetting::Auto, Harness::Codex, None, true),
+            resolve(ShellSetting::Auto, AnyHarness::Codex, None, true),
             Dialect::PowerShell
         );
         assert_eq!(
-            resolve(ShellSetting::Auto, Harness::Codex, None, false),
+            resolve(ShellSetting::Auto, AnyHarness::Codex, None, false),
             Dialect::Bash
         );
         assert_eq!(
             resolve(
                 ShellSetting::Auto,
-                Harness::ClaudeCode,
+                AnyHarness::ClaudeCode,
                 Some(&ShellKind::Bash),
                 true
             ),

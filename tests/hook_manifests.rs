@@ -7,10 +7,11 @@
 
 use std::path::Path;
 
-const MANIFESTS: [(&str, &str); 3] = [
+const MANIFESTS: [(&str, &str); 4] = [
     ("plugin/hooks/hooks.json", "claude-code"),
     ("plugin/hooks/hooks-codex.json", "codex"),
     ("plugin/hooks/hooks-cursor.json", "cursor"),
+    ("plugin/hooks.json", "antigravity"),
 ];
 
 fn commands(path: &str) -> Vec<String> {
@@ -119,6 +120,20 @@ fn every_cursor_tool_hook_keeps_a_matcher() {
     }
 }
 
+/// Antigravity's claims are off, so its tool hooks match the shell tool alone.
+#[test]
+fn every_antigravity_tool_hook_matches_the_shell_tool() {
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string("plugin/hooks.json").unwrap()).unwrap();
+    for (_, group) in v.as_object().unwrap() {
+        for event in ["PreToolUse", "PostToolUse"] {
+            for entry in group[event].as_array().into_iter().flatten() {
+                assert_eq!(entry["matcher"], "run_command", "{event}: {entry}");
+            }
+        }
+    }
+}
+
 /// The merged `PreToolUse` block needs a matcher covering the tool families it
 /// guards, or it spawns on every Read, Grep, Glob and Agent call as well.
 #[test]
@@ -159,7 +174,11 @@ fn mcp_tools_reach_pre_tool_use() {
 /// more.
 #[test]
 fn session_end_asks_for_a_budget_of_its_own() {
-    for (f, _) in MANIFESTS {
+    for (f, name) in MANIFESTS {
+        // Antigravity sends no session-end event.
+        if name == "antigravity" {
+            continue;
+        }
         let found: Vec<_> = hook_commands(f)
             .into_iter()
             .filter(|c| c.contains("hook session-end"))

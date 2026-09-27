@@ -90,7 +90,7 @@ pub fn envelope(
         recorded_at: now_rfc3339(),
         devkit_version: env!("CARGO_PKG_VERSION").to_string(),
         analyzer_version: ANALYZER_VERSION,
-        harness: Some(payload.harness().name().to_string()),
+        harness: Some(payload.harness().to_string()),
         event: event.as_str().to_string(),
         vendor_event: payload.event_name(),
         session_id: owned(payload.session_id()),
@@ -326,9 +326,9 @@ fn kind_name(k: &UncertaintyKind) -> String {
 #[cfg(test)]
 mod tests {
     use devkit_command::{Context, Dialect, Limits, PathStyle};
+    use pabal::AnyHarness;
 
     use super::*;
-    use crate::hook::payload::Harness;
 
     fn ctx() -> Context {
         Context {
@@ -399,7 +399,8 @@ mod tests {
     #[test]
     fn every_record_names_both_its_verb_and_its_vendor_event() {
         let payload = Payload::new(
-            Some(Harness::Codex),
+            Some(AnyHarness::Codex),
+            HookEvent::Stop,
             serde_json::json!({
                 "hook_event_name": "Interrupt",
                 "session_id": "s1",
@@ -423,31 +424,52 @@ mod tests {
     fn cursors_spellings_of_the_ids_reach_the_envelope() {
         let payload = Payload::new(
             None,
+            HookEvent::SubagentStart,
             serde_json::json!({
-                "hook_event_name": "preToolUse",
-                "cursor_version": "1.7.0",
+                "hook_event_name": "subagentStart",
+                "cursor_version": "2026.09.26-dd393fe",
                 "conversation_id": "c1",
-                "parent_conversation_id": "p1",
-                "tool_use_id": "u1",
-                "tool_input": { "working_directory": "/w" }
+                "subagent_id": "a1",
+                "subagent_type": "generalPurpose",
+                "parent_conversation_id": "c1",
+                "tool_call_id": "tc1",
+                "cwd": "/w"
             }),
         )
         .unwrap();
         let r = envelope(
             &payload,
-            HookEvent::PreToolUse,
+            HookEvent::SubagentStart,
             &Checkout::at(&payload_cwd(&payload)),
             Kind::Lifecycle,
         );
         assert_eq!(r.session_id.as_deref(), Some("c1"));
-        assert_eq!(r.agent_id.as_deref(), Some("p1"));
-        assert_eq!(r.tool_use_id.as_deref(), Some("u1"));
+        assert_eq!(r.agent_id.as_deref(), Some("a1"));
         assert_eq!(r.cwd.as_deref(), Some(std::path::Path::new("/w")));
         assert_eq!(
             r.harness.as_deref(),
             Some("cursor"),
             "inferred, not declared"
         );
+    }
+
+    #[test]
+    fn an_antigravity_record_names_the_verbs_event() {
+        let payload = Payload::new(
+            Some(AnyHarness::Antigravity),
+            HookEvent::Stop,
+            serde_json::json!({"conversationId": "ag1", "terminationReason": "NO_TOOL_CALL"}),
+        )
+        .unwrap();
+        let r = envelope(
+            &payload,
+            HookEvent::Stop,
+            &Checkout::at(&payload_cwd(&payload)),
+            Kind::Lifecycle,
+        );
+        assert_eq!(r.harness.as_deref(), Some("antigravity"));
+        assert_eq!(r.vendor_event.as_deref(), Some("Stop"));
+        assert_eq!(r.session_id.as_deref(), Some("ag1"));
     }
 
     #[test]

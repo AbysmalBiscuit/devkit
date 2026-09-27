@@ -6,8 +6,7 @@
 //! own tool to pick the shell path or the edit path, which is where that
 //! decision belongs.
 //!
-//! pabal parses the Claude Code and Codex payloads and writes their responses.
-//! `payload` layers the Cursor spellings it does not model yet on top.
+//! pabal parses each harness's payload and writes its responses.
 //!
 //! Exit codes are a control channel. Exit 2 blocks the tool call on Claude Code
 //! `PreToolUse` and on Codex, so a usage error, an unknown verb and a panic all
@@ -33,7 +32,8 @@ use std::io::{Read, Write};
 
 use anyhow::Result;
 use clap::{Args, ValueEnum};
-use payload::{Harness, Payload};
+use pabal::AnyHarness;
+use payload::Payload;
 use serde_json::Value;
 
 #[derive(Args)]
@@ -42,7 +42,7 @@ pub struct HookCli {
     pub event: HookEvent,
     /// Which harness sent it. Beats inferring from the payload's shape.
     #[arg(long)]
-    pub harness: Option<Harness>,
+    pub harness: Option<AnyHarness>,
 }
 
 /// devkit's own hook vocabulary, deliberately not a model of any payload's
@@ -50,7 +50,10 @@ pub struct HookCli {
 /// onto `stop`, and Cursor spells the same events in camelCase. One verb per
 /// vendor event is what keeps each manifest a translation table with no logic
 /// in it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+///
+/// A variant's own name is the event pabal is told for a harness that leaves
+/// it out of the payload.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum, strum::IntoStaticStr)]
 pub enum HookEvent {
     /// The one-word spelling is permanent: it is how every installed
     /// `lockm hook pretooluse` reads, and those manifests outlive the binary.
@@ -80,7 +83,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         HookEvent::PreToolUse => pre_tool_use(harness),
         // The two verbs that release, which is the half with a correctness
         // consequence, so it runs before the record.
-        HookEvent::SubagentStop => with_payload(harness, |p| {
+        HookEvent::SubagentStop => with_payload(harness, cli.event, |p| {
             edit::release_subagent(p);
             record_only(p, cli.event);
             Ok(())
@@ -88,7 +91,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // Release, then record, then sweep. Release first because it is the
         // one step with a correctness consequence; the sweep last because it is
         // the only one that can be skipped without loss.
-        HookEvent::SessionEnd => with_payload(harness, |p| {
+        HookEvent::SessionEnd => with_payload(harness, cli.event, |p| {
             edit::release_session(p);
             clear_issue_receipts(p);
             let settings = record_only(p, cli.event);
@@ -102,7 +105,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         }),
         // Compaction is what drops the injected rules out of the agent's
         // context, so clearing the set is what lets them inject again.
-        HookEvent::PostCompact => with_payload(harness, |p| {
+        HookEvent::PostCompact => with_payload(harness, cli.event, |p| {
             if let Ok(holder) = p.holder() {
                 rules::clear_for_holder(&holder);
             }
@@ -112,7 +115,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // Record-only. Each reads stdin, builds one record and exits; nothing
         // reaches stdout, because `UserPromptSubmit` appends a hook's stdout to
         // the prompt and `Stop` and `PermissionRequest` honour a JSON decision.
-        event => with_payload(harness, |p| {
+        event => with_payload(harness, event, |p| {
             record_only(p, event);
             Ok(())
         }),
@@ -153,10 +156,10 @@ fn record_only(payload: &Payload, event: HookEvent) -> devkit_common::harness_lo
 /// Read the hook payload from stdin. `None` covers an unreadable pipe, text
 /// that is not JSON, and JSON that is not an object: none is a payload to
 /// judge, and the caller's fail-closed rule is the same for all three.
-fn read_payload(harness: Option<Harness>) -> Option<Payload> {
+fn read_payload(harness: Option<AnyHarness>, event: HookEvent) -> Option<Payload> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf).ok()?;
-    Payload::new(harness, serde_json::from_str::<Value>(&buf).ok()?)
+    Payload::new(harness, event, serde_json::from_str::<Value>(&buf).ok()?)
 }
 
 /// Run a verb over the payload, or do nothing when there is none to read. A
@@ -165,8 +168,12 @@ fn read_payload(harness: Option<Harness>) -> Option<Payload> {
 ///
 /// An absent payload is read as an empty object rather than skipped, so a verb
 /// a harness fires with no body still records that it fired.
-fn with_payload(harness: Option<Harness>, f: impl FnOnce(&Payload) -> Result<()>) -> Result<()> {
-    f(&read_payload(harness).unwrap_or_else(|| Payload::empty(harness)))
+fn with_payload(
+    harness: Option<AnyHarness>,
+    event: HookEvent,
+    f: impl FnOnce(&Payload) -> Result<()>,
+) -> Result<()> {
+    f(&read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event)))
 }
 
 /// The retired `lockm hook <event>` spelling. Kept because an installed plugin
@@ -174,11 +181,11 @@ fn with_payload(harness: Option<Harness>, f: impl FnOnce(&Payload) -> Result<()>
 pub(crate) fn legacy_lock_event(event: &str) -> Result<()> {
     match event {
         "pretooluse" => pre_tool_use(None),
-        "subagent-stop" => with_payload(None, |p| {
+        "subagent-stop" => with_payload(None, HookEvent::SubagentStop, |p| {
             edit::release_subagent(p);
             Ok(())
         }),
-        "session-end" => with_payload(None, |p| {
+        "session-end" => with_payload(None, HookEvent::SessionEnd, |p| {
             edit::release_session(p);
             Ok(())
         }),
@@ -195,8 +202,8 @@ pub(crate) fn legacy_lock_event(event: &str) -> Result<()> {
 ///
 /// Dispatch happens before any config load or tree-sitter work, so an edit
 /// or MCP payload pays nothing for the shell path.
-pub(crate) fn pre_tool_use(harness: Option<Harness>) -> Result<()> {
-    let Some(payload) = read_payload(harness) else {
+pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
+    let Some(payload) = read_payload(harness, HookEvent::PreToolUse) else {
         return shell::deny_unreadable_payload(harness);
     };
     if let Some(write) = edit::write(&payload) {

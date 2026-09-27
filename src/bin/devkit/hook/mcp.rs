@@ -10,7 +10,10 @@ use devkit_config::IssueToolRule;
 use pabal::Tool;
 use serde_json::Value;
 
-use super::{payload::Payload, print_envelope, record};
+use super::{
+    payload::{self, Payload},
+    print_envelope, record,
+};
 use crate::issue::{
     receipt::{self, Field},
     render,
@@ -47,9 +50,11 @@ pub(super) fn guard(payload: &Payload) -> Result<()> {
     let outcome =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| respond(payload, &matched)));
     match outcome {
-        Ok(Verdict::Deny(reason)) => print_envelope(&payload.harness().deny(&reason)),
+        Ok(Verdict::Deny(reason)) => print_envelope(&payload::deny(payload.harness(), &reason)),
         Ok(Verdict::Allow) => {}
-        Err(_) if matched.get().is_some() => print_envelope(&payload.harness().deny(PANIC_REASON)),
+        Err(_) if matched.get().is_some() => {
+            print_envelope(&payload::deny(payload.harness(), PANIC_REASON))
+        }
         Err(_) => {}
     }
     let _ = std::io::stdout().flush();
