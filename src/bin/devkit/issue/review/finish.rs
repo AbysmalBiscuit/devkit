@@ -6,15 +6,16 @@ use devkit_config::Person;
 use serde::Deserialize;
 
 use super::{
-    REVIEW_FINISH_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, parse_args,
-    person_by_login, resolve_target, target_from_person, with_fields,
+    REVIEW_FINISH_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, parse_args, person_by_login,
+    resolve_target, target_from_person, with_fields,
 };
+use crate::template::VarArgs;
 
 pub struct Args {
     pub body: Option<String>,
     pub to: Vec<String>,
     pub pr: Option<u64>,
-    pub args: Vec<String>,
+    pub vars: VarArgs,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -181,7 +182,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let caller = devkit_common::caller::caller();
     let mut vars = tmpls.defaults();
-    let given = parse_args(&args.args, &tmpls.declared())?;
+    let given = parse_args(&args.vars, &tmpls.declared())?;
     check_required(
         "issue review finish",
         &loaded.config,

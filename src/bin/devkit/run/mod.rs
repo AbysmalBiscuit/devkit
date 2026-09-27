@@ -171,11 +171,8 @@ pub(crate) enum Cmd {
         /// skipped). A key also passed with --env wins.
         #[arg(long = "env-file")]
         env_file: Option<String>,
-        /// Set a template variable the task reads, over its
-        /// `[templates.variables]` value. Repeatable. `devkit config tasks
-        /// NAME` lists the ones it reads.
-        #[arg(long = "arg", value_name = "KEY=VALUE")]
-        args: Vec<String>,
+        #[command(flatten)]
+        vars: crate::template::VarArgs,
         /// Print the rendered plan (cwd, argv, env, resolved ports) without
         /// executing.
         #[arg(long)]
@@ -510,7 +507,7 @@ pub fn run(cli: RunCli) -> Result<()> {
             name,
             env,
             env_file,
-            args,
+            vars,
             dry_run,
         } => cmd_task(
             &cli,
@@ -518,7 +515,7 @@ pub fn run(cli: RunCli) -> Result<()> {
             name.as_deref(),
             env,
             env_file.as_deref(),
-            args,
+            vars,
             *dry_run,
         ),
     }
@@ -614,7 +611,7 @@ fn cmd_task(
     name: Option<&str>,
     env_pairs: &[String],
     env_file: Option<&str>,
-    arg_pairs: &[String],
+    vars: &crate::template::VarArgs,
     dry_run: bool,
 ) -> Result<()> {
     use devkit_ports::task::{self, Resolved, SeqItem};
@@ -628,7 +625,7 @@ fn cmd_task(
     };
 
     let user = parse_user_env(env_pairs, env_file)?;
-    let args = task::parse_args(arg_pairs)?;
+    let args = vars.parse()?;
     let root = toplevel(cwd)?;
     let resolved = task::resolve(
         &loaded.config,

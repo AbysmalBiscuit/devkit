@@ -9,15 +9,15 @@ issue setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary|--no-summary] [--dr
 issue setup --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue pr [status] [selector] [--json] [--cache-only]  # also the bare `issue pr`
-issue pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--pr <URL|number>] [--arg k=v]
+issue pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--pr <URL|number>] [--arg k=v] [--arg-file k=path]
 issue pr ready [--to <alias>] [--no-push] [--pr <URL|number>]
 issue pr checkout <target> [<worktree-path>] [--setup] [--apps a,b]
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree] [--no-preserve]
 issue sync-includes [selectors…] [--overwrite [--all]] [-y] [--dry-run]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size N] [--retries N]
 issue dashboard [--chart bar|line] [--bucket B] [--mode M] [--aggregate cumulative|period] [--all-roles] [--author gh] [--no-plots] [--no-cache]
-issue review request ["<message>"] [--to <alias|#channel>] [--pr <URL|number>] [--no-push] [--no-notify] [--arg k=v]
-issue review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg k=v]
+issue review request ["<message>"] [--to <alias|#channel>] [--pr <URL|number>] [--no-push] [--no-notify] [--arg k=v] [--arg-file k=path]
+issue review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg k=v] [--arg-file k=path]
 ```
 
 ## `setup` — start an issue
@@ -84,6 +84,7 @@ A run that notifies marks a draft ready for review first; `--no-notify` leaves d
 | `--pr <URL\|number>` | Act on this PR for this run. A pasted GitHub PR URL keeps its own repository; a bare number means `pr_repo`. The command records whichever PR it acted on, so this is how a worktree bound to the wrong PR is rebound, including the superseded case where the old and new PRs share a head branch and the branch lookup is ambiguous. Without it the PR comes from the worktree's record, and failing that from its branch. |
 | `--no-notify` | Send no Slack and leave draft state alone. Pins targets to what `--to` resolved to, possibly none, instead of falling back to the PR's current reviewers. |
 | `--arg k=v` | **Repeatable.** Override a declared template variable. |
+| `--arg-file k=path` | **Repeatable.** The same, from a file's contents, or stdin for `k=-`. |
 
 With no `--to`, it resolves the PR's current human reviewers and notifies them; `--no-notify` suppresses that and prints the PR URL instead. Everything that can refuse the run (recipients, the reviewer gate) is settled before a draft is marked ready, so a run with nobody to notify leaves a draft a draft. The Slack template's `pr_title` is the PR's own title from GitHub.
 

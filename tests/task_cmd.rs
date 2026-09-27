@@ -858,3 +858,67 @@ fn config_variables_lists_each_declared_variable() {
         })
     );
 }
+
+#[test]
+fn arg_file_passes_a_multi_line_value_from_a_file() {
+    let dir = setup();
+    std::fs::write(dir.path().join("body.md"), "line one\nline two\n").unwrap();
+    let out = run_in(dir.path(), &[
+        "task",
+        "commit",
+        "--arg-file",
+        "msg=body.md",
+        "--dry-run",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("--msg=devkit: line one\nline two\n version"),
+        "the file's contents, trailing newline included: {stdout}"
+    );
+}
+
+#[test]
+fn arg_file_dash_reads_the_value_from_stdin() {
+    use std::io::Write;
+
+    let dir = setup();
+    let mut child = devkit_run_in(dir.path())
+        .args(["task", "commit", "--arg-file", "msg=-", "--dry-run"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn devkit run");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"from\nstdin\n")
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("--msg=devkit: from\nstdin\n version"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn naming_one_key_through_arg_and_arg_file_is_refused() {
+    let dir = setup();
+    std::fs::write(dir.path().join("body.md"), "x").unwrap();
+    let out = run_in(dir.path(), &[
+        "task",
+        "commit",
+        "--arg",
+        "msg=inline",
+        "--arg-file",
+        "msg=body.md",
+        "--dry-run",
+    ]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("`msg`"), "{stderr}");
+}

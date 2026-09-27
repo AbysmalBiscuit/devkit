@@ -23,6 +23,7 @@ mod rules;
 mod run;
 mod schema;
 mod shim;
+mod template;
 
 const SHIM_HELP: &str = "\
 Also installed under their own names:

@@ -101,3 +101,54 @@ fn a_name_only_another_surfaces_template_reads_does_not_bind() {
     let out = fake.issue(&["pr", "create", "--no-push", "--pr-title", "add a thing"]);
     assert!(out.status.success(), "{out:?}");
 }
+
+/// A project whose `pr_body` is one declared multi-line arg, with no PR yet.
+fn fake_for_notes() -> ghfake::Fake {
+    ghfake::Fake::without_pr(
+        "[templates]\npr_body = \"{{ notes }}\"\n[templates.variables]\nnotes = { required = \"always\" }\n",
+    )
+}
+
+#[test]
+fn arg_file_carries_a_multi_line_body_from_a_file() {
+    let fake = fake_for_notes();
+    let notes = fake.project().join("notes.md");
+    std::fs::write(&notes, "first line\nsecond line\n").unwrap();
+    let pair = format!("notes={}", notes.display());
+    let _ = fake.issue(&[
+        "pr",
+        "create",
+        "--no-push",
+        "--pr-title",
+        "t",
+        "--arg-file",
+        &pair,
+    ]);
+    assert!(
+        fake.calls().contains("--body first line\nsecond line\n"),
+        "{}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn arg_file_dash_carries_a_multi_line_body_from_stdin() {
+    let fake = fake_for_notes();
+    let out = fake.issue_with_stdin(
+        &[
+            "pr",
+            "create",
+            "--no-push",
+            "--pr-title",
+            "t",
+            "--arg-file",
+            "notes=-",
+        ],
+        b"from\nstdin\n",
+    );
+    assert!(
+        fake.calls().contains("--body from\nstdin\n"),
+        "{out:?}\n{}",
+        fake.calls()
+    );
+}

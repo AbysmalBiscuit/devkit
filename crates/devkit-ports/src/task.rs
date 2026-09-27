@@ -268,18 +268,6 @@ fn command_reads(t: &TaskConfig) -> Result<BTreeSet<String>> {
     template::undeclared(&templates)
 }
 
-/// Parse repeated `--arg key=value` pairs.
-pub fn parse_args(pairs: &[String]) -> Result<BTreeMap<String, String>> {
-    pairs
-        .iter()
-        .map(|pair| {
-            pair.split_once('=')
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .with_context(|| format!("--arg must be key=value, got `{pair}`"))
-        })
-        .collect()
-}
-
 /// Refuse an `--arg` task `name` never reads, a `required_args` entry naming
 /// something it never reads, and a required arg left unset for this caller,
 /// before any step of it resolves.

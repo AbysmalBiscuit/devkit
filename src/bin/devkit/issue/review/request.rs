@@ -5,13 +5,16 @@ use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
 use devkit_config::Person;
 
 use super::{
-    REVIEW_REQUEST_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, guard_branch,
-    is_human_login, parse_args, person_by_login, resolve_target, target_from_person, with_fields,
+    REVIEW_REQUEST_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, guard_branch, is_human_login,
+    parse_args, person_by_login, resolve_target, target_from_person, with_fields,
 };
-use crate::issue::pr::{
-    add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr,
-    resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing},
-    reviewer_logins,
+use crate::{
+    issue::pr::{
+        add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr,
+        resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing},
+        reviewer_logins,
+    },
+    template::VarArgs,
 };
 
 pub struct Args {
@@ -23,7 +26,7 @@ pub struct Args {
     /// bare number means `pr_repo`. Replaces a wrong recorded binding, since
     /// recording what this run acts on is what makes it a rebind.
     pub pr: Option<String>,
-    pub args: Vec<String>,
+    pub vars: VarArgs,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -99,7 +102,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let caller = devkit_common::caller::caller();
     let mut vars = tmpls.defaults();
-    let given = parse_args(&args.args, &tmpls.declared())?;
+    let given = parse_args(&args.vars, &tmpls.declared())?;
     check_required(
         "issue review request",
         &loaded.config,

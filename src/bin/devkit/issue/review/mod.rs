@@ -4,6 +4,8 @@ use anyhow::{Context, Result, bail};
 use devkit_common::{caller::Caller, progress::Steps, slack};
 use devkit_config::{Config, Person};
 
+use crate::template::VarArgs;
+
 pub(crate) mod finish;
 pub(crate) mod request;
 
@@ -96,25 +98,19 @@ pub(crate) fn is_human_login(login: &str) -> bool {
     !login.ends_with("[bot]")
 }
 
-/// Parse repeated `--arg key=value` pairs, validating each key against the
+/// Parse `--arg` and `--arg-file`, validating each key against the
 /// declared `[templates.variables]` allowlist. `allowed` is `declared()`, not
 /// `defaults()`: a variable declared only to carry a `required` marking has no
 /// default value and so is absent from `defaults()`, which would otherwise
 /// make it undeclarable — and therefore unpassable, defeating the point of
 /// marking it required.
 pub(crate) fn parse_args(
-    pairs: &[String],
+    vars: &VarArgs,
     allowed: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, String>> {
-    let mut out = BTreeMap::new();
-    for pair in pairs {
-        let (k, v) = pair
-            .split_once('=')
-            .with_context(|| format!("--arg must be key=value, got `{pair}`"))?;
-        if !allowed.contains(k) {
-            bail!("--arg `{k}` is not declared in [templates.variables]");
-        }
-        out.insert(k.to_string(), v.to_string());
+    let out = vars.parse()?;
+    if let Some(k) = out.keys().find(|k| !allowed.contains(*k)) {
+        bail!("--arg `{k}` is not declared in [templates.variables]");
     }
     Ok(out)
 }
@@ -329,13 +325,20 @@ mod tests {
         assert!(!is_human_login("coderabbitai[bot]"));
     }
 
+    fn args(pairs: &[&str]) -> VarArgs {
+        VarArgs {
+            args: pairs.iter().map(|s| s.to_string()).collect(),
+            arg_files: Vec::new(),
+        }
+    }
+
     #[test]
     fn parse_args_validates_against_allowlist() {
         let allowed = BTreeSet::from(["team".to_string()]);
-        let ok = parse_args(&["team=infra".to_string()], &allowed).unwrap();
+        let ok = parse_args(&args(&["team=infra"]), &allowed).unwrap();
         assert_eq!(ok.get("team").map(String::as_str), Some("infra"));
-        assert!(parse_args(&["ghost=x".to_string()], &allowed).is_err());
-        assert!(parse_args(&["noeq".to_string()], &allowed).is_err());
+        assert!(parse_args(&args(&["ghost=x"]), &allowed).is_err());
+        assert!(parse_args(&args(&["noeq"]), &allowed).is_err());
     }
 
     #[test]
@@ -344,7 +347,7 @@ mod tests {
         // no default and is absent from `defaults()`. The allowlist must
         // still accept it, or a required variable could never be supplied.
         let allowed = BTreeSet::from(["ticket".to_string()]);
-        let ok = parse_args(&["ticket=eng-1".to_string()], &allowed).unwrap();
+        let ok = parse_args(&args(&["ticket=eng-1"]), &allowed).unwrap();
         assert_eq!(ok.get("ticket").map(String::as_str), Some("eng-1"));
     }
 

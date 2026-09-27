@@ -9,9 +9,12 @@ use super::{
     resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing, verify_created},
     reviewer_logins,
 };
-use crate::issue::review::{
-    PR_CONTEXT_KEYS, PrAction, Target, action_for, base_ctx, check_required, finish, guard_branch,
-    parse_args, render_review, resolve_target, with_fields,
+use crate::{
+    issue::review::{
+        PR_CONTEXT_KEYS, PrAction, Target, action_for, base_ctx, check_required, finish, guard_branch,
+        parse_args, render_review, resolve_target, with_fields,
+    },
+    template::VarArgs,
 };
 
 pub struct Args {
@@ -26,7 +29,7 @@ pub struct Args {
     /// bare number means `pr_repo`. Replaces a wrong recorded binding, since
     /// recording what this run acts on is what makes it a rebind.
     pub pr: Option<String>,
-    pub args: Vec<String>,
+    pub vars: VarArgs,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -203,7 +206,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let caller = devkit_common::caller::caller();
     let mut vars = tmpls.defaults();
-    let given = parse_args(&args.args, &tmpls.declared())?;
+    let given = parse_args(&args.vars, &tmpls.declared())?;
     check_required(
         "issue pr",
         &loaded.config,
@@ -357,8 +360,8 @@ mod tests {
     }
 
     /// The hazard the deferred body exists for: `render_review` is strict about
-    /// undefined variables, and `base_ctx` binds `issue` only when the worktree
-    /// has an `issue setup` record.
+    /// undefined variables, and `base_ctx` binds `issue` only when the
+    /// worktree has an `issue setup` record.
     #[test]
     fn a_body_template_reading_the_record_fails_without_one() {
         let ctx = base_ctx(None, "lev/eng-1-fix");
