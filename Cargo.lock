@@ -435,6 +435,7 @@ dependencies = [
  "devkit-common",
  "schemars",
  "serde",
+ "serde_json",
  "tempfile",
  "toml",
 ]

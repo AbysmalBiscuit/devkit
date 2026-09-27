@@ -585,6 +585,13 @@
           "description": "Claim a lock on every file an agent's edit or resolvable shell write\ntouches, and deny a write another session holds. Resolves per\ncheckout, first answer wins: `DEVKIT_ENFORCE_WRITES` (`1`/`true`/`yes`/\n`on` or `0`/`false`/`no`/`off`; anything else falls through), then any\nproject layer for the written path (`devkit.local.toml` and a linked\nworktree's main-checkout layer included), then the global config. Fails\nclosed on a registry error.",
           "type": "boolean"
         },
+        "issue_tools": {
+          "additionalProperties": {
+            "$ref": "#/$defs/IssueToolRule"
+          },
+          "description": "MCP tools that create or edit issues, whose title and body must come\nfrom `devkit issue render`. Merged across config layers by name.\nEnforces on its own presence, independent of `enforce_commands`.",
+          "type": "object"
+        },
         "log": {
           "$ref": "#/$defs/LogSection",
           "default": {
@@ -669,6 +676,69 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "IssueToolRule": {
+      "description": "One `[harness.issue_tools.<name>]` entry: an MCP tool that creates or edits\nissues, whose title and body the pre-tool-use hook allows only when\n`devkit issue render` produced them in the same agent session.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\n```",
+      "properties": {
+        "absent": {
+          "default": [],
+          "description": "Input keys that must be missing or null for the call to count as a\ncreate. Any other call is an update.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "body": {
+          "description": "The input key holding the issue's body.",
+          "type": "string"
+        },
+        "body_patch": {
+          "default": [],
+          "description": "Input keys that edit the body without carrying it whole. A call\ncarrying one is denied, since no render can vouch for the result.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "`false` turns off an entry a parent layer declared.",
+          "type": "boolean"
+        },
+        "equals": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Input keys that must equal the given string for the call to count as a\ncreate.",
+          "type": "object"
+        },
+        "servers": {
+          "default": [],
+          "description": "MCP server names this entry covers, matched case-insensitively; `*`\nmatches any run of characters. Empty matches any server.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "The input key holding the issue's title.",
+          "type": "string"
+        },
+        "tools": {
+          "default": [],
+          "description": "MCP tool names this entry covers, matched exactly. Empty matches\nnothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ],
       "type": "object"
     },
     "LayerMarker": {

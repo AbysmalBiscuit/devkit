@@ -244,6 +244,116 @@ pub struct CommandRule {
     pub severity: Severity,
 }
 
+/// One `[harness.issue_tools.<name>]` entry: an MCP tool that creates or edits
+/// issues, whose title and body the pre-tool-use hook allows only when
+/// `devkit issue render` produced them in the same agent session.
+///
+/// ```
+/// # use devkit_config::IssueToolRule;
+/// # use serde_json::json;
+/// # let doc: toml::Table = toml::from_str(r#"
+/// [harness.issue_tools.linear]
+/// servers    = ["*linear*"]
+/// tools      = ["save_issue"]
+/// absent     = ["id"]
+/// title      = "title"
+/// body       = "description"
+/// body_patch = ["patch"]
+///
+/// [harness.issue_tools.github]
+/// servers = ["*github*"]
+/// tools   = ["issue_write"]
+/// equals  = { method = "create" }
+/// title   = "title"
+/// body    = "body"
+/// # "#).unwrap();
+/// # let rule = |name: &str| -> IssueToolRule {
+/// #     doc["harness"]["issue_tools"][name].clone().try_into().unwrap()
+/// # };
+/// # assert!(rule("linear").matches(Some("claude.ai Linear"), "save_issue"));
+/// # assert!(rule("github").is_create(&json!({"method": "create"})));
+/// ```
+#[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
+pub struct IssueToolRule {
+    /// MCP server names this entry covers, matched case-insensitively; `*`
+    /// matches any run of characters. Empty matches any server.
+    #[serde(default)]
+    pub servers: Vec<String>,
+    /// MCP tool names this entry covers, matched exactly. Empty matches
+    /// nothing.
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// Input keys that must be missing or null for the call to count as a
+    /// create. Any other call is an update.
+    #[serde(default)]
+    pub absent: Vec<String>,
+    /// Input keys that must equal the given string for the call to count as a
+    /// create.
+    #[serde(default)]
+    pub equals: BTreeMap<String, String>,
+    /// The input key holding the issue's title.
+    pub title: String,
+    /// The input key holding the issue's body.
+    pub body: String,
+    /// Input keys that edit the body without carrying it whole. A call
+    /// carrying one is denied, since no render can vouch for the result.
+    #[serde(default)]
+    pub body_patch: Vec<String>,
+    /// `false` turns off an entry a parent layer declared.
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
+}
+
+impl IssueToolRule {
+    /// Whether a call to `tool` on `server` is one this entry covers.
+    pub fn matches(&self, server: Option<&str>, tool: &str) -> bool {
+        if !self.tools.iter().any(|t| t == tool) {
+            return false;
+        }
+        if self.servers.is_empty() {
+            return true;
+        }
+        let Some(server) = server else {
+            return false;
+        };
+        let server = server.to_lowercase();
+        self.servers
+            .iter()
+            .any(|p| wildcard_matches(&p.to_lowercase(), &server))
+    }
+
+    /// Whether `input` creates an issue rather than updating one.
+    pub fn is_create(&self, input: &serde_json::Value) -> bool {
+        self.absent
+            .iter()
+            .all(|k| input.get(k).is_none_or(serde_json::Value::is_null))
+            && self
+                .equals
+                .iter()
+                .all(|(k, v)| input.get(k).and_then(serde_json::Value::as_str) == Some(v))
+    }
+}
+
+/// Whether `text` matches `pattern`, where each `*` stands for any run of
+/// characters, `/` included. A pattern without `*` matches exactly.
+pub fn wildcard_matches(pattern: &str, text: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let head = parts.next().unwrap_or_default();
+    let Some(mut rest) = text.strip_prefix(head) else {
+        return false;
+    };
+    let Some(tail) = parts.next_back() else {
+        return rest.is_empty();
+    };
+    for part in parts {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.ends_with(tail)
+}
+
 fn enabled_default() -> bool {
     true
 }
@@ -381,6 +491,11 @@ pub struct HarnessSection {
     /// overrides only the keys it sets.
     #[serde(default)]
     pub commands: BTreeMap<String, CommandRule>,
+    /// MCP tools that create or edit issues, whose title and body must come
+    /// from `devkit issue render`. Merged across config layers by name.
+    /// Enforces on its own presence, independent of `enforce_commands`.
+    #[serde(default)]
+    pub issue_tools: BTreeMap<String, IssueToolRule>,
     /// How the guard resolves a guarded command to one of `[apps]`, from a
     /// workspace path in the command, a `--filter`/`--dir`/`-C` value, or the
     /// shell's directory.
@@ -409,6 +524,7 @@ impl Default for HarnessSection {
             unsupported_language: PolicyAction::Block,
             script_files: PolicyAction::Allow,
             commands: BTreeMap::new(),
+            issue_tools: BTreeMap::new(),
             app_match: AppMatch::default(),
             log: LogSection::default(),
         }
@@ -439,6 +555,42 @@ mod tests {
         assert!(!rule.enabled);
         assert_eq!(rule.action, RuleAction::Warn);
         assert_eq!(rule.severity, Severity::Info);
+    }
+
+    #[test]
+    fn issue_tool_rules_match_and_classify() {
+        let linear: IssueToolRule = toml::from_str(
+            "servers = [\"*linear*\"]\ntools = [\"save_issue\"]\nabsent = [\"id\"]\n\
+             title = \"title\"\nbody = \"description\"\nbody_patch = [\"patch\"]\n",
+        )
+        .unwrap();
+        let github: IssueToolRule = toml::from_str(
+            "servers = [\"*github*\"]\ntools = [\"issue_write\"]\n\
+             equals = { method = \"create\" }\ntitle = \"title\"\nbody = \"body\"\n",
+        )
+        .unwrap();
+        assert!(linear.matches(Some("claude.ai Linear"), "save_issue"));
+        assert!(linear.matches(Some("claude_ai_Linear"), "save_issue"));
+        assert!(!linear.matches(Some("claude.ai Linear"), "get_issue"));
+        assert!(!linear.matches(None, "save_issue"));
+        assert!(github.matches(Some("claude.ai GitHub"), "issue_write"));
+        assert!(linear.is_create(&serde_json::json!({"title": "t"})));
+        assert!(!linear.is_create(&serde_json::json!({"id": "ENG-1"})));
+        assert!(linear.is_create(&serde_json::json!({"id": null})));
+        assert!(github.is_create(&serde_json::json!({"method": "create"})));
+        assert!(!github.is_create(&serde_json::json!({"method": "update"})));
+        assert_eq!(linear.body_patch, ["patch"]);
+        assert!(linear.enabled);
+        let any_server = IssueToolRule {
+            servers: vec![],
+            ..linear.clone()
+        };
+        assert!(any_server.matches(None, "save_issue"));
+        let no_tools = IssueToolRule {
+            tools: vec![],
+            ..linear
+        };
+        assert!(!no_tools.matches(Some("claude.ai Linear"), "save_issue"));
     }
 
     #[test]

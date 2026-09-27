@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use devkit_config::{AppMatch, CommandRule, PolicyAction, ShellSetting};
+use devkit_config::{AppMatch, CommandRule, IssueToolRule, PolicyAction, ShellSetting};
 use serde::de::DeserializeOwned;
 
 use crate::vcs::Checkout;
@@ -130,6 +130,7 @@ impl Default for HarnessPolicy {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct HarnessRules {
     pub commands: BTreeMap<String, CommandRule>,
+    pub issue_tools: BTreeMap<String, IssueToolRule>,
     pub app_match: AppMatch,
     pub policy: HarnessPolicy,
 }
@@ -234,9 +235,33 @@ pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<Stri
             )),
         },
     }
+
+    let mut issue_tools = BTreeMap::new();
+    match merged.get("issue_tools") {
+        None => {}
+        Some(v) => match v.as_table() {
+            Some(table) => {
+                for (name, value) in table {
+                    match value.clone().try_into::<IssueToolRule>() {
+                        Ok(rule) => {
+                            issue_tools.insert(name.clone(), rule);
+                        }
+                        Err(e) => {
+                            warnings.push(format!("skipping `[harness.issue_tools.{name}]`: {e}"))
+                        }
+                    }
+                }
+            }
+            None => warnings.push(format!(
+                "ignoring `[harness.issue_tools]`: expected a table, found {}",
+                v.type_str()
+            )),
+        },
+    }
     (
         HarnessRules {
             commands,
+            issue_tools,
             app_match,
             policy,
         },
@@ -557,6 +582,37 @@ programs = "node"
         assert_eq!(warns.len(), 1);
         assert!(
             warns[0].contains("oops"),
+            "warning names the rule: {}",
+            warns[0]
+        );
+    }
+
+    #[test]
+    fn issue_tools_merge_by_name_and_a_child_disables_one() {
+        let (h, warns) = merge_rules(&[
+            layer(
+                "root",
+                "[harness.issue_tools.linear]\nservers = [\"*linear*\"]\n\
+                 tools = [\"save_issue\"]\nabsent = [\"id\"]\ntitle = \"title\"\n\
+                 body = \"description\"\nbody_patch = [\"patch\"]\n",
+            ),
+            layer("child", "[harness.issue_tools.linear]\nenabled = false\n"),
+        ]);
+        assert!(warns.is_empty(), "{warns:?}");
+        assert_eq!(h.issue_tools["linear"].tools, ["save_issue"]);
+        assert!(!h.issue_tools["linear"].enabled);
+    }
+
+    #[test]
+    fn a_malformed_issue_tool_is_skipped_with_a_warning() {
+        let (h, warns) = merge_rules(&[layer(
+            "root",
+            "[harness.issue_tools.half]\ntools = [\"save_issue\"]\nbody = \"description\"\n",
+        )]);
+        assert!(h.issue_tools.is_empty());
+        assert_eq!(warns.len(), 1);
+        assert!(
+            warns[0].contains("[harness.issue_tools.half]"),
             "warning names the rule: {}",
             warns[0]
         );

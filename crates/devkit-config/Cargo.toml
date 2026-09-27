@@ -7,6 +7,7 @@ version = "0.14.6" # x-release-please-version
 anyhow.workspace = true
 schemars.workspace = true
 serde = { workspace = true }
+serde_json.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
