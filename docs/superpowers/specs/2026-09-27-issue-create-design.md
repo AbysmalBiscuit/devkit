@@ -65,7 +65,7 @@ Works under every tracker and needs no credential.
 
 1. Runs `check_required` over `issue_title` and `issue_body` and renders both.
 2. Resolves the session ids (below). With none (a human at a terminal), skips to step 4 and says on stderr that no receipt was written. Humans never pass through the hook, so no fallback id exists.
-3. Resolves the git checkout root of the start directory, failing when there is none, and writes the receipts.
+3. Refuses before writing anything when any session id is invalid. Resolves the receipt store (below), failing when the start directory is in no git checkout, and writes the receipts.
 4. Prints `{"title": "...", "body": "..."}` to stdout. JSON keeps the strings exact: an agent copies them into an MCP call whose arguments are JSON strings as well.
 
 ### `devkit issue create`
@@ -87,13 +87,13 @@ The tracker selection reuses `issue::tracker::select`, and the repository comes 
 
 A receipt records that `issue render` produced a given title, or a given body, in a given agent session. Each render writes two: one for its title and one for its body.
 
-- **Location.** `<checkout>/.devkit/issue-receipts/<session>/title-<hex>` and `.../body-<hex>`, where `<checkout>` is the git checkout root of the start directory. The files are empty; their names are the record. `gitignore::write_self_ignore` keeps `.devkit/` untracked.
+- **Location.** `<store>/.devkit/issue-receipts/<session>/title-<hex>` and `.../body-<hex>`, where `<store>` is the repository's main worktree, or the checkout root when there is none. Every worktree of one repository shares the store, because a harness reports the directory its session started in, not the worktree the agent rendered from. The files are empty; their names are the record. `gitignore::write_self_ignore` keeps `.devkit/` untracked.
 - **Digest.** `<hex>` is the SHA-256 of the normalized text as bare lowercase hex. `harness_log::redact::digest` prefixes `sha256:`, and a colon is not a legal NTFS filename character, so the receipt module takes the hex without that prefix. `normalize` converts CRLF to LF, strips trailing whitespace from each line, and trims the whole string.
 - **Session.** The CLI takes it from `HARNESS_SESSION_VARS` (`CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`), the same values the hook payload carries as `session_id`. When two variables hold different ids, it writes the receipts under each.
 - **Session id as a path.** A session id is valid only when it is non-empty and every character is an ASCII letter, digit, `-` or `_`. The CLI refuses an invalid one. The pre-tool-use hook denies a matched call whose payload session id is invalid, and the session-end hook skips it.
 - **Concurrency.** Each receipt is its own file named by its content, so parallel agents and subagents in one session never write the same file and need no lock.
 - **Per-field receipts.** A call's title and body are checked separately, so a call may pair the title of one render with the body of another. Both still came out of the template, so this is accepted.
-- **Lifetime.** Receipts are not consumed when a call is allowed, because an allowed call can still fail at the MCP server and be retried. The `session-end` hook deletes `<checkout>/.devkit/issue-receipts/<session>/` for the payload's checkout. A session that never fires `session-end` (a killed cloud agent) or rendered in another checkout leaves its directory behind, so `issue render` first deletes every session directory in its checkout whose modification time is older than seven days.
+- **Lifetime.** Receipts are not consumed when a call is allowed, because an allowed call can still fail at the MCP server and be retried. The `session-end` hook deletes `<store>/.devkit/issue-receipts/<session>/` for the payload's repository. A session that never fires `session-end` (a killed cloud agent) or rendered in another repository leaves its directory behind, so `issue render` first deletes every session directory in its store whose modification time is older than seven days.
 
 Subagents are not scoped separately. Claude Code gives a subagent's shell the same environment as its parent, with no agent id, so the CLI cannot tell subagents apart. Content addressing already keeps them from interfering.
 
@@ -135,14 +135,14 @@ A call **matches** an entry when its server and tool match. A matched call is ch
 - **Create** (every `absent` key missing and every `equals` pair holding): the title and the body each need a receipt. A missing title or body field is checked as the empty string, so a Linear create that leaves `description` empty to take a Linear-side `template` is denied.
 - **Update** (anything else): a `body_patch` key denies. Otherwise each of the title and body fields the call carries needs a receipt, and fields it omits are not checked. An update touching neither (state, labels, assignee) is allowed.
 
-Dispatch in `pre_tool_use` becomes: edit, then MCP, then shell. Every `Tool::Mcp` payload takes the MCP branch and returns from it; none reaches `shell::guard`, whose non-shell arm denies the payload as an unusable shell command (`src/bin/devkit/hook/shell.rs`). The MCP branch:
+Dispatch in `pre_tool_use` becomes: edit, then MCP, then shell. Every `Tool::Mcp` payload takes the MCP branch and returns from it, so none reaches `shell::guard`. The MCP branch:
 
-1. Loads the full config for the payload's cwd. No config, or one that fails to load, allows: no entry can be known to match, and denying there would block every MCP tool in a project whose `devkit.toml` has a typo.
+1. Merges the `[harness.issue_tools]` tables from the config layers at the payload's cwd, the way the command guard merges its rules. An entry that fails to parse is skipped, so a typo in one entry cannot block every MCP tool.
 2. Finds the first enabled entry the call matches. None allows without output.
-3. From here every failure denies: an invalid or missing session id, no checkout at the payload's cwd, an IO error, or a panic. The branch runs under `catch_unwind` with a `matched` flag, the pattern `shell::guard` uses with its `write_stage` flag, so a panic after a match denies and a panic before one allows. The table is an opt-in enforcement rule, and one that fails open enforces nothing.
-4. Checks the receipts under `<checkout>/.devkit/issue-receipts/<session>/`.
+3. From here every failure denies: an invalid or missing session id, no checkout at the payload's cwd, a `.devkit` that is a file, a `tool_input` that is not a JSON object, an IO error, or a panic. The branch runs under `catch_unwind` with a `matched` flag, the pattern `shell::guard` uses with its `write_stage` flag, so a panic after a match denies and a panic before one allows. The table is an opt-in enforcement rule, and one that fails open enforces nothing.
+4. Checks the receipts under `<store>/.devkit/issue-receipts/<session>/`.
 
-The deny reason tells the agent to run `devkit issue render --title ... [--body ...]` and then pass its `title` and `body` output unchanged as the call's `<title key>` and `<body key>`. It lists the `--arg`s the templates require of an agent, with their descriptions, computed the way `check_required` computes them with nothing supplied. When the session's receipts directory exists but a field has no matching receipt, the reason names that field and says its text differs from what was rendered. A `body_patch` denial says to render the whole new body instead.
+The deny reason tells the agent to run `devkit issue render --title ... [--body ...]` and then pass its `title` and `body` output unchanged as the call's `<title key>` and `<body key>`. It lists the `--arg`s the templates require of an agent, with their descriptions, computed the way `check_required` computes them with nothing supplied. That list loads the full config, so only a missing-receipt denial builds it. When the session's receipts directory exists but a field has no matching receipt, the reason names that field and says its text differs from what was rendered. A `body_patch` denial says to render the whole new body instead.
 
 The MCP branch writes no harness log record.
 
