@@ -15,6 +15,8 @@ mod info_cache;
 mod pr;
 mod preserve;
 mod prs;
+#[allow(dead_code)]
+pub(crate) mod receipt;
 mod review;
 mod select;
 pub(crate) mod setup;
