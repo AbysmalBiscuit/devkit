@@ -455,6 +455,60 @@ fn the_same_run_as_a_human_takes_the_default() {
 }
 
 #[test]
+fn a_blank_value_does_not_supply_a_required_arg() {
+    let dir = setup();
+    let out = run_in(dir.path(), &[
+        "task",
+        "pinned-commit",
+        "--arg",
+        "msg=fix",
+        "--arg",
+        "scope=",
+        "--dry-run",
+    ]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--arg scope=... (required for agents)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_whitespace_value_does_not_supply_an_arg_with_no_default() {
+    let dir = setup();
+    let out = devkit_run_in(dir.path())
+        .args(["task", "commit", "--arg", "msg=  ", "--dry-run"])
+        .env("DEVKIT_CALLER", "human")
+        .output()
+        .expect("run devkit run");
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--arg msg=..."),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn a_blank_value_still_overrides_the_default_of_an_optional_arg() {
+    let dir = setup();
+    let out = run_in(dir.path(), &[
+        "task",
+        "commit",
+        "--arg",
+        "msg=fix",
+        "--arg",
+        "scope=",
+        "--dry-run",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("argv: git --msg=: fix version"),
+        "{out:?}"
+    );
+}
+
+#[test]
 fn the_listing_is_caller_relative() {
     let dir = setup();
     let agent = run_in(dir.path(), &["task"]);
@@ -539,7 +593,10 @@ fn task_split_of_an_empty_value_adds_no_arguments() {
     let dir = setup();
     std::fs::write(
         dir.path().join("devkit.toml"),
-        r#"[tasks.show]
+        r#"[templates.variables]
+extra = ""
+
+[tasks.show]
 run = ["git", "config", "--file", "observed", "probe.value", "set", { split = "{{ extra }}", on = ";" }]
 "#,
     )

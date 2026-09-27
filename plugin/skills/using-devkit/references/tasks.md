@@ -23,7 +23,7 @@ A task's templates can read variables as well as ports. The ARGS column of `devr
 devrun task commit --arg msg="fix login redirect"
 ```
 
-- A missing required arg fails before any step runs, naming the flag: ``task `commit` needs --arg msg=...``. A sequence checks every step's args up front. When the arg has a `description` in `[templates.variables]`, a line under the error says what to pass.
+- A missing required arg fails before any step runs, naming the flag: ``task `commit` needs --arg msg=...``. A blank or whitespace-only value counts as missing, so `--arg msg=` fails the same way. An optional arg takes a blank value as given, over its default. A sequence checks every step's args up front. When the arg has a `description` in `[templates.variables]`, a line under the error says what to pass.
 - An `--arg` the task never reads is rejected, so a mistyped key fails loudly.
 - A multi-line value (a commit body, a PR description) goes through `--arg-file KEY=path`, which passes the file's contents unchanged, trailing newline included. `KEY=-` reads stdin, so a heredoc works. Every command that takes `--arg` takes it: `devrun task`, `issue pr create`, `issue review request|finish` and `devkit template render`. A key given through both flags is refused. It is unrelated to `--env-file`, which reads `K=V` lines into env overrides.
 - `issue`, `slug` and `branch` come from the worktree's `.devkit/issue.toml` and git. Outside an issue worktree they are undefined; supply one with `--arg issue=<id>` when the task reads it.

@@ -151,7 +151,8 @@ pub fn required_of(cfg: &Config, task: Option<&str>, name: &str) -> Required {
 
 /// The required names this run's templates read and the caller did not supply.
 /// `reads` is what the surface will actually render; a name no template reads
-/// is never asked for.
+/// is never asked for. A blank value does not supply a required arg: the
+/// requirement exists because the task needs a value.
 pub fn missing_args(
     cfg: &Config,
     task: Option<&str>,
@@ -161,7 +162,7 @@ pub fn missing_args(
 ) -> Vec<Missing> {
     reads
         .iter()
-        .filter(|n| !given.contains_key(n.as_str()))
+        .filter(|n| given.get(n.as_str()).is_none_or(|v| v.trim().is_empty()))
         .filter(|n| is_required(cfg, task, n, caller))
         .map(|n| Missing {
             name: n.clone(),
