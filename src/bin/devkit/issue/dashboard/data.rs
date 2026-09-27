@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use devkit_common::{
-    cmd::{capture, gh_json_in},
-    github,
+    cmd::capture,
+    forge::{Forge, PrTimeline, Repo, Role},
     tracker::{AssignedIssue, Tracker},
 };
 use serde::{Deserialize, Serialize};
@@ -50,18 +50,6 @@ pub fn origin(tracker: &dyn Tracker, issues: &[AssignedIssue]) -> Option<DateTim
     issues.iter().filter_map(|i| parse_ts(&i.created_at)).min()
 }
 
-#[derive(Deserialize)]
-struct PrTimes {
-    #[serde(rename = "createdAt", default)]
-    created_at: Option<String>,
-    #[serde(rename = "mergedAt", default)]
-    merged_at: Option<String>,
-    #[serde(default)]
-    additions: i64,
-    #[serde(default)]
-    deletions: i64,
-}
-
 /// A `pr_timeline` result reduced to unix-second stamps so it serializes
 /// without chrono's serde feature; reconstituted into `DateTime`s on the way
 /// back out.
@@ -82,13 +70,13 @@ fn to_datetimes(stamps: &[i64]) -> Vec<DateTime<Utc>> {
 
 /// (opened stamps, merged stamps, total additions, total deletions) for my PRs.
 /// With `use_cache`, a fresh prior fetch is reused; failures are never cached.
-/// `repo` is absent when no PR repository resolves (no `[github] pr_repo` and
-/// no github.com `origin`, e.g. a Linear project whose code lives elsewhere) —
-/// the section then degrades to empty rather than failing the dashboard.
+/// `pr` is absent when no PR repository resolves (no forge, or a Linear
+/// project whose code lives elsewhere): the section then degrades to empty
+/// rather than failing the dashboard.
 pub fn pr_timeline(
     all_roles: bool,
     use_cache: bool,
-    repo: Option<&github::Repo>,
+    pr: Option<(&dyn Forge, &Repo)>,
     scope: &CacheScope,
 ) -> (Vec<DateTime<Utc>>, Vec<DateTime<Utc>>, i64, i64) {
     let key = if all_roles {
@@ -104,37 +92,16 @@ pub fn pr_timeline(
             c.deletions,
         );
     }
-    let Some(repo) = repo else {
+    let Some((forge, repo)) = pr else {
         return (Vec::new(), Vec::new(), 0, 0);
     };
-    let fetch = |search: &str| -> Vec<PrTimes> {
-        if let Some(v) = fetch_timeline_http(search, repo) {
-            return v;
-        }
-        gh_json_in(
-            &[
-                "pr",
-                "list",
-                "--search",
-                search,
-                "--state",
-                "all",
-                "--limit",
-                "500",
-                "--json",
-                "createdAt,mergedAt,additions,deletions",
-            ],
-            repo,
-            ".",
-        )
-        .unwrap_or_default()
-    };
+    let fetch =
+        |role: Role| -> Vec<PrTimeline> { forge.timeline(repo, role, 500).unwrap_or_default() };
     let prs = if all_roles {
-        // The two GitHub queries are independent round trips; run them
-        // together.
+        // The two queries are independent round trips; run them together.
         let (mut authored, reviewed) = std::thread::scope(|s| {
-            let at = s.spawn(|| fetch("author:@me"));
-            let rt = s.spawn(|| fetch("reviewed-by:@me"));
+            let at = s.spawn(|| fetch(Role::Author));
+            let rt = s.spawn(|| fetch(Role::Reviewer));
             (
                 at.join().expect("author PR thread panicked"),
                 rt.join().expect("reviewed PR thread panicked"),
@@ -143,7 +110,7 @@ pub fn pr_timeline(
         authored.extend(reviewed);
         authored
     } else {
-        fetch("author:@me")
+        fetch(Role::Author)
     };
     let opened: Vec<DateTime<Utc>> = prs
         .iter()
@@ -164,25 +131,6 @@ pub fn pr_timeline(
         });
     }
     (opened, merged, add, del)
-}
-
-/// Timeline PRs for `qualifier` (`author:@me` / `reviewed-by:@me`) over direct
-/// HTTP; `None` on no token / transport failure so the caller falls back to
-/// `gh`.
-fn fetch_timeline_http(qualifier: &str, repo: &github::Repo) -> Option<Vec<PrTimes>> {
-    github::token()?;
-    let items = github::pr_timeline(&repo.slug, qualifier, 500).ok()?;
-    Some(
-        items
-            .into_iter()
-            .map(|t| PrTimes {
-                created_at: t.created_at,
-                merged_at: t.merged_at,
-                additions: t.additions,
-                deletions: t.deletions,
-            })
-            .collect(),
-    )
 }
 
 /// Author-dates of every commit by `author` in `repo` (empty on error).

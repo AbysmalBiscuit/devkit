@@ -5,8 +5,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use devkit_common::{
-    cmd::{gh_capture, gh_json_in},
-    gitfetch, github,
+    forge::{self, Forge, PrBrief, PrLocator},
+    gitfetch,
     progress::Steps,
     tracker::{IssueRef, Tracker, TrackerKind},
     vcs::{NewWorktree, Vcs, VersionControl},
@@ -28,30 +28,29 @@ pub struct CheckoutArgs {
 /// How the raw `<PR_ISSUE_ID_URL>` input is classified before resolution.
 #[derive(Debug, PartialEq, Eq)]
 enum Ident {
-    Pr(github::PrLocator),
+    Pr(PrLocator),
     Issue(IssueRef),
-    Fuzzy(github::PrLocator),
+    Fuzzy(PrLocator),
 }
 
 /// Classify the identifier by shape. The PR and bare-number rules are
 /// tracker-independent; recognizing an issue id or issue URL is the tracker's.
-fn classify(input: &str, t: &dyn Tracker) -> Result<Ident> {
+fn classify(input: &str, t: &dyn Tracker, forge: &dyn Forge) -> Result<Ident> {
     let s = input.trim();
-    if s.contains("github.com") && s.contains("/pull/") {
-        let loc = github::PrLocator::from_url(s).context("no PR number in GitHub URL")?;
+    if let Some(loc) = forge.locate(s) {
         return Ok(Ident::Pr(loc));
     }
     if let Some(rest) = s.strip_prefix('#')
         && !rest.is_empty()
         && rest.chars().all(|c| c.is_ascii_digit())
     {
-        return Ok(Ident::Pr(github::PrLocator {
+        return Ok(Ident::Pr(PrLocator {
             repo: None,
             number: rest.parse().context("bad PR number")?,
         }));
     }
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) {
-        return Ok(Ident::Fuzzy(github::PrLocator {
+        return Ok(Ident::Fuzzy(PrLocator {
             repo: None,
             number: s.parse().context("bad number")?,
         }));
@@ -103,73 +102,9 @@ fn decide_fuzzy_via(t: &dyn Tracker, n: u64, pr_exists: bool, is_tty: bool) -> F
 }
 
 struct Resolved {
-    loc: github::PrLocator,
+    loc: PrLocator,
     linear_id: Option<String>,
     linear_title: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PrMeta {
-    number: u64,
-    title: String,
-    head_ref_name: String,
-}
-
-/// Whether GitHub PR `n` exists in `repo`. A clean "not found" from `gh pr
-/// view` is `Ok(false)`; a real tool failure (gh missing, unauthenticated,
-/// network down, bad cwd) propagates as `Err` rather than masquerading as
-/// absence.
-fn pr_exists(n: u64, cwd: &str, repo: &github::Repo) -> Result<bool> {
-    // Direct HTTP resolves existence from a 200/404; a clean 404 is
-    // `Ok(false)`. Any HTTP failure (no token, transport) yields `None` ->
-    // fall back to `gh`.
-    if let Ok(exists) = github::pr_exists(&repo.slug, n) {
-        return Ok(exists);
-    }
-    match gh_capture(
-        &["pr", "view", &n.to_string(), "--json", "number"],
-        repo,
-        cwd,
-    ) {
-        Ok(_) => Ok(true),
-        Err(e) => {
-            // `gh_capture` embeds the command's stderr in its error message, so
-            // the not-found signal is recoverable from the rendered error
-            // chain.
-            let msg = format!("{e:#}").to_lowercase();
-            if msg.contains("no pull requests found")
-                || msg.contains("could not resolve to a pullrequest")
-            {
-                Ok(false)
-            } else {
-                Err(e).with_context(|| format!("probing whether PR #{n} exists"))
-            }
-        }
-    }
-}
-
-/// PR number/title/head-branch, over direct HTTP when a token is available and
-/// falling back to `gh pr view` otherwise.
-fn fetch_pr_meta(n: u64, cwd: &str, repo: &github::Repo) -> Result<PrMeta> {
-    if let Ok(m) = github::pr_meta(&repo.slug, n) {
-        return Ok(PrMeta {
-            number: m.number,
-            title: m.title,
-            head_ref_name: m.head_ref_name,
-        });
-    }
-    gh_json_in(
-        &[
-            "pr",
-            "view",
-            &n.to_string(),
-            "--json",
-            "number,title,headRefName",
-        ],
-        repo,
-        cwd,
-    )
 }
 
 /// Turn a chosen issue into a `Resolved`, erroring if it has no PR. A title the
@@ -177,16 +112,20 @@ fn fetch_pr_meta(n: u64, cwd: &str, repo: &github::Repo) -> Result<PrMeta> {
 /// lookup is best-effort: the title only decorates the worktree name, so a
 /// tracker hiccup must not fail a checkout whose PR is already resolved.
 ///
-/// The locator comes from the PR's URL so a PR outside `pr_repo` — which a
-/// split `[github]` config makes reachable — is fetched from the repository
-/// holding it. A URL that does not parse leaves the number to resolve against
-/// `pr_repo`.
-fn resolve_issue(id: &str, title: Option<String>, t: &dyn Tracker) -> Result<Resolved> {
+/// The locator comes from the PR's URL so a PR outside the PR repository is
+/// fetched from the repository holding it. A URL that does not parse leaves
+/// the number to resolve against the PR repository.
+fn resolve_issue(
+    id: &str,
+    title: Option<String>,
+    t: &dyn Tracker,
+    forge: &dyn Forge,
+) -> Result<Resolved> {
     let pr = t
         .issue_pr(id)?
         .with_context(|| format!("issue {id} has no associated PR to check out"))?;
     Ok(Resolved {
-        loc: github::PrLocator::from_url(&pr.url).unwrap_or(github::PrLocator {
+        loc: forge.locate(&pr.url).unwrap_or(PrLocator {
             repo: None,
             number: pr.number,
         }),
@@ -196,14 +135,9 @@ fn resolve_issue(id: &str, title: Option<String>, t: &dyn Tracker) -> Result<Res
 }
 
 /// Resolve the raw input to a concrete PR. Network + interactive.
-fn resolve(
-    target: &str,
-    cwd: &str,
-    repos: &github::Repos,
-    t: &dyn Tracker,
-    steps: &Steps,
-) -> Result<Resolved> {
-    match classify(target, t)? {
+fn resolve(target: &str, f: &forge::Resolved, t: &dyn Tracker, steps: &Steps) -> Result<Resolved> {
+    let forge = f.forge.as_ref();
+    match classify(target, t, forge)? {
         Ident::Pr(loc) => Ok(Resolved {
             loc,
             linear_id: None,
@@ -215,15 +149,18 @@ fn resolve(
             // template slugifies whatever it is given, so the slug stands in
             // for the title and spares a lookup.
             steps.during_result(&format!("Resolving issue {}...", r.id), || {
-                resolve_issue(&r.id, r.slug.clone(), t)
+                resolve_issue(&r.id, r.slug.clone(), t, forge)
             })
         }
         Ident::Fuzzy(loc) => {
             let n = loc.number;
-            let repo = loc.resolve(repos)?;
+            let repo = loc.resolve(&f.repos)?;
             // Probe both sides under a spinner; clear it before any prompt.
             let (exists, decision) = steps.during_result(&format!("Resolving {n}..."), || {
-                let exists = pr_exists(n, cwd, &repo)?;
+                let exists = forge
+                    .pr(&repo, n)
+                    .with_context(|| format!("probing whether PR #{n} exists"))?
+                    .is_some();
                 let is_tty = std::io::stdin().is_terminal();
                 Ok::<_, anyhow::Error>((exists, decide_fuzzy_via(t, n, exists, is_tty)))
             })?;
@@ -239,21 +176,21 @@ fn resolve(
                     linear_id: None,
                     linear_title: None,
                 }),
-                FuzzyDecision::UseTracker(r) => resolve_issue(&r.id, r.slug.clone(), t),
+                FuzzyDecision::UseTracker(r) => resolve_issue(&r.id, r.slug.clone(), t, forge),
                 FuzzyDecision::Prompt(cands) => match prompt_choice(exists, &cands, n, t.kind())? {
                     None => Ok(Resolved {
                         loc,
                         linear_id: None,
                         linear_title: None,
                     }),
-                    Some(r) => resolve_issue(&r.id, r.slug.clone(), t),
+                    Some(r) => resolve_issue(&r.id, r.slug.clone(), t, forge),
                 },
             }
         }
     }
 }
 
-/// Print the options and read a choice. `Ok(None)` = the GitHub PR.
+/// Print the options and read a choice. `Ok(None)` = the PR.
 fn prompt_choice(
     pr_exists: bool,
     candidates: &[IssueRef],
@@ -268,7 +205,7 @@ fn prompt_choice(
     options.extend(candidates.iter().map(Some));
     for (i, opt) in options.iter().enumerate() {
         match opt {
-            None => println!("  [{i}] GitHub PR #{n}"),
+            None => println!("  [{i}] PR #{n}"),
             Some(c) => println!("  [{i}] {} {}", kind.as_str(), c.id),
         }
     }
@@ -316,7 +253,7 @@ pub(crate) fn with_cleanup<T>(
 /// to whatever the template leaves inside `checkout_worktree_dir_max`. A
 /// template rendering both splits that room between them.
 ///
-/// Nothing here reaches the branch: `gh pr checkout` takes that from the
+/// Nothing here reaches the branch: the forge checkout takes that from the
 /// remote. This context names a directory, so a limit it cannot meet is an
 /// error rather than an overrun.
 fn dir_ctx(
@@ -384,16 +321,17 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         .context("primary checkout path not UTF-8")?;
     let baseline_target = crate::baseline::target(cfg, &primary)?;
 
-    let repos = github::Repos::resolve(&cfg.github, primary_s, None);
+    let f = forge::resolve(&cfg.forge, &cfg.github, primary_s, None);
+    let forge = f.forge.as_ref();
     let tracker =
-        devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(primary_s), &repos).tracker;
+        devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(primary_s), &f.repos).tracker;
     let steps = Steps::persistent();
-    let resolved = resolve(&args.target, primary_s, &repos, tracker.as_ref(), &steps)?;
-    let pr_repo = resolved.loc.resolve(&repos)?;
+    let resolved = resolve(&args.target, &f, tracker.as_ref(), &steps)?;
+    let pr_repo = resolved.loc.resolve(&f.repos)?;
 
-    let meta: PrMeta = steps
+    let meta: PrBrief = steps
         .during_result(&format!("Fetching PR #{}...", resolved.loc.number), || {
-            fetch_pr_meta(resolved.loc.number, primary_s, &pr_repo)
+            crate::issue::pr::resolve::existing(forge, &pr_repo, resolved.loc.number)
         })
         .with_context(|| format!("fetching PR #{}", resolved.loc.number))?;
 
@@ -451,11 +389,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let issue = with_cleanup(&worktree, primary_s, || {
         steps
             .during_result(&format!("Checking out PR #{}...", meta.number), || {
-                gh_capture(
-                    &["pr", "checkout", &meta.number.to_string()],
-                    &pr_repo,
-                    worktree_s,
-                )
+                forge.checkout(&pr_repo, &meta, &worktree)
             })
             .with_context(|| format!("checking out PR #{}", meta.number))?;
 
@@ -463,7 +397,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         // until the checkout lands — validated immediately after, before the
         // record is written, rather than pre-gated.
         let head = vcs.revision(&worktree)?;
-        let checked_out = github::pr_meta_full(&pr_repo, meta.number)
+        let checked_out = crate::issue::pr::resolve::existing(forge, &pr_repo, meta.number)
             .with_context(|| format!("verifying PR #{}", meta.number))?;
         crate::issue::review::finish::assert_belongs(&checked_out, &head)?;
 
@@ -479,7 +413,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             // A PR checkout reviews someone else's work; there is no issue
             // to scaffold notes for.
             summary: None,
-            pr: Some(github::PrLocator {
+            pr: Some(PrLocator {
                 repo: Some(pr_repo.slug.clone()),
                 number: meta.number,
             }),
@@ -661,6 +595,10 @@ mod tests {
         }
     }
 
+    fn github() -> forge::github::GithubForge {
+        forge::github::GithubForge::new("github.com")
+    }
+
     fn tracker() -> devkit_common::tracker::linear::LinearTracker {
         devkit_common::tracker::linear::LinearTracker::new(Some("k".into()))
     }
@@ -675,8 +613,8 @@ mod tests {
     #[test]
     fn classify_hash_is_pr() {
         assert_eq!(
-            classify("#3340", &tracker()).unwrap(),
-            Ident::Pr(github::PrLocator {
+            classify("#3340", &tracker(), &github()).unwrap(),
+            Ident::Pr(PrLocator {
                 repo: None,
                 number: 3340
             })
@@ -685,8 +623,8 @@ mod tests {
     #[test]
     fn classify_github_url_is_pr() {
         assert_eq!(
-            classify("https://github.com/o/r/pull/12", &tracker()).unwrap(),
-            Ident::Pr(github::PrLocator {
+            classify("https://github.com/o/r/pull/12", &tracker(), &github()).unwrap(),
+            Ident::Pr(PrLocator {
                 repo: Some("o/r".into()),
                 number: 12
             })
@@ -695,7 +633,7 @@ mod tests {
     #[test]
     fn classify_prefix_is_an_issue() {
         assert_eq!(
-            classify("eng-42", &tracker()).unwrap(),
+            classify("eng-42", &tracker(), &github()).unwrap(),
             iref("ENG-42", None)
         );
     }
@@ -703,12 +641,20 @@ mod tests {
     /// run reaches it instead of being rejected on sight.
     #[test]
     fn classify_defers_the_id_shape_to_the_tracker() {
-        assert_eq!(classify("eng42", &tracker()).unwrap(), iref("ENG42", None));
+        assert_eq!(
+            classify("eng42", &tracker(), &github()).unwrap(),
+            iref("ENG42", None)
+        );
     }
     #[test]
     fn classify_issue_url_is_an_issue() {
         assert_eq!(
-            classify("https://linear.app/acme/issue/ENG-42/fix", &tracker()).unwrap(),
+            classify(
+                "https://linear.app/acme/issue/ENG-42/fix",
+                &tracker(),
+                &github()
+            )
+            .unwrap(),
             iref("ENG-42", Some("fix"))
         );
     }
@@ -717,19 +663,31 @@ mod tests {
     #[test]
     fn classify_issue_url_ignores_a_workspace_named_like_an_id() {
         assert_eq!(
-            classify("https://linear.app/acme-2/issue/ENG-42/fix", &tracker()).unwrap(),
+            classify(
+                "https://linear.app/acme-2/issue/ENG-42/fix",
+                &tracker(),
+                &github()
+            )
+            .unwrap(),
             iref("ENG-42", Some("fix"))
         );
     }
     #[test]
     fn classify_issue_url_without_an_issue_segment_errors() {
-        assert!(classify("https://linear.app/acme/team/ENG/active", &tracker()).is_err());
+        assert!(
+            classify(
+                "https://linear.app/acme/team/ENG/active",
+                &tracker(),
+                &github()
+            )
+            .is_err()
+        );
     }
     #[test]
     fn classify_bare_number_is_fuzzy() {
         assert_eq!(
-            classify("3340", &tracker()).unwrap(),
-            Ident::Fuzzy(github::PrLocator {
+            classify("3340", &tracker(), &github()).unwrap(),
+            Ident::Fuzzy(PrLocator {
                 repo: None,
                 number: 3340
             })
@@ -742,8 +700,12 @@ mod tests {
         // resolved pr_repo#42 — a different pull request that happens
         // to share a number — and built a worktree from it without a
         // word.
-        let Ident::Pr(loc) = classify("https://github.com/other/repo/pull/42", &tracker()).unwrap()
-        else {
+        let Ident::Pr(loc) = classify(
+            "https://github.com/other/repo/pull/42",
+            &tracker(),
+            &github(),
+        )
+        .unwrap() else {
             panic!("expected a PR")
         };
         assert_eq!(loc.repo.as_deref(), Some("other/repo"));
@@ -752,7 +714,9 @@ mod tests {
     #[test]
     fn a_bare_number_or_hash_defaults_to_pr_repo() {
         for input in ["#42", "42"] {
-            let (Ident::Pr(loc) | Ident::Fuzzy(loc)) = classify(input, &tracker()).unwrap() else {
+            let (Ident::Pr(loc) | Ident::Fuzzy(loc)) =
+                classify(input, &tracker(), &github()).unwrap()
+            else {
                 panic!("expected a PR-shaped ident for {input}")
             };
             assert_eq!(loc.repo, None, "{input}");
@@ -761,7 +725,7 @@ mod tests {
     }
     #[test]
     fn classify_garbage_errors() {
-        assert!(classify("not an id", &tracker()).is_err());
+        assert!(classify("not an id", &tracker(), &github()).is_err());
     }
 
     #[test]
@@ -819,7 +783,7 @@ mod tests {
         use devkit_common::tracker::fake;
         let t =
             fake::FakeTracker::new().with_pr("ENG-42", "https://github.com/other/repo/pull/7", 7);
-        let r = resolve_issue("ENG-42", None, &t).unwrap();
+        let r = resolve_issue("ENG-42", None, &t, &github()).unwrap();
         assert_eq!(r.loc.repo.as_deref(), Some("other/repo"));
         assert_eq!(r.loc.number, 7);
     }
@@ -828,7 +792,7 @@ mod tests {
     fn a_linked_pr_whose_url_does_not_parse_falls_back_to_its_number() {
         use devkit_common::tracker::fake;
         let t = fake::FakeTracker::new().with_pr("ENG-42", "not-a-pr-url", 7);
-        let r = resolve_issue("ENG-42", None, &t).unwrap();
+        let r = resolve_issue("ENG-42", None, &t, &github()).unwrap();
         assert_eq!(r.loc.repo, None);
         assert_eq!(r.loc.number, 7);
     }

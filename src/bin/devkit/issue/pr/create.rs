@@ -2,8 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
-    cmd::gh_capture,
-    github,
+    forge::{self, NewPr, PrLocator},
     progress::Steps,
     vcs::{Vcs, VersionControl},
 };
@@ -31,7 +30,7 @@ pub struct Args {
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
     pub no_push: bool,
-    /// Use this PR for this run: a GitHub PR URL keeps its own repository, a
+    /// Use this PR for this run: a PR URL keeps its own repository, a
     /// bare number means `pr_repo`. Replaces a wrong recorded binding, since
     /// recording what this run acts on is what makes it a rebind.
     pub pr: Option<String>,
@@ -66,7 +65,11 @@ fn reuse_note(number: u64, pr_is_draft: bool, asked: Option<PrCreateState>) -> O
     let (is, flag, way_back) = if pr_is_draft {
         ("a draft", "--ready", "issue pr ready")
     } else {
-        ("ready for review", "--draft", "gh pr ready --undo")
+        (
+            "ready for review",
+            "--draft",
+            "convert it to a draft on the forge",
+        )
     };
     Some(format!(
         "PR #{number} already exists and is {is}.\n\
@@ -85,7 +88,7 @@ fn require_pr_title(title: &str) -> Result<()> {
 /// The PR this run acts on, created or reused.
 pub(crate) struct Resolved {
     pub url: String,
-    pub locator: github::PrLocator,
+    pub locator: PrLocator,
 }
 
 /// Renders the PR title on demand.
@@ -109,7 +112,7 @@ pub(crate) struct Ensure<'a> {
     /// `{{ issue }}` cannot be rendered outside a worktree `issue setup`
     /// created, and a run that only reuses a PR needs neither.
     pub pr_body: RenderBody<'a>,
-    /// GitHub logins to request as reviewers.
+    /// Logins to request as reviewers.
     pub reviewers: Vec<String>,
     /// `defaults.require_pr_reviewer`: whether opening a PR ready for review
     /// demands a human reviewer.
@@ -123,7 +126,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
     let found = resolve_existing(&args.existing)?;
     let start = args.existing.start;
     let steps = args.steps;
-    let joined = args.reviewers.join(",");
+    let forge = args.existing.forge.forge.as_ref();
 
     let action = action_for(found.pr.as_ref().map(|p| p.state.as_str()));
 
@@ -137,7 +140,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             // Mutating an existing PR is gated before the call: a mismatch here
             // is refused before a single reviewer is added.
             finish::assert_belongs(&pr, args.head)?;
-            add_reviewers(pr.number, &args.reviewers, &found.repo, start, steps)?;
+            add_reviewers(forge, &found.repo, pr.number, &args.reviewers, steps)?;
             if let Some(note) = reuse_note(pr.number, pr.is_draft, args.asked) {
                 eprintln!("{note}");
             }
@@ -161,35 +164,24 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             let pr_title = (args.pr_title)()?;
             require_pr_title(&pr_title)?;
             let pr_body = (args.pr_body)(&pr_title)?;
-            let mut gh_args = vec![
-                "pr", "create", "--base", &args.base, "--title", &pr_title, "--body", &pr_body,
-            ];
-            if !args.reviewers.is_empty() {
-                gh_args.push("--reviewer");
-                gh_args.push(&joined);
-            }
-            match args.state {
-                PrCreateState::Draft => gh_args.push("--draft"),
-                PrCreateState::Ready => {}
-            }
-            let out = steps
-                .during_result("Creating PR...", || {
-                    gh_capture(&gh_args, &found.repo, start)
-                })
-                .context("gh pr create failed")?;
-            let url = out
-                .lines()
-                .rev()
-                .find(|l| l.contains("://"))
-                .context("could not parse a PR URL from `gh pr create` output")?
-                .trim()
-                .to_string();
-            let locator = github::PrLocator::from_url(&url)
-                .context("could not parse a PR number from `gh pr create` output")?;
-            let created_repo = locator.resolve(args.existing.repos)?;
+            let new = NewPr {
+                base: &args.base,
+                head: args.existing.branch,
+                title: &pr_title,
+                body: &pr_body,
+                draft: args.state == PrCreateState::Draft,
+                reviewers: &args.reviewers,
+            };
+            let url = steps.during_result("Creating PR...", || {
+                forge.create(&found.repo, &new, Path::new(start))
+            })?;
+            let locator = forge
+                .locate(&url)
+                .with_context(|| format!("could not read a PR number from {url}"))?;
+            let created_repo = locator.resolve(&args.existing.forge.repos)?;
             // The gate runs before the record is written and before any
             // notification goes out.
-            verify_created(&created_repo, locator.number, args.head)
+            verify_created(forge, &created_repo, locator.number, args.head)
                 .with_context(|| format!("{url} is open with nothing recorded"))?;
             Resolved { url, locator }
         }
@@ -208,7 +200,7 @@ pub fn run(args: Args) -> Result<()> {
         devkit_ports::load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
     let people = &loaded.config.people;
     let tmpls = &loaded.config.templates;
-    let repos = github::Repos::resolve(&loaded.config.github, &start, None);
+    let forge = forge::resolve(&loaded.config.forge, &loaded.config.github, &start, None);
 
     let caller = devkit_common::caller::caller();
     let mut vars = tmpls.defaults();
@@ -269,9 +261,13 @@ pub fn run(args: Args) -> Result<()> {
         existing: Existing {
             start: &start,
             branch: &branch,
-            repos: &repos,
+            forge: &forge,
             record: record.as_ref(),
-            explicit_pr: args.pr.as_deref().map(parse_pr_flag).transpose()?,
+            explicit_pr: args
+                .pr
+                .as_deref()
+                .map(|s| parse_pr_flag(s, forge.forge.as_ref()))
+                .transpose()?,
             no_push: args.no_push,
             steps: &steps,
         },
@@ -351,7 +347,7 @@ mod tests {
         let note = note.expect("a contradicted flag is reported");
         assert!(note.contains("#123"), "names the PR: {note}");
         assert!(
-            note.contains("gh pr ready --undo"),
+            note.contains("convert it to a draft"),
             "names the way out: {note}"
         );
     }

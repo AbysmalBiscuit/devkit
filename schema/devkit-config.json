@@ -485,21 +485,74 @@
       },
       "type": "object"
     },
-    "GithubConfig": {
+    "ForgeConfig": {
       "additionalProperties": false,
-      "description": "Which GitHub repositories this project uses. Both default to the `origin`\nremote. They are separate because a fork opens its PRs upstream while its\nissues may sit on either side, and because a project may track issues in a\nrepository separate from its code.\n\nThis table is not under `[tracker]`: a project on Linear with a fork\nworkflow needs `pr_repo` just as much as a GitHub one does. Each key\nresolves on its own and only when an operation needs it, so a project that\nonly reads PRs never supplies `issues_repo`. Unknown keys are refused: a\nmisspelled `issue_repo` ignored would default from `origin` and query\nanother repository's issues.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\npr_repo     = \"upstream/app\"\n```",
+      "description": "Where this project's pull requests live. Absent means detect from the\n`origin` host: github.com, gitlab.com and codeberg.org, else no forge.\n\n```toml\n[forge]\nkind = \"gitlab\"\nhost = \"gitlab.example.com\"\nrepo = \"platform/app\"\n```",
       "properties": {
-        "issues_repo": {
+        "host": {
           "default": null,
-          "description": "Repository holding the issues, e.g. `org/planning`. Defaults from an\n`origin` remote that reaches github.com (an ssh alias is resolved with\n`ssh -G`); otherwise the error names this key.",
+          "description": "The forge's hostname, for a self-hosted instance such as GitHub\nEnterprise Server or a company GitLab. Defaults to the kind's public\nhost: github.com, gitlab.com, or codeberg.org. Needs `kind`.",
           "type": [
             "string",
             "null"
           ]
         },
-        "pr_repo": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ForgeKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null,
-          "description": "Repository pull requests are opened against, e.g. `upstream/app`.\nDefaults like `issues_repo`. `issue prs --repo` overrides it for one\nrun, and an ambient `GH_REPO` never does.",
+          "description": "Force a forge instead of detecting one. With no forge, commands that\nread or write a pull request fail and say so; worktrees, ports, locks\nand docs keep working. `none` declares that this project has no pull\nrequests, so `issue end` finishes a worktree once its tracker issue is\ndone, its tree is clean and its commits are on a remote. Detection that\nfinds no forge holds that verdict open instead, because `issue end`\ndeletes branches. `devkit doctor`'s `forge` row shows which forge\nresolved and why."
+        },
+        "repo": {
+          "default": null,
+          "description": "Repository pull requests are opened against, e.g. `upstream/app`, or\n`group/subgroup/app` on GitLab. Defaults from an `origin` remote on the\nforge's host (an ssh alias is resolved with `ssh -G`). `issue prs\n--repo` overrides it for one run, and an ambient `GH_REPO` never does.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ForgeKind": {
+      "description": "A git forge devkit's PR commands can talk to.",
+      "oneOf": [
+        {
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "github",
+          "description": "github.com, or GitHub Enterprise Server through `host`.",
+          "type": "string"
+        },
+        {
+          "const": "gitlab",
+          "description": "gitlab.com, or a self-managed GitLab through `host`.",
+          "type": "string"
+        },
+        {
+          "const": "forgejo",
+          "description": "Forgejo or Gitea. codeberg.org unless `host` names another instance.",
+          "type": "string"
+        }
+      ]
+    },
+    "GithubConfig": {
+      "additionalProperties": false,
+      "description": "Which GitHub repository holds this project's issues, for the GitHub\ntracker. The repository pull requests go to is `[forge] repo`, since a\nproject on any forge has one.\n\nUnknown keys are refused: a misspelled `issue_repo` ignored would default\nfrom `origin` and query another repository's issues.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\n```",
+      "properties": {
+        "issues_repo": {
+          "default": null,
+          "description": "Repository holding the issues, e.g. `org/planning`. Defaults from an\n`origin` remote on the GitHub host the forge names (github.com unless\n`[forge] host` says otherwise; an ssh alias is resolved with\n`ssh -G`); otherwise the error names this key.",
           "type": [
             "string",
             "null"
@@ -1417,13 +1470,21 @@
       },
       "description": "Libraries `docm` resolves version-correct checkouts for."
     },
+    "forge": {
+      "$ref": "#/$defs/ForgeConfig",
+      "default": {
+        "host": null,
+        "kind": null,
+        "repo": null
+      },
+      "description": "Which forge holds this project's pull requests. Detected when the table\nis absent."
+    },
     "github": {
       "$ref": "#/$defs/GithubConfig",
       "default": {
-        "issues_repo": null,
-        "pr_repo": null
+        "issues_repo": null
       },
-      "description": "Which GitHub repositories back issues and pull requests."
+      "description": "Which GitHub repository backs the GitHub tracker's issues."
     },
     "harness": {
       "$ref": "#/$defs/HarnessSection",

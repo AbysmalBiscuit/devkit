@@ -10,7 +10,10 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 
 use super::{AssignedIssue, IssueDetails, IssueRef, PrRef, State, StateKind, Tracker, TrackerKind};
-use crate::github::{self, Repo};
+use crate::{
+    forge::{Repo, remote::same_host},
+    github::Api,
+};
 
 /// GitHub's `(state, stateReason)` pair, in devkit's vocabulary.
 ///
@@ -391,6 +394,7 @@ pub fn parse_timeline_page(resp: &serde_json::Value) -> (Vec<Transition>, Option
 /// Fetch the rest of one issue's timeline past `cursor`, appending each page's
 /// transitions onto the matching entry in `issues`.
 fn fill_remaining_timeline(
+    api: &Api,
     slug: &str,
     number: &str,
     mut cursor: String,
@@ -400,7 +404,7 @@ fn fill_remaining_timeline(
         .parse()
         .with_context(|| format!("bad issue number {number}"))?;
     loop {
-        let resp = github::graphql(&timeline_page_query(slug, n, &cursor))?;
+        let resp = api.graphql(&timeline_page_query(slug, n, &cursor))?;
         let (extra, next) = parse_timeline_page(&resp);
         if let Some(issue) = issues.iter_mut().find(|i| i.identifier == number) {
             issue.history.extend(extra);
@@ -414,8 +418,8 @@ fn fill_remaining_timeline(
 
 /// The authenticated user's own login. `filterBy.assignee` needs a concrete
 /// value; GitHub's `@me` shorthand does not extend to it.
-fn viewer_login() -> Result<String> {
-    let resp = github::graphql("query { viewer { login } }")?;
+fn viewer_login(api: &Api) -> Result<String> {
+    let resp = api.graphql("query { viewer { login } }")?;
     resp["data"]["viewer"]["login"]
         .as_str()
         .map(String::from)
@@ -525,17 +529,17 @@ pub fn parse_timeline_origin(resp: &serde_json::Value) -> Option<String> {
 
 // --- issue URLs / ids --------------------------------------------------------
 
-/// The `owner/repo` and issue number in a `.../issues/<n>` GitHub URL, or
+/// The `owner/repo` and issue number in a `.../issues/<n>` URL on `host`, or
 /// `None` when the string is not that shape.
-fn parse_issue_url(s: &str) -> Option<(String, u64)> {
+fn parse_issue_url(s: &str, host: &str) -> Option<(String, u64)> {
     let s = s.trim();
     let rest = s
         .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"))?;
-    let rest = rest
-        .strip_prefix("www.")
-        .unwrap_or(rest)
-        .strip_prefix("github.com/")?;
+    let (url_host, rest) = rest.split_once('/')?;
+    if !same_host(url_host, host) {
+        return None;
+    }
     let mut it = rest.split('/');
     let owner = it.next().filter(|s| !s.is_empty())?;
     let name = it.next().filter(|s| !s.is_empty())?;
@@ -552,11 +556,13 @@ fn parse_issue_url(s: &str) -> Option<(String, u64)> {
 
 pub struct GithubTracker {
     repo: Repo,
+    api: Api,
 }
 
 impl GithubTracker {
     pub fn new(repo: Repo) -> GithubTracker {
-        GithubTracker { repo }
+        let api = Api::new(&repo.host);
+        GithubTracker { repo, api }
     }
 }
 
@@ -570,7 +576,7 @@ impl Tracker for GithubTracker {
     /// to check that a project naming its own repositories would still be
     /// missing.
     fn ready(&self) -> bool {
-        github::token().is_some()
+        self.api.token().is_some()
     }
 
     fn issue_ref(&self, input: &str) -> Result<IssueRef> {
@@ -581,7 +587,7 @@ impl Tracker for GithubTracker {
                 slug: None,
             });
         }
-        let (repo, number) = parse_issue_url(s)
+        let (repo, number) = parse_issue_url(s, &self.repo.host)
             .with_context(|| format!("unrecognized GitHub issue identifier: {s}"))?;
         anyhow::ensure!(
             repo.eq_ignore_ascii_case(&self.repo.slug),
@@ -602,7 +608,7 @@ impl Tracker for GithubTracker {
         let n: u64 = id
             .parse()
             .with_context(|| format!("bad issue number {id}"))?;
-        let resp = github::graphql_partial(&issue_query(&self.repo.slug, n))?;
+        let resp = self.api.graphql_partial(&issue_query(&self.repo.slug, n))?;
         Ok(parse_issue(&resp, id))
     }
 
@@ -615,7 +621,7 @@ impl Tracker for GithubTracker {
         let Some((query, aliases)) = states_query(&self.repo.slug, ids) else {
             return HashMap::new();
         };
-        match github::graphql_partial(&query) {
+        match self.api.graphql_partial(&query) {
             Ok(resp) => parse_states(&resp, &aliases),
             Err(e) => {
                 eprintln!("GitHub lookup failed: {e:#}");
@@ -628,7 +634,7 @@ impl Tracker for GithubTracker {
         let n: u64 = id
             .parse()
             .with_context(|| format!("bad issue number {id}"))?;
-        let resp = github::graphql(&issue_pr_query(&self.repo.slug, n))?;
+        let resp = self.api.graphql(&issue_pr_query(&self.repo.slug, n))?;
         match parse_issue_pr(&resp) {
             LinkedChoice::None => Ok(None),
             LinkedChoice::One(p) => Ok(Some(p)),
@@ -654,7 +660,7 @@ impl Tracker for GithubTracker {
     fn issues_for_prs(&self, urls: &[String]) -> HashMap<String, Vec<String>> {
         let mut out = HashMap::new();
         for (query, aliases) in issues_for_prs_queries(urls) {
-            match github::graphql(&query) {
+            match self.api.graphql(&query) {
                 Ok(resp) => out.extend(parse_issues_for_prs(&resp, &aliases, &self.repo.slug)),
                 Err(e) => {
                     eprintln!("GitHub PR-link lookup failed: {e:#}");
@@ -666,14 +672,16 @@ impl Tracker for GithubTracker {
     }
 
     fn assigned_history(&self, on_page: &mut dyn FnMut(usize)) -> Result<Vec<AssignedIssue>> {
-        let login = viewer_login()?;
+        let login = viewer_login(&self.api)?;
         let mut out: Vec<AssignedIssue> = Vec::new();
         let mut after: Option<String> = None;
         loop {
-            let resp = github::graphql(&assigned_query(&self.repo.slug, &login, after.as_deref()))?;
+            let resp =
+                self.api
+                    .graphql(&assigned_query(&self.repo.slug, &login, after.as_deref()))?;
             let (mut issues, more) = parse_assigned(&resp);
             for (number, cursor) in more {
-                fill_remaining_timeline(&self.repo.slug, &number, cursor, &mut issues)?;
+                fill_remaining_timeline(&self.api, &self.repo.slug, &number, cursor, &mut issues)?;
             }
             out.append(&mut issues);
             on_page(out.len());
@@ -689,7 +697,7 @@ impl Tracker for GithubTracker {
     /// creation date: the dashboard timeline is a project's history, and a
     /// contributor's account routinely predates the project by years.
     fn timeline_origin(&self) -> Result<Option<String>> {
-        let resp = github::graphql(&timeline_origin_query(&self.repo.slug))?;
+        let resp = self.api.graphql(&timeline_origin_query(&self.repo.slug))?;
         Ok(parse_timeline_origin(&resp))
     }
 
@@ -699,13 +707,14 @@ impl Tracker for GithubTracker {
     /// bare number is an issue here.
     fn issue_url(&self, id: &str) -> Option<String> {
         let (slug, number) = id.split_once('#').unwrap_or((&self.repo.slug, id));
-        Some(format!("https://github.com/{slug}/issues/{number}"))
+        Some(format!("https://{}/{slug}/issues/{number}", self.repo.host))
     }
 
     fn check(&self) -> Result<String> {
-        github::token()
-            .context("no GitHub token (set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`)")?;
-        let login = viewer_login()?;
+        self.api
+            .token()
+            .with_context(|| format!("no GitHub token ({})", self.api.token_hint()))?;
+        let login = viewer_login(&self.api)?;
         Ok(format!("github: {login} ({})", self.repo.slug))
     }
 }
@@ -716,6 +725,7 @@ mod tests {
 
     fn repo(slug: &str) -> Repo {
         Repo {
+            host: "github.com".into(),
             slug: slug.to_string(),
         }
     }

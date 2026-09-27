@@ -15,7 +15,7 @@ pub fn actions() -> Vec<Action> {
         },
         Action {
             name: "issue.prs",
-            summary: "Triage your GitHub PRs: the ones you authored and the ones awaiting your review.",
+            summary: "Triage your PRs on the project's forge: the ones you authored and the ones awaiting your review.",
             schema: prs_schema,
             handler: prs_handler,
         },
@@ -45,15 +45,10 @@ fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: StatusArgs = serde_json::from_value(args).context("invalid issue.status arguments")?;
     let root = a.root.unwrap_or_else(|| ".".to_string());
     let loaded = project_config(&root);
-    let default_gh = devkit_config::GithubConfig::default();
-    let github_cfg = loaded
-        .as_ref()
-        .map(|l| &l.config.github)
-        .unwrap_or(&default_gh);
-    let repos = devkit_common::github::Repos::resolve(github_cfg, &root, None);
+    let forge = resolve_forge(loaded.as_ref(), &root, None);
     let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
-    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root), &repos);
-    let report = status::gather_with(&root, &a.ids, &tracker, &repos)?;
+    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root), &forge.repos);
+    let report = status::gather_with(&root, &a.ids, &tracker, &forge)?;
     Ok(serde_json::to_value(report)?)
 }
 
@@ -62,6 +57,20 @@ fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
 /// triage answer, with every config-driven choice left at its default.
 fn project_config(root: &str) -> Option<devkit_ports::load::Loaded> {
     devkit_ports::load::load(None, std::path::Path::new(root)).ok()
+}
+
+/// The project's forge and repositories, from its config when one loads and
+/// from the `origin` remote alone otherwise.
+fn resolve_forge(
+    loaded: Option<&devkit_ports::load::Loaded>,
+    root: &str,
+    pr_override: Option<&str>,
+) -> devkit_common::forge::Resolved {
+    let (forge, github) = match loaded {
+        Some(l) => (l.config.forge.clone(), l.config.github.clone()),
+        None => Default::default(),
+    };
+    devkit_common::forge::resolve(&forge, &github, root, pr_override)
 }
 
 #[derive(Deserialize)]
@@ -84,11 +93,11 @@ fn prs_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "root": { "type": "string", "description": "Directory to run gh in (default \".\"); not the MCP server's CWD." },
+            "root": { "type": "string", "description": "Project directory (default \".\"); not the MCP server's CWD." },
             "mine": { "type": "boolean", "description": "Include PRs you authored. Neither flag set ⇒ both groups." },
             "reviews": { "type": "boolean", "description": "Include PRs awaiting your review. Neither flag set ⇒ both groups." },
             "repo": { "type": "string", "description": "owner/name to target instead of detecting from root." },
-            "batch_size": { "type": "integer", "description": "PRs fetched per search page (default 25). Lower it if GitHub returns HTTP 504." },
+            "batch_size": { "type": "integer", "description": "PRs fetched per search page (default 25). Lower it if the forge returns HTTP 504." },
             "retries": { "type": "integer", "description": "Extra attempts per page after a failure (default 0)." }
         },
         "additionalProperties": false
@@ -108,20 +117,15 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let resolve_pr_links = loaded
         .as_ref()
         .is_some_and(|l| l.config.linear.resolve_pr_links);
-    let default_gh = devkit_config::GithubConfig::default();
-    let github_cfg = loaded
-        .as_ref()
-        .map(|l| &l.config.github)
-        .unwrap_or(&default_gh);
-    let repos = devkit_common::github::Repos::resolve(github_cfg, &root, a.repo.as_deref());
-    let repo = repos.prs()?.slug.clone();
+    let forge = resolve_forge(loaded.as_ref(), &root, a.repo.as_deref());
+    let repo = forge.repos.prs()?;
     let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
-    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root), &repos);
+    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root), &forge.repos);
     let report = prs::gather(
-        &root,
+        forge.forge.as_ref(),
+        repo,
         a.mine,
         a.reviews,
-        &repo,
         &ignored_checks,
         resolve_pr_links,
         prs::Fetch {

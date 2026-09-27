@@ -178,11 +178,25 @@ fn gh_auth_status_hosts() -> serde_json::Value {
         .unwrap_or_default()
 }
 
+/// The GitHub host this project uses: its forge's when that forge is GitHub
+/// (GitHub Enterprise included), github.com otherwise.
+fn github_api() -> github::Api {
+    let cfg = devkit_ports::load::load(None, Path::new(".")).ok();
+    let (forge, gh) = match cfg {
+        Some(l) => (l.config.forge, l.config.github),
+        None => Default::default(),
+    };
+    let resolved = devkit_common::forge::resolve(&forge, &gh, ".", None);
+    github::Api::new(resolved.repos.github_host())
+}
+
 fn run_github() -> Result<()> {
-    let source = github::token_source();
+    let api = github_api();
+    let source = api.token_source();
     let viewer = match source {
         TokenSource::None => Err("no token".to_string()),
-        TokenSource::Env(_) | TokenSource::Gh => github::rest_get("/user")
+        TokenSource::Env(_) | TokenSource::Gh => api
+            .rest_get("/user")
             .map_err(|e| format!("{e:#}"))
             .and_then(|v| {
                 v.get("login")

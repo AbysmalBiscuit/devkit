@@ -1,15 +1,14 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use devkit_common::{
-    cmd::gh_capture,
-    github,
+    forge,
     progress::Steps,
     vcs::{Vcs, VersionControl},
 };
 
 use super::{
-    add_reviewers, gate_ready, require_existing_pr,
+    Gate, add_reviewers, gate_ready, require_existing_pr,
     resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing},
     reviewer_logins,
 };
@@ -18,7 +17,7 @@ use crate::issue::review::{self, Target, guard_branch, resolve_target};
 pub struct Args {
     pub to: Vec<String>,
     pub no_push: bool,
-    /// Use this PR for this run: a GitHub PR URL keeps its own repository, a
+    /// Use this PR for this run: a PR URL keeps its own repository, a
     /// bare number means `pr_repo`.
     pub pr: Option<String>,
     pub dir: Option<String>,
@@ -30,7 +29,7 @@ pub fn run(args: Args) -> Result<()> {
     let loaded =
         devkit_ports::load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
     let people = &loaded.config.people;
-    let repos = github::Repos::resolve(&loaded.config.github, &start, None);
+    let forge = forge::resolve(&loaded.config.forge, &loaded.config.github, &start, None);
 
     let here = Path::new(&start);
     let vcs = Vcs::at(here);
@@ -56,9 +55,13 @@ pub fn run(args: Args) -> Result<()> {
     let found = resolve_existing(&Existing {
         start: &start,
         branch: &branch,
-        repos: &repos,
+        forge: &forge,
         record: record.as_ref(),
-        explicit_pr: args.pr.as_deref().map(parse_pr_flag).transpose()?,
+        explicit_pr: args
+            .pr
+            .as_deref()
+            .map(|s| parse_pr_flag(s, forge.forge.as_ref()))
+            .transpose()?,
         no_push: args.no_push,
         steps: &steps,
     })?;
@@ -71,35 +74,34 @@ pub fn run(args: Args) -> Result<()> {
 
     // Recorded before the flip, not after: the binding is true the moment the
     // PR is resolved and verified, and a run that dies mid-flight then leaves
-    // the record naming a PR that exists rather than GitHub holding a state
+    // the record naming a PR that exists rather than the forge holding a state
     // change nothing local knows about.
     if let Some(rec) = record_with_pr(record.as_ref(), locator) {
         devkit_common::record::write(&toplevel, &rec)?;
     }
 
-    let number = pr.number.to_string();
-    add_reviewers(pr.number, &reviewers, &repo, &start, &steps)?;
+    let f = forge.forge.as_ref();
+    add_reviewers(f, &repo, pr.number, &reviewers, &steps)?;
 
-    // `gh pr ready` on a PR that is already ready is a no-op, and the gate
-    // guards the flip rather than the run, so a ready PR is neither judged nor
-    // called about. Refusing before the flip leaves a draft a draft.
+    // The gate guards the flip rather than the run, so a ready PR is neither
+    // judged nor called about. Refusing before the flip leaves a draft a draft.
     if pr.is_draft {
         gate_ready(
-            pr.number,
-            &reviewers,
-            loaded.config.defaults.require_pr_reviewer,
-            pr.author_login.as_deref(),
+            f,
             &repo,
-            &start,
+            pr.number,
+            &Gate {
+                added: &reviewers,
+                required: loaded.config.defaults.require_pr_reviewer,
+                author: pr.author_login.as_deref(),
+            },
             &steps,
         )?;
-        steps
-            .during_result("Marking ready for review...", || {
-                gh_capture(&["pr", "ready", &number], &repo, &start)
-            })
-            .context("gh pr ready failed")?;
+        steps.during_result("Marking ready for review...", || {
+            f.mark_ready(&repo, pr.number)
+        })?;
     } else {
-        eprintln!("PR #{number} is already ready for review.");
+        eprintln!("PR #{} is already ready for review.", pr.number);
     }
 
     println!("{}", pr.url);

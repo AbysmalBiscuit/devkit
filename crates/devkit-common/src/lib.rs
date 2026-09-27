@@ -5,6 +5,7 @@ pub mod config;
 #[cfg(feature = "daemon")]
 pub mod daemon;
 pub mod disk;
+pub mod forge;
 pub mod git;
 pub mod gitfetch;
 pub mod github;

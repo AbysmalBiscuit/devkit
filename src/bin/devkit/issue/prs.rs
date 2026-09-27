@@ -326,15 +326,15 @@ pub fn run(
 
     // Resolve the repo up front: the snapshot cache is keyed by it and the
     // stale table must render before the fetch starts.
-    let default_gh = devkit_config::GithubConfig::default();
-    let github_cfg = loaded
-        .as_ref()
-        .map(|l| &l.config.github)
-        .unwrap_or(&default_gh);
-    let repos = devkit_common::github::Repos::resolve(github_cfg, ".", repo.as_deref());
-    let resolved = repos.prs()?.slug.clone();
+    let (forge_cfg, github_cfg) = match &loaded {
+        Some(l) => (l.config.forge.clone(), l.config.github.clone()),
+        None => Default::default(),
+    };
+    let forge = devkit_common::forge::resolve(&forge_cfg, &github_cfg, ".", repo.as_deref());
+    let pr_repo = forge.repos.prs()?;
+    let resolved = pr_repo.slug.clone();
     let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
-    let tracker = devkit_common::tracker::resolve(kind, Path::new("."), &repos);
+    let tracker = devkit_common::tracker::resolve(kind, Path::new("."), &forge.repos);
     let repo_key = if no_cache {
         None
     } else {
@@ -363,19 +363,20 @@ pub fn run(
             want_reviews,
         ));
         format!(
-            "Fetching PRs from GitHub... {}",
+            "Fetching PRs from {}... {}",
+            forge.forge.host(),
             ui::Paint::on(ui::Stream::Stderr).dim("(table is as of the last run)")
         )
     } else {
-        "Fetching PRs from GitHub...".to_string()
+        format!("Fetching PRs from {}...", forge.forge.host())
     };
     let _fetch_spin = live.spinner(&spin_msg);
 
     let fetched = devkit_issue::prs::gather(
-        ".",
+        forge.forge.as_ref(),
+        pr_repo,
         mine,
         reviews,
-        &resolved,
         &ignored_checks,
         resolve_pr_links,
         fetch,

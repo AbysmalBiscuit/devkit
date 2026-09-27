@@ -35,9 +35,13 @@ pub struct Config {
     /// Linear lookups that cost an extra API round trip.
     #[serde(default)]
     pub linear: LinearConfig,
-    /// Which GitHub repositories back issues and pull requests.
+    /// Which GitHub repository backs the GitHub tracker's issues.
     #[serde(default)]
     pub github: GithubConfig,
+    /// Which forge holds this project's pull requests. Detected when the table
+    /// is absent.
+    #[serde(default)]
+    pub forge: ForgeConfig,
     /// Which issue tracker backs `issue`. Detected when the table is absent.
     #[serde(default)]
     pub tracker: TrackerConfig,
@@ -511,40 +515,107 @@ pub struct LinearConfig {
     pub resolve_pr_links: bool,
 }
 
-/// Which GitHub repositories this project uses. Both default to the `origin`
-/// remote. They are separate because a fork opens its PRs upstream while its
-/// issues may sit on either side, and because a project may track issues in a
-/// repository separate from its code.
+/// Which GitHub repository holds this project's issues, for the GitHub
+/// tracker. The repository pull requests go to is `[forge] repo`, since a
+/// project on any forge has one.
 ///
-/// This table is not under `[tracker]`: a project on Linear with a fork
-/// workflow needs `pr_repo` just as much as a GitHub one does. Each key
-/// resolves on its own and only when an operation needs it, so a project that
-/// only reads PRs never supplies `issues_repo`. Unknown keys are refused: a
-/// misspelled `issue_repo` ignored would default from `origin` and query
-/// another repository's issues.
+/// Unknown keys are refused: a misspelled `issue_repo` ignored would default
+/// from `origin` and query another repository's issues.
 ///
 /// ```
 /// # use devkit_config::Config;
 /// # let cfg = Config::parse(r#"
 /// [github]
 /// issues_repo = "org/planning"
-/// pr_repo     = "upstream/app"
 /// # "#).unwrap();
 /// # assert_eq!(cfg.github.issues_repo.as_deref(), Some("org/planning"));
-/// # assert_eq!(cfg.github.pr_repo.as_deref(), Some("upstream/app"));
 /// # assert!(Config::parse("[github]\nissue_repo = \"org/planning\"\n").is_err());
 /// ```
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GithubConfig {
     /// Repository holding the issues, e.g. `org/planning`. Defaults from an
-    /// `origin` remote that reaches github.com (an ssh alias is resolved with
+    /// `origin` remote on the GitHub host the forge names (github.com unless
+    /// `[forge] host` says otherwise; an ssh alias is resolved with
     /// `ssh -G`); otherwise the error names this key.
     pub issues_repo: Option<String>,
-    /// Repository pull requests are opened against, e.g. `upstream/app`.
-    /// Defaults like `issues_repo`. `issue prs --repo` overrides it for one
-    /// run, and an ambient `GH_REPO` never does.
+    /// Moved to `[forge] repo`. Still parsed, so a config written before the
+    /// move loads, and every command that needs the PR repository says where
+    /// the key went.
+    #[schemars(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_repo: Option<String>,
+}
+
+/// A git forge devkit's PR commands can talk to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForgeKind {
+    /// github.com, or GitHub Enterprise Server through `host`.
+    Github,
+    /// gitlab.com, or a self-managed GitLab through `host`.
+    Gitlab,
+    /// Forgejo or Gitea. codeberg.org unless `host` names another instance.
+    Forgejo,
+    None,
+}
+
+impl ForgeKind {
+    /// The `[forge] kind` spelling, which is also the serialized form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ForgeKind::Github => "github",
+            ForgeKind::Gitlab => "gitlab",
+            ForgeKind::Forgejo => "forgejo",
+            ForgeKind::None => "none",
+        }
+    }
+}
+
+impl std::fmt::Display for ForgeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Where this project's pull requests live. Absent means detect from the
+/// `origin` host: github.com, gitlab.com and codeberg.org, else no forge.
+///
+/// ```
+/// # use devkit_config::{Config, ForgeKind};
+/// # let cfg = Config::parse(r#"
+/// [forge]
+/// kind = "gitlab"
+/// host = "gitlab.example.com"
+/// repo = "platform/app"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.forge.kind, Some(ForgeKind::Gitlab));
+/// # assert_eq!(cfg.forge.host.as_deref(), Some("gitlab.example.com"));
+/// # assert_eq!(cfg.forge.repo.as_deref(), Some("platform/app"));
+/// # assert_eq!(Config::parse("").unwrap().forge.kind, None);
+/// # assert!(Config::parse("[forge]\nrepos = \"a/b\"\n").is_err());
+/// ```
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ForgeConfig {
+    /// Force a forge instead of detecting one. With no forge, commands that
+    /// read or write a pull request fail and say so; worktrees, ports, locks
+    /// and docs keep working. `none` declares that this project has no pull
+    /// requests, so `issue end` finishes a worktree once its tracker issue is
+    /// done, its tree is clean and its commits are on a remote. Detection that
+    /// finds no forge holds that verdict open instead, because `issue end`
+    /// deletes branches. `devkit doctor`'s `forge` row shows which forge
+    /// resolved and why.
+    pub kind: Option<ForgeKind>,
+    /// The forge's hostname, for a self-hosted instance such as GitHub
+    /// Enterprise Server or a company GitLab. Defaults to the kind's public
+    /// host: github.com, gitlab.com, or codeberg.org. Needs `kind`.
+    pub host: Option<String>,
+    /// Repository pull requests are opened against, e.g. `upstream/app`, or
+    /// `group/subgroup/app` on GitLab. Defaults from an `origin` remote on the
+    /// forge's host (an ssh alias is resolved with `ssh -G`). `issue prs
+    /// --repo` overrides it for one run, and an ambient `GH_REPO` never does.
+    pub repo: Option<String>,
 }
 
 /// Which issue tracker a project uses. Absent means detect: a resolvable

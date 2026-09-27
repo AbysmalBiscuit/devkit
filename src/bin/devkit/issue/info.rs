@@ -60,7 +60,7 @@ pub fn run(
     // batch, so narrowing it would not save a round trip.
     let d = st::discover(start, &[])?;
     let top = current_top(start);
-    let (resolved, repos) = crate::issue::tracker::select(config, start, None);
+    let (resolved, forge) = crate::issue::tracker::select(config, start, None);
     let tracker = resolved.tracker.as_ref();
     let mut info = TrackerInfo::of(&resolved);
 
@@ -104,8 +104,7 @@ pub fn run(
         if let Some(pr) = cached_pr {
             apply_cached_pr(&mut row, pr);
         }
-        let repo = repos.prs()?;
-        info.link_base = live_enrich(&mut row, &d, &resolved, !json, repo)?;
+        info.link_base = live_enrich(&mut row, &d, &resolved, !json, &forge)?;
 
         if let PrStatus::Unique {
             number,
@@ -154,7 +153,7 @@ fn live_enrich(
     d: &st::Discovered,
     resolved: &Resolved,
     render: bool,
-    repo: &devkit_common::github::Repo,
+    forge: &devkit_common::forge::Resolved,
 ) -> Result<Option<String>> {
     let t = resolved.tracker.as_ref();
     let mut lt = if render {
@@ -205,7 +204,7 @@ fn live_enrich(
         {
             let tx = tx.clone();
             s.spawn(move || {
-                let _ = tx.send(Update::Prs(st::fetch_prs(d, repo)));
+                let _ = tx.send(Update::Prs(st::fetch_prs(d, forge)));
             });
         }
         if let Some(id) = tracker_id {
@@ -302,7 +301,7 @@ fn local_row(top: &str) -> Result<IssueWorktree> {
 /// superseded PR on the row — with its own state driving the verdict.
 fn seedable_cached_pr(
     cached: Option<crate::issue::info_cache::CachedPr>,
-    recorded: Option<&devkit_common::github::PrLocator>,
+    recorded: Option<&devkit_common::forge::PrLocator>,
 ) -> Option<crate::issue::info_cache::CachedPr> {
     let cached = cached?;
     match recorded {
@@ -404,7 +403,7 @@ mod tests {
             url: "https://github.com/o/r/pull/7".into(),
             is_draft: false,
         };
-        let bound = |n: u64| devkit_common::github::PrLocator {
+        let bound = |n: u64| devkit_common::forge::PrLocator {
             repo: None,
             number: n,
         };

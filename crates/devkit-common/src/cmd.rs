@@ -114,22 +114,22 @@ pub fn gh_json<T: serde::de::DeserializeOwned>(args: &[&str], cwd: &str) -> Resu
     serde_json::from_str(raw).with_context(|| "parsing gh JSON output")
 }
 
-/// `<args...> --repo github.com/<slug>`, the argument vector `gh_json_in` and
+/// `<args...> --repo <host>/<slug>`, the argument vector `gh_json_in` and
 /// `gh_capture` both run. Split out so the repository/host scoping is
 /// testable without spawning `gh`.
-fn gh_args(args: &[&str], repo: &crate::github::Repo) -> Vec<String> {
+fn gh_args(args: &[&str], repo: &crate::forge::Repo) -> Vec<String> {
     let mut v: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     v.push("--repo".to_string());
     v.push(repo.qualified());
     v
 }
 
-/// `gh <args...> --repo github.com/<slug>` as JSON. Every repository-scoped
+/// `gh <args...> --repo <host>/<slug>` as JSON. Every repository-scoped
 /// `gh` invocation goes through here so no call can be left to pick its
 /// repository from the ambient `GH_REPO`.
 pub fn gh_json_in<T: serde::de::DeserializeOwned>(
     args: &[&str],
-    repo: &crate::github::Repo,
+    repo: &crate::forge::Repo,
     cwd: &str,
 ) -> Result<T> {
     let v = gh_args(args, repo);
@@ -137,10 +137,10 @@ pub fn gh_json_in<T: serde::de::DeserializeOwned>(
     gh_json(&refs, cwd)
 }
 
-/// `gh <args...> --repo github.com/<slug>`, capturing stdout. The mutating
+/// `gh <args...> --repo <host>/<slug>`, capturing stdout. The mutating
 /// counterpart to `gh_json_in`, scoped the same way and for the same reason:
 /// no repository-scoped `gh` call is left for `GH_REPO` to redirect.
-pub fn gh_capture(args: &[&str], repo: &crate::github::Repo, cwd: &str) -> Result<String> {
+pub fn gh_capture(args: &[&str], repo: &crate::forge::Repo, cwd: &str) -> Result<String> {
     let v = gh_args(args, repo);
     let refs: Vec<&str> = v.iter().map(String::as_str).collect();
     capture("gh", &refs, Some(cwd))
@@ -223,7 +223,10 @@ mod tests {
 
     #[test]
     fn gh_json_in_always_names_the_repository_and_host() {
-        let repo = crate::github::Repo { slug: "o/r".into() };
+        let repo = crate::forge::Repo {
+            host: "ghe.acme.test".into(),
+            slug: "o/r".into(),
+        };
         // Asserted on the argument vector, not on behavior: the point is that
         // neither GH_REPO nor GH_HOST can redirect the call, and behavior alone
         // cannot distinguish "no ambient variable set" from "flag present".
@@ -231,7 +234,7 @@ mod tests {
             "pr",
             "list",
             "--repo",
-            "github.com/o/r"
+            "ghe.acme.test/o/r"
         ]);
     }
 }

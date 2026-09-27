@@ -22,6 +22,8 @@ fn pr_label(row: &IssueWorktree) -> String {
         }
         PrStatus::Ambiguous { candidates } => format!("ambiguous ({})", candidates.len()),
         PrStatus::Unknown { .. } => "unknown".into(),
+        PrStatus::Untracked { pushed: true } => "pushed".into(),
+        PrStatus::Untracked { pushed: false } => "unpushed".into(),
     }
 }
 

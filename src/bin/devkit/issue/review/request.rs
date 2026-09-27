@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use devkit_common::{
-    cmd::gh_capture,
-    github,
+    forge::{self, Forge, Repo},
     progress::Steps,
     vcs::{Vcs, VersionControl},
 };
@@ -16,7 +15,7 @@ use super::{
 };
 use crate::{
     issue::pr::{
-        add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr,
+        Gate, add_reviewers, gate_ready, require_existing_pr,
         resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing},
         reviewer_logins,
     },
@@ -65,15 +64,17 @@ pub(crate) fn pinned_targets(explicit: &[Target], no_notify: bool) -> Option<Vec
 /// human reviewers (reverse-looked-up).
 fn resolve_request_targets(
     explicit: &[Target],
+    forge: &dyn Forge,
+    repo: &Repo,
     pr: u64,
-    cwd: &str,
-    repo: &github::Repo,
     people: &HashMap<String, Person>,
 ) -> Result<Vec<Target>> {
     if !explicit.is_empty() {
         return Ok(explicit.to_vec());
     }
-    let logins: Vec<String> = requested_reviewer_logins(pr, cwd, repo)?
+    let logins: Vec<String> = forge
+        .reviewers(repo, pr)?
+        .requested
         .into_iter()
         .filter(|l| is_human_login(l))
         .collect();
@@ -104,7 +105,7 @@ pub fn run(args: Args) -> Result<()> {
     )?;
     let people = &loaded.config.people;
     let tmpls = &loaded.config.templates;
-    let repos = github::Repos::resolve(&loaded.config.github, &start, None);
+    let forge = forge::resolve(&loaded.config.forge, &loaded.config.github, &start, None);
 
     let caller = devkit_common::caller::caller();
     let mut vars = tmpls.defaults();
@@ -152,9 +153,13 @@ pub fn run(args: Args) -> Result<()> {
     let found = resolve_existing(&Existing {
         start: &start,
         branch: &branch,
-        repos: &repos,
+        forge: &forge,
         record: record.as_ref(),
-        explicit_pr: args.pr.as_deref().map(parse_pr_flag).transpose()?,
+        explicit_pr: args
+            .pr
+            .as_deref()
+            .map(|s| parse_pr_flag(s, forge.forge.as_ref()))
+            .transpose()?,
         no_push: args.no_push,
         steps: &steps,
     })?;
@@ -169,32 +174,32 @@ pub fn run(args: Args) -> Result<()> {
     // no `--to` names nobody — so it happens before any mutation. Refusing
     // after the flip would leave the PR ready for a review nobody was asked
     // for.
+    let f = forge.forge.as_ref();
     let targets = match pinned_targets(&explicit, args.no_notify) {
         Some(t) => t,
         None => steps.during_result("Resolving reviewers...", || {
-            resolve_request_targets(&explicit, pr.number, &start, &repo, people)
+            resolve_request_targets(&explicit, f, &repo, pr.number, people)
         })?,
     };
 
-    let number = pr.number.to_string();
-    add_reviewers(pr.number, &reviewers, &repo, &start, &steps)?;
+    add_reviewers(f, &repo, pr.number, &reviewers, &steps)?;
 
     if should_flip(pr.is_draft, args.no_notify) {
         // Refusing before the flip leaves the PR a draft.
         gate_ready(
-            pr.number,
-            &reviewers,
-            loaded.config.defaults.require_pr_reviewer,
-            pr.author_login.as_deref(),
+            f,
             &repo,
-            &start,
+            pr.number,
+            &Gate {
+                added: &reviewers,
+                required: loaded.config.defaults.require_pr_reviewer,
+                author: pr.author_login.as_deref(),
+            },
             &steps,
         )?;
-        steps
-            .during_result("Marking ready for review...", || {
-                gh_capture(&["pr", "ready", &number], &repo, &start)
-            })
-            .context("gh pr ready failed")?;
+        steps.during_result("Marking ready for review...", || {
+            f.mark_ready(&repo, pr.number)
+        })?;
     }
 
     if let Some(rec) = record_with_pr(record.as_ref(), locator) {
@@ -206,15 +211,9 @@ pub fn run(args: Args) -> Result<()> {
         return Ok(());
     }
 
-    let full = steps
-        .during_result("Fetching PR title...", || {
-            super::finish::fetch_pr_full(pr.number, &start, &repo)
-        })
-        .context("fetching the PR's title")?;
-
     let notify_ctx = with_fields(&base, &[
         ("pr_url", serde_json::json!(pr.url)),
-        ("pr_title", serde_json::json!(full.title)),
+        ("pr_title", serde_json::json!(pr.title)),
         (
             "input",
             serde_json::json!(args.body.clone().unwrap_or_default()),
