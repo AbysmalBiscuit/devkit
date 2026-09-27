@@ -22,7 +22,7 @@ use crate::{harness::parse_env_override, paths, vcs::Checkout};
 
 /// Bumped when the record envelope changes shape. Every record carries it, so
 /// a reader meeting an unfamiliar one knows it rather than guessing.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// One line of the log, useful by itself and never rewritten.
 ///
@@ -49,6 +49,10 @@ pub struct Record {
     pub vendor_event: Option<String>,
     pub session_id: Option<String>,
     pub agent_id: Option<String>,
+    /// The lock holder the payload's writes are claimed under, as `locks.json`
+    /// names it. A Claude Code fork carries an `agent_id` yet holds as its
+    /// session, so `agent_id` alone cannot say whose locks a record is about.
+    pub holder: Option<String>,
     pub tool_use_id: Option<String>,
     pub cwd: Option<PathBuf>,
     pub project_root: Option<PathBuf>,

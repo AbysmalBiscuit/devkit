@@ -15,13 +15,13 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_config::PolicyAction;
-use devkit_locks::{Registry, hook};
+use devkit_locks::Registry;
 use pabal::Tool;
 
 use super::{
     HookEvent,
     gate::{self, Armed, Claims, WriteGate},
-    payload::Payload,
+    payload::{Holder, Payload},
     print_envelope, record, rules,
 };
 
@@ -34,7 +34,7 @@ const WRITE_TOOLS: [&str; 5] = ["Edit", "MultiEdit", "Write", "NotebookEdit", "a
 pub enum Write {
     Targets {
         paths: Vec<String>,
-        holder: String,
+        holder: Holder,
     },
     /// A write this hook cannot evaluate.
     Unusable(String),
@@ -49,10 +49,9 @@ pub fn write(payload: &Payload) -> Option<Write> {
         _ if WRITE_TOOLS.contains(&name) => Vec::new(),
         _ => return None,
     };
-    let Some(session) = payload.session_id() else {
-        return Some(Write::Unusable(
-            "write payload carries no session_id".into(),
-        ));
+    let holder = match payload.holder() {
+        Ok(holder) => holder,
+        Err(missing) => return Some(Write::Unusable(missing.to_string())),
     };
     if paths.is_empty() {
         return Some(Write::Unusable(format!(
@@ -64,7 +63,7 @@ pub fn write(payload: &Payload) -> Option<Write> {
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect(),
-        holder: hook::holder_from_fields(session, payload.agent()),
+        holder,
     })
 }
 
@@ -161,14 +160,14 @@ pub fn release_subagent(payload: &Payload) {
     // Releasing the bare session holder here would free the parent's and every
     // sibling's locks, so an unattributable stop, a fork's included, releases
     // nothing.
-    if let (Some(session), Some(agent)) = (payload.session_id(), payload.agent()) {
-        release(&hook::holder_from_fields(session, Some(agent)));
+    if let Some(holder) = payload.subagent_holder() {
+        release(&holder);
     }
 }
 
 pub fn release_session(payload: &Payload) {
-    if let Some(session) = payload.session_id() {
-        release(session);
+    if let Some(holder) = payload.session_holder() {
+        release(&holder);
     }
 }
 
@@ -190,7 +189,7 @@ mod tests {
 
     fn targets(raw: serde_json::Value) -> (Vec<String>, String) {
         match write(&payload(raw)) {
-            Some(Write::Targets { paths, holder }) => (paths, holder),
+            Some(Write::Targets { paths, holder }) => (paths, holder.to_string()),
             Some(Write::Unusable(reason)) => panic!("expected targets, got Unusable({reason})"),
             None => panic!("expected targets, got no write"),
         }
@@ -268,10 +267,10 @@ mod tests {
         assert_eq!(paths, vec!["a.rs", "c.rs", "b.rs"]);
     }
 
-    fn write_to(path: &str, holder: &str) -> Write {
+    fn write_to(path: &str, session: &str) -> Write {
         Write::Targets {
             paths: vec![path.to_string()],
-            holder: holder.to_string(),
+            holder: payload(json!({ "session_id": session })).holder().unwrap(),
         }
     }
 

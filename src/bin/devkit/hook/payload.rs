@@ -73,6 +73,29 @@ fn text<'a>(raw: &'a Value, key: &str) -> Option<&'a str> {
     raw.get(key)?.as_str().filter(|s| !s.is_empty())
 }
 
+/// The id a payload's locks and fired rules are held under: its session, or
+/// `session/agent` for a subagent. Only a [`Payload`] makes one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Holder(String);
+
+impl std::ops::Deref for Holder {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A payload with no session has no holder, so nothing can be claimed for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MissingSession;
+
+impl std::fmt::Display for MissingSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("write payload carries no session_id")
+    }
+}
+
 /// A parsed hook payload and the harness that answers it.
 #[derive(Debug, Clone)]
 pub struct Payload {
@@ -129,6 +152,28 @@ impl Payload {
         self.inner
             .agent()
             .or_else(|| self.cursor_text("parent_conversation_id"))
+    }
+
+    /// Who this payload's writes are held by. The payload exposes no ancestry
+    /// deeper than session and subagent, so a holder has at most two levels.
+    pub fn holder(&self) -> Result<Holder, MissingSession> {
+        let session = self.session_id().ok_or(MissingSession)?;
+        Ok(Holder(match self.agent().filter(|a| !a.is_empty()) {
+            Some(agent) => format!("{session}/{agent}"),
+            None => session.to_string(),
+        }))
+    }
+
+    /// The session's own holder, which covers every subagent's by prefix.
+    pub fn session_holder(&self) -> Option<Holder> {
+        self.session_id().map(|session| Holder(session.to_string()))
+    }
+
+    /// The holder of the subagent this payload speaks for. `None` for the
+    /// session and for a fork, whose holder is the session's.
+    pub fn subagent_holder(&self) -> Option<Holder> {
+        self.agent()?;
+        self.holder().ok()
     }
 
     /// The raw `agent_id`, which a Claude Code fork carries as well as a
@@ -296,6 +341,41 @@ mod tests {
             }),
         );
         assert_eq!(p.cwd(), Some(Path::new("/repo")));
+    }
+
+    #[test]
+    fn the_holder_is_the_session_or_session_slash_subagent() {
+        let session = payload(None, json!({"session_id": "S"}));
+        assert_eq!(session.holder().as_deref(), Ok("S"));
+        assert_eq!(session.subagent_holder(), None);
+
+        let sub = payload(
+            None,
+            json!({"session_id": "S", "agent_id": "a1", "agent_type": "general-purpose"}),
+        );
+        assert_eq!(sub.holder().as_deref(), Ok("S/a1"));
+        assert_eq!(sub.session_holder().as_deref(), Some("S"));
+        assert_eq!(sub.subagent_holder().as_deref(), Some("S/a1"));
+    }
+
+    /// A fork can end without a `SubagentStop` to release it, so it holds as
+    /// its session and has no subagent holder to release.
+    #[test]
+    fn a_fork_holds_as_its_session() {
+        let fork = payload(None, json!({"session_id": "S", "agent_id": "afork"}));
+        assert_eq!(fork.holder().as_deref(), Ok("S"));
+        assert_eq!(fork.subagent_holder(), None);
+    }
+
+    #[test]
+    fn a_payload_without_a_session_has_no_holder() {
+        let p = payload(
+            None,
+            json!({"agent_id": "a1", "agent_type": "general-purpose"}),
+        );
+        assert_eq!(p.holder(), Err(MissingSession));
+        assert_eq!(p.session_holder(), None);
+        assert_eq!(p.subagent_holder(), None);
     }
 
     #[test]

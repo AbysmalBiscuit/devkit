@@ -1,4 +1,3 @@
-pub mod hook;
 pub mod ident;
 pub mod model;
 pub mod store;

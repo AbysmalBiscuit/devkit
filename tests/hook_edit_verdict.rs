@@ -43,8 +43,18 @@ fn run_codex_hook(project: &Path, state: &Path, payload: &str) -> Output {
 }
 
 fn run_hook_as(harness: &str, project: &Path, state: &Path, payload: &str) -> Output {
+    run_verb(
+        &["pre-tool-use", "--harness", harness],
+        project,
+        state,
+        payload,
+    )
+}
+
+fn run_verb(verb: &[&str], project: &Path, state: &Path, payload: &str) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
-    cmd.args(["hook", "pre-tool-use", "--harness", harness])
+    cmd.arg("hook")
+        .args(verb)
         .current_dir(project)
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
@@ -416,6 +426,46 @@ fn a_subagent_gets_a_rule_its_parent_already_fired() {
     assert!(
         text.contains("Foo should"),
         "the subagent's context never held what the parent was shown: {text}"
+    );
+}
+
+/// Compaction drops only the compacted agent's injected rules, so only that
+/// agent's rules fire again.
+#[test]
+fn a_subagents_compaction_rearms_its_rules_and_not_its_parents() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = rules_project(state.path());
+    let target = "crates/foo/src/a.rs";
+    let parent = write_payload("S", None, proj.path(), target);
+    let child = write_payload("S", Some("a1"), proj.path(), target);
+    injected_text(&run_hook(proj.path(), state.path(), &parent));
+    injected_text(&run_hook(proj.path(), state.path(), &child));
+
+    let compact = serde_json::json!({
+        "hook_event_name": "PostCompact",
+        "session_id": "S",
+        "agent_id": "a1",
+        "agent_type": "general-purpose",
+        "cwd": proj.path().to_string_lossy(),
+    })
+    .to_string();
+    let out = run_verb(&["post-compact"], proj.path(), state.path(), &compact);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let text = injected_text(&run_hook(proj.path(), state.path(), &child));
+    assert!(
+        text.contains("Foo should"),
+        "the subagent's rules re-arm: {text}"
+    );
+    let again = run_hook(proj.path(), state.path(), &parent);
+    assert_eq!(
+        one_object(&again),
+        None,
+        "the parent's context still holds them"
     );
 }
 

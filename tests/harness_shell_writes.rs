@@ -213,11 +213,23 @@ fn an_unresolved_write_blocks_by_default_and_warns_when_configured() {
     );
 }
 
+/// Neither write path has a holder to claim for without a session, and both
+/// say so the same way.
 #[test]
-fn a_write_without_a_session_id_is_denied() {
+fn a_write_without_a_session_id_is_denied_alike_on_both_paths() {
     let e = env(WRITES);
-    let reason = denial(&hook(&e, None, "echo x > a.txt")).expect("denied");
-    assert!(reason.contains("session_id"), "{reason}");
+    let shell = denial(&hook(&e, None, "echo x > a.txt")).expect("the shell write is denied");
+    let edit = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "cwd": e.project.path().to_string_lossy(),
+        "tool_input": { "file_path": "a.txt" }
+    })
+    .to_string();
+    let edit = denial(&devkit(&e, &["hook", "pre-tool-use"], Some(&edit), &[]))
+        .expect("the edit is denied");
+    assert!(shell.contains("session_id"), "{shell}");
+    assert_eq!(edit, shell);
 }
 
 #[test]

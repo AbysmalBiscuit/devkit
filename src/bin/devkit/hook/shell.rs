@@ -24,7 +24,7 @@ use serde_json::Value;
 use super::{
     HookEvent, dialect,
     gate::{self, Armed, WriteGate, WriteVerdict},
-    payload::{Harness, Payload},
+    payload::{Harness, MissingSession, Payload},
     print_envelope, record, writes,
 };
 
@@ -306,14 +306,12 @@ fn respond(
         })
     };
     if writes_on {
-        let holder = payload
-            .session_id()
-            .map(|session| devkit_locks::hook::holder_from_fields(session, payload.agent()));
+        let holder = payload.holder();
         let verdict = write_stage(
             &analysis,
             &rules.policy,
             !blocks.is_empty(),
-            holder.as_deref(),
+            holder.as_deref().map_err(|&missing| missing),
             gate,
             &checkout,
             &cwd,
@@ -357,7 +355,7 @@ fn write_stage<R>(
     analysis: &Analysis,
     policy: &HarnessPolicy,
     blocked: bool,
-    holder: Option<&str>,
+    holder: Result<&str, MissingSession>,
     gate: &WriteGate<R>,
     checkout: &Checkout,
     cwd: &Path,
@@ -373,12 +371,14 @@ where
     if blocked || !verdict.blocks.is_empty() || evaluation.claims.is_empty() {
         return verdict;
     }
-    let Some(holder) = holder else {
-        verdict.blocks.push(format!(
-            "{} shell write payload carries no session_id (fail-closed)",
-            gate::PREFIX
-        ));
-        return verdict;
+    let holder = match holder {
+        Ok(holder) => holder,
+        Err(missing) => {
+            verdict
+                .blocks
+                .push(format!("{} {missing} (fail-closed)", gate::PREFIX));
+            return verdict;
+        }
     };
     let found = gate.decide(
         &evaluation.claims,

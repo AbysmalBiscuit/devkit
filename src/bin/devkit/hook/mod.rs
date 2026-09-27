@@ -103,8 +103,8 @@ pub fn run(cli: HookCli) -> Result<()> {
         // Compaction is what drops the injected rules out of the agent's
         // context, so clearing the set is what lets them inject again.
         HookEvent::PostCompact => with_payload(harness, |p| {
-            if let Some(session) = p.session_id() {
-                rules::clear_for_holder(session);
+            if let Ok(holder) = p.holder() {
+                rules::clear_for_holder(&holder);
             }
             record_only(p, cli.event);
             Ok(())
