@@ -33,7 +33,9 @@ pub fn signature(config_argv: &[String]) -> Option<Vec<String>> {
     if sig.is_empty() {
         return None;
     }
-    let bare_after = config_argv[cut..]
+    // Words after `--` go to whatever the command hands them to, not a verb.
+    let (options, _) = split_trailing(&config_argv[cut..]);
+    let bare_after = options
         .iter()
         .any(|w| !w.starts_with('-') && !is_template(w));
     if bare_after {
@@ -63,6 +65,39 @@ pub fn matches(sig: &[String], typed: &[String]) -> bool {
         return false;
     }
     basename(&typed[0]) == basename(&sig[0]) && sig[1..] == typed[1..sig.len()]
+}
+
+/// Whether `typed`, already matching `sig`, asks for nothing `config_argv`
+/// does not do: each word it adds before `--` appears in the config's, and its
+/// words after `--` equal the config's. A config with nothing or a template
+/// past its signature leaves the rest open.
+pub fn within(config_argv: &[String], sig: &[String], typed: &[String]) -> bool {
+    let tail = &config_argv[sig.len()..];
+    if tail.is_empty() || tail.iter().any(|w| is_template(w)) {
+        return true;
+    }
+    let (options, trailing) = split_trailing(tail);
+    let (typed_options, typed_trailing) = split_trailing(&typed[sig.len()..]);
+    typed_options.iter().all(|w| options.contains(w))
+        && typed_trailing.is_none_or(|t| trailing == Some(t))
+}
+
+/// How many words past `sig` in `config_argv` the typed command leaves out.
+pub fn omitted(config_argv: &[String], sig: &[String], typed: &[String]) -> usize {
+    let typed_rest = &typed[sig.len()..];
+    config_argv[sig.len()..]
+        .iter()
+        .filter(|w| !typed_rest.contains(w))
+        .count()
+}
+
+/// `words` split at the first `--` into what comes before it and, when there
+/// is one, what comes after it.
+fn split_trailing(words: &[String]) -> (&[String], Option<&[String]>) {
+    match words.iter().position(|w| w == "--") {
+        Some(i) => (&words[..i], Some(&words[i + 1..])),
+        None => (words, None),
+    }
 }
 
 #[cfg(test)]
@@ -142,5 +177,54 @@ mod tests {
     #[test]
     fn the_command_word_matches_by_basename() {
         assert!(matches(&v(&["vite"]), &v(&["./node_modules/.bin/vite"])));
+    }
+
+    #[test]
+    fn bare_words_after_a_double_dash_keep_the_signature() {
+        assert_eq!(
+            sig(&["cargo", "clippy", "--workspace", "--", "-D", "warnings"]),
+            Some(v(&["cargo", "clippy"]))
+        );
+    }
+
+    fn is_within(config: &[&str], typed: &[&str]) -> bool {
+        let config = v(config);
+        within(&config, &signature(&config).unwrap(), &v(typed))
+    }
+
+    #[test]
+    fn a_typed_command_is_within_a_config_that_does_everything_it_asks() {
+        let build = ["cargo", "build", "--workspace", "--locked"];
+        assert!(is_within(&build, &["cargo", "build"]));
+        assert!(is_within(&build, &[
+            "cargo",
+            "build",
+            "--locked",
+            "--workspace"
+        ]));
+        assert!(!is_within(&build, &["cargo", "build", "-p", "x"]));
+        assert!(!is_within(&build, &["cargo", "build", "--release"]));
+    }
+
+    #[test]
+    fn words_after_a_double_dash_compare_as_one_group() {
+        let lint = ["cargo", "clippy", "--workspace", "--", "-D", "warnings"];
+        assert!(is_within(&lint, &[
+            "cargo", "clippy", "--", "-D", "warnings"
+        ]));
+        assert!(is_within(&lint, &["cargo", "clippy", "--workspace"]));
+        assert!(!is_within(&lint, &["cargo", "clippy", "--", "-D"]));
+        assert!(!is_within(&lint, &[
+            "cargo", "clippy", "--", "warnings", "-D"
+        ]));
+        assert!(!is_within(&lint, &["cargo", "clippy", "-D", "warnings"]));
+    }
+
+    #[test]
+    fn a_config_with_nothing_or_a_template_past_its_signature_leaves_the_rest_open() {
+        assert!(is_within(&["vite"], &["vite", "build"]));
+        assert!(is_within(&["nitro", "dev", "--port", "{{ port }}"], &[
+            "nitro", "dev", "--host", "0.0.0.0"
+        ]));
     }
 }

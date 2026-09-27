@@ -370,6 +370,8 @@ fn searched_app(n: &Normalized, p: &Project) -> Option<String> {
 /// A task whose signature the typed segment matches.
 struct TaskHit<'a> {
     sig_len: usize,
+    /// Words of the task's `run` the typed segment leaves out.
+    omitted: usize,
     name: &'a str,
     /// The app the task is scoped to, which is what a hint resolves against.
     app: Option<&'a str>,
@@ -378,12 +380,15 @@ struct TaskHit<'a> {
 /// The task this segment retypes, if redirecting to it would change the
 /// process.
 ///
-/// Ranked by signature length, then by hint resolution among the tasks tied at
-/// that length, then by name. Length first because a longer signature is the
-/// more specific claim on the command; the hint next because a tie means
-/// several tasks retype the same command and only the app the agent is working
-/// in says which was meant; name last so a `HashMap`'s iteration order cannot
-/// make the message name a different task from one call to the next.
+/// Ranked by signature length, then by how few of the task's words the segment
+/// leaves out, then by hint resolution among the tasks still tied, then by
+/// name. Length first because a longer signature is the more specific claim on
+/// the command; omissions next because `cargo build` is closer to a task
+/// running `cargo build --workspace` than to one adding `--release`; the hint
+/// next because a remaining tie means several tasks retype the same command and
+/// only the app the agent is working in says which was meant; name last so a
+/// `HashMap`'s iteration order cannot make the message name a different task
+/// from one call to the next.
 ///
 /// `min_sig` is the shortest signature allowed to claim this segment; the
 /// caller raises it to exclude a bare-program task from a command the catalog
@@ -404,7 +409,7 @@ fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
             if task.guard.is_none() && s.len() < min_sig {
                 return None;
             }
-            if !sig::matches(&s, &n.argv) {
+            if !sig::matches(&s, &n.argv) || !sig::within(&cfg.argv, &s, &n.argv) {
                 return None;
             }
             tasks::redirect_worth_it(
@@ -415,14 +420,21 @@ fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
             )
             .then_some(TaskHit {
                 sig_len: s.len(),
+                omitted: sig::omitted(&cfg.argv, &s, &n.argv),
                 name: name.as_str(),
                 app: task.app.as_deref(),
             })
         })
         .collect();
-    hits.sort_by(|a, b| b.sig_len.cmp(&a.sig_len).then_with(|| a.name.cmp(b.name)));
-    let best = hits.first()?.sig_len;
-    let tied = &hits[..hits.iter().take_while(|h| h.sig_len == best).count()];
+    hits.sort_by(|a, b| {
+        b.sig_len
+            .cmp(&a.sig_len)
+            .then_with(|| a.omitted.cmp(&b.omitted))
+            .then_with(|| a.name.cmp(b.name))
+    });
+    let rank = |h: &TaskHit<'_>| (h.sig_len, h.omitted);
+    let best = rank(hits.first()?);
+    let tied = &hits[..hits.iter().take_while(|h| rank(h) == best).count()];
 
     // `Scope::Catalog`, because the rung is hint *resolution*: a lone candidate
     // named without one would let a single app-scoped task beat an appless one
@@ -1006,6 +1018,39 @@ mod tests {
             let d = decide_with("bun test unit", &BTreeMap::new(), Some(&p));
             assert!(reason(&d).contains("devrun task long"), "{}", reason(&d));
         }
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_task_that_adds_least_to_the_command() {
+        let p = project(|c| {
+            for (name, run) in [
+                ("release", vec![
+                    "cargo",
+                    "build",
+                    "--workspace",
+                    "--release",
+                    "--locked",
+                ]),
+                ("workspace-build", vec![
+                    "cargo",
+                    "build",
+                    "--workspace",
+                    "--locked",
+                ]),
+            ] {
+                c.tasks.insert(name.into(), TaskConfig {
+                    run: run.iter().map(|s| (*s).into()).collect(),
+                    guard: Some(true),
+                    ..Default::default()
+                });
+            }
+        });
+        let d = decide_with("cargo build", &BTreeMap::new(), Some(&p));
+        assert!(
+            reason(&d).contains("devrun task workspace-build"),
+            "{}",
+            reason(&d)
+        );
     }
 
     /// Two tasks that retype the same command, each scoped to a different app.
