@@ -399,7 +399,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         let head = vcs.revision(&worktree)?;
         let checked_out = crate::issue::pr::resolve::existing(forge, &pr_repo, meta.number)
             .with_context(|| format!("verifying PR #{}", meta.number))?;
-        crate::issue::review::finish::assert_belongs(&checked_out, &head)?;
+        crate::issue::pr::resolve::assert_belongs(&checked_out, &head)?;
 
         let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
         devkit_common::record::write(&worktree, &devkit_common::record::IssueRecord {

@@ -11,13 +11,15 @@ use devkit_ports::templates::worktree_context;
 
 use super::{
     add_reviewers, require_reviewer_for_ready,
-    resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing, verify_created},
+    resolve::{
+        Existing, assert_belongs, parse_pr_flag, record_with_pr, resolve_existing, verify_created,
+    },
     reviewer_logins,
 };
 use crate::{
     issue::review::{
-        PR_CONTEXT_KEYS, PrAction, Target, action_for, check_required, finish, guard_branch,
-        parse_args, render_review, resolve_target, with_fields,
+        PR_CONTEXT_KEYS, PrAction, Target, action_for, check_required, guard_branch, parse_args,
+        render_review, resolve_target, with_fields,
     },
     template::VarArgs,
 };
@@ -139,7 +141,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
                 .expect("AddReviewer implies a resolved locator");
             // Mutating an existing PR is gated before the call: a mismatch here
             // is refused before a single reviewer is added.
-            finish::assert_belongs(&pr, args.head)?;
+            assert_belongs(&pr, args.head)?;
             add_reviewers(forge, &found.repo, pr.number, &args.reviewers, steps)?;
             if let Some(note) = reuse_note(pr.number, pr.is_draft, args.asked) {
                 eprintln!("{note}");
