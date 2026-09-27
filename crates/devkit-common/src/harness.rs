@@ -33,16 +33,13 @@ pub fn parse_env_override(val: Option<&str>) -> Option<bool> {
     }
 }
 
-/// The global devkit config file: `$DEVKIT_CONFIG`, else
-/// `~/.config/devkit/config.toml`. Mirrors the `~/.config/devkit/config.toml`
-/// base layer the resolver loads, so the harness reads the same global config
-/// the other binaries do.
+/// The global devkit config file: `$DEVKIT_CONFIG`, else the home config
+/// layer the resolver loads, so the harness reads the same global config the
+/// other binaries do.
 pub fn global_config_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
-        return Some(PathBuf::from(p));
-    }
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".config/devkit/config.toml"))
+    std::env::var_os("DEVKIT_CONFIG")
+        .map(PathBuf::from)
+        .or_else(devkit_config::home_config_path)
 }
 
 /// Combine the enforcement opt-in sources. The env override is an explicit
