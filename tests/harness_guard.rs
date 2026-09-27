@@ -548,3 +548,99 @@ fn the_declared_harness_picks_the_envelope() {
     );
     assert!(v["agent_message"].is_string());
 }
+
+/// The context lines an allowed command came back with, none when silent.
+fn notes(out: &Output) -> Vec<String> {
+    assert!(
+        !denied(out),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if out.stdout.iter().all(u8::is_ascii_whitespace) {
+        return Vec::new();
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+    v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("additionalContext")
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+const CARGO_BUILD_TASK: &str = r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.bun-only]
+programs = ["node"]
+args = ["server.js"]
+reason = "This workspace is bun-only."
+
+[tasks.build]
+run = ["cargo", "build"]
+
+[apps.web]
+base_port = 3000
+path = "apps/web"
+launch = ["nitro", "dev"]
+"#;
+
+const PROJECT_NOTE: &str = "devkit did not check it against the project's tasks and apps.";
+
+#[test]
+fn a_loop_repeats_no_unresolved_note() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(CARGO_BUILD_TASK);
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload(r#"for p in a b c; do cargo build "$(date)"; node "$y"; done"#),
+    );
+    let notes = notes(&out);
+    let mut distinct = notes.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(notes.len(), distinct.len(), "{notes:#?}");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("`cargo build \"$(date)\"`") && n.ends_with(PROJECT_NOTE)),
+        "{notes:#?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("`[harness.commands]` rule")),
+        "{notes:#?}"
+    );
+}
+
+#[test]
+fn an_unresolved_program_no_task_or_app_runs_gets_no_project_note() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(CARGO_BUILD_TASK);
+    for command in [r#"printf %s "$q""#, r#"jq -r .x <<<"$base""#] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert_eq!(notes(&out), Vec::<String>::new(), "{command}");
+    }
+}
+
+#[test]
+fn an_unresolved_program_a_task_or_app_could_run_keeps_its_project_note() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(CARGO_BUILD_TASK);
+    for command in [
+        r#"cargo build "$x""#,
+        r#"nitro "$x""#,
+        r#"vite "$x""#,
+        r#""$tool" build"#,
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        let notes = notes(&out);
+        assert!(
+            notes.iter().any(|n| n.ends_with(PROJECT_NOTE)),
+            "{command}: {notes:#?}"
+        );
+    }
+}
