@@ -12,6 +12,7 @@ pub use devkit_config::ForgeKind;
 use devkit_config::{ForgeConfig, GithubConfig};
 use serde::{Deserialize, Serialize};
 
+pub mod forgejo;
 pub mod github;
 pub mod gitlab;
 pub mod none;
@@ -616,9 +617,7 @@ pub fn resolve(
     let forge: Box<dyn Forge> = match choice.kind {
         ForgeKind::Github => Box::new(github::GithubForge::new(&choice.host)),
         ForgeKind::Gitlab => Box::new(gitlab::GitlabForge::new(&choice.host)),
-        ForgeKind::Forgejo => Box::new(none::NoForge::new(
-            "the forgejo backend is not built yet".into(),
-        )),
+        ForgeKind::Forgejo => Box::new(forgejo::ForgejoForge::new(&choice.host)),
         ForgeKind::None => Box::new(none::NoForge::new(choice.reason.clone())),
     };
     Resolved {
