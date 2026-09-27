@@ -165,6 +165,22 @@ fn an_invalid_session_id_is_refused() {
 }
 
 #[test]
+fn an_invalid_second_session_id_writes_no_receipt_for_the_first() {
+    let p = project();
+    let out = render(
+        p.path(),
+        &[
+            ("CLAUDE_CODE_SESSION_ID", "S1"),
+            ("CODEX_SESSION_ID", "../x"),
+        ],
+        &["--title", "T", "--arg", "acceptance=A"],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("session id"), "{}", stderr(&out));
+    assert!(receipts(p.path(), "S1").is_empty());
+}
+
+#[test]
 fn an_empty_title_is_refused() {
     let p = project();
     let out = render(p.path(), &[("CLAUDE_CODE_SESSION_ID", "S1")], &[

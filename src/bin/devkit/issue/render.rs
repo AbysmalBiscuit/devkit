@@ -115,6 +115,9 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
     )?;
 
     let sessions = receipt::sessions_from_env();
+    if let Some(bad) = sessions.iter().find(|s| !receipt::valid_session(s)) {
+        bail!("session id `{bad}` is not usable as a directory name: no receipt written");
+    }
     if sessions.is_empty() {
         eprintln!("no agent session: no receipt written");
     } else {
