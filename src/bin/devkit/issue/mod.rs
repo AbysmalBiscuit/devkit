@@ -7,6 +7,7 @@ use devkit::completions::Shell;
 use crate::template::VarArgs;
 
 pub(crate) mod checkout;
+mod create;
 mod dashboard;
 mod end;
 mod hooks;
@@ -145,6 +146,17 @@ pub(crate) enum Cmd {
     /// an agent session this records a receipt, and the pre-tool-use hook
     /// denies an issue write whose text has none.
     Render {
+        /// Issue title, the `input` of the `issue_title` template.
+        #[arg(long)]
+        title: String,
+        /// Issue body, the `input` of the `issue_body` template.
+        #[arg(long)]
+        body: Option<String>,
+        #[command(flatten)]
+        vars: VarArgs,
+    },
+    /// Create a GitHub issue from the issue templates.
+    Create {
         /// Issue title, the `input` of the `issue_title` template.
         #[arg(long)]
         title: String,
@@ -474,6 +486,13 @@ pub fn run(cli: IssueCli) -> Result<()> {
             cli.config.as_deref(),
         ),
         Some(Cmd::Render { title, body, vars }) => render::run(render::RenderArgs {
+            title,
+            body,
+            vars,
+            dir: cli.dir,
+            config: cli.config,
+        }),
+        Some(Cmd::Create { title, body, vars }) => create::run(create::CreateArgs {
             title,
             body,
             vars,

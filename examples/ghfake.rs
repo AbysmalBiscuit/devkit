@@ -26,6 +26,9 @@ fn canned(args: &str) -> Option<(&'static str, &'static str)> {
     if args.starts_with("pr view") && args.contains("reviews") {
         return Some(("reviews.json", r#"{"reviews":[]}"#));
     }
+    if args.starts_with("issue create") {
+        return Some(("issue_create.txt", "https://github.com/o/r/issues/42\n"));
+    }
     None
 }
 
