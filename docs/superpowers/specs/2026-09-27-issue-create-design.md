@@ -63,7 +63,7 @@ Works under every tracker and needs no credential.
 2. Writes a receipt for the rendered pair (below).
 3. Prints `{"title": "...", "body": "..."}` to stdout. JSON keeps the strings exact: an agent copies them into an MCP call whose arguments are JSON strings as well.
 
-When no harness session id is set (a human at a terminal), it renders and prints but writes no receipt, and says so on stderr. When the start directory is not inside a git checkout, it fails before rendering, since a receipt has nowhere to go.
+When no harness session id is set (a human at a terminal), it renders and prints but writes no receipt, and says so on stderr. Humans never pass through the hook, so no fallback id exists. When the start directory is not inside a git checkout, it fails before rendering, since a receipt has nowhere to go.
 
 ### `devkit issue create`
 
@@ -150,6 +150,10 @@ reason   = "file issues with `devkit issue create` so the issue template applies
 ```
 
 `devkit issue create` runs `gh` as its own child process, which the hook never sees, so the rule does not block it.
+
+### devkit's own config
+
+devkit's `devkit.toml` ships both `[harness.issue_create]` entries above (`linear` and `github`) and the `gh-issue-create` command rule, so this repository enforces its own issue path. It leaves `issue_title` and `issue_body` at their defaults. Issues filed here still go through `issue render` or `issue create`, and a template can be added later without touching the rules.
 
 ## Documentation
 
