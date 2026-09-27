@@ -32,6 +32,28 @@ programs = ["git"]
 args = ["worktree", "remove"]
 reason = "Use devkit's issue binary to remove worktrees: issue end [branch-name]"
 
+[harness.commands.gh-issue-create]
+programs = ["gh"]
+args = ["issue", "create"]
+reason = "file issues with `devkit issue create` so the issue template applies"
+
+# Issue writes through a tracker's MCP must carry text `devkit issue render`
+# produced. The templates stay at their defaults for now.
+[harness.issue_tools.linear]
+servers = ["*linear*"]
+tools = ["save_issue"]
+absent = ["id"]
+title = "title"
+body = "description"
+body_patch = ["patch"]
+
+[harness.issue_tools.github]
+servers = ["*github*"]
+tools = ["issue_write"]
+equals = { method = "create" }
+title = "title"
+body = "body"
+
 [tasks.audit]
 description = "Check Cargo.lock against the RustSec advisory database"
 run = ["cargo", "audit"]

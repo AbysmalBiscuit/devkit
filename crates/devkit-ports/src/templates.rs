@@ -55,7 +55,7 @@ struct BuiltIn {
     source: fn(&Templates) -> &str,
 }
 
-const BUILT_INS: [BuiltIn; 9] = [
+const BUILT_INS: [BuiltIn; 11] = [
     BuiltIn {
         name: "branch",
         description: "Branch name `issue setup` creates",
@@ -90,6 +90,16 @@ const BUILT_INS: [BuiltIn; 9] = [
         name: "pr_body",
         description: "Body of a PR opened by `issue pr create`",
         source: Templates::pr_body,
+    },
+    BuiltIn {
+        name: "issue_title",
+        description: "Title of an issue `issue render` or `issue create` writes",
+        source: Templates::issue_title,
+    },
+    BuiltIn {
+        name: "issue_body",
+        description: "Body of an issue `issue render` or `issue create` writes",
+        source: Templates::issue_body,
     },
     BuiltIn {
         name: "review_request",
@@ -252,6 +262,18 @@ mod tests {
             1,
             "{names:?}"
         );
+    }
+
+    #[test]
+    fn the_issue_templates_are_built_ins() {
+        let names: Vec<String> = list(&cfg(""), Path::new("."), Caller::Agent)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        for name in ["issue_title", "issue_body"] {
+            assert_eq!(names.iter().filter(|n| *n == name).count(), 1, "{names:?}");
+        }
     }
 
     #[test]

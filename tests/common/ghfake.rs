@@ -90,7 +90,7 @@ impl Fake {
                     .expect("git remote add");
                 ""
             }
-            None => "[forge]\nkind = \"github\"\nrepo = \"o/r\"",
+            None => "[forge]\nkind = \"github\"\nrepo = \"o/r\"\n\n[github]\nissues_repo = \"o/r\"",
         };
 
         std::fs::write(

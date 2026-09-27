@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use devkit_command::{Analysis, Invocation, Value};
 use devkit_common::caller::Caller;
-use devkit_config::{AppMatch, CommandRule, Config, RuleAction, RunAction, RunArg, Severity};
+use devkit_config::{
+    AppMatch, CommandRule, Config, RuleAction, RunAction, RunArg, Severity, wildcard_matches,
+};
 use norm::basename;
 
 use crate::apps::App;
@@ -106,26 +108,6 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
         Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => Match::Possible,
     };
     here.min(args_match(patterns, args))
-}
-
-/// Whether `text` matches `pattern`, where each `*` stands for any run of
-/// characters, `/` included. A pattern without `*` matches exactly.
-fn wildcard_matches(pattern: &str, text: &str) -> bool {
-    let mut parts = pattern.split('*');
-    let head = parts.next().unwrap_or_default();
-    let Some(mut rest) = text.strip_prefix(head) else {
-        return false;
-    };
-    let Some(tail) = parts.next_back() else {
-        return rest.is_empty();
-    };
-    for part in parts {
-        match rest.find(part) {
-            Some(at) => rest = &rest[at + part.len()..],
-            None => return false,
-        }
-    }
-    rest.ends_with(tail)
 }
 
 /// Decide over an analysis. Every invocation is checked, nested ones

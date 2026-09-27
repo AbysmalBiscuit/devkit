@@ -11,8 +11,8 @@ mod layers;
 pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
 pub mod harness;
 pub use harness::{
-    AppMatch, CommandRule, Fidelity, HarnessSection, LogSection, PolicyAction, PromptFidelity,
-    RuleAction, Severity, ShellSetting,
+    AppMatch, CommandRule, Fidelity, HarnessSection, IssueToolRule, LogSection, PolicyAction,
+    PromptFidelity, RuleAction, Severity, ShellSetting, wildcard_matches,
 };
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
@@ -1138,6 +1138,8 @@ pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
 pub const DEFAULT_WORKTREE_DIR: &str = "{{ slug }}";
 pub const DEFAULT_PR_TITLE: &str = "{{ input }}";
 pub const DEFAULT_PR_BODY: &str = "{{ input }}";
+pub const DEFAULT_ISSUE_TITLE: &str = "{{ input }}";
+pub const DEFAULT_ISSUE_BODY: &str = "{{ input }}";
 pub const DEFAULT_REVIEW_REQUEST: &str = "{{ input }} {{ pr_url }}";
 pub const DEFAULT_REVIEW_FINISH: &str = "{{ input }} {{ pr_url }}";
 pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "ISSUE_SUMMARY_{{ issue }}.md";
@@ -1355,6 +1357,15 @@ pub struct Templates {
     /// `--pr-body` argument. Rendered only when a PR is actually opened, not
     /// when an existing one is reused.
     pub pr_body: Option<String>,
+    /// Title of an issue rendered by `issue render` or created by `issue
+    /// create`. `{{ input }}` is the `--title` argument; the rendered title
+    /// must not be empty.
+    pub issue_title: Option<String>,
+    /// Body of an issue rendered by `issue render` or created by `issue
+    /// create`. `{{ input }}` is the `--body` argument and `issue_title` is the
+    /// rendered title. A `[templates.variables]` entry either template reads,
+    /// marked `required`, must be passed as `--arg`.
+    pub issue_body: Option<String>,
     /// Slack message sent by `issue review request`. Rendered once per
     /// recipient with `name`, `slack_id` (empty for a channel), `pr_url`,
     /// `pr_title` (the PR's own title from GitHub), `input`, and `branch`,
@@ -1424,6 +1435,14 @@ impl Templates {
 
     pub fn pr_body(&self) -> &str {
         self.pr_body.as_deref().unwrap_or(DEFAULT_PR_BODY)
+    }
+
+    pub fn issue_title(&self) -> &str {
+        self.issue_title.as_deref().unwrap_or(DEFAULT_ISSUE_TITLE)
+    }
+
+    pub fn issue_body(&self) -> &str {
+        self.issue_body.as_deref().unwrap_or(DEFAULT_ISSUE_BODY)
     }
 
     pub fn review_request(&self) -> &str {
@@ -3231,6 +3250,15 @@ overwrite = true
         assert_eq!(t.pr_body(), DEFAULT_PR_BODY);
         assert_eq!(t.review_request(), DEFAULT_REVIEW_REQUEST);
         assert_eq!(t.review_finish(), DEFAULT_REVIEW_FINISH);
+    }
+
+    #[test]
+    fn issue_templates_default_to_the_input() {
+        let t = Templates::default();
+        assert_eq!(t.issue_title(), "{{ input }}");
+        assert_eq!(t.issue_body(), "{{ input }}");
+        let c = Config::parse("[templates]\nissue_body = \"x {{ input }}\"\n").unwrap();
+        assert_eq!(c.templates.issue_body(), "x {{ input }}");
     }
 
     #[test]

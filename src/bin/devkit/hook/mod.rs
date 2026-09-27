@@ -21,6 +21,7 @@
 
 mod dialect;
 mod edit;
+mod mcp;
 mod payload;
 pub mod record;
 pub(crate) mod rules;
@@ -88,6 +89,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // the only one that can be skipped without loss.
         HookEvent::SessionEnd => with_payload(harness, |p| {
             edit::release_session(p);
+            clear_issue_receipts(p);
             let settings = record_only(p, cli.event);
             if settings.auto_prune && settings.enabled {
                 // A retention cap nothing enforces is not a promise. Fail-open:
@@ -113,6 +115,19 @@ pub fn run(cli: HookCli) -> Result<()> {
             record_only(p, event);
             Ok(())
         }),
+    }
+}
+
+/// Delete the ending session's `issue render` receipts in the payload's
+/// checkout. Best-effort: a receipt left behind is swept by a later render.
+fn clear_issue_receipts(payload: &Payload) {
+    let cwd = record::payload_cwd(payload);
+    let checkout = devkit_common::vcs::Checkout::at(&cwd);
+    if let (Some(session), Some(root)) = (
+        payload.session_id(),
+        crate::issue::receipt::store_root(&checkout),
+    ) {
+        let _ = crate::issue::receipt::clear_session(&root, session);
     }
 }
 
@@ -172,18 +187,22 @@ pub(crate) fn legacy_lock_event(event: &str) -> Result<()> {
     }
 }
 
-/// The payload's own tool picks the path. The two `PreToolUse` matcher
-/// blocks each manifest used to carry existed only because two subsystems
-/// answered one event; the decision belongs here, where the payload is.
+/// The payload's own tool picks the path: an edit goes to the edit guard, an
+/// MCP call to the issue guard, and everything else to the shell guard. The
+/// decision belongs here, where the payload is, rather than in one matcher
+/// block per subsystem in each manifest.
 ///
 /// Dispatch happens before any config load or tree-sitter work, so an edit
-/// payload pays nothing for the shell path.
+/// or MCP payload pays nothing for the shell path.
 pub(crate) fn pre_tool_use(harness: Option<Harness>) -> Result<()> {
     let Some(payload) = read_payload(harness) else {
         return shell::deny_unreadable_payload(harness);
     };
-    match edit::write(&payload) {
-        Some(write) => edit::guard(&payload, write),
-        None => shell::guard(&payload),
+    if let Some(write) = edit::write(&payload) {
+        return edit::guard(&payload, write);
+    }
+    match payload.tool() {
+        Some(pabal::Tool::Mcp { .. }) => mcp::guard(&payload),
+        _ => shell::guard(&payload),
     }
 }

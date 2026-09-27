@@ -438,6 +438,7 @@ dependencies = [
  "devkit-git",
  "schemars",
  "serde",
+ "serde_json",
  "tempfile",
  "toml",
 ]
