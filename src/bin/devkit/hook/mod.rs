@@ -123,7 +123,7 @@ pub fn run(cli: HookCli) -> Result<()> {
 /// no tree-sitter.
 fn record_only(payload: &Payload, event: HookEvent) -> devkit_common::harness_log::Settings {
     let cwd = record::payload_cwd(payload);
-    let checkout = devkit_common::git::Checkout::at(&cwd);
+    let checkout = devkit_common::vcs::Checkout::at(&cwd);
     let settings = devkit_common::harness_log::resolve_in(&checkout, &cwd);
     if !settings.enabled {
         return settings;

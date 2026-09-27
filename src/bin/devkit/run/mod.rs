@@ -7,7 +7,12 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
 use devkit::completions::Shell;
-use devkit_common::{disk::human_size, git::Git, progress::Steps, supervise, ui};
+use devkit_common::{
+    disk::human_size,
+    progress::Steps,
+    supervise, ui,
+    vcs::{Vcs, VersionControl},
+};
 use devkit_ports::{
     load,
     registry::{self, Role},
@@ -237,18 +242,17 @@ fn cwd_of(cli: &RunCli) -> String {
 }
 
 fn toplevel(cwd: &str) -> Result<String> {
-    Ok(devkit_common::git::checkout_root(Path::new(cwd))?
+    Ok(devkit_common::vcs::checkout_root(Path::new(cwd))?
         .to_string_lossy()
         .into_owned())
 }
 
-/// Pick known apps whose files appear in a `git diff --stat` against the
-/// baseline.
-pub fn apps_from_diff(diff_stat: &str, known: &[String], apps_dir: &str) -> Vec<String> {
+/// Pick known apps whose files changed since the baseline.
+pub fn apps_from_diff(changed: &[String], known: &[String], apps_dir: &str) -> Vec<String> {
     let prefix = format!("{apps_dir}/");
     let mut found = Vec::new();
-    for line in diff_stat.lines() {
-        if let Some(rest) = line.trim().strip_prefix(&prefix)
+    for path in changed {
+        if let Some(rest) = path.strip_prefix(&prefix)
             && let Some(name) = rest.split('/').next()
             && known.iter().any(|k| k == name)
             && !found.contains(&name.to_string())
@@ -526,7 +530,7 @@ pub fn run(cli: RunCli) -> Result<()> {
 fn baseline_scope(cli: &RunCli, cwd: &str) -> Result<(PathBuf, String)> {
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     let dir = crate::baseline::dir(&loaded.config)?;
-    let repo = devkit_common::git::primary_checkout(Path::new(cwd))?;
+    let repo = devkit_common::vcs::primary_checkout(Path::new(cwd))?;
     Ok((dir, repo.to_string_lossy().into_owned()))
 }
 
@@ -735,11 +739,11 @@ fn cmd_up(
         // A run that names its apps needs no baseline; only diff-detection
         // does, so the target resolves here rather than up front.
         let baseline_target = crate::baseline::target(cfg, Path::new(cwd))?;
-        let diff = Git::at(Path::new(cwd))
-            .args(["diff", &format!("{baseline_target}...HEAD"), "--stat"])
-            .output()
+        let here = Path::new(cwd);
+        let changed = Vcs::at(here)
+            .changed_paths(here, &baseline_target)
             .unwrap_or_default();
-        apps = apps_from_diff(&diff, &known, &cfg.defaults.apps_dir);
+        apps = apps_from_diff(&changed, &known, &cfg.defaults.apps_dir);
         anyhow::ensure!(
             !apps.is_empty(),
             "no apps to run (none given and none detected in diff vs {baseline_target})\n{}",
@@ -804,7 +808,7 @@ fn cmd_up(
                     // Read before `ensure`, which moves the pin onto the
                     // baseline it built.
                     let previous = devkit_common::record::read(wt).and_then(|r| r.baseline);
-                    let primary = devkit_common::git::primary_checkout(Path::new(cwd))?;
+                    let primary = devkit_common::vcs::primary_checkout(Path::new(cwd))?;
                     let path =
                         crate::baseline::ensure(cfg, catalog, &primary, wt, &sha, &apps, &steps)?;
                     // A rebase repoints this worktree at a different baseline.
@@ -1043,7 +1047,7 @@ fn report_down(out: &run::DownOutcome) {
 /// that names nothing both fall through to an unexempted `down`.
 fn cmd_down(cwd: &str, args: &DownArgs) -> Result<()> {
     let current = toplevel(cwd)?;
-    let repo = devkit_common::git::primary_checkout(Path::new(cwd)).ok();
+    let repo = devkit_common::vcs::primary_checkout(Path::new(cwd)).ok();
     // A baseline holding no rows has nothing to exempt, and the wait for its
     // lock is unbounded, so the decision is skipped rather than queued behind
     // whatever holds it. Rows appearing afterwards are outside the scope this
@@ -1818,14 +1822,21 @@ mod tests {
 
     #[test]
     fn picks_known_apps_from_diff() {
-        let diff =
-            " apps/api/server/x.ts | 2 +-\n apps/lab-os/page.tsx | 1 +\n packages/z/y.ts | 1 +\n";
+        let changed = [
+            "apps/api/server/x.ts",
+            "apps/lab-os/page.tsx",
+            "apps/api/y.ts",
+            "packages/z/y.ts",
+        ]
+        .map(String::from);
         let known = vec![
             "api".to_string(),
             "lab-os".to_string(),
             "foundry-portal".to_string(),
         ];
-        assert_eq!(apps_from_diff(diff, &known, "apps"), vec!["api", "lab-os"]);
+        assert_eq!(apps_from_diff(&changed, &known, "apps"), vec![
+            "api", "lab-os"
+        ]);
     }
 
     #[test]

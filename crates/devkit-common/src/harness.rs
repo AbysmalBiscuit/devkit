@@ -9,7 +9,7 @@ use std::{
 use devkit_config::{AppMatch, CommandRule, PolicyAction, ShellSetting};
 use serde::de::DeserializeOwned;
 
-use crate::git::Checkout;
+use crate::vcs::Checkout;
 
 /// Read one `[harness]` flag from a config body.
 ///

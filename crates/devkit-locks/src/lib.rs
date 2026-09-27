@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use devkit_common::git::Checkout;
+use devkit_common::vcs::Checkout;
 use model::{AcquireOutcome, Conflict, LockEntry, Refusal};
 
 /// Try a running daemon over `locks.sock`. `Ok(None)` = no daemon (caller uses
@@ -50,7 +50,7 @@ fn now() -> u64 {
 /// two callers under one repository, one hit while git is transiently
 /// unavailable, land on two different roots with nothing to explain why.
 pub fn find_root_from(start: &Path) -> PathBuf {
-    match devkit_common::git::checkout_root_opt(start) {
+    match devkit_common::vcs::checkout_root_opt(start) {
         Ok(Some(root)) => root,
         Ok(None) => start.to_path_buf(),
         Err(e) => unscoped(start, &format!("{e:#}")),
@@ -641,7 +641,7 @@ impl WriteResolver {
         self.checkout
             .as_ref()
             .is_some_and(|c| c.checkout_of(root).is_some())
-            || matches!(devkit_common::git::checkout_root_opt(root), Ok(Some(_)))
+            || matches!(devkit_common::vcs::checkout_root_opt(root), Ok(Some(_)))
     }
 
     /// Same decision as [`decide_write`], but sharing this resolver's cache.

@@ -55,7 +55,7 @@ fn run(exe: &Path, project: &Path, state: &Path, args: &[&str]) -> Output {
 }
 
 fn toplevel(project: &Path) -> String {
-    devkit_common::git::checkout_root(project)
+    devkit_common::vcs::checkout_root(project)
         .expect("git rev-parse")
         .to_string_lossy()
         .into_owned()

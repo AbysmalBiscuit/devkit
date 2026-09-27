@@ -4,6 +4,7 @@ use anyhow::Result;
 use devkit_common::{
     livetable::{Cell, LiveTable},
     tracker::{Resolved, State},
+    vcs::{Vcs, VersionControl},
 };
 use devkit_issue::status::{self as st, IssueWorktree, PrStatus, StatusReport, TrackerInfo};
 
@@ -30,15 +31,16 @@ fn pick_index(
             .position(|r| crate::issue::select::matches(r, sel)),
         None => {
             let top = current_top?;
-            rows.iter()
-                .position(|r| devkit_common::git::same_path(Path::new(&r.worktree), Path::new(top)))
+            rows.iter().position(|r| {
+                devkit_common::paths::same_path(Path::new(&r.worktree), Path::new(top))
+            })
         }
     }
 }
 
 /// The current worktree's root (`git rev-parse --show-toplevel`), trimmed.
 fn current_top(start: &str) -> Option<String> {
-    devkit_common::git::checkout_root(Path::new(start))
+    devkit_common::vcs::checkout_root(Path::new(start))
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
@@ -273,12 +275,13 @@ fn live_enrich(
     Ok(link_base)
 }
 
-/// Build a row for the worktree at `top` straight from git, for the current-dir
-/// case where discovery did not list it (notably the main clone). PR and issue
-/// state stay empty — the main clone has neither — while the cache-only path
-/// still overlays a cached PR if one happens to exist.
+/// Build a row for the worktree at `top` straight from the repository, for the
+/// current-dir case where discovery did not list it (notably the main clone).
+/// PR and issue state stay empty — the main clone has neither — while the
+/// cache-only path still overlays a cached PR if one happens to exist.
 fn local_row(top: &str) -> Result<IssueWorktree> {
-    let branch = devkit_common::git::branch(Path::new(top))?;
+    let top_path = Path::new(top);
+    let branch = Vcs::at(top_path).branch(top_path)?;
     let issue_id = devkit_common::worktree::issue_id_of(Path::new(top), &branch);
     Ok(IssueWorktree {
         worktree: top.to_string(),

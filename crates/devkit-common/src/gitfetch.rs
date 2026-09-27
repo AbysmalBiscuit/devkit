@@ -1,4 +1,4 @@
-//! Timestamp-gated `git fetch` to skip redundant network round-trips.
+//! Timestamp-gated fetch to skip redundant network round-trips.
 //!
 //! Every devkit fetch feeds an immediate consumer — a `worktree add <ref>` or a
 //! `reset --hard <ref>` that reads the just-fetched remote-tracking ref — so a
@@ -19,7 +19,10 @@ use std::{
 
 use anyhow::Result;
 
-use crate::{git::Git, paths};
+use crate::{
+    paths,
+    vcs::{Vcs, VersionControl},
+};
 
 const DEFAULT_TTL_SECS: u64 = 60;
 
@@ -93,16 +96,14 @@ fn fetch_gated(
     Ok(true)
 }
 
-/// `git fetch <remote>` in `cwd`, skipped when the same target was fetched
-/// within the TTL. Returns `Ok(())` whether it fetched or reused a fresh fetch.
+/// Fetch `remote` into `cwd`'s repository, skipped when the same target was
+/// fetched within the TTL. Returns `Ok(())` whether it fetched or reused a
+/// fresh fetch.
 pub fn fetch(remote: &str, cwd: &str) -> Result<()> {
     let marker = marker_path(cwd, remote);
     fetch_gated(&marker, ttl_secs(), now_secs(), || {
-        Git::at(Path::new(cwd))
-            .args(["fetch", remote])
-            .network()
-            .output()
-            .map(|_| ())
+        let repo = Path::new(cwd);
+        Vcs::at(repo).fetch(repo, remote)
     })?;
     Ok(())
 }
@@ -191,6 +192,8 @@ mod tests {
     #[test]
     fn a_locked_ssh_key_fails_fast_and_names_the_remedy() {
         use std::{os::unix::fs::PermissionsExt, time::Instant};
+
+        use crate::git::Git;
 
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");

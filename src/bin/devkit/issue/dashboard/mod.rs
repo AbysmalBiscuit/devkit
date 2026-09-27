@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use devkit_common::vcs::{Vcs, VersionControl};
 
 use crate::issue::{prs, triage};
 
@@ -202,7 +203,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         Some(a) => a,
         None => capture_email(&start),
     };
-    let primary = devkit_common::git::primary_checkout(std::path::Path::new(&start))?;
+    let primary = devkit_common::vcs::primary_checkout(std::path::Path::new(&start))?;
     let primary = primary
         .to_str()
         .context("primary checkout path not UTF-8")?;
@@ -316,9 +317,6 @@ pub fn run(args: DashboardArgs) -> Result<()> {
 }
 
 fn capture_email(start: &str) -> String {
-    devkit_common::git::Git::at(std::path::Path::new(start))
-        .args(["config", "user.email"])
-        .output()
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
+    let start = std::path::Path::new(start);
+    Vcs::at(start).user_email(start).unwrap_or_default()
 }

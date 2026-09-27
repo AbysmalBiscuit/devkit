@@ -10,7 +10,7 @@ use std::{
 use anyhow::Result;
 use rayon::prelude::*;
 
-use crate::git::{self, Worktree};
+use crate::vcs::{self, Worktree};
 
 /// Marker identifying a baseline worktree. Baselines are linked worktrees, so
 /// without a way to tell one apart each becomes an `UNKNOWN` row in
@@ -156,7 +156,7 @@ pub struct Worktrees {
 
 /// Every worktree of the repository `start` sits in, classified.
 pub fn discover_all(start: &str) -> Result<Worktrees> {
-    let mut all = git::worktrees(Path::new(start))?.into_iter();
+    let mut all = vcs::worktrees(Path::new(start))?.into_iter();
     let main = all.next().expect("git never lists zero worktrees");
     let mut linked = Vec::new();
     let mut undecidable = Vec::new();
@@ -1381,7 +1381,7 @@ mod tests {
         let (_, others) = discover(main.to_str().unwrap()).unwrap();
         let names: Vec<_> = others.iter().map(|w| w.path.clone()).collect();
         assert!(
-            matches!(&names[..], [only] if crate::git::same_path(only, &issue)),
+            matches!(&names[..], [only] if crate::paths::same_path(only, &issue)),
             "baseline still listed: {names:?}"
         );
     }
@@ -1438,7 +1438,7 @@ mod tests {
         let w = discover_all(main.to_str().unwrap()).unwrap();
         assert!(w.linked.is_empty(), "{:?}", w.linked);
         assert!(
-            matches!(&w.undecidable[..], [only] if crate::git::same_path(only, &issue)),
+            matches!(&w.undecidable[..], [only] if crate::paths::same_path(only, &issue)),
             "{:?}",
             w.undecidable
         );

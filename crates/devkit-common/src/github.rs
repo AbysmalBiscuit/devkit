@@ -15,7 +15,10 @@ use std::{path::Path, sync::OnceLock, time::Duration};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::http::{agent, explain};
+use crate::{
+    http::{agent, explain},
+    vcs::{Vcs, VersionControl},
+};
 
 const API: &str = "https://api.github.com";
 const UA: &str = "devkit";
@@ -322,9 +325,9 @@ pub fn remote_reaches_github(url: &str) -> bool {
 /// check cannot be skipped by a caller that declared its tracker and therefore
 /// never ran detection.
 pub fn github_origin_slug(cwd: &str) -> Result<String> {
-    let url = crate::git::Git::at(Path::new(cwd))
-        .args(["remote", "get-url", "origin"])
-        .output()
+    let cwd = Path::new(cwd);
+    let url = Vcs::at(cwd)
+        .remote_url(cwd, "origin")
         .context("reading the `origin` remote")?;
     anyhow::ensure!(
         remote_reaches_github(&url),

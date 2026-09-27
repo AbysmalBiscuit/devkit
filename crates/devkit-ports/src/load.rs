@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::Result;
-use devkit_common::git::Checkout;
+use devkit_common::vcs::Checkout;
 use devkit_config::{self as config, Config, Provenance};
 
 use crate::{

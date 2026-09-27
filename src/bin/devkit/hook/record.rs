@@ -12,12 +12,12 @@ use devkit_command::{
     ANALYZER_VERSION, Analysis, Location, Target, Uncertainty, UncertaintyKind, Value,
 };
 use devkit_common::{
-    git::Checkout,
     harness_log::{
         self, AnalysisProjection, Counts, FrameEnd, Kind, Permission, Prompt, Record,
         SCHEMA_VERSION, SessionFrame, ShellPost, UnresolvedWrite, Worktree, WorktreeChange,
         now_rfc3339,
     },
+    vcs::Checkout,
 };
 use devkit_config::{Fidelity, PromptFidelity};
 use serde_json::Value as Json;

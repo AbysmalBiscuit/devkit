@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use devkit_common::git::Checkout;
+use devkit_common::vcs::Checkout;
 
 /// Whether write enforcement is active for a write originating at `cwd`.
 pub fn enforcement_enabled_in(checkout: &Checkout, cwd: &Path) -> bool {

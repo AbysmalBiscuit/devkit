@@ -61,7 +61,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs"]
 
 [workspace.package]
 edition = "2024"
@@ -104,6 +104,7 @@ console = "0.15"
 supports-hyperlinks = "3"
 strum = { version = "0.27", features = ["derive"] }
 pabal = "0.1"
+ambassador = "0.5.1"
 ureq = { version = "2", features = ["json"] }
 # ureq's TLS stack. Default features off: they pull aws-lc-rs, ureq uses ring.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
@@ -126,6 +127,7 @@ toml_edit = { version = "0.25", features = ["serde"] }
 devkit-docs = { path = "crates/devkit-docs" }
 devkit-rules = { path = "crates/devkit-rules" }
 devkit-command = { path = "crates/devkit-command" }
+devkit-vcs = { path = "crates/devkit-vcs" }
 tree-sitter = "0.27"
 tree-sitter-bash = "0.25"
 tree-sitter-powershell = "0.26"

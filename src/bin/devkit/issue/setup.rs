@@ -6,10 +6,10 @@ use std::{
 use anyhow::{Context, Result};
 use devkit_common::{
     cmd::capture,
-    git::Git,
     gitfetch,
     progress::Steps,
     tracker::{IssueDetails, IssueRef, Resolved, Tracker},
+    vcs::{NewWorktree, Vcs, VersionControl},
 };
 use devkit_config::{PrepFile, expand_tilde};
 use devkit_ports::load;
@@ -541,7 +541,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         })
         .transpose()?
         .flatten();
-    let primary = devkit_common::git::primary_checkout(Path::new(&start))?;
+    let primary = devkit_common::vcs::primary_checkout(Path::new(&start))?;
     let primary_s = primary
         .to_str()
         .context("primary checkout path not UTF-8")?;
@@ -554,29 +554,17 @@ pub fn run(args: SetupArgs) -> Result<()> {
     steps.during_result("Fetching from origin...", || {
         gitfetch::fetch("origin", primary_s)
     })?;
-    if Git::at(Path::new(primary_s))
-        .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
-        .success()?
-    {
+    let vcs = Vcs::at(&primary);
+    if vcs.has_branch(&primary, &branch)? {
         anyhow::bail!("branch {branch} already exists — let /issue-setup decide how to proceed");
     }
     steps.during_result("Creating worktree...", || {
-        Git::at(Path::new(primary_s))
-            .args([
-                "worktree",
-                "add",
-                // The baseline target is a remote-tracking branch, which git
-                // would mark as the new branch's upstream. That leaves it
-                // tracking `origin/main`, and a plain `git push` in the
-                // worktree then refuses on the name mismatch.
-                "--no-track",
-                "-b",
-                &branch,
-                worktree.to_str().unwrap(),
-                &baseline_target,
-            ])
-            .network()
-            .output()
+        vcs.create_worktree(&NewWorktree {
+            main: &primary,
+            path: &worktree,
+            start: &baseline_target,
+            branch: Some(&branch),
+        })
     })?;
 
     // The summary lands before the record so the record can name it: that is

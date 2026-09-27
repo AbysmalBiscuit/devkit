@@ -12,9 +12,9 @@ use std::{
 use anyhow::{Context, Result};
 use devkit_common::{
     disk::dir_size,
-    git::Git,
     progress::Steps,
     record::RecordState,
+    vcs::{Changes, NewWorktree, Ownership, Vcs, VersionControl},
     worktree::{BASELINE_MARKER, BaselineState},
 };
 use devkit_config::{Config, expand_tilde};
@@ -32,7 +32,7 @@ pub fn target(cfg: &Config, repo: &Path) -> Result<String> {
     if !cfg.defaults.baseline_ref.is_empty() {
         return Ok(cfg.defaults.baseline_ref.clone());
     }
-    devkit_common::git::default_remote_branch(repo).context(
+    Vcs::at(repo).default_branch(repo).context(
         "no baseline target: set `defaults.baseline_ref`, \
          or run `git remote set-head origin -a` so origin/HEAD names one",
     )
@@ -43,16 +43,9 @@ pub fn target(cfg: &Config, repo: &Path) -> Result<String> {
 /// not move its merge base with another branch, and the value changes only
 /// when the worktree is rebased.
 pub fn pin(worktree: &Path, target: &str) -> Result<String> {
-    let out = devkit_common::git::Git::at(worktree)
-        .args(["merge-base", "HEAD", target])
-        .output()
-        .with_context(|| format!("resolving the fork point between HEAD and `{target}`"))?;
-    let sha = out.trim();
-    anyhow::ensure!(
-        !sha.is_empty(),
-        "`git merge-base HEAD {target}` named no commit"
-    );
-    Ok(sha.to_string())
+    Vcs::at(worktree)
+        .fork_point(worktree, target)
+        .with_context(|| format!("resolving the fork point between HEAD and `{target}`"))
 }
 
 /// One app's prep fingerprint at the sha the baseline was built from.
@@ -341,13 +334,10 @@ pub fn ensure(
             Slot::Reuse(path, marker) => (path, marker, false),
             Slot::Rebuild(path) => {
                 assert_rebuildable(primary_s, &path, worktree)?;
-                let path_s = baseline_path_str(&path)?;
+                baseline_path_str(&path)?;
                 // Always `--force`: the tree may hold rendered prep files and
                 // include copies that a plain remove would refuse over.
-                let _ = Git::at(primary)
-                    .args(["worktree", "remove", "--force", path_s])
-                    .timeout(devkit_common::git::SLOW_TIMEOUT)
-                    .output();
+                let _ = Vcs::at(primary).remove_worktree(primary, &path, true);
                 let _ = std::fs::remove_dir_all(&path);
                 create(primary, &path, sha, steps)?;
                 (path, fresh_marker(sha), true)
@@ -468,15 +458,17 @@ fn fresh_marker(sha: &str) -> Marker {
 /// Detached so the baseline never occupies a branch name and never shows up in
 /// a session manager's branch list.
 fn create(primary: &Path, path: &Path, sha: &str, steps: &Steps) -> Result<()> {
-    let path_s = baseline_path_str(path)?;
     // A directory removed by hand leaves a registration behind; `worktree add`
     // refuses over it until the registration is pruned.
-    let _ = Git::at(primary).args(["worktree", "prune"]).output();
+    let vcs = Vcs::at(primary);
+    let _ = vcs.prune(primary);
     steps.during_result("Creating baseline worktree...", || {
-        Git::at(primary)
-            .args(["worktree", "add", "--detach", path_s, sha])
-            .network()
-            .output()
+        vcs.create_worktree(&NewWorktree {
+            main: primary,
+            path,
+            start: sha,
+            branch: None,
+        })
     })?;
     Ok(())
 }
@@ -523,7 +515,7 @@ impl References {
     fn naming(&self, baseline: &Path) -> Vec<&Path> {
         self.by_baseline
             .iter()
-            .filter(|(spelling, _)| devkit_common::git::same_path(spelling, baseline))
+            .filter(|(spelling, _)| devkit_common::paths::same_path(spelling, baseline))
             .flat_map(|(_, holders)| holders.iter().map(PathBuf::as_path))
             .collect()
     }
@@ -533,7 +525,7 @@ impl References {
     fn others_naming(&self, baseline: &Path, worktree: &Path) -> Vec<&Path> {
         self.naming(baseline)
             .into_iter()
-            .filter(|w| !devkit_common::git::same_path(w, worktree))
+            .filter(|w| !devkit_common::paths::same_path(w, worktree))
             .collect()
     }
 
@@ -542,7 +534,7 @@ impl References {
         self.unreadable
             .iter()
             .map(PathBuf::as_path)
-            .filter(|p| !devkit_common::git::same_path(p, tree))
+            .filter(|p| !devkit_common::paths::same_path(p, tree))
             .collect()
     }
 
@@ -633,11 +625,11 @@ pub fn referencers(repo: &str) -> Result<References> {
 /// way round here: it would report no live rows for a live server whose holder
 /// merely could not be resolved.
 pub fn live_rows_hold(baseline: &Path, ports: &registry::Data) -> bool {
-    use devkit_common::git::PathIdentity;
+    use devkit_common::paths::PathIdentity;
     ports.entries.values().any(|e| {
         e.pid.is_some_and(registry::pid_alive)
             && matches!(
-                devkit_common::git::path_identity(Path::new(&e.holder), baseline),
+                devkit_common::paths::path_identity(Path::new(&e.holder), baseline),
                 PathIdentity::Same | PathIdentity::Unknown
             )
     })
@@ -852,7 +844,7 @@ fn unreferenced(refs: &References, baseline: &Path) -> bool {
 fn decide(
     baseline: &Path,
     refs: &References,
-    registered: &[devkit_common::git::Worktree],
+    registered: &[devkit_common::vcs::Worktree],
     gates: Gates,
     ports: &registry::Data,
 ) -> Result<Option<Removal>> {
@@ -941,20 +933,20 @@ fn decide(
 /// orphaned one is the whole question here. Read once per sweep: it is one git
 /// process, and the baseline directory lock a sweep holds is one `issue end`
 /// waits on unbounded.
-fn registrations(repo: &str) -> Result<Vec<devkit_common::git::Worktree>> {
-    devkit_common::git::worktrees(Path::new(repo))
+fn registrations(repo: &str) -> Result<Vec<devkit_common::vcs::Worktree>> {
+    devkit_common::vcs::worktrees(Path::new(repo))
 }
 
 /// git's registration for `baseline`, matched by identity for the same reason
 /// `References::naming` is: git spells a path the way it was registered, a
 /// sweep spells it the way the directory read it back.
 fn registration<'a>(
-    registrations: &'a [devkit_common::git::Worktree],
+    registrations: &'a [devkit_common::vcs::Worktree],
     baseline: &Path,
-) -> Option<&'a devkit_common::git::Worktree> {
+) -> Option<&'a devkit_common::vcs::Worktree> {
     registrations
         .iter()
-        .find(|w| devkit_common::git::same_path(&w.path, baseline))
+        .find(|w| devkit_common::paths::same_path(&w.path, baseline))
 }
 
 /// A marked tree this repository has no registration for, which is the state a
@@ -967,15 +959,15 @@ fn registration<'a>(
 /// earlier and needs nothing of the sort — so the unproven case refuses with
 /// the live one.
 fn orphan_removal(baseline: &Path) -> Result<Removal> {
-    match gitdir_state(baseline) {
-        GitdirState::Absent => Ok(Removal::Orphan),
-        GitdirState::Resolves => anyhow::bail!(
+    match Vcs::at(baseline).ownership(baseline) {
+        Ownership::Unowned => Ok(Removal::Orphan),
+        Ownership::Owned => anyhow::bail!(
             "{} carries a baseline marker but this repository has no worktree registration \
              for it, and its git directory resolves; remove it from the repository that \
              owns it",
             baseline.display()
         ),
-        GitdirState::Unknown => anyhow::bail!(
+        Ownership::Unknown => anyhow::bail!(
             "cannot tell whether {} belongs to another repository: its .git can be \
              neither read nor ruled out; refusing to remove it",
             baseline.display()
@@ -983,86 +975,11 @@ fn orphan_removal(baseline: &Path) -> Result<Removal> {
     }
 }
 
-/// What stands behind a directory's `.git`.
-///
-/// Three-valued for the reason [`devkit_common::worktree::BaselineState`] and
-/// [`MarkerState`] are: only `Absent` reaches a deletion, so a two-valued
-/// answer would have to fold every unanticipated read failure into one of the
-/// other two, and folding it into "nothing here" deletes somebody's checkout.
-enum GitdirState {
-    /// A `.git` directory (a repository lives here), or a `.git` file naming a
-    /// git directory that is there.
-    Resolves,
-    /// No `.git` at all, or one naming a git directory that is not there —
-    /// which is what a baseline whose registration went looks like.
-    Absent,
-    /// The question could not be answered: `.git` could not be stat'd or read,
-    /// it names a path this build cannot represent, or the named path could not
-    /// be stat'd.
-    Unknown,
-}
-
-/// Classify `dir`'s `.git`. Every failure that is not "the thing is not there"
-/// is [`GitdirState::Unknown`]: the error set is open — permissions, a broken
-/// mount, a file this process may unlink but not read — and no member of it
-/// proves the directory is unowned.
-fn gitdir_state(dir: &Path) -> GitdirState {
-    let dot = dir.join(".git");
-    let md = match std::fs::metadata(&dot) {
-        Ok(md) => md,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return GitdirState::Absent,
-        Err(_) => return GitdirState::Unknown,
-    };
-    if md.is_dir() {
-        return GitdirState::Resolves;
-    }
-    let Ok(body) = std::fs::read(&dot) else {
-        return GitdirState::Unknown;
-    };
-    let Some(named) = body
-        .split(|b| *b == b'\n')
-        .find_map(|line| line.strip_prefix(b"gitdir:"))
-    else {
-        // A `.git` file that names no git directory is not a pointer at
-        // anything, whatever else it holds.
-        return GitdirState::Absent;
-    };
-    // A path this build cannot spell is a path it cannot check.
-    let Ok(named) = std::str::from_utf8(named) else {
-        return GitdirState::Unknown;
-    };
-    // git strips only the trailing newline when it reads this file back, so
-    // every other space belongs to the directory name. Rather than reproduce
-    // git's parse on a path that decides a deletion, anything still carrying
-    // whitespace at either end after the separator is left unproven.
-    let named = named.trim_end_matches(['\r', '\n']);
-    let named = named.strip_prefix(' ').unwrap_or(named);
-    if named != named.trim() {
-        return GitdirState::Unknown;
-    }
-    let named = Path::new(named);
-    let target = if named.is_absolute() {
-        named.to_path_buf()
-    } else {
-        dir.join(named)
-    };
-    // `Path::exists` folds a permission error into `false`, which is the whole
-    // bug this function exists to avoid.
-    match std::fs::symlink_metadata(&target) {
-        Ok(_) => GitdirState::Resolves,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => GitdirState::Absent,
-        Err(_) => GitdirState::Unknown,
-    }
-}
-
 /// Whether the tree carries modified tracked files.
 fn has_local_edits(baseline: &Path) -> Result<bool> {
-    let out = Git::at(baseline)
-        .args(["status", "--porcelain", "--untracked-files=no"])
-        .timeout(devkit_common::git::SLOW_TIMEOUT)
-        .output()
-        .with_context(|| format!("reading the state of {}", baseline.display()))?;
-    Ok(!out.trim().is_empty())
+    Vcs::at(baseline)
+        .dirty(baseline, Changes::Tracked)
+        .with_context(|| format!("reading the state of {}", baseline.display()))
 }
 
 /// The body of [`drop_reference`], without the directory lock. A sweep already
@@ -1076,7 +993,7 @@ fn remove_if_unreferenced(
     repo: &str,
     baseline: &Path,
     refs: &References,
-    registered: &[devkit_common::git::Worktree],
+    registered: &[devkit_common::vcs::Worktree],
     gates: Gates,
     ports: &registry::Data,
     sweep: Sweep,
@@ -1088,7 +1005,7 @@ fn remove_if_unreferenced(
     // destructive command somewhere other than the baseline — and a dry run
     // that skipped the resolution would promise a removal the real sweep then
     // refuses on the same input.
-    let path_s = baseline_path_str(baseline)?;
+    baseline_path_str(baseline)?;
     // A dry run takes no lock. The wait for a slot lock is unbounded, so a
     // read-only pass would queue behind a bootstrap while holding the directory
     // lock, and it would leave a lock file behind for every slot it merely
@@ -1112,10 +1029,8 @@ fn remove_if_unreferenced(
                 // Always `--force`: a baseline holds include copies and
                 // rendered prep files, and any untracked file
                 // would otherwise refuse the removal.
-                Git::at(Path::new(repo))
-                    .args(["worktree", "remove", "--force", path_s])
-                    .timeout(devkit_common::git::SLOW_TIMEOUT)
-                    .output()?;
+                let repo = Path::new(repo);
+                Vcs::at(repo).remove_worktree(repo, baseline, true)?;
                 Ok(true)
             }
             Removal::Orphan => {
@@ -1368,7 +1283,7 @@ pub fn write_pin(worktree: &Path, sha: &str, path: &Path) -> Result<()> {
             devkit_common::record::path(worktree).display()
         ),
         RecordState::Absent => {
-            let branch = devkit_common::git::branch(worktree)?;
+            let branch = Vcs::at(worktree).branch(worktree)?;
             devkit_common::record::IssueRecord {
                 issue: branch.clone(),
                 slug: branch,
@@ -1388,6 +1303,8 @@ pub fn write_pin(worktree: &Path, sha: &str, path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use devkit_common::git::GitBackend;
+
     use super::*;
 
     fn app_with(prep: Vec<devkit_config::PrepFile>, setup: Vec<Vec<String>>) -> App {
@@ -1676,7 +1593,7 @@ mod tests {
         assert!(
             refs.unreadable
                 .iter()
-                .any(|p| devkit_common::git::same_path(p, &path)),
+                .any(|p| devkit_common::paths::same_path(p, &path)),
             "the fixture must put the baseline in the unreadable list: {:?}",
             refs.unreadable
         );
@@ -2354,7 +2271,7 @@ mod tests {
         assert!(
             refs.unreadable
                 .iter()
-                .any(|p| devkit_common::git::same_path(p, &f.b)),
+                .any(|p| devkit_common::paths::same_path(p, &f.b)),
             "{:?}",
             refs.unreadable
         );
@@ -2726,7 +2643,7 @@ mod tests {
         assert!(
             refs.naming(&f.baseline)
                 .iter()
-                .any(|p| devkit_common::git::same_path(p, &bare)),
+                .any(|p| devkit_common::paths::same_path(p, &bare)),
             "the new record counts: {:?}",
             refs.by_baseline
         );
@@ -2848,40 +2765,6 @@ mod tests {
         assert!(stranger.exists(), "the refused tree was removed");
     }
 
-    /// The mark of a tree some repository still owns. An abandoned baseline
-    /// keeps its `.git` file while the git directory it names is gone, and that
-    /// is the tree a sweep reclaims as a plain directory.
-    #[test]
-    fn a_gitdir_resolves_only_while_something_stands_behind_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let tree = dir.path().join("tree");
-        std::fs::create_dir_all(&tree).unwrap();
-        assert!(
-            matches!(gitdir_state(&tree), GitdirState::Absent),
-            "no .git"
-        );
-
-        let admin = dir.path().join("admin");
-        std::fs::write(tree.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
-        assert!(
-            matches!(gitdir_state(&tree), GitdirState::Absent),
-            "the target does not exist"
-        );
-
-        std::fs::create_dir_all(&admin).unwrap();
-        assert!(
-            matches!(gitdir_state(&tree), GitdirState::Resolves),
-            "the target exists"
-        );
-
-        let repo = dir.path().join("repo");
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
-        assert!(
-            matches!(gitdir_state(&repo), GitdirState::Resolves),
-            "a .git directory is a repository"
-        );
-    }
-
     /// git keeps every space in a directory name and strips only the trailing
     /// newline when it reads a `.git` file back, so a `gitdir:` whose target
     /// ends in a space names a directory git resolves. Trimming it here would
@@ -2900,7 +2783,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(gitdir_state(&stranger), GitdirState::Unknown));
+        assert!(matches!(
+            Vcs::Git(GitBackend).ownership(&stranger),
+            Ownership::Unknown
+        ));
         for sweep in [Sweep::Report, Sweep::Remove] {
             let err = remove_if_unreferenced(
                 &f.repo,
@@ -2930,7 +2816,10 @@ mod tests {
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(tree.join(".git"), b"gitdir: /somewhere/\xff/.git\n").unwrap();
 
-        assert!(matches!(gitdir_state(&tree), GitdirState::Unknown));
+        assert!(matches!(
+            Vcs::Git(GitBackend).ownership(&tree),
+            Ownership::Unknown
+        ));
     }
 
     /// A `.git` this process may unlink but not read, and a `gitdir:` target it
@@ -2950,7 +2839,10 @@ mod tests {
         // Root, and some CI containers, ignore file permissions, which leaves
         // nothing to observe either way.
         if std::fs::read(&dot).is_err() {
-            assert!(matches!(gitdir_state(&unreadable), GitdirState::Unknown));
+            assert!(matches!(
+                Vcs::Git(GitBackend).ownership(&unreadable),
+                Ownership::Unknown
+            ));
         }
         std::fs::set_permissions(&dot, std::fs::Permissions::from_mode(0o644)).unwrap();
 
@@ -2964,12 +2856,18 @@ mod tests {
             format!("gitdir: {}/admin\n", loop_dir.display()),
         )
         .unwrap();
-        assert!(matches!(gitdir_state(&looped), GitdirState::Unknown));
+        assert!(matches!(
+            Vcs::Git(GitBackend).ownership(&looped),
+            Ownership::Unknown
+        ));
 
         let itself = dir.path().join("itself");
         std::fs::create_dir_all(&itself).unwrap();
         let dot = itself.join(".git");
         std::os::unix::fs::symlink(&dot, &dot).unwrap();
-        assert!(matches!(gitdir_state(&itself), GitdirState::Unknown));
+        assert!(matches!(
+            Vcs::Git(GitBackend).ownership(&itself),
+            Ownership::Unknown
+        ));
     }
 }

@@ -5,7 +5,12 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use devkit_common::{progress::Steps, record::RecordState, worktree::IssueId};
+use devkit_common::{
+    progress::Steps,
+    record::RecordState,
+    vcs::{Changes, Vcs, VersionControl},
+    worktree::IssueId,
+};
 use devkit_issue::status::{IssueWorktree, gather_with, label, reason_not_finished};
 
 use crate::issue::triage::render;
@@ -139,7 +144,7 @@ impl std::error::Error for Dirty {}
 /// dir (`.` by default), and works from inside a worktree or from the primary
 /// checkout itself.
 fn main_repo(start: &str) -> Result<String> {
-    devkit_common::git::primary_checkout(Path::new(start))?
+    devkit_common::vcs::primary_checkout(Path::new(start))?
         .to_str()
         .map(str::to_string)
         .context("primary checkout path not UTF-8")
@@ -175,19 +180,15 @@ fn cleanup(
     if cwd_c == wt || cwd_c.starts_with(&wt) {
         anyhow::bail!("cd out of {wt_s} before removing it");
     }
-    let dirty = !devkit_common::git::Git::at(&wt)
-        .args(["status", "--porcelain"])
-        .output()?
-        .trim()
-        .is_empty();
-    if dirty && !force {
+    let vcs = Vcs::at(&wt);
+    if vcs.dirty(&wt, Changes::All)? && !force {
         return Err(Dirty.into());
     }
     let (summary, baseline) = recorded_leftovers(&wt, force)?;
 
-    let main = devkit_common::git::primary_checkout(&wt)?;
+    let main = devkit_common::vcs::primary_checkout(&wt)?;
     let parent = main.parent().context("main repo has no parent")?;
-    let branch = devkit_common::git::branch(&wt)?;
+    let branch = vcs.branch(&wt)?;
 
     // Before the removal, while this worktree is still the referencer that
     // entitles the run to stop these servers. Best-effort, like the reclaim
@@ -203,15 +204,7 @@ fn cleanup(
         );
     }
 
-    let mut rm: Vec<&str> = vec!["worktree", "remove"];
-    if force {
-        rm.push("--force");
-    }
-    rm.push(wt_s.as_str());
-    devkit_common::git::Git::at(&main)
-        .args(rm)
-        .timeout(devkit_common::git::SLOW_TIMEOUT)
-        .output()?;
+    vcs.remove_worktree(&main, &wt, force)?;
 
     // Best-effort: `devrun baseline prune` is the guarantee, so a baseline left
     // standing must not fail an otherwise-complete removal. The suggestion is
@@ -235,18 +228,8 @@ fn cleanup(
     // corrupt.)
     {
         let _guard = branch_lock.lock().unwrap_or_else(|e| e.into_inner());
-        if devkit_common::git::Git::at(&main)
-            .args([
-                "show-ref",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{branch}"),
-            ])
-            .success()?
-        {
-            let _ = devkit_common::git::Git::at(&main)
-                .args(["branch", "-D", &branch])
-                .output();
+        if vcs.has_branch(&main, &branch)? {
+            let _ = vcs.delete_branch(&main, &branch);
         }
     }
 
@@ -589,9 +572,8 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
     // Every removal has joined; a single prune reclaims any stale worktree
     // entries without racing a concurrent removal.
     if let Some(main) = &main {
-        let _ = devkit_common::git::Git::at(Path::new(main))
-            .args(["worktree", "prune"])
-            .output();
+        let main = Path::new(main);
+        let _ = Vcs::at(main).prune(main);
     }
     println!();
     if !archived.is_empty() {

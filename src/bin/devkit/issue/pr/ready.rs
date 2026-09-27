@@ -1,7 +1,12 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
+use devkit_common::{
+    cmd::gh_capture,
+    github,
+    progress::Steps,
+    vcs::{Vcs, VersionControl},
+};
 
 use super::{
     add_reviewers, gate_ready, require_existing_pr,
@@ -27,7 +32,9 @@ pub fn run(args: Args) -> Result<()> {
     let people = &loaded.config.people;
     let repos = github::Repos::resolve(&loaded.config.github, &start, None);
 
-    let branch = devkit_common::git::branch(Path::new(&start))?;
+    let here = Path::new(&start);
+    let vcs = Vcs::at(here);
+    let branch = vcs.branch(here)?;
     guard_branch(&branch)?;
 
     let explicit: Vec<Target> = args
@@ -40,14 +47,10 @@ pub fn run(args: Args) -> Result<()> {
         eprintln!("warning: {w}");
     }
 
-    let toplevel = devkit_common::git::checkout_root(Path::new(&start))?;
+    let toplevel = devkit_common::vcs::checkout_root(Path::new(&start))?;
     let record = devkit_common::record::read(&toplevel);
 
-    let head = Git::at(Path::new(&start))
-        .args(["rev-parse", "HEAD"])
-        .output()?
-        .trim()
-        .to_string();
+    let head = vcs.revision(here)?;
 
     let steps = Steps::persistent();
     let found = resolve_existing(&Existing {

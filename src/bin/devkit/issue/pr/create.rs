@@ -1,7 +1,12 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
+use devkit_common::{
+    cmd::gh_capture,
+    github,
+    progress::Steps,
+    vcs::{Vcs, VersionControl},
+};
 use devkit_config::PrCreateState;
 use devkit_ports::templates::worktree_context;
 
@@ -191,7 +196,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
     };
 
     if let Some(rec) = record_with_pr(args.existing.record, resolved.locator.clone()) {
-        let toplevel = devkit_common::git::checkout_root(Path::new(start))?;
+        let toplevel = devkit_common::vcs::checkout_root(Path::new(start))?;
         devkit_common::record::write(&toplevel, &rec)?;
     }
     Ok(resolved)
@@ -218,7 +223,9 @@ pub fn run(args: Args) -> Result<()> {
     )?;
     vars.extend(given);
 
-    let branch = devkit_common::git::branch(Path::new(&start))?;
+    let here = Path::new(&start);
+    let vcs = Vcs::at(here);
+    let branch = vcs.branch(here)?;
     guard_branch(&branch)?;
 
     let explicit: Vec<Target> = args
@@ -231,7 +238,7 @@ pub fn run(args: Args) -> Result<()> {
         eprintln!("warning: {w}");
     }
 
-    let toplevel = devkit_common::git::checkout_root(Path::new(&start))?
+    let toplevel = devkit_common::vcs::checkout_root(Path::new(&start))?
         .to_string_lossy()
         .into_owned();
     let record = devkit_common::record::read(Path::new(&toplevel));
@@ -245,11 +252,7 @@ pub fn run(args: Args) -> Result<()> {
     let title_input = serde_json::json!(args.pr_title.clone().unwrap_or_default());
     let body_input = serde_json::json!(args.pr_body.clone().unwrap_or_default());
 
-    let head = Git::at(Path::new(&start))
-        .args(["rev-parse", "HEAD"])
-        .output()?
-        .trim()
-        .to_string();
+    let head = vcs.revision(here)?;
 
     // Only a flag the user typed can be reported as ignored; deriving this from
     // the resolved state would warn on every reuse under the default config.

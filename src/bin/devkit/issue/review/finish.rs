@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use devkit_common::{cmd::gh_json_in, github, progress::Steps};
+use devkit_common::{
+    cmd::gh_json_in,
+    github,
+    progress::Steps,
+    vcs::{Vcs, VersionControl},
+};
 use devkit_config::Person;
 use devkit_ports::templates::worktree_context;
 use serde::Deserialize;
@@ -195,8 +200,9 @@ pub fn run(args: Args) -> Result<()> {
     vars.extend(given);
 
     let steps = Steps::persistent();
-    let branch = devkit_common::git::branch(std::path::Path::new(&start)).ok();
-    let record = devkit_common::git::checkout_root(std::path::Path::new(&start))
+    let here = std::path::Path::new(&start);
+    let branch = Vcs::at(here).branch(here).ok();
+    let record = devkit_common::vcs::checkout_root(std::path::Path::new(&start))
         .ok()
         .and_then(|top| devkit_common::record::read(&top));
 

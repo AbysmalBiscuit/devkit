@@ -7,7 +7,12 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use devkit_common::{cmd::gh_json_in, git::Git, github, progress::Steps};
+use devkit_common::{
+    cmd::gh_json_in,
+    github,
+    progress::Steps,
+    vcs::{Vcs, VersionControl},
+};
 use serde::Deserialize;
 
 use crate::issue::review::finish;
@@ -161,10 +166,8 @@ pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found> {
     if !args.no_push {
         args.steps
             .during_result("Pushing branch...", || {
-                Git::at(Path::new(args.start))
-                    .args(["push", "-u", "origin", args.branch])
-                    .network()
-                    .output()
+                let here = Path::new(args.start);
+                Vcs::at(here).push(here, "origin", args.branch)
             })
             .context("git push failed (refusing to force-push)")?;
     }

@@ -30,7 +30,7 @@ pub fn matches_parts(worktree_path: &str, branch: &str, issue_id: &str, sel: &st
     {
         return true;
     }
-    devkit_common::git::same_path(Path::new(worktree_path), Path::new(sel))
+    devkit_common::paths::same_path(Path::new(worktree_path), Path::new(sel))
 }
 
 /// True when `sel` names this worktree by any of `matches_parts`' names or by

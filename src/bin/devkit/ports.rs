@@ -59,7 +59,7 @@ fn resolve_holder(explicit: Option<String>, cwd: &str) -> Result<String> {
     if let Some(h) = explicit {
         return Ok(h);
     }
-    Ok(devkit_common::git::checkout_root(std::path::Path::new(cwd))
+    Ok(devkit_common::vcs::checkout_root(std::path::Path::new(cwd))
         .context("no --holder given and the current directory is not a git worktree")?
         .to_string_lossy()
         .into_owned())

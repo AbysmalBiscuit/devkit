@@ -15,7 +15,7 @@ pub fn run(_cli: McpCli) -> Result<()> {
     let cwd = std::env::current_dir().ok();
     let own_worktree = cwd
         .as_deref()
-        .and_then(|cwd| devkit_common::git::checkout_root(cwd).ok());
+        .and_then(|cwd| devkit_common::vcs::checkout_root(cwd).ok());
     let ctx = devkit_mcp::ServerCtx {
         default_holder: devkit_mcp::mint_holder(),
         own_worktree,

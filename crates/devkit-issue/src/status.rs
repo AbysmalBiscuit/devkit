@@ -2,9 +2,9 @@ use std::{collections::HashMap, path::Path};
 
 use anyhow::Result;
 use devkit_common::{
-    git::Git,
     github,
     tracker::{Resolved, State, StateKind, TrackerKind},
+    vcs::{Changes, Vcs, VersionControl},
     worktree::{self, IssueId},
 };
 use serde::{Deserialize, Serialize};
@@ -271,13 +271,8 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
 /// dirty rather than clean, since a wrong "clean" here would let a caller
 /// discard real work.
 pub fn dirty_of(path: &str) -> bool {
-    match Git::at(Path::new(path))
-        .args(["status", "--porcelain"])
-        .output()
-    {
-        Ok(status) => !status.trim().is_empty(),
-        Err(_) => true,
-    }
+    let path = Path::new(path);
+    Vcs::at(path).dirty(path, Changes::All).unwrap_or(true)
 }
 
 /// `dirty_of` for many worktrees, run on a bounded thread pool with order
@@ -696,7 +691,10 @@ pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
 mod tests {
     use std::collections::HashMap;
 
-    use devkit_common::tracker::{StateKind, Tracker, TrackerKind, fake::FakeTracker};
+    use devkit_common::{
+        git::Git,
+        tracker::{StateKind, Tracker, TrackerKind, fake::FakeTracker},
+    };
 
     use super::*;
 
