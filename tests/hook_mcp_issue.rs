@@ -13,9 +13,6 @@ use std::{
 use serde_json::{Value, json};
 
 const CONFIG: &str = r#"
-[harness]
-enforce_writes = true
-
 [harness.issue_tools.linear]
 servers    = ["*linear*"]
 tools      = ["save_issue"]
