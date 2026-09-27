@@ -764,15 +764,13 @@ struct TaskEntry {
 }
 
 impl TaskEntry {
-    fn all(config: &config::Config) -> Vec<TaskEntry> {
-        task::list(config, devkit_common::caller::caller())
+    fn all(config: &config::Config, catalog: &HashMap<String, App>) -> Vec<TaskEntry> {
+        task::list(config, catalog, devkit_common::caller::caller())
             .into_iter()
             .map(|row| {
-                let task = config.tasks.get(&row.name);
-                let mut needs: Vec<String> = task
-                    .map(|t| t.require_live.iter())
-                    .into_iter()
-                    .flatten()
+                let mut needs: Vec<String> = row
+                    .require_live
+                    .iter()
                     .map(|app| format!("`devrun up {app}`"))
                     .collect();
                 needs.extend(
@@ -782,8 +780,8 @@ impl TaskEntry {
                         .map(|arg| format!("`--arg {}=...`", arg.name)),
                 );
                 TaskEntry {
-                    app: task.and_then(|t| t.app.clone()),
-                    invalid: row.kind == "invalid",
+                    app: config.tasks.get(&row.name).and_then(|t| t.app.clone()),
+                    invalid: row.kind.is_err(),
                     name: row.name,
                     description: row.description,
                     needs,
@@ -833,7 +831,7 @@ struct Listing {
 impl Listing {
     fn of(loaded: &load::Loaded, settings: &BriefConfig, root: &Path, cwd: &Path) -> Listing {
         let entries = if settings.tasks {
-            TaskEntry::all(&loaded.config)
+            TaskEntry::all(&loaded.config, &loaded.catalog)
         } else {
             Vec::new()
         };

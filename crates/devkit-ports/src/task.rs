@@ -47,13 +47,131 @@ pub enum Resolved {
     Sequence(Vec<SeqItem>),
 }
 
+/// Whether a task runs one command or a list of steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskKind {
+    Command,
+    Sequence,
+}
+
+impl TaskKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            TaskKind::Command => "command",
+            TaskKind::Sequence => "sequence",
+        }
+    }
+}
+
+/// A task as every reader sees it. [`view`] builds it, and nothing else
+/// decides whether a task can run.
+pub struct TaskView<'a> {
+    pub name: String,
+    pub task: &'a TaskConfig,
+    /// What the task is and needs, or why `devrun task` refuses it.
+    pub checked: Result<Checked, String>,
+}
+
+/// What a well-formed task is and needs.
+#[derive(Debug, Clone)]
+pub struct Checked {
+    pub kind: TaskKind,
+    /// Every name its `run` and `env` templates read, across its steps for a
+    /// sequence. An app's `static_env` renders for `devrun up` too, where no
+    /// `--arg` exists, so it is left out.
+    pub reads: BTreeSet<String>,
+    /// The servers that must be live before it runs: its own `require_live`,
+    /// or for a sequence its steps', minus any app an earlier `up` step
+    /// starts.
+    pub require_live: Vec<String>,
+}
+
+impl TaskView<'_> {
+    /// The checked task, or its refusal as an error.
+    pub fn runnable(&self) -> Result<&Checked> {
+        self.checked.as_ref().map_err(|why| anyhow!("{why}"))
+    }
+
+    /// The variables it takes from `[templates.variables]` or `--arg`, each
+    /// marked required or not for this caller. None for an invalid task.
+    pub fn args(&self, cfg: &Config, caller: Caller) -> Vec<TaskArg> {
+        match &self.checked {
+            Ok(c) => arg_rows(cfg, Some(&self.name), args_among(c.reads.clone()), caller),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn row(&self, cfg: &Config, caller: Caller) -> TaskRow {
+        TaskRow {
+            name: self.name.clone(),
+            kind: self.checked.as_ref().map(|c| c.kind).map_err(Clone::clone),
+            app: self.task.app.clone().unwrap_or_else(|| "-".into()),
+            args: self.args(cfg, caller),
+            require_live: self
+                .checked
+                .as_ref()
+                .map(|c| c.require_live.clone())
+                .unwrap_or_default(),
+            description: self.task.description.clone().unwrap_or_default(),
+        }
+    }
+}
+
+/// Task `name` checked against the config and app catalog. Errs only for a
+/// task that is not configured; a malformed one comes back carrying why.
+///
+/// Everything decidable before any variable has a value is checked here. Port
+/// references are found by rendering, so [`resolve`] checks them against the
+/// run's variables.
+pub fn view<'a>(
+    cfg: &'a Config,
+    catalog: &HashMap<String, App>,
+    name: &str,
+) -> Result<TaskView<'a>> {
+    let task = lookup(cfg, name)?;
+    Ok(TaskView {
+        name: name.to_string(),
+        task,
+        // A table cell or a doctor row holds one line.
+        checked: check(cfg, catalog, name, task).map_err(|e| {
+            format!("{e:#}")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        }),
+    })
+}
+
+/// Every configured task's [`view`], sorted by name.
+pub fn views<'a>(cfg: &'a Config, catalog: &HashMap<String, App>) -> Vec<TaskView<'a>> {
+    let mut names: Vec<&String> = cfg.tasks.keys().collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|n| view(cfg, catalog, n).expect("a configured task"))
+        .collect()
+}
+
 /// One row for the `devrun task` listing.
 pub struct TaskRow {
     pub name: String,
-    pub kind: &'static str,
+    /// The task's kind, or why it cannot run.
+    pub kind: Result<TaskKind, String>,
     pub app: String,
     pub args: Vec<TaskArg>,
+    /// See [`Checked::require_live`].
+    pub require_live: Vec<String>,
     pub description: String,
+}
+
+impl TaskRow {
+    /// The kind as the listing prints it.
+    pub fn kind_label(&self) -> &'static str {
+        match self.kind {
+            Ok(k) => k.label(),
+            Err(_) => "invalid",
+        }
+    }
 }
 
 /// A variable a task's or template's source reads, set with `--arg
@@ -84,32 +202,14 @@ impl TaskArg {
     }
 }
 
-/// Configured tasks sorted by name. `kind` reflects the shape on disk; an
-/// invalid shape (both or neither of `run`/`steps`), a template that does not
-/// compile, or a `required_args` entry naming something the task never reads
-/// is listed as `invalid` rather than hidden, so a typo is visible in the
+/// Configured tasks sorted by name. A task [`view`] refuses is listed as
+/// invalid with the reason rather than hidden, so a typo is visible in the
 /// listing.
-pub fn list(cfg: &Config, caller: Caller) -> Vec<TaskRow> {
-    let mut rows: Vec<TaskRow> = cfg
-        .tasks
+pub fn list(cfg: &Config, catalog: &HashMap<String, App>, caller: Caller) -> Vec<TaskRow> {
+    views(cfg, catalog)
         .iter()
-        .map(|(name, t)| {
-            let args = task_args(cfg, name, caller);
-            TaskRow {
-                name: name.clone(),
-                kind: match (!t.run.is_empty(), !t.steps.is_empty(), args.is_ok()) {
-                    (true, false, true) => "command",
-                    (false, true, true) => "sequence",
-                    _ => "invalid",
-                },
-                app: t.app.clone().unwrap_or_else(|| "-".into()),
-                args: args.unwrap_or_default(),
-                description: t.description.clone().unwrap_or_default(),
-            }
-        })
-        .collect();
-    rows.sort_by(|a, b| a.name.cmp(&b.name));
-    rows
+        .map(|v| v.row(cfg, caller))
+        .collect()
 }
 
 /// Configured tasks as a text table, or a hint when none are configured.
@@ -123,10 +223,13 @@ pub fn tasks_text(rows: &[TaskRow]) -> String {
     for r in rows {
         t.add_row(vec![
             r.name.clone(),
-            r.kind.to_string(),
+            r.kind_label().to_string(),
             r.app.clone(),
             args_text(&r.args),
-            r.description.clone(),
+            match &r.kind {
+                Ok(_) => r.description.clone(),
+                Err(why) => why.clone(),
+            },
         ]);
     }
     t.to_string()
@@ -151,27 +254,6 @@ const PORT_NAMES: [&str; 2] = ["port", "ports"];
 /// they are never a task's args.
 const ISSUE_FIELDS: [&str; 3] = ["issue", "slug", "branch"];
 
-/// Every name the `run` and `env` templates of task `name` read, across all of
-/// its steps for a sequence. An app's `static_env` renders for `devrun up`
-/// too, where no `--arg` exists, so it is left out.
-fn read_names(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
-    let t = lookup(cfg, name)?;
-    let mut names = command_reads(t)?;
-    for step in &t.steps {
-        if let Step::Task(r) = step
-            && let Some(sub) = cfg.tasks.get(r)
-        {
-            names.extend(command_reads(sub)?);
-        }
-    }
-    Ok(names)
-}
-
-/// The variables task `name` takes from `[templates.variables]` or `--arg`.
-pub fn args(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
-    Ok(args_among(read_names(cfg, name)?))
-}
-
 /// `reads` minus the names the render context supplies itself.
 fn args_among(mut reads: BTreeSet<String>) -> BTreeSet<String> {
     reads.retain(|n| !PORT_NAMES.contains(&n.as_str()) && !ISSUE_FIELDS.contains(&n.as_str()));
@@ -179,10 +261,15 @@ fn args_among(mut reads: BTreeSet<String>) -> BTreeSet<String> {
 }
 
 /// Every arg task `name` takes, each marked required or not for this caller.
-pub fn task_args(cfg: &Config, name: &str, caller: Caller) -> Result<Vec<TaskArg>> {
-    let all = args(cfg, name)?;
-    check_required_names(cfg, name, &all)?;
-    Ok(arg_rows(cfg, Some(name), all, caller))
+pub fn task_args(
+    cfg: &Config,
+    catalog: &HashMap<String, App>,
+    name: &str,
+    caller: Caller,
+) -> Result<Vec<TaskArg>> {
+    let v = view(cfg, catalog, name)?;
+    v.runnable()?;
+    Ok(v.args(cfg, caller))
 }
 
 /// `names` as arg rows, each marked required or not for this caller under
@@ -215,21 +302,16 @@ pub fn arg_rows(
 }
 
 /// Task `name`'s listing row, refusing what [`resolve`] would refuse about
-/// its shape or args instead of listing it as `invalid`.
-pub fn describe(cfg: &Config, name: &str, caller: Caller) -> Result<TaskRow> {
-    let t = lookup(cfg, name)?;
-    let kind = if is_sequence(name, t)? {
-        "sequence"
-    } else {
-        "command"
-    };
-    Ok(TaskRow {
-        name: name.to_string(),
-        kind,
-        app: t.app.clone().unwrap_or_else(|| "-".into()),
-        args: task_args(cfg, name, caller)?,
-        description: t.description.clone().unwrap_or_default(),
-    })
+/// its shape instead of listing it as invalid.
+pub fn describe(
+    cfg: &Config,
+    catalog: &HashMap<String, App>,
+    name: &str,
+    caller: Caller,
+) -> Result<TaskRow> {
+    let v = view(cfg, catalog, name)?;
+    v.runnable()?;
+    Ok(v.row(cfg, caller))
 }
 
 fn lookup<'a>(cfg: &'a Config, name: &str) -> Result<&'a TaskConfig> {
@@ -238,60 +320,130 @@ fn lookup<'a>(cfg: &'a Config, name: &str) -> Result<&'a TaskConfig> {
         .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))
 }
 
-/// Whether task `name` is a sequence, refusing a task that is neither a
-/// well-formed command nor a well-formed sequence.
-fn is_sequence(name: &str, t: &TaskConfig) -> Result<bool> {
-    let is_sequence = match (!t.run.is_empty(), !t.steps.is_empty()) {
+/// What [`view`] decides: the shape, the templates, the apps named, each step,
+/// and the `required_args` entries.
+fn check(
+    cfg: &Config,
+    catalog: &HashMap<String, App>,
+    name: &str,
+    t: &TaskConfig,
+) -> Result<Checked> {
+    let checked = match (!t.run.is_empty(), !t.steps.is_empty()) {
         (true, true) => bail!("task `{name}` sets both `run` and `steps`"),
         (false, false) => bail!("task `{name}` sets neither `run` nor `steps`"),
-        (true, false) => false,
-        (false, true) => true,
+        (true, false) => check_command(catalog, name, t)?,
+        (false, true) => check_sequence(cfg, catalog, name, t)?,
     };
-    ensure!(
-        !is_sequence || (t.app.is_none() && t.env.is_empty() && t.require_live.is_empty()),
-        "sequence task `{name}` may only set `description`, `steps`, and `required_args`"
-    );
-    Ok(is_sequence)
-}
-
-/// Refuse a `required_args` entry naming something the task never reads: an
-/// entry that silently guards nothing leaves the author believing it does.
-/// The task's own entries count, and so do those of every command task its
-/// steps name.
-fn check_required_names(cfg: &Config, name: &str, args: &BTreeSet<String>) -> Result<()> {
-    let t = lookup(cfg, name)?;
-    let steps = t.steps.iter().filter_map(|step| match step {
-        Step::Task(r) => cfg.tasks.get(r),
-        Step::Up(_) => None,
-    });
-    for n in std::iter::once(t)
-        .chain(steps)
-        .flat_map(|t| t.required_args.keys())
-    {
+    // An entry that silently guards nothing leaves the author believing it
+    // does.
+    let args = args_among(checked.reads.clone());
+    for n in t.required_args.keys() {
         ensure!(
             args.contains(n),
             "task `{name}` lists `{n}` in required_args but reads no such arg"
         );
     }
-    Ok(())
+    Ok(checked)
 }
 
-fn command_reads(t: &TaskConfig) -> Result<BTreeSet<String>> {
+fn check_command(catalog: &HashMap<String, App>, name: &str, t: &TaskConfig) -> Result<Checked> {
+    ensure!(
+        matches!(t.run.first(), Some(RunArg::Scalar(_))),
+        "task `{name}` program must be a plain string, not a table"
+    );
+    for entry in &t.run {
+        match entry {
+            RunArg::Scalar(_) => {}
+            // Splitting on the empty pattern yields a boundary between every
+            // character, so it would silently produce one argument per byte.
+            RunArg::Action(RunAction::Split { on, .. }) => ensure!(
+                !on.is_empty(),
+                "task `{name}` has a split with an empty `on`"
+            ),
+        }
+    }
+    if let Some(a) = &t.app {
+        ensure!(
+            catalog.contains_key(a),
+            "task `{name}` names unknown app `{a}`"
+        );
+    }
+    for r in &t.require_live {
+        ensure!(
+            catalog.contains_key(r),
+            "task `{name}` lists unknown app `{r}` in require_live"
+        );
+    }
     let mut templates: Vec<&str> = t.run.iter().map(RunArg::template).collect();
     templates.extend(t.env.values().map(String::as_str));
-    template::undeclared(&templates)
+    Ok(Checked {
+        kind: TaskKind::Command,
+        reads: template::undeclared(&templates).with_context(|| format!("task `{name}`"))?,
+        require_live: t.require_live.clone(),
+    })
 }
 
-/// Refuse an `--arg` task `name` never reads, a `required_args` entry naming
-/// something it never reads, and a required arg left unset for this caller,
-/// before any step of it resolves.
+/// A sequence's steps must each be a well-formed command task or an app to
+/// bring up. Its reads are its steps' reads.
+fn check_sequence(
+    cfg: &Config,
+    catalog: &HashMap<String, App>,
+    name: &str,
+    t: &TaskConfig,
+) -> Result<Checked> {
+    ensure!(
+        t.app.is_none() && t.env.is_empty() && t.require_live.is_empty(),
+        "sequence task `{name}` may only set `description`, `steps`, and `required_args`"
+    );
+    let mut reads = BTreeSet::new();
+    let mut require_live: Vec<String> = Vec::new();
+    let mut up = BTreeSet::new();
+    for step in &t.steps {
+        match step {
+            Step::Task(r) => {
+                let sub = cfg
+                    .tasks
+                    .get(r)
+                    .ok_or_else(|| anyhow!("task `{name}` references unknown task `{r}`"))?;
+                ensure!(
+                    !sub.run.is_empty() && sub.steps.is_empty(),
+                    "task `{name}` references `{r}`, which is not a command task \
+                     (sequences cannot nest)"
+                );
+                let step = check(cfg, catalog, r, sub)
+                    .with_context(|| format!("task `{name}` runs `{r}`"))?;
+                reads.extend(step.reads);
+                for app in step.require_live {
+                    if !up.contains(&app) && !require_live.contains(&app) {
+                        require_live.push(app);
+                    }
+                }
+            }
+            Step::Up(app) => {
+                ensure!(
+                    catalog.contains_key(app),
+                    "task `{name}` brings up unknown app `{app}`"
+                );
+                up.insert(app.clone());
+            }
+        }
+    }
+    Ok(Checked {
+        kind: TaskKind::Sequence,
+        reads,
+        require_live,
+    })
+}
+
+/// Refuse an `--arg` task `name` never reads and a required arg left unset
+/// for this caller, before any step of it resolves.
 fn check_args(
     cfg: &Config,
     name: &str,
+    reads: &BTreeSet<String>,
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<()> {
-    let reads = read_names(cfg, name)?;
     for k in given.keys() {
         ensure!(
             (reads.contains(k) && !PORT_NAMES.contains(&k.as_str()))
@@ -299,9 +451,7 @@ fn check_args(
             "task `{name}` reads no variable `{k}`"
         );
     }
-    let args = args_among(reads);
-    check_required_names(cfg, name, &args)?;
-    let missing = missing_args(cfg, Some(name), &args, given, caller);
+    let missing = missing_args(cfg, Some(name), &args_among(reads.clone()), given, caller);
     ensure_supplied(&format!("task `{name}`"), &missing)
 }
 
@@ -329,9 +479,9 @@ fn variables(
 /// Resolve task `name` for execution in `worktree_root`. Command tasks get
 /// their port references allocated (issue role, pid-less reservations for
 /// apps not yet running) and their templates rendered; sequence tasks
-/// validate and resolve each step. All validation errors fire here, before
-/// anything spawns, including an `--arg` in `args` the task never reads and a
-/// required one missing from it.
+/// resolve each step. All validation errors fire here, before anything
+/// spawns: what [`view`] refuses, an `--arg` in `args` the task never reads, a
+/// required one missing from it, and a port reference the render turns up.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve(
     cfg: &Config,
@@ -343,12 +493,12 @@ pub fn resolve(
     args: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<Resolved> {
-    let t = lookup(cfg, name)?;
-    let is_sequence = is_sequence(name, t)?;
-    check_args(cfg, name, args, caller)?;
+    let v = view(cfg, catalog, name)?;
+    let checked = v.runnable()?;
+    check_args(cfg, name, &checked.reads, args, caller)?;
     let vars = variables(cfg, worktree_root, args);
-    if !is_sequence {
-        return Ok(Resolved::Command(resolve_command(
+    let command = |name: &str, t: &TaskConfig| {
+        resolve_command(
             &vars,
             catalog,
             worktree_root,
@@ -357,42 +507,21 @@ pub fn resolve(
             t,
             user_env,
             false,
-        )?));
+        )
+    };
+    match checked.kind {
+        TaskKind::Command => Ok(Resolved::Command(command(name, v.task)?)),
+        TaskKind::Sequence => v
+            .task
+            .steps
+            .iter()
+            .map(|step| match step {
+                Step::Task(r) => Ok(SeqItem::Run(command(r, &cfg.tasks[r])?)),
+                Step::Up(app) => Ok(SeqItem::Up(app.clone())),
+            })
+            .collect::<Result<_>>()
+            .map(Resolved::Sequence),
     }
-    let mut items = Vec::with_capacity(t.steps.len());
-    for step in &t.steps {
-        match step {
-            Step::Task(r) => {
-                let sub = cfg
-                    .tasks
-                    .get(r)
-                    .ok_or_else(|| anyhow!("task `{name}` references unknown task `{r}`"))?;
-                ensure!(
-                    !sub.run.is_empty() && sub.steps.is_empty(),
-                    "task `{name}` references `{r}`, which is not a command task \
-                     (sequences cannot nest)"
-                );
-                items.push(SeqItem::Run(resolve_command(
-                    &vars,
-                    catalog,
-                    worktree_root,
-                    holder,
-                    r,
-                    sub,
-                    user_env,
-                    false,
-                )?));
-            }
-            Step::Up(app) => {
-                ensure!(
-                    catalog.contains_key(app),
-                    "task `{name}` brings up unknown app `{app}`"
-                );
-                items.push(SeqItem::Up(app.clone()));
-            }
-        }
-    }
-    Ok(Resolved::Sequence(items))
 }
 
 /// Env templates a command task will render: `static_env` overlaid by the
@@ -415,9 +544,9 @@ fn effective_env<'a>(
     m
 }
 
-/// Discovery + allocation for one command task, then delegate to the pure
-/// renderer. `ports[...]` references and (if `{{ port }}` is used) the task's
-/// own app are allocated in one `registry::alloc` call.
+/// Discovery + allocation for one command task [`view`] accepted, then
+/// delegate to the pure renderer. `ports[...]` references and (if `{{ port }}`
+/// is used) the task's own app are allocated in one `registry::alloc` call.
 #[allow(clippy::too_many_arguments)]
 fn resolve_command(
     vars: &BTreeMap<String, String>,
@@ -429,30 +558,7 @@ fn resolve_command(
     user_env: &BTreeMap<String, String>,
     enforce_live: bool,
 ) -> Result<CommandPlan> {
-    ensure!(
-        matches!(t.run.first(), Some(RunArg::Scalar(_))),
-        "task `{name}` program must be a plain string, not a table"
-    );
-    for entry in &t.run {
-        match entry {
-            RunArg::Scalar(_) => {}
-            // Splitting on the empty pattern yields a boundary between every
-            // character, so it would silently produce one argument per byte.
-            RunArg::Action(RunAction::Split { on, .. }) => ensure!(
-                !on.is_empty(),
-                "task `{name}` has a split with an empty `on`"
-            ),
-        }
-    }
-    let app = t
-        .app
-        .as_deref()
-        .map(|a| {
-            catalog
-                .get(a)
-                .ok_or_else(|| anyhow!("task `{name}` names unknown app `{a}`"))
-        })
-        .transpose()?;
+    let app = t.app.as_deref().map(|a| &catalog[a]);
     let static_env = app.map(|a| a.static_env.clone()).unwrap_or_default();
     let env_templates = effective_env(&static_env, t, user_env);
 
@@ -463,10 +569,6 @@ fn resolve_command(
     let all_refs = template::referenced_ports(&all_templates, vars)
         .with_context(|| format!("scanning require_live templates of task `{name}`"))?;
     for r in &t.require_live {
-        ensure!(
-            catalog.contains_key(r),
-            "task `{name}` lists unknown app `{r}` in require_live"
-        );
         ensure!(
             all_refs.apps.contains(r),
             "task `{name}` lists `{r}` in require_live but never references `ports['{r}']`"
@@ -555,9 +657,9 @@ pub fn resolve_step(
     user_env: &BTreeMap<String, String>,
     args: &BTreeMap<String, String>,
 ) -> Result<CommandPlan> {
-    let t = lookup(cfg, name)?;
+    let v = view(cfg, catalog, name)?;
     ensure!(
-        !t.run.is_empty() && t.steps.is_empty(),
+        v.runnable()?.kind == TaskKind::Command,
         "task `{name}` is not a command task"
     );
     let vars = variables(cfg, worktree_root, args);
@@ -567,7 +669,7 @@ pub fn resolve_step(
         worktree_root,
         holder,
         name,
-        t,
+        v.task,
         user_env,
         true,
     )
@@ -654,22 +756,37 @@ mod tests {
         let rows = vec![
             TaskRow {
                 name: "check".into(),
-                kind: "sequence",
+                kind: Ok(TaskKind::Sequence),
                 app: "-".into(),
                 args: vec![],
+                require_live: vec![],
                 description: "lint then test".into(),
             },
             TaskRow {
                 name: "lint".into(),
-                kind: "command",
+                kind: Ok(TaskKind::Command),
                 app: "api".into(),
                 args: vec![],
+                require_live: vec![],
                 description: String::new(),
+            },
+            TaskRow {
+                name: "typo".into(),
+                kind: Err("task `typo` sets both `run` and `steps`".into()),
+                app: "-".into(),
+                args: vec![],
+                require_live: vec![],
+                description: "never shown".into(),
             },
         ];
         let text = tasks_text(&rows);
         assert!(text.contains("NAME") && text.contains("KIND"), "{text}");
         assert!(text.contains("check") && text.contains("lint"), "{text}");
+        let typo = text.lines().find(|l| l.contains("typo")).unwrap();
+        assert!(
+            typo.contains("invalid") && typo.contains("sets both"),
+            "{typo}"
+        );
         let empty = tasks_text(&[]);
         assert!(empty.contains("no tasks configured"), "{empty}");
     }
@@ -801,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_rejects_bad_shapes() {
+    fn the_listing_refuses_exactly_what_resolve_refuses_and_says_why() {
         let both = TaskConfig {
             run: vec!["git".into()],
             steps: vec![Step::Up("api-prod".into())],
@@ -826,6 +943,28 @@ mod tests {
             steps: vec![Step::Up("api-prod".into())],
             ..TaskConfig::default()
         };
+        let empty_split = TaskConfig {
+            run: vec![
+                "git".into(),
+                RunArg::Action(RunAction::Split {
+                    split: "{{ files }}".into(),
+                    on: String::new(),
+                }),
+            ],
+            ..TaskConfig::default()
+        };
+        let unknown_step = TaskConfig {
+            steps: vec![Step::Task("nope".into())],
+            ..TaskConfig::default()
+        };
+        let bad_step = TaskConfig {
+            steps: vec![Step::Task("empty-split".into())],
+            ..TaskConfig::default()
+        };
+        let self_step = TaskConfig {
+            steps: vec![Step::Task("self-step".into())],
+            ..TaskConfig::default()
+        };
         let cfg = cfg_with(&[
             ("both", both),
             ("neither", neither),
@@ -833,32 +972,44 @@ mod tests {
             ("nested", step_to_sequence),
             ("seq", seq),
             ("seq-require-live", seq_with_require_live),
+            ("empty-split", empty_split),
+            ("unknown-step", unknown_step),
+            ("bad-step", bad_step),
+            ("self-step", self_step),
         ]);
         let cat = api_catalog();
         let u = BTreeMap::new();
-        for bad in [
-            "both",
-            "neither",
-            "seq-with-app",
-            "nested",
-            "seq-require-live",
-            "missing",
-        ] {
-            assert!(
-                resolve(
-                    &cfg,
-                    &cat,
-                    Path::new("/wt"),
-                    "/wt",
-                    bad,
-                    &u,
-                    &u,
-                    Caller::Agent
-                )
-                .is_err(),
-                "task `{bad}` must fail validation"
+        let rows = list(&cfg, &cat, Caller::Agent);
+        for row in &rows {
+            let resolved = resolve(
+                &cfg,
+                &cat,
+                Path::new("/wt"),
+                "/wt",
+                &row.name,
+                &u,
+                &u,
+                Caller::Agent,
             );
+            match (&row.kind, resolved) {
+                (Ok(_), Ok(_)) => assert_eq!(row.name, "seq"),
+                (Err(why), Err(e)) => assert_eq!(why, &format!("{e:#}"), "{}", row.name),
+                (kind, resolved) => panic!("{}: listed {kind:?}, resolved {resolved:?}", row.name),
+            }
         }
+        assert!(
+            resolve(
+                &cfg,
+                &cat,
+                Path::new("/wt"),
+                "/wt",
+                "missing",
+                &u,
+                &u,
+                Caller::Agent
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -941,11 +1092,11 @@ mod tests {
                 ..TaskConfig::default()
             }),
         ]);
-        let rows = list(&cfg, Caller::Agent);
+        let rows = list(&cfg, &api_catalog(), Caller::Agent);
         assert_eq!(rows[0].name, "a-seq");
-        assert_eq!(rows[0].kind, "sequence");
+        assert_eq!(rows[0].kind, Ok(TaskKind::Sequence));
         assert_eq!(rows[0].description, "d");
-        assert_eq!(rows[1].kind, "command");
+        assert_eq!(rows[1].kind, Ok(TaskKind::Command));
     }
 
     #[test]

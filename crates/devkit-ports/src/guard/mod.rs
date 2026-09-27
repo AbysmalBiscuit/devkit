@@ -278,7 +278,8 @@ fn project_hit(typed: &[String], n: &Normalized, prog: &str, p: &Project) -> Opt
         // The guard only ever fires because a coding agent acted, and its
         // stdin is a harness pipe, so the TTY says nothing. Name the set the
         // agent will actually be asked for.
-        let args = crate::task::task_args(&p.config, &name, Caller::Agent).unwrap_or_default();
+        let args =
+            crate::task::task_args(&p.config, &p.catalog, &name, Caller::Agent).unwrap_or_default();
         let usage: String = args
             .iter()
             .filter(|a| a.required)

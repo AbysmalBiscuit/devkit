@@ -35,8 +35,9 @@ const HINT_HARNESS_LOG: &str =
     "off — set [harness.log] enabled = true in ~/.config/devkit/config.toml";
 
 /// Exit non-zero when a credential that is set fails validation, or when a
-/// config exists that does not load. An unset credential is a warning; an
-/// unreachable host is not a hard failure.
+/// config exists that does not load or configures a task `devrun task`
+/// refuses. An unset credential is a warning; an unreachable host is not a
+/// hard failure.
 fn worst_exit(rows: &[Row]) -> i32 {
     if rows.iter().any(|r| matches!(r.check, Check::Invalid(_))) {
         1
@@ -233,6 +234,30 @@ fn config_check(start: &std::path::Path) -> Check {
             Check::Invalid(why.split_whitespace().collect::<Vec<_>>().join(" "))
         }
     }
+}
+
+/// Every task `devrun task` would refuse, with why. None when the config does
+/// not load, which the `config` row reports, or configures no tasks.
+fn tasks_row(start: &std::path::Path) -> Option<Row> {
+    let loaded = devkit_ports::load::load_quiet(None, start).ok()?;
+    let views = devkit_ports::task::views(&loaded.config, &loaded.catalog);
+    if views.is_empty() {
+        return None;
+    }
+    let refused: Vec<&str> = views
+        .iter()
+        .filter_map(|v| v.checked.as_ref().err().map(String::as_str))
+        .collect();
+    Some(Row {
+        key: "tasks",
+        data: serde_json::Value::Null,
+        source: Source::Unset,
+        check: if refused.is_empty() {
+            Check::Ok(format!("{} tasks valid", views.len()))
+        } else {
+            Check::Invalid(refused.join("; "))
+        },
+    })
 }
 
 fn docs_cache_check() -> Check {
@@ -499,6 +524,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
         },
         harness_log_row(),
     ];
+    rows.extend(tasks_row(std::path::Path::new(".")));
     rows.extend(steps.during("Checking shim links...", shim_rows));
     rows
 }

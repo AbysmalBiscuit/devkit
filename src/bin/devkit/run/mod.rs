@@ -623,7 +623,7 @@ fn cmd_task(
     let caller = devkit_common::caller::caller();
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     let Some(name) = name else {
-        let rows = task::list(&loaded.config, caller);
+        let rows = task::list(&loaded.config, &loaded.catalog, caller);
         print!("{}", task::tasks_text(&rows));
         return Ok(());
     };
