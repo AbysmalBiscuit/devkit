@@ -124,6 +124,8 @@ Credentials resolve per forge, from the environment first and then `secrets.toml
 | GitLab | `GITLAB_TOKEN` | the REST API |
 | Forgejo | `FORGEJO_TOKEN`, then `GITEA_TOKEN` | the REST API |
 
+A GitLab personal access token needs the `api` scope. A fine-grained one needs Merge Request create, read and update, Approval Configuration, Project, Pipeline and Job read on the project, and User read on the User tab. A Forgejo token needs access to all repositories, since a token limited to specific ones cannot read the user, with `repository` read and write, `issue` read and `user` read.
+
 GitLab and Forgejo mark a draft with a title prefix (`Draft:` and `WIP:`), which `pr ready` removes. Neither reports line counts cheaply, so `issue dashboard`'s PR additions and deletions stay zero there.
 
 `[github] pr_repo` moved to `[forge] repo`. A config that still carries it loads, and every PR command names the new key.
