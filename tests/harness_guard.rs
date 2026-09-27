@@ -223,8 +223,8 @@ fn a_cursor_payload_gets_the_cursor_envelope() {
 
 #[test]
 fn an_unparseable_config_fails_open() {
-    // The gate must be forced on: an unparseable layer makes `project_layers`
-    // fail, so the gate would read false on its own and this would prove only
+    // The gate must be forced on: the only layer is unparseable, so no layer
+    // opts in, the gate would read false on its own, and this would prove only
     // that the gate-off path works.
     let home = tempfile::tempdir().unwrap();
     let proj = project("[[[ not toml");

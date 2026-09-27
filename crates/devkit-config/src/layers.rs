@@ -60,6 +60,61 @@ pub(crate) fn project_layers_rooted(
     start: &Path,
     main_checkout: Option<&Path>,
 ) -> Result<Discovery> {
+    let mut layers = candidates(start, main_checkout);
+    let (barrier, bodies) = scan_cutoff(&layers);
+    let cut = barrier.unwrap_or(0);
+    layers.drain(..cut);
+    // Nearest first, so the error reported is the one closest to `start`.
+    let mut parsed = Vec::with_capacity(layers.len());
+    for body in bodies.into_iter().skip(cut).rev() {
+        parsed.push(body.transpose()?);
+    }
+    parsed.reverse();
+    Ok(Discovery {
+        layers,
+        rooted: barrier.is_some(),
+        parsed,
+    })
+}
+
+/// A project layer that will not read or parse.
+#[derive(Debug)]
+pub struct BrokenLayer {
+    pub path: PathBuf,
+    pub error: anyhow::Error,
+}
+
+/// What [`read_project_layers`] found: every layer that parsed, with its
+/// body, lowest precedence first, and every one that did not.
+#[derive(Debug, Default)]
+pub struct ReadLayers {
+    pub layers: Vec<(Layer, toml::Table)>,
+    pub broken: Vec<BrokenLayer>,
+}
+
+/// The layers [`project_layers`] finds, parsed, for a reader that must not
+/// lose every layer to one bad file. A layer that will not read or parse goes
+/// to `broken` instead of failing the walk. It cannot declare a
+/// `[config] root = true` barrier, so the layers above it stay in.
+pub fn read_project_layers(start: &Path, main_checkout: Option<&Path>) -> ReadLayers {
+    let layers = candidates(start, main_checkout);
+    let (barrier, bodies) = scan_cutoff(&layers);
+    let mut read = ReadLayers::default();
+    for (layer, body) in layers.into_iter().zip(bodies).skip(barrier.unwrap_or(0)) {
+        match body.unwrap_or_else(|| read_table(&layer.path)) {
+            Ok(table) => read.layers.push((layer, table)),
+            Err(error) => read.broken.push(BrokenLayer {
+                path: layer.path,
+                error,
+            }),
+        }
+    }
+    read
+}
+
+/// Every config file that could apply at `start`, lowest precedence first,
+/// before any `[config] root = true` barrier is applied.
+fn candidates(start: &Path, main_checkout: Option<&Path>) -> Vec<Layer> {
     let root = start
         .ancestors()
         .find(|d| d.join(CONFIG_FILE).is_file() || d.join(LOCAL_CONFIG_FILE).is_file())
@@ -89,12 +144,7 @@ pub(crate) fn project_layers_rooted(
     ordered.extend(files_in(root, LayerKind::Checkout));
 
     dedupe(&mut ordered);
-    let (rooted, parsed) = apply_cutoff(&mut ordered)?;
-    Ok(Discovery {
-        layers: ordered,
-        rooted,
-        parsed,
-    })
+    ordered
 }
 
 /// The config files present in one directory, tracked first so the untracked
@@ -141,32 +191,30 @@ fn read_table(path: &Path) -> Result<toml::Table> {
 /// directory's layers survive, and everything above the directory is
 /// dropped. Scans from the nearest-to-`start` layer backward and stops at
 /// the first (i.e. last in precedence order) match, so nothing below the
-/// barrier is ever read — a malformed or unreadable ancestor layer the
-/// barrier was meant to hide never gets parsed. Returns whether a barrier was
-/// found, and the bodies parsed along the way so the caller need not read the
-/// surviving layers a second time; those below the scan's stopping point stay
+/// barrier is ever read, and a malformed or unreadable ancestor layer the
+/// barrier was meant to hide never gets parsed. A layer that will not parse
+/// declares no barrier, and the scan goes on past it; whether it fails the
+/// walk is the caller's call.
+///
+/// Returns the index of the first surviving layer when a barrier fired, and
+/// what the scan read of each layer, so the caller need not read the
+/// surviving layers a second time; those past the scan's stopping point stay
 /// `None`.
-fn apply_cutoff(layers: &mut Vec<Layer>) -> Result<(bool, Vec<Option<toml::Table>>)> {
-    let mut parsed: Vec<Option<toml::Table>> = vec![None; layers.len()];
-    let mut barrier = None;
+fn scan_cutoff(layers: &[Layer]) -> (Option<usize>, Vec<Option<Result<toml::Table>>>) {
+    let mut bodies: Vec<_> = layers.iter().map(|_| None).collect();
     for i in (0..layers.len()).rev() {
-        let table = read_table(&layers[i].path)?;
-        let is_root = crate::is_root_layer(&table);
-        parsed[i] = Some(table);
+        let body = read_table(&layers[i].path);
+        let is_root = body.as_ref().is_ok_and(crate::is_root_layer);
+        bodies[i] = Some(body);
         if is_root {
-            barrier = Some(i);
-            break;
+            let mut cut = i;
+            while cut > 0 && layers[cut - 1].path.parent() == layers[i].path.parent() {
+                cut -= 1;
+            }
+            return (Some(cut), bodies);
         }
     }
-    let Some(mut cut) = barrier else {
-        return Ok((false, parsed));
-    };
-    while cut > 0 && layers[cut - 1].path.parent() == layers[cut].path.parent() {
-        cut -= 1;
-    }
-    layers.drain(..cut);
-    parsed.drain(..cut);
-    Ok((true, parsed))
+    (None, bodies)
 }
 
 #[cfg(test)]
