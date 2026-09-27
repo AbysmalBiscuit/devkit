@@ -1,0 +1,4 @@
+[apps.web]
+base_port = 47100
+path = "."
+launch = ["python3", "-m", "http.server", "{{ port }}"]

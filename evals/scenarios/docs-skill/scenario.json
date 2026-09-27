@@ -1,0 +1,6 @@
+{
+  "max_turns": 4,
+  "checks": [
+    {"id": "loads-docs", "call": "Skill", "match": "(^|:)docs$"}
+  ]
+}

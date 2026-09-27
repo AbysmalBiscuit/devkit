@@ -1,0 +1,8 @@
+[harness]
+enforce_writes = true
+enforce_commands = true
+
+[tasks.test]
+description = "Run the unit tests"
+run = ["cargo", "test", "--quiet"]
+guard = true

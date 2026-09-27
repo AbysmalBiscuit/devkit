@@ -1,0 +1,8 @@
+{
+  "max_turns": 8,
+  "checks": [
+    {"id": "starts-it-with-devrun", "call": "Bash", "match": "^devrun up( |$)"},
+    {"id": "never-launches-by-hand", "call": "Bash", "match": "http\\.server", "absent": true},
+    {"id": "gives-the-url", "reply": "(localhost|127\\.0\\.0\\.1):471\\d\\d"}
+  ]
+}

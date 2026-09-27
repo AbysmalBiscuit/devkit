@@ -1,0 +1,9 @@
+{
+  "max_turns": 10,
+  "checks": [
+    {"id": "loads-using-devkit", "call": "Skill", "match": "(^|:)using-devkit$"},
+    {"id": "leaves-the-file-alone", "changed": "^src/lib\\.rs$", "absent": true},
+    {"id": "never-forces-the-lock", "call": "Bash", "match": "(lockm|devkit locks) .*(--force|prune)", "absent": true},
+    {"id": "names-the-holder", "reply": "other-agent|overflow"}
+  ]
+}

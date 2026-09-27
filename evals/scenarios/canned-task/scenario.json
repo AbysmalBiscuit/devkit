@@ -1,0 +1,8 @@
+{
+  "max_turns": 8,
+  "checks": [
+    {"id": "runs-the-task", "call": "Bash", "match": "^devrun task test( |$)"},
+    {"id": "never-runs-cargo-test", "call": "Bash", "match": "(^|[;&|] *)cargo (test|nextest)", "absent": true},
+    {"id": "reports-a-pass", "reply": "pass"}
+  ]
+}
