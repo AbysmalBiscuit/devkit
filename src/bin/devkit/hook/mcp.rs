@@ -29,8 +29,9 @@ pub(super) enum Verdict {
 /// `decide` stays free of IO.
 pub(super) struct Context<'a> {
     /// The required `--arg`s the issue templates ask of an agent, appended to
-    /// a missing-receipt denial.
-    pub hint: &'a str,
+    /// a missing-receipt denial. Called only for that denial, since building
+    /// it loads the config a second time.
+    pub hint: &'a dyn Fn() -> String,
     /// Whether this session has rendered anything, which turns "not rendered"
     /// into "differs from what was rendered".
     pub session_seen: bool,
@@ -95,9 +96,8 @@ fn respond(payload: &Payload, matched: &OnceLock<()>) -> Verdict {
             cwd.display()
         ));
     };
-    let hint = required_hint(&checkout, &cwd);
     let ctx = Context {
-        hint: &hint,
+        hint: &|| required_hint(&checkout, &cwd),
         session_seen: receipt::session_dir(&root, session).is_dir(),
     };
     let server = server.unwrap_or(tool);
@@ -201,7 +201,9 @@ pub(super) fn decide(
             return Ok(Verdict::Deny(format!(
                 "{opening} Run `devkit issue render --title ... [--body ...]` and pass its \
                  `title` output unchanged as `{}` and its `body` output as `{}`.{}",
-                rule.title, rule.body, ctx.hint
+                rule.title,
+                rule.body,
+                (ctx.hint)()
             )));
         }
     }
@@ -236,7 +238,7 @@ mod tests {
         let set: HashSet<(Field, String)> =
             receipted.iter().map(|(f, t)| (*f, t.to_string())).collect();
         let ctx = Context {
-            hint: "",
+            hint: &String::new,
             session_seen: false,
         };
         decide(rule, "srv", "tool", &input, &ctx, &|f, t| {
@@ -316,7 +318,7 @@ mod tests {
     #[test]
     fn a_rendered_session_reports_the_field_as_differing() {
         let ctx = Context {
-            hint: "",
+            hint: &String::new,
             session_seen: true,
         };
         let v = decide(
