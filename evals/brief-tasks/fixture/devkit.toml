@@ -1,0 +1,228 @@
+# A monorepo with many apps and tasks for `evals/brief-tasks`: the size the
+# brief has to stay readable at. render.sh creates the app directories.
+
+[harness]
+enforce_writes = true
+enforce_commands = true
+
+[apps.api]
+base_port = 41000
+path = "services/api"
+launch = ["bun", "run", "dev", "--port", "{{ port }}"]
+
+[apps.web]
+base_port = 41100
+path = "apps/web"
+launch = ["bun", "run", "dev", "--port", "{{ port }}"]
+static_env = { API_URL = "http://localhost:{{ ports['api'] }}" }
+
+[apps.admin]
+base_port = 41200
+path = "apps/admin"
+launch = ["bun", "run", "dev", "--port", "{{ port }}"]
+
+[apps.docs]
+base_port = 41300
+path = "apps/docs"
+launch = ["bun", "run", "dev", "--port", "{{ port }}"]
+
+[apps.marketing]
+base_port = 41400
+path = "apps/marketing"
+launch = ["bun", "run", "dev", "--port", "{{ port }}"]
+
+[apps.worker]
+base_port = 41500
+path = "services/worker"
+launch = ["bun", "run", "start"]
+
+[apps.gateway]
+base_port = 41600
+path = "services/gateway"
+launch = ["go", "run", ".", "-port", "{{ port }}"]
+
+[apps.billing]
+base_port = 41700
+path = "services/billing"
+launch = ["bun", "run", "dev", "--port", "{{ port }}"]
+
+[apps.search]
+base_port = 41800
+path = "services/search"
+launch = ["cargo", "run", "--", "--port", "{{ port }}"]
+
+[apps.storybook]
+base_port = 41900
+path = "packages/ui"
+launch = ["bun", "run", "storybook", "--port", "{{ port }}"]
+
+[templates.variables]
+env = { default = "local", description = "target database: local or staging" }
+name = { description = "migration name in snake_case" }
+steps = { default = "1", description = "how many migrations to roll back" }
+spec = { default = "", description = "one spec file to run; empty runs the whole suite" }
+
+[tasks.install]
+description = "Install all workspace dependencies"
+run = ["bun", "install", "--frozen-lockfile"]
+guard = true
+
+[tasks.lint]
+description = "Lint every package with biome"
+run = ["bunx", "biome", "check", "."]
+guard = true
+
+[tasks.fmt]
+description = "Format every package with biome"
+run = ["bunx", "biome", "format", "--write", "."]
+guard = true
+
+[tasks.typecheck]
+description = "Type-check every TypeScript package"
+run = ["bunx", "turbo", "run", "typecheck"]
+guard = true
+
+[tasks.test]
+description = "Run every unit test suite"
+run = ["bunx", "turbo", "run", "test"]
+guard = true
+
+[tasks.verify]
+description = "Lint, type-check and test the whole repo"
+steps = [{ task = "lint" }, { task = "typecheck" }, { task = "test" }]
+
+[tasks.codegen]
+description = "Regenerate the API client and GraphQL types"
+run = ["bunx", "turbo", "run", "codegen"]
+
+[tasks.db-migrate]
+description = "Apply pending database migrations"
+app = "api"
+run = ["bun", "run", "db:migrate", "--env={{ env }}"]
+required_args = { env = "agents" }
+
+[tasks.db-new-migration]
+description = "Create an empty migration file"
+app = "api"
+run = ["bun", "run", "db:new", "{{ name }}"]
+
+[tasks.db-rollback]
+description = "Roll back recent migrations"
+app = "api"
+run = ["bun", "run", "db:rollback", "--steps={{ steps }}", "--env={{ env }}"]
+
+[tasks.db-seed]
+description = "Seed the local database with fixture data"
+app = "api"
+run = ["bun", "run", "db:seed"]
+
+[tasks.test-api]
+description = "Run the API unit tests"
+app = "api"
+run = ["bun", "test"]
+guard = true
+
+[tasks.lint-api]
+description = "Lint the API service"
+app = "api"
+run = ["bunx", "biome", "check", "."]
+
+[tasks.test-web]
+description = "Run the web app unit tests"
+app = "web"
+run = ["bun", "test"]
+guard = true
+
+[tasks.build-web]
+description = "Production build of the web app"
+app = "web"
+run = ["bun", "run", "build"]
+
+[tasks.e2e-web]
+description = "Run Playwright end-to-end tests against the local web app"
+app = "web"
+run = ["bunx", "playwright", "test", "{{ spec }}"]
+env = { BASE_URL = "http://localhost:{{ ports['web'] }}", API_URL = "http://localhost:{{ ports['api'] }}" }
+require_live = ["web", "api"]
+
+[tasks.test-admin]
+description = "Run the admin app unit tests"
+app = "admin"
+run = ["bun", "test"]
+
+[tasks.build-admin]
+description = "Production build of the admin app"
+app = "admin"
+run = ["bun", "run", "build"]
+
+[tasks.build-docs]
+description = "Build the docs site"
+app = "docs"
+run = ["bun", "run", "build"]
+
+[tasks.check-links]
+description = "Check the docs site for broken links"
+app = "docs"
+run = ["bun", "run", "check-links"]
+
+[tasks.build-marketing]
+description = "Production build of the marketing site"
+app = "marketing"
+run = ["bun", "run", "build"]
+
+[tasks.test-worker]
+description = "Run the worker unit tests"
+app = "worker"
+run = ["bun", "test"]
+
+[tasks.replay-jobs]
+description = "Replay failed jobs from the dead-letter queue"
+app = "worker"
+run = ["bun", "run", "replay"]
+
+[tasks.test-gateway]
+description = "Run the gateway Go tests"
+app = "gateway"
+run = ["go", "test", "./..."]
+guard = true
+
+[tasks.lint-gateway]
+description = "Lint the gateway with golangci-lint"
+app = "gateway"
+run = ["golangci-lint", "run"]
+
+[tasks.test-billing]
+description = "Run the billing service tests"
+app = "billing"
+run = ["bun", "test"]
+
+[tasks.stripe-listen]
+description = "Forward Stripe webhooks to the local billing service"
+app = "billing"
+run = ["stripe", "listen", "--forward-to", "localhost:{{ ports['billing'] }}/webhooks"]
+require_live = ["billing"]
+
+[tasks.test-search]
+description = "Run the search service Rust tests"
+app = "search"
+run = ["cargo", "nextest", "run"]
+guard = true
+
+[tasks.reindex]
+description = "Rebuild the local search index from the database"
+app = "search"
+run = ["cargo", "run", "--bin", "reindex"]
+
+[tasks.test-ui]
+description = "Run the UI component tests"
+app = "storybook"
+run = ["bun", "test"]
+
+[tasks.build-storybook]
+description = "Build the static Storybook"
+app = "storybook"
+run = ["bun", "run", "build-storybook"]
+
+[tasks.dev-stack]
+description = "Start the API and web app, then seed the database"
+steps = [{ up = "api" }, { up = "web" }, { task = "db-seed" }]

@@ -404,6 +404,12 @@ fn leaving_a_project_says_so_once() {
     );
 }
 
+/// The brief wraps its prose to the terminal width, and a long temp path (as
+/// on macOS) moves the line breaks, so phrases are matched with them undone.
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// `brief --if-changed` from an arbitrary directory, with the project's home
 /// and isolated state so the watermark from a previous run is visible.
 fn brief_from(project: &Project, cwd: &Path, stdin: &str) -> Output {
@@ -483,17 +489,15 @@ fn a_docs_only_project_renders_pins() {
 
 #[test]
 fn a_pins_only_brief_makes_no_devrun_claim() {
-    // "This checkout is a devkit-managed project: dev servers,
-    // ports, canned tasks, and cross-session file locks are
-    // coordinated by the devkit CLIs" is false for a checkout with no
-    // devkit.toml at all — an agent would act on that claim as fact.
+    // "This checkout is a devkit project" is false for a checkout with no
+    // devkit.toml at all, and an agent would act on that claim as fact.
     let project = Project::docs_only();
     std::fs::remove_file(project.root.join("devkit.toml")).unwrap();
 
-    let text = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
+    let text = unwrapped(&String::from_utf8_lossy(&project.brief(&[]).stdout));
     assert!(text.contains("serde"), "{text}");
     assert!(
-        !text.contains("coordinated by the devkit"),
+        !text.contains("is a devkit project"),
         "pins-only brief still makes the devrun claim: {text}"
     );
 }
@@ -507,8 +511,8 @@ fn a_devrun_brief_still_makes_the_devrun_claim() {
         "[config]\nroot = true\n\n{DEFAULTS}[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
 
-    let text = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
-    assert!(text.contains("coordinated by the devkit"), "{text}");
+    let text = unwrapped(&String::from_utf8_lossy(&project.brief(&[]).stdout));
+    assert!(text.contains("is a devkit project"), "{text}");
 }
 
 #[test]
@@ -613,7 +617,6 @@ fn brief_apps_false_drops_the_app_lines_that_are_configured() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(!text.contains("apps/api"), "{text}");
     assert!(!text.contains("devrun up"), "{text}");
-    assert!(!text.contains("portm status"), "{text}");
     assert!(text.contains("tests"), "the other sections survive: {text}");
 }
 
@@ -637,12 +640,83 @@ fn every_devrun_section_switched_off_drops_the_devrun_half() {
         "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\napps = false\ntasks = false\nlocks = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
     let out = project.brief(&[]);
-    let text = String::from_utf8_lossy(&out.stdout);
+    let text = unwrapped(&String::from_utf8_lossy(&out.stdout));
     assert!(
-        !text.contains("devkit-managed project"),
+        !text.contains("is a devkit project"),
         "the devrun claim goes with the half it introduces: {text}"
     );
     assert!(text.contains("serde"), "pins still render: {text}");
+}
+
+/// Two apps with tasks of their own beside a task that belongs to neither.
+fn monorepo() -> Project {
+    let project = Project::docs_only();
+    std::fs::create_dir_all(project.root.join("apps/web")).unwrap();
+    project.set_config(&format!(
+        "[config]\nroot = true\n\n{DEFAULTS}{API_APP}\
+         [apps.web]\nbase_port = 9200\npath = \"apps/web\"\nlaunch = [\"echo\", \"web\"]\n\n\
+         [tasks.test]\nrun = [\"cargo\", \"test\"]\ndescription = \"every suite\"\n\n\
+         [tasks.test-web]\napp = \"web\"\nrun = [\"echo\"]\ndescription = \"web unit tests\"\n\n\
+         [tasks.e2e]\napp = \"web\"\nrun = [\"echo\", \"{{{{ ports['api'] }}}}\"]\n\
+         require_live = [\"api\"]\ndescription = \"browser tests\"\n\n\
+         [tasks.migrate]\napp = \"api\"\nrun = [\"echo\", \"{{{{ target }}}}\"]\n\
+         description = \"apply migrations\"\n"
+    ));
+    project
+}
+
+#[test]
+fn a_monorepo_brief_names_other_apps_tasks_without_describing_them() {
+    let project = monorepo();
+    let text = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
+    assert!(text.contains("- test: every suite"), "{text}");
+    assert!(
+        text.contains("- web (apps/web): e2e (needs `devrun up api`), test-web"),
+        "{text}"
+    );
+    assert!(
+        text.contains("- api (apps/api): migrate (needs `--arg target=...`)"),
+        "{text}"
+    );
+    assert!(!text.contains("web unit tests"), "{text}");
+    assert!(!text.contains('\u{2014}'), "no em dash: {text}");
+    assert!(!text.contains("portm"), "{text}");
+}
+
+#[test]
+fn inside_an_app_its_tasks_are_described() {
+    let project = monorepo();
+    let web = project.root.join("apps/web");
+    let out = brief_from(&project, &web, r#"{"session_id":"inside"}"#);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("  - test-web: web unit tests"), "{text}");
+    assert!(
+        text.contains("  - e2e: browser tests (needs `devrun up api`)"),
+        "{text}"
+    );
+    assert!(text.contains("- api (apps/api): migrate"), "{text}");
+}
+
+#[test]
+fn moving_into_an_app_re_emits_the_brief() {
+    let project = monorepo();
+    let session = r#"{"session_id":"moving"}"#;
+    let web = project.root.join("apps/web");
+    assert!(
+        !brief_from(&project, &project.root, session)
+            .stdout
+            .is_empty()
+    );
+    assert!(
+        brief_from(&project, &project.root, session)
+            .stdout
+            .is_empty()
+    );
+
+    let inside = brief_from(&project, &web, session);
+    let text = String::from_utf8_lossy(&inside.stdout);
+    assert!(text.contains("web unit tests"), "{text}");
+    assert!(brief_from(&project, &web, session).stdout.is_empty());
 }
 
 #[test]

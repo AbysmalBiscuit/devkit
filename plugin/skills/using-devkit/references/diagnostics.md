@@ -27,7 +27,7 @@ The command prints the identity behind the token devkit would send, names which 
 
 ## `brief`
 
-Prints the current checkout's devkit orientation: configured apps, the `[tasks]` table, this worktree's live servers, and registered library versions. The two halves are independent: a checkout with no devrun setup still gets the library table, and one evidencing no registered library still gets the rest. It prints **nothing** when neither applies. A config that fails to load is reported rather than swallowed, so a broken `devkit.toml` is diagnosable from the brief.
+Prints the current checkout's devkit orientation: configured tasks, configured apps, this worktree's live servers, and registered library versions. Tasks that belong to no app are listed with their descriptions. Each app gets one line naming its tasks, and only the app whose directory holds the working directory has its tasks described. A task that needs a live server or a required `--arg` says so with the command that supplies it; `devkit config tasks <name>` has the rest. The two halves are independent: a checkout with no devrun setup still gets the library table, and one evidencing no registered library still gets the rest. It prints **nothing** when neither applies. A config that fails to load is reported rather than swallowed, so a broken `devkit.toml` is diagnosable from the brief.
 
 The plugin's `SessionStart` hook runs it so sessions start already knowing the project. Run it by hand to re-orient mid-session.
 
@@ -35,7 +35,7 @@ The plugin's `SessionStart` hook runs it so sessions start already knowing the p
 - `--if-changed` prints nothing when this session already received the same brief (it reads `session_id` from the hook's stdin JSON). Rejected together with `--pins-only`: the watermark records the *whole* brief, so suppressing on it after emitting only the library table would tell the session it had seen a brief it never got.
 - `--additional-context` wraps the output in the JSON envelope Codex and Cursor read a hook's context from. Claude Code takes plain stdout.
 
-The plugin runs a full brief at `SessionStart`, `--pins-only` at `PostCompact`, and `--if-changed` at `CwdChanged`.
+The plugin runs a full brief at `SessionStart`, `--pins-only` at `PostCompact`, and `--if-changed` at `CwdChanged`. Moving into or out of an app's directory changes which app is described, so `--if-changed` emits again then.
 
 The library-versions section answers for the directory it runs in. At a workspace root it rolls up the members a JS lockfile names (cargo and uv keep members in a manifest, so they resolve per workspace), one row per version they resolve; where members disagree, both versions appear with the workspaces holding them, so an agent reads the right checkout for the app it is editing. A library the reference registry records a checkout for under this project shows even without lockfile evidence, sourced `resolved checkout`, and a checkout whose version is not the one the lockfile names is flagged `; checkout <version>`.
 

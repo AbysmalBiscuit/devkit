@@ -190,14 +190,17 @@ pub struct BriefConfig {
     pub enabled: bool,
     /// The library-versions section.
     pub pins: bool,
-    /// The `lockm` line. Whether sessions ever share this checkout is not
-    /// something devkit can observe, so it is a switch rather than a probe.
+    /// The lock lines: the lock-enforcement sentence, or the `lockm` line when
+    /// writes are not enforced. Whether sessions ever share this checkout is
+    /// not something devkit can observe, so it is a switch rather than a probe.
     pub locks: bool,
-    /// The apps line and the `devrun up` / `portm` bullets. Live servers this
-    /// worktree holds are reported regardless: a bound port is a fact about
-    /// the machine, not a listing the brief chose to carry.
+    /// The apps section and the `devrun up` bullet. With it off, app tasks
+    /// join the task list. Live servers this worktree holds are reported
+    /// regardless: a bound port is a fact about the machine, not a listing the
+    /// brief chose to carry.
     pub apps: bool,
-    /// The task table and the `devrun task` bullet.
+    /// The task list, the task names on app lines, and the `devrun task`
+    /// bullets.
     pub tasks: bool,
     /// The rules section: which of a file's rules reach the session on their
     /// own and how to list the rest. It appears only while `[rules]` is
