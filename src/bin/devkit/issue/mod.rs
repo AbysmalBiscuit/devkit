@@ -25,7 +25,6 @@ mod slug;
 mod status;
 mod summary;
 mod sync;
-mod tracker;
 mod triage;
 
 /// `--timing` verbosity, parsed by clap. `--timing` alone = summary,

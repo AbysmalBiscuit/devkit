@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use devkit_common::tracker;
 use devkit_issue::{prs, status};
 use serde::Deserialize;
 use serde_json::Value;
@@ -44,33 +45,9 @@ fn status_schema() -> Value {
 fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: StatusArgs = serde_json::from_value(args).context("invalid issue.status arguments")?;
     let root = a.root.unwrap_or_else(|| ".".to_string());
-    let loaded = project_config(&root);
-    let forge = resolve_forge(loaded.as_ref(), &root, None);
-    let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
-    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root), &forge.repos);
-    let report = status::gather_with(&root, &a.ids, &tracker, &forge, false)?;
+    let sel = tracker::select(None, &root, None);
+    let report = status::gather_with(&root, &a.ids, &sel.tracker, &sel.forge, false)?;
     Ok(serde_json::to_value(report)?)
-}
-
-/// The config reachable from `root`, or `None` when none resolves. A project
-/// without a `devkit.toml` — or with one that fails to load — still gets its
-/// triage answer, with every config-driven choice left at its default.
-fn project_config(root: &str) -> Option<devkit_ports::load::Loaded> {
-    devkit_ports::load::load(None, std::path::Path::new(root)).ok()
-}
-
-/// The project's forge and repositories, from its config when one loads and
-/// from the `origin` remote alone otherwise.
-fn resolve_forge(
-    loaded: Option<&devkit_ports::load::Loaded>,
-    root: &str,
-    pr_override: Option<&str>,
-) -> devkit_common::forge::Resolved {
-    let (forge, github) = match loaded {
-        Some(l) => (l.config.forge.clone(), l.config.github.clone()),
-        None => Default::default(),
-    };
-    devkit_common::forge::resolve(&forge, &github, root, pr_override)
 }
 
 #[derive(Deserialize)]
@@ -107,22 +84,21 @@ fn prs_schema() -> Value {
 fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: PrsArgs = serde_json::from_value(args).context("invalid issue.prs arguments")?;
     let root = a.root.unwrap_or_else(|| ".".to_string());
+    let sel = tracker::select(None, &root, a.repo.as_deref());
     // Check-name globs to discount from the CHECK verdict, plus the Linear
-    // PR-link opt-in; absent config ⇒ neither.
-    let loaded = project_config(&root);
-    let ignored_checks = loaded
+    // PR-link opt-in. Without a config, neither.
+    let ignored_checks = sel
+        .config
         .as_ref()
-        .map(|l| l.config.defaults.ignored_checks.clone())
+        .map(|c| c.defaults.ignored_checks.clone())
         .unwrap_or_default();
-    let resolve_pr_links = loaded
+    let resolve_pr_links = sel
+        .config
         .as_ref()
-        .is_some_and(|l| l.config.linear.resolve_pr_links);
-    let forge = resolve_forge(loaded.as_ref(), &root, a.repo.as_deref());
-    let repo = forge.repos.prs()?;
-    let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
-    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root), &forge.repos);
+        .is_some_and(|c| c.linear.resolve_pr_links);
+    let repo = sel.forge.repos.prs()?;
     let report = prs::gather(
-        forge.forge.as_ref(),
+        sel.forge.forge.as_ref(),
         repo,
         a.mine,
         a.reviews,
@@ -132,7 +108,7 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
             batch_size: a.batch_size.unwrap_or(prs::DEFAULT_BATCH_SIZE),
             retries: a.retries.unwrap_or(0),
         },
-        tracker.tracker.as_ref(),
+        sel.tracker.tracker.as_ref(),
     )?;
     Ok(serde_json::to_value(report)?)
 }

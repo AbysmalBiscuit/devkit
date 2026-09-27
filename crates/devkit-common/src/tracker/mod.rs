@@ -11,6 +11,9 @@ pub mod fake;
 pub mod github;
 pub mod linear;
 pub mod none;
+mod select;
+
+pub use select::{Selected, select};
 
 /// Where an issue sits in its tracker's workflow. Linear's `state.type`
 /// vocabulary, adopted as devkit's own because the status verdict, the triage

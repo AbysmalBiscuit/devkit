@@ -60,7 +60,11 @@ pub fn run(
     // batch, so narrowing it would not save a round trip.
     let d = st::discover(start, &[])?;
     let top = current_top(start);
-    let (resolved, forge) = crate::issue::tracker::select(config, start, None);
+    let devkit_common::tracker::Selected {
+        tracker: resolved,
+        forge,
+        ..
+    } = devkit_common::tracker::select(config.map(Path::new), start, None);
     let tracker = resolved.tracker.as_ref();
     let mut info = TrackerInfo::of(&resolved);
 
