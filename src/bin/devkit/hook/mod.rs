@@ -122,7 +122,7 @@ pub fn run(cli: HookCli) -> Result<()> {
 /// checkout. Best-effort: a receipt left behind is swept by a later render.
 fn clear_issue_receipts(payload: &Payload) {
     let cwd = record::payload_cwd(payload);
-    let checkout = devkit_common::git::Checkout::at(&cwd);
+    let checkout = devkit_common::vcs::Checkout::at(&cwd);
     if let (Some(session), Some(root)) = (
         payload.session_id(),
         crate::issue::receipt::store_root(&checkout),

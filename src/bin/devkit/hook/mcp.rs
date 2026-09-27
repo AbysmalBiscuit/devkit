@@ -5,7 +5,7 @@
 use std::{collections::BTreeMap, io::Write, path::Path, sync::OnceLock};
 
 use anyhow::Result;
-use devkit_common::{caller::Caller, git::Checkout, harness, required};
+use devkit_common::{caller::Caller, harness, required, vcs::Checkout};
 use devkit_config::IssueToolRule;
 use pabal::Tool;
 use serde_json::Value;

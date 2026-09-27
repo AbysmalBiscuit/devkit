@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use devkit_common::{caller::HARNESS_SESSION_VARS, git::Checkout, gitignore, harness_log::redact};
+use devkit_common::{caller::HARNESS_SESSION_VARS, gitignore, harness_log::redact, vcs::Checkout};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Field {

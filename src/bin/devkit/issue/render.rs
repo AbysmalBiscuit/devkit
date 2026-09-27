@@ -121,7 +121,7 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
     if sessions.is_empty() {
         eprintln!("no agent session: no receipt written");
     } else {
-        let checkout = receipt::store_root(&devkit_common::git::Checkout::at(Path::new(&start)))
+        let checkout = receipt::store_root(&devkit_common::vcs::Checkout::at(Path::new(&start)))
             .with_context(|| format!("not inside a git checkout: {start}"))?;
         let _ = receipt::sweep_stale(&checkout, receipt::STALE_AFTER);
         for session in &sessions {
