@@ -258,7 +258,8 @@ fn a_devkit_file_denies_a_matched_call() {
     let p = project();
     std::fs::write(p.path().join(".devkit"), "").unwrap();
     let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, create("T", "B")));
-    assert!(denial(&out).is_some());
+    let reason = denial(&out).expect("denied");
+    assert!(reason.contains("is a file"), "{reason}");
 }
 
 #[test]

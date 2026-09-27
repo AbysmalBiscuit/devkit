@@ -101,10 +101,25 @@ fn receipt_path(checkout: &Path, session: &str, field: Field, text: &str) -> Pat
     session_dir(checkout, session).join(format!("{}{}", field.prefix(), hex(text)))
 }
 
-pub(crate) fn write(checkout: &Path, session: &str, title: &str, body: &str) -> Result<()> {
+/// Refuse an invalid session id, and a `.devkit` that is a file: Windows
+/// reports a path through a file as not found, which would read as "no
+/// receipt" rather than as the broken store it is.
+fn check_store(checkout: &Path, session: &str) -> Result<()> {
     if !valid_session(session) {
         bail!("session id `{session}` is not usable as a directory name");
     }
+    let devkit = checkout.join(".devkit");
+    if devkit.is_file() {
+        bail!(
+            "{} is a file, not the directory `devkit issue render` keeps its receipts in",
+            devkit.display()
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn write(checkout: &Path, session: &str, title: &str, body: &str) -> Result<()> {
+    check_store(checkout, session)?;
     let dir = session_dir(checkout, session);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     gitignore::write_self_ignore(&checkout.join(".devkit"));
@@ -116,9 +131,7 @@ pub(crate) fn write(checkout: &Path, session: &str, title: &str, body: &str) -> 
 }
 
 pub(crate) fn has(checkout: &Path, session: &str, field: Field, text: &str) -> Result<bool> {
-    if !valid_session(session) {
-        bail!("session id `{session}` is not usable as a directory name");
-    }
+    check_store(checkout, session)?;
     let path = receipt_path(checkout, session, field, text);
     path.try_exists()
         .with_context(|| format!("reading {}", path.display()))
