@@ -16,7 +16,7 @@ use super::{
 use crate::{
     issue::pr::{
         Gate, add_reviewers, gate_ready, require_existing_pr,
-        resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing},
+        resolve::{Existing, assert_belongs, parse_pr_flag, record_with_pr, resolve_existing},
         reviewer_logins,
     },
     template::VarArgs,
@@ -168,7 +168,7 @@ pub fn run(args: Args) -> Result<()> {
     let locator = found.locator.expect("a resolved PR carries a locator");
     let repo = found.repo;
     // Every mutation below is gated on the PR carrying this worktree's commits.
-    super::finish::assert_belongs(&pr, &head)?;
+    assert_belongs(&pr, &head)?;
 
     // Resolving the recipients can refuse the run — a PR with no reviewers and
     // no `--to` names nobody — so it happens before any mutation. Refusing

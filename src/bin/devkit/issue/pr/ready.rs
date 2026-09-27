@@ -9,10 +9,10 @@ use devkit_common::{
 
 use super::{
     Gate, add_reviewers, gate_ready, require_existing_pr,
-    resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing},
+    resolve::{Existing, assert_belongs, parse_pr_flag, record_with_pr, resolve_existing},
     reviewer_logins,
 };
-use crate::issue::review::{self, Target, guard_branch, resolve_target};
+use crate::issue::review::{Target, guard_branch, resolve_target};
 
 pub struct Args {
     pub to: Vec<String>,
@@ -70,7 +70,7 @@ pub fn run(args: Args) -> Result<()> {
     let locator = found.locator.expect("a resolved PR carries a locator");
     let repo = found.repo;
     // Every mutation below is gated on the PR carrying this worktree's commits.
-    review::finish::assert_belongs(&pr, &head)?;
+    assert_belongs(&pr, &head)?;
 
     // Recorded before the flip, not after: the binding is true the moment the
     // PR is resolved and verified, and a run that dies mid-flight then leaves

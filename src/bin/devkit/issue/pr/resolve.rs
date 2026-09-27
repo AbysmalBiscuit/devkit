@@ -8,12 +8,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use devkit_common::{
-    forge::{self, Forge, PrBrief, PrLocator, Repo, Repos},
+    forge::{self, Forge, HeadLookup, PrBrief, PrLocator, Repo, Repos},
     progress::Steps,
     vcs::{Vcs, VersionControl},
 };
-
-use crate::issue::review::finish;
 
 /// `--pr <URL|number>`: a pasted PR URL on the project's forge keeps its own
 /// repository; a bare number means the configured PR repository.
@@ -64,6 +62,55 @@ pub(crate) fn existing(forge: &dyn Forge, repo: &Repo, number: u64) -> Result<Pr
         .with_context(|| format!("PR #{number} not found in {}", repo.slug))
 }
 
+/// The single PR an acting path may operate on. Ambiguity is refused rather
+/// than ranked: two forks proposing one branch name is the case that produces
+/// two candidates, and picking one would act on a stranger's PR.
+pub(crate) fn resolve_acting(l: &HeadLookup) -> Result<Option<PrBrief>> {
+    match l {
+        HeadLookup::Unique(p) => Ok(Some(p.clone())),
+        HeadLookup::NoMatch => Ok(None),
+        HeadLookup::Ambiguous(c) => {
+            let list = c
+                .iter()
+                .map(|p| format!("#{} ({})", p.number, p.url))
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::bail!("several PRs share this head branch: {list}; pass --pr to choose one")
+        }
+        HeadLookup::Unavailable(why) => {
+            anyhow::bail!("could not look up the PR for this branch: {why}")
+        }
+    }
+}
+
+/// Explicit locator, then the record, then branch discovery. `--pr` means one
+/// thing everywhere, use this PR for this run, and does not itself write
+/// anything; `review request` recording what it acted on is what makes it a
+/// rebind.
+pub(crate) fn resolve_locator(
+    explicit: Option<&PrLocator>,
+    record: Option<&PrLocator>,
+) -> Option<PrLocator> {
+    explicit.or(record).cloned()
+}
+
+/// A PR entering an acting path must carry this worktree's commits. How it was
+/// chosen does not change what it can do: a branch-discovered `Unique` is
+/// unique only among one repository's PRs, so another fork's same-named branch
+/// gives the identical answer.
+///
+/// `head_ref_oid` is the branch head the PR carries, not the commit that
+/// landed on the base, so a squashed or rebased merge still compares equal.
+pub(crate) fn assert_belongs(pr: &PrBrief, head: &str) -> Result<()> {
+    anyhow::ensure!(
+        pr.head_ref_oid == head,
+        "PR #{} is at {} but this worktree is at {head}, so it does not carry this work",
+        pr.number,
+        pr.head_ref_oid
+    );
+    Ok(())
+}
+
 /// A PR that was just created must carry this worktree's commits, which can
 /// only be checked once it exists, so this runs after the call rather than
 /// before it. A failure here leaves the PR open on the forge, which is why the
@@ -75,7 +122,7 @@ pub(crate) fn verify_created(
     head: &str,
 ) -> Result<()> {
     let created = existing(forge, repo, number).context("fetching the PR just created")?;
-    finish::assert_belongs(&created, head)
+    assert_belongs(&created, head)
         .context("the PR just created does not carry this worktree's commits")
 }
 
@@ -126,7 +173,7 @@ pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found> {
 
     let forge = args.forge.forge.as_ref();
     let record_loc = args.record.and_then(|r| r.pr.clone());
-    let resolved_loc = finish::resolve_locator(args.explicit_pr.as_ref(), record_loc.as_ref());
+    let resolved_loc = resolve_locator(args.explicit_pr.as_ref(), record_loc.as_ref());
     let repo = acting_repo(resolved_loc.as_ref(), &args.forge.repos)?;
 
     match resolved_loc {
@@ -145,7 +192,7 @@ pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found> {
         }
         None => {
             let pr = args.steps.during_result("Looking up existing PR...", || {
-                finish::resolve_acting(&forge.pr_by_head(&repo, args.branch))
+                resolve_acting(&forge.pr_by_head(&repo, args.branch))
             })?;
             let locator = pr.as_ref().map(|p| PrLocator {
                 repo: Some(repo.slug.clone()),
@@ -233,5 +280,70 @@ mod tests {
         assert_eq!(got.apps, base.apps);
 
         assert!(record_with_pr(None, loc).is_none());
+    }
+
+    #[test]
+    fn an_ambiguous_lookup_refuses_on_an_acting_path() {
+        let err = resolve_acting(&HeadLookup::Ambiguous(vec![brief(7), brief(8)]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("#7") && err.contains("#8"), "{err}");
+    }
+
+    fn brief(n: u64) -> PrBrief {
+        PrBrief {
+            number: n,
+            state: "OPEN".into(),
+            url: format!("https://github.com/o/r/pull/{n}"),
+            title: String::new(),
+            head_ref_name: "feat/x".into(),
+            head_ref_oid: "cafe1".into(),
+            head_repo_owner: None,
+            is_draft: false,
+            author_login: None,
+        }
+    }
+
+    fn loc(repo: Option<&str>, number: u64) -> PrLocator {
+        PrLocator {
+            repo: repo.map(str::to_string),
+            number,
+        }
+    }
+
+    fn brief_at(oid: &str) -> PrBrief {
+        PrBrief {
+            number: 5,
+            head_ref_oid: oid.into(),
+            ..brief(5)
+        }
+    }
+
+    #[test]
+    fn precedence_is_explicit_then_record_then_branch() {
+        // review finish --pr wins over branch discovery by contract today.
+        // Making the record unconditionally authoritative would either
+        // disable that flag silently or leave an undocumented way
+        // around the new rule.
+        let ex = loc(None, 7);
+        let rec = loc(Some("up/app"), 9);
+        assert_eq!(resolve_locator(Some(&ex), Some(&rec)), Some(ex.clone()));
+        assert_eq!(resolve_locator(None, Some(&rec)), Some(rec));
+        assert_eq!(resolve_locator(None, None), None); // branch discovery
+    }
+
+    #[test]
+    fn a_pr_that_is_not_this_worktrees_head_is_refused() {
+        // --pr with a mistyped number names a real PR that resolves cleanly,
+        // the record makes it authoritative, and its merge lets issue
+        // end run `git branch -D` on a worktree whose work never
+        // landed.
+        let pr = brief_at("cafe1234");
+        assert!(assert_belongs(&pr, "cafe1234").is_ok());
+        let err = assert_belongs(&pr, "beef5678").unwrap_err().to_string();
+        assert!(
+            err.contains("cafe1234") && err.contains("beef5678"),
+            "{err}"
+        );
     }
 }
