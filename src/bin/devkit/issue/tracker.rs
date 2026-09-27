@@ -1,17 +1,17 @@
-//! Which tracker and GitHub repositories this project's commands talk to.
+//! Which tracker and forge this project's commands talk to.
 
 use std::path::Path;
 
-use devkit_common::{github::Repos, tracker::Resolved};
+use devkit_common::{forge, tracker::Resolved};
 
 /// Everything one config load yields for an `issue` command: the tracker and
-/// repositories `select` returns, plus the config itself and how its load went.
+/// forge `select` returns, plus the config itself and how its load went.
 /// `issue end` needs the last two — its preserve entries live in the config,
 /// and acting on an empty table because the config is broken would remove a
 /// worktree having archived nothing.
 pub struct Selected {
     pub tracker: Resolved,
-    pub repos: Repos,
+    pub forge: forge::Resolved,
     pub config: Option<devkit_config::Config>,
     pub health: devkit_config::Health,
 }
@@ -28,33 +28,37 @@ pub fn select_full(config: Option<&str>, start: &str, pr_override: Option<&str>)
     let resolved = devkit_common::config::resolve(config.map(Path::new), dir);
     let health = devkit_config::Health::of(&resolved);
     let cfg = resolved.ok().map(|(c, _)| c);
-    let (kind, github) = match &cfg {
-        Some(c) => (c.tracker.kind, c.github.clone()),
-        None => (None, devkit_config::GithubConfig::default()),
+    let (kind, forge_cfg, github) = match &cfg {
+        Some(c) => (c.tracker.kind, c.forge.clone(), c.github.clone()),
+        None => (None, Default::default(), Default::default()),
     };
-    let repos = Repos::resolve(&github, start, pr_override);
-    let tracker = devkit_common::tracker::resolve(kind, dir, &repos);
+    let forge = forge::resolve(&forge_cfg, &github, start, pr_override);
+    let tracker = devkit_common::tracker::resolve(kind, dir, &forge.repos);
     Selected {
         tracker,
-        repos,
+        forge,
         config: cfg,
         health,
     }
 }
 
-/// The tracker this project talks to and the GitHub repositories its commands
-/// work against, resolved from `config` (or the layers discovered from `start`)
-/// plus the `origin` remote. The two come back together because they come from
-/// one config load: resolving the tracker needs the issues repository to build
-/// a GitHub adapter.
+/// The tracker this project talks to and the forge and repositories its
+/// commands work against, resolved from `config` (or the layers discovered from
+/// `start`) plus the `origin` remote. The two come back together because they
+/// come from one config load: resolving the tracker needs the issues repository
+/// to build a GitHub adapter.
 ///
 /// A project without a `devkit.toml` — or with one that fails to load — still
 /// gets its tracker from detection and its repositories from origin alone: the
 /// tracker choice must never be what fails a command that would otherwise work.
 /// `pr_override` is `issue prs --repo`.
-pub fn select(config: Option<&str>, start: &str, pr_override: Option<&str>) -> (Resolved, Repos) {
+pub fn select(
+    config: Option<&str>,
+    start: &str,
+    pr_override: Option<&str>,
+) -> (Resolved, forge::Resolved) {
     let sel = select_full(config, start, pr_override);
-    (sel.tracker, sel.repos)
+    (sel.tracker, sel.forge)
 }
 
 #[cfg(test)]

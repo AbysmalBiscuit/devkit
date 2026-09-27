@@ -198,7 +198,7 @@ pub const DETECTED: &str = "detected: ";
 /// `LINEAR_API_KEY` resolves to Linear for every project, so a GitHub project
 /// on such a machine must set `kind` explicitly. What detection buys is that
 /// every config predating `[tracker]` keeps behaving exactly as it did.
-pub fn resolve(kind: Option<TrackerKind>, cwd: &Path, repos: &crate::github::Repos) -> Resolved {
+pub fn resolve(kind: Option<TrackerKind>, cwd: &Path, repos: &crate::forge::Repos) -> Resolved {
     resolve_with_key(kind, cwd, repos, crate::secrets::resolve("LINEAR_API_KEY"))
 }
 
@@ -207,11 +207,11 @@ pub fn resolve(kind: Option<TrackerKind>, cwd: &Path, repos: &crate::github::Rep
 fn resolve_with_key(
     kind: Option<TrackerKind>,
     cwd: &Path,
-    repos: &crate::github::Repos,
+    repos: &crate::forge::Repos,
     key: Option<String>,
 ) -> Resolved {
     let declared = kind.is_some();
-    match kind.unwrap_or_else(|| detect(cwd, key.as_deref())) {
+    match kind.unwrap_or_else(|| detect(cwd, repos.github_host(), key.as_deref())) {
         TrackerKind::Linear => Resolved {
             tracker: Box::new(linear::LinearTracker::new(key)),
             declared,
@@ -256,11 +256,11 @@ fn resolve_with_key(
 }
 
 /// Detection order, used only when `[tracker] kind` is absent.
-fn detect(cwd: &Path, linear_key: Option<&str>) -> TrackerKind {
+fn detect(cwd: &Path, github_host: &str, linear_key: Option<&str>) -> TrackerKind {
     if linear_key.is_some() {
         return TrackerKind::Linear;
     }
-    if crate::github::github_origin_slug(&cwd.to_string_lossy()).is_ok() {
+    if crate::forge::remote::origin_slug(&cwd.to_string_lossy(), github_host).is_ok() {
         return TrackerKind::Github;
     }
     TrackerKind::None
@@ -270,22 +270,31 @@ fn detect(cwd: &Path, linear_key: Option<&str>) -> TrackerKind {
 mod tests {
     use super::*;
 
-    fn cfg(issues: Option<&str>, prs: Option<&str>) -> devkit_config::GithubConfig {
-        devkit_config::GithubConfig {
-            issues_repo: issues.map(String::from),
-            pr_repo: prs.map(String::from),
-        }
+    /// `Repos` from the issues and PR repository keys, plus an origin slug.
+    fn repos(issues: Option<&str>, prs: Option<&str>, origin: Option<&str>) -> crate::forge::Repos {
+        crate::forge::Repos::from_parts(
+            &devkit_config::GithubConfig {
+                issues_repo: issues.map(String::from),
+                pr_repo: None,
+            },
+            &devkit_config::ForgeConfig {
+                repo: prs.map(String::from),
+                ..Default::default()
+            },
+            origin.map(String::from),
+            None,
+        )
     }
 
-    /// `Repos` where neither key resolves: no `[github]` config and no origin.
-    fn no_repos() -> crate::github::Repos {
-        crate::github::Repos::from_parts(&cfg(None, None), None, None)
+    /// `Repos` where neither key resolves: no config and no origin.
+    fn no_repos() -> crate::forge::Repos {
+        repos(None, None, None)
     }
 
-    /// `Repos` whose keys both default to one origin slug — the shape a project
-    /// with a github.com `origin` and no `[github]` config resolves to.
-    fn repos_with(slug: &str) -> crate::github::Repos {
-        crate::github::Repos::from_parts(&cfg(None, None), Some(slug.to_string()), None)
+    /// `Repos` whose keys both default to one origin slug, the shape a project
+    /// with a github.com `origin` and no repository config resolves to.
+    fn repos_with(slug: &str) -> crate::forge::Repos {
+        repos(None, None, Some(slug))
     }
 
     /// `detect` against a scratch repository whose `origin` is `url`.
@@ -299,7 +308,7 @@ mod tests {
             .args(["remote", "add", "origin", url])
             .output()
             .unwrap();
-        detect(dir.path(), linear_key)
+        detect(dir.path(), "github.com", linear_key)
     }
 
     #[test]
@@ -451,14 +460,10 @@ mod tests {
     /// closed the gate.
     #[test]
     fn a_configured_project_is_ready_without_a_github_origin() {
-        let repos = crate::github::Repos::from_parts(
-            &cfg(Some("org/planning"), Some("up/app")),
-            None,
-            None,
-        );
+        let repos = repos(Some("org/planning"), Some("up/app"), None);
         let r = resolve(Some(TrackerKind::Github), Path::new("."), &repos);
         assert_eq!(r.tracker.kind(), TrackerKind::Github);
-        assert!(r.tracker.ready() || crate::github::token().is_none());
+        assert!(r.tracker.ready() || crate::github::Api::new("github.com").token().is_none());
     }
 
     /// `slug_from_remote_url` parses any `host/owner/repo` shape, so detection

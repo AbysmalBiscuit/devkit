@@ -2,247 +2,26 @@ use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 use devkit_common::{
-    cmd::gh_json,
-    github,
+    forge::{CheckState, Forge, OpenPr, OpenPrPage, Repo, ReviewDecision, ReviewState, Section},
     tracker::{Tracker, TrackerKind},
 };
 use serde::{Deserialize, Serialize};
 
-// GraphQL response shapes
-// ---------------------------------------------------------
-
-/// The shape of the old single-request response. Sections are now fetched and
-/// paged separately, so this survives only as the fixture wrapper that lets the
-/// classification tests parse a whole-response JSON blob.
-#[cfg(test)]
-#[derive(serde::Deserialize)]
-struct GqlResp {
-    data: GqlData,
-}
-
-#[derive(serde::Deserialize)]
-struct GqlData {
-    viewer: Viewer,
-    mine: SearchNodes,
-    #[serde(rename = "reviewRequested")]
-    review_requested: SearchNodes,
-    #[serde(rename = "reviewedBy")]
-    reviewed_by: SearchNodes,
-}
-
-#[derive(serde::Deserialize)]
-struct Viewer {
-    login: String,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct SearchNodes {
-    nodes: Vec<PrNode>,
-}
-
-/// One page of a single search section, plus the cursor to the next.
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct SearchPage {
-    nodes: Vec<PrNode>,
-    #[serde(rename = "pageInfo")]
-    page_info: PageInfo,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct PageInfo {
-    #[serde(rename = "hasNextPage")]
-    has_next_page: bool,
-    #[serde(rename = "endCursor")]
-    end_cursor: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-struct PageResp {
-    data: PageData,
-}
-
-#[derive(serde::Deserialize)]
-struct PageData {
-    viewer: Viewer,
-    search: SearchPage,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct ActorLogin {
-    login: String,
-}
-
-/// Deserialize a possibly-null string as the empty string. GitHub returns
-/// `submittedAt: null` for a PENDING review, which a bare `String` rejects;
-/// `#[serde(default)]` only covers a missing field, not an explicit null.
-fn null_as_empty<'de, D>(d: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct ReviewNode {
-    author: ActorLogin,
-    state: String,
-    #[serde(rename = "submittedAt", deserialize_with = "null_as_empty")]
-    submitted_at: String,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct ReviewConn {
-    nodes: Vec<ReviewNode>,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct ReqNode {
-    #[serde(rename = "requestedReviewer")]
-    requested_reviewer: Option<ActorLogin>,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct ReqConn {
-    nodes: Vec<ReqNode>,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct Rollup {
-    state: String,
-    contexts: ContextsConn,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct ContextsConn {
-    nodes: Vec<RollupContext>,
-}
-
-/// One status-check entry under a commit's rollup. GitHub returns a union of
-/// `CheckRun` (Actions etc., carrying `name` + `conclusion` + `status`) and
-/// `StatusContext` (external statuses, carrying `context` + `state`); both
-/// shapes deserialize into this flattened node, with empty fields for the
-/// absent half.
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct RollupContext {
-    name: String,
-    status: String,
-    conclusion: Option<String>,
-    /// When this CheckRun attempt began. Used to pick the latest attempt among
-    /// re-runs of the same name; absent on external StatusContexts (which carry
-    /// no duplicate names). RFC 3339 UTC, so lexicographic order is
-    /// chronological.
-    #[serde(rename = "startedAt")]
-    started_at: Option<String>,
-    context: String,
-    state: String,
-}
-
-impl RollupContext {
-    /// The check's display name, from whichever union half populated it.
-    fn name(&self) -> &str {
-        if self.name.is_empty() {
-            &self.context
-        } else {
-            &self.name
-        }
-    }
-
-    /// Normalised verdict for this single check: `"fail"`, `"run"`, or `"ok"`.
-    fn verdict(&self) -> &'static str {
-        // StatusContext: only `state` is set.
-        if self.name.is_empty() && !self.context.is_empty() {
-            return match self.state.as_str() {
-                "SUCCESS" => "ok",
-                s if FAIL.contains(&s) => "fail",
-                _ => "run", // PENDING, EXPECTED, …
-            };
-        }
-        // CheckRun: a non-terminal status is still running; otherwise judge the
-        // conclusion. A completed run with no conclusion is treated as running.
-        if !self.status.is_empty() && self.status != "COMPLETED" {
-            return "run";
-        }
-        match self.conclusion.as_deref() {
-            Some("SUCCESS" | "NEUTRAL" | "SKIPPED") => "ok",
-            // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE, STALE
-            Some(_) => "fail",
-            None => "run",
-        }
-    }
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct CommitInner {
-    #[serde(rename = "statusCheckRollup")]
-    status_check_rollup: Option<Rollup>,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct CommitNode {
-    commit: CommitInner,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct CommitsConn {
-    nodes: Vec<CommitNode>,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct PrNode {
-    number: u64,
-    url: String,
-    title: String,
-    #[serde(rename = "headRefName")]
-    head_ref_name: String,
-    #[serde(rename = "isDraft")]
-    is_draft: bool,
-    #[serde(rename = "reviewDecision")]
-    review_decision: Option<String>,
-    mergeable: String,
-    author: ActorLogin,
-    commits: CommitsConn,
-    reviews: ReviewConn,
-    #[serde(rename = "reviewRequests")]
-    review_requests: ReqConn,
-}
-
-impl PrNode {
-    /// The status-check rollup state of the last commit, if any.
-    fn rollup_state(&self) -> Option<&str> {
-        self.commits
-            .nodes
-            .first()
-            .and_then(|c| c.commit.status_check_rollup.as_ref())
-            .map(|r| r.state.as_str())
-    }
+/// The three open-PR searches the report is built from, plus whose they are.
+struct Sections {
+    viewer: String,
+    mine: Vec<OpenPr>,
+    review_requested: Vec<OpenPr>,
+    reviewed_by: Vec<OpenPr>,
 }
 
 // pure logic
 // --------------------------------------------------------------------
 
-const FAIL: [&str; 4] = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"];
-#[allow(dead_code)]
-const RUNNING: [&str; 3] = ["IN_PROGRESS", "QUEUED", "PENDING"];
-
-/// The issue ids a PR addresses, uppercased — zero or one from text. Taken
-/// from the branch (head) ref — the convention for our own PRs — falling
-/// back to the PR title, where other people's PRs carry the id (e.g.
-/// `feat: … [SWE-123]`). Linear-linked ids are merged in later by `gather`.
+/// The issue ids a PR addresses, uppercased: zero or one from text. Taken
+/// from the branch (head) ref, the convention for our own PRs, falling back
+/// to the PR title, where other people's PRs carry the id (e.g.
+/// `feat: ... [SWE-123]`). Linear-linked ids are merged in later by `gather`.
 fn issue_ids_of(head: &str, title: &str) -> Vec<String> {
     devkit_common::worktree::find_id(head)
         .or_else(|| devkit_common::worktree::find_id(title))
@@ -273,15 +52,6 @@ fn apply_linked(report: &mut PrsReport, linked: &HashMap<String, Vec<String>>) {
         if let Some(ids) = linked.get(&pr.url) {
             merge_linked(&mut pr.issue_ids, ids);
         }
-    }
-}
-
-fn checks_text(rollup: Option<&str>) -> &'static str {
-    match rollup {
-        None => "-",
-        Some("SUCCESS") => "ok",
-        Some(s) if FAIL.contains(&s) => "fail",
-        Some(_) => "run",
     }
 }
 
@@ -318,13 +88,13 @@ fn name_ignored(name: &str, ignored: &[String]) -> bool {
 }
 
 /// The CHECK verdict for a PR, with `ignored` check-name globs discounted. When
-/// the rollup carries per-check contexts, the verdict is recomputed from the
+/// the PR carries per-check runs, the verdict is recomputed from the
 /// non-ignored checks so a single known-broken check (e.g. a deploy left red by
 /// an unfinished PR) no longer fails the column; ignored failures are counted
-/// so they can still be surfaced. Falls back to the aggregate rollup state when
-/// no contexts are present.
+/// so they can still be surfaced. Falls back to the forge's overall state when
+/// no runs are present.
 enum Checks {
-    /// No rollup at all.
+    /// No checks at all.
     None,
     /// All non-ignored checks green; `masked` is the count of ignored checks
     /// that were themselves failing (so the green can be flagged as masking
@@ -332,39 +102,30 @@ enum Checks {
     Ok { masked: usize },
     /// A non-ignored check is still running.
     Run,
-    /// Non-ignored checks that failed, by name (empty when only the aggregate
-    /// rollup state was available).
+    /// Non-ignored checks that failed, by name (empty when only the overall
+    /// state was available).
     Fail(Vec<String>),
 }
 
-fn check_verdict(pr: &PrNode, ignored: &[String]) -> Checks {
-    let contexts = pr
-        .commits
-        .nodes
-        .first()
-        .and_then(|c| c.commit.status_check_rollup.as_ref())
-        .map(|r| &r.contexts.nodes);
-    let contexts = match contexts {
-        Some(c) if !c.is_empty() => c,
-        // No per-check detail: fall back to the aggregate rollup state.
-        _ => {
-            return match checks_text(pr.rollup_state()) {
-                "-" => Checks::None,
-                "ok" => Checks::Ok { masked: 0 },
-                "run" => Checks::Run,
-                _ => Checks::Fail(Vec::new()),
-            };
-        }
+fn check_verdict(pr: &OpenPr, ignored: &[String]) -> Checks {
+    let Some(checks) = &pr.checks else {
+        return Checks::None;
     };
-    // Collapse re-run attempts. GitHub's rollup returns every attempt of a
-    // CheckRun, so a stale CANCELLED or FAILURE run lingers beside the latest
-    // green one and would otherwise fail the column. Keep only the most recent
-    // attempt per name (by `startedAt`); external StatusContexts carry no
-    // timestamp but are already unique per name, so they pass through
-    // untouched.
-    let mut latest: Vec<&RollupContext> = Vec::new();
-    for c in contexts {
-        match latest.iter_mut().find(|e| e.name() == c.name()) {
+    if checks.runs.is_empty() {
+        return match checks.overall {
+            CheckState::Passed => Checks::Ok { masked: 0 },
+            CheckState::Running => Checks::Run,
+            CheckState::Failed => Checks::Fail(Vec::new()),
+        };
+    }
+    // Collapse re-run attempts. A forge can return every attempt of a check,
+    // so a stale cancelled or failed run lingers beside the latest green one
+    // and would otherwise fail the column. Keep only the most recent attempt
+    // per name (by `started_at`); checks with no timestamp are already unique
+    // per name, so they pass through untouched.
+    let mut latest: Vec<&devkit_common::forge::CheckRun> = Vec::new();
+    for c in &checks.runs {
+        match latest.iter_mut().find(|e| e.name == c.name) {
             Some(prev) if c.started_at > prev.started_at => *prev = c,
             Some(_) => {}
             None => latest.push(c),
@@ -375,12 +136,12 @@ fn check_verdict(pr: &PrNode, ignored: &[String]) -> Checks {
     let mut running = false;
     let mut masked = 0;
     for c in latest {
-        let ignored = name_ignored(c.name(), ignored);
-        match c.verdict() {
-            "fail" if ignored => masked += 1,
-            "fail" => failing.push(c.name().to_string()),
-            "run" if !ignored => running = true,
-            _ => {}
+        let ignored = name_ignored(&c.name, ignored);
+        match c.state {
+            CheckState::Failed if ignored => masked += 1,
+            CheckState::Failed => failing.push(c.name.clone()),
+            CheckState::Running if !ignored => running = true,
+            CheckState::Running | CheckState::Passed => {}
         }
     }
     if !failing.is_empty() {
@@ -404,17 +165,17 @@ fn checks_cell(c: &Checks) -> String {
     }
 }
 
-/// True when someone is actually expected to review: branch protection
-/// requires a review (`REVIEW_REQUIRED`), or a reviewer sits in the pending
-/// request list (including CODEOWNERS auto-requests). Submitted `COMMENTED`
-/// reviews don't count — bots comment on every PR, and a comment obliges
-/// nobody. Standing decisions are handled by `approved`/`changes_requested`
-/// before callers consult this predicate.
-fn review_in_flight(pr: &PrNode) -> bool {
-    pr.review_decision.as_deref() == Some("REVIEW_REQUIRED") || !pr.review_requests.nodes.is_empty()
+/// True when someone is actually expected to review: the forge requires a
+/// review before merge, or a reviewer sits in the pending request list
+/// (including CODEOWNERS auto-requests). Submitted comment reviews don't
+/// count, since bots comment on every PR and a comment obliges nobody.
+/// Standing decisions are handled by `approved`/`changes_requested` before
+/// callers consult this predicate.
+fn review_in_flight(pr: &OpenPr) -> bool {
+    pr.review_decision == Some(ReviewDecision::ReviewRequired) || !pr.review_requests.is_empty()
 }
 
-fn review_text(pr: &PrNode) -> &'static str {
+fn review_text(pr: &OpenPr) -> &'static str {
     if changes_requested(pr) {
         return "changes";
     }
@@ -424,29 +185,34 @@ fn review_text(pr: &PrNode) -> &'static str {
     if review_in_flight(pr) {
         return "awaiting";
     }
-    if pr.reviews.nodes.is_empty() {
+    if pr.reviews.is_empty() {
         "not requested"
     } else {
         "commented"
     }
 }
 
-/// Per-author effective review state: each reviewer's most recent `APPROVED` /
-/// `CHANGES_REQUESTED` / `DISMISSED` review wins; `COMMENTED` and `PENDING`
-/// reviews leave a standing decision untouched. Bots are included — any actor
-/// that votes counts. Mirrors GitHub's own review-decision semantics.
-fn effective_reviews(pr: &PrNode) -> BTreeMap<&str, &str> {
-    let mut latest: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
-    for r in &pr.reviews.nodes {
-        if !matches!(
-            r.state.as_str(),
-            "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
-        ) {
-            continue;
-        }
-        let slot = latest.entry(r.author.login.as_str()).or_insert(("", ""));
+/// Whether a review is a decision that stands until the same reviewer makes
+/// another: approval, a change request, or a dismissal.
+fn is_decision(state: ReviewState) -> bool {
+    matches!(
+        state,
+        ReviewState::Approved | ReviewState::ChangesRequested | ReviewState::Dismissed
+    )
+}
+
+/// Per-author effective review state: each reviewer's most recent decision
+/// wins, and comment or pending reviews leave a standing decision untouched.
+/// Bots are included: any actor that votes counts. Mirrors GitHub's own
+/// review-decision semantics.
+fn effective_reviews(pr: &OpenPr) -> BTreeMap<&str, ReviewState> {
+    let mut latest: BTreeMap<&str, (&str, ReviewState)> = BTreeMap::new();
+    for r in pr.reviews.iter().filter(|r| is_decision(r.state)) {
+        let slot = latest
+            .entry(r.author.as_str())
+            .or_insert(("", ReviewState::Pending));
         if r.submitted_at.as_str() >= slot.0 {
-            *slot = (r.submitted_at.as_str(), r.state.as_str());
+            *slot = (r.submitted_at.as_str(), r.state);
         }
     }
     latest
@@ -455,54 +221,55 @@ fn effective_reviews(pr: &PrNode) -> BTreeMap<&str, &str> {
         .collect()
 }
 
-/// Logins whose current effective review is `CHANGES_REQUESTED`.
-fn change_requesters(pr: &PrNode) -> Vec<&str> {
+/// Logins whose current effective review is a change request.
+fn change_requesters(pr: &OpenPr) -> Vec<&str> {
     effective_reviews(pr)
         .into_iter()
-        .filter(|(_, state)| *state == "CHANGES_REQUESTED")
+        .filter(|(_, state)| *state == ReviewState::ChangesRequested)
         .map(|(login, _)| login)
         .collect()
 }
 
 /// True when the PR carries a standing change request. Driven by the per-author
 /// effective review state so any actor (human or bot, required or not) counts;
-/// falls back to GitHub's `reviewDecision` in case the review list was
+/// falls back to the forge's overall decision in case the review list was
 /// truncated.
-fn changes_requested(pr: &PrNode) -> bool {
-    !change_requesters(pr).is_empty() || pr.review_decision.as_deref() == Some("CHANGES_REQUESTED")
+fn changes_requested(pr: &OpenPr) -> bool {
+    !change_requesters(pr).is_empty()
+        || pr.review_decision == Some(ReviewDecision::ChangesRequested)
 }
 
 /// True when the PR carries a standing approval and no standing change request.
-/// `reviewDecision` is empty when the repo requires no review, so an approval
-/// on such a PR shows only in the per-author review state — derived
+/// The overall decision is empty when the repo requires no review, so an
+/// approval on such a PR shows only in the per-author review state, derived
 /// symmetrically to [`changes_requested`] so a non-required approval still
 /// reads as approved.
-fn approved(pr: &PrNode) -> bool {
+fn approved(pr: &OpenPr) -> bool {
     if changes_requested(pr) {
         return false;
     }
-    pr.review_decision.as_deref() == Some("APPROVED")
-        || effective_reviews(pr).values().any(|s| *s == "APPROVED")
+    pr.review_decision == Some(ReviewDecision::Approved)
+        || effective_reviews(pr)
+            .values()
+            .any(|s| *s == ReviewState::Approved)
 }
 
 /// True when a reviewer who requested changes is back in the pending
-/// review-request list. GitHub drops a reviewer from `reviewRequests` once they
-/// submit a review, so their reappearance means re-review was requested of
-/// them.
-fn re_review_requested(pr: &PrNode) -> bool {
+/// review-request list. A forge drops a reviewer from the pending list once
+/// they submit a review, so their reappearance means re-review was requested
+/// of them.
+fn re_review_requested(pr: &OpenPr) -> bool {
     let requesters = change_requesters(pr);
     pr.review_requests
-        .nodes
         .iter()
-        .filter_map(|r| r.requested_reviewer.as_ref())
-        .any(|rr| requesters.contains(&rr.login.as_str()))
+        .any(|login| requesters.contains(&login.as_str()))
 }
 
-fn mine_action(pr: &PrNode, ignored: &[String]) -> String {
+fn mine_action(pr: &OpenPr, ignored: &[String]) -> String {
     if pr.is_draft {
         return "draft".into();
     }
-    let conflict = pr.mergeable == "CONFLICTING";
+    let conflict = pr.conflicting;
     if changes_requested(pr) {
         let base = if re_review_requested(pr) {
             "await re-review"
@@ -530,35 +297,26 @@ fn mine_action(pr: &PrNode, ignored: &[String]) -> String {
     }
 }
 
-/// My effective review verdict on a PR. A `COMMENTED` reply never supersedes a
-/// standing `APPROVED`/`CHANGES_REQUESTED`: the latest *decision* review
-/// (`APPROVED`/`CHANGES_REQUESTED`/`DISMISSED`) wins, mirroring GitHub's own
-/// review-decision semantics and the `change_requesters` rule on the mine path.
-/// Only when there is no standing decision does a `COMMENTED` review count.
-fn my_vote(pr: &PrNode, me: &str) -> &'static str {
+/// My effective review verdict on a PR. A comment never supersedes a standing
+/// approval or change request: the latest *decision* review wins, mirroring
+/// the `change_requesters` rule on the mine path. Only when there is no
+/// standing decision does a comment count.
+fn my_vote(pr: &OpenPr, me: &str) -> &'static str {
     let decision = pr
         .reviews
-        .nodes
         .iter()
-        .filter(|r| r.author.login == me)
-        .filter(|r| {
-            matches!(
-                r.state.as_str(),
-                "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
-            )
-        })
+        .filter(|r| r.author == me && is_decision(r.state))
         .max_by(|a, b| a.submitted_at.cmp(&b.submitted_at))
-        .map(|r| r.state.as_str());
+        .map(|r| r.state);
     match decision {
-        Some("APPROVED") => "APPROVED",
-        Some("CHANGES_REQUESTED") => "CHANGES_REQUESTED",
+        Some(ReviewState::Approved) => "APPROVED",
+        Some(ReviewState::ChangesRequested) => "CHANGES_REQUESTED",
         // No standing decision (none, or a dismissed review): a comment still
         // prompts the reviewer to decide.
         _ if pr
             .reviews
-            .nodes
             .iter()
-            .any(|r| r.author.login == me && r.state == "COMMENTED") =>
+            .any(|r| r.author == me && r.state == ReviewState::Commented) =>
         {
             "COMMENTED"
         }
@@ -567,7 +325,7 @@ fn my_vote(pr: &PrNode, me: &str) -> &'static str {
 }
 
 /// (my_vote, action) for a PR where I'm a reviewer.
-fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
+fn reviewer_state(pr: &OpenPr, me: &str) -> (String, String) {
     let vote = my_vote(pr, me);
     let vote_label = match vote {
         "APPROVED" => "approved",
@@ -581,12 +339,7 @@ fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
     if pr.is_draft {
         return (vote_label, "draft".into());
     }
-    let requested = pr
-        .review_requests
-        .nodes
-        .iter()
-        .filter_map(|r| r.requested_reviewer.as_ref())
-        .any(|rr| rr.login == me);
+    let requested = pr.review_requests.iter().any(|login| login == me);
     let action = if requested {
         "REVIEW NEEDED"
     } else {
@@ -601,49 +354,14 @@ fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
     (vote_label, action)
 }
 
-// GraphQL fetch
-// -----------------------------------------------------------------
-
-const PR_FIELDS: &str = "number url title headRefName isDraft reviewDecision mergeable \
-author { login } \
-commits(last: 1) { nodes { commit { statusCheckRollup { state \
-contexts(first: 100) { nodes { \
-__typename \
-... on CheckRun { name status conclusion startedAt } \
-... on StatusContext { context state } } } } } } } \
-reviews(last: 100) { nodes { author { login } state submittedAt } } \
-reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }";
-
-/// One of the three PR searches the report is built from. Each is fetched as
-/// its own paginated query: a single request carrying all three at `first: 100`
-/// asks GitHub to resolve ~90k nodes before it can answer, which times out
-/// (HTTP 504) on a repo with many open PRs.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Section {
-    Mine,
-    ReviewRequested,
-    ReviewedBy,
-}
-
-impl Section {
-    /// The search qualifier selecting this section's PRs.
-    fn qualifier(self) -> &'static str {
-        match self {
-            Section::Mine => "author:@me",
-            Section::ReviewRequested => "review-requested:@me",
-            Section::ReviewedBy => "reviewed-by:@me",
-        }
-    }
-}
-
 /// Pagination and retry knobs for the PR-search round trips.
 #[derive(Clone, Copy, Debug)]
 pub struct Fetch {
     /// PRs requested per search page. Smaller pages keep each request inside
-    /// GitHub's GraphQL time budget; the nested per-PR selections stay at 100
-    /// because the verdict logic reduces over the full set (see [`PR_FIELDS`]).
+    /// the forge's time budget.
     pub batch_size: u32,
-    /// Extra attempts per page after a failure. Zero ⇒ fail on the first error.
+    /// Extra attempts per page after a failure. Zero means fail on the first
+    /// error.
     pub retries: u32,
 }
 
@@ -658,28 +376,13 @@ impl Default for Fetch {
 
 pub const DEFAULT_BATCH_SIZE: u32 = 25;
 
-/// One page of one section. `after` threads the previous page's `endCursor`.
-fn build_page_query(repo: &str, section: Section, size: u32, after: Option<&str>) -> String {
-    let cursor = match after {
-        Some(c) => format!(", after: \"{c}\""),
-        None => String::new(),
-    };
-    format!(
-        "query {{ viewer {{ login }} \
-search(query: \"repo:{repo} is:pr is:open {}\", type: ISSUE, first: {size}{cursor}) \
-{{ pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }} }} }}",
-        section.qualifier()
-    )
-}
-
-/// Turn one GraphQL response into the report. Pure -> unit-tested. `ignored`
+/// Turn the fetched sections into the report. Pure, so unit-tested. `ignored`
 /// holds the check-name globs discounted from each PR's CHECK verdict.
-fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[String]) -> PrsReport {
-    let me = data.viewer.login;
+fn classify(data: Sections, want_mine: bool, want_reviews: bool, ignored: &[String]) -> PrsReport {
+    let me = data.viewer;
 
     let mine_views: Vec<MinePrView> = if want_mine {
         data.mine
-            .nodes
             .iter()
             .filter(|pr| pr.number != 0)
             .map(|pr| MinePrView {
@@ -696,13 +399,12 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
     };
 
     let review_views: Vec<ReviewPrView> = if want_reviews {
-        let mut seen: BTreeMap<u64, PrNode> = BTreeMap::new();
+        let mut seen: BTreeMap<u64, OpenPr> = BTreeMap::new();
         for pr in data
             .review_requested
-            .nodes
             .into_iter()
-            .chain(data.reviewed_by.nodes)
-            .filter(|pr| pr.number != 0 && pr.author.login != me)
+            .chain(data.reviewed_by)
+            .filter(|pr| pr.number != 0 && pr.author != me)
         {
             seen.entry(pr.number).or_insert(pr);
         }
@@ -713,7 +415,7 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
                     number: pr.number,
                     url: pr.url.clone(),
                     issue_ids: issue_ids_of(&pr.head_ref_name, &pr.title),
-                    author: pr.author.login.clone(),
+                    author: pr.author.clone(),
                     my_vote,
                     action,
                 }
@@ -764,85 +466,67 @@ pub struct PrsReport {
     pub reviews: Vec<ReviewPrView>,
 }
 
-/// One PR-search GraphQL round trip over direct HTTP, falling back to
-/// `gh api graphql` when no token is configured or the HTTP path fails.
-fn fetch_graphql<T: serde::de::DeserializeOwned>(query: &str, root: &str) -> Result<T> {
-    if let Ok(v) = github::graphql(query)
-        && let Ok(resp) = serde_json::from_value::<T>(v)
-    {
-        return Ok(resp);
-    }
-    let arg = format!("query={query}");
-    gh_json(
-        &["api", "graphql", "--hostname", "github.com", "-f", &arg],
-        root,
-    )
-}
-
 /// Backoff before retry `attempt` (1-based): 1s, 2s, 4s, then 8s for the rest.
 fn backoff(attempt: u32) -> std::time::Duration {
     std::time::Duration::from_secs(1 << attempt.saturating_sub(1).min(3))
 }
 
-/// One page, retried up to `retries` times. Both transports are tried on every
-/// attempt (`fetch_graphql` already falls back HTTP -> `gh`), so a retry covers
-/// a 504 from either. The last error is what surfaces.
-fn fetch_page(query: &str, root: &str, retries: u32) -> Result<PageResp> {
+/// One page, retried up to `retries` times. The last error is what surfaces.
+fn fetch_page(
+    forge: &dyn Forge,
+    repo: &Repo,
+    section: Section,
+    f: Fetch,
+    cursor: Option<&str>,
+) -> Result<OpenPrPage> {
     let mut attempt = 0;
     loop {
-        match fetch_graphql::<PageResp>(query, root) {
-            Ok(resp) => return Ok(resp),
-            Err(e) if attempt < retries => {
+        match forge.open_prs(repo, section, f.batch_size, cursor) {
+            Ok(page) => return Ok(page),
+            Err(_) if attempt < f.retries => {
                 attempt += 1;
                 std::thread::sleep(backoff(attempt));
-                let _ = e;
             }
             Err(e) => return Err(e),
         }
     }
 }
 
-/// The viewer login plus every PR node of one fully-paged section.
-type SectionNodes = Result<(String, Vec<PrNode>)>;
+/// The viewer login plus every PR of one fully-paged section.
+type SectionPrs = Result<(String, Vec<OpenPr>)>;
 
-/// Follow `pageInfo` cursors until GitHub reports no more, accumulating nodes.
+/// Follow page cursors until the forge reports no more, accumulating PRs.
 /// `next` fetches one page for a given cursor; split from the transport so the
-/// loop is unit-testable. Returns the viewer login alongside the nodes.
-fn paginate(mut next: impl FnMut(Option<&str>) -> Result<(String, SearchPage)>) -> SectionNodes {
-    let mut nodes = Vec::new();
+/// loop is unit-testable. Returns the viewer login alongside the PRs.
+fn paginate(mut next: impl FnMut(Option<&str>) -> Result<OpenPrPage>) -> SectionPrs {
+    let mut prs = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
-        let (login, page) = next(cursor.as_deref())?;
-        nodes.extend(page.nodes);
-        // A `hasNextPage` with no cursor would loop forever on the same page.
-        match page.page_info.end_cursor {
-            Some(c) if page.page_info.has_next_page => cursor = Some(c),
-            _ => return Ok((login, nodes)),
+        let page = next(cursor.as_deref())?;
+        prs.extend(page.prs);
+        match page.next {
+            Some(c) => cursor = Some(c),
+            None => return Ok((page.viewer, prs)),
         }
     }
 }
 
 /// Every open PR in one section, paged at `f.batch_size`.
-fn fetch_section(repo: &str, section: Section, root: &str, f: Fetch) -> SectionNodes {
-    paginate(|cursor| {
-        let query = build_page_query(repo, section, f.batch_size, cursor);
-        let resp = fetch_page(&query, root, f.retries)?;
-        Ok((resp.data.viewer.login, resp.data.search))
-    })
+fn fetch_section(forge: &dyn Forge, repo: &Repo, section: Section, f: Fetch) -> SectionPrs {
+    paginate(|cursor| fetch_page(forge, repo, section, f, cursor))
 }
 
-/// Fetch and classify the caller's PRs in a single GraphQL round-trip.
-/// Neither flag set ⇒ both groups. Stateless: no diff cache is read or
-/// written. `t`'s linked issues are unioned into each row via
-/// [`apply_tracker_links`], which costs one extra batched round trip on both
-/// tracker paths — opted into by `resolve_pr_links` on Linear, unconditional
-/// on GitHub.
+/// Fetch and classify the caller's open PRs in `repo`. Neither flag set means
+/// both groups. Stateless: no diff cache is read or written. `t`'s linked
+/// issues are unioned into each row via [`apply_tracker_links`], which costs
+/// one extra batched round trip on both tracker paths: opted into by
+/// `resolve_pr_links` on Linear, unconditional on GitHub.
 #[allow(clippy::too_many_arguments)]
 pub fn gather(
-    root: &str,
+    forge: &dyn Forge,
+    repo: &Repo,
     mine: bool,
     reviews: bool,
-    repo: &str,
     ignored_checks: &[String],
     resolve_pr_links: bool,
     fetch: Fetch,
@@ -851,8 +535,8 @@ pub fn gather(
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
 
-    // Only the sections the report will render are fetched, and the three run
-    // concurrently — each paginates independently, so serialising them would
+    // Only the sections the report will render are fetched, and they run
+    // concurrently: each paginates independently, so serialising them would
     // multiply the wall clock by the section count.
     let mut wanted = Vec::new();
     if want_mine {
@@ -862,10 +546,10 @@ pub fn gather(
         wanted.push(Section::ReviewRequested);
         wanted.push(Section::ReviewedBy);
     }
-    let fetched: Vec<(Section, SectionNodes)> = std::thread::scope(|s| {
+    let fetched: Vec<(Section, SectionPrs)> = std::thread::scope(|s| {
         let handles: Vec<_> = wanted
             .iter()
-            .map(|&sec| (sec, s.spawn(move || fetch_section(repo, sec, root, fetch))))
+            .map(|&sec| (sec, s.spawn(move || fetch_section(forge, repo, sec, fetch))))
             .collect();
         handles
             .into_iter()
@@ -879,23 +563,21 @@ pub fn gather(
             .collect()
     });
 
-    let mut data = GqlData {
-        viewer: Viewer {
-            login: String::new(),
-        },
-        mine: SearchNodes::default(),
-        review_requested: SearchNodes::default(),
-        reviewed_by: SearchNodes::default(),
+    let mut data = Sections {
+        viewer: String::new(),
+        mine: Vec::new(),
+        review_requested: Vec::new(),
+        reviewed_by: Vec::new(),
     };
     for (sec, res) in fetched {
-        let (login, nodes) = res?;
-        if data.viewer.login.is_empty() {
-            data.viewer.login = login;
+        let (login, prs) = res?;
+        if data.viewer.is_empty() {
+            data.viewer = login;
         }
         match sec {
-            Section::Mine => data.mine.nodes = nodes,
-            Section::ReviewRequested => data.review_requested.nodes = nodes,
-            Section::ReviewedBy => data.reviewed_by.nodes = nodes,
+            Section::Mine => data.mine = prs,
+            Section::ReviewRequested => data.review_requested = prs,
+            Section::ReviewedBy => data.reviewed_by = prs,
         }
     }
 
@@ -976,26 +658,31 @@ mod tests {
         assert_eq!(report.mine[0].issue_ids, vec!["9"]);
     }
 
-    fn node(json: serde_json::Value) -> PrNode {
-        serde_json::from_value(json).unwrap()
+    /// A GitHub GraphQL PR node, read through the GitHub forge's own parser,
+    /// so the fixtures below stay in the shape GitHub answers with.
+    fn node(json: serde_json::Value) -> OpenPr {
+        devkit_common::forge::github::open_pr_from_node(&json).unwrap()
     }
 
-    // A representative `gh api graphql` response parses into the views with the
-    // same classification the old per-`gh pr list` path produced.
+    fn nodes(json: serde_json::Value) -> Vec<OpenPr> {
+        json.as_array().unwrap().iter().cloned().map(node).collect()
+    }
+
+    // A representative response parses into the views with the same
+    // classification the old per-`gh pr list` path produced.
     #[test]
-    fn parses_graphql_and_classifies() {
-        let raw = r#"{
-          "data": {
-            "viewer": { "login": "me" },
-            "mine": { "nodes": [
+    fn parses_and_classifies() {
+        let data = Sections {
+            viewer: "me".into(),
+            mine: nodes(serde_json::json!([
               { "number": 10, "url": "u10", "headRefName": "lev/eng-1-foo",
                 "isDraft": false, "reviewDecision": "APPROVED", "mergeable": "MERGEABLE",
                 "author": {"login": "me"},
                 "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]},
                 "reviews": {"nodes": [{"author": {"login": "alice"}, "state": "APPROVED", "submittedAt": "2026-06-20T10:00:00Z"}]},
                 "reviewRequests": {"nodes": []} }
-            ]},
-            "reviewRequested": { "nodes": [
+            ])),
+            review_requested: nodes(serde_json::json!([
               { "number": 20, "url": "u20", "headRefName": "igork/ff-b01-thing",
                 "title": "feat(api): flag-gate thing [SWE-2]",
                 "isDraft": false, "reviewDecision": "REVIEW_REQUIRED", "mergeable": "MERGEABLE",
@@ -1003,12 +690,10 @@ mod tests {
                 "commits": {"nodes": []},
                 "reviews": {"nodes": []},
                 "reviewRequests": {"nodes": [{"requestedReviewer": {"login": "me"}}]} }
-            ]},
-            "reviewedBy": { "nodes": [] }
-          }
-        }"#;
-        let resp: GqlResp = serde_json::from_str(raw).unwrap();
-        let report = classify(resp.data, true, true, &[]);
+            ])),
+            reviewed_by: Vec::new(),
+        };
+        let report = classify(data, true, true, &[]);
         assert_eq!(report.mine.len(), 1);
         assert_eq!(report.mine[0].number, 10);
         assert_eq!(report.mine[0].issue_ids, vec!["ENG-1"]);
@@ -1022,62 +707,40 @@ mod tests {
         assert_eq!(report.reviews[0].action, "REVIEW NEEDED");
     }
 
-    fn page(nodes: &[u64], next: Option<&str>) -> SearchPage {
-        SearchPage {
-            nodes: nodes
+    fn page(numbers: &[u64], next: Option<&str>) -> OpenPrPage {
+        OpenPrPage {
+            viewer: "me".into(),
+            prs: numbers
                 .iter()
                 .map(|n| node(serde_json::json!({ "number": n })))
                 .collect(),
-            page_info: PageInfo {
-                has_next_page: next.is_some(),
-                end_cursor: next.map(str::to_string),
-            },
+            next: next.map(str::to_string),
         }
     }
 
     // Every page is followed, and each request carries the previous page's
-    // cursor — the whole point of paging: no PR is dropped past the first page.
+    // cursor. That is the whole point of paging: no PR is dropped past the
+    // first page.
     #[test]
     fn paginate_follows_cursors_across_pages() {
         let mut seen_cursors: Vec<Option<String>> = Vec::new();
-        let (login, nodes) = paginate(|c| {
+        let (login, prs) = paginate(|c| {
             seen_cursors.push(c.map(str::to_string));
             Ok(match c {
-                None => ("me".into(), page(&[1, 2], Some("c1"))),
-                Some("c1") => ("me".into(), page(&[3, 4], Some("c2"))),
-                _ => ("me".into(), page(&[5], None)),
+                None => page(&[1, 2], Some("c1")),
+                Some("c1") => page(&[3, 4], Some("c2")),
+                _ => page(&[5], None),
             })
         })
         .unwrap();
         assert_eq!(login, "me");
-        let got: Vec<u64> = nodes.iter().map(|n| n.number).collect();
+        let got: Vec<u64> = prs.iter().map(|n| n.number).collect();
         assert_eq!(got, vec![1, 2, 3, 4, 5]);
         assert_eq!(seen_cursors, vec![
             None,
             Some("c1".to_string()),
             Some("c2".to_string())
         ]);
-    }
-
-    // `hasNextPage: true` with a null `endCursor` must terminate rather than
-    // refetch page one forever.
-    #[test]
-    fn paginate_stops_when_cursor_missing() {
-        let mut calls = 0;
-        let (_, nodes) = paginate(|_| {
-            calls += 1;
-            assert!(calls < 10, "paginate looped on a null cursor");
-            Ok(("me".into(), SearchPage {
-                nodes: vec![node(serde_json::json!({ "number": 1 }))],
-                page_info: PageInfo {
-                    has_next_page: true,
-                    end_cursor: None,
-                },
-            }))
-        })
-        .unwrap();
-        assert_eq!(calls, 1);
-        assert_eq!(nodes.len(), 1);
     }
 
     // A page error aborts the whole section: a partial PR list would silently
@@ -1088,36 +751,13 @@ mod tests {
         let res = paginate(|_| {
             calls += 1;
             if calls == 1 {
-                Ok(("me".into(), page(&[1], Some("c1"))))
+                Ok(page(&[1], Some("c1")))
             } else {
                 Err(anyhow::anyhow!("HTTP 504"))
             }
         });
         assert!(res.is_err());
         assert_eq!(calls, 2);
-    }
-
-    // The per-section query carries the batch size, the section's qualifier,
-    // and the cursor — and keeps the nested selections at 100 (the verdict
-    // logic reduces over the full review/check set).
-    #[test]
-    fn page_query_shape() {
-        let first = build_page_query("o/r", Section::Mine, 25, None);
-        assert!(first.contains("first: 25"), "{first}");
-        assert!(first.contains("author:@me"), "{first}");
-        assert!(!first.contains("after:"), "{first}");
-        assert!(
-            first.contains("pageInfo { hasNextPage endCursor }"),
-            "{first}"
-        );
-        assert!(first.contains("reviews(last: 100)"), "{first}");
-
-        let next = build_page_query("o/r", Section::ReviewRequested, 10, Some("Y3Vyc29y"));
-        assert!(next.contains("first: 10, after: \"Y3Vyc29y\""), "{next}");
-        assert!(next.contains("review-requested:@me"), "{next}");
-
-        let by = build_page_query("o/r", Section::ReviewedBy, 25, None);
-        assert!(by.contains("reviewed-by:@me"), "{by}");
     }
 
     #[test]
@@ -1143,7 +783,7 @@ mod tests {
             ]},
             "reviewRequests": {"nodes": []}
         }));
-        assert_eq!(pr.reviews.nodes[0].submitted_at, "");
+        assert_eq!(pr.reviews[0].submitted_at, "");
     }
 
     fn mine_node(
@@ -1151,7 +791,7 @@ mod tests {
         mergeable: &str,
         draft: bool,
         rollup: Option<&str>,
-    ) -> PrNode {
+    ) -> OpenPr {
         let commits = match rollup {
             Some(s) => {
                 serde_json::json!({"nodes": [{"commit": {"statusCheckRollup": {"state": s}}}]})
@@ -1168,12 +808,13 @@ mod tests {
 
     #[test]
     fn checks_fail_run_ok_empty() {
-        assert_eq!(checks_text(None), "-");
-        assert_eq!(checks_text(Some("SUCCESS")), "ok");
-        assert_eq!(checks_text(Some("FAILURE")), "fail");
-        assert_eq!(checks_text(Some("ERROR")), "fail");
-        assert_eq!(checks_text(Some("PENDING")), "run");
-        assert_eq!(checks_text(Some("EXPECTED")), "run");
+        let cell = |rollup| checks_cell(&check_verdict(&mine_node(None, "x", false, rollup), &[]));
+        assert_eq!(cell(None), "-");
+        assert_eq!(cell(Some("SUCCESS")), "ok");
+        assert_eq!(cell(Some("FAILURE")), "fail");
+        assert_eq!(cell(Some("ERROR")), "fail");
+        assert_eq!(cell(Some("PENDING")), "run");
+        assert_eq!(cell(Some("EXPECTED")), "run");
     }
 
     #[test]
@@ -1188,7 +829,7 @@ mod tests {
     }
 
     /// Build a PR node carrying explicit rollup contexts (CheckRun shape).
-    fn pr_with_contexts(rollup: &str, contexts: serde_json::Value) -> PrNode {
+    fn pr_with_contexts(rollup: &str, contexts: serde_json::Value) -> OpenPr {
         node(serde_json::json!({
             "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
             "reviewDecision": "APPROVED", "mergeable": "MERGEABLE", "author": {"login": "me"},
@@ -1340,7 +981,7 @@ mod tests {
     /// followed by my own `COMMENTED` replies (e.g. answering a bot's inline
     /// threads), with `requested` controlling whether the human is
     /// re-requested.
-    fn change_request_node(requested: bool) -> PrNode {
+    fn change_request_node(requested: bool) -> OpenPr {
         let reviews = serde_json::json!({"nodes": [
             {"author": {"login": "human"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-23T11:00:00Z"},
             {"author": {"login": "me"}, "state": "COMMENTED", "submittedAt": "2026-06-23T13:00:00Z"}
@@ -1386,7 +1027,7 @@ mod tests {
         rollup: &str,
         requested: bool,
         reviews: serde_json::Value,
-    ) -> PrNode {
+    ) -> OpenPr {
         let requests = if requested {
             serde_json::json!({"nodes": [{"requestedReviewer": {"login": "human"}}]})
         } else {

@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::Path};
 
 use anyhow::Result;
 use devkit_common::{
-    github,
+    forge::{self, ForgeKind, HeadLookup, PrBrief, PrLocator, PrLookup, Repo},
     tracker::{Resolved, State, StateKind, TrackerKind},
     vcs::{Changes, Vcs, VersionControl},
     worktree::{self, IssueId},
@@ -32,23 +32,33 @@ pub enum PrStatus {
     Ambiguous {
         candidates: Vec<devkit_common::tracker::PrRef>,
     },
-    /// The PR could not be identified — no token, a failed request, or a
-    /// recorded PR that no longer resolves.
+    /// The PR could not be identified: no token, a failed request, no forge
+    /// found, or a recorded PR that no longer resolves.
     Unknown { reason: String },
+    /// The project declared it has no forge, so there is no PR to wait for.
+    /// What stands in for "merged" is the branch's commits being on a remote,
+    /// since `issue end` deletes the branch.
+    Untracked { pushed: bool },
 }
 
 impl PrStatus {
     pub fn number(&self) -> Option<u64> {
         match self {
             PrStatus::Unique { number, .. } => Some(*number),
-            PrStatus::None | PrStatus::Ambiguous { .. } | PrStatus::Unknown { .. } => None,
+            PrStatus::None
+            | PrStatus::Ambiguous { .. }
+            | PrStatus::Unknown { .. }
+            | PrStatus::Untracked { .. } => None,
         }
     }
 
     pub fn url(&self) -> Option<&str> {
         match self {
             PrStatus::Unique { url, .. } => Some(url),
-            PrStatus::None | PrStatus::Ambiguous { .. } | PrStatus::Unknown { .. } => None,
+            PrStatus::None
+            | PrStatus::Ambiguous { .. }
+            | PrStatus::Unknown { .. }
+            | PrStatus::Untracked { .. } => None,
         }
     }
 
@@ -60,6 +70,7 @@ impl PrStatus {
             PrStatus::None => "NO_PR",
             PrStatus::Ambiguous { .. } => "AMBIGUOUS",
             PrStatus::Unknown { .. } => "UNKNOWN",
+            PrStatus::Untracked { .. } => "NO_FORGE",
         }
     }
 }
@@ -186,8 +197,8 @@ impl Discovered {
     }
 }
 
-/// One GitHub head-branch lookup per worktree branch, keyed by branch name.
-pub struct Prs(HashMap<String, github::HeadLookup>);
+/// Each worktree branch's PR status, keyed by branch name.
+pub struct Prs(HashMap<String, PrStatus>);
 
 impl Prs {
     /// An empty PR list, built without any network call. Used when there are
@@ -196,7 +207,15 @@ impl Prs {
         Prs(HashMap::new())
     }
 
-    /// Overlay `row`'s branch's head lookup onto `row.pr`, leaving the row
+    /// Head-branch lookups, tagged as the report's `PrStatus`.
+    pub fn from_lookups(lookups: HashMap<String, HeadLookup>) -> Prs {
+        Prs(lookups
+            .into_iter()
+            .map(|(b, l)| (b, pr_status_of(&l)))
+            .collect())
+    }
+
+    /// Overlay `row`'s branch's status onto `row.pr`, leaving the row
     /// untouched when the branch is detached or has no entry (an empty `Prs`
     /// never queried it). Same rule `assemble` applies per row, exposed so a
     /// single-worktree caller can enrich one row.
@@ -204,23 +223,23 @@ impl Prs {
         if row.branch == "DETACHED" {
             return;
         }
-        if let Some(lookup) = self.0.get(&row.branch) {
-            row.pr = pr_status_of(lookup);
+        if let Some(status) = self.0.get(&row.branch) {
+            row.pr = status.clone();
         }
     }
 }
 
 /// Tag a head-branch lookup as the report's `PrStatus`.
-fn pr_status_of(lookup: &github::HeadLookup) -> PrStatus {
+fn pr_status_of(lookup: &HeadLookup) -> PrStatus {
     match lookup {
-        github::HeadLookup::Unique(pr) => PrStatus::Unique {
+        HeadLookup::Unique(pr) => PrStatus::Unique {
             number: pr.number,
             state: pr.state.clone(),
             url: pr.url.clone(),
             is_draft: pr.is_draft,
         },
-        github::HeadLookup::NoMatch => PrStatus::None,
-        github::HeadLookup::Ambiguous(candidates) => PrStatus::Ambiguous {
+        HeadLookup::NoMatch => PrStatus::None,
+        HeadLookup::Ambiguous(candidates) => PrStatus::Ambiguous {
             candidates: candidates
                 .iter()
                 .map(|p| devkit_common::tracker::PrRef {
@@ -229,7 +248,7 @@ fn pr_status_of(lookup: &github::HeadLookup) -> PrStatus {
                 })
                 .collect(),
         },
-        github::HeadLookup::Unavailable(reason) => PrStatus::Unknown {
+        HeadLookup::Unavailable(reason) => PrStatus::Unknown {
             reason: reason.clone(),
         },
     }
@@ -312,89 +331,32 @@ pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clon
     });
 }
 
-/// One GraphQL round trip resolving every worktree branch's PR, aliased the way
-/// `linear::build_query` aliases its state queries.
-///
-/// This replaces a `gh pr list --limit 500` over the whole repository. The
-/// branch count is the worktree count, which is small; the repository's total
-/// PR count — what the 500 cap was fighting — stops mattering.
-pub fn heads_query(slug: &str, branches: &[String]) -> String {
-    let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
-    let fields = "totalCount nodes { number state url headRefName headRefOid isDraft \
-                  author { login } \
-                  headRepositoryOwner { login } }";
-    let aliases = branches
-        .iter()
-        .enumerate()
-        .map(|(i, b)| {
-            format!(
-                "b{i}: pullRequests(headRefName: {}, first: 10, \
-                 states: [OPEN, CLOSED, MERGED]) {{ {fields} }}",
-                serde_json::Value::from(b.as_str())
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!(
-        "query {{ repository(owner: {}, name: {}) {{ {aliases} }} }}",
-        serde_json::Value::from(owner),
-        serde_json::Value::from(name),
-    )
+/// Whether the commit checked out at `path` is on some remote-tracking branch.
+/// A repository that cannot answer reads as not pushed, since this stands in
+/// for a merged PR before `issue end` deletes the branch.
+pub fn pushed_of(path: &str) -> bool {
+    let path = Path::new(path);
+    Vcs::at(path).pushed(path).unwrap_or(false)
 }
 
-/// Split a `heads_query` response back into one lookup per branch.
-pub fn parse_heads(
-    resp: &serde_json::Value,
-    branches: &[String],
-) -> HashMap<String, github::HeadLookup> {
-    branches
-        .iter()
-        .enumerate()
-        .map(|(i, b)| {
-            let key = format!("b{i}");
-            let alias = &resp["data"]["repository"][&key];
-            // A present-but-null or absent alias is a malformed response, not
-            // evidence the branch has no PR — the latter is what `issue end`
-            // reads before deleting a worktree.
-            let lookup = if alias.is_null() {
-                github::HeadLookup::Unavailable(format!(
-                    "no `{key}` alias in the GraphQL response for branch `{b}`"
-                ))
-            } else {
-                let one = serde_json::json!({
-                    "data": { "repository": { "pullRequests": alias } },
-                });
-                github::parse_head_lookup(&one)
-            };
-            (b.clone(), lookup)
-        })
-        .collect()
-}
-
-/// Every branch marked `Unavailable` with the same `reason` — the whole batch
+/// Every branch marked `Unavailable` with the same `reason`: the whole batch
 /// request could not be made at all (no token, transport failure).
-fn unavailable_all(branches: &[String], reason: &str) -> HashMap<String, github::HeadLookup> {
+fn unavailable_all(branches: &[String], reason: &str) -> HashMap<String, HeadLookup> {
     branches
         .iter()
-        .map(|b| {
-            (
-                b.clone(),
-                github::HeadLookup::Unavailable(reason.to_string()),
-            )
-        })
+        .map(|b| (b.clone(), HeadLookup::Unavailable(reason.to_string())))
         .collect()
 }
 
 /// Split worktree branches into ones a worktree's record already binds to a
 /// PR (paired with that locator) and the rest, to be looked up by head branch
 /// name in one batch. A bound branch never reaches the batch: the record is
-/// authoritative over branch matching in any repository, not only one
-/// outside `pr_repo`, so a superseded PR sharing the same head branch can
-/// never win by riding along in that batch.
+/// authoritative over branch matching in any repository, so a superseded PR
+/// sharing the same head branch can never win by riding along in that batch.
 fn partition_by_record(
     rows: &[IssueWorktree],
-    recorded: impl Fn(&str) -> Option<github::PrLocator>,
-) -> (Vec<(String, github::PrLocator)>, Vec<String>) {
+    recorded: impl Fn(&str) -> Option<PrLocator>,
+) -> (Vec<(String, PrLocator)>, Vec<String>) {
     let mut bound = Vec::new();
     let mut branches = Vec::new();
     for row in rows.iter().filter(|r| r.branch != "DETACHED") {
@@ -410,11 +372,11 @@ fn partition_by_record(
 /// already has a variant for: `Unavailable` covers both a transport failure
 /// and a PR that no longer resolves, since neither may fall back to branch
 /// matching and both close the finished verdict the same way.
-fn recorded_result(found: Result<Option<github::PrBrief>>, n: u64) -> github::HeadLookup {
+fn recorded_result(found: Result<Option<PrBrief>>, n: u64) -> HeadLookup {
     match found {
-        Ok(Some(pr)) => github::HeadLookup::Unique(pr),
-        Ok(None) => github::HeadLookup::Unavailable(format!("recorded PR #{n} no longer resolves")),
-        Err(e) => github::HeadLookup::Unavailable(format!("{e:#}")),
+        Ok(Some(pr)) => HeadLookup::Unique(pr),
+        Ok(None) => HeadLookup::Unavailable(format!("recorded PR #{n} no longer resolves")),
+        Err(e) => HeadLookup::Unavailable(format!("{e:#}")),
     }
 }
 
@@ -424,9 +386,9 @@ fn recorded_result(found: Result<Option<github::PrBrief>>, n: u64) -> github::He
 /// verdict instead of closing it.
 fn recorded_answers(
     pending: Vec<(String, u64)>,
-    answers: Vec<github::PrLookup>,
-) -> HashMap<String, github::HeadLookup> {
-    let mut answers: Vec<Option<github::PrLookup>> = answers.into_iter().map(Some).collect();
+    answers: Vec<PrLookup>,
+) -> HashMap<String, HeadLookup> {
+    let mut answers: Vec<Option<PrLookup>> = answers.into_iter().map(Some).collect();
     answers.resize_with(pending.len(), || None);
     pending
         .into_iter()
@@ -442,27 +404,17 @@ fn recorded_answers(
         .collect()
 }
 
-/// Every recorded locator's exact PR, in one GraphQL round trip, keyed by the
+/// Every recorded locator's exact PR, in one batched read, keyed by the
 /// worktree branch each was recorded for. A locator naming no repository means
 /// `default_repo`; one whose slug will not validate is `Unavailable` on its own
 /// without keeping the rest of the batch from being asked.
 fn recorded_lookups(
-    bound: Vec<(String, github::PrLocator)>,
-    default_repo: &github::Repo,
-) -> HashMap<String, github::HeadLookup> {
+    bound: Vec<(String, PrLocator)>,
+    default_repo: &Repo,
+    forge: &dyn forge::Forge,
+) -> HashMap<String, HeadLookup> {
     if bound.is_empty() {
         return HashMap::new();
-    }
-    if github::token().is_none() {
-        return bound
-            .into_iter()
-            .map(|(branch, _)| {
-                (
-                    branch,
-                    github::HeadLookup::Unavailable("no GitHub token resolved".into()),
-                )
-            })
-            .collect();
     }
     let mut out = HashMap::new();
     let mut targets = Vec::new();
@@ -470,15 +422,15 @@ fn recorded_lookups(
     for (branch, loc) in bound {
         match loc.resolve_or(default_repo) {
             Ok(repo) => {
-                targets.push((repo.slug, loc.number));
+                targets.push((repo, loc.number));
                 pending.push((branch, loc.number));
             }
             Err(e) => {
-                out.insert(branch, github::HeadLookup::Unavailable(format!("{e:#}")));
+                out.insert(branch, HeadLookup::Unavailable(format!("{e:#}")));
             }
         }
     }
-    let answers = match github::prs_by_number(&targets) {
+    let answers = match forge.prs(&targets) {
         Ok(found) => found,
         Err(e) => {
             let reason = format!("{e:#}");
@@ -496,35 +448,48 @@ fn recorded_lookups(
 /// keeps the record: the record is authoritative over branch matching, and a
 /// branch match overwriting it is the inversion this ordering forbids.
 fn merge_lookups(
-    recorded: HashMap<String, github::HeadLookup>,
-    batch: HashMap<String, github::HeadLookup>,
-) -> HashMap<String, github::HeadLookup> {
+    recorded: HashMap<String, HeadLookup>,
+    batch: HashMap<String, HeadLookup>,
+) -> HashMap<String, HeadLookup> {
     let mut merged = batch;
     merged.extend(recorded);
     merged
 }
 
-/// The PR lookup for every worktree branch, in at most two round trips: one
-/// resolving every recorded locator by number, one matching every other branch
-/// by head name. Fails soft: a request that cannot be made at all (no token,
-/// transport error) marks every branch it covered `Unknown` rather than
-/// aborting the caller's report.
-pub fn fetch_prs(d: &Discovered, repo: &github::Repo) -> Result<Prs> {
+/// The PR status of every worktree branch. With a forge, that is at most two
+/// round trips: one resolving every recorded locator by number, one matching
+/// every other branch by head name. Fails soft: a request that cannot be made
+/// at all (no token, transport error) marks every branch it covered `Unknown`
+/// rather than aborting the caller's report.
+///
+/// A project that declared no forge gets each branch's push state instead,
+/// and one where devkit found no forge gets `Unknown` naming why.
+pub fn fetch_prs(d: &Discovered, f: &forge::Resolved) -> Result<Prs> {
+    let rows = d.rows.iter().filter(|r| r.branch != "DETACHED");
+    match (f.forge.kind(), f.declared) {
+        (ForgeKind::None, true) => {
+            return Ok(Prs(rows
+                .map(|r| {
+                    let pushed = pushed_of(&r.worktree);
+                    (r.branch.clone(), PrStatus::Untracked { pushed })
+                })
+                .collect()));
+        }
+        (ForgeKind::None, false) => {
+            let branches: Vec<String> = rows.map(|r| r.branch.clone()).collect();
+            let reason = format!("no forge: {}", f.reason);
+            return Ok(Prs::from_lookups(unavailable_all(&branches, &reason)));
+        }
+        (ForgeKind::Github | ForgeKind::Gitlab | ForgeKind::Forgejo, _) => {}
+    }
+    let repo = f.repos.prs()?;
+    let forge = f.forge.as_ref();
     let (bound, branches) = partition_by_record(&d.rows, |worktree| {
         devkit_common::record::read(Path::new(worktree)).and_then(|r| r.pr)
     });
-    let recorded = recorded_lookups(bound, repo);
-    let batch = if branches.is_empty() {
-        HashMap::new()
-    } else if github::token().is_none() {
-        unavailable_all(&branches, "no GitHub token resolved")
-    } else {
-        match github::graphql(&heads_query(&repo.slug, &branches)) {
-            Ok(v) => parse_heads(&v, &branches),
-            Err(e) => unavailable_all(&branches, &format!("{e:#}")),
-        }
-    };
-    Ok(Prs(merge_lookups(recorded, batch)))
+    let recorded = recorded_lookups(bound, repo, forge);
+    let batch = forge.prs_by_head(repo, &branches);
+    Ok(Prs::from_lookups(merge_lookups(recorded, batch)))
 }
 
 /// Attach dirty flags (in row order), the branch's PR, tracker state, and the
@@ -597,6 +562,8 @@ pub fn reason_not_finished(
         PrStatus::None => bits.push("no PR".into()),
         PrStatus::Ambiguous { .. } => bits.push("PR ambiguous".into()),
         PrStatus::Unknown { reason } => bits.push(format!("PR unknown: {reason}")),
+        PrStatus::Untracked { pushed: true } => {}
+        PrStatus::Untracked { pushed: false } => bits.push("commits not on a remote".into()),
     }
     // A project that declared it has no tracker has no state to wait for; every
     // other tracker gates on the issue's state and says so when it could not
@@ -634,7 +601,7 @@ pub fn gather_with(
     start: &str,
     ids: &[String],
     t: &Resolved,
-    repos: &github::Repos,
+    f: &forge::Resolved,
 ) -> Result<StatusReport> {
     let d = discover(start, ids)?;
     let info = TrackerInfo::of(t);
@@ -644,12 +611,11 @@ pub fn gather_with(
         // repository is needed either.
         return Ok(assemble(d, Vec::new(), Prs::empty(), HashMap::new(), info));
     }
-    let repo = repos.prs()?;
     let paths = d.worktree_paths();
     let ids_v: Vec<String> = d.issue_ids().to_vec();
     let (dirty, prs, states, link_base) = std::thread::scope(|s| {
         let dt = s.spawn(|| dirty_many(&paths));
-        let pt = s.spawn(|| fetch_prs(&d, repo));
+        let pt = s.spawn(|| fetch_prs(&d, f));
         // The state fetch and the link base share a thread: both go through the
         // tracker, and both can reach the network.
         let tt = s.spawn(|| (t.states(&ids_v), t.issue_url("")));
@@ -674,9 +640,13 @@ pub fn gather_with(
 /// closed on every row until a caller overlays real data.
 pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = discover(start, ids)?;
-    let repos =
-        devkit_common::github::Repos::resolve(&devkit_config::GithubConfig::default(), start, None);
-    let t = devkit_common::tracker::resolve(None, Path::new(start), &repos);
+    let f = forge::resolve(
+        &devkit_config::ForgeConfig::default(),
+        &devkit_config::GithubConfig::default(),
+        start,
+        None,
+    );
+    let t = devkit_common::tracker::resolve(None, Path::new(start), &f.repos);
     let dirty = dirty_many(&d.worktree_paths());
     Ok(assemble(
         d,
@@ -874,19 +844,22 @@ mod tests {
         }
     }
     impl Prs {
-        fn for_test(briefs: Vec<github::PrBrief>) -> Self {
-            Prs(briefs
-                .into_iter()
-                .map(|b| (b.head_ref_name.clone(), github::HeadLookup::Unique(b)))
-                .collect())
+        fn for_test(briefs: Vec<PrBrief>) -> Self {
+            Prs::from_lookups(
+                briefs
+                    .into_iter()
+                    .map(|b| (b.head_ref_name.clone(), HeadLookup::Unique(b)))
+                    .collect(),
+            )
         }
     }
 
-    fn pr(n: u64, state: &str, head: &str) -> github::PrBrief {
-        github::PrBrief {
+    fn pr(n: u64, state: &str, head: &str) -> PrBrief {
+        PrBrief {
             number: n,
             state: state.into(),
             url: format!("https://x/{n}"),
+            title: String::new(),
             head_ref_name: head.into(),
             head_ref_oid: format!("oid{n}"),
             head_repo_owner: None,
@@ -908,7 +881,7 @@ mod tests {
         b.worktree = "/w/b".into();
         b.branch = "feat/y".into();
 
-        let loc = github::PrLocator {
+        let loc = PrLocator {
             repo: None,
             number: 12,
         };
@@ -917,21 +890,6 @@ mod tests {
         });
         assert_eq!(bound, vec![("feat/x".to_string(), loc)]);
         assert_eq!(branches, vec!["feat/y".to_string()]);
-    }
-
-    /// A `heads_query` response carrying one PR for the first branch queried.
-    fn heads_fixture(number: u64, branch: &str) -> serde_json::Value {
-        serde_json::json!({ "data": { "repository": { "b0": {
-            "totalCount": 1,
-            "nodes": [{
-                "number": number,
-                "state": "OPEN",
-                "url": format!("https://github.com/o/r/pull/{number}"),
-                "headRefName": branch,
-                "headRefOid": "beef5678",
-                "headRepositoryOwner": { "login": "o" },
-            }],
-        } } } })
     }
 
     #[test]
@@ -944,7 +902,7 @@ mod tests {
         row.worktree = "/w/a".into();
         row.branch = "feat/x".into();
 
-        let recorded = github::PrLocator {
+        let recorded = PrLocator {
             repo: Some("me/fork".into()),
             number: 12,
         };
@@ -956,17 +914,16 @@ mod tests {
             "a bound branch never reaches the batch"
         );
 
-        let batch = parse_heads(&heads_fixture(11, "feat/x"), &["feat/x".to_string()]);
-        assert!(
-            matches!(&batch["feat/x"], github::HeadLookup::Unique(p) if p.number == 11),
-            "the fixture's second PR is what branch matching would report"
-        );
-
+        // What branch matching would report: the stranger's PR.
+        let batch = HashMap::from([(
+            "feat/x".to_string(),
+            HeadLookup::Unique(pr(11, "OPEN", "feat/x")),
+        )]);
         let recorded = HashMap::from([(
             "feat/x".to_string(),
             recorded_result(Ok(Some(pr(12, "MERGED", "feat/x"))), 12),
         )]);
-        let prs = Prs(merge_lookups(recorded, batch));
+        let prs = Prs::from_lookups(merge_lookups(recorded, batch));
         prs.apply(&mut row);
         assert_eq!(row.pr.number(), Some(12), "got {:?}", row.pr);
     }
@@ -978,9 +935,9 @@ mod tests {
             Ok(Some(pr(12, "MERGED", "someone/else"))),
             Ok(None),
         ]);
-        assert!(matches!(&got["feat/x"], github::HeadLookup::Unique(p) if p.number == 12));
+        assert!(matches!(&got["feat/x"], HeadLookup::Unique(p) if p.number == 12));
         assert!(
-            matches!(&got["feat/y"], github::HeadLookup::Unavailable(r) if r.contains("13")),
+            matches!(&got["feat/y"], HeadLookup::Unavailable(r) if r.contains("13")),
             "got {:?}",
             got["feat/y"]
         );
@@ -990,10 +947,7 @@ mod tests {
         // finished verdict.
         let short = recorded_answers(pending, vec![Ok(Some(pr(12, "MERGED", "feat/x")))]);
         assert_eq!(short.len(), 2);
-        assert!(matches!(
-            short["feat/y"],
-            github::HeadLookup::Unavailable(_)
-        ));
+        assert!(matches!(short["feat/y"], HeadLookup::Unavailable(_)));
     }
 
     #[test]
@@ -1001,7 +955,7 @@ mod tests {
         let mut d = wt("UNKNOWN", "NO_PR", false, None);
         d.branch = "DETACHED".into();
         let (bound, branches) = partition_by_record(&[d], |_| {
-            Some(github::PrLocator {
+            Some(PrLocator {
                 repo: None,
                 number: 1,
             })
@@ -1015,15 +969,15 @@ mod tests {
         let brief = pr(12, "OPEN", "feat/y");
         assert!(matches!(
             recorded_result(Ok(Some(brief.clone())), 12),
-            github::HeadLookup::Unique(p) if p.number == 12
+            HeadLookup::Unique(p) if p.number == 12
         ));
         assert!(matches!(
             recorded_result(Ok(None), 3),
-            github::HeadLookup::Unavailable(reason) if reason.contains('3')
+            HeadLookup::Unavailable(reason) if reason.contains('3')
         ));
         assert!(matches!(
             recorded_result(Err(anyhow::anyhow!("boom")), 3),
-            github::HeadLookup::Unavailable(reason) if reason.contains("boom")
+            HeadLookup::Unavailable(reason) if reason.contains("boom")
         ));
     }
 
@@ -1265,55 +1219,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn heads_are_batched_one_alias_per_branch() {
-        let q = heads_query("o/r", &["feat/a".into(), "fix/b".into()]);
-        assert!(
-            q.contains("b0: pullRequests(headRefName: \"feat/a\""),
-            "{q}"
-        );
-        assert!(q.contains("b1: pullRequests(headRefName: \"fix/b\""), "{q}");
-        assert_eq!(q.matches("repository(").count(), 1, "one round trip");
-    }
-
-    #[test]
-    fn a_repository_with_more_prs_than_any_window_still_resolves_each_branch() {
-        // The `--limit 500` listing this replaces could not promise this: a
-        // branch whose PR sat beyond the window read as NO_PR, with no
-        // signal.
-        let resp: serde_json::Value = serde_json::from_str(
-            r#"{"data":{"repository":{
-                 "b0":{"totalCount":1,"nodes":[{"number":900,"state":"OPEN",
-                       "url":"https://github.com/o/r/pull/900","headRefName":"feat/a",
-                       "headRefOid":"aa11","headRepositoryOwner":{"login":"me"}}]},
-                 "b1":{"totalCount":0,"nodes":[]}}}}"#,
-        )
-        .unwrap();
-        let got = parse_heads(&resp, &["feat/a".into(), "fix/b".into()]);
-        assert!(matches!(got["feat/a"], github::HeadLookup::Unique(ref p) if p.number == 900));
-        assert!(matches!(got["fix/b"], github::HeadLookup::NoMatch));
-    }
-
-    #[test]
-    fn a_missing_alias_is_unavailable_not_no_match() {
-        // A malformed or truncated response is a lookup that could not be
-        // made, not evidence the branch has no PR — the latter is what
-        // `issue end` reads before deleting a worktree.
-        let resp: serde_json::Value = serde_json::from_str(
-            r#"{"data":{"repository":{
-                 "b0":{"totalCount":0,"nodes":[]}}}}"#,
-        )
-        .unwrap();
-        let got = parse_heads(&resp, &["feat/a".into(), "fix/b".into()]);
-        assert!(matches!(got["feat/a"], github::HeadLookup::NoMatch));
-        match &got["fix/b"] {
-            github::HeadLookup::Unavailable(reason) => {
-                assert!(reason.contains("fix/b"), "{reason}");
-            }
-            other => panic!("expected Unavailable, got {other:?}"),
-        }
-    }
-
     // dirty_stream must report each index exactly once with the same result
     // dirty_many computes. Every dir is a clean git repo except one, which
     // carries an untracked file, so exactly one index is true and the value
@@ -1369,28 +1274,83 @@ mod tests {
         assert!(dirty_of(dir.path().to_str().unwrap()));
     }
 
+    /// A project that declared no forge has no PR to wait for, so its commits
+    /// being on a remote is what `issue end` needs before deleting the branch.
     #[test]
-    fn heads_query_selects_is_draft() {
-        let q = heads_query("o/r", &["feat/a".into()]);
+    fn a_project_with_no_forge_finishes_once_its_commits_are_pushed() {
+        let none = tracker(TrackerKind::None, false);
+        let row = |pushed| IssueWorktree {
+            pr: PrStatus::Untracked { pushed },
+            ..wt("ENG-1", "NO_PR", false, None)
+        };
+        assert_eq!(reason_not_finished(&row(true), &none, false), None);
+        assert_eq!(
+            reason_not_finished(&row(false), &none, false).as_deref(),
+            Some("commits not on a remote")
+        );
+        assert_eq!(row(true).pr.state_label(), "NO_FORGE");
+    }
+
+    fn scratch_forge(kind: &str) -> (tempfile::TempDir, forge::Resolved) {
+        let dir = tempfile::tempdir().unwrap();
+        Git::fixture(dir.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        Git::fixture(dir.path())
+            .args(["commit", "-q", "--allow-empty", "-m", "init"])
+            .output()
+            .unwrap();
+        let cfg: devkit_config::Config =
+            devkit_config::Config::parse(&format!("[forge]\nkind = \"{kind}\"\n")).unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let f = forge::resolve(&cfg.forge, &cfg.github, &path, None);
+        (dir, f)
+    }
+
+    /// Declared none reads each branch's push state; a commit only local
+    /// reads as not pushed. Detection finding no forge holds the gate with
+    /// the reason instead.
+    #[test]
+    fn fetch_prs_without_a_forge_reads_push_state_or_holds_the_gate() {
+        let (dir, declared) = scratch_forge("none");
+        let mut row = wt("ENG-1", "NO_PR", false, None);
+        row.worktree = dir.path().to_string_lossy().into_owned();
+        row.branch = "main".into();
+        let d = Discovered::for_test(vec![row.clone()], vec!["ENG-1".into()]);
+        let mut got = row.clone();
+        fetch_prs(&d, &declared).unwrap().apply(&mut got);
+        assert_eq!(got.pr, PrStatus::Untracked { pushed: false });
+
+        let detected = forge::resolve(
+            &devkit_config::ForgeConfig::default(),
+            &devkit_config::GithubConfig::default(),
+            &row.worktree,
+            None,
+        );
+        let mut got = row;
+        fetch_prs(&d, &detected).unwrap().apply(&mut got);
         assert!(
-            q.contains("isDraft"),
-            "heads_query must select isDraft: {q}"
+            matches!(&got.pr, PrStatus::Unknown { reason } if reason.contains("no forge")),
+            "{:?}",
+            got.pr
         );
     }
 
     #[test]
     fn pr_status_of_carries_the_draft_flag() {
-        let pr = github::PrBrief {
+        let pr = PrBrief {
             number: 7,
             state: "OPEN".into(),
             url: "u7".into(),
+            title: String::new(),
             head_ref_name: "feat/x".into(),
             head_ref_oid: "abc123".into(),
             head_repo_owner: None,
             is_draft: true,
             author_login: None,
         };
-        let status = pr_status_of(&github::HeadLookup::Unique(pr));
+        let status = pr_status_of(&HeadLookup::Unique(pr));
         assert_eq!(status, PrStatus::Unique {
             number: 7,
             state: "OPEN".into(),

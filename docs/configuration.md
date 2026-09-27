@@ -36,7 +36,7 @@ linear_workspace = "adaptyv"
 slack_token      = "xoxb-..."
 ```
 
-Resolution order for each credential is `$ENV` -> `secrets.toml` -> unset, so a shell export or a Doppler-injected variable always overrides the file. Populate the file with `devkit auth <linear|slack>` (it validates the token against the live API before saving) and inspect it with `devkit doctor`. GitHub has no entry: devkit uses the token `gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN` supplies, and `devkit auth github` reports which.
+Resolution order for each credential is `$ENV` -> `secrets.toml` -> unset, so a shell export or a Doppler-injected variable always overrides the file. Populate the file with `devkit auth <linear|slack>` (it validates the token against the live API before saving) and inspect it with `devkit doctor`. GitHub has no entry: devkit uses the token `gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN` supplies, and `devkit auth github` reports which. A GitLab or Forgejo forge reads `gitlab_token` or `forgejo_token` like any other key.
 
 ## Editor support
 

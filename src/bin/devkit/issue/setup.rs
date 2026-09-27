@@ -460,8 +460,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
         anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
     }
 
-    let repos = devkit_common::github::Repos::resolve(&cfg.github, &start, None);
-    let resolved = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start), &repos);
+    let forge = devkit_common::forge::resolve(&cfg.forge, &cfg.github, &start, None);
+    let resolved =
+        devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start), &forge.repos);
     let t = resolved.tracker.as_ref();
     let issue_ref = args
         .issue

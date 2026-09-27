@@ -71,16 +71,18 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
         declared: true,
         reason: "chosen by this test".into(),
     };
-    let repos = devkit_common::github::Repos::from_parts(
+    let main = base.path().join("main");
+    let forge = devkit_common::forge::resolve(
+        &devkit_config::ForgeConfig::default(),
         &devkit_config::GithubConfig::default(),
-        None,
+        main.to_str().unwrap(),
         None,
     );
     let report = devkit_issue::status::gather_with(
-        base.path().join("main").to_str().unwrap(),
+        main.to_str().unwrap(),
         &["NOPE-1".into()],
         &injected,
-        &repos,
+        &forge,
     )
     .unwrap();
     assert!(report.worktrees.is_empty());

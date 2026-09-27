@@ -51,10 +51,16 @@ impl Fake {
         Self::build(extra, None, None)
     }
 
-    /// A project with no `[github]` table and `origin` set to `url`, so every
-    /// repository it acts on defaults from the remote.
+    /// A project with no `[forge]` table and `origin` set to `url`, so the
+    /// forge and every repository it acts on are detected from the remote.
     pub fn with_origin(url: &str) -> Self {
         Self::build("", None, Some(url))
+    }
+
+    /// [`Fake::with_origin`] with `extra` appended to the config, which may
+    /// open tables of its own (`[forge]`, say).
+    pub fn with_origin_and(extra: &str, url: &str) -> Self {
+        Self::build(extra, None, Some(url))
     }
 
     fn build(extra_defaults: &str, pr: Option<&Pr>, origin: Option<&str>) -> Self {
@@ -84,7 +90,7 @@ impl Fake {
                     .expect("git remote add");
                 ""
             }
-            None => "[github]\npr_repo = \"o/r\"",
+            None => "[forge]\nkind = \"github\"\nrepo = \"o/r\"",
         };
 
         std::fs::write(

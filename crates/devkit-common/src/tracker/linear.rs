@@ -71,7 +71,7 @@ pub fn parse_issue_pr(resp: &serde_json::Value) -> (Option<LinearPr>, String) {
         .filter_map(|a| a["url"].as_str())
         .find(|u| u.contains("github.com") && u.contains("/pull/"))
         .and_then(|u| {
-            crate::github::pr_number_from_url(u).map(|number| LinearPr {
+            crate::forge::pr_number_from_url(u).map(|number| LinearPr {
                 url: u.to_string(),
                 number,
             })

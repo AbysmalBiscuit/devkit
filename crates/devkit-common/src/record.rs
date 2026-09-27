@@ -23,7 +23,7 @@ pub struct IssueRecord {
     /// `pr_repo` is still findable. Absent on records written before it existed
     /// and on an `issue setup` worktree whose PR does not exist yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pr: Option<crate::github::PrLocator>,
+    pub pr: Option<crate::forge::PrLocator>,
     /// The baseline this worktree compares against, written whenever `devrun
     /// up` resolves one. Absent on records written before baselines were
     /// per-worktree, and on a worktree that has never run one. The path is
@@ -112,7 +112,7 @@ mod tests {
             slug: "fix-login".into(),
             apps: vec!["web".into(), "api".into()],
             summary: Some("/w/ISSUE_SUMMARY_ABC-123.md".into()),
-            pr: Some(crate::github::PrLocator {
+            pr: Some(crate::forge::PrLocator {
                 repo: Some("acme/web".into()),
                 number: 42,
             }),

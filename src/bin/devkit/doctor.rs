@@ -147,14 +147,44 @@ fn baseline_orphans() -> (usize, u64, usize) {
 /// Detection is ambient — a globally exported `LINEAR_API_KEY` resolves Linear
 /// for every project on the machine, including one that has nothing in Linear —
 /// so without this row nothing on any CLI path reveals the choice or its cause.
-fn resolve_tracker(start: &std::path::Path) -> Resolved {
+fn resolve_selection(start: &std::path::Path) -> (Resolved, devkit_common::forge::Resolved) {
     let cfg = devkit_ports::load::load(None, start).ok().map(|l| l.config);
-    let (kind, github) = match cfg {
-        Some(c) => (c.tracker.kind, c.github),
-        None => (None, devkit_config::GithubConfig::default()),
+    let (kind, forge_cfg, github) = match cfg {
+        Some(c) => (c.tracker.kind, c.forge, c.github),
+        None => Default::default(),
     };
-    let repos = devkit_common::github::Repos::resolve(&github, &start.to_string_lossy(), None);
-    devkit_common::tracker::resolve(kind, start, &repos)
+    let forge = devkit_common::forge::resolve(&forge_cfg, &github, &start.to_string_lossy(), None);
+    (
+        devkit_common::tracker::resolve(kind, start, &forge.repos),
+        forge,
+    )
+}
+
+/// Which forge the PR commands talk to, and why. A forge devkit could not find
+/// fails every PR command and holds `issue end`'s verdict open, with nothing
+/// else on the CLI saying so.
+fn forge_check(r: &devkit_common::forge::Resolved) -> Check {
+    use devkit_common::forge::ForgeKind;
+    let kind = r.forge.kind();
+    match kind {
+        ForgeKind::None if r.declared => Check::Ok(format!("none: {}", r.reason)),
+        ForgeKind::None => Check::Warn(format!(
+            "none: {}; PR commands fail and `issue end` finishes nothing",
+            r.reason
+        )),
+        ForgeKind::Github | ForgeKind::Gitlab | ForgeKind::Forgejo => {
+            let detail = format!("{kind} on {}: {}", r.forge.host(), r.reason);
+            if r.forge.ready() {
+                Check::Ok(detail)
+            } else {
+                let why = r.forge.check().err().map(|e| format!("{e:#}"));
+                Check::Warn(format!(
+                    "{detail}; {}",
+                    why.unwrap_or_else(|| "no token".into())
+                ))
+            }
+        }
+    }
 }
 
 /// A tracker devkit fell back to answers nothing while looking like an answer:
@@ -375,6 +405,7 @@ fn harness_identity_check(id: Option<devkit_locks::ident::Identity>, harness_env
 }
 
 fn gather(steps: &Steps) -> Vec<Row> {
+    let selection = resolve_selection(std::path::Path::new("."));
     let mut rows = vec![
         Row {
             key: "linear_api_key",
@@ -424,7 +455,13 @@ fn gather(steps: &Steps) -> Vec<Row> {
             key: "tracker",
             data: serde_json::Value::Null,
             source: Source::Unset,
-            check: tracker_check(&resolve_tracker(std::path::Path::new("."))),
+            check: tracker_check(&selection.0),
+        },
+        Row {
+            key: "forge",
+            data: serde_json::Value::Null,
+            source: Source::Unset,
+            check: forge_check(&selection.1),
         },
         Row {
             key: "devrun_strays",
@@ -647,6 +684,32 @@ mod tests {
         let check = config_check(&broken);
         assert!(matches!(check, Check::Invalid(_)), "{check:?}");
         assert_eq!(worst_exit(&[row(check)]), 1);
+    }
+
+    /// A forge devkit could not find is a warning naming the reason, and one
+    /// the project declared absent is its own answer.
+    #[test]
+    fn the_forge_row_separates_a_declared_none_from_detection_finding_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |kind: Option<devkit_config::ForgeKind>| {
+            devkit_common::forge::resolve(
+                &devkit_config::ForgeConfig {
+                    kind,
+                    ..Default::default()
+                },
+                &devkit_config::GithubConfig::default(),
+                &dir.path().to_string_lossy(),
+                None,
+            )
+        };
+        match forge_check(&at(Some(devkit_config::ForgeKind::None))) {
+            Check::Ok(d) => assert!(d.contains("[forge] kind"), "{d}"),
+            other => panic!("a declared none is not a fault: {other:?}"),
+        }
+        match forge_check(&at(None)) {
+            Check::Warn(d) => assert!(d.contains("[forge] kind"), "{d}"),
+            other => panic!("finding no forge is a warning: {other:?}"),
+        }
     }
 
     /// The row exists so ambient detection is debuggable: on a machine with a

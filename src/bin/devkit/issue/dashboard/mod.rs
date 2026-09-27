@@ -75,21 +75,25 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     // any resolve) — used both to fetch the timeline and to scope its cache
     // entries so two projects, or two viewers of one project, never share
     // a cache file (see `cache::CacheScope`).
-    let (resolved, scope_repos) =
+    let (resolved, scope_forge) =
         crate::issue::tracker::select(args.config.as_deref(), &start, None);
     let tracker = resolved.tracker.as_ref();
-    let scope_repo = scope_repos
+    let scope_repo = scope_forge
+        .repos
         .issues()
-        .or_else(|_| scope_repos.prs())
+        .or_else(|_| scope_forge.repos.prs())
         .map(|r| r.slug.clone())
         .unwrap_or_default();
     let viewer = match tracker.kind() {
         devkit_common::tracker::TrackerKind::Linear => {
             devkit_common::secrets::resolve("LINEAR_API_KEY").unwrap_or_default()
         }
-        devkit_common::tracker::TrackerKind::Github => devkit_common::github::token()
-            .unwrap_or_default()
-            .to_string(),
+        devkit_common::tracker::TrackerKind::Github => {
+            devkit_common::github::Api::new(scope_forge.repos.github_host())
+                .token()
+                .unwrap_or_default()
+                .to_string()
+        }
         devkit_common::tracker::TrackerKind::None => String::new(),
     };
     let scope = cache::CacheScope {
@@ -213,18 +217,23 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         args.config.as_deref().map(std::path::Path::new),
         std::path::Path::new(&start),
     )?;
-    let repos = devkit_common::github::Repos::resolve(&loaded.config.github, primary, None);
+    let forge =
+        devkit_common::forge::resolve(&loaded.config.forge, &loaded.config.github, primary, None);
     // Absent, not `?`: the PR-timeline section degrades to empty when no PR
     // repository resolves (a Linear project whose code is not on GitHub is
     // exactly the shape `[github]` exists to serve), while the issue charts
     // and commit history above and below it still render.
-    let pr_repo = repos.prs().ok();
+    let pr = forge
+        .repos
+        .prs()
+        .ok()
+        .map(|repo| (forge.forge.as_ref(), repo));
     let steps = devkit_common::progress::Steps::new();
     let pr_pb = steps.spinner("[1/2] Loading PR history...");
     let commit_pb = steps.spinner("[2/2] Loading commit history...");
     let (opened, merged, add, del, commits) = std::thread::scope(|s| {
         let pr_t = s.spawn(|| {
-            let timeline = data::pr_timeline(args.all_roles, use_cache, pr_repo, &scope);
+            let timeline = data::pr_timeline(args.all_roles, use_cache, pr, &scope);
             pr_pb.finish_and_clear();
             timeline
         });

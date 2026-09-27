@@ -364,14 +364,14 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
              rerun with --no-preserve to remove without preserving anything"
         );
     }
-    let (tracker, repos) = (sel.tracker, sel.repos);
+    let (tracker, forge) = (sel.tracker, sel.forge);
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
         let report = steps.during_result("Fetching PR + issue status...", || {
-            gather_with(start, &[], &tracker, &repos)
+            gather_with(start, &[], &tracker, &forge)
         })?;
         render(&report, false);
         let t = select_explicit(&report.worktrees, ids);
@@ -386,7 +386,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
         t
     } else {
         let report = steps.during_result("Fetching PR + issue status...", || {
-            gather_with(start, ids, &tracker, &repos)
+            gather_with(start, ids, &tracker, &forge)
         })?;
         render(&report, false);
         if pr_only {

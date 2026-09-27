@@ -1,10 +1,8 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use devkit_common::{
-    cmd::{gh_capture, gh_json_in},
-    github,
+    forge::{Forge, Repo},
     progress::Steps,
 };
-use serde::Deserialize;
 
 use crate::issue::review::{PrAction, Target, action_for, is_human_login};
 
@@ -33,112 +31,13 @@ pub(crate) fn reviewer_logins(targets: &[Target]) -> (Vec<String>, Vec<String>) 
     (logins, warnings)
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReviewRequestsView {
-    review_requests: Vec<ReviewRequest>,
-}
-
-#[derive(Deserialize)]
-struct ReviewRequest {
-    #[serde(default)]
-    login: Option<String>,
-}
-
-/// Logins currently requested as reviewers on PR `pr`, over direct HTTP when a
-/// token is available, else `gh pr view --json reviewRequests`.
-pub(crate) fn requested_reviewer_logins(
-    pr: u64,
-    cwd: &str,
-    repo: &github::Repo,
-) -> Result<Vec<String>> {
-    if github::token().is_some()
-        && let Ok(logins) = github::requested_reviewers(&repo.slug, pr)
-    {
-        return Ok(logins);
-    }
-    let view: ReviewRequestsView = gh_json_in(
-        &["pr", "view", &pr.to_string(), "--json", "reviewRequests"],
-        repo,
-        cwd,
-    )?;
-    Ok(view
-        .review_requests
-        .into_iter()
-        .filter_map(|r| r.login)
-        .collect())
-}
-
-#[derive(Deserialize)]
-struct ReviewsView {
-    reviews: Vec<SubmittedReview>,
-}
-
-/// One entry of `gh pr view --json reviews`. The REST API names the reviewer
-/// `user`; `gh` names it `author`, and leaves it null for an account that no
-/// longer exists.
-#[derive(Deserialize)]
-struct SubmittedReview {
-    #[serde(default)]
-    author: Option<ReviewAuthor>,
-}
-
-#[derive(Deserialize)]
-struct ReviewAuthor {
-    #[serde(default)]
-    login: Option<String>,
-}
-
-/// The distinct logins behind a `gh pr view --json reviews` payload; one person
-/// submitting several reviews is one reviewer.
-fn gh_review_logins(view: ReviewsView) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for r in view.reviews {
-        let Some(login) = r.author.and_then(|a| a.login) else {
-            continue;
-        };
-        if !out.contains(&login) {
-            out.push(login);
-        }
-    }
-    out
-}
-
-/// Logins that have submitted a review on PR `pr`, over direct HTTP when a
-/// token is available, else `gh pr view --json reviews`. A machine
-/// authenticated only through `gh auth login` resolves no bearer token, and the
-/// direct call errors without one.
-fn submitted_reviewer_logins(pr: u64, cwd: &str, repo: &github::Repo) -> Result<Vec<String>> {
-    if github::token().is_some()
-        && let Ok(logins) = github::submitted_reviewers(&repo.slug, pr)
-    {
-        return Ok(logins);
-    }
-    let view: ReviewsView = gh_json_in(
-        &["pr", "view", &pr.to_string(), "--json", "reviews"],
-        repo,
-        cwd,
-    )?;
-    Ok(gh_review_logins(view))
-}
-
-/// Every login already tied to PR `pr` as a reviewer: pending requests plus
-/// anyone who has submitted a review. GitHub drops a login from the pending
-/// list the moment they review, so a PR that collected an early look would
-/// otherwise count nobody.
-pub(crate) fn reviewer_logins_on(pr: u64, cwd: &str, repo: &github::Repo) -> Result<Vec<String>> {
-    let mut out = requested_reviewer_logins(pr, cwd, repo)?;
-    out.extend(submitted_reviewer_logins(pr, cwd, repo)?);
-    Ok(out)
-}
-
 /// Marking a PR ready acts on one that exists. Opening one is `issue pr
 /// create`'s job, so a branch with no PR is an error naming it rather than a
 /// silent create.
 pub(crate) fn require_existing_pr(pr_state: Option<&str>) -> Result<()> {
     match action_for(pr_state) {
         PrAction::Create => bail!(
-            "no PR for this branch — run `issue pr create` first, \
+            "no PR for this branch: run `issue pr create` first, \
              or pass --pr <URL|number>"
         ),
         PrAction::AddReviewer => Ok(()),
@@ -150,7 +49,7 @@ pub(crate) fn require_existing_pr(pr_state: Option<&str>) -> Result<()> {
 /// when `defaults.require_pr_reviewer` is set.
 ///
 /// `existing` are the logins already on the PR and `added` the ones this run
-/// requests. Both count: GitHub drops a reviewer from `reviewRequests` the
+/// requests. Both count: a forge drops a reviewer from the pending list the
 /// moment they review, so counting pending requests alone would refuse a PR
 /// that has already been looked at. `author` is the PR's own author, who does
 /// not review their own PR whichever list they turn up in.
@@ -171,8 +70,8 @@ pub(crate) fn require_reviewer_for_ready(
     if !any_human {
         bail!(
             "refusing to mark this PR ready with no human reviewer \
-             (defaults.require_pr_reviewer is set) — pass --to, or add a \
-             reviewer on GitHub"
+             (defaults.require_pr_reviewer is set): pass --to, or add a \
+             reviewer on the forge"
         );
     }
     Ok(())
@@ -181,54 +80,52 @@ pub(crate) fn require_reviewer_for_ready(
 /// Request `logins` as reviewers on PR `number`. A run with none to add makes
 /// no call at all, so an empty `--to` never touches the PR.
 pub(crate) fn add_reviewers(
+    forge: &dyn Forge,
+    repo: &Repo,
     number: u64,
     logins: &[String],
-    repo: &github::Repo,
-    cwd: &str,
     steps: &Steps,
 ) -> Result<()> {
     if logins.is_empty() {
         return Ok(());
     }
-    let joined = logins.join(",");
-    steps
-        .during_result("Adding reviewers...", || {
-            gh_capture(
-                &["pr", "edit", &number.to_string(), "--add-reviewer", &joined],
-                repo,
-                cwd,
-            )
-        })
-        .context("gh pr edit --add-reviewer failed")?;
-    Ok(())
+    steps.during_result("Adding reviewers...", || {
+        forge.add_reviewers(repo, number, logins)
+    })
 }
 
 /// Whether the PR's own reviewers still decide the gate. What this run requests
 /// can satisfy it on its own, and with the gate off nothing has to: either way
-/// the lookup is two network round trips that change no answer.
+/// the lookup is network round trips that change no answer.
 fn needs_reviewer_lookup(added: &[String], required: bool, author: Option<&str>) -> bool {
     require_reviewer_for_ready(&[], added, required, author).is_err()
+}
+
+/// What a ready flip is checked against.
+pub(crate) struct Gate<'a> {
+    pub added: &'a [String],
+    pub required: bool,
+    pub author: Option<&'a str>,
 }
 
 /// Refuse a run about to make PR `number` ready for review with no human
 /// reviewer. Call it only on the run that performs the flip: an already-ready
 /// PR is not made ready by anything happening here.
 pub(crate) fn gate_ready(
+    forge: &dyn Forge,
+    repo: &Repo,
     number: u64,
-    added: &[String],
-    required: bool,
-    author: Option<&str>,
-    repo: &github::Repo,
-    cwd: &str,
+    gate: &Gate<'_>,
     steps: &Steps,
 ) -> Result<()> {
-    if !needs_reviewer_lookup(added, required, author) {
+    if !needs_reviewer_lookup(gate.added, gate.required, gate.author) {
         return Ok(());
     }
-    let already = steps.during_result("Resolving the PR's reviewers...", || {
-        reviewer_logins_on(number, cwd, repo)
+    let on_pr = steps.during_result("Resolving the PR's reviewers...", || {
+        forge.reviewers(repo, number)
     })?;
-    require_reviewer_for_ready(&already, added, required, author)
+    let already: Vec<String> = on_pr.requested.into_iter().chain(on_pr.submitted).collect();
+    require_reviewer_for_ready(&already, gate.added, gate.required, gate.author)
 }
 
 #[cfg(test)]
@@ -343,20 +240,5 @@ mod tests {
         );
         assert!(require_existing_pr(Some("OPEN")).is_ok());
         assert!(require_existing_pr(Some("MERGED")).is_err());
-    }
-
-    /// `gh` reports the reviewer under `author`, not the REST API's `user`, and
-    /// nulls it for an account that no longer exists.
-    #[test]
-    fn the_gh_fallback_reads_authors_and_dedupes() {
-        let view: ReviewsView = serde_json::from_value(serde_json::json!({
-            "reviews": [
-                { "author": { "login": "igoracc" }, "state": "COMMENTED" },
-                { "author": { "login": "igoracc" }, "state": "APPROVED" },
-                { "author": null, "state": "APPROVED" }
-            ]
-        }))
-        .expect("gh reviews payload");
-        assert_eq!(gh_review_logins(view), vec!["igoracc".to_string()]);
     }
 }

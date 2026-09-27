@@ -165,6 +165,33 @@ impl VersionControl for GitBackend {
         Ok(())
     }
 
+    fn pushed(&self, dir: &Path) -> Result<bool> {
+        Ok(!Git::at(dir)
+            .args(["branch", "--remotes", "--contains", "HEAD"])
+            .output()?
+            .trim()
+            .is_empty())
+    }
+
+    fn checkout_remote_ref(
+        &self,
+        dir: &Path,
+        remote: &str,
+        remote_ref: &str,
+        branch: &str,
+    ) -> Result<()> {
+        Git::at(dir)
+            .args(["fetch", remote, remote_ref])
+            .network()
+            .output()
+            .with_context(|| format!("fetching {remote_ref} from {remote}"))?;
+        Git::at(dir)
+            .args(["checkout", "-B", branch, "FETCH_HEAD"])
+            .output()
+            .with_context(|| format!("checking out {branch}"))?;
+        Ok(())
+    }
+
     fn remote_url(&self, dir: &Path, remote: &str) -> Result<String> {
         Ok(Git::at(dir)
             .args(["remote", "get-url", remote])

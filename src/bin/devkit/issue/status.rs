@@ -160,7 +160,7 @@ fn progress_msg(prs_done: bool, states_done: bool) -> String {
 /// to stdout exactly as the silent gather would.
 pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<StatusReport> {
     let d = st::discover(start, ids)?;
-    let (resolved, repos) = crate::issue::tracker::select(config, start, None);
+    let (resolved, forge) = crate::issue::tracker::select(config, start, None);
     let info = TrackerInfo::of(&resolved);
     if d.is_empty() {
         // No worktrees means no PR fetch — the report is empty either way.
@@ -173,7 +173,6 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
         ));
     }
 
-    let repo = repos.prs()?;
     let m = d.len();
     let paths = d.worktree_paths();
     let ids_v: Vec<String> = d.issue_ids().to_vec();
@@ -206,7 +205,7 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
             let tx = tx.clone();
             let d = &d;
             s.spawn(move || {
-                let _ = tx.send(Update::Prs(st::fetch_prs(d, repo)));
+                let _ = tx.send(Update::Prs(st::fetch_prs(d, &forge)));
             });
         }
         {

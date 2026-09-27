@@ -208,7 +208,7 @@ pub(crate) enum Cmd {
         #[arg(short = 'v', long)]
         verbose: bool,
     },
-    /// At-a-glance triage of your GitHub PRs via gh.
+    /// At-a-glance triage of your open PRs on the project's forge.
     Prs {
         /// Show only your open PRs. Neither flag prints both sections.
         #[arg(short = 'm', long)]
@@ -220,10 +220,11 @@ pub(crate) enum Cmd {
         /// owner/repo to triage instead of the current repository.
         #[arg(short = 'R', long)]
         repo: Option<String>,
-        /// Refetch from GitHub instead of rendering the last run's cached rows.
+        /// Refetch from the forge instead of rendering the last run's cached
+        /// rows.
         #[arg(long = "no-cache")]
         no_cache: bool,
-        /// PRs fetched per GitHub search page. Lower this if GitHub returns
+        /// PRs fetched per search page. Lower this if the forge returns
         /// HTTP 504 on a repo with many open PRs.
         #[arg(long, default_value_t = devkit_issue::prs::DEFAULT_BATCH_SIZE, value_parser = clap::value_parser!(u32).range(1..=100))]
         batch_size: u32,
@@ -256,7 +257,8 @@ pub(crate) enum Cmd {
         /// Print the tables without the timelines.
         #[arg(long = "no-plots")]
         no_plots: bool,
-        /// Refetch from GitHub instead of rendering the last run's cached rows.
+        /// Refetch from the forge instead of rendering the last run's cached
+        /// rows.
         #[arg(long = "no-cache")]
         no_cache: bool,
     },
@@ -286,7 +288,7 @@ pub(crate) enum PrCmd {
         /// Open ready for review, whatever `defaults.pr_create_state` says.
         #[arg(short = 'r', long, conflicts_with = "draft")]
         ready: bool,
-        /// Reviewer: a `[people]` alias. Repeatable. Adds GitHub reviewers and
+        /// Reviewer: a `[people]` alias. Repeatable. Adds forge reviewers and
         /// sends no Slack.
         #[arg(long = "to")]
         to: Vec<String>,
@@ -302,8 +304,8 @@ pub(crate) enum PrCmd {
         /// Open or update the PR without pushing the branch first.
         #[arg(long = "no-push")]
         no_push: bool,
-        /// Use this PR for this run: a GitHub PR URL or a bare number (meaning
-        /// `pr_repo`). Replaces a wrong recorded binding.
+        /// Use this PR for this run: a PR URL on the forge or a bare number
+        /// (meaning `[forge] repo`). Replaces a wrong recorded binding.
         #[arg(long)]
         pr: Option<String>,
         #[command(flatten)]
@@ -314,15 +316,15 @@ pub(crate) enum PrCmd {
     /// Pushes the branch first unless `--no-push`. A PR that is already ready
     /// is reported and changed in no way.
     Ready {
-        /// Reviewer: a `[people]` alias. Repeatable. Adds GitHub reviewers and
+        /// Reviewer: a `[people]` alias. Repeatable. Adds forge reviewers and
         /// sends no Slack.
         #[arg(long = "to")]
         to: Vec<String>,
         /// Mark ready without pushing the branch first.
         #[arg(long = "no-push")]
         no_push: bool,
-        /// Use this PR for this run: a GitHub PR URL or a bare number (meaning
-        /// `pr_repo`). Replaces a wrong recorded binding.
+        /// Use this PR for this run: a PR URL on the forge or a bare number
+        /// (meaning `[forge] repo`). Replaces a wrong recorded binding.
         #[arg(long)]
         pr: Option<String>,
     },
@@ -375,8 +377,8 @@ pub(crate) enum ReviewCmd {
         /// Slack: never falls back to the PR's current reviewers.
         #[arg(long = "no-notify")]
         no_notify: bool,
-        /// Use this PR for this run: a GitHub PR URL or a bare number (meaning
-        /// `pr_repo`). Replaces a wrong recorded binding.
+        /// Use this PR for this run: a PR URL on the forge or a bare number
+        /// (meaning `[forge] repo`). Replaces a wrong recorded binding.
         #[arg(long)]
         pr: Option<String>,
         #[command(flatten)]
