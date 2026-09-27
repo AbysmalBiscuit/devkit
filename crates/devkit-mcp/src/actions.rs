@@ -24,6 +24,7 @@ pub fn actions() -> Vec<Action> {
     v.extend(crate::locks::actions());
     v.extend(crate::devrun::actions());
     v.extend(crate::issue::actions());
+    v.extend(crate::templates::actions());
     v
 }
 

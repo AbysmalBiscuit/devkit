@@ -1305,6 +1305,11 @@ pub struct Templates {
     /// `prefix`, `apps`. A field the tracker left empty renders as the empty
     /// string, so `{% if parent %}` drops its line.
     pub issue_summary: Option<String>,
+    /// Templates no command sends, rendered by `devkit template render
+    /// <name>` for the caller to deliver itself. A built-in template never
+    /// takes one's name: `render` looks here first.
+    #[serde(default)]
+    pub custom: std::collections::BTreeMap<String, CustomTemplate>,
     /// Constants available to every template above. A context field of the same
     /// name wins, and `--arg key=value` overrides either. An entry may instead
     /// be a table carrying a `default`, a `required` marking and a
@@ -1390,6 +1395,43 @@ impl Templates {
     pub fn declared(&self) -> std::collections::BTreeSet<String> {
         self.variables.keys().cloned().collect()
     }
+}
+
+/// One `[templates.custom]` entry: a template a project writes once and an
+/// agent renders with `devkit template render <name> --arg key=value`. It
+/// reads `[templates.variables]` like every other template, plus `branch`,
+/// and `issue`, `slug` and `apps` from the worktree's `.devkit/issue.toml`.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [templates.custom.standup]
+/// description = "Daily update for #eng-standup"
+/// body = """
+/// **Yesterday:** {{ yesterday }}
+/// **Today:** {{ today }}
+/// {% if blockers %}**Blocked on:** {{ blockers }}{% endif %}
+/// """
+///
+/// [templates.variables]
+/// yesterday = { required = "always", description = "what shipped, one line per item" }
+/// today = { required = "always" }
+/// blockers = { default = "" }
+/// # "#).unwrap();
+/// # let t = &cfg.templates.custom["standup"];
+/// # assert_eq!(t.description.as_deref(), Some("Daily update for #eng-standup"));
+/// # assert!(t.body.starts_with("**Yesterday:** {{ yesterday }}\n"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomTemplate {
+    /// What the template is for, shown by `devkit template list` so a caller
+    /// can pick the right one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The minijinja source. Rendering is strict: a variable nothing supplies
+    /// is an error, and a trailing newline is kept.
+    pub body: String,
 }
 
 /// The `url` an app is addressed at when it sets none of its own.

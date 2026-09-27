@@ -8,6 +8,7 @@ devkit config tasks <name>                    # what one task runs, and each arg
 devrun task <name> --dry-run                  # print the rendered plan(s) — argv, cwd, env — without running
 devrun task <name>                            # run it
 devrun task <name> --arg KEY=value            # set a template variable the task reads
+devrun task <name> --arg-file KEY=path        # set one to a file's contents, or KEY=- for stdin
 devrun task <name> --env KEY=value            # overlay env on every step
 devrun task <name> --env-file F
 ```
@@ -24,6 +25,7 @@ devrun task commit --arg msg="fix login redirect"
 
 - A missing required arg fails before any step runs, naming the flag: ``task `commit` needs --arg msg=...``. A sequence checks every step's args up front. When the arg has a `description` in `[templates.variables]`, a line under the error says what to pass.
 - An `--arg` the task never reads is rejected, so a mistyped key fails loudly.
+- A multi-line value (a commit body, a PR description) goes through `--arg-file KEY=path`, which passes the file's contents unchanged, trailing newline included. `KEY=-` reads stdin, so a heredoc works. Every command that takes `--arg` takes it: `devrun task`, `issue pr create`, `issue review request|finish` and `devkit template render`. A key given through both flags is refused. It is unrelated to `--env-file`, which reads `K=V` lines into env overrides.
 - `issue`, `slug` and `branch` come from the worktree's `.devkit/issue.toml` and git. Outside an issue worktree they are undefined; supply one with `--arg issue=<id>` when the task reads it.
 - When the command guard redirects a command you typed to a task, its message spells out the required `--arg` flags, then describes each arg that has a description, optional ones bracketed. Run the task with them, and fill an optional arg when its description says it applies.
 - `devkit config tasks <name>` describes one task before you run it: its `run` or `steps` templates, the servers it needs live and the command that starts each, a `usage` line with every `--arg` you must pass, then every arg it reads with who must pass it (`always`, `agents`, `humans` or `no`), its default (`none` when it has none) and its description. `--json` emits the same as one object. Reach for it instead of a `--dry-run` that fails on a missing arg.

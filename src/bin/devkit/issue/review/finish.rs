@@ -3,18 +3,20 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use devkit_common::{cmd::gh_json_in, github, progress::Steps};
 use devkit_config::Person;
+use devkit_ports::templates::worktree_context;
 use serde::Deserialize;
 
 use super::{
-    REVIEW_FINISH_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, parse_args,
-    person_by_login, resolve_target, target_from_person, with_fields,
+    REVIEW_FINISH_CONTEXT_KEYS, Target, check_required, deliver, parse_args, person_by_login,
+    resolve_target, target_from_person, with_fields,
 };
+use crate::template::VarArgs;
 
 pub struct Args {
     pub body: Option<String>,
     pub to: Vec<String>,
     pub pr: Option<u64>,
-    pub args: Vec<String>,
+    pub vars: VarArgs,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -181,7 +183,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let caller = devkit_common::caller::caller();
     let mut vars = tmpls.defaults();
-    let given = parse_args(&args.args, &tmpls.declared())?;
+    let given = parse_args(&args.vars, &tmpls.declared())?;
     check_required(
         "issue review finish",
         &loaded.config,
@@ -243,7 +245,7 @@ pub fn run(args: Args) -> Result<()> {
             .collect::<Result<_>>()?
     };
 
-    let base = base_ctx(record.as_ref(), branch.as_deref().unwrap_or(""));
+    let base = worktree_context(record.as_ref(), Some(branch.as_deref().unwrap_or("")));
     let notify_ctx = with_fields(&base, &[
         ("pr_url", serde_json::json!(view.url)),
         ("pr_title", serde_json::json!(view.title)),

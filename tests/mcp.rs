@@ -457,3 +457,77 @@ fn personal_config_disables_the_server_everywhere() {
     std::fs::write(personal.join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
     assert_disabled(&mcp(proj.path(), state.path(), &handshake()));
 }
+
+#[test]
+fn templates_render_matches_the_cli() {
+    let proj = project();
+    std::fs::write(
+        proj.path().join("devkit.toml"),
+        format!(
+            "{MINIMAL_CONFIG}\n\
+             [templates.custom.standup]\n\
+             description = \"Daily update\"\n\
+             body = \"Today: {{{{ today }}}}\\n{{% if blockers %}}Blocked: {{{{ blockers }}}}{{% endif %}}\\n\"\n\
+             [templates.variables]\n\
+             today = {{ required = \"always\" }}\n\
+             blockers = {{ default = \"\" }}\n"
+        ),
+    )
+    .unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let resps = mcp(proj.path(), state.path(), &[
+        call_req(
+            1,
+            "templates.render",
+            json!({ "name": "standup", "args": { "today": "ship\nit", "blockers": "review" } }),
+        ),
+        call_req(2, "templates.list", json!({})),
+        call_req(3, "templates.show", json!({ "name": "standup" })),
+        call_req(4, "templates.render", json!({ "name": "standup" })),
+    ]);
+
+    let cli = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .current_dir(proj.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("HOME", state.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env("DEVKIT_CALLER", "agent")
+        .args([
+            "template",
+            "render",
+            "standup",
+            "--arg",
+            "today=ship\nit",
+            "--arg",
+            "blockers=review",
+        ])
+        .output()
+        .unwrap();
+    assert!(cli.status.success(), "{cli:?}");
+    let rendered = tool_json(&resps[0], false);
+    assert_eq!(
+        rendered["text"].as_str().unwrap(),
+        String::from_utf8(cli.stdout).unwrap()
+    );
+    assert_eq!(rendered["text"], "Today: ship\nit\nBlocked: review\n");
+
+    let list = tool_json(&resps[1], false);
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "standup" && t["description"] == "Daily update"),
+        "{list}"
+    );
+    let show = tool_json(&resps[2], false);
+    assert!(
+        show["source"].as_str().unwrap().starts_with("Today: "),
+        "{show}"
+    );
+
+    let missing = tool_json(&resps[3], true);
+    assert!(
+        missing.as_str().unwrap().contains("--arg today=..."),
+        "{missing}"
+    );
+}

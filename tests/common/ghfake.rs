@@ -166,13 +166,37 @@ github = "sweeper[bot]"
     /// GitHub credential is stripped so the run resolves no bearer token and
     /// takes its `gh` fallback for each lookup.
     pub fn issue(&self, args: &[&str]) -> std::process::Output {
+        self.issue_cmd(args).output().expect("spawn devkit issue")
+    }
+
+    /// [`Fake::issue`] with `stdin` piped in.
+    pub fn issue_with_stdin(&self, args: &[&str], stdin: &[u8]) -> std::process::Output {
+        use std::{io::Write, process::Stdio};
+
+        let mut child = self
+            .issue_cmd(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn devkit issue");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(stdin)
+            .expect("write stdin");
+        child.wait_with_output().expect("wait devkit issue")
+    }
+
+    fn issue_cmd(&self, args: &[&str]) -> Command {
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         let path = std::env::join_paths(
             std::iter::once(self.bin.path().to_path_buf()).chain(std::env::split_paths(&inherited)),
         )
         .expect("join PATH");
-        Command::new(env!("CARGO_BIN_EXE_devkit"))
-            .env("DEVKIT_SKIP_AUTOLINK", "1")
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+        cmd.env("DEVKIT_SKIP_AUTOLINK", "1")
             .env("PATH", path)
             .env("GHFAKE_DIR", self.bin.path())
             .env("HOME", self.state.path())
@@ -186,9 +210,8 @@ github = "sweeper[bot]"
             .env_remove("DEVKIT_CALLER")
             .args(["issue", "-C"])
             .arg(self.project.path())
-            .args(args)
-            .output()
-            .expect("spawn devkit issue")
+            .args(args);
+        cmd
     }
 }
 

@@ -3,15 +3,19 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
 use devkit_config::PrCreateState;
+use devkit_ports::templates::worktree_context;
 
 use super::{
     add_reviewers, require_reviewer_for_ready,
     resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing, verify_created},
     reviewer_logins,
 };
-use crate::issue::review::{
-    PR_CONTEXT_KEYS, PrAction, Target, action_for, base_ctx, check_required, finish, guard_branch,
-    parse_args, render_review, resolve_target, with_fields,
+use crate::{
+    issue::review::{
+        PR_CONTEXT_KEYS, PrAction, Target, action_for, check_required, finish, guard_branch,
+        parse_args, render_review, resolve_target, with_fields,
+    },
+    template::VarArgs,
 };
 
 pub struct Args {
@@ -26,7 +30,7 @@ pub struct Args {
     /// bare number means `pr_repo`. Replaces a wrong recorded binding, since
     /// recording what this run acts on is what makes it a rebind.
     pub pr: Option<String>,
-    pub args: Vec<String>,
+    pub vars: VarArgs,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -203,7 +207,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let caller = devkit_common::caller::caller();
     let mut vars = tmpls.defaults();
-    let given = parse_args(&args.args, &tmpls.declared())?;
+    let given = parse_args(&args.vars, &tmpls.declared())?;
     check_required(
         "issue pr",
         &loaded.config,
@@ -237,7 +241,7 @@ pub fn run(args: Args) -> Result<()> {
         None
     };
 
-    let ctx = base_ctx(record.as_ref(), &branch);
+    let ctx = worktree_context(record.as_ref(), Some(&branch));
     let title_input = serde_json::json!(args.pr_title.clone().unwrap_or_default());
     let body_input = serde_json::json!(args.pr_body.clone().unwrap_or_default());
 
@@ -357,11 +361,11 @@ mod tests {
     }
 
     /// The hazard the deferred body exists for: `render_review` is strict about
-    /// undefined variables, and `base_ctx` binds `issue` only when the worktree
-    /// has an `issue setup` record.
+    /// undefined variables, and `worktree_context` binds `issue` only when the
+    /// worktree has an `issue setup` record.
     #[test]
     fn a_body_template_reading_the_record_fails_without_one() {
-        let ctx = base_ctx(None, "lev/eng-1-fix");
+        let ctx = worktree_context(None, Some("lev/eng-1-fix"));
         let vars = std::collections::BTreeMap::new();
         assert!(render_review("Closes {{ issue }}", "pr_body", &ctx, &vars, None).is_err());
 
@@ -373,7 +377,7 @@ mod tests {
             pr: None,
             baseline: None,
         };
-        let ctx = base_ctx(Some(&record), "lev/eng-1-fix");
+        let ctx = worktree_context(Some(&record), Some("lev/eng-1-fix"));
         let out = render_review("Closes {{ issue }}", "pr_body", &ctx, &vars, None).unwrap();
         assert_eq!(out, "Closes ENG-1");
     }

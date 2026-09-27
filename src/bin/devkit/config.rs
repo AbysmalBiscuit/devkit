@@ -369,7 +369,7 @@ fn declared_variables(cfg: &Config, caller: Caller) -> Vec<TaskArg> {
 
 /// Args as a table, REQUIRED naming who must pass each. An empty default is
 /// quoted so it reads apart from none.
-fn args_table(args: &[TaskArg]) -> String {
+pub(crate) fn args_table(args: &[TaskArg]) -> String {
     let mut t = ui::table(&["NAME", "REQUIRED", "DEFAULT", "DESCRIPTION"]);
     for a in args {
         t.add_row(vec![

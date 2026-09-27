@@ -4,6 +4,8 @@ use anyhow::{Context, Result, bail};
 use devkit_common::{caller::Caller, progress::Steps, slack};
 use devkit_config::{Config, Person};
 
+use crate::template::VarArgs;
+
 pub(crate) mod finish;
 pub(crate) mod request;
 
@@ -96,25 +98,19 @@ pub(crate) fn is_human_login(login: &str) -> bool {
     !login.ends_with("[bot]")
 }
 
-/// Parse repeated `--arg key=value` pairs, validating each key against the
+/// Parse `--arg` and `--arg-file`, validating each key against the
 /// declared `[templates.variables]` allowlist. `allowed` is `declared()`, not
 /// `defaults()`: a variable declared only to carry a `required` marking has no
 /// default value and so is absent from `defaults()`, which would otherwise
 /// make it undeclarable — and therefore unpassable, defeating the point of
 /// marking it required.
 pub(crate) fn parse_args(
-    pairs: &[String],
+    vars: &VarArgs,
     allowed: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, String>> {
-    let mut out = BTreeMap::new();
-    for pair in pairs {
-        let (k, v) = pair
-            .split_once('=')
-            .with_context(|| format!("--arg must be key=value, got `{pair}`"))?;
-        if !allowed.contains(k) {
-            bail!("--arg `{k}` is not declared in [templates.variables]");
-        }
-        out.insert(k.to_string(), v.to_string());
+    let out = vars.parse()?;
+    if let Some(k) = out.keys().find(|k| !allowed.contains(*k)) {
+        bail!("--arg `{k}` is not declared in [templates.variables]");
     }
     Ok(out)
 }
@@ -166,21 +162,6 @@ pub(crate) fn with_fields(
     let mut m = base.as_object().cloned().unwrap_or_default();
     for (k, v) in extra {
         m.insert((*k).into(), v.clone());
-    }
-    serde_json::Value::Object(m)
-}
-
-/// Base context shared by every review template: branch + issue record fields.
-pub(crate) fn base_ctx(
-    record: Option<&devkit_common::record::IssueRecord>,
-    branch: &str,
-) -> serde_json::Value {
-    let mut m = serde_json::Map::new();
-    m.insert("branch".into(), serde_json::json!(branch));
-    if let Some(r) = record {
-        m.insert("issue".into(), serde_json::json!(r.issue));
-        m.insert("slug".into(), serde_json::json!(r.slug));
-        m.insert("apps".into(), serde_json::json!(r.apps));
     }
     serde_json::Value::Object(m)
 }
@@ -253,6 +234,7 @@ mod tests {
     use std::collections::{BTreeSet, HashMap};
 
     use devkit_config::Person;
+    use devkit_ports::templates::worktree_context;
 
     use super::*;
 
@@ -329,13 +311,20 @@ mod tests {
         assert!(!is_human_login("coderabbitai[bot]"));
     }
 
+    fn args(pairs: &[&str]) -> VarArgs {
+        VarArgs {
+            args: pairs.iter().map(|s| s.to_string()).collect(),
+            arg_files: Vec::new(),
+        }
+    }
+
     #[test]
     fn parse_args_validates_against_allowlist() {
         let allowed = BTreeSet::from(["team".to_string()]);
-        let ok = parse_args(&["team=infra".to_string()], &allowed).unwrap();
+        let ok = parse_args(&args(&["team=infra"]), &allowed).unwrap();
         assert_eq!(ok.get("team").map(String::as_str), Some("infra"));
-        assert!(parse_args(&["ghost=x".to_string()], &allowed).is_err());
-        assert!(parse_args(&["noeq".to_string()], &allowed).is_err());
+        assert!(parse_args(&args(&["ghost=x"]), &allowed).is_err());
+        assert!(parse_args(&args(&["noeq"]), &allowed).is_err());
     }
 
     #[test]
@@ -344,7 +333,7 @@ mod tests {
         // no default and is absent from `defaults()`. The allowlist must
         // still accept it, or a required variable could never be supplied.
         let allowed = BTreeSet::from(["ticket".to_string()]);
-        let ok = parse_args(&["ticket=eng-1".to_string()], &allowed).unwrap();
+        let ok = parse_args(&args(&["ticket=eng-1"]), &allowed).unwrap();
         assert_eq!(ok.get("ticket").map(String::as_str), Some("eng-1"));
     }
 
@@ -374,9 +363,9 @@ mod tests {
         let expected =
             |k: &[&str]| -> BTreeSet<String> { k.iter().map(|s| s.to_string()).collect() };
 
-        // `issue pr` renders pr_title and pr_body directly off base_ctx, with
-        // `input` on both and `pr_title` bound for the body.
-        let base = base_ctx(Some(&record), "lev/eng-1-fix");
+        // `issue pr` renders pr_title and pr_body directly off the worktree
+        // context, with `input` on both and `pr_title` bound for the body.
+        let base = worktree_context(Some(&record), Some("lev/eng-1-fix"));
         let pr = with_fields(&base, &[
             ("input", serde_json::json!("x")),
             ("pr_title", serde_json::json!("t")),

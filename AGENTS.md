@@ -29,8 +29,8 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | Crate | Role |
 |---|---|
 | `devkit-config` | `devkit.toml` types, layer discovery and merge, JSON Schema |
-| `devkit-common` | shared IO: `git`, `config`, `pool`, `cmd`/`github`, `tracker`, `worktree`, `harness`, `caller`, `required`, `harness_log`, `store`, `sys` |
-| `devkit-ports` | port registry, app catalog, server lifecycle, tasks, command guard |
+| `devkit-common` | shared IO: `git`, `config`, `args`, `pool`, `cmd`/`github`, `tracker`, `worktree`, `harness`, `caller`, `required`, `harness_log`, `store`, `sys` |
+| `devkit-ports` | port registry, app catalog, server lifecycle, tasks, named templates, command guard |
 | `devkit-locks` | file-lock registry |
 | `devkit-rules` | rule-index matching and context rendering |
 | `devkit-command` | IO-free shell-command analyzer (tree-sitter; needs a C compiler) |

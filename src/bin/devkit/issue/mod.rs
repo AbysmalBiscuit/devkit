@@ -4,6 +4,8 @@ use anyhow::Result;
 use clap::Subcommand;
 use devkit::completions::Shell;
 
+use crate::template::VarArgs;
+
 pub(crate) mod checkout;
 mod dashboard;
 mod end;
@@ -304,10 +306,8 @@ pub(crate) enum PrCmd {
         /// `pr_repo`). Replaces a wrong recorded binding.
         #[arg(long)]
         pr: Option<String>,
-        /// Override a declared template variable: `--arg key=value`.
-        /// Repeatable.
-        #[arg(short = 'a', long = "arg")]
-        args: Vec<String>,
+        #[command(flatten)]
+        vars: VarArgs,
     },
     /// Mark this branch's PR ready for review.
     ///
@@ -379,10 +379,8 @@ pub(crate) enum ReviewCmd {
         /// `pr_repo`). Replaces a wrong recorded binding.
         #[arg(long)]
         pr: Option<String>,
-        /// Override a declared template variable: `--arg key=value`.
-        /// Repeatable.
-        #[arg(long = "arg")]
-        args: Vec<String>,
+        #[command(flatten)]
+        vars: VarArgs,
     },
     /// Announce over Slack that you finished reviewing.
     ///
@@ -397,10 +395,8 @@ pub(crate) enum ReviewCmd {
         /// PR number; required when not run inside the PR's worktree.
         #[arg(long)]
         pr: Option<u64>,
-        /// Override a declared template variable: `--arg key=value`.
-        /// Repeatable.
-        #[arg(long = "arg")]
-        args: Vec<String>,
+        #[command(flatten)]
+        vars: VarArgs,
     },
 }
 
@@ -472,7 +468,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
                     pr_body,
                     no_push,
                     pr,
-                    args,
+                    vars,
                 } => pr::create::run(pr::create::Args {
                     draft,
                     ready,
@@ -482,7 +478,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
                     pr_body,
                     no_push,
                     pr,
-                    args,
+                    vars,
                     dir: cli.dir,
                     config: cli.config,
                 }),
@@ -603,22 +599,22 @@ pub fn run(cli: IssueCli) -> Result<()> {
                 no_push,
                 no_notify,
                 pr,
-                args,
+                vars,
             } => review::request::run(review::request::Args {
                 body,
                 to,
                 no_push,
                 no_notify,
                 pr,
-                args,
+                vars,
                 dir: cli.dir,
                 config: cli.config,
             }),
-            ReviewCmd::Finish { body, to, pr, args } => review::finish::run(review::finish::Args {
+            ReviewCmd::Finish { body, to, pr, vars } => review::finish::run(review::finish::Args {
                 body,
                 to,
                 pr,
-                args,
+                vars,
                 dir: cli.dir,
                 config: cli.config,
             }),
