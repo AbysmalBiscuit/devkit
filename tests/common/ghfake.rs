@@ -43,27 +43,33 @@ impl Fake {
     /// `extra` lands at the end of `[defaults]`, so a caller that needs another
     /// table (`[templates]`, say) opens one there.
     pub fn new(extra: &str, pr: &Pr) -> Self {
-        Self::build(extra, Some(pr), None)
+        Self::build(extra, std::slice::from_ref(pr), None)
+    }
+
+    /// The same project, with `gh pr list` reporting every one of `prs` for
+    /// the branch.
+    pub fn with_prs(extra: &str, prs: &[Pr]) -> Self {
+        Self::build(extra, prs, None)
     }
 
     /// The same project, with `gh pr list` reporting no PR at all.
     pub fn without_pr(extra: &str) -> Self {
-        Self::build(extra, None, None)
+        Self::build(extra, &[], None)
     }
 
     /// A project with no `[forge]` table and `origin` set to `url`, so the
     /// forge and every repository it acts on are detected from the remote.
     pub fn with_origin(url: &str) -> Self {
-        Self::build("", None, Some(url))
+        Self::build("", &[], Some(url))
     }
 
     /// [`Fake::with_origin`] with `extra` appended to the config, which may
     /// open tables of its own (`[forge]`, say).
     pub fn with_origin_and(extra: &str, url: &str) -> Self {
-        Self::build(extra, None, Some(url))
+        Self::build(extra, &[], Some(url))
     }
 
-    fn build(extra_defaults: &str, pr: Option<&Pr>, origin: Option<&str>) -> Self {
+    fn build(extra_defaults: &str, prs: &[Pr], origin: Option<&str>) -> Self {
         let project = tempfile::tempdir().expect("project dir");
         let git = || devkit_git::Git::fixture(project.path());
         git()
@@ -119,19 +125,12 @@ github = "sweeper[bot]"
         .expect("write devkit.toml");
 
         let bin = tempfile::tempdir().expect("fake bin dir");
-        let payload = match pr {
-            Some(pr) => format!(
-                r#"[{{"number":{n},"state":"{state}","url":"https://github.com/o/r/pull/{n}",
-                     "headRefName":"lev/eng-1-fix","headRefOid":"{head}","isDraft":{draft},
-                     "author":{{"login":"{author}"}}}}]"#,
-                n = pr.number,
-                state = pr.state,
-                draft = pr.is_draft,
-                author = pr.author,
-            ),
-            None => "[]".to_string(),
-        };
-        std::fs::write(bin.path().join("pr_list.json"), payload).expect("write pr list payload");
+        let listed: Vec<String> = prs.iter().map(|pr| pr_json(pr, &head)).collect();
+        std::fs::write(
+            bin.path().join("pr_list.json"),
+            format!("[{}]", listed.join(",")),
+        )
+        .expect("write pr list payload");
         install_fake_gh(bin.path());
 
         let state = tempfile::tempdir().expect("state dir");
@@ -141,6 +140,26 @@ github = "sweeper[bot]"
             state,
             head,
         }
+    }
+
+    /// Answer `gh pr view <n>` with `pr`, at this project's head. Without one
+    /// the fake reports that the PR does not exist.
+    pub fn serve_pr(&self, pr: &Pr) {
+        std::fs::write(
+            self.bin.path().join("pr_view.json"),
+            pr_json(pr, &self.head),
+        )
+        .expect("write pr view");
+    }
+
+    /// Have `gh pr create` open `pr`, which `gh pr view` then serves.
+    pub fn create_opens(&self, pr: &Pr) {
+        std::fs::write(
+            self.bin.path().join("pr_create.txt"),
+            format!("https://github.com/o/r/pull/{}\n", pr.number),
+        )
+        .expect("write pr create answer");
+        self.serve_pr(pr);
     }
 
     /// Answer `gh pr view --json reviews` with `payload` for the rest of this
@@ -219,6 +238,19 @@ github = "sweeper[bot]"
             .args(args);
         cmd
     }
+}
+
+/// `pr` as `gh --json` reports it, on this project's branch at `head`.
+fn pr_json(pr: &Pr, head: &str) -> String {
+    format!(
+        r#"{{"number":{n},"state":"{state}","url":"https://github.com/o/r/pull/{n}",
+             "headRefName":"lev/eng-1-fix","headRefOid":"{head}","isDraft":{draft},
+             "author":{{"login":"{author}"}}}}"#,
+        n = pr.number,
+        state = pr.state,
+        draft = pr.is_draft,
+        author = pr.author,
+    )
 }
 
 /// Copy the `ghfake` example binary into `bin_dir` under the name `gh`, so a

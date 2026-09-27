@@ -29,13 +29,16 @@ fn canned(args: &str) -> Option<(&'static str, &'static str)> {
     if args.starts_with("issue create") {
         return Some(("issue_create.txt", "https://github.com/o/r/issues/42\n"));
     }
+    if args.starts_with("pr create") {
+        return Some(("pr_create.txt", ""));
+    }
     None
 }
 
 /// Verbs that succeed silently. `auth token` is deliberately absent: it must
 /// fail so a run resolves no bearer token and takes its `gh` fallback.
 fn succeeds_silently(args: &str) -> bool {
-    args.starts_with("pr ready") || args.starts_with("pr edit") || args.starts_with("pr create")
+    args.starts_with("pr ready") || args.starts_with("pr edit") || args.starts_with("pr checkout")
 }
 
 fn read_or(dir: &Path, file: &str, fallback: &str) -> String {
@@ -57,6 +60,17 @@ fn main() {
 
     if let Some((file, fallback)) = canned(&joined) {
         print!("{}", read_or(&dir, file, fallback));
+        return;
+    }
+    if joined.starts_with("pr view") {
+        match std::fs::read_to_string(dir.join("pr_view.json")) {
+            Ok(pr) => print!("{pr}"),
+            // What `gh` says for a PR that does not exist.
+            Err(_) => {
+                eprintln!("no pull requests found");
+                std::process::exit(1);
+            }
+        }
         return;
     }
     if succeeds_silently(&joined) {
