@@ -2,7 +2,7 @@
 name = "devkit-timing"
 description = "Opt-in timing of devkit's subprocess and network IO"
 edition.workspace = true
-version = "0.14.6" # x-release-please-version
+version = "0.14.7" # x-release-please-version
 
 [dependencies]
 serde_json.workspace = true

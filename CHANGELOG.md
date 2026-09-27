@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.14.7](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.6...v0.14.7) (2026-09-27)
+
+
+### Features
+
+* **brief:** add a rules section ([#160](https://github.com/AbysmalBiscuit/devkit/issues/160)) ([7ba41e2](https://github.com/AbysmalBiscuit/devkit/commit/7ba41e261b4fcabb88260688ec78c4831620e84e))
+* **brief:** list tasks by app and trim the brief ([#162](https://github.com/AbysmalBiscuit/devkit/issues/162)) ([d991929](https://github.com/AbysmalBiscuit/devkit/commit/d991929e0ebe5191fb6df56388360f271147bb9e))
+* **command:** model permission changes ([#174](https://github.com/AbysmalBiscuit/devkit/issues/174)) ([4aea742](https://github.com/AbysmalBiscuit/devkit/commit/4aea74210c3ca507b3f937d048dc41295aa4ace6))
+* **config:** describe task args and variables ([#159](https://github.com/AbysmalBiscuit/devkit/issues/159)) ([34e0076](https://github.com/AbysmalBiscuit/devkit/commit/34e00765ee8da16afd8173ee7692b8cfff3259e1))
+* **docm:** treeless clones and per-library excludes ([#157](https://github.com/AbysmalBiscuit/devkit/issues/157)) ([a4f4410](https://github.com/AbysmalBiscuit/devkit/commit/a4f4410ea5ed326b98e2b4569d04a4563bfc0ff3))
+* **forge:** support GitLab and Forgejo alongside GitHub ([#183](https://github.com/AbysmalBiscuit/devkit/issues/183)) ([1926908](https://github.com/AbysmalBiscuit/devkit/commit/19269085d762be13823befc08daf79e9d74aeb0d))
+* **harness:** claim bounded shell write sets ([#158](https://github.com/AbysmalBiscuit/devkit/issues/158)) ([a72acf1](https://github.com/AbysmalBiscuit/devkit/commit/a72acf1aeb6ef623b50738a21309c8ea1e3ad2bf))
+* **hook:** parse Cursor and Antigravity payloads with pabal 0.2 ([#191](https://github.com/AbysmalBiscuit/devkit/issues/191)) ([00e2918](https://github.com/AbysmalBiscuit/devkit/commit/00e2918915b463fa0df7bd2a77d9b21b4346bd5d))
+* **hooks:** add before_worktree_remove ([#140](https://github.com/AbysmalBiscuit/devkit/issues/140)) ([1ea3aed](https://github.com/AbysmalBiscuit/devkit/commit/1ea3aedfebb73a2bc1cbcd6dd66949fa8493d6be))
+* **issue:** add dashboard chart aggregation modes ([#144](https://github.com/AbysmalBiscuit/devkit/issues/144)) ([61ad36a](https://github.com/AbysmalBiscuit/devkit/commit/61ad36a646bfb052f69157ecf8877d80a349f012))
+* **issue:** label the y-axis of dashboard charts ([#143](https://github.com/AbysmalBiscuit/devkit/issues/143)) ([99e7b29](https://github.com/AbysmalBiscuit/devkit/commit/99e7b293d88b4a9e72ef41743a6e382a69a76fc7))
+* **issues:** create issues from enforced templates ([#185](https://github.com/AbysmalBiscuit/devkit/issues/185)) ([3a38874](https://github.com/AbysmalBiscuit/devkit/commit/3a388749b08044e5a4fbbb39bc08c56ddd6c830d))
+* **issue:** take the summary from the tracker ([#138](https://github.com/AbysmalBiscuit/devkit/issues/138)) ([30425fb](https://github.com/AbysmalBiscuit/devkit/commit/30425fbf4b61dfd497ff498e0958f160cca9219e))
+* **rules:** add rules add, edit and remove ([#150](https://github.com/AbysmalBiscuit/devkit/issues/150)) ([7052dd4](https://github.com/AbysmalBiscuit/devkit/commit/7052dd4d1cef978dfef4db883b486b75eada6e0b))
+* **rules:** honor repo-rules-agent.toml in query ([#151](https://github.com/AbysmalBiscuit/devkit/issues/151)) ([e7a1d1f](https://github.com/AbysmalBiscuit/devkit/commit/e7a1d1f9775abaa04efcb3da0754aba8e93733cd))
+* **template:** render templates on demand ([#165](https://github.com/AbysmalBiscuit/devkit/issues/165)) ([2da3c36](https://github.com/AbysmalBiscuit/devkit/commit/2da3c369b360b23b4f18c094f84007916d228b31))
+* **templates:** add variable descriptions ([#152](https://github.com/AbysmalBiscuit/devkit/issues/152)) ([918f594](https://github.com/AbysmalBiscuit/devkit/commit/918f5945a99dc2af431c95e2b6213b7e5690f6c4))
+
+
+### Bug Fixes
+
+* **command:** end the fresh-path exemption on placement ([#125](https://github.com/AbysmalBiscuit/devkit/issues/125)) ([40ae328](https://github.com/AbysmalBiscuit/devkit/commit/40ae328c4bdd141bcfbb88ab30c896b067338672))
+* **common:** keep live blocks from climbing over output ([#141](https://github.com/AbysmalBiscuit/devkit/issues/141)) ([2e2b919](https://github.com/AbysmalBiscuit/devkit/commit/2e2b919a99ec7af98c94cb1fce08a2f39f7b344b))
+* **git:** fail fast when ssh needs a prompt ([#142](https://github.com/AbysmalBiscuit/devkit/issues/142)) ([8fe7ae3](https://github.com/AbysmalBiscuit/devkit/commit/8fe7ae31dc9d47f713b91d46f26a5473432ab184))
+* **guard:** note each unresolved command once ([#200](https://github.com/AbysmalBiscuit/devkit/issues/200)) ([2bcd2fa](https://github.com/AbysmalBiscuit/devkit/commit/2bcd2fa01607345603e5f14e36792f4b47c96ee3))
+* **guard:** redirect only commands a task covers ([#198](https://github.com/AbysmalBiscuit/devkit/issues/198)) ([f6c0488](https://github.com/AbysmalBiscuit/devkit/commit/f6c048893768df228441a286b61688c2c6c7fcf8))
+* **hooks:** keep enforcement on past a broken layer ([#190](https://github.com/AbysmalBiscuit/devkit/issues/190)) ([8846a35](https://github.com/AbysmalBiscuit/devkit/commit/8846a35c56750b9e2e7f9ed58cac8842640879aa))
+* **issue:** allow setup --slug without an issue id ([#127](https://github.com/AbysmalBiscuit/devkit/issues/127)) ([7c28ba7](https://github.com/AbysmalBiscuit/devkit/commit/7c28ba731b95a7ab845c6605cdbd884bc5d028b0))
+* **issue:** dashboard spinners, x labels and status colors ([#149](https://github.com/AbysmalBiscuit/devkit/issues/149)) ([b35e2ed](https://github.com/AbysmalBiscuit/devkit/commit/b35e2ede409ae52f1fc0e86177734328f80952a1))
+* **issue:** hold worktrees past their merged PR ([#189](https://github.com/AbysmalBiscuit/devkit/issues/189)) ([a27a28b](https://github.com/AbysmalBiscuit/devkit/commit/a27a28bee792999718e08a7c5d41f425301212a5))
+* **issue:** make status, info, end and MCP agree ([#193](https://github.com/AbysmalBiscuit/devkit/issues/193)) ([cd9b46a](https://github.com/AbysmalBiscuit/devkit/commit/cd9b46a456af1823bbb158173d8e71cef7262c0d))
+* **issue:** report ambiguous branch PRs in review finish ([#192](https://github.com/AbysmalBiscuit/devkit/issues/192)) ([ff2cf62](https://github.com/AbysmalBiscuit/devkit/commit/ff2cf6244e46f1a77aa18e56eaac61fc53aaa471))
+* **locks:** free every root on release --all ([#199](https://github.com/AbysmalBiscuit/devkit/issues/199)) ([d55ba01](https://github.com/AbysmalBiscuit/devkit/commit/d55ba0109f1e77b3fd0d7b2790f96ff48f884079))
+* **tasks:** refuse a blank required arg ([#173](https://github.com/AbysmalBiscuit/devkit/issues/173)) ([d1b32b3](https://github.com/AbysmalBiscuit/devkit/commit/d1b32b3bb74d127f3b582726bde646f4c274bc65))
+
 ## [0.14.6](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.5...v0.14.6) (2026-09-21)
 
 
