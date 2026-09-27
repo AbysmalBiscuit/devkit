@@ -44,7 +44,7 @@ const LINEAR: &str = "mcp__claude_ai_Linear__save_issue";
 
 fn project() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(p.path())
+    devkit_git::Git::fixture(p.path())
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();
@@ -334,7 +334,7 @@ fn session_end_ignores_a_traversal_id() {
 #[test]
 fn a_render_in_a_linked_worktree_counts_at_the_primary() {
     let p = project();
-    let git = || devkit_common::git::Git::fixture(p.path());
+    let git = || devkit_git::Git::fixture(p.path());
     git().args(["add", "-A"]).output().unwrap();
     git().args(["commit", "-q", "-m", "init"]).output().unwrap();
     let parent = tempfile::tempdir().unwrap();
