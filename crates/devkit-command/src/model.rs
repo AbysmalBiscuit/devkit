@@ -81,6 +81,8 @@ pub enum FileOp {
     Delete,
     Rename,
     Copy,
+    /// A mode, owner or ACL change: the path's metadata, never its contents.
+    Permissions,
 }
 
 impl FileOp {
@@ -93,6 +95,7 @@ impl FileOp {
             FileOp::Delete => "delete",
             FileOp::Rename => "rename",
             FileOp::Copy => "copy",
+            FileOp::Permissions => "permissions",
         }
     }
 }

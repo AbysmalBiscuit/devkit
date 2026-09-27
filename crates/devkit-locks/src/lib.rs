@@ -604,8 +604,10 @@ impl WriteResolver {
     }
 
     /// Live rows another session holds that cover a name created fresh under
-    /// `dir`. Narrower than [`check_scope`](Self::check_scope): a claim below
-    /// `dir` reaches no such name, so it is not a conflict. Takes no lock.
+    /// `dir`, which are the rows on `dir` itself or above it, so the same
+    /// query answers for a change to `dir` alone. Narrower than
+    /// [`check_scope`](Self::check_scope): a claim below `dir` reaches no such
+    /// name, so it is not a conflict. Takes no lock.
     ///
     /// There is no whole-checkout form. `scope_key` answers that with `.`,
     /// which only a claim on the checkout root covers, while the directory

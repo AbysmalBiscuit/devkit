@@ -182,6 +182,8 @@ const MUTATING_PATH_METHODS: &[&str] = &[
     "copy_into",
     "move",
     "move_into",
+    "chmod",
+    "lchmod",
 ];
 
 /// The mode a call to `open` was given, and whether it was given one at all.
@@ -1052,6 +1054,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     self.rename_into(node, &src, &arg(1, "dst"), scope)
                 }
                 "os.truncate" => self.effect(node, FileOp::Overwrite, &arg(0, "path"), scope),
+                "os.chmod" | "os.lchmod" | "os.chown" | "os.lchown" | "shutil.chown" => {
+                    self.effect(node, FileOp::Permissions, &arg(0, "path"), scope)
+                }
+                // A descriptor carries no path this can name.
+                "os.fchmod" | "os.fchown" => {
+                    self.effect(node, FileOp::Permissions, &Py::Unknown, scope)
+                }
                 "os.symlink" | "os.link" => {
                     let link = arg(1, "dst");
                     self.link_in_fresh(node, &link);
@@ -1386,6 +1395,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 self.effect(node, FileOp::Create, this, scope)
             }
             "unlink" | "rmdir" => self.effect(node, FileOp::Delete, this, scope),
+            "chmod" | "lchmod" => self.effect(node, FileOp::Permissions, this, scope),
             "copy" => self.copy(node, &dest(), keywords, scope),
             "copy_into" => self.tree(node, &dest(), method, scope),
             // A move renames the source away, so the source is written too.
@@ -1839,6 +1849,32 @@ mod tests {
         );
         assert!(a.file_effects.is_empty(), "{:?}", a.file_effects);
         assert!(a.uncertainties.is_empty(), "{:?}", a.uncertainties);
+    }
+
+    #[test]
+    fn permission_changes_name_the_path_they_change() {
+        let a = py(
+            "import os, shutil, pathlib\nos.chmod('a', 0o755)\nos.lchmod('b', 0o755)\nos.chown('c', 1, 1)\nos.lchown('d', 1, 1)\nshutil.chown('e', 'me')\npathlib.Path('f').chmod(0o755)\npathlib.Path('g').lchmod(0o755)\nos.chmod(path='h', mode=0o755)",
+        );
+        assert_eq!(targets(&a), [
+            "/repo/a", "/repo/b", "/repo/c", "/repo/d", "/repo/e", "/repo/f", "/repo/g", "/repo/h"
+        ]);
+        assert!(
+            a.file_effects.iter().all(|e| e.op == FileOp::Permissions),
+            "{:?}",
+            a.file_effects
+        );
+    }
+
+    #[test]
+    fn a_permission_change_through_a_descriptor_or_lost_receiver_is_unresolved() {
+        for source in [
+            "import os\nos.fchmod(3, 0o755)",
+            "import os\nos.fchown(3, 1, 1)",
+            "import pathlib\npathlib.Path('safe.txt').with_stem('victim').chmod(0o755)",
+        ] {
+            assert!(unresolved(&py(source)), "{source}");
+        }
     }
 
     #[test]

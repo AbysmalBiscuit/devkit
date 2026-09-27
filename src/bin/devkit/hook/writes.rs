@@ -62,6 +62,9 @@ pub enum ScopeCheck {
     /// A name was created fresh under this directory. Nobody else can produce
     /// that name, so only a claim covering the directory's children conflicts.
     Fresh { dir: String },
+    /// Only this path's metadata changes, so a claim on it or on a directory
+    /// above it conflicts, and a claim below it does not.
+    Covering { path: String },
 }
 
 impl Evaluation {
@@ -115,7 +118,19 @@ fn unresolved_fix(action: PolicyAction) -> &'static str {
 pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     let mut e = Evaluation::default();
     for effect in &analysis.file_effects {
+        // A permission change leaves the contents alone. Claiming its path
+        // would hold the file against the session editing it for the rest of
+        // this one, so the path is only checked against claims already made.
+        let permissions = effect.op == FileOp::Permissions;
         match &effect.target {
+            Target::Path(path) if permissions => {
+                e.scope(ScopeCheck::Covering { path: path.clone() })
+            }
+            Target::Within(dir) if permissions => e.scope(ScopeCheck::Tree {
+                dir: dir.clone(),
+                whole_checkout: false,
+            }),
+            Target::Ephemeral { .. } if permissions => {}
             Target::Path(p) => {
                 if !e.claims.contains(p) {
                     e.claims.push(p.clone());
@@ -200,6 +215,7 @@ fn op_name(op: FileOp) -> &'static str {
         FileOp::Delete => "delete",
         FileOp::Rename => "rename",
         FileOp::Copy => "copy",
+        FileOp::Permissions => "permission change",
     }
 }
 
@@ -223,6 +239,7 @@ pub fn enforce(
                 whole_checkout,
             } => resolver.check_scope(dir, *whole_checkout, holder)?,
             ScopeCheck::Fresh { dir } => resolver.check_covering(dir, holder)?,
+            ScopeCheck::Covering { path } => resolver.check_covering(path, holder)?,
         });
     }
     if !conflicts.is_empty() {
@@ -322,6 +339,36 @@ mod tests {
             whole_checkout: true,
         }]);
         assert!(e.blocks.is_empty());
+    }
+
+    #[test]
+    fn a_permission_change_is_a_scope_check_and_never_a_claim() {
+        let e = eval(
+            "chmod +x run.sh; chmod -R 755 bin; chown me src/*.rs; T=$(mktemp); chmod 600 \"$T\"",
+            HarnessPolicy::default(),
+        );
+        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert!(e.trees.is_empty(), "{:?}", e.trees);
+        assert!(e.blocks.is_empty(), "{:?}", e.blocks);
+        assert_eq!(e.scopes, [
+            ScopeCheck::Covering {
+                path: "/repo/run.sh".to_string(),
+            },
+            ScopeCheck::Tree {
+                dir: "/repo/src".to_string(),
+                whole_checkout: false,
+            },
+            ScopeCheck::Tree {
+                dir: "/repo/bin".to_string(),
+                whole_checkout: false,
+            },
+        ]);
+
+        let e = eval(
+            "python3 -c \"import os; os.fchmod(3, 0o755)\"",
+            HarnessPolicy::default(),
+        );
+        assert!(e.blocks[0].contains("permission change"), "{}", e.blocks[0]);
     }
 
     #[test]
