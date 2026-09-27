@@ -65,25 +65,25 @@ Each manifest is a translation table with no logic in it. Every command carries 
 
 `pre-tool-use` answers on stdout with a denial, a warning, or nothing, and never runs the command itself. Its write stage fails closed: an unresolved write, a registry error, or a registry that does not answer within 2 seconds is a denial. Its command guard fails open.
 
-| devkit verb | Claude Code | Codex | Cursor |
-|---|---|---|---|
-| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `beforeShellExecution` |
-| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` |
-| `post-tool-use-failure` | `PostToolUseFailure` | | `postToolUseFailure` |
-| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` |
-| `session-end` | `SessionEnd` | `SessionEnd` | `sessionEnd` |
-| `subagent-start` | `SubagentStart` | `SubagentStart` | |
-| `subagent-stop` | `SubagentStop` | `SubagentStop` | `subagentStop` |
-| `permission-request` | `PermissionRequest` | `PermissionRequest` | |
-| `permission-denied` | `PermissionDenied` | | |
-| `stop` | `Stop` | `Stop`, `Interrupt` | `stop` |
-| `stop-failure` | `StopFailure` | | |
-| `pre-compact` | `PreCompact` | `PreCompact` | `preCompact` |
-| `post-compact` | `PostCompact` | `PostCompact` | |
-| `cwd-changed` | `CwdChanged` | | `workspaceOpen` |
-| `worktree-create` | `WorktreeCreate` | | |
-| `worktree-remove` | `WorktreeRemove` | | |
-| `user-prompt-submit` | `UserPromptSubmit` | `UserPromptSubmit` | |
+| devkit verb | Claude Code | Codex | Cursor | Antigravity |
+|---|---|---|---|---|
+| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `beforeShellExecution` | `PreToolUse` |
+| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` |
+| `post-tool-use-failure` | `PostToolUseFailure` | | `postToolUseFailure` | |
+| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` | |
+| `session-end` | `SessionEnd` | `SessionEnd` | `sessionEnd` | |
+| `subagent-start` | `SubagentStart` | `SubagentStart` | | |
+| `subagent-stop` | `SubagentStop` | `SubagentStop` | `subagentStop` | |
+| `permission-request` | `PermissionRequest` | `PermissionRequest` | | |
+| `permission-denied` | `PermissionDenied` | | | |
+| `stop` | `Stop` | `Stop`, `Interrupt` | `stop` | |
+| `stop-failure` | `StopFailure` | | | |
+| `pre-compact` | `PreCompact` | `PreCompact` | `preCompact` | |
+| `post-compact` | `PostCompact` | `PostCompact` | | |
+| `cwd-changed` | `CwdChanged` | | `workspaceOpen` | |
+| `worktree-create` | `WorktreeCreate` | | | |
+| `worktree-remove` | `WorktreeRemove` | | | |
+| `user-prompt-submit` | `UserPromptSubmit` | `UserPromptSubmit` | | |
 
 A blank cell is an event that harness does not send, or one devkit leaves unwired.
 
@@ -92,8 +92,11 @@ Check the vendor before adding a verb rather than recalling it:
 - Claude Code: <https://code.claude.com/docs/en/hooks>, which carries the per-event payloads and the exit-code table.
 - Codex: <https://developers.openai.com/codex/config-schema.json>, and `codex-rs/protocol/src/protocol.rs` plus `codex-rs/config/src/hook_config.rs` in `openai/codex` behind it.
 - Cursor: <https://cursor.com/docs/hooks>. Not the `cursor-hooks` npm schema, which lags the product.
+- Antigravity: <https://antigravity.google/docs/hooks>.
 
 Cursor reads a decision from the stdout of `preToolUse`, `subagentStart` and `beforeSubmitPrompt`, and devkit answers an allow with nothing. Empty stdout is a proven allow only on `beforeShellExecution`, so the guard rides that event, and the other three stay unwired until a captured Cursor payload shows silence is an allow there too. Cursor's `postToolUse` and `postToolUseFailure` match `Shell`, the calls the guard saw. Its Tab completions edit files through `afterTabFileEdit`, which is post-only, so a Tab edit cannot be lock-guarded; that gap is noted rather than solved. Cursor also runs hooks configured for Claude Code and sends them its own camelCase payload, so a Claude Code hook that receives one answers as Cursor.
+
+Antigravity leaves the event out of its payload, so the verb in the command names it. It sends no session-start or session-end event, so its sessions get no bootstrap, no brief, and no write claims, which nothing would release. Its `PreToolUse` and `PostToolUse` match `run_command`, the shell tool the guard reads.
 
 **Exit codes are part of the contract.** No verb in the family ever exits 2. Exit 2 blocks the tool call on Claude Code `PreToolUse` and sets `should_block` on Codex, and clap exits 2 for a usage error, so an unrecognised verb would otherwise deny every command an agent ran. A usage error, an unknown verb and a panic all exit 1 with a message on stderr. And only `pre-tool-use` writes to stdout: `UserPromptSubmit` appends a hook's stdout to the prompt, and `Stop` and `PermissionRequest` honour a JSON decision.
 
@@ -155,6 +158,16 @@ ln -s "$(pwd)/plugin" ~/.cursor/plugins/local/devkit
 ```
 
 For the MCP server alone: the repo ships `.cursor/mcp.json`, the same `mcpServers` shape as Claude Code's, registering it project-scoped.
+
+## Antigravity
+
+Antigravity reads `plugin.json`, `hooks.json` and `mcp_config.json` from the plugin directory's root. Install it from a checkout:
+
+```sh
+agy plugin install "$(pwd)/plugin"
+```
+
+Antigravity has no session-start hook to bootstrap from, so install `devkit` on `PATH` first.
 
 ## Zed and generic MCP clients
 

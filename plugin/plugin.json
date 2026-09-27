@@ -1,0 +1,4 @@
+{
+  "name": "devkit",
+  "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle"
+}
