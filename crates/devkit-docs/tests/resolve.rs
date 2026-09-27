@@ -9,7 +9,7 @@ use devkit_docs::{
 
 /// A follow-up git operation against an already-built `fixture_repo`.
 fn git(args: &[&str], cwd: &str) -> String {
-    devkit_common::git::Git::fixture(std::path::Path::new(cwd))
+    devkit_git::Git::fixture(std::path::Path::new(cwd))
         .args(args.iter().copied())
         .output()
         .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"))

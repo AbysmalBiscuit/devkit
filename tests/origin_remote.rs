@@ -71,7 +71,7 @@ fn status_reports_worktrees_without_a_forge() {
     let fake = ghfake::Fake::with_origin("https://git.acme.test/acme/widget.git");
     let wts = tempfile::tempdir().unwrap();
     let wt = wts.path().join("eng-2");
-    devkit_common::git::Git::fixture(fake.project())
+    devkit_git::Git::fixture(fake.project())
         .args([
             "worktree",
             "add",

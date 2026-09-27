@@ -7,6 +7,8 @@ version = "0.14.6" # x-release-please-version
 anyhow.workspace = true
 devkit-config.workspace = true
 devkit-vcs.workspace = true
+devkit-git.workspace = true
+devkit-timing.workspace = true
 ambassador.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
@@ -27,7 +29,6 @@ ring.workspace = true
 chrono.workspace = true
 minijinja.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 rayon.workspace = true
 strum.workspace = true
 interprocess = { workspace = true, optional = true }
@@ -35,8 +36,7 @@ interprocess = { workspace = true, optional = true }
 [features]
 daemon = ["dep:interprocess"]
 # Test-only surface for other crates' fixtures: the in-memory `tracker::fake`
-# tracker, and `git::Git::fixture` (which builds on the private `NULL_DEVICE`
-# constant, not exposed on its own).
+# tracker.
 test-support = []
 
 [dev-dependencies]
@@ -44,10 +44,7 @@ test-support = []
 # assert what actually reaches the terminal.
 indicatif = { workspace = true, features = ["in_memory"] }
 tempfile.workspace = true
-# Enables `test-support` on the lib build linked into this crate's own
-# integration tests (tests/*.rs links the lib as an ordinary, non-`cfg(test)`
-# dependency, so `Git::fixture` is otherwise compiled out there).
-devkit-common = { workspace = true, features = ["test-support"] }
+devkit-git = { workspace = true, features = ["test-support"] }
 
 # Unix process primitives (signals, sessions); unavailable on Windows.
 [target.'cfg(unix)'.dependencies]

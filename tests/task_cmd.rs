@@ -11,7 +11,7 @@ fn setup() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     let git = |args: &[&str]| {
-        devkit_common::git::Git::fixture(root)
+        devkit_git::Git::fixture(root)
             .args(args.iter().copied())
             .output()
             .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
@@ -347,7 +347,7 @@ fn issue_fields_render_from_the_record_and_are_undefined_without_one() {
     );
 
     let git = |args: &[&str]| {
-        devkit_common::git::Git::fixture(dir.path())
+        devkit_git::Git::fixture(dir.path())
             .args(args.iter().copied())
             .output()
             .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
@@ -580,7 +580,7 @@ run = ["git", "add", "--", { split = "{{ files }}", on = ";" }]
         "files=new file.txt;$(touch injected).txt",
     ]);
     assert!(out.status.success(), "{out:?}");
-    let staged = devkit_common::git::Git::fixture(dir.path())
+    let staged = devkit_git::Git::fixture(dir.path())
         .args(["diff", "--cached", "--name-only", "-z"])
         .output()
         .unwrap();
@@ -603,7 +603,7 @@ run = ["git", "config", "--file", "observed", "probe.value", "set", { split = "{
     .unwrap();
     let out = run_in(dir.path(), &["task", "show", "--arg", "extra="]);
     assert!(out.status.success(), "{out:?}");
-    let recorded = devkit_common::git::Git::fixture(dir.path())
+    let recorded = devkit_git::Git::fixture(dir.path())
         .args(["config", "--file", "observed", "--get", "probe.value"])
         .output()
         .unwrap();

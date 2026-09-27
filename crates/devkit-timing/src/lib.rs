@@ -1,9 +1,10 @@
 //! Opt-in timing instrumentation for network and subprocess IO.
 //!
-//! When enabled, every subprocess spawn ([`crate::cmd::capture`]) and HTTP
-//! request (GitHub / Linear / Slack) is wrapped in a `tracing` span tagged with
-//! an `op` group and a `detail` string. A custom [`Layer`] collects each span
-//! as it closes; on process exit the collected ops are summarised to stderr:
+//! When enabled, every subprocess spawn (git, and `devkit_common::cmd`) and
+//! HTTP request (GitHub / Linear / Slack) is wrapped in a `tracing` span tagged
+//! with an `op` group and a `detail` string. A custom [`Layer`] collects each
+//! span as it closes; on process exit the collected ops are summarised to
+//! stderr:
 //!
 //! ```text
 //! timing — wall 1.31s, IO busy 0.95s over 16 ops (serial 2.85s, 3.0× overlap)

@@ -9,7 +9,7 @@ fn git_is_only_spawned_by_the_git_module() {
     let offenders = scan(&["Command::new(\"git\")", "cmd::git(", "capture(\"git\""]);
     assert!(
         offenders.is_empty(),
-        "git must be spawned only by devkit_common::git; found:\n{}",
+        "git must be spawned only by devkit_git; found:\n{}",
         offenders.join("\n")
     );
 }
@@ -17,8 +17,7 @@ fn git_is_only_spawned_by_the_git_module() {
 fn scan(needles: &[&str]) -> Vec<String> {
     let mut found = Vec::new();
     walk(Path::new(env!("CARGO_MANIFEST_DIR")), &mut |path, body| {
-        if path.ends_with("crates/devkit-common/src/git/mod.rs")
-            || path.ends_with("tests/no_stray_git.rs")
+        if path.ends_with("crates/devkit-git/src/lib.rs") || path.ends_with("tests/no_stray_git.rs")
         {
             return;
         }

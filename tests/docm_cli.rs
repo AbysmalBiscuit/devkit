@@ -15,7 +15,7 @@ const READY: Duration = Duration::from_secs(60);
 const CONTENTION: Duration = Duration::from_secs(30);
 
 fn git(cwd: &Path, args: &[&str]) {
-    devkit_common::git::Git::fixture(cwd)
+    devkit_git::Git::fixture(cwd)
         .args(args.iter().copied())
         .output()
         .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
@@ -563,7 +563,7 @@ fn info_and_list_report_the_ref_commit_and_clone_origin() {
     let info = env.docm(&["info", "up"]);
     assert_ran(&info, "docm info up");
     let out = stdout(&info);
-    let head = devkit_common::git::Git::fixture(Path::new(&env.upstream))
+    let head = devkit_git::Git::fixture(Path::new(&env.upstream))
         .args(["rev-parse", "v1.0.0^{commit}"])
         .output()
         .unwrap();

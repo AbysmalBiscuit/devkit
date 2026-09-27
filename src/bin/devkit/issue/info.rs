@@ -356,7 +356,7 @@ mod tests {
     fn local_row_reads_branch_id_and_dirty() {
         let base = tempfile::tempdir().unwrap();
         let run = |args: &[&str]| {
-            devkit_common::git::Git::fixture(base.path())
+            devkit_git::Git::fixture(base.path())
                 .args(args.iter().copied())
                 .output()
                 .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));

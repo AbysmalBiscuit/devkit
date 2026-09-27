@@ -13,7 +13,7 @@ use baselinetest::{devkit, git, project};
 const MARKER: &str = "before-remove-marker";
 
 fn rev(cwd: &Path, rev: &str) -> Option<String> {
-    devkit_common::git::Git::fixture(cwd)
+    devkit_git::Git::fixture(cwd)
         .args(["rev-parse", "--verify", "--quiet", rev])
         .output()
         .ok()

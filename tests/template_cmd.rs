@@ -39,7 +39,7 @@ mood = { default = "fine", required = "agents" }
 
 fn setup() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
-    devkit_common::git::Git::fixture(dir.path())
+    devkit_git::Git::fixture(dir.path())
         .args(["init", "-q", "-b", "x/eng-1-fix"])
         .output()
         .expect("git init");

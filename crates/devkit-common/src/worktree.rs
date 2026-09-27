@@ -1329,8 +1329,9 @@ fn match_options() -> glob::MatchOptions {
 mod tests {
     use std::path::Path;
 
+    use devkit_git::parse_porcelain;
+
     use super::*;
-    use crate::git::parse_porcelain;
 
     #[test]
     fn a_directory_with_the_marker_is_a_baseline() {
@@ -1347,7 +1348,7 @@ mod tests {
         let main = tmp.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
         let git = |cwd: &std::path::Path, args: &[&str]| {
-            crate::git::Git::fixture(cwd)
+            devkit_git::Git::fixture(cwd)
                 .args(args.iter().copied())
                 .output()
                 .unwrap()
@@ -1411,7 +1412,7 @@ mod tests {
         let main = tmp.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
         let git = |cwd: &std::path::Path, args: &[&str]| {
-            crate::git::Git::fixture(cwd)
+            devkit_git::Git::fixture(cwd)
                 .args(args.iter().copied())
                 .output()
                 .unwrap()

@@ -17,7 +17,7 @@ pub fn capture_env(
     cwd: Option<&str>,
     env: &[(&str, &str)],
 ) -> Result<String> {
-    let _span = crate::timing::subprocess_span(program, args).entered();
+    let _span = devkit_timing::subprocess_span(program, args).entered();
     let mut c = Command::new(program);
     c.args(args);
     for (k, v) in env {
@@ -55,7 +55,7 @@ pub fn capture(program: &str, args: &[&str], cwd: Option<&str>) -> Result<String
 /// exits, so a child that fills the OS pipe buffer cannot block in `write()`
 /// while this thread only polls exit status.
 pub fn capture_bounded(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
-    let _span = crate::timing::subprocess_span(program, args).entered();
+    let _span = devkit_timing::subprocess_span(program, args).entered();
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())

@@ -1,6 +1,6 @@
 //! The project repository, reached through whichever backend keeps it. Every
 //! question devkit asks about the repository it coordinates goes through here;
-//! [`crate::git::Git`] is only for what is git by definition.
+//! [`devkit_git::Git`] is only for what is git by definition.
 
 use std::{
     path::{Path, PathBuf},
@@ -9,13 +9,14 @@ use std::{
 
 use ambassador::Delegate;
 use anyhow::{Context, Result};
+use devkit_git::GitBackend;
 pub use devkit_vcs::{
     Changes, DETACHED, NewWorktree, Ownership, VersionControl, Worktree,
     ambassador_impl_VersionControl,
 };
 use strum::{EnumIter, IntoEnumIterator};
 
-use crate::{git::GitBackend, paths::same_path};
+use crate::paths::same_path;
 
 /// Every backend devkit can drive, in the order they claim a directory.
 #[derive(Debug, Clone, Copy, Delegate, EnumIter)]
@@ -271,8 +272,9 @@ fn containment(
 
 #[cfg(test)]
 mod tests {
+    use devkit_git::Git;
+
     use super::*;
-    use crate::git::Git;
 
     fn run(args: &[&str], cwd: &Path) -> Result<String> {
         Git::fixture(cwd).args(args.iter().copied()).output()

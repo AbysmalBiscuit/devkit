@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn harness_declared_in_a_nested_directory_is_honored() {
         let repo = tempfile::tempdir().unwrap();
-        crate::git::Git::fixture(repo.path())
+        devkit_git::Git::fixture(repo.path())
             .args(["init", "-q", "-b", "main"])
             .output()
             .unwrap();
@@ -437,23 +437,23 @@ mod tests {
     #[test]
     fn harness_is_inherited_from_the_main_checkout() {
         let main = tempfile::tempdir().unwrap();
-        crate::git::Git::fixture(main.path())
+        devkit_git::Git::fixture(main.path())
             .args(["init", "-q", "-b", "main"])
             .output()
             .unwrap();
         std::fs::write(main.path().join("f.txt"), "x\n").unwrap();
-        crate::git::Git::fixture(main.path())
+        devkit_git::Git::fixture(main.path())
             .args(["add", "."])
             .output()
             .unwrap();
-        crate::git::Git::fixture(main.path())
+        devkit_git::Git::fixture(main.path())
             .args(["commit", "-qm", "init"])
             .output()
             .unwrap();
 
         let holder = tempfile::tempdir().unwrap();
         let linked = holder.path().join("wt");
-        crate::git::Git::fixture(main.path())
+        devkit_git::Git::fixture(main.path())
             .args([
                 "worktree",
                 "add",

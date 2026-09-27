@@ -7,7 +7,7 @@ use devkit_locks::ident::Identity;
 use serde_json::{Value, json};
 
 fn git(args: &[&str], cwd: &Path) {
-    devkit_common::git::Git::fixture(cwd)
+    devkit_git::Git::fixture(cwd)
         .args(args.iter().copied())
         .output()
         .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));

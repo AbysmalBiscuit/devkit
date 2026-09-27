@@ -29,12 +29,12 @@ pub(crate) enum TimingFlag {
 
 /// Resolve the timing mode: the flag wins; otherwise fall back to
 /// `DEVKIT_TIMING`.
-fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
-    use devkit_common::timing::Mode;
+fn timing_mode(flag: Option<TimingFlag>) -> devkit_timing::Mode {
+    use devkit_timing::Mode;
     match flag {
         Some(TimingFlag::Summary) => Mode::Summary,
         Some(TimingFlag::Trace) => Mode::Trace,
-        None => devkit_common::timing::mode_from_env(),
+        None => devkit_timing::mode_from_env(),
     }
 }
 
@@ -440,7 +440,7 @@ fn print_summary(rows: &[Row]) {
 }
 
 pub fn run(cli: RunCli) -> Result<()> {
-    let _timing = devkit_common::timing::init(timing_mode(cli.timing), cli.timing_log.clone());
+    let _timing = devkit_timing::init(timing_mode(cli.timing), cli.timing_log.clone());
     let cwd = cwd_of(&cli);
     match &cli.cmd {
         Cmd::Up {
@@ -1644,7 +1644,7 @@ mod tests {
     }
 
     fn fixture_git(cwd: &Path, args: &[&str]) -> String {
-        devkit_common::git::Git::fixture(cwd)
+        devkit_git::Git::fixture(cwd)
             .args(args.iter().copied())
             .output()
             .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"))

@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 /// `find_root_from`/normalization resolve.
 fn project() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(p.path())
+    devkit_git::Git::fixture(p.path())
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();
@@ -44,7 +44,7 @@ fn project_with_config() -> tempfile::TempDir {
 /// worktree — `issue.status` then returns empty without needing `gh`.
 fn git_repo() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(p.path())
+    devkit_git::Git::fixture(p.path())
         .args(["init", "-q"])
         .output()
         .unwrap();

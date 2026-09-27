@@ -63,7 +63,7 @@ mod tests {
         let repo = tmp.path().join("proj");
         std::fs::create_dir_all(&repo).unwrap();
         let git = |args: &[&str]| {
-            crate::git::Git::fixture(&repo)
+            devkit_git::Git::fixture(&repo)
                 .args(args.iter().copied())
                 .output()
                 .unwrap()

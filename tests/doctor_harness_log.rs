@@ -21,7 +21,7 @@ struct Env {
 /// `~/.config/devkit/config.toml` when given; `project` to `devkit.toml`.
 fn env(global: Option<&str>, project_config: &str) -> Env {
     let project = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(project.path())
+    devkit_git::Git::fixture(project.path())
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();

@@ -14,7 +14,7 @@ use std::{
 };
 
 fn git(args: &[&str], cwd: &Path) {
-    devkit_common::git::Git::fixture(cwd)
+    devkit_git::Git::fixture(cwd)
         .args(args.iter().copied())
         .output()
         .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
@@ -107,7 +107,7 @@ fn setup_leaves_the_new_branch_without_an_upstream() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "setup failed: {stderr}");
     let wt = t.path().join("app/wts/fix-export");
-    let tracked = devkit_common::git::Git::fixture(&wt)
+    let tracked = devkit_git::Git::fixture(&wt)
         .args(["rev-parse", "--verify", "--quiet", "@{upstream}"])
         .success()
         .unwrap();
@@ -136,7 +136,7 @@ fn setup_with_only_a_slug_creates_an_issueless_worktree() {
     let record = devkit_common::record::read(&wt).expect("setup record");
     assert_eq!(record.issue, "");
     assert_eq!(record.slug, "tidy-docs");
-    let branch = devkit_common::git::Git::fixture(&wt)
+    let branch = devkit_git::Git::fixture(&wt)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .unwrap();

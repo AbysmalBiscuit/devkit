@@ -541,23 +541,23 @@ mod tests {
     #[test]
     fn project_devkit_toml_never_resolves_to_the_main_checkout() {
         let main = tempfile::tempdir().unwrap();
-        devkit_common::git::Git::fixture(main.path())
+        devkit_git::Git::fixture(main.path())
             .args(["init", "-q", "-b", "main"])
             .output()
             .unwrap();
         std::fs::write(main.path().join("f.txt"), "x\n").unwrap();
-        devkit_common::git::Git::fixture(main.path())
+        devkit_git::Git::fixture(main.path())
             .args(["add", "."])
             .output()
             .unwrap();
-        devkit_common::git::Git::fixture(main.path())
+        devkit_git::Git::fixture(main.path())
             .args(["commit", "-qm", "init"])
             .output()
             .unwrap();
 
         let holder = tempfile::tempdir().unwrap();
         let linked = holder.path().join("wt");
-        devkit_common::git::Git::fixture(main.path())
+        devkit_git::Git::fixture(main.path())
             .args([
                 "worktree",
                 "add",

@@ -300,11 +300,11 @@ mod tests {
     /// `detect` against a scratch repository whose `origin` is `url`.
     fn detect_with_remote(url: &str, linear_key: Option<&str>) -> TrackerKind {
         let dir = tempfile::tempdir().unwrap();
-        crate::git::Git::fixture(dir.path())
+        devkit_git::Git::fixture(dir.path())
             .args(["init", "-q"])
             .output()
             .unwrap();
-        crate::git::Git::fixture(dir.path())
+        devkit_git::Git::fixture(dir.path())
             .args(["remote", "add", "origin", url])
             .output()
             .unwrap();
@@ -407,11 +407,11 @@ mod tests {
     #[test]
     fn a_detected_github_origin_resolves_the_adapter_undeclared() {
         let dir = tempfile::tempdir().unwrap();
-        crate::git::Git::fixture(dir.path())
+        devkit_git::Git::fixture(dir.path())
             .args(["init", "-q"])
             .output()
             .unwrap();
-        crate::git::Git::fixture(dir.path())
+        devkit_git::Git::fixture(dir.path())
             .args([
                 "remote",
                 "add",

@@ -4,7 +4,7 @@
 use std::path::Path;
 
 fn sh(args: &[&str], cwd: &Path) {
-    devkit_common::git::Git::fixture(cwd)
+    devkit_git::Git::fixture(cwd)
         .args(args.iter().copied())
         .output()
         .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
@@ -46,7 +46,7 @@ pub fn serve_partial(dir: &Path) -> String {
 /// what a partial clone could still fetch on demand.
 #[allow(dead_code)]
 pub fn local_objects(repo: &Path, kind: &str) -> Vec<String> {
-    devkit_common::git::Git::fixture(repo)
+    devkit_git::Git::fixture(repo)
         .args([
             "cat-file",
             "--batch-all-objects",

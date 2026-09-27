@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn a_scope_keys_to_its_checkout_root() {
         let repo = tempfile::tempdir().unwrap();
-        devkit_common::git::Git::fixture(repo.path())
+        devkit_git::Git::fixture(repo.path())
             .args(["init", "-q", "-b", "main"])
             .output()
             .unwrap();
@@ -741,7 +741,7 @@ mod tests {
         // the FlockStore path. A unique root namespaces these lock
         // rows.
         let root = tempfile::tempdir().unwrap();
-        devkit_common::git::Git::fixture(root.path())
+        devkit_git::Git::fixture(root.path())
             .args(["init", "-q", "-b", "main"])
             .output()
             .unwrap();
@@ -781,7 +781,7 @@ mod tests {
     /// A directory named `.git` is not a repository. The fixture is a real one
     /// so this asserts root resolution rather than the presence of a filename.
     fn init_repo(at: &Path) {
-        devkit_common::git::Git::fixture(at)
+        devkit_git::Git::fixture(at)
             .args(["init", "-q", "-b", "main"])
             .output()
             .unwrap();
@@ -937,7 +937,7 @@ mod tests {
     #[test]
     fn write_ctx_derives_root_and_relpath() {
         let root = tempfile::tempdir().unwrap();
-        devkit_common::git::Git::fixture(root.path())
+        devkit_git::Git::fixture(root.path())
             .args(["init", "-q", "-b", "main"])
             .output()
             .unwrap();

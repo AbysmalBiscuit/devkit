@@ -17,7 +17,7 @@ struct Env {
 
 fn env(config: &str) -> Env {
     let project = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::fixture(project.path())
+    devkit_git::Git::fixture(project.path())
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();

@@ -39,7 +39,7 @@ impl Project {
         let home = root.path().join("home");
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        devkit_common::git::Git::fixture(&repo)
+        devkit_git::Git::fixture(&repo)
             .args(["init", "-b", "main"])
             .output()
             .unwrap();
