@@ -945,6 +945,14 @@ mod tests {
     }
 
     #[test]
+    fn a_tilde_is_a_directory_name_node_does_not_expand() {
+        assert_eq!(
+            targets(&bash("node -e \"require('fs').writeFileSync('~/f', 'x')\"")),
+            ["/repo/~/f"]
+        );
+    }
+
+    #[test]
     fn node_fs_writes_through_require_and_imports() {
         assert_eq!(
             targets(&bash(
@@ -1120,6 +1128,7 @@ mod tests {
         let context = Context {
             dialect: Dialect::Bash,
             cwd: Some("/repo".into()),
+            home: None,
             path_style: PathStyle::Unix,
             limits: Limits {
                 value: 128,
@@ -1156,6 +1165,7 @@ mod tests {
         let context = Context {
             dialect: Dialect::Bash,
             cwd: Some(cwd.clone()),
+            home: None,
             path_style: PathStyle::Unix,
             limits: Limits {
                 value: 128,

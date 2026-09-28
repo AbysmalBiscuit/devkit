@@ -213,6 +213,20 @@ fn an_unresolved_write_blocks_by_default_and_warns_when_configured() {
     );
 }
 
+#[test]
+fn a_write_under_the_home_directory_is_claimed_like_any_path() {
+    let e = env(WRITES);
+    let home = e.project.path().to_string_lossy().into_owned();
+    let out = devkit(
+        &e,
+        &["harness", "shell"],
+        Some(&payload(&e, Some("S1"), "Bash", "echo x > ~/notes.txt")),
+        &[("HOME", &home)],
+    );
+    assert_eq!(denial(&out), None);
+    assert_eq!(rows(&e), [("notes.txt".to_string(), "S1".to_string())]);
+}
+
 /// Neither write path has a holder to claim for without a session, and both
 /// say so the same way.
 #[test]

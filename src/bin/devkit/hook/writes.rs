@@ -163,6 +163,7 @@ mod tests {
         let ctx = Context {
             dialect: Dialect::Bash,
             cwd: Some("/repo".into()),
+            home: None,
             path_style: PathStyle::Unix,
             limits: Limits::default(),
         };

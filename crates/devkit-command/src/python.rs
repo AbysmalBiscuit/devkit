@@ -1751,6 +1751,11 @@ mod tests {
     }
 
     #[test]
+    fn a_tilde_is_a_directory_name_python_does_not_expand() {
+        assert_eq!(targets(&py("open('~/f', 'w')")), ["/repo/~/f"]);
+    }
+
+    #[test]
     fn a_function_body_runs_only_when_called() {
         assert!(
             py("def f():\n    open('a.txt', 'w')\n")

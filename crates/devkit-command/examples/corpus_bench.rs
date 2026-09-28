@@ -53,6 +53,7 @@ fn main() {
             let ctx = Context {
                 dialect,
                 cwd: field("cwd").map(str::to_string),
+                home: None,
                 path_style: if platform == "windows" && dialect == Dialect::PowerShell {
                     PathStyle::Windows
                 } else {

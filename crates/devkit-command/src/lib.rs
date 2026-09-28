@@ -62,6 +62,7 @@ pub(crate) mod testutil {
         Context {
             dialect,
             cwd: Some("/repo".into()),
+            home: Some("/home/u".into()),
             path_style: PathStyle::Unix,
             limits: Limits::default(),
         }

@@ -612,8 +612,15 @@ impl<'t> Walker<'_, '_, '_, 't> {
         let text = ts::text(node, self.source);
         match node.kind() {
             "word" | "number" | "command_name" => {
-                if text.starts_with('~') || (text.contains('{') && text.contains(',')) {
+                if text.contains('{') && text.contains(',') {
                     return Value::Unknown;
+                }
+                if text.starts_with('~') && starts_word(node) {
+                    return match self.expanded_home(&text[1..]) {
+                        Some(text) if has_unescaped(&text, GLOB) => glob_bound(&text),
+                        Some(text) => Value::Known(unescape(&text)),
+                        None => Value::Unknown,
+                    };
                 }
                 if has_unescaped(text, GLOB) {
                     return glob_bound(text);
@@ -729,6 +736,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
+    /// `~` then `rest` with the home directory in place of the `~`, escaped so
+    /// the word's own unescaping and globbing leave the home directory as it
+    /// is. `~user`, `~+` and `~-` need more than the home directory.
+    fn expanded_home(&self, rest: &str) -> Option<String> {
+        let home = self.a.ctx.home.as_deref()?;
+        (rest.is_empty() || rest.starts_with('/')).then(|| format!("{}{rest}", escape_glob(home)))
+    }
+
     /// A word joining quoted text to an unquoted glob, such as `"$d"/*.rs`.
     /// The quoted parts stay literal, so they are escaped before the pattern
     /// is bounded. An unquoted expansion is split and matched by the shell, so
@@ -738,7 +753,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
         for (i, part) in parts.iter().enumerate() {
             let text = ts::text(*part, self.source);
             match part.kind() {
-                "word" if i == 0 && text.starts_with('~') => return Value::Unknown,
+                "word" if i == 0 && text.starts_with('~') => match self.expanded_home(&text[1..]) {
+                    Some(text) => pattern.push_str(&text),
+                    None => return Value::Unknown,
+                },
                 "word" => pattern.push_str(text),
                 "string" | "raw_string" | "ansi_c_string" => match self.value(*part, scope) {
                     Value::Known(s) => pattern.push_str(&escape_glob(&s)),
@@ -871,6 +889,12 @@ fn glob_bound(pattern: &str) -> Value {
         (true, 0) => ".".to_string(),
         (true, _) => "/".to_string(),
     })
+}
+
+/// Whether `node` begins its shell word, the only place bash expands a `~`.
+fn starts_word(node: Node) -> bool {
+    node.parent()
+        .is_none_or(|p| p.kind() != "concatenation" || p.start_byte() == node.start_byte())
 }
 
 fn escape_glob(text: &str) -> String {
@@ -1125,11 +1149,61 @@ mod tests {
     }
 
     #[test]
+    fn an_unquoted_leading_tilde_is_the_home_directory() {
+        for (source, expected) in [
+            ("echo x > ~/f", "/home/u/f"),
+            ("touch ~/f", "/home/u/f"),
+            ("cp a.txt ~", "/home/u"),
+            ("touch ~/'my dir'/f", "/home/u/my dir/f"),
+            ("d=~/src; touch \"$d\"/f", "/home/u/src/f"),
+            ("cd ~/src && touch f", "/home/u/src/f"),
+            ("rm -f ~/src/*.rs", "/home/u/src/**"),
+            ("rm -f ~/\"my dir\"/*.rs", "/home/u/my dir/**"),
+        ] {
+            assert_eq!(writes(&bash(source)).last().unwrap(), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_tilde_bash_does_not_expand_names_a_literal_directory() {
+        for (source, expected) in [
+            ("touch \"~/f\"", "/repo/~/f"),
+            ("touch '~'/f", "/repo/~/f"),
+            ("touch \\~/f", "/repo/~/f"),
+            ("touch \"x\"~/f", "/repo/x~/f"),
+        ] {
+            assert_eq!(writes(&bash(source)), [expected], "{source}");
+        }
+    }
+
+    #[test]
+    fn a_tilde_needing_more_than_the_home_directory_is_unresolved() {
+        for source in [
+            "touch ~root/f",
+            "touch ~+/f",
+            "touch ~-/f",
+            "rm -f ~root/*.rs",
+        ] {
+            assert_eq!(writes(&bash(source)), ["?"], "{source}");
+        }
+        let homeless = crate::Context {
+            home: None,
+            ..crate::testutil::ctx(crate::Dialect::Bash)
+        };
+        for source in ["touch ~/f", "rm -f ~/src/*.rs"] {
+            assert_eq!(
+                writes(&crate::analyze(source, &homeless)),
+                ["?"],
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn a_glob_whose_matches_can_leave_its_directory_is_unresolved() {
         for source in [
             "rm -f src/*/../x",
             "rm -f src/.*",
-            "rm -f ~/src/*.rs",
             "rm -f \"$X\"/*.rs",
             "d=src; rm -f $d/*.rs",
         ] {

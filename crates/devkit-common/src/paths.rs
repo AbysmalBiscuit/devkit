@@ -121,15 +121,20 @@ pub fn cache_dir() -> PathBuf {
 /// The rules cache path needs this to reach a non-XDG location on all
 /// platforms.
 pub fn home() -> PathBuf {
+    try_home().expect("HOME must be set")
+}
+
+/// The user's home directory, or `None` when the environment names none.
+pub fn try_home() -> Option<PathBuf> {
     if let Some(h) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
-        return PathBuf::from(h);
+        return Some(PathBuf::from(h));
     }
     // Windows has no HOME; the user profile is the home equivalent.
     #[cfg(windows)]
     if let Some(p) = std::env::var_os("USERPROFILE").filter(|s| !s.is_empty()) {
-        return PathBuf::from(p);
+        return Some(PathBuf::from(p));
     }
-    panic!("HOME must be set");
+    None
 }
 
 /// The `systemd --user` unit path for the daemon:

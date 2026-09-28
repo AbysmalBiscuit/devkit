@@ -341,6 +341,7 @@ fn context(dialect: Dialect, cwd: Option<&Path>) -> Context {
     Context {
         dialect,
         cwd: cwd.map(|p| p.to_string_lossy().into_owned()),
+        home: devkit_common::paths::try_home().map(|p| p.to_string_lossy().into_owned()),
         path_style: if cfg!(windows) {
             PathStyle::Windows
         } else {

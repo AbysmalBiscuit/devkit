@@ -313,6 +313,18 @@ impl<'t> Walker<'_, '_, '_> {
         }
     }
 
+    /// Whether a `~` stands for the home directory: it begins its word and is
+    /// alone or before a `/`. `~user` needs more than the home directory.
+    fn names_home(&self, tilde: Node<'t>) -> bool {
+        if tilde.parent().is_none_or(|p| p.kind() != "concatenation") {
+            return true;
+        }
+        tilde.prev_sibling().is_none()
+            && tilde
+                .next_sibling()
+                .is_none_or(|next| ts::text(next, self.source).starts_with('/'))
+    }
+
     fn value(&mut self, node: Node<'t>, scope: &mut Scope) -> Value {
         let text = ts::text(node, self.source);
         match node.kind() {
@@ -324,7 +336,11 @@ impl<'t> Walker<'_, '_, '_> {
                 }
             }
             "escape_sequence" => Value::Known(text.strip_prefix('\\').unwrap_or(text).to_string()),
-            "glob" | "home_dir_expansion" | "brace_expansion" => {
+            "home_dir_expansion" => match &self.a.ctx.home {
+                Some(home) if self.names_home(node) => Value::Known(home.clone()),
+                _ => Value::Unknown,
+            },
+            "glob" | "brace_expansion" => {
                 self.substitutions(node, scope);
                 Value::Unknown
             }
@@ -472,7 +488,7 @@ mod tests {
     use crate::{
         Analysis, Dialect,
         model::{Limit, Target, UncertaintyKind},
-        testutil::{ctx, programs, targets},
+        testutil::{ctx, programs, targets, writes},
     };
 
     fn fish(source: &str) -> Analysis {
@@ -491,6 +507,23 @@ mod tests {
         assert_eq!(targets(&fish("cd sub; and echo x > a.txt")), [
             "/repo/sub/a.txt"
         ]);
+    }
+
+    #[test]
+    fn a_tilde_expands_only_unquoted() {
+        for (source, expected) in [
+            ("echo x > ~/f", "/home/u/f"),
+            ("touch ~", "/home/u"),
+            ("touch ~/'my dir'/f", "/home/u/my dir/f"),
+            ("touch '~/f'", "/repo/~/f"),
+            ("touch \"~/f\"", "/repo/~/f"),
+            ("touch ~root/f", "?"),
+        ] {
+            assert_eq!(writes(&fish(source)), [expected], "{source}");
+        }
+        let mut homeless = ctx(Dialect::Fish);
+        homeless.home = None;
+        assert_eq!(writes(&crate::analyze("touch ~/f", &homeless)), ["?"]);
     }
 
     #[test]

@@ -55,6 +55,9 @@ impl Default for Limits {
 pub struct Context {
     pub dialect: Dialect,
     pub cwd: Option<String>,
+    /// The directory a leading `~` expands to where the shell expands it.
+    /// Without one, such a path stays unresolved.
+    pub home: Option<String>,
     pub path_style: PathStyle,
     pub limits: Limits,
 }
