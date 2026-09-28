@@ -23,6 +23,7 @@ fn main() {
     let ctx = Context {
         dialect,
         cwd: std::env::var("CWD").ok(),
+        home: std::env::var("HOME").ok(),
         path_style: if dialect == Dialect::PowerShell {
             PathStyle::Windows
         } else {

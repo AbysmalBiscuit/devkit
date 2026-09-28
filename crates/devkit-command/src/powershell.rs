@@ -833,7 +833,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
     fn value(&mut self, node: Node<'t>, scope: &mut Scope) -> Value {
         let text = ts::text(node, self.source);
         let value = match node.kind() {
-            "verbatim_string_characters" | "verbatim_string_literal" => Value::Known(
+            "verbatim_string_characters" | "verbatim_string_literal" => quoted(
                 text.trim_start_matches('\'')
                     .trim_end_matches('\'')
                     .replace("''", "'"),
@@ -847,11 +847,21 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 } else {
                     text.trim_matches('"').to_string()
                 };
-                self.expand(&body, node, scope)
+                match self.expand(&body, node, scope) {
+                    Value::Known(s) => quoted(s),
+                    v => v,
+                }
             }
             "generic_token" | "command_argument" | "decimal_integer_literal" => {
                 if text.contains(['*', '?', '[']) {
                     Value::Unknown
+                } else if text.starts_with('~') {
+                    match (home_rest(text), self.a.ctx.home.as_deref()) {
+                        (Some(rest), Some(home)) => {
+                            Value::Known(format!("{home}{}", rest.replace('`', "")))
+                        }
+                        _ => Value::Unknown,
+                    }
                 } else {
                     Value::Known(text.replace('`', ""))
                 }
@@ -1439,6 +1449,23 @@ fn resolve_param(c: &Cmdlet, typed: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// What follows the `~` of a path the filesystem provider reads as under the
+/// home directory: `~` alone or before a separator.
+fn home_rest(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix('~')?;
+    (rest.is_empty() || rest.starts_with(['/', '\\'])).then_some(rest)
+}
+
+/// A quoted string. A cmdlet's provider expands a quoted `~` path while a
+/// native command takes it as a name, so such a string names nothing certain.
+fn quoted(s: String) -> Value {
+    match home_rest(&s) {
+        Some(_) => Value::Unknown,
+        None => Value::Known(s),
+    }
+}
+
 fn here_string_body(text: &str) -> String {
     let inner = text
         .trim_start_matches(['@'])
@@ -1510,8 +1537,38 @@ mod tests {
     fn ps(source: &str) -> Analysis {
         let mut c = ctx(Dialect::PowerShell);
         c.cwd = Some("C:/repo".into());
+        c.home = Some("C:/Users/u".into());
         c.path_style = PathStyle::Windows;
         crate::analyze(source, &c)
+    }
+
+    #[test]
+    fn an_unquoted_leading_tilde_is_the_home_directory() {
+        for (source, expected) in [
+            ("Set-Content ~/f x", "C:/Users/u/f"),
+            (r"echo x > ~\f", r"C:/Users/u\f"),
+            ("Remove-Item ~", "C:/Users/u"),
+        ] {
+            assert_eq!(targets(&ps(source)), [expected], "{source}");
+        }
+    }
+
+    /// A cmdlet's provider expands a quoted `~` too, while a native command
+    /// takes it as a name, so a quoted one names nothing certain.
+    #[test]
+    fn a_quoted_or_other_users_tilde_is_unresolved() {
+        for source in [
+            "Set-Content '~/f' x",
+            "Set-Content \"~/f\" x",
+            "Set-Content ~user/f x",
+        ] {
+            assert_eq!(targets(&ps(source)), ["?"], "{source}");
+        }
+        let mut homeless = ctx(Dialect::PowerShell);
+        homeless.home = None;
+        assert_eq!(targets(&crate::analyze("Set-Content ~/f x", &homeless)), [
+            "?"
+        ]);
     }
 
     #[test]

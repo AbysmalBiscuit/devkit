@@ -84,7 +84,7 @@ pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Tar
             };
         }
     };
-    if p.is_empty() || p.starts_with('~') || p.contains(['*', '?', '[']) {
+    if p.is_empty() || p.contains(['*', '?', '[']) {
         return Target::Unresolved;
     }
     if style == PathStyle::Windows
@@ -245,9 +245,19 @@ mod tests {
         assert_eq!(win("C:"), None);
     }
 
+    /// Each dialect expands a `~` where its language does, so one that
+    /// reaches here is part of a name.
     #[test]
-    fn globs_tildes_and_unknowns_are_unresolved() {
-        for v in [k("src/*.rs"), k("~/x"), k(""), Value::Unknown] {
+    fn a_tilde_is_an_ordinary_name() {
+        assert_eq!(
+            resolve(&k("~/x"), Some("/repo"), PathStyle::Unix),
+            Target::Path("/repo/~/x".into())
+        );
+    }
+
+    #[test]
+    fn globs_and_unknowns_are_unresolved() {
+        for v in [k("src/*.rs"), k(""), Value::Unknown] {
             assert_eq!(
                 resolve(&v, Some("/repo"), PathStyle::Unix),
                 Target::Unresolved,

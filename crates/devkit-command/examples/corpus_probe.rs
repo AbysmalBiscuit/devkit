@@ -64,6 +64,7 @@ fn context_of(record: &serde_json::Value) -> Context {
             .get("cwd")
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        home: None,
         path_style: if platform == "windows" && dialect == Dialect::PowerShell {
             PathStyle::Windows
         } else {

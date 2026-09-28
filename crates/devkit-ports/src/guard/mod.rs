@@ -230,6 +230,7 @@ fn bash_context() -> devkit_command::Context {
     devkit_command::Context {
         dialect: devkit_command::Dialect::Bash,
         cwd: None,
+        home: None,
         path_style: if cfg!(windows) {
             devkit_command::PathStyle::Windows
         } else {
@@ -575,6 +576,7 @@ mod tests {
         let ctx = devkit_command::Context {
             dialect: devkit_command::Dialect::Bash,
             cwd: None,
+            home: None,
             path_style: devkit_command::PathStyle::Unix,
             limits: devkit_command::Limits::default(),
         };
