@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.8](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.7...v0.14.8) (2026-09-28)
+
+
+### Bug Fixes
+
+* **docm:** pin line endings in library clones ([#203](https://github.com/AbysmalBiscuit/devkit/issues/203)) ([d43208f](https://github.com/AbysmalBiscuit/devkit/commit/d43208f4ac479b2b16c64baba61d62960129afa8))
+* **guard:** resolve ~ paths to the home directory ([#204](https://github.com/AbysmalBiscuit/devkit/issues/204)) ([fba6c48](https://github.com/AbysmalBiscuit/devkit/commit/fba6c48b3e1f70efc2da8c1842a3bc67a7c807d1))
+
 ## [0.14.7](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.6...v0.14.7) (2026-09-27)
 
 
