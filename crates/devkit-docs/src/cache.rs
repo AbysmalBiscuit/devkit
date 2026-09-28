@@ -282,7 +282,7 @@ impl LibCache {
                 );
             }
             meta.origin = Some(actual);
-            return Ok(());
+            return self.pin_line_endings();
         }
         self.ensure_dir()?;
         let dest = self.bare_str();
@@ -316,7 +316,24 @@ impl LibCache {
             ])
             .output()?;
         meta.origin = Some(repo.to_string());
-        Ok(())
+        self.pin_line_endings()
+    }
+
+    /// Turn off end-of-line conversion for every checkout of this clone, so a
+    /// user's `text` attributes cannot report a committed CRLF file as
+    /// modified. `info/attributes` outranks the tree's `.gitattributes` and
+    /// `core.attributesFile` without touching the rest of the user's config.
+    /// A matching file is left alone so a concurrent status never reads it
+    /// half-written.
+    fn pin_line_endings(&self) -> Result<()> {
+        const ATTRIBUTES: &str = "* -text\n";
+        let info = self.bare().join("info");
+        let path = info.join("attributes");
+        if std::fs::read_to_string(&path).is_ok_and(|current| current == ATTRIBUTES) {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&info).with_context(|| format!("creating {}", info.display()))?;
+        std::fs::write(&path, ATTRIBUTES).with_context(|| format!("writing {}", path.display()))
     }
 
     pub fn fetch(&self) -> Result<()> {
