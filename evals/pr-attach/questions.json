@@ -1,0 +1,95 @@
+[
+  {
+    "id": "alt-value",
+    "question": "Write the single --attach value, without the flag itself, that attaches ./.devkit/proof/after.png with the alt text `Login error`.",
+    "kind": "text",
+    "expect": ["./.devkit/proof/after.png#Login error", ".devkit/proof/after.png#Login error"],
+    "proof": "tests/pr_create_attach.rs each_attachment_reaches_gh_as_its_own_flag"
+  },
+  {
+    "id": "bare-video-path",
+    "question": "You attach ./.devkit/proof/demo.mp4 and the body holds a line with only `./.devkit/proof/demo.mp4` on it, no other markdown. Does gh replace that line with the uploaded URL?",
+    "kind": "bool",
+    "expect": false
+  },
+  {
+    "id": "video-player-markup",
+    "question": "Which markdown, alone in its paragraph, makes the attached recording render as a video player?",
+    "kind": "enum",
+    "values": [
+      "./.devkit/proof/demo.mp4",
+      "![demo](./.devkit/proof/demo.mp4)",
+      "[demo](./.devkit/proof/demo.mp4)",
+      "<video src=\"./.devkit/proof/demo.mp4\">"
+    ],
+    "expect": "![demo](./.devkit/proof/demo.mp4)"
+  },
+  {
+    "id": "video-mid-paragraph",
+    "question": "The video embed sits inside a sentence with other text around it. Does it render as a player?",
+    "kind": "bool",
+    "expect": false
+  },
+  {
+    "id": "video-link",
+    "question": "The body holds `[demo](./.devkit/proof/demo.mp4)` alone in its paragraph. Does it render as a video player?",
+    "kind": "bool",
+    "expect": false
+  },
+  {
+    "id": "unreferenced-file",
+    "question": "You attach a file the body never mentions. Is it left out of the PR body?",
+    "kind": "bool",
+    "expect": false
+  },
+  {
+    "id": "reused-pr",
+    "question": "This branch already has an open PR, #12. Does `devkit issue pr create --attach ./.devkit/proof/after.png` add the screenshot to it?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/pr_create_attach.rs a_reused_pr_is_refused_before_it_is_touched"
+  },
+  {
+    "id": "reused-pr-command",
+    "question": "Write the command that attaches ./.devkit/proof/after.png to that existing PR #12.",
+    "kind": "command",
+    "expect": [
+      "gh pr edit 12 --attach ./.devkit/proof/after.png",
+      "gh pr edit 12 --attach .devkit/proof/after.png"
+    ]
+  },
+  {
+    "id": "gitlab-push",
+    "question": "In a project whose forge is GitLab, you run `devkit issue pr create --attach ./.devkit/proof/after.png`. Is the branch pushed?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/pr_create_attach.rs a_forge_without_attachments_refuses_before_the_push"
+  },
+  {
+    "id": "missing-file-push",
+    "question": "In a GitHub project, ./.devkit/proof/after.png does not exist and you pass `--attach ./.devkit/proof/after.png`. Is the branch pushed?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/pr_create_attach.rs a_missing_file_is_refused_before_the_push"
+  },
+  {
+    "id": "hash-in-filename",
+    "question": "The file ./shots/issue#206.png exists and you pass `--attach ./shots/issue#206.png`. Is `206.png` used as alt text?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/pr_create_attach.rs a_hash_inside_an_existing_filename_is_not_alt_text"
+  },
+  {
+    "id": "path-base",
+    "question": "From /home/me you run `devkit issue -C /work/app pr create --attach shot.png`. Give the absolute path the file must be at.",
+    "kind": "text",
+    "expect": ["/work/app/shot.png"],
+    "proof": "tests/pr_create_attach.rs each_attachment_reaches_gh_as_its_own_flag"
+  },
+  {
+    "id": "old-gh",
+    "question": "The gh on PATH is 2.98.0. Does `devkit issue pr create --attach ./.devkit/proof/after.png` open a PR?",
+    "kind": "bool",
+    "expect": false
+  }
+]
