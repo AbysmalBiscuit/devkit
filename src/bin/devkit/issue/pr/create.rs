@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
-    forge::{self, NewPr, PrLocator},
+    forge::{self, Forge, NewPr, PrLocator},
     progress::Steps,
     vcs::{Vcs, VersionControl},
 };
@@ -31,6 +31,8 @@ pub struct Args {
     pub base: Option<String>,
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
+    /// `--attach` values, passed to the forge as given.
+    pub attach: Vec<String>,
     pub no_push: bool,
     /// Use this PR for this run: a PR URL keeps its own repository, a
     /// bare number means `pr_repo`. Replaces a wrong recorded binding, since
@@ -87,6 +89,36 @@ fn require_pr_title(title: &str) -> Result<()> {
     Ok(())
 }
 
+/// Refuse `--attach` values gh could not upload, before anything is pushed.
+/// A file is read the way gh reads it: the whole value when it names a file,
+/// else the longest prefix before a `#` that does, with the rest as alt text.
+fn check_attachments(forge: &dyn Forge, dir: &Path, attach: &[String]) -> Result<()> {
+    if attach.is_empty() {
+        return Ok(());
+    }
+    if !forge.attaches_media() {
+        bail!(
+            "--attach uploads through gh and needs a GitHub forge; this project's forge is {}",
+            forge.kind()
+        );
+    }
+    for value in attach {
+        let prefixes = value.rmatch_indices('#').map(|(i, _)| &value[..i]);
+        let found = std::iter::once(value.as_str())
+            .chain(prefixes)
+            .filter(|p| !p.is_empty())
+            .any(|p| dir.join(p).is_file());
+        if !found {
+            let path = match value.rsplit_once('#') {
+                Some((path, _)) if !path.is_empty() => path,
+                _ => value,
+            };
+            bail!("--attach {path}: no such file in {}", dir.display());
+        }
+    }
+    Ok(())
+}
+
 /// The PR this run acts on, created or reused.
 pub(crate) struct Resolved {
     pub url: String,
@@ -116,6 +148,8 @@ pub(crate) struct Ensure<'a> {
     pub pr_body: RenderBody<'a>,
     /// Logins to request as reviewers.
     pub reviewers: Vec<String>,
+    /// Uploaded into the body of a PR this run opens.
+    pub attachments: &'a [String],
     /// `defaults.require_pr_reviewer`: whether opening a PR ready for review
     /// demands a human reviewer.
     pub require_reviewer: bool,
@@ -142,6 +176,13 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             // Mutating an existing PR is gated before the call: a mismatch here
             // is refused before a single reviewer is added.
             assert_belongs(&pr, args.head)?;
+            if !args.attachments.is_empty() {
+                bail!(
+                    "PR #{n} already exists, and --attach uploads only into a PR this run opens.\n\
+                     To add files to it: gh pr edit {n} --attach <file>",
+                    n = pr.number
+                );
+            }
             add_reviewers(forge, &found.repo, pr.number, &args.reviewers, steps)?;
             if let Some(note) = reuse_note(pr.number, pr.is_draft, args.asked) {
                 eprintln!("{note}");
@@ -173,6 +214,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
                 body: &pr_body,
                 draft: args.state == PrCreateState::Draft,
                 reviewers: &args.reviewers,
+                attachments: args.attachments,
             };
             let url = steps.during_result("Creating PR...", || {
                 forge.create(&found.repo, &new, Path::new(start))
@@ -203,6 +245,7 @@ pub fn run(args: Args) -> Result<()> {
     let people = &loaded.config.people;
     let tmpls = &loaded.config.templates;
     let forge = forge::resolve(&loaded.config.forge, &loaded.config.github, &start, None);
+    check_attachments(forge.forge.as_ref(), Path::new(&start), &args.attach)?;
 
     let caller = devkit_common::caller::caller();
     let mut vars = tmpls.defaults();
@@ -296,6 +339,7 @@ pub fn run(args: Args) -> Result<()> {
             render_review(tmpls.pr_body(), "pr_body", &ctx, &vars, missing_at)
         }),
         reviewers,
+        attachments: &args.attach,
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
         steps: &steps,
     })?;

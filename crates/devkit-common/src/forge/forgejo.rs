@@ -1030,6 +1030,7 @@ mod tests {
                     body: "why",
                     draft: true,
                     reviewers: &reviewers,
+                    attachments: &[],
                 },
                 dir.path(),
             )

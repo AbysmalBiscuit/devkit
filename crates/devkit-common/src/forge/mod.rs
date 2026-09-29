@@ -300,6 +300,10 @@ pub struct NewPr<'a> {
     pub draft: bool,
     /// Logins to request as reviewers.
     pub reviewers: &'a [String],
+    /// Images and videos to upload into the body, each as `gh --attach` takes
+    /// it: a path, optionally followed by `#` and alt text. Empty unless
+    /// [`Forge::attaches_media`].
+    pub attachments: &'a [String],
 }
 
 /// A PR's reviewers. A forge drops a login from `requested` once they review,
@@ -445,6 +449,11 @@ pub trait Forge: Send + Sync {
             .iter()
             .map(|b| (b.clone(), self.pr_by_head(repo, b)))
             .collect()
+    }
+    /// Whether [`Forge::create`] uploads [`NewPr::attachments`]. A forge that
+    /// does not ignores them, so callers refuse attachments first.
+    fn attaches_media(&self) -> bool {
+        false
     }
     /// Open a PR from `pr.head`, run in the checkout at `cwd`. Returns its URL.
     fn create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String>;

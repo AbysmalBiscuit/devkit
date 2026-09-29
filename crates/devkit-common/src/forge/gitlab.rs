@@ -1049,6 +1049,7 @@ mod tests {
             body: "Body",
             draft,
             reviewers,
+            attachments: &[],
         }
     }
 
