@@ -78,7 +78,7 @@ The optional second positional overrides the worktree path (default: `templates.
 
 ### `--attach`: images and video in the PR body
 
-`pr create --attach <file>[#alt]` uploads an image or video into the body of the PR it opens, through `gh pr create --attach`. It is repeatable, and alt text for an image follows `#`. A body that references a file by the same path gets the uploaded URL in its place, and an attachment the body does not reference is appended. A video renders as a player only when its URL stands alone in its paragraph, so give its path a line of its own:
+`pr create --attach <file>[#alt]` uploads an image or video into the body of the PR it opens, through `gh pr create --attach`. It is repeatable, and alt text for an image follows `#`. A markdown image or link in the body whose destination is the same path gets the uploaded URL in its place, and an attachment the body does not reference is appended. A bare path is not a reference. Embed a video like an image, alone in its paragraph: gh swaps the whole embed for the bare URL, which is what renders as a player. Mid-paragraph, it becomes a link instead.
 
 ```sh
 issue pr create --pr-title 'feat(login): show the error state' \
@@ -86,7 +86,7 @@ issue pr create --pr-title 'feat(login): show the error state' \
   --attach ./.devkit/proof/demo.mp4 \
   --pr-body '![after](./.devkit/proof/after.png)
 
-./.devkit/proof/demo.mp4'
+![demo](./.devkit/proof/demo.mp4)'
 ```
 
 - Paths are relative to the working directory, or to `-C` when given. A `#` inside a filename that exists is part of the path, not the start of alt text.
