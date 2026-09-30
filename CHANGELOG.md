@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.9](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.8...v0.14.9) (2026-09-30)
+
+
+### Features
+
+* **issue:** attach media when opening a PR ([#208](https://github.com/AbysmalBiscuit/devkit/issues/208)) ([c10829a](https://github.com/AbysmalBiscuit/devkit/commit/c10829a88424646e02530c6714201606121ad6fd))
+* **issue:** require proof for each done-when item ([#210](https://github.com/AbysmalBiscuit/devkit/issues/210)) ([c3ca870](https://github.com/AbysmalBiscuit/devkit/commit/c3ca870a80fa019e00ad9af81fc49751066fdf6c))
+
 ## [0.14.8](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.7...v0.14.8) (2026-09-28)
 
 
