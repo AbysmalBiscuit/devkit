@@ -813,6 +813,13 @@ pub struct Defaults {
     /// Off by default.
     #[serde(default)]
     pub require_pr_reviewer: bool,
+    /// The `[templates.variables]` name whose `--arg` carries a PR's proof.
+    /// When set, an agent's `issue pr create` in an issue worktree is refused
+    /// before the push unless that proof answers every item of the issue's
+    /// `Done when` or `Acceptance criteria` section, each on a line starting
+    /// with the item's number (`2. <evidence>`). Unset by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_proof_variable: Option<String>,
     /// Glob patterns for status-check names to discount from a PR's CHECK
     /// verdict — e.g. a deploy left red by an unfinished PR. Matched
     /// case-insensitively against each check's name; a PR reads green when only
@@ -862,6 +869,7 @@ impl Default for Defaults {
             pr_base: default_pr_base(),
             pr_create_state: PrCreateState::default(),
             require_pr_reviewer: false,
+            pr_proof_variable: None,
             ignored_checks: Vec::new(),
             stray_scan_width: default_stray_scan_width(),
             worktree_include: Vec::new(),

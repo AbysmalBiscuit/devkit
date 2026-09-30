@@ -2,15 +2,19 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
+    caller::Caller,
     forge::{self, Forge, NewPr, PrLocator},
     progress::Steps,
     vcs::{Vcs, VersionControl},
+    worktree::IssueId,
 };
 use devkit_config::PrCreateState;
 use devkit_ports::templates::worktree_context;
 
 use super::{
-    add_reviewers, require_reviewer_for_ready,
+    add_reviewers,
+    proof::require_proof,
+    require_reviewer_for_ready,
     resolve::{
         Existing, assert_belongs, parse_pr_flag, record_with_pr, resolve_existing, verify_created,
     },
@@ -284,6 +288,20 @@ pub fn run(args: Args) -> Result<()> {
     } else {
         None
     };
+
+    let issue = record
+        .as_ref()
+        .and_then(|r| r.issue.parse::<IssueId>().ok());
+    if let (Some(variable), Some(issue), Caller::Agent) = (
+        &loaded.config.defaults.pr_proof_variable,
+        issue.as_ref().and_then(IssueId::tracker),
+        caller,
+    ) {
+        let tracker =
+            devkit_common::tracker::resolve(loaded.config.tracker.kind, here, &forge.repos);
+        let proof = vars.get(variable).map_or("", String::as_str);
+        require_proof(tracker.tracker.as_ref(), issue, proof, variable)?;
+    }
 
     let ctx = worktree_context(record.as_ref(), Some(&branch));
     let title_input = serde_json::json!(args.pr_title.clone().unwrap_or_default());

@@ -98,6 +98,23 @@ issue pr create --pr-title 'feat(login): show the error state' \
 
 `defaults.require_pr_reviewer` refuses any run that would leave a PR ready with no human reviewer other than the PR's own author: `pr create --ready`, `pr ready`, and `review request`'s draft flip. A pending request, a submitted review, or a `--to` in the same run all count; the author's own review does not. The refusal comes before the flip, so the PR stays a draft. Opening a draft is never gated, and neither is a PR that was already ready.
 
+### Proof for every item
+
+When `defaults.pr_proof_variable` names a template variable (say `proof`), an agent's `pr create` in an `issue setup` worktree reads the issue from the tracker and refuses, before the push, a proof that skips an item of its `Done when` section. A `Done when` or `Acceptance criteria` section counts, under a heading or a bold label like `**Acceptance criteria:**`, matched in any case. The refusal lists each missing item with its number.
+
+Items are numbered in the order the issue lists them. Answer item `n` on a line of the proof that starts with `n.`, `n)` or `n:`, so the wording can be yours:
+
+```sh
+issue pr create --pr-title 'feat(login): show the error state' --arg proof='1. test `login_error_renders`
+2. test `retry_clears_error`
+3. `devkit issue pr create -h` prints the new flag'
+```
+
+- A numbered line indented two columns or more belongs to the entry above it and answers nothing.
+- Not gated: a human caller, a worktree with no issue record, one set up with only `--slug` or checked out from a PR that names no issue, and an issue with no such section.
+- An issue the tracker cannot return is refused, since the items cannot be checked.
+- The check runs on every agent run, a reused PR included, because it comes before the push that finds the PR. Whether the evidence holds is left to review.
+
 ## `review request` — ship for review
 
 Pushes the branch, requests the reviewers on the PR, and Slack-messages them the PR link plus your body. With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON object for an agent to forward.

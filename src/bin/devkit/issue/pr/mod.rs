@@ -7,6 +7,7 @@ use devkit_common::{
 use crate::issue::review::{PrAction, Target, action_for, is_human_login};
 
 pub(crate) mod create;
+pub(crate) mod proof;
 pub(crate) mod ready;
 pub(crate) mod resolve;
 
