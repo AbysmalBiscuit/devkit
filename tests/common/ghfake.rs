@@ -174,6 +174,35 @@ github = "sweeper[bot]"
             .expect("write review requests");
     }
 
+    /// Answer `gh api graphql` with issue `body`, the way the tracker's issue
+    /// query reads it. Without one the fake fails the call.
+    pub fn serve_issue(&self, body: &str) {
+        let payload = serde_json::json!({ "data": { "repository": { "issue": {
+            "title": "An issue",
+            "url": "https://github.com/o/r/issues/7",
+            "body": body,
+            "state": "OPEN",
+            "stateReason": null,
+            "assignees": { "pageInfo": { "hasNextPage": false }, "nodes": [] },
+            "labels": { "pageInfo": { "hasNextPage": false }, "nodes": [] },
+        } } } });
+        std::fs::write(self.bin.path().join("graphql.json"), payload.to_string())
+            .expect("write graphql answer");
+    }
+
+    /// Make the project an `issue setup` worktree for issue `id`.
+    pub fn record_issue(&self, id: &str) {
+        devkit_common::record::write(self.project(), &devkit_common::record::IssueRecord {
+            issue: id.into(),
+            slug: "fix".into(),
+            apps: Vec::new(),
+            summary: None,
+            pr: None,
+            baseline: None,
+        })
+        .expect("write issue record");
+    }
+
     pub fn head(&self) -> &str {
         &self.head
     }
@@ -192,6 +221,14 @@ github = "sweeper[bot]"
     /// takes its `gh` fallback for each lookup.
     pub fn issue(&self, args: &[&str]) -> std::process::Output {
         self.issue_cmd(args).output().expect("spawn devkit issue")
+    }
+
+    /// [`Fake::issue`] with `DEVKIT_CALLER` set to `caller`.
+    pub fn issue_as(&self, caller: &str, args: &[&str]) -> std::process::Output {
+        self.issue_cmd(args)
+            .env("DEVKIT_CALLER", caller)
+            .output()
+            .expect("spawn devkit issue")
     }
 
     /// [`Fake::issue`] with `stdin` piped in.

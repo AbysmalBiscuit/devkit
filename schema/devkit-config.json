@@ -374,6 +374,13 @@
           "default": "draft",
           "description": "State `issue pr create` opens a PR in when neither `--draft` nor\n`--ready` is given. Draft by default, so a new PR never lands in\nanyone's review queue until it is marked ready."
         },
+        "pr_proof_variable": {
+          "description": "The `[templates.variables]` name whose `--arg` carries a PR's proof.\nWhen set, an agent's `issue pr create` in an issue worktree is refused\nbefore the push unless that proof answers every item of the issue's\n`Done when` or `Acceptance criteria` section, each on a line starting\nwith the item's number (`2. <evidence>`). Unset by default.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "require_pr_reviewer": {
           "default": false,
           "description": "Refuse any run that would leave a PR ready for review with no human\nGitHub reviewer other than its own author: `issue pr create --ready`,\n`issue pr ready`, and the draft-to-ready flip in `issue review request`.\nOff by default.",

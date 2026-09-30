@@ -62,6 +62,13 @@ fn main() {
         print!("{}", read_or(&dir, file, fallback));
         return;
     }
+    if joined.starts_with("api graphql") {
+        match std::fs::read_to_string(dir.join("graphql.json")) {
+            Ok(answer) => print!("{answer}"),
+            Err(_) => std::process::exit(1),
+        }
+        return;
+    }
     if joined.starts_with("pr view") {
         match std::fs::read_to_string(dir.join("pr_view.json")) {
             Ok(pr) => print!("{pr}"),

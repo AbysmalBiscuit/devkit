@@ -303,6 +303,15 @@ pub(crate) enum Cmd {
     },
 }
 
+const PROOF_HELP: &str = "\
+Proof check: with `defaults.pr_proof_variable` set, an agent in an issue
+worktree is refused before the push unless that `--arg` answers every item of
+the issue's `Done when` or `Acceptance criteria` section, each on a line
+starting with the item's number:
+
+  --arg proof='1. test `refuses_a_gap`
+  2. test `opens_when_covered`'";
+
 #[derive(Subcommand)]
 pub(crate) enum PrCmd {
     /// Open (or reuse) this branch's PR.
@@ -310,6 +319,7 @@ pub(crate) enum PrCmd {
     /// Pushes the branch first unless `--no-push`. A PR this run opens is a
     /// draft unless `--ready` or `defaults.pr_create_state` says otherwise;
     /// an open PR that already exists is reused with its state left alone.
+    #[command(after_help = PROOF_HELP)]
     Create {
         /// Open as a draft, whatever `defaults.pr_create_state` says.
         #[arg(short = 'd', long)]
