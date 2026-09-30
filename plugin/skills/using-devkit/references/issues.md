@@ -11,7 +11,7 @@ issue render --title T [--body B] [--arg k=v] [--arg-file k=path]
 issue create --title T [--body B] [--arg k=v] [--arg-file k=path]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue pr [status] [selector] [--json] [--cache-only]  # also the bare `issue pr`
-issue pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--pr <URL|number>] [--arg k=v] [--arg-file k=path]
+issue pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title T] [--pr-body B] [--attach <file>[#alt]] [--no-push] [--pr <URL|number>] [--arg k=v] [--arg-file k=path]
 issue pr ready [--to <alias>] [--no-push] [--pr <URL|number>]
 issue pr checkout <target> [<worktree-path>] [--setup] [--apps a,b]
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree] [--no-preserve]
@@ -75,6 +75,26 @@ The optional second positional overrides the worktree path (default: `templates.
 - `--pr <URL|number>` acts on that PR and records it, which is how a worktree bound to the wrong PR is rebound. `--no-push` skips the push.
 - Whichever PR the run ends on, its head commit must be this worktree's `HEAD`. A reused PR is checked before it is touched, a new one straight after it opens; a failure there leaves the new PR open and says so.
 - `pr ready` on a branch with no PR is an error naming `issue pr create`; a merged or closed PR is refused.
+
+### `--attach`: images and video in the PR body
+
+`pr create --attach <file>[#alt]` uploads an image or video into the body of the PR it opens, through `gh pr create --attach`. It is repeatable, and alt text for an image follows `#`. A markdown image or link in the body whose destination is the same path gets the uploaded URL in its place, and an attachment the body does not reference is appended. A bare path is not a reference: it stays as written, and the file is appended. Embed a video like an image, alone in its paragraph: gh swaps the whole embed for the bare URL, which is what renders as a player. A video embedded mid-paragraph, or written as a plain link without the `!`, stays a link.
+
+```sh
+issue pr create --pr-title 'feat(login): show the error state' \
+  --attach './.devkit/proof/after.png#The login error state' \
+  --attach ./.devkit/proof/demo.mp4 \
+  --pr-body '![after](./.devkit/proof/after.png)
+
+![demo](./.devkit/proof/demo.mp4)'
+```
+
+- Paths are relative to the working directory, or to `-C` when given. A `#` inside a filename that exists is part of the path, not the start of alt text.
+- A missing file, and any forge but GitHub, are refused before the push.
+- A branch whose PR already exists is refused before that PR is touched, because a rerun would add another copy of each file. Attach to it with `gh pr edit <n> --attach <file>`.
+- It needs gh 2.99.0 or later. An older gh fails with its own error after the push, and no PR is opened.
+- gh enforces GitHub's file count, type and size limits. On a private repository only people with access can see the attachments.
+- If some uploads fail, gh still opens the PR with the ones that succeeded but exits non-zero, so the run reports a failure. The next `pr create` without `--attach` finds that PR and records it.
 
 `defaults.require_pr_reviewer` refuses any run that would leave a PR ready with no human reviewer other than the PR's own author: `pr create --ready`, `pr ready`, and `review request`'s draft flip. A pending request, a submitted review, or a `--to` in the same run all count; the author's own review does not. The refusal comes before the flip, so the PR stays a draft. Opening a draft is never gated, and neither is a PR that was already ready.
 

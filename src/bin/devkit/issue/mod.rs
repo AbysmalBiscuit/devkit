@@ -330,6 +330,14 @@ pub(crate) enum PrCmd {
         /// PR body, instead of the one the template renders.
         #[arg(short = 'b', long = "pr-body")]
         pr_body: Option<String>,
+        /// Image or video to upload into the body of the PR this run opens.
+        /// Repeatable. Alt text follows `#`. A body reference to the same path,
+        /// like `![alt](./after.png)`, becomes the uploaded URL; an attachment
+        /// the body does not reference is appended. GitHub only; paths are
+        /// relative to the working directory (or `-C`). Refused when the PR
+        /// already exists.
+        #[arg(long, value_name = "FILE[#ALT]")]
+        attach: Vec<String>,
         /// Open or update the PR without pushing the branch first.
         #[arg(long = "no-push")]
         no_push: bool,
@@ -511,6 +519,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
                     base,
                     pr_title,
                     pr_body,
+                    attach,
                     no_push,
                     pr,
                     vars,
@@ -521,6 +530,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
                     base,
                     pr_title,
                     pr_body,
+                    attach,
                     no_push,
                     pr,
                     vars,

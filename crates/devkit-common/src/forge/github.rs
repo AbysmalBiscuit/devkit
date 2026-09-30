@@ -888,8 +888,13 @@ impl Forge for GithubForge {
         }
     }
 
+    fn attaches_media(&self) -> bool {
+        true
+    }
+
     /// `gh pr create` picks the head from the checkout it runs in, which is
-    /// how it finds a branch pushed to a fork.
+    /// how it finds a branch pushed to a fork. It also resolves each
+    /// attachment's path against `cwd`.
     fn create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String> {
         let joined = pr.reviewers.join(",");
         let mut args = vec![
@@ -900,6 +905,9 @@ impl Forge for GithubForge {
         }
         if pr.draft {
             args.push("--draft");
+        }
+        for file in pr.attachments {
+            args.extend(["--attach", file]);
         }
         let out = gh_capture(&args, repo, &cwd.to_string_lossy()).context("gh pr create failed")?;
         out.lines()
