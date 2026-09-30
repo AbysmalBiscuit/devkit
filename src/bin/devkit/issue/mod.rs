@@ -305,12 +305,12 @@ pub(crate) enum Cmd {
 
 const PROOF_HELP: &str = "\
 Proof check: with `defaults.pr_proof_variable` set, an agent in an issue
-worktree is refused before the push unless that `--arg` answers every item of
-the issue's `Done when` or `Acceptance criteria` section, each on a line
-starting with the item's number:
+worktree is refused before the push unless that variable answers every item of
+the issue's `Done when` or `Acceptance criteria` section, each on an unindented
+line starting with the item's number:
 
-  --arg proof='1. test `refuses_a_gap`
-  2. test `opens_when_covered`'";
+--arg proof='1. test `refuses_a_gap`
+2. test `opens_when_covered`'";
 
 #[derive(Subcommand)]
 pub(crate) enum PrCmd {
