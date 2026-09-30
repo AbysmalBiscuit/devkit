@@ -172,3 +172,20 @@ fn a_human_caller_is_not_gated() {
     assert!(ok, "{stderr}");
     assert!(p.opened());
 }
+
+/// `pr checkout` records `UNKNOWN` when the PR names no issue, which leaves
+/// nothing to ask the tracker about.
+#[test]
+fn a_checkout_worktree_with_no_issue_is_not_gated() {
+    let p = project();
+    p.fake.record_issue("UNKNOWN");
+    p.fake.serve_issue(ISSUE);
+
+    let (ok, stderr) = p.create("agent", "covered no item by number");
+    assert!(ok, "{stderr}");
+    assert!(
+        !p.fake.calls().contains("api graphql"),
+        "{}",
+        p.fake.calls()
+    );
+}

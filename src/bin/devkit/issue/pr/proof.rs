@@ -98,14 +98,18 @@ pub(crate) fn require_every_item(items: &[String], proof: &str, variable: &str) 
 
 /// The lines of `text` outside fenced code blocks, fence lines dropped too.
 fn outside_fences(text: &str) -> impl Iterator<Item = &str> {
-    let mut fenced = false;
+    let mut open: Option<&str> = None;
     text.lines().filter(move |l| {
         let t = l.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
-            fenced = !fenced;
-            return false;
+        let Some(marker) = ["```", "~~~"].into_iter().find(|m| t.starts_with(m)) else {
+            return open.is_none();
+        };
+        match open {
+            None => open = Some(marker),
+            Some(m) if m == marker => open = None,
+            Some(_) => return false,
         }
-        !fenced
+        false
     })
 }
 
@@ -245,6 +249,12 @@ Intro paragraph.
     fn a_bold_label_section_ends_at_the_next_label() {
         let body = "**Acceptance criteria:**\n- One\n- Two\n**Notes:**\n- Not an item\n";
         assert_eq!(done_when_items(body), vec!["One", "Two"]);
+    }
+
+    #[test]
+    fn a_fence_closes_only_on_its_own_marker() {
+        let body = "```\n~~~\n## Done when\n- Fake\n```\n## Done when\n- Real\n";
+        assert_eq!(done_when_items(body), vec!["Real"]);
     }
 
     #[test]

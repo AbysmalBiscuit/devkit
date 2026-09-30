@@ -111,7 +111,7 @@ issue pr create --pr-title 'feat(login): show the error state' --arg proof='1. t
 ```
 
 - A numbered line indented two columns or more belongs to the entry above it and answers nothing.
-- Not gated: a human caller, a worktree with no issue record or one set up with only `--slug`, and an issue with no such section.
+- Not gated: a human caller, a worktree with no issue record, one set up with only `--slug` or checked out from a PR that names no issue, and an issue with no such section.
 - An issue the tracker cannot return is refused, since the items cannot be checked.
 - The check runs on every agent run, a reused PR included, because it comes before the push that finds the PR. Whether the evidence holds is left to review.
 

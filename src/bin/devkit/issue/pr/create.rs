@@ -6,6 +6,7 @@ use devkit_common::{
     forge::{self, Forge, NewPr, PrLocator},
     progress::Steps,
     vcs::{Vcs, VersionControl},
+    worktree::IssueId,
 };
 use devkit_config::PrCreateState;
 use devkit_ports::templates::worktree_context;
@@ -290,11 +291,12 @@ pub fn run(args: Args) -> Result<()> {
 
     let issue = record
         .as_ref()
-        .map(|r| r.issue.as_str())
-        .filter(|i| !i.is_empty());
-    if let (Some(variable), Some(issue), Caller::Agent) =
-        (&loaded.config.defaults.pr_proof_variable, issue, caller)
-    {
+        .and_then(|r| r.issue.parse::<IssueId>().ok());
+    if let (Some(variable), Some(issue), Caller::Agent) = (
+        &loaded.config.defaults.pr_proof_variable,
+        issue.as_ref().and_then(IssueId::tracker),
+        caller,
+    ) {
         let tracker =
             devkit_common::tracker::resolve(loaded.config.tracker.kind, here, &forge.repos);
         let proof = vars.get(variable).map_or("", String::as_str);
