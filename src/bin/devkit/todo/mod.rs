@@ -1,5 +1,7 @@
-//! `devkit todo`: the todo lists agents and people share, kept in devkit's
-//! own store.
+//! `devkit todo`: the todo lists agents and people share, kept in the store
+//! `[todo] backend` names.
+
+pub(crate) mod store;
 
 use std::{collections::BTreeSet, path::Path};
 
@@ -16,10 +18,10 @@ use devkit_todo::{
     node::{self, GLOBAL, Place, SessionRef},
     render, transition,
 };
-use devkit_todo_builtin::BuiltinStore;
 use pabal::AnyHarness;
 use serde_json::{Value, json};
 
+use self::store::Store;
 use crate::hook::{
     self, HookEvent,
     todo::{harness_of, to_todo_holder},
@@ -138,7 +140,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let session = node::session_from_env(get);
     let cwd = std::env::current_dir()?;
     let own_node = || Ok::<_, anyhow::Error>(node::node(&place_at(&cwd)?, session.as_ref()));
-    let store = BuiltinStore::open();
+    let store = Store::for_cli(&cwd)?;
     match cli.command {
         TodoCommand::Scope => println!("{}", own_node()?),
         TodoCommand::List(args) => list(&store, &args, &cwd, session.as_ref(), &actor)?,
@@ -158,7 +160,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 parent,
                 order,
             })?;
-            println!("{id}");
+            println!("{}", devkit_todo::short_id(&id));
         }
         TodoCommand::Start { ids } => set_status(&store, ids, StatusKind::InProgress, &actor)?,
         TodoCommand::Stop { ids } | TodoCommand::Undone { ids } => {
@@ -184,8 +186,11 @@ pub fn run(cli: TodoCli) -> Result<()> {
                      (devkit todo cancel <id>)"
                 );
             }
-            store.apply(&Edit::Purge(id.clone()))?;
-            NativeMap::at(devkit_todo::state_dir()).forget(&id)?;
+            let Some(todo) = store.get(&id)? else {
+                bail!("no todo {id}");
+            };
+            store.apply(&Edit::Purge(todo.id.clone()))?;
+            NativeMap::at(devkit_todo::state_dir()).forget(&todo.id)?;
         }
     }
     Ok(())
@@ -218,7 +223,7 @@ fn project_of(node: String) -> Option<String> {
 }
 
 fn set_status(
-    store: &BuiltinStore,
+    store: &impl TodoStore,
     ids: Vec<String>,
     to: StatusKind,
     actor: &Holder,
@@ -226,18 +231,19 @@ fn set_status(
     if ids.is_empty() {
         bail!("name at least one todo id");
     }
-    // Every id is checked against one listing before any is written, so a
-    // batch with one unknown or claimed todo changes nothing.
-    let todos = store.list(&Filter::all())?;
+    // Every id is checked before any is written, so a batch with one unknown
+    // or claimed todo changes nothing.
+    let mut todos = Vec::new();
     for id in &ids {
-        let Some(todo) = todos.iter().find(|t| &t.id == id) else {
+        let Some(todo) = store.get(id)? else {
             bail!("no todo {id}");
         };
         transition(&todo.status, to, actor)?;
+        todos.push(todo);
     }
-    for id in ids {
+    for todo in todos {
         store.apply(&Edit::SetStatus {
-            id,
+            id: todo.id,
             to,
             actor: actor.clone(),
         })?;
@@ -246,7 +252,7 @@ fn set_status(
 }
 
 fn move_todo(
-    store: &BuiltinStore,
+    store: &impl TodoStore,
     id: String,
     parent: Option<String>,
     top: bool,
@@ -262,7 +268,7 @@ fn move_todo(
 }
 
 fn list(
-    store: &BuiltinStore,
+    store: &impl TodoStore,
     args: &ListArgs,
     cwd: &Path,
     session: Option<&SessionRef>,
@@ -326,7 +332,9 @@ fn context(args: &ContextArgs) -> Option<String> {
         id: payload.session_id()?.to_string(),
     };
     let viewer = to_todo_holder(&payload.holder().ok()?);
-    let place = place_at(&hook::record::payload_cwd(&payload)).ok()?;
+    let cwd = hook::record::payload_cwd(&payload);
+    let checkout = Checkout::at(&cwd);
+    let place = node::place_of(&checkout).ok()?;
     let visible = node::visible_nodes(&place, Some(&session));
     let own = node::node(&place, Some(&session));
     let workspace = matches!(place, Place::Workspace { .. }).then(|| node::node(&place, None));
@@ -334,7 +342,7 @@ fn context(args: &ContextArgs) -> Option<String> {
     filter
         .nodes
         .extend(workspace.iter().map(|w| NodeMatch::Subtree(w.clone())));
-    let (todos, siblings): (Vec<Todo>, Vec<Todo>) = BuiltinStore::open()
+    let (todos, siblings): (Vec<Todo>, Vec<Todo>) = Store::for_hook(&checkout, &cwd)
         .list(&filter)
         .ok()?
         .into_iter()

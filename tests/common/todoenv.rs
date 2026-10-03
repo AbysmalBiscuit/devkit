@@ -33,6 +33,20 @@ impl Proj {
         Proj { root, home, path }
     }
 
+    /// As [`Proj::new`], with `toml` as the isolated home's
+    /// `~/.config/devkit/config.toml`.
+    pub fn with_home_config(toml: &str) -> Self {
+        let p = Self::new();
+        let dir = p.home.path().join(".config/devkit");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), toml).unwrap();
+        p
+    }
+
+    pub fn home_config(&self) -> PathBuf {
+        self.home.path().join(".config/devkit/config.toml")
+    }
+
     /// `devkit` run in `dir` with `env` set and no ambient session.
     pub fn devkit_in(
         &self,
@@ -83,10 +97,21 @@ impl Proj {
 
     /// `devkit hook <verb> --harness <harness>` with `payload` on stdin.
     pub fn hook(&self, verb: &str, harness: &str, payload: &serde_json::Value) -> Output {
+        self.hook_with(verb, harness, payload, &[])
+    }
+
+    /// As [`Proj::hook`], with `env` set.
+    pub fn hook_with(
+        &self,
+        verb: &str,
+        harness: &str,
+        payload: &serde_json::Value,
+        env: &[(&str, &str)],
+    ) -> Output {
         self.devkit_in(
             &self.path,
             &["hook", verb, "--harness", harness],
-            &[],
+            env,
             &payload.to_string(),
         )
     }

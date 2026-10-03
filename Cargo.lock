@@ -341,6 +341,7 @@ dependencies = [
 name = "devkit"
 version = "0.14.9"
 dependencies = [
+ "ambassador",
  "anyhow",
  "chrono",
  "clap",
@@ -359,6 +360,7 @@ dependencies = [
  "devkit-timing",
  "devkit-todo",
  "devkit-todo-builtin",
+ "devkit-todo-taskwarrior",
  "fd-lock",
  "indicatif",
  "interprocess",

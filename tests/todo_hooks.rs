@@ -465,3 +465,12 @@ fn plan_a_session_that_changes_checkout_brings_its_open_steps_along() {
     assert_eq!(by_text(&p, "b").project.as_deref(), Some(node.as_str()));
     assert_eq!(p.todos().len(), 2);
 }
+
+/// A hook never fails or speaks because the config is broken: native capture
+/// keeps working on the built-in store.
+#[test]
+fn a_broken_config_leaves_hooks_on_the_builtin_store() {
+    let p = Proj::with_home_config("[todo]\nbackend = 3\n");
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
+    assert_eq!(by_text(&p, "alpha").status, Status::Pending);
+}

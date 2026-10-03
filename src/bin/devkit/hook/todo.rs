@@ -8,22 +8,27 @@
 //! - Native capture: the harness's own task and plan tools are mirrored into
 //!   the store after they run.
 
+use std::path::Path;
+
 use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
 use devkit_common::vcs::Checkout;
 use devkit_todo::{
-    Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, TodoStore,
+    Claimed, Edit, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
     holder::HOLDER_VAR,
     native::{MirroredStep, NativeMap},
     node::{self, Harness, SessionRef},
     transition,
 };
-use devkit_todo_builtin::BuiltinStore;
 use pabal::AnyHarness;
 use serde_json::Value;
 
-use super::payload::{self, Payload};
+use super::{
+    payload::{self, Payload},
+    record,
+};
+use crate::todo::store::Store;
 
 /// The harnesses whose sessions name a todo node.
 pub(crate) fn harness_of(harness: AnyHarness) -> Option<Harness> {
@@ -42,11 +47,13 @@ pub(crate) fn to_todo_holder(holder: &payload::Holder) -> Holder {
 /// crashed agent's todos do not show as in progress forever, and forgets the
 /// lists last injected for it. Silent: a store failure leaves the claims for
 /// a person to reset.
-pub(crate) fn release(holder: Option<payload::Holder>) {
+pub(crate) fn release(payload: &Payload, holder: Option<payload::Holder>) {
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
         let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
-        let _ = BuiltinStore::open().apply(&Edit::ReleaseAll { holder });
+        let cwd = record::payload_cwd(payload);
+        let store = Store::for_hook(&Checkout::at(&cwd), &cwd);
+        let _ = store.apply(&Edit::ReleaseAll { holder });
     }
 }
 
@@ -86,15 +93,20 @@ pub(crate) fn status_edits(analysis: &Analysis) -> Vec<(StatusKind, String)> {
 /// A block reason when a sub-agent's command would change a todo another
 /// holder has in progress. Writes nothing: the command makes its own changes
 /// when it runs, attributed by [`rewrite`]. A store failure blocks nothing.
-pub(crate) fn check_claims(payload: &Payload, analysis: &Analysis) -> Option<String> {
+pub(crate) fn check_claims(
+    payload: &Payload,
+    analysis: &Analysis,
+    checkout: &Checkout,
+    cwd: &Path,
+) -> Option<String> {
     let actor = to_todo_holder(&payload.subagent_holder()?);
     let edits = status_edits(analysis);
     if edits.is_empty() {
         return None;
     }
-    let todos = BuiltinStore::open().list(&Filter::all()).ok()?;
+    let store = Store::for_hook(checkout, cwd);
     edits.into_iter().find_map(|(to, id)| {
-        let todo = todos.iter().find(|t| t.id == id)?;
+        let todo = store.get(&id).ok()??;
         let Claimed { by } = transition(&todo.status, to, &actor).err()?;
         Some(format!(
             "devkit todo: todo {id} is in progress by {by}; pick another todo"
@@ -155,12 +167,12 @@ pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
 
 /// What a native capture needs from a payload: which harness's ids it uses,
 /// who acted, and the node its session writes to.
-struct Capture {
+struct Capture<S: TodoStore> {
     harness: Harness,
     session: Holder,
     actor: Holder,
     node: String,
-    store: BuiltinStore,
+    store: S,
     map: NativeMap,
 }
 
@@ -215,7 +227,7 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
         session: to_todo_holder(&session),
         actor: to_todo_holder(&actor),
         node,
-        store: BuiltinStore::open(),
+        store: Store::for_hook(checkout, &record::payload_cwd(payload)),
         map: NativeMap::at(devkit_todo::state_dir()),
     };
     let raw = payload.raw();
@@ -230,7 +242,7 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
 
 /// Claude Code's task list is shared by a session and its sub-agents, so the
 /// mapping is recorded under the session for either to update it.
-fn task_create(c: &Capture, input: &Value, response: &Value) -> Result<()> {
+fn task_create(c: &Capture<impl TodoStore>, input: &Value, response: &Value) -> Result<()> {
     let (Some(subject), Some(native)) =
         (input["subject"].as_str(), response["task"]["id"].as_str())
     else {
@@ -245,7 +257,7 @@ fn task_create(c: &Capture, input: &Value, response: &Value) -> Result<()> {
     c.map.record(c.harness, &c.session, native, &id)
 }
 
-fn task_update(c: &Capture, input: &Value) -> Result<()> {
+fn task_update(c: &Capture<impl TodoStore>, input: &Value) -> Result<()> {
     let Some(native) = input["taskId"].as_str() else {
         return Ok(());
     };
@@ -253,11 +265,8 @@ fn task_update(c: &Capture, input: &Value) -> Result<()> {
         return Ok(());
     };
     if let Some(subject) = input["subject"].as_str() {
-        let current = c.store.list(&Filter::all())?;
-        if current
-            .iter()
-            .any(|t| t.id == id && t.description != devkit_todo::one_line(subject))
-        {
+        let current = c.store.get(&id)?;
+        if current.is_some_and(|t| t.description != devkit_todo::one_line(subject)) {
             c.store.apply(&Edit::Describe {
                 id: id.clone(),
                 description: subject.to_string(),
@@ -277,7 +286,7 @@ fn task_update(c: &Capture, input: &Value) -> Result<()> {
 /// A tool that resends its whole list on every call, diffed against the
 /// acting holder's previous list. Each agent context keeps its own list, so a
 /// sub-agent's first call never cancels its session's steps.
-fn list_replace(c: &Capture, list: &Value, text_key: &str) -> Result<()> {
+fn list_replace(c: &Capture<impl TodoStore>, list: &Value, text_key: &str) -> Result<()> {
     let Some(list) = list.as_array() else {
         return Ok(());
     };
@@ -290,10 +299,12 @@ fn list_replace(c: &Capture, list: &Value, text_key: &str) -> Result<()> {
             })
         })
         .collect();
-    let todos = c.store.list(&Filter::all())?;
-    let previous: Vec<Mirrored> = c
-        .map
-        .snapshot(c.harness, &c.actor)?
+    let snapshot = c.map.snapshot(c.harness, &c.actor)?;
+    let mut todos: Vec<Todo> = Vec::new();
+    for step in &snapshot {
+        todos.extend(c.store.get(&step.todo)?);
+    }
+    let previous: Vec<Mirrored> = snapshot
         .into_iter()
         .filter_map(|MirroredStep { text, todo }| {
             let status = todos.iter().find(|t| t.id == todo)?.status.kind();
