@@ -36,6 +36,19 @@ pub(crate) fn mark_pending(data_dir: &Path) {
     let _ = File::create(pending_path(data_dir));
 }
 
+/// Writes `text` to `path`, readable only by this user on Unix: a sync
+/// failure's reason can name the server.
+fn write_private(path: &Path, text: &str) {
+    let _ = fs::remove_file(path);
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    if let Ok(mut file) = options.open(path) {
+        let _ = std::io::Write::write_all(&mut file, text.as_bytes());
+    }
+}
+
 fn failed_recently(data_dir: &Path) -> bool {
     fs::metadata(failed_path(data_dir))
         .and_then(|m| m.modified())
@@ -74,7 +87,7 @@ pub(crate) fn run(store: &TaskchampionStore, background: bool) -> Result<()> {
             let _ = fs::remove_file(pending_path(dir));
             if let Err(e) = store.sync_once() {
                 let reason = format!("{e:#}");
-                let _ = fs::write(failed_path(dir), &reason);
+                write_private(&failed_path(dir), &reason);
                 if !background {
                     eprintln!("{}", failure_text(&reason));
                 }

@@ -536,3 +536,29 @@ fn the_session_end_timeout_allows_the_push() {
         );
     }
 }
+
+#[test]
+fn a_sync_failure_never_shows_the_urls_credentials() {
+    let server = Refusing::start();
+    let port = server.url.trim_start_matches("http://127.0.0.1:");
+    for url in [
+        format!("http://alice:hunter2@127.0.0.1:{port}"),
+        "http://alice:hunter2@[bad".to_string(),
+    ] {
+        let p = Proj::new();
+        let out = p.devkit(&["todo", "sync"], &server_env(&url));
+        assert!(out.status.success(), "{}", stderr(&out));
+        let err = stderr(&out);
+        assert!(err.contains("devkit todo: sync failed:"), "{err}");
+        assert!(!err.contains("hunter2"), "{err}");
+        let failed = replica_dir(&p).join("sync.failed");
+        let marker = std::fs::read_to_string(&failed).unwrap();
+        assert!(!marker.contains("hunter2"), "{marker}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&failed).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        }
+    }
+}

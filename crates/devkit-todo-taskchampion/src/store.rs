@@ -66,6 +66,24 @@ impl SyncTarget {
     }
 }
 
+/// `text` with the user and password `url` carries removed, since a sync
+/// error quotes the URL it was given.
+fn redacted(text: &str, url: &str) -> String {
+    let authority = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
+    let Some((userinfo, _)) = authority.rsplit_once('@') else {
+        return text.to_string();
+    };
+    let password = userinfo.split_once(':').map(|(_, p)| p);
+    [Some(userinfo), password]
+        .into_iter()
+        .flatten()
+        .filter(|secret| !secret.is_empty())
+        .fold(text.to_string(), |out, secret| {
+            out.replace(secret, "<redacted>")
+        })
+}
+
 /// Todos kept in the taskchampion replica at `data_dir`, under one root
 /// project. A task outside the root is never a todo.
 pub struct TaskchampionStore {
@@ -131,6 +149,10 @@ impl TaskchampionStore {
             let mut server = target.server()?;
             replica.sync(&mut server, false)?;
             Ok(())
+        })
+        .map_err(|e| match target {
+            SyncTarget::Server { url, .. } => anyhow!(redacted(&format!("{e:#}"), url)),
+            SyncTarget::Dir(_) => e,
         })
     }
 
@@ -435,5 +457,19 @@ impl TodoStore for TaskchampionStore {
                 Ok(())
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redacted;
+
+    #[test]
+    fn a_urls_user_and_password_are_redacted() {
+        let url = "http://alice:hunter2@sync.example/";
+        let text = "GET http://alice:hunter2@sync.example/v1: refused; hunter2";
+        let out = redacted(text, url);
+        assert!(!out.contains("hunter2") && !out.contains("alice:"), "{out}");
+        assert_eq!(redacted("plain", "https://sync.example/"), "plain");
     }
 }
