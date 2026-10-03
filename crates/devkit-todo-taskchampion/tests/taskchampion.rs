@@ -120,11 +120,45 @@ fn a_held_lock_fails_after_the_wait() {
     held.1.recv().unwrap();
     let store = TaskchampionStore::at(data).with_lock_wait(Duration::from_millis(200));
     let started = std::time::Instant::now();
-    let err = store.list(&Filter::all()).unwrap_err();
+    let err = store.add(new(Some("r.main"), "a")).unwrap_err();
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(format!("{err:#}").contains("todo store busy"), "{err:#}");
     release.0.send(()).unwrap();
     holder.join().unwrap();
+}
+
+#[test]
+fn reads_never_wait_for_the_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let writer = TaskchampionStore::at(data.clone());
+    let id = writer.add(new(Some("r.main"), "a")).unwrap();
+    let lock = data.join("devkit.lock");
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        devkit_common::store::with_file_lock(&lock, || {
+            held_tx.send(()).unwrap();
+            release_rx.recv().ok();
+            Ok(())
+        })
+        .unwrap();
+    });
+    held_rx.recv().unwrap();
+    let reader = TaskchampionStore::at(data).with_lock_wait(Duration::from_millis(200));
+    assert_eq!(reader.list(&Filter::all()).unwrap().len(), 1);
+    assert!(reader.get(&id).unwrap().is_some());
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+}
+
+#[test]
+fn a_replica_not_created_yet_reads_as_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    assert!(store.list(&Filter::all()).unwrap().is_empty());
+    assert!(!data.exists());
 }
 
 #[cfg(unix)]
@@ -137,7 +171,7 @@ fn an_uncreatable_data_dir_names_the_path() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
     let data = locked.join("tc");
     let err = TaskchampionStore::at(data.clone())
-        .list(&Filter::all())
+        .add(new(None, "a"))
         .unwrap_err();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(

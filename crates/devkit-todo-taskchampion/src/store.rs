@@ -95,8 +95,8 @@ impl TaskchampionStore {
         }
     }
 
-    /// Gives up with a "todo store busy" error once another process has held
-    /// the replica lock for `wait`.
+    /// A write gives up with a "todo store busy" error once another process
+    /// has held the replica lock for `wait`. Reads never take the lock.
     pub fn with_lock_wait(self, wait: Duration) -> Self {
         Self {
             lock_wait: Some(wait),
@@ -147,6 +147,25 @@ impl TaskchampionStore {
             Some(wait) => with_file_lock_for(&lock, wait, run),
             None => with_file_lock(&lock, run),
         }
+    }
+
+    /// Runs `f` on a read-only view of the replica, without the lock. SQLite's
+    /// write-ahead log lets a reader see the last committed state while
+    /// another process writes or syncs, so a read never waits behind a sync.
+    /// A replica not created yet reads as `empty`.
+    fn reading<T>(&self, empty: T, f: impl FnOnce(&mut Replica) -> Result<T>) -> Result<T> {
+        // taskchampion's database file, the name taskwarrior also opens.
+        if !self.data_dir.join("taskchampion.sqlite3").exists() {
+            return Ok(empty);
+        }
+        let storage = StorageConfig::OnDisk {
+            taskdb_dir: self.data_dir.clone(),
+            create_if_missing: false,
+            access_mode: AccessMode::ReadOnly,
+        }
+        .into_storage()
+        .with_context(|| format!("opening the todo replica at {}", self.data_dir.display()))?;
+        f(&mut Replica::new(storage))
     }
 
     fn open(&self) -> Result<Replica> {
@@ -284,7 +303,7 @@ fn write_status(
 
 impl TodoStore for TaskchampionStore {
     fn list(&self, filter: &Filter) -> Result<Vec<Todo>> {
-        self.locked(|replica| {
+        self.reading(Vec::new(), |replica| {
             Ok(self
                 .todos(replica)?
                 .into_iter()
@@ -294,7 +313,7 @@ impl TodoStore for TaskchampionStore {
     }
 
     fn get(&self, id: &str) -> Result<Option<Todo>> {
-        self.locked(|replica| self.find(replica, id))
+        self.reading(None, |replica| self.find(replica, id))
     }
 
     fn add(&self, todo: NewTodo) -> Result<String> {
