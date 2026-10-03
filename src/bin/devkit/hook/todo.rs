@@ -1,5 +1,12 @@
-//! The todo store's side of the hooks: who a payload acts as, and the
-//! harness its session belongs to.
+//! The todo store's side of the hooks.
+//!
+//! - Release: when a sub-agent or session ends, the todos it still has in
+//!   progress return to pending.
+//! - Shell-guard attribution: a sub-agent's `devkit todo` status changes are
+//!   checked against other holders' claims, and on Claude Code its command is
+//!   rewritten so the CLI acts as the sub-agent when the invocation runs.
+//! - Native capture: the harness's own task and plan tools are mirrored into
+//!   the store after they run.
 
 use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
