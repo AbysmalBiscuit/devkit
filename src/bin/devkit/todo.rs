@@ -204,15 +204,24 @@ pub(crate) fn place_at(dir: &Path) -> Result<Place> {
     node::place_of(&Checkout::at(dir))
 }
 
-/// The holder a CLI call acts as: the harness session for an agent, `agent`
-/// for an agent outside any harness session, `human` for a person.
+/// The variable the pre-tool-use hook sets on a sub-agent's `devkit todo`
+/// invocations, naming the sub-agent's holder.
+pub(crate) const HOLDER_VAR: &str = "DEVKIT_TODO_HOLDER";
+
+/// The holder a CLI call acts as: the sub-agent [`HOLDER_VAR`] names when its
+/// session covers it, else the harness session for an agent, `agent` for an
+/// agent outside any harness session, and `human` for a person.
 pub(crate) fn actor_from_env(caller: Caller, get: impl Fn(&str) -> Option<String>) -> Holder {
-    match caller {
-        Caller::Human => Holder::human(),
-        Caller::Agent => {
-            node::session_from_env(get).map_or_else(|| Holder::new("agent"), |s| Holder::new(s.id))
-        }
+    if caller == Caller::Human {
+        return Holder::human();
     }
+    let session = node::session_from_env(&get).map(|s| Holder::new(s.id));
+    let sub_agent = get(HOLDER_VAR)
+        .map(|h| Holder::new(h.trim()))
+        .filter(|h| !h.is_empty() && session.as_ref().is_some_and(|s| s.covers(h)));
+    sub_agent
+        .or(session)
+        .unwrap_or_else(|| Holder::new("agent"))
 }
 
 /// The global list is stored without a node.
@@ -385,4 +394,37 @@ pub(crate) fn digest_path(holder: &Holder) -> PathBuf {
         .join("todo")
         .join("digests")
         .join(format!("{:016x}", hasher.finish()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    #[test]
+    fn a_sub_agent_holder_under_the_session_is_the_actor() {
+        let sub = [("CLAUDE_CODE_SESSION_ID", "S"), (HOLDER_VAR, "S/a1")];
+        assert_eq!(
+            actor_from_env(Caller::Agent, env(&sub)),
+            Holder::new("S/a1")
+        );
+        let foreign = [("CLAUDE_CODE_SESSION_ID", "S"), (HOLDER_VAR, "T/a1")];
+        assert_eq!(
+            actor_from_env(Caller::Agent, env(&foreign)),
+            Holder::new("S")
+        );
+        assert_eq!(
+            actor_from_env(Caller::Agent, env(&[(HOLDER_VAR, "S/a1")])),
+            Holder::new("agent")
+        );
+        assert_eq!(actor_from_env(Caller::Human, env(&sub)), Holder::human());
+    }
 }

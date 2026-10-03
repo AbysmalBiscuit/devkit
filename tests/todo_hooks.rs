@@ -94,26 +94,80 @@ fn bash(p: &Proj, agent: Option<&str>, command: &str) -> serde_json::Value {
 
 fn denial(out: &std::process::Output) -> Option<String> {
     let s = stdout(out);
-    (!s.trim().is_empty()).then(|| {
-        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
-        v["hookSpecificOutput"]["permissionDecisionReason"]
+    if s.trim().is_empty() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+    let output = &v["hookSpecificOutput"];
+    (output["permissionDecision"] == "deny").then(|| {
+        output["permissionDecisionReason"]
             .as_str()
             .unwrap()
             .to_string()
     })
 }
 
+/// What the pre-tool-use hook hands back for a sub-agent's Bash command: the
+/// command the harness runs in its place, or the original when the hook left
+/// it alone.
+fn guarded(p: &Proj, harness: &str, agent: &str, command: &str) -> String {
+    let out = p.hook("pre-tool-use", harness, &bash(p, Some(agent), command));
+    assert_eq!(out.status.code(), Some(0), "{}", todoenv::stderr(&out));
+    let s = stdout(&out);
+    if s.trim().is_empty() {
+        return command.to_string();
+    }
+    let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+    assert!(denial(&out).is_none(), "denied: {s}");
+    v["hookSpecificOutput"]["updatedInput"]["command"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no updated command: {s}"))
+        .to_string()
+}
+
+/// `command` from sub-agent `agent` of session `S`, through the hook and then
+/// run the way the harness would run what the hook returned.
+fn run_as_sub_agent(p: &Proj, agent: &str, command: &str) -> std::process::Output {
+    let rewritten = guarded(p, "claude-code", agent, command);
+    p.shell(&rewritten, &[("CLAUDE_CODE_SESSION_ID", "S")])
+}
+
 #[test]
-fn attribution_a_sub_agents_start_is_recorded_as_the_sub_agent() {
+fn attribution_a_sub_agents_start_runs_as_the_sub_agent() {
     let p = Proj::new();
     let id = seed(&p, "a");
-    let out = p.hook(
-        "pre-tool-use",
-        "claude-code",
-        &bash(&p, Some("a1"), &format!("devkit todo start {id}")),
+    let rewritten = guarded(&p, "claude-code", "a1", &format!("devkit todo start {id}"));
+    assert_eq!(
+        p.todo(&id).status,
+        Status::Pending,
+        "the hook writes nothing"
     );
-    assert_eq!(stdout(&out), "");
+    let run = p.shell(&rewritten, &[("CLAUDE_CODE_SESSION_ID", "S")]);
+    assert!(run.status.success(), "{}", todoenv::stderr(&run));
     assert_eq!(p.todo(&id).status, in_progress("S/a1"));
+}
+
+#[test]
+fn attribution_a_command_that_never_reaches_the_todo_changes_nothing() {
+    let p = Proj::new();
+    let id = seed(&p, "a");
+    run_as_sub_agent(&p, "a1", &format!("false && devkit todo done {id}"));
+    assert_eq!(p.todo(&id).status, Status::Pending);
+}
+
+#[test]
+fn attribution_start_then_done_credits_the_sub_agent() {
+    let p = Proj::new();
+    let id = seed(&p, "a");
+    let run = run_as_sub_agent(
+        &p,
+        "a1",
+        &format!("devkit todo start {id} && devkit todo done {id}"),
+    );
+    assert!(run.status.success(), "{}", todoenv::stderr(&run));
+    assert_eq!(p.todo(&id).status, Status::Completed {
+        by: Some(Holder::new("S/a1"))
+    });
 }
 
 #[test]
@@ -121,7 +175,7 @@ fn attribution_a_siblings_start_is_denied_naming_the_holder() {
     let p = Proj::new();
     let id = seed(&p, "a");
     let start = format!("devkit todo start {id}");
-    p.hook("pre-tool-use", "claude-code", &bash(&p, Some("a1"), &start));
+    run_as_sub_agent(&p, "a1", &start);
     let out = p.hook("pre-tool-use", "claude-code", &bash(&p, Some("a2"), &start));
     let reason = denial(&out).expect("denied");
     assert!(reason.contains("in progress by S/a1"), "{reason}");
@@ -153,18 +207,17 @@ fn attribution_a_command_the_write_gate_denies_leaves_no_claim() {
 }
 
 #[test]
-fn attribution_the_parent_command_run_after_it_keeps_the_sub_agent() {
+fn attribution_the_session_starting_it_again_keeps_the_sub_agent() {
     let p = Proj::new();
     let id = seed(&p, "a");
-    let start = format!("devkit todo start {id}");
-    p.hook("pre-tool-use", "claude-code", &bash(&p, Some("a1"), &start));
+    run_as_sub_agent(&p, "a1", &format!("devkit todo start {id}"));
     let run = p.devkit(&["todo", "start", &id], &[("CLAUDE_CODE_SESSION_ID", "S")]);
     assert!(run.status.success(), "{}", todoenv::stderr(&run));
     assert_eq!(p.todo(&id).status, in_progress("S/a1"));
 }
 
 #[test]
-fn attribution_skips_the_session_itself() {
+fn attribution_leaves_the_sessions_own_command_alone() {
     let p = Proj::new();
     let id = seed(&p, "a");
     let out = p.hook(
@@ -173,7 +226,16 @@ fn attribution_skips_the_session_itself() {
         &bash(&p, None, &format!("devkit todo start {id}")),
     );
     assert_eq!(stdout(&out), "");
-    assert_eq!(p.todo(&id).status, Status::Pending);
+}
+
+/// Codex's handling of a rewritten command is unverified, so its sub-agents'
+/// changes land as the session.
+#[test]
+fn attribution_leaves_codex_commands_alone() {
+    let p = Proj::new();
+    let id = seed(&p, "a");
+    let command = format!("devkit todo start {id}");
+    assert_eq!(guarded(&p, "codex", "a1", &command), command);
 }
 
 /// The recorded payloads in `tests/fixtures/todo/<name>`, pointed at `p`.

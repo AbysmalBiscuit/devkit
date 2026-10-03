@@ -2,13 +2,14 @@
 //! harness its session belongs to.
 
 use anyhow::Result;
-use devkit_command::Analysis;
+use devkit_command::{Analysis, Dialect, Invocation};
 use devkit_common::vcs::Checkout;
 use devkit_todo::{
     BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, TodoStore,
     diff::{Change, Step, diff, pair},
     native::NativeMap,
     node::{self, Harness, SessionRef},
+    transition,
 };
 use pabal::AnyHarness;
 use serde_json::Value;
@@ -40,21 +41,23 @@ pub(crate) fn release(holder: Option<payload::Holder>) {
     }
 }
 
+/// The arguments after `todo` when `inv` runs `devkit todo`.
+fn todo_args(inv: &Invocation) -> Option<impl Iterator<Item = Option<&str>>> {
+    let program = inv.program.known().unwrap_or_default();
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    if name.strip_suffix(".exe").unwrap_or(name) != "devkit" {
+        return None;
+    }
+    let mut args = inv.args.iter().map(|a| a.known());
+    (args.next().flatten() == Some("todo")).then_some(args)
+}
+
 /// Every `devkit todo start|stop|done|undone|cancel <id>...` in a command,
 /// as the status each asks for and the id it names. Ids the analysis could
 /// not resolve are skipped.
 pub(crate) fn status_edits(analysis: &Analysis) -> Vec<(StatusKind, String)> {
     let mut out = Vec::new();
-    for inv in &analysis.invocations {
-        let program = inv.program.known().unwrap_or_default();
-        let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-        if name.strip_suffix(".exe").unwrap_or(name) != "devkit" {
-            continue;
-        }
-        let mut args = inv.args.iter().map(|a| a.known());
-        if args.next().flatten() != Some("todo") {
-            continue;
-        }
+    for mut args in analysis.invocations.iter().filter_map(todo_args) {
         let kind = match args.next().flatten() {
             Some("start") => StatusKind::InProgress,
             Some("stop" | "undone") => StatusKind::Pending,
@@ -71,32 +74,69 @@ pub(crate) fn status_edits(analysis: &Analysis) -> Vec<(StatusKind, String)> {
     out
 }
 
-/// Applies a sub-agent's `devkit todo` status changes as the sub-agent before
-/// its command runs. The command itself runs as the session, which covers the
-/// sub-agent, so the claim recorded here stays. A sub-agent's shell carries
-/// its session's id, so only the hook can tell them apart.
-///
-/// Returns a block reason when another holder has a named todo in progress.
-/// Any other store failure lets the command run, and its change lands as the
-/// session.
-pub(crate) fn attribute(payload: &Payload, analysis: &Analysis) -> Option<String> {
+/// A block reason when a sub-agent's command would change a todo another
+/// holder has in progress. Writes nothing: the command makes its own changes
+/// when it runs, attributed by [`rewrite`]. A store failure blocks nothing.
+pub(crate) fn check_claims(payload: &Payload, analysis: &Analysis) -> Option<String> {
     let actor = to_todo_holder(&payload.subagent_holder()?);
-    let store = crate::todo::store();
-    for (to, id) in status_edits(analysis) {
-        let edit = Edit::SetStatus {
-            id: id.clone(),
-            to,
-            actor: actor.clone(),
-        };
-        if let Err(e) = store.apply(&edit)
-            && let Some(Claimed { by }) = e.downcast_ref::<Claimed>()
-        {
-            return Some(format!(
-                "devkit todo: todo {id} is in progress by {by}; pick another todo"
-            ));
-        }
+    let edits = status_edits(analysis);
+    if edits.is_empty() {
+        return None;
     }
-    None
+    let todos = crate::todo::store().list(&Filter::all()).ok()?;
+    edits.into_iter().find_map(|(to, id)| {
+        let todo = todos.iter().find(|t| t.id == id)?;
+        let Claimed { by } = transition(&todo.status, to, &actor).err()?;
+        Some(format!(
+            "devkit todo: todo {id} is in progress by {by}; pick another todo"
+        ))
+    })
+}
+
+/// A sub-agent's command with each `devkit todo` invocation prefixed by the
+/// sub-agent's holder, so the CLI acts as the sub-agent when, and only if, the
+/// invocation runs. A sub-agent's shell carries its session's id, so only the
+/// hook can tell the two apart.
+///
+/// `None` leaves the command alone and the CLI acts as the session. That is
+/// the answer outside Bash, and on a harness whose handling of a rewritten
+/// command is unverified.
+pub(crate) fn rewrite(
+    payload: &Payload,
+    analysis: &Analysis,
+    command: &str,
+    dialect: Dialect,
+) -> Option<String> {
+    if payload.harness() != AnyHarness::ClaudeCode || dialect != Dialect::Bash {
+        return None;
+    }
+    let holder = payload.subagent_holder()?;
+    with_holder(command, analysis, &holder)
+}
+
+fn with_holder(command: &str, analysis: &Analysis, holder: &str) -> Option<String> {
+    let mut starts: Vec<usize> = analysis
+        .invocations
+        .iter()
+        .filter(|inv| todo_args(inv).is_some())
+        .map(|inv| inv.location.outer.start)
+        .filter(|&at| command.is_char_boundary(at))
+        .collect();
+    if starts.is_empty() {
+        return None;
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    let prefix = format!(
+        "{}='{}' ",
+        crate::todo::HOLDER_VAR,
+        holder.replace('\'', "'\\''")
+    );
+    let mut out = command.to_string();
+    for at in starts.into_iter().rev() {
+        out.insert_str(at, &prefix);
+    }
+    Some(out)
 }
 
 /// Mirrors the harness's own task and plan tools into the store. The native
@@ -343,6 +383,33 @@ mod tests {
             StatusKind::Cancelled,
             "7".to_string()
         )]);
+    }
+
+    fn prefixed(command: &str) -> Option<String> {
+        let ctx = Context {
+            dialect: Dialect::Bash,
+            cwd: Some("/repo".into()),
+            home: None,
+            path_style: PathStyle::Unix,
+            limits: Limits::default(),
+        };
+        with_holder(command, &devkit_command::analyze(command, &ctx), "S/a1")
+    }
+
+    #[test]
+    fn each_todo_invocation_carries_the_holder() {
+        assert_eq!(
+            prefixed("false && devkit todo done 1; devkit todo list | cat").as_deref(),
+            Some(
+                "false && DEVKIT_TODO_HOLDER='S/a1' devkit todo done 1; \
+                 DEVKIT_TODO_HOLDER='S/a1' devkit todo list | cat"
+            )
+        );
+        assert_eq!(
+            prefixed("bash -c 'devkit todo start 2'").as_deref(),
+            Some("DEVKIT_TODO_HOLDER='S/a1' bash -c 'devkit todo start 2'")
+        );
+        assert_eq!(prefixed("devkit locks list"), None);
     }
 
     #[test]

@@ -40,7 +40,18 @@ impl Proj {
         env: &[(&str, &str)],
         stdin: &str,
     ) -> Output {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+        self.spawn(dir, env!("CARGO_BIN_EXE_devkit"), args, env, stdin)
+    }
+
+    fn spawn(
+        &self,
+        dir: &Path,
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &str)],
+        stdin: &str,
+    ) -> Output {
+        let mut cmd = Command::new(program);
         cmd.env("HOME", self.home.path())
             .env("XDG_STATE_HOME", self.home.path())
             .env("DEVKIT_SKIP_AUTOLINK", "1")
@@ -77,6 +88,24 @@ impl Proj {
             &[],
             &payload.to_string(),
         )
+    }
+
+    /// `command` run by bash in the checkout, as a harness's Bash tool runs
+    /// it: with `devkit` on `PATH` and `env` set.
+    pub fn shell(&self, command: &str, env: &[(&str, &str)]) -> Output {
+        let bin = self.root.path().join("bin");
+        if !bin.exists() {
+            std::fs::create_dir(&bin).unwrap();
+            std::fs::copy(env!("CARGO_BIN_EXE_devkit"), bin.join("devkit")).unwrap();
+        }
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let mut all = vec![("PATH", path.as_str())];
+        all.extend_from_slice(env);
+        self.spawn(&self.path, "bash", &["-c", command], &all, "")
     }
 
     pub fn state(&self) -> PathBuf {
