@@ -598,6 +598,7 @@ fn log_dir_bytes(dir: &std::path::Path) -> u64 {
 fn source_label(s: &Source) -> &'static str {
     match s {
         Source::Env => "env",
+        Source::Doppler => "doppler",
         Source::File => "file",
         Source::Unset => "unset",
     }

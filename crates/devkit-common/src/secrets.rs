@@ -2,7 +2,8 @@
 //!
 //! Tokens resolve env-first, then this file, so a shell export or a
 //! Doppler-injected var always wins and behavior is unchanged when nothing is
-//! stored. The file is written `0600` and lives beside `config.toml`.
+//! stored. [`resolve_many`] can also ask Doppler between the two. The file is
+//! written `0600` and lives beside `config.toml`.
 
 use std::path::{Path, PathBuf};
 
@@ -17,6 +18,12 @@ pub struct Secrets {
     pub linear_workspace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slack_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devkit_todo_sync_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devkit_todo_sync_client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devkit_todo_sync_secret: Option<String>,
 }
 
 impl Secrets {
@@ -25,6 +32,9 @@ impl Secrets {
             "linear_api_key" => self.linear_api_key.as_deref(),
             "linear_workspace" => self.linear_workspace.as_deref(),
             "slack_token" => self.slack_token.as_deref(),
+            "devkit_todo_sync_url" => self.devkit_todo_sync_url.as_deref(),
+            "devkit_todo_sync_client_id" => self.devkit_todo_sync_client_id.as_deref(),
+            "devkit_todo_sync_secret" => self.devkit_todo_sync_secret.as_deref(),
             _ => None,
         }
     }
@@ -34,6 +44,9 @@ impl Secrets {
             "linear_api_key" => &mut self.linear_api_key,
             "linear_workspace" => &mut self.linear_workspace,
             "slack_token" => &mut self.slack_token,
+            "devkit_todo_sync_url" => &mut self.devkit_todo_sync_url,
+            "devkit_todo_sync_client_id" => &mut self.devkit_todo_sync_client_id,
+            "devkit_todo_sync_secret" => &mut self.devkit_todo_sync_secret,
             other => anyhow::bail!("unknown secret key: {other}"),
         };
         *slot = Some(value);
@@ -45,6 +58,7 @@ impl Secrets {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Source {
     Env,
+    Doppler,
     File,
     Unset,
 }
@@ -150,6 +164,104 @@ pub fn source(env_key: &str) -> Source {
     source_of(env_val, file_val)
 }
 
+/// The Doppler project, and optionally config, that [`resolve_many`] reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DopplerScope {
+    pub project: String,
+    /// Doppler's own default config when `None`.
+    pub config: Option<String>,
+}
+
+/// Each name resolved env -> Doppler (only with `doppler`, one call for every
+/// name the environment lacks) -> secrets file, in the order given. Values are
+/// trimmed, and a value that trims to empty counts as unset. A Doppler failure
+/// of any kind falls through to the file without a message, so nothing Doppler
+/// prints can reach a log.
+pub fn resolve_many(
+    names: &[&str],
+    doppler: Option<&DopplerScope>,
+) -> Vec<(Option<String>, Source)> {
+    resolve_many_with(
+        names,
+        doppler,
+        "doppler",
+        |k| std::env::var(k).ok(),
+        cached(),
+    )
+}
+
+/// Doppler's own retries and per-attempt timeout are cut to one 5 s attempt
+/// (`--attempts 1 --timeout 5s`); this bound only covers a wedged process.
+const DOPPLER_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn resolve_many_with(
+    names: &[&str],
+    doppler: Option<&DopplerScope>,
+    program: &str,
+    env: impl Fn(&str) -> Option<String>,
+    file: &Secrets,
+) -> Vec<(Option<String>, Source)> {
+    let trimmed = |v: Option<String>| v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let from_env: Vec<Option<String>> = names.iter().map(|n| trimmed(env(n))).collect();
+    let missing: Vec<&str> = names
+        .iter()
+        .zip(&from_env)
+        .filter(|(_, v)| v.is_none())
+        .map(|(n, _)| *n)
+        .collect();
+    let from_doppler = match doppler {
+        Some(scope) if !missing.is_empty() => doppler_get(program, scope, &missing),
+        _ => serde_json::Map::new(),
+    };
+    names
+        .iter()
+        .zip(from_env)
+        .map(|(name, env_val)| {
+            if env_val.is_some() {
+                return (env_val, Source::Env);
+            }
+            let computed = from_doppler
+                .get(*name)
+                .and_then(|v| v.get("computed"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            if let Some(v) = trimmed(computed) {
+                return (Some(v), Source::Doppler);
+            }
+            match trimmed(file.get(&name.to_ascii_lowercase()).map(str::to_string)) {
+                Some(v) => (Some(v), Source::File),
+                None => (None, Source::Unset),
+            }
+        })
+        .collect()
+}
+
+/// `doppler secrets get <names> --json`, parsed; empty on any failure.
+fn doppler_get(
+    program: &str,
+    scope: &DopplerScope,
+    names: &[&str],
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut args = vec!["secrets", "get"];
+    args.extend_from_slice(names);
+    args.extend_from_slice(&[
+        "--json",
+        "--no-exit-on-missing-secret",
+        "--attempts",
+        "1",
+        "--timeout",
+        "5s",
+        "--project",
+        &scope.project,
+    ]);
+    if let Some(config) = &scope.config {
+        args.extend_from_slice(&["--config", config]);
+    }
+    crate::cmd::capture_bounded(program, &args, DOPPLER_BOUND)
+        .and_then(|out| serde_json::from_str(&out).ok())
+        .unwrap_or_default()
+}
+
 /// Persist one credential to the default path, preserving the others.
 pub fn store(key: &str, value: &str) -> Result<()> {
     store_at(&secrets_path(), key, value)
@@ -214,6 +326,185 @@ mod tests {
             Source::File
         );
         assert_eq!(source_of(None, None), Source::Unset);
+    }
+
+    #[cfg(unix)]
+    mod doppler {
+        use super::super::*;
+
+        struct Fake {
+            _dir: tempfile::TempDir,
+            program: String,
+            calls: PathBuf,
+        }
+
+        /// A `doppler` stand-in that logs each call's argv and then runs
+        /// `body`.
+        fn fake(body: &str) -> Fake {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let calls = dir.path().join("calls");
+            let program = dir.path().join("doppler");
+            std::fs::write(
+                &program,
+                format!("#!/bin/sh\necho \"$@\" >> '{}'\n{body}\n", calls.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Fake {
+                program: program.to_string_lossy().into_owned(),
+                _dir: dir,
+                calls,
+            }
+        }
+
+        fn call_count(f: &Fake) -> usize {
+            std::fs::read_to_string(&f.calls)
+                .map(|s| s.lines().count())
+                .unwrap_or(0)
+        }
+
+        fn scope() -> DopplerScope {
+            DopplerScope {
+                project: "devkit".into(),
+                config: Some("dev".into()),
+            }
+        }
+
+        fn env_with<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+            move |k| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| *name == k)
+                    .map(|(_, v)| (*v).to_string())
+            }
+        }
+
+        #[test]
+        fn env_beats_doppler_beats_file() {
+            let f = fake(
+                r#"echo '{"A":{"computed":"from-doppler-a"},"B":{"computed":"from-doppler-b"},"C":{"computed":null}}'"#,
+            );
+            let file = Secrets {
+                devkit_todo_sync_secret: Some("from-file".into()),
+                ..Secrets::default()
+            };
+            let got = resolve_many_with(
+                &["A", "B", "DEVKIT_TODO_SYNC_SECRET"],
+                Some(&scope()),
+                &f.program,
+                env_with(&[("A", "from-env")]),
+                &file,
+            );
+            assert_eq!(got, vec![
+                (Some("from-env".into()), Source::Env),
+                (Some("from-doppler-b".into()), Source::Doppler),
+                (Some("from-file".into()), Source::File),
+            ]);
+            let log = std::fs::read_to_string(&f.calls).unwrap();
+            assert!(log.contains("--project devkit --config dev"), "{log}");
+            assert!(log.contains("--no-exit-on-missing-secret"), "{log}");
+        }
+
+        #[test]
+        fn doppler_runs_once_for_every_missing_name() {
+            let f = fake(r#"echo '{"A":{"computed":"a"},"B":{"computed":"b"}}'"#);
+            let got = resolve_many_with(
+                &["A", "B"],
+                Some(&scope()),
+                &f.program,
+                env_with(&[]),
+                &Secrets::default(),
+            );
+            assert_eq!(got[0], (Some("a".into()), Source::Doppler));
+            assert_eq!(got[1], (Some("b".into()), Source::Doppler));
+            assert_eq!(call_count(&f), 1);
+        }
+
+        #[test]
+        fn doppler_is_not_run_when_the_env_has_every_name() {
+            let f = fake("exit 1");
+            resolve_many_with(
+                &["A"],
+                Some(&scope()),
+                &f.program,
+                env_with(&[("A", "a")]),
+                &Secrets::default(),
+            );
+            assert_eq!(call_count(&f), 0);
+        }
+
+        #[test]
+        fn no_scope_never_runs_doppler() {
+            let f = fake("echo loud >&2; exit 1");
+            let got =
+                resolve_many_with(&["A"], None, &f.program, env_with(&[]), &Secrets::default());
+            assert_eq!(got, vec![(None, Source::Unset)]);
+            assert_eq!(call_count(&f), 0);
+        }
+
+        #[test]
+        fn a_failing_doppler_falls_through_silently() {
+            let f = fake("echo secret-value-xyz >&2; echo secret-value-xyz; exit 1");
+            let file = Secrets {
+                devkit_todo_sync_url: Some("https://file".into()),
+                ..Secrets::default()
+            };
+            let got = resolve_many_with(
+                &["DEVKIT_TODO_SYNC_URL", "DEVKIT_TODO_SYNC_SECRET"],
+                Some(&scope()),
+                &f.program,
+                env_with(&[]),
+                &file,
+            );
+            assert_eq!(got, vec![
+                (Some("https://file".into()), Source::File),
+                (None, Source::Unset),
+            ]);
+            assert!(!format!("{got:?}").contains("secret-value-xyz"));
+        }
+
+        #[test]
+        fn values_are_trimmed() {
+            let f = fake(r#"printf '{"B":{"computed":"  b\\n"}}'"#);
+            let file = Secrets {
+                devkit_todo_sync_url: Some(" c\n".into()),
+                ..Secrets::default()
+            };
+            let got = resolve_many_with(
+                &["A", "B", "DEVKIT_TODO_SYNC_URL", "D"],
+                Some(&scope()),
+                &f.program,
+                env_with(&[("A", "  abc\n"), ("D", " \n")]),
+                &file,
+            );
+            assert_eq!(got, vec![
+                (Some("abc".into()), Source::Env),
+                (Some("b".into()), Source::Doppler),
+                (Some("c".into()), Source::File),
+                (None, Source::Unset),
+            ]);
+        }
+    }
+
+    #[test]
+    fn the_new_keys_round_trip_through_the_file() {
+        let (_guard, p) = tmp();
+        for key in [
+            "devkit_todo_sync_url",
+            "devkit_todo_sync_client_id",
+            "devkit_todo_sync_secret",
+        ] {
+            store_at(&p, key, &format!("v-{key}")).unwrap();
+        }
+        let s = load_from(&p).unwrap();
+        for key in [
+            "devkit_todo_sync_url",
+            "devkit_todo_sync_client_id",
+            "devkit_todo_sync_secret",
+        ] {
+            assert_eq!(s.get(key), Some(format!("v-{key}").as_str()));
+        }
     }
 
     #[test]
