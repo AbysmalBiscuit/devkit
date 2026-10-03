@@ -157,14 +157,35 @@ struct Capture {
     map: NativeMap,
 }
 
-fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
-    let tool = payload.tool_name();
-    if !matches!(
-        tool,
-        Some("TaskCreate" | "TaskUpdate" | "update_plan" | "TodoWrite")
-    ) {
-        return Ok(());
+/// The harness tools capture mirrors.
+#[derive(Clone, Copy)]
+enum NativeTool {
+    /// Claude Code's `TaskCreate`.
+    TaskCreate,
+    /// Claude Code's `TaskUpdate`.
+    TaskUpdate,
+    /// Codex's `update_plan`, which resends the whole plan.
+    UpdatePlan,
+    /// Claude Code's `TodoWrite`, which resends the whole list.
+    TodoWrite,
+}
+
+impl NativeTool {
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "TaskCreate" => Some(Self::TaskCreate),
+            "TaskUpdate" => Some(Self::TaskUpdate),
+            "update_plan" => Some(Self::UpdatePlan),
+            "TodoWrite" => Some(Self::TodoWrite),
+            _ => None,
+        }
     }
+}
+
+fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
+    let Some(tool) = payload.tool_name().and_then(NativeTool::parse) else {
+        return Ok(());
+    };
     let Some(harness) = harness_of(payload.harness()) else {
         return Ok(());
     };
@@ -193,11 +214,10 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
     let raw = payload.raw();
     let input = &raw["tool_input"];
     match tool {
-        Some("TaskCreate") => task_create(&c, input, &raw["tool_response"]),
-        Some("TaskUpdate") => task_update(&c, input),
-        Some("update_plan") => list_replace(&c, &input["plan"], "step"),
-        Some("TodoWrite") => list_replace(&c, &input["todos"], "content"),
-        _ => Ok(()),
+        NativeTool::TaskCreate => task_create(&c, input, &raw["tool_response"]),
+        NativeTool::TaskUpdate => task_update(&c, input),
+        NativeTool::UpdatePlan => list_replace(&c, &input["plan"], "step"),
+        NativeTool::TodoWrite => list_replace(&c, &input["todos"], "content"),
     }
 }
 
