@@ -85,6 +85,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // The two verbs that release, which is the half with a correctness
         // consequence, so it runs before the record.
         HookEvent::SubagentStop => with_payload(harness, cli.event, |p| {
+            todo::release(p.subagent_holder());
             edit::release_subagent(p);
             record_only(p, cli.event);
             Ok(())
@@ -93,6 +94,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // one step with a correctness consequence; the sweep last because it is
         // the only one that can be skipped without loss.
         HookEvent::SessionEnd => with_payload(harness, cli.event, |p| {
+            todo::release(p.session_holder());
             edit::release_session(p);
             clear_issue_receipts(p);
             let settings = record_only(p, cli.event);

@@ -360,7 +360,7 @@ fn context(args: &ContextArgs) -> Option<String> {
 
 /// Keyed on a hash of the full holder, so a sub-agent's injection never
 /// suppresses its session's.
-fn digest_path(holder: &Holder) -> PathBuf {
+pub(crate) fn digest_path(holder: &Holder) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     holder.hash(&mut hasher);
     paths::state_dir()
