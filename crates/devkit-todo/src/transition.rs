@@ -63,7 +63,8 @@ impl std::error::Error for Claimed {}
 ///
 /// An actor that covers the claimant repeats a claim without taking it, so a
 /// sub-agent's claim survives its session starting the same todo. A sub-agent
-/// takes over a claim its session holds, so delegating does not lock it out.
+/// takes over a claim its session holds, so delegating does not lock it out;
+/// a person's claim is never taken over this way.
 /// Any other change to a todo in progress needs an actor that covers the
 /// claimant.
 pub fn transition(
@@ -76,7 +77,7 @@ pub fn transition(
             if to == StatusKind::InProgress && actor.covers(by) {
                 return Ok(None);
             }
-            if to == StatusKind::InProgress && by.covers(actor) {
+            if to == StatusKind::InProgress && !by.is_human() && by.covers(actor) {
                 return Ok(Some(Status::InProgress { by: actor.clone() }));
             }
             if !actor.covers(by) {
@@ -146,6 +147,14 @@ mod tests {
         assert_eq!(
             transition(&ip("S/a1"), StatusKind::Pending, &h("S/a2")),
             claimed
+        );
+    }
+
+    #[test]
+    fn an_agent_cannot_take_a_persons_claim() {
+        assert_eq!(
+            transition(&ip("human"), StatusKind::InProgress, &h("S")),
+            Err(Claimed { by: h("human") })
         );
     }
 
