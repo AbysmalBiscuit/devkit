@@ -10,8 +10,8 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_todo::{
-    BuiltinStore, Edit, Filter, Holder, NewTodo, NodeMatch, ORDER_GAP, Status, StatusKind, Todo,
-    TodoStore, builtin,
+    BuiltinStore, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
+    builtin,
     holder::HOLDER_VAR,
     native::NativeMap,
     node::{self, GLOBAL, Place, SessionRef},
@@ -258,22 +258,6 @@ fn move_todo(
         };
         return store.apply(&Edit::Reorder { id, order });
     }
-    let order = match order {
-        Some(order) => order,
-        None => {
-            let todos = store.list(&Filter::all())?;
-            let Some(me) = todos.iter().find(|t| t.id == id) else {
-                bail!("no todo {id}");
-            };
-            todos
-                .iter()
-                .filter(|t| t.project == me.project && t.parent == parent && t.id != id)
-                .filter_map(|t| t.order)
-                .max()
-                .unwrap_or(0)
-                + ORDER_GAP
-        }
-    };
     store.apply(&Edit::Move { id, parent, order })
 }
 

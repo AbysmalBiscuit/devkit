@@ -71,11 +71,12 @@ pub enum Edit {
         id: String,
         description: String,
     },
-    /// Nests the todo under `parent`, or at the top level when `None`.
+    /// Nests the todo under `parent`, or at the top level when `None`, at
+    /// `order` among its new siblings, or after the last of them when `None`.
     Move {
         id: String,
         parent: Option<String>,
-        order: i64,
+        order: Option<i64>,
     },
     Reorder {
         id: String,

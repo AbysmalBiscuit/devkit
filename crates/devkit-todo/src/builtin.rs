@@ -47,6 +47,23 @@ impl store::Document for Doc {
 }
 
 impl Doc {
+    /// The order that places a todo after the last of its siblings: the todos
+    /// on `project` under `parent`, other than `skip`.
+    fn after_last(
+        &self,
+        project: &Option<String>,
+        parent: &Option<String>,
+        skip: Option<&str>,
+    ) -> i64 {
+        self.todos
+            .values()
+            .filter(|t| &t.project == project && &t.parent == parent && Some(t.id.as_str()) != skip)
+            .filter_map(|t| t.order)
+            .max()
+            .unwrap_or(0)
+            + ORDER_GAP
+    }
+
     fn todo_mut(&mut self, id: &str) -> Result<&mut Todo> {
         id.parse::<u64>()
             .ok()
@@ -113,15 +130,9 @@ impl TodoStore for BuiltinStore {
             if let Some(parent) = &todo.parent {
                 doc.todo_mut(parent)?;
             }
-            let order = todo.order.unwrap_or_else(|| {
-                doc.todos
-                    .values()
-                    .filter(|t| t.project == todo.project && t.parent == todo.parent)
-                    .filter_map(|t| t.order)
-                    .max()
-                    .unwrap_or(0)
-                    + ORDER_GAP
-            });
+            let order = todo
+                .order
+                .unwrap_or_else(|| doc.after_last(&todo.project, &todo.parent, None));
             let key = doc.next_id.max(1);
             doc.next_id = key + 1;
             let id = key.to_string();
@@ -159,9 +170,11 @@ impl TodoStore for BuiltinStore {
                     if let Some(parent) = parent {
                         doc.todo_mut(parent)?;
                     }
+                    let project = doc.todo_mut(id)?.project.clone();
+                    let order = order.unwrap_or_else(|| doc.after_last(&project, parent, Some(id)));
                     let todo = doc.todo_mut(id)?;
                     todo.parent = parent.clone();
-                    todo.order = Some(*order);
+                    todo.order = Some(order);
                     todo.modified = Some(now());
                 }
                 Edit::Relocate { id, project } => {

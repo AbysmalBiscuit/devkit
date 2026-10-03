@@ -181,3 +181,26 @@ fn concurrent_adds_all_land() {
     assert_eq!(ids.len(), 200);
     assert_eq!(all(&BuiltinStore::at(dir.path().to_path_buf())).len(), 200);
 }
+
+#[test]
+fn move_without_order_lands_after_the_new_siblings() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = BuiltinStore::at(dir.path().to_path_buf());
+    store.add(new("parent")).unwrap();
+    let child = |text: &str| NewTodo {
+        parent: Some("1".into()),
+        ..new(text)
+    };
+    store.add(child("a")).unwrap();
+    store.add(child("b")).unwrap();
+    store.add(new("loose")).unwrap();
+    store
+        .apply(&Edit::Move {
+            id: "4".into(),
+            parent: Some("1".into()),
+            order: None,
+        })
+        .unwrap();
+    assert_eq!(get(&store, "4").parent.as_deref(), Some("1"));
+    assert_eq!(get(&store, "4").order, Some(3 * 1024));
+}
