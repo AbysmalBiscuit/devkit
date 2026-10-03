@@ -357,6 +357,7 @@ dependencies = [
  "devkit-ports",
  "devkit-rules",
  "devkit-timing",
+ "devkit-todo",
  "fd-lock",
  "indicatif",
  "interprocess",
@@ -566,6 +567,19 @@ dependencies = [
  "serde_json",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "devkit-todo"
+version = "0.14.9"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "devkit-common",
+ "devkit-vcs",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

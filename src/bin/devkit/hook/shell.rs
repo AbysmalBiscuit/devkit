@@ -264,7 +264,9 @@ fn respond(
     // early return is skipped: a record with an empty verdict is half a record.
     // That is the accepted trade, bounded by logging being off by default and
     // enablable only from the global config.
-    if !commands_on && !writes_on && !settings.enabled {
+    // A sub-agent's `devkit todo` claims are attributed whatever the gates
+    // say, so the analysis runs for it even with nothing else to decide.
+    if !commands_on && !writes_on && !settings.enabled && payload.subagent_holder().is_none() {
         return Outcome::silent();
     }
     if writes_on {
@@ -320,11 +322,27 @@ fn respond(
         blocks.extend(verdict.blocks);
         notes.extend(verdict.warnings);
     }
+    // A sub-agent's command that would change a todo another holder has in
+    // progress is denied, naming the holder.
+    if blocks.is_empty()
+        && let Some(reason) = super::todo::check_claims(payload, &analysis)
+    {
+        blocks.push(reason);
+    }
     if !blocks.is_empty() {
         let rec = shell_record(Decision::Deny, &blocks, &notes);
         return deny(which, &blocks).with(rec);
     }
     let rec = shell_record(Decision::Allow, &[], &notes);
+    let context = (!notes.is_empty()).then(|| notes.join("\n"));
+    if let Some(rewritten) = super::todo::rewrite(payload, &analysis, command, dialect)
+        && let Some(envelope) = payload.rewrite_answer(&rewritten, context.as_deref())
+    {
+        return Outcome {
+            response: Response::Envelope(envelope),
+            record: rec,
+        };
+    }
     if notes.is_empty() {
         return Outcome::silent().with(rec);
     }

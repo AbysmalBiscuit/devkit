@@ -210,3 +210,28 @@ fn find_timeouts(v: &serde_json::Value, needle: &str, out: &mut Vec<u64>) {
         _ => {}
     }
 }
+
+/// A todo context line that fails to parse prints nothing, like every other
+/// failure of that command, so a typo would silently stop the injection.
+#[test]
+fn every_todo_context_line_names_its_harness_and_parses() {
+    let exe = Path::new(env!("CARGO_BIN_EXE_devkit"));
+    for (f, name) in &MANIFESTS[..2] {
+        let lines: Vec<String> = commands(f)
+            .into_iter()
+            .filter(|c| c.starts_with("devkit todo context"))
+            .collect();
+        assert_eq!(lines.len(), 4, "{f}: {lines:?}");
+        for c in lines {
+            assert!(c.contains(&format!("--harness {name}")), "{f}: {c}");
+            let mut args: Vec<&str> = c.split_whitespace().skip(1).collect();
+            args.push("--help");
+            let out = std::process::Command::new(exe)
+                .args(&args)
+                .env("DEVKIT_SKIP_AUTOLINK", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{f}: {c}");
+        }
+    }
+}

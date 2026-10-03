@@ -1,0 +1,8 @@
+{
+  "max_turns": 25,
+  "checks": [
+    {"id": "adds-todos", "call": "Bash", "match": "devkit todo add"},
+    {"id": "finishes-todos", "call": "Bash", "match": "devkit todo done"},
+    {"id": "renames-the-function", "changed": "^src/users\\.py$"}
+  ]
+}

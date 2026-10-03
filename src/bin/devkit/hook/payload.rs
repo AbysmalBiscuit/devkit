@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use pabal::{AnyHarness, AnyPayload, AnyView, Fields, Response, Tool};
+use pabal::{AddContext, AnyHarness, AnyPayload, AnyView, Fields, Response, Tool};
 use serde_json::Value;
 
 use super::HookEvent;
@@ -143,6 +143,40 @@ impl Payload {
 
     pub fn tool(&self) -> Option<Tool<'_>> {
         self.0.tool()
+    }
+
+    /// The answer that adds `text` to the agent's context on an event whose
+    /// hook output the harness reads as JSON. `None` on any other event, and
+    /// where the harness has no such channel.
+    pub fn context_answer(&self, text: &str) -> Option<String> {
+        let response = match self.0.view() {
+            AnyView::SessionStart(v) => Some(v.add_context(text)),
+            AnyView::SubagentStart(v) => v.add_context(text),
+            AnyView::UserPromptSubmit(v) => v.add_context(text),
+            _ => None,
+        };
+        response.map(|r| r.to_string())
+    }
+
+    /// A Claude Code `PreToolUse` answer that runs `command` in place of the
+    /// shell command the payload carries, adding `context` when given. It
+    /// sets no permission decision, so the harness still asks about the
+    /// command it runs. `None` on any other harness or event.
+    pub fn rewrite_answer(&self, command: &str, context: Option<&str>) -> Option<String> {
+        let AnyView::PreToolUse(pre) = self.0.view() else {
+            return None;
+        };
+        if self.harness() != AnyHarness::ClaudeCode {
+            return None;
+        }
+        let mut input = self.raw().get("tool_input")?.as_object()?.clone();
+        input.insert("command".to_owned(), Value::String(command.to_owned()));
+        let mut answer = match context {
+            Some(text) => pre.add_context(text)?.json()?.clone(),
+            None => serde_json::json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse" } }),
+        };
+        answer["hookSpecificOutput"]["updatedInput"] = Value::Object(input);
+        Some(answer.to_string())
     }
 
     /// A `PreToolUse` answer that adds `text` to the agent's context and

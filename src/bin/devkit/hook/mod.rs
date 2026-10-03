@@ -22,10 +22,11 @@ mod dialect;
 mod edit;
 mod gate;
 mod mcp;
-mod payload;
+pub(crate) mod payload;
 pub mod record;
 pub(crate) mod rules;
 mod shell;
+pub(crate) mod todo;
 mod writes;
 
 use std::io::{Read, Write};
@@ -84,6 +85,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // The two verbs that release, which is the half with a correctness
         // consequence, so it runs before the record.
         HookEvent::SubagentStop => with_payload(harness, cli.event, |p| {
+            todo::release(p.subagent_holder());
             edit::release_subagent(p);
             record_only(p, cli.event);
             Ok(())
@@ -92,6 +94,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // one step with a correctness consequence; the sweep last because it is
         // the only one that can be skipped without loss.
         HookEvent::SessionEnd => with_payload(harness, cli.event, |p| {
+            todo::release(p.session_holder());
             edit::release_session(p);
             clear_issue_receipts(p);
             let settings = record_only(p, cli.event);
@@ -101,6 +104,13 @@ pub fn run(cli: HookCli) -> Result<()> {
                 // this hook's exit.
                 let _ = devkit_common::harness_log::prune::sweep(&settings);
             }
+            Ok(())
+        }),
+        HookEvent::PostToolUse => with_payload(harness, cli.event, |p| {
+            let cwd = record::payload_cwd(p);
+            let checkout = devkit_common::vcs::Checkout::at(&cwd);
+            todo::capture(p, &checkout);
+            record_in(p, cli.event, &checkout, &cwd);
             Ok(())
         }),
         // Compaction is what drops the injected rules out of the agent's
@@ -143,12 +153,22 @@ fn clear_issue_receipts(payload: &Payload) {
 fn record_only(payload: &Payload, event: HookEvent) -> devkit_common::harness_log::Settings {
     let cwd = record::payload_cwd(payload);
     let checkout = devkit_common::vcs::Checkout::at(&cwd);
-    let settings = devkit_common::harness_log::resolve_in(&checkout, &cwd);
+    record_in(payload, event, &checkout, &cwd)
+}
+
+/// [`record_only`] for a verb that already resolved the payload's checkout.
+fn record_in(
+    payload: &Payload,
+    event: HookEvent,
+    checkout: &devkit_common::vcs::Checkout,
+    cwd: &std::path::Path,
+) -> devkit_common::harness_log::Settings {
+    let settings = devkit_common::harness_log::resolve_in(checkout, cwd);
     if !settings.enabled {
         return settings;
     }
     let kind = record::record_only(payload, event, &settings);
-    let rec = record::envelope(payload, event, &checkout, kind);
+    let rec = record::envelope(payload, event, checkout, kind);
     devkit_common::harness_log::record(&settings, &rec);
     settings
 }
@@ -156,7 +176,7 @@ fn record_only(payload: &Payload, event: HookEvent) -> devkit_common::harness_lo
 /// Read the hook payload from stdin. `None` covers an unreadable pipe, text
 /// that is not JSON, and JSON that is not an object: none is a payload to
 /// judge, and the caller's fail-closed rule is the same for all three.
-fn read_payload(harness: Option<AnyHarness>, event: HookEvent) -> Option<Payload> {
+pub(crate) fn read_payload(harness: Option<AnyHarness>, event: HookEvent) -> Option<Payload> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf).ok()?;
     Payload::new(harness, event, serde_json::from_str::<Value>(&buf).ok()?)

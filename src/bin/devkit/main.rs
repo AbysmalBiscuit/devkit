@@ -24,6 +24,7 @@ mod run;
 mod schema;
 mod shim;
 mod template;
+mod todo;
 
 const SHIM_HELP: &str = "\
 Also installed under their own names:
@@ -150,6 +151,9 @@ enum Cmd {
     /// List, show and render templates for the caller to deliver itself.
     #[command(display_name = "devkit template")]
     Template(template::TemplateCli),
+    /// Todo lists shared by agents and people across sessions.
+    #[command(display_name = "devkit todo")]
+    Todo(todo::TodoCli),
     /// Install the old command names as hardlinks beside this binary.
     ///
     /// Creates hardlinks such as `issue` and `devrun` beside this
@@ -422,6 +426,7 @@ fn main() -> Result<()> {
                 Cmd::HookLog(c) => hook_log::run(c),
                 Cmd::Rules(c) => rules::run(c),
                 Cmd::Template(c) => template::run(c),
+                Cmd::Todo(c) => todo::run(c),
                 Cmd::InstallLinks(a) => links::run(a),
             }
         }
