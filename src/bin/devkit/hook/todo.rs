@@ -258,14 +258,15 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
     };
     let raw = payload.raw();
     let input = &raw["tool_input"];
-    match tool {
+    let captured = match tool {
         NativeTool::TaskCreate => task_create(&c, input, &raw["tool_response"]),
         NativeTool::TaskUpdate => task_update(&c, input),
         NativeTool::UpdatePlan => list_replace(&c, &input["plan"], "step"),
         NativeTool::TodoWrite => list_replace(&c, &input["todos"], "content"),
-    }?;
+    };
+    // A capture can fail after some of its writes committed.
     c.store.spawn_sync(&cwd);
-    Ok(())
+    captured
 }
 
 /// Claude Code's task list is shared by a session and its sub-agents, so the

@@ -586,3 +586,54 @@ fn list_sync_reports_a_sync_that_could_not_run() {
     );
     assert!(stdout(&out).contains("one"), "{}", stdout(&out));
 }
+
+#[test]
+fn a_capture_that_fails_partway_still_syncs_what_it_wrote() {
+    let shared = Shared::new();
+    let tool = |name: &str, input: Value, response: Value| {
+        json!({
+            "session_id": "s1",
+            "cwd": shared.p.path,
+            "hook_event_name": "PostToolUse",
+            "tool_name": name,
+            "tool_input": input,
+            "tool_response": response,
+        })
+    };
+    let create = tool(
+        "TaskCreate",
+        json!({"subject": "alpha", "description": "alpha"}),
+        json!({"task": {"id": "1", "subject": "alpha"}}),
+    );
+    let out = shared.p.hook("post-tool-use", "claude-code", &create);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let dir = replica_dir(&shared.p);
+    poll_until(Duration::from_secs(30), "the capture's sync", || {
+        !dir.join("sync.pending").exists()
+    });
+    let here = TaskchampionStore::at(dir.clone());
+    let id = here.list(&Filter::all()).unwrap()[0].id.clone();
+    here.apply(&Edit::SetStatus {
+        id: id.clone(),
+        to: StatusKind::InProgress,
+        actor: Holder::new("someone-else"),
+    })
+    .unwrap();
+
+    let update = tool(
+        "TaskUpdate",
+        json!({"taskId": "1", "subject": "renamed", "status": "in_progress"}),
+        json!({}),
+    );
+    let out = shared.p.hook("post-tool-use", "claude-code", &update);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).contains("in progress"), "{}", stderr(&out));
+    let other = shared.other();
+    poll_until(Duration::from_secs(15), "the rename on the server", || {
+        other.sync_once().unwrap();
+        other
+            .get(&id)
+            .unwrap()
+            .is_some_and(|t| t.description == "renamed")
+    });
+}
