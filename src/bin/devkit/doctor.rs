@@ -31,6 +31,7 @@ const HINT_LINEAR: &str = "run: devkit auth linear   (https://linear.app/setting
 const HINT_SLACK: &str = "run: devkit auth slack    (Slack app -> OAuth & Permissions)";
 const HINT_WORKSPACE: &str = "optional — falls back to the Linear API for issue links";
 const HINT_GITHUB: &str = "run: gh auth login   (or set GH_TOKEN/GITHUB_TOKEN)";
+const HINT_TODO_SYNC: &str = "optional, the taskchampion replica stays local without all three";
 const HINT_HARNESS_LOG: &str =
     "off — set [harness.log] enabled = true in ~/.config/devkit/config.toml";
 
@@ -525,7 +526,73 @@ fn gather(steps: &Steps) -> Vec<Row> {
         harness_log_row(),
     ];
     rows.extend(tasks_row(std::path::Path::new(".")));
+    rows.extend(todo_rows(std::path::Path::new(".")));
     rows.extend(steps.during("Checking shim links...", shim_rows));
+    rows
+}
+
+/// The secrets-file keys of the todo sync credentials, in `SYNC_VARS` order.
+const TODO_SYNC_KEYS: [&str; 3] = [
+    "devkit_todo_sync_url",
+    "devkit_todo_sync_client_id",
+    "devkit_todo_sync_secret",
+];
+
+/// The todo backend in effect and where it came from, plus, for a
+/// taskchampion replica that would sync to a server, where each credential
+/// resolves from. A credential's value is never shown.
+fn todo_rows(start: &std::path::Path) -> Vec<Row> {
+    use crate::todo::store::{
+        BACKEND_VAR, BackendSource, SYNC_VARS, doppler_scope, effective_backend,
+    };
+    let config = devkit_common::config::resolve(None, start)
+        .ok()
+        .map(|(c, _)| c.todo);
+    let env = std::env::var(BACKEND_VAR).ok();
+    let (backend, from) = match effective_backend(config.as_ref(), env.as_deref()) {
+        Ok(chosen) => chosen,
+        Err(e) => {
+            return vec![Row {
+                key: "todo_backend",
+                data: serde_json::Value::Null,
+                source: Source::Env,
+                check: Check::Invalid(e.to_string()),
+            }];
+        }
+    };
+    let name = serde_json::to_value(backend)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let (source, origin) = match from {
+        BackendSource::Env => (Source::Env, format!("from {BACKEND_VAR}")),
+        BackendSource::Config => (Source::File, "from [todo] backend".to_string()),
+        BackendSource::Default => (Source::Unset, "the default".to_string()),
+    };
+    let mut rows = vec![Row {
+        key: "todo_backend",
+        data: serde_json::json!({ "backend": name }),
+        source,
+        check: Check::Ok(format!("{name}, {origin}")),
+    }];
+    let tc = config.unwrap_or_default().taskchampion;
+    if backend == devkit_config::TodoBackend::Taskchampion && tc.server_dir.is_none() {
+        let resolved = secrets::resolve_many(&SYNC_VARS, doppler_scope(&tc).as_ref());
+        rows.extend(
+            TODO_SYNC_KEYS
+                .into_iter()
+                .zip(resolved)
+                .map(|(key, (value, source))| Row {
+                    key,
+                    data: serde_json::Value::Null,
+                    source,
+                    check: match value {
+                        Some(_) => Check::Ok("set".into()),
+                        None => Check::Unset(HINT_TODO_SYNC),
+                    },
+                }),
+        );
+    }
     rows
 }
 

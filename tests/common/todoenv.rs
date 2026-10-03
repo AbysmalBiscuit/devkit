@@ -14,6 +14,17 @@ use devkit_todo_builtin::BuiltinStore;
 #[path = "testenv.rs"]
 mod testenv;
 
+/// Variables a developer's shell may set that would pick a test's todo
+/// backend, its sync target, or credentials doctor validates over the network.
+const AMBIENT_TODO_VARS: [&str; 6] = [
+    "DEVKIT_TODO_BACKEND",
+    "DEVKIT_TODO_SYNC_URL",
+    "DEVKIT_TODO_SYNC_CLIENT_ID",
+    "DEVKIT_TODO_SYNC_SECRET",
+    "LINEAR_API_KEY",
+    "SLACK_TOKEN",
+];
+
 pub struct Proj {
     root: tempfile::TempDir,
     home: tempfile::TempDir,
@@ -84,6 +95,9 @@ impl Proj {
             .env_remove("DEVKIT_CONFIG")
             .env_remove("DEVKIT_ENFORCE_WRITES")
             .env_remove("DEVKIT_ENFORCE_COMMANDS");
+        for var in AMBIENT_TODO_VARS {
+            cmd.env_remove(var);
+        }
         testenv::scrub_identity(&mut cmd);
         cmd.args(args)
             .envs(env.iter().copied())

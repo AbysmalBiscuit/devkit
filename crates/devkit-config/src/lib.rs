@@ -97,10 +97,24 @@ pub struct Config {
 /// [todo.taskwarrior]
 /// path = "/opt/task"
 /// project = "agents"
+///
+/// [todo.taskchampion]
+/// data_dir = "/var/devkit/todo"
+/// server_dir = "/mnt/shared/todo-sync"
+/// doppler_project = "devkit"
+/// doppler_config = "dev"
 /// # "#).unwrap();
 /// # assert_eq!(cfg.todo.backend, TodoBackend::Taskwarrior);
 /// # assert_eq!(cfg.todo.taskwarrior.path, "/opt/task");
 /// # assert_eq!(cfg.todo.taskwarrior.project, "agents");
+/// # let tc = &cfg.todo.taskchampion;
+/// # assert_eq!(tc.data_dir.as_deref(), Some("/var/devkit/todo"));
+/// # assert_eq!(tc.server_dir.as_deref(), Some("/mnt/shared/todo-sync"));
+/// # assert_eq!(tc.doppler_project.as_deref(), Some("devkit"));
+/// # assert_eq!(tc.doppler_config.as_deref(), Some("dev"));
+/// # let champion = Config::parse("[todo]\nbackend = \"taskchampion\"\n").unwrap();
+/// # assert_eq!(champion.todo.backend, TodoBackend::Taskchampion);
+/// # assert!(Config::parse("[todo.taskchampion]\nserver = \"x\"\n").is_err());
 /// # let empty = Config::parse("").unwrap();
 /// # assert_eq!(empty.todo.backend, TodoBackend::Builtin);
 /// # assert_eq!(empty.todo.taskwarrior.path, "task");
@@ -116,13 +130,19 @@ pub struct TodoConfig {
     /// Which store keeps the todos. `builtin` is a JSON file in devkit's
     /// state directory. `taskwarrior` keeps them in the local taskwarrior
     /// through taskwarrior 3's `task` program, under the project
-    /// `[todo.taskwarrior] project` names. Set it in
+    /// `[todo.taskwarrior] project` names. `taskchampion` keeps them in a
+    /// taskchampion replica devkit embeds, under the same project, and can
+    /// sync it to a directory or a sync server. Set it in
     /// `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:
     /// a committed `taskwarrior` breaks every machine without `task`, cloud
-    /// sessions included.
+    /// sessions included. `DEVKIT_TODO_BACKEND`, when set, overrides it with
+    /// the same spellings.
     pub backend: TodoBackend,
-    /// The `taskwarrior` backend's settings.
+    /// The `taskwarrior` backend's settings. `project` also roots the
+    /// `taskchampion` backend's todos.
     pub taskwarrior: TaskwarriorConfig,
+    /// The `taskchampion` backend's settings.
+    pub taskchampion: TaskchampionConfig,
 }
 
 /// The store `[todo] backend` names.
@@ -132,6 +152,7 @@ pub enum TodoBackend {
     #[default]
     Builtin,
     Taskwarrior,
+    Taskchampion,
 }
 
 /// How devkit runs taskwarrior for `[todo] backend = "taskwarrior"`.
@@ -168,6 +189,27 @@ impl Default for TaskwarriorConfig {
             project: "devkit".to_string(),
         }
     }
+}
+
+/// Where `[todo] backend = "taskchampion"` keeps its replica and syncs it.
+/// With no `server_dir`, the replica syncs to a server when
+/// `DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` and
+/// `DEVKIT_TODO_SYNC_SECRET` all resolve, and otherwise stays local.
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskchampionConfig {
+    /// The replica's directory. Defaults to `taskchampion` under devkit's
+    /// todo state directory.
+    pub data_dir: Option<String>,
+    /// Sync to this directory instead of a server. The server credentials
+    /// are not read when it is set.
+    pub server_dir: Option<String>,
+    /// Read the server credentials the environment lacks from this Doppler
+    /// project, before the secrets file.
+    pub doppler_project: Option<String>,
+    /// The Doppler config to read them from. Doppler's own default when
+    /// absent.
+    pub doppler_config: Option<String>,
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the

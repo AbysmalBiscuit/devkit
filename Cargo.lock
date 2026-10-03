@@ -392,6 +392,7 @@ dependencies = [
  "devkit-timing",
  "devkit-todo",
  "devkit-todo-builtin",
+ "devkit-todo-taskchampion",
  "devkit-todo-taskwarrior",
  "fd-lock",
  "indicatif",

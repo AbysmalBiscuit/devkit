@@ -47,6 +47,7 @@ devkit-timing.workspace = true
 devkit-todo.workspace = true
 devkit-todo-builtin.workspace = true
 devkit-todo-taskwarrior.workspace = true
+devkit-todo-taskchampion.workspace = true
 ambassador.workspace = true
 pabal.workspace = true
 same-file.workspace = true
@@ -111,7 +112,7 @@ supports-hyperlinks = "3"
 strum = { version = "0.27", features = ["derive"] }
 pabal = { version = "0.2", features = ["clap"] }
 ambassador = "0.5.1"
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "2", features = ["json", "proxy-from-env"] }
 # An embedded taskchampion replica. Stays on the 2.0.2 line taskwarrior pins,
 # so its wire format matches the `task` a person reads the lists with.
 taskchampion = { version = "~2.0.2", default-features = false, features = ["server-sync", "bundled"] }
