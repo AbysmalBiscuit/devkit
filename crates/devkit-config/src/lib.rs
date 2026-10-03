@@ -2047,9 +2047,10 @@ pub(crate) fn resolve_with_home(
     if let Some(warning) = check_baseline_path(&origin, home)? {
         eprintln!("{warning}");
     }
-    let mut cfg: Config = toml::Value::Table(merged)
-        .try_into()
-        .context("deserializing merged devkit config")?;
+    let mut cfg: Config = toml::Value::Table(merged).try_into().with_context(|| {
+        let layers: Vec<String> = order.iter().map(|p| p.display().to_string()).collect();
+        format!("deserializing merged devkit config ({})", layers.join(", "))
+    })?;
     reject_reserved_variables(&cfg, &origin)?;
     reject_never_without_default(&cfg, &origin)?;
     resolve_defaults(&mut cfg, &origin, checkout_root, default_worktree_root)?;
