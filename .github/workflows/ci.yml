@@ -70,6 +70,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
+      # The taskwarrior todo tests need taskwarrior 3, which Homebrew ships.
+      # Where `task` is missing they return early, so the other runners skip
+      # them.
+      - name: Install taskwarrior
+        if: matrix.os == 'macos-latest'
+        run: brew install task && task --version
       - name: Test workspace
         run: cargo nextest run --workspace --no-fail-fast
       # nextest does not run doctests. The workspace has none today, so this
