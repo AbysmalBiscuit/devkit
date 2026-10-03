@@ -45,7 +45,7 @@ On taskwarrior:
 
 - A todo's id is its task's uuid, shown as the first 8 characters. Any prefix of 8 or more that names one task works wherever an id does.
 - A global todo is filed under the project `global`. A task with no project is never a todo, so your own unfiled tasks stay out of every list.
-- A task started with `task start` or in alacritree, outside devkit, counts as held by a person, so no agent takes it over.
+- A task started outside devkit, with `task start` or in alacritree, counts as held by a person when it has no `holder`, so no agent takes it over. A task that still carries an agent's `holder` stays that agent's claim, even after someone stops and restarts it with `task`.
 - devkit records who holds a todo in a `holder` attribute. To see it in your own `task` reports, add these lines to your taskrc:
 
   ```text
