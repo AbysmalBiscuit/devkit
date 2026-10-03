@@ -1,16 +1,20 @@
 [package]
 name = "devkit-todo"
-description = "Agent todo lists: the model, the claim rule, node naming and the built-in store"
+description = "Agent todo lists: the model, the claim rule, node naming and the store trait"
 edition.workspace = true
 version = "0.14.9" # x-release-please-version
 
 [dependencies]
 anyhow.workspace = true
+ambassador.workspace = true
 serde = { workspace = true }
-serde_json.workspace = true
-chrono.workspace = true
 devkit-common.workspace = true
 devkit-vcs.workspace = true
 
+[features]
+# The backend contract suite, `contract` and `contract_tests!`.
+test-support = []
+
 [dev-dependencies]
 tempfile.workspace = true
+devkit-todo = { path = ".", features = ["test-support"] }

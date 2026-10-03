@@ -9,6 +9,7 @@
 - Every `devkit.toml` from the filesystem root down to the working directory merges. Tables merge key by key. Scalars and arrays replace wholesale, so a deeper `[[context.files]]` or `[hooks]` list replaces the parent's list.
 - `[config] root = true` stops the walk at that directory and drops every shallower layer, the home config included.
 - `--config <path>` or `$DEVKIT_CONFIG` selects one file verbatim, with no layering and no home base.
+- The home config's `[todo]` table is the exception to both: where todos are kept is a fact about the machine, so it stays the base layer under a rooted or explicit config, which can still override it.
 
 The `[harness]` switches and `[harness.log]` resolve across layers by rules of their own, which their descriptions give.
 

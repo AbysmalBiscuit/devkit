@@ -1,6 +1,6 @@
 # Todo lists: `devkit todo`
 
-devkit keeps agent todo lists in its own store, outside any checkout, so a resumed session, a later session and the person running the agents all read the same lists. At session start, after compaction, when a sub-agent starts, and on each prompt whose lists changed, a hook injects the lists you can see. Track any work of three or more steps there before you start it.
+devkit keeps agent todo lists in a store outside any checkout, so a resumed session, a later session and the person running the agents all read the same lists. At session start, after compaction, when a sub-agent starts, and on each prompt whose lists changed, a hook injects the lists you can see. Track any work of three or more steps there before you start it.
 
 ## Where your todos live
 
@@ -21,7 +21,7 @@ When other sessions on your workspace left pending todos, the injected context s
 
 ## Ids and claims
 
-Ids are the numbers in parentheses in the injected lists and in `devkit todo list`. `devkit todo add` prints the new one.
+Ids are in parentheses in the injected lists and in `devkit todo list`. `devkit todo add` prints the new one.
 
 `devkit todo start <id>` claims a todo for you. A todo another agent has in progress shows `in progress: <name>`, and starting, finishing or dropping it fails naming the holder: pick another todo. A sub-agent claims a todo with `start` before working on it, so two sub-agents never work on the same one. A sub-agent may take over a todo its own session started, and its session starting that todo again leaves the sub-agent's claim in place. When an agent or sub-agent ends, the todos it still has in progress return to pending. In Claude Code a sub-agent's `devkit todo` commands act as that sub-agent; in Codex they act as its session, so Codex sub-agents do not exclude each other.
 
@@ -36,3 +36,19 @@ Codex offers `update_plan` only when its config sets `[tools.update_plan] enable
 `devkit todo cancel <id>` drops a todo and keeps the record, marked cancelled, so the person running the agents can see what was abandoned. Cancelled todos are counted rather than listed.
 
 `devkit todo purge` deletes a record for good, for text that must disappear such as a pasted secret. It needs a person at a terminal and refuses an agent; cancel instead.
+
+## Backends
+
+The built-in store is the default: one file in devkit's state directory. `[todo] backend = "taskwarrior"` keeps the todos in the local taskwarrior instead, through taskwarrior 3's `task` program, on the same project names alacritree's taskwarrior tab reads. Set it in `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`: a committed value breaks every machine without `task`, cloud sessions included. `[todo.taskwarrior] path` names another `task` program. Agents use `devkit todo` or their native tool on either backend.
+
+On taskwarrior:
+
+- A todo's id is its task's uuid, shown as the first 8 characters. Any prefix of 8 or more that names one task works wherever an id does.
+- A global todo is filed under the project `global`. A task with no project is never a todo, so your own unfiled tasks stay out of every list.
+- A task started outside devkit, with `task start` or in alacritree, counts as held by a person when it has no `holder`, so no agent takes it over. A task that still carries an agent's `holder` stays that agent's claim, even after someone stops and restarts it with `task`.
+- devkit records who holds a todo in a `holder` attribute. To see it in your own `task` reports, add these lines to your taskrc:
+
+  ```text
+  uda.holder.type=string
+  uda.holder.label=Holder
+  ```

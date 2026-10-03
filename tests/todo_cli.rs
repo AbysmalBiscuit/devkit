@@ -192,3 +192,30 @@ fn a_batch_with_one_claimed_todo_changes_nothing() {
     assert!(stderr(&unknown).contains("no todo 99"));
     assert_eq!(p.todo("1").status, Status::Pending);
 }
+
+/// The normal state of a cloud session: no devkit config anywhere.
+#[test]
+fn no_config_anywhere_uses_the_builtin_store() {
+    let p = Proj::new();
+    assert!(!p.home_config().exists());
+    let add = p.devkit(&["todo", "add", "one"], &S1);
+    assert!(add.status.success(), "{}", stderr(&add));
+    assert_eq!(stdout(&add), "1\n");
+    assert_eq!(p.todo("1").description, "one");
+}
+
+#[test]
+fn a_broken_config_is_an_error_in_the_cli() {
+    let p = Proj::with_home_config("[todo]\nbackend = 3\n");
+    let list = p.devkit(&["todo", "list"], &S1);
+    assert_eq!(list.status.code(), Some(1), "{}", stdout(&list));
+    let config = p.home_config();
+    assert!(
+        stderr(&list).contains(&*config.to_string_lossy()),
+        "{}",
+        stderr(&list)
+    );
+    let add = p.devkit(&["todo", "add", "one"], &S1);
+    assert_eq!(add.status.code(), Some(1));
+    assert!(p.todos().is_empty());
+}

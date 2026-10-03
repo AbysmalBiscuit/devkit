@@ -1,0 +1,18 @@
+[package]
+name = "devkit-todo-taskwarrior"
+description = "Agent todo lists kept in the local taskwarrior through its task program"
+edition.workspace = true
+version = "0.14.9" # x-release-please-version
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+chrono.workspace = true
+devkit-common.workspace = true
+devkit-todo.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
+devkit-todo = { workspace = true, features = ["test-support"] }
