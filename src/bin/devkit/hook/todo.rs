@@ -47,13 +47,11 @@ pub(crate) fn to_todo_holder(holder: &payload::Holder) -> Holder {
 /// crashed agent's todos do not show as in progress forever, and forgets the
 /// lists last injected for it. Silent: a store failure leaves the claims for
 /// a person to reset.
-pub(crate) fn release(payload: &Payload, holder: Option<payload::Holder>) {
+pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout, cwd: &Path) {
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
         let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
-        let cwd = record::payload_cwd(payload);
-        let store = Store::for_hook(&Checkout::at(&cwd), &cwd);
-        let _ = store.apply(&Edit::ReleaseAll { holder });
+        let _ = Store::for_hook(checkout, cwd).apply(&Edit::ReleaseAll { holder });
     }
 }
 
