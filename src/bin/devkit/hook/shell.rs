@@ -264,7 +264,9 @@ fn respond(
     // early return is skipped: a record with an empty verdict is half a record.
     // That is the accepted trade, bounded by logging being off by default and
     // enablable only from the global config.
-    if !commands_on && !writes_on && !settings.enabled {
+    // A sub-agent's `devkit todo` claims are attributed whatever the gates
+    // say, so the analysis runs for it even with nothing else to decide.
+    if !commands_on && !writes_on && !settings.enabled && payload.subagent_holder().is_none() {
         return Outcome::silent();
     }
     if writes_on {
@@ -319,6 +321,12 @@ fn respond(
         );
         blocks.extend(verdict.blocks);
         notes.extend(verdict.warnings);
+    }
+    // Last, so a command something else denies never leaves a claim behind.
+    if blocks.is_empty()
+        && let Some(reason) = super::todo::attribute(payload, &analysis)
+    {
+        blocks.push(reason);
     }
     if !blocks.is_empty() {
         let rec = shell_record(Decision::Deny, &blocks, &notes);

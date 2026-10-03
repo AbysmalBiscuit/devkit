@@ -44,7 +44,10 @@ impl Proj {
         cmd.env("HOME", self.home.path())
             .env("XDG_STATE_HOME", self.home.path())
             .env("DEVKIT_SKIP_AUTOLINK", "1")
-            .env_remove("DEVKIT_CALLER");
+            .env_remove("DEVKIT_CALLER")
+            .env_remove("DEVKIT_CONFIG")
+            .env_remove("DEVKIT_ENFORCE_WRITES")
+            .env_remove("DEVKIT_ENFORCE_COMMANDS");
         testenv::scrub_identity(&mut cmd);
         cmd.args(args)
             .envs(env.iter().copied())
