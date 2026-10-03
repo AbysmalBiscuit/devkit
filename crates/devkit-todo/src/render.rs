@@ -69,10 +69,7 @@ fn section(node: &str, todos: &[&Todo], viewer: &Holder, full: bool) -> Option<S
 fn line(todo: &Todo, viewer: &Holder) -> String {
     let (mark, note) = match &todo.status {
         Status::InProgress { by } if by == viewer => (' ', ", in progress".to_string()),
-        Status::InProgress { by } => {
-            let name = by.rsplit('/').next().unwrap_or(by);
-            (' ', format!(", in progress: {name}"))
-        }
+        Status::InProgress { by } => (' ', format!(", in progress: {}", by.name())),
         Status::Completed { .. } => ('x', String::new()),
         Status::Pending | Status::Cancelled { .. } => (' ', String::new()),
     };

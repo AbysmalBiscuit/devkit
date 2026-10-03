@@ -29,6 +29,16 @@ impl Holder {
         self.0 == HUMAN
     }
 
+    /// The session this holder belongs to: `S` for both `S` and `S/a`.
+    pub fn session(&self) -> Holder {
+        Holder::new(self.0.split('/').next().unwrap_or(&self.0))
+    }
+
+    /// The name a list shows for this holder: `a` for `S/a`, `S` for `S`.
+    pub fn name(&self) -> &str {
+        self.0.rsplit('/').next().unwrap_or(&self.0)
+    }
+
     /// Whether `self` may act on what `other` holds: its own claims, its
     /// sub-agents' claims, and every claim for a human.
     pub fn covers(&self, other: &Holder) -> bool {
@@ -58,6 +68,14 @@ impl fmt::Display for Holder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sub_agent_names_itself_and_its_session() {
+        assert_eq!(Holder::new("S/a1").session(), Holder::new("S"));
+        assert_eq!(Holder::new("S").session(), Holder::new("S"));
+        assert_eq!(Holder::new("S/a1").name(), "a1");
+        assert_eq!(Holder::new("S").name(), "S");
+    }
 
     #[test]
     fn covers_itself_its_sub_agents_and_everything_as_human() {

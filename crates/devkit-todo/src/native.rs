@@ -97,9 +97,9 @@ impl NativeMap {
         holder: &Holder,
         native: &str,
     ) -> Result<Option<String>> {
-        let session = holder.split('/').next().unwrap_or(holder);
+        let session = holder.session();
         self.with_doc(|doc| {
-            Ok([&**holder, session]
+            Ok([&**holder, &*session]
                 .into_iter()
                 .find_map(|h| doc.ids.get(&id_key(harness, h, native)).cloned()))
         })
