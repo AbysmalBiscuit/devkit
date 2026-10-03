@@ -17,6 +17,8 @@ A list belongs to a node. Nodes nest on `.`:
 
 You see your own node and every node above it, never another session's. A sub-agent shares its session's node, so it sees and writes the same list as the agent that started it.
 
+When other sessions on your workspace left pending todos, the injected context says how many and names the `devkit todo list --subtree` command that shows them. It does so at session start, and on each later prompt while your own list has nothing open. To continue one of them, claim it with `devkit todo start <id>`. It stays on its own node.
+
 ## Ids and claims
 
 Ids are the numbers in parentheses in the injected lists and in `devkit todo list`. `devkit todo add` prints the new one.

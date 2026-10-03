@@ -328,10 +328,40 @@ fn context(args: &ContextArgs) -> Option<String> {
     let viewer = to_todo_holder(&payload.holder().ok()?);
     let place = place_at(&hook::record::payload_cwd(&payload)).ok()?;
     let visible = node::visible_nodes(&place, Some(&session));
-    let todos = BuiltinStore::open()
-        .list(&Filter::exact(visible.clone()))
-        .ok()?;
-    let lists = render::render_lists(&visible, &todos, &viewer);
+    let own = node::node(&place, Some(&session));
+    let workspace = matches!(place, Place::Workspace { .. }).then(|| node::node(&place, None));
+    let mut filter = Filter::exact(visible.clone());
+    filter
+        .nodes
+        .extend(workspace.iter().map(|w| NodeMatch::Subtree(w.clone())));
+    let (todos, siblings): (Vec<Todo>, Vec<Todo>) = BuiltinStore::open()
+        .list(&filter)
+        .ok()?
+        .into_iter()
+        .partition(|t| visible.iter().any(|n| n == t.node()));
+    let mut lists = render::render_lists(&visible, &todos, &viewer);
+    let own_open = todos.iter().any(|t| {
+        t.node() == own
+            && matches!(
+                t.status.kind(),
+                StatusKind::Pending | StatusKind::InProgress
+            )
+    });
+    let at_start = payload.event_name().as_deref() == Some("SessionStart");
+    let pending = siblings
+        .iter()
+        .filter(|t| t.status.kind() == StatusKind::Pending)
+        .count();
+    if let Some(line) = workspace
+        .filter(|_| at_start || !own_open)
+        .and_then(|w| render::left_by_others(&w, pending))
+    {
+        if !lists.is_empty() {
+            lists.push('\n');
+        }
+        lists.push_str(&line);
+        lists.push('\n');
+    }
     let digest = render::digest(&lists);
     let digest_path = builtin::digest_path(&viewer);
     if args.if_changed && std::fs::read_to_string(&digest_path).is_ok_and(|seen| seen == digest) {

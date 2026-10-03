@@ -136,6 +136,19 @@ fn walk<'a>(
     }
 }
 
+/// The line naming the pending todos other sessions left on `workspace`'s
+/// session nodes, or `None` when there are none. A session never sees a
+/// sibling's list, so this is how it learns there is one to pick up.
+pub fn left_by_others(workspace: &str, pending: usize) -> Option<String> {
+    let noun = if pending == 1 { "todo" } else { "todos" };
+    (pending > 0).then(|| {
+        format!(
+            "Other sessions on `{workspace}` left {pending} pending {noun}; \
+             `devkit todo list --subtree {workspace}` lists them."
+        )
+    })
+}
+
 /// What an agent is told ahead of its lists. It does not depend on the
 /// backend.
 pub fn guide(own_node: &str) -> String {

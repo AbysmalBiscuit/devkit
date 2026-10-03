@@ -108,3 +108,53 @@ fn a_failed_repository_lookup_means_silence() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "");
 }
+
+const LEFT: &str = "Other sessions on `proj.main` left 1 pending todo; \
+                    `devkit todo list --subtree proj.main` lists them.";
+
+#[test]
+fn session_start_names_the_todos_other_sessions_left() {
+    let p = Proj::new();
+    p.devkit(&["todo", "add", "earlier work"], &[(
+        "CLAUDE_CODE_SESSION_ID",
+        "s0",
+    )]);
+    p.devkit(&["todo", "add", "elsewhere"], &[(
+        "CLAUDE_CODE_SESSION_ID",
+        "s0",
+    )]);
+    p.devkit(&["todo", "done", "2"], &[("CLAUDE_CODE_SESSION_ID", "s0")]);
+    let text = injected(&context(&p, &[], event(&p, "SessionStart")));
+    assert!(text.contains(LEFT), "{text}");
+    assert!(
+        !text.contains("earlier work"),
+        "a sibling's list is never shown: {text}"
+    );
+}
+
+#[test]
+fn the_line_returns_on_a_prompt_only_while_the_own_list_is_empty() {
+    let p = Proj::new();
+    p.devkit(&["todo", "add", "earlier work"], &[(
+        "CLAUDE_CODE_SESSION_ID",
+        "s0",
+    )]);
+    let prompt = ["--guide", "none"];
+    let empty_own = injected(&context(&p, &prompt, event(&p, "UserPromptSubmit")));
+    assert!(empty_own.contains(LEFT), "{empty_own}");
+    p.devkit(&["todo", "add", "mine"], &S1);
+    let busy = injected(&context(&p, &prompt, event(&p, "UserPromptSubmit")));
+    assert!(!busy.contains("Other sessions"), "{busy}");
+    assert!(busy.contains("- [ ] mine (2)"), "{busy}");
+}
+
+#[test]
+fn another_branchs_sessions_are_not_counted() {
+    let p = Proj::new();
+    p.devkit(
+        &["todo", "add", "--node", "proj.other.claude-s0", "far"],
+        &[("DEVKIT_CALLER", "human")],
+    );
+    let text = injected(&context(&p, &[], event(&p, "SessionStart")));
+    assert!(!text.contains("Other sessions"), "{text}");
+}
