@@ -1,6 +1,7 @@
 use std::{fs, path::Path, thread};
 
-use devkit_todo::{BuiltinStore, Filter, NewTodo, Todo, TodoStore};
+use devkit_todo::{Filter, NewTodo, Todo, TodoStore};
+use devkit_todo_builtin::BuiltinStore;
 
 devkit_todo::contract_tests!(|| {
     let dir = tempfile::tempdir().unwrap();

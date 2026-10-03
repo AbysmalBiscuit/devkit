@@ -7,11 +7,10 @@ use std::{collections::BTreeMap, path::PathBuf, time::SystemTime};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, SecondsFormat, Utc};
 use devkit_common::store;
-use serde::{Deserialize, Serialize};
-
-use crate::{
+use devkit_todo::{
     Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, one_line, state_dir, transition,
 };
+use serde::{Deserialize, Serialize};
 
 const VERSION: u32 = 1;
 

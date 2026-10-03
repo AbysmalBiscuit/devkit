@@ -49,7 +49,8 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | `devkit-vcs` | the `VersionControl` trait: what devkit asks of a project's repository |
 | `devkit-git` | the `Git` builder (timeouts, env scrubbing, batch-mode ssh) and `GitBackend` |
 | `devkit-timing` | `--timing` spans for subprocess and network IO, and their summary |
-| `devkit-todo` | agent todo lists: the `TodoStore` trait, the built-in store, the claim rule, node naming, the native-tool map, rendering and list diffing |
+| `devkit-todo` | agent todo lists: the `TodoStore` trait and its contract suite, the claim rule, node naming, the native-tool map, rendering and list diffing |
+| `devkit-todo-builtin` | `BuiltinStore`, the todo store devkit ships: one JSON document under the state directory |
 
 ## Rules
 

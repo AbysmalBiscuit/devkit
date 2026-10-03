@@ -358,6 +358,7 @@ dependencies = [
  "devkit-rules",
  "devkit-timing",
  "devkit-todo",
+ "devkit-todo-builtin",
  "fd-lock",
  "indicatif",
  "interprocess",
@@ -575,12 +576,22 @@ version = "0.14.9"
 dependencies = [
  "ambassador",
  "anyhow",
- "chrono",
  "devkit-common",
  "devkit-todo",
  "devkit-vcs",
  "serde",
- "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "devkit-todo-builtin"
+version = "0.14.9"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "devkit-common",
+ "devkit-todo",
+ "serde",
  "tempfile",
 ]
 

@@ -5,7 +5,6 @@
 // crate, so they use absolute paths that must resolve here too.
 extern crate self as devkit_todo;
 
-pub mod builtin;
 #[cfg(feature = "test-support")]
 pub mod contract;
 pub mod holder;
@@ -14,7 +13,6 @@ pub mod transition;
 
 use std::path::PathBuf;
 
-pub use builtin::BuiltinStore;
 use devkit_common::paths;
 pub use holder::Holder;
 pub use node::{Filter, NodeMatch};

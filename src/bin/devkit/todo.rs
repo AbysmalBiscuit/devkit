@@ -10,12 +10,13 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_todo::{
-    BuiltinStore, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
+    Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
     holder::HOLDER_VAR,
     native::NativeMap,
     node::{self, GLOBAL, Place, SessionRef},
     render, transition,
 };
+use devkit_todo_builtin::BuiltinStore;
 use pabal::AnyHarness;
 use serde_json::{Value, json};
 

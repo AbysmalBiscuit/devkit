@@ -8,7 +8,8 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
-use devkit_todo::{BuiltinStore, Filter, Todo, TodoStore};
+use devkit_todo::{Filter, Todo, TodoStore};
+use devkit_todo_builtin::BuiltinStore;
 
 #[path = "testenv.rs"]
 mod testenv;

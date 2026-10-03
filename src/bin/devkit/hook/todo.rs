@@ -12,13 +12,14 @@ use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
 use devkit_common::vcs::Checkout;
 use devkit_todo::{
-    BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, TodoStore,
+    Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
     holder::HOLDER_VAR,
     native::{MirroredStep, NativeMap},
     node::{self, Harness, SessionRef},
     transition,
 };
+use devkit_todo_builtin::BuiltinStore;
 use pabal::AnyHarness;
 use serde_json::Value;
 

@@ -1,0 +1,16 @@
+[package]
+name = "devkit-todo-builtin"
+description = "The todo store devkit ships: one JSON document under the state directory"
+edition.workspace = true
+version = "0.14.9" # x-release-please-version
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true }
+chrono.workspace = true
+devkit-common.workspace = true
+devkit-todo.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+devkit-todo = { workspace = true, features = ["test-support"] }
