@@ -18,9 +18,29 @@ pub const UDAS: [(&str, &str); 6] = [
     ("uda.holder.label", "Holder"),
 ];
 
-/// The project a global todo is filed under. A task with no project is never
-/// a todo, so a person's own unfiled tasks stay out of every list.
-pub const GLOBAL_PROJECT: &str = devkit_todo::node::GLOBAL;
+/// The root project devkit keeps its todos under unless configured
+/// otherwise.
+pub const DEFAULT_ROOT: &str = "devkit";
+
+/// The taskwarrior project a node's todos are filed under: `root` itself for
+/// the global list, `<root>.<node>` for any other node.
+pub fn project_of(root: &str, node: Option<&str>) -> String {
+    match node.filter(|n| *n != devkit_todo::node::GLOBAL) {
+        Some(node) => format!("{root}.{node}"),
+        None => root.to_string(),
+    }
+}
+
+/// The node `project` files a todo on under `root`: `Some(None)` for the
+/// global list, and `None` for a project outside `root`, whose tasks are not
+/// todos.
+pub fn node_of(root: &str, project: &str) -> Option<Option<String>> {
+    if project == root {
+        return Some(None);
+    }
+    let node = project.strip_prefix(root)?.strip_prefix('.')?;
+    (!node.is_empty()).then(|| Some(node.to_string()))
+}
 
 /// A task as `task export` prints it.
 #[derive(Debug, Deserialize)]
@@ -44,14 +64,15 @@ fn integer_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, 
 }
 
 impl Exported {
-    /// The todo this task is, or `None` for a task that is not one: no
-    /// project, or a status other than pending, completed or deleted.
+    /// The todo this task is under `root`, or `None` for a task that is not
+    /// one: a project outside `root`, no project at all, or a status other
+    /// than pending, completed or deleted.
     ///
     /// A pending task started with no `holder` was started outside devkit,
     /// by `task start` or alacritree, so it reads as held by a person and no
     /// agent takes it over.
-    pub fn into_todo(self) -> Option<Todo> {
-        let project = self.project?;
+    pub fn into_todo(self, root: &str) -> Option<Todo> {
+        let project = node_of(root, self.project.as_deref()?)?;
         let holder = self
             .holder
             .filter(|h| !h.is_empty())
@@ -71,7 +92,7 @@ impl Exported {
             status,
             parent: self.subof,
             order: self.order,
-            project: (project != GLOBAL_PROJECT).then_some(project),
+            project,
             entry: self.entry.as_deref().and_then(rfc3339),
             modified: self.modified.as_deref().and_then(rfc3339),
         })
@@ -101,9 +122,10 @@ pub fn status_args(status: &Status, started: bool) -> Vec<String> {
     }
 }
 
-/// The `project:` word for a todo's node, `None` being the global list.
-pub fn project_arg(project: Option<&str>) -> String {
-    format!("project:{}", project.unwrap_or(GLOBAL_PROJECT))
+/// The `project:` word for a todo's node under `root`, `None` being the
+/// global list.
+pub fn project_arg(root: &str, node: Option<&str>) -> String {
+    format!("project:{}", project_of(root, node))
 }
 
 /// A description as a `task` argument. Taskwarrior reads a backslash as an
@@ -130,7 +152,7 @@ mod tests {
             "uuid": "96432cd6-082a-4d8c-a9cb-adef8823ff92",
             "description": "d",
             "status": "pending",
-            "project": "r.main",
+            "project": "devkit.r.main",
         });
         task.as_object_mut()
             .unwrap()
@@ -139,7 +161,7 @@ mod tests {
     }
 
     fn status_of(json: serde_json::Value) -> Option<Status> {
-        exported(json).into_todo().map(|t| t.status)
+        exported(json).into_todo(DEFAULT_ROOT).map(|t| t.status)
     }
 
     #[test]
@@ -187,18 +209,18 @@ mod tests {
     }
 
     #[test]
-    fn global_project_reads_as_none_and_no_project_is_not_a_todo() {
-        let global = exported(serde_json::json!({"project": "global"}));
-        assert_eq!(global.into_todo().unwrap().project, None);
+    fn the_root_reads_as_global_and_no_project_is_not_a_todo() {
+        let global = exported(serde_json::json!({"project": "devkit"}));
+        assert_eq!(global.into_todo(DEFAULT_ROOT).unwrap().project, None);
         let mut unfiled = exported(serde_json::json!({}));
         unfiled.project = None;
-        assert_eq!(unfiled.into_todo(), None);
+        assert_eq!(unfiled.into_todo(DEFAULT_ROOT), None);
     }
 
     #[test]
     fn fractional_order_rounds() {
         let task = exported(serde_json::json!({"order": 1024.4}));
-        assert_eq!(task.into_todo().unwrap().order, Some(1024));
+        assert_eq!(task.into_todo(DEFAULT_ROOT).unwrap().order, Some(1024));
     }
 
     #[test]
@@ -210,7 +232,7 @@ mod tests {
         assert_eq!(rfc3339("yesterday"), None);
         let task = exported(serde_json::json!({"entry": "20261003T120000Z"}));
         assert_eq!(
-            task.into_todo().unwrap().entry.as_deref(),
+            task.into_todo(DEFAULT_ROOT).unwrap().entry.as_deref(),
             Some("2026-10-03T12:00:00Z")
         );
     }
@@ -254,9 +276,27 @@ mod tests {
     }
 
     #[test]
-    fn project_words_name_the_node() {
-        assert_eq!(project_arg(None), "project:global");
-        assert_eq!(project_arg(Some("r.main")), "project:r.main");
+    fn project_words_file_the_node_under_the_root() {
+        assert_eq!(project_arg("devkit", None), "project:devkit");
+        assert_eq!(project_arg("devkit", Some("global")), "project:devkit");
+        assert_eq!(
+            project_arg("devkit", Some("r.main")),
+            "project:devkit.r.main"
+        );
+    }
+
+    #[test]
+    fn only_projects_under_the_root_name_a_node() {
+        assert_eq!(node_of("devkit", "devkit"), Some(None));
+        assert_eq!(
+            node_of("devkit", "devkit.r.main"),
+            Some(Some("r.main".into()))
+        );
+        assert_eq!(node_of("devkit", "r.main"), None);
+        assert_eq!(node_of("devkit", "devkit-web.r"), None);
+        assert_eq!(node_of("devkit", "devkitx"), None);
+        let home = exported(serde_json::json!({"project": "home"}));
+        assert_eq!(home.into_todo(DEFAULT_ROOT), None);
     }
 
     #[test]

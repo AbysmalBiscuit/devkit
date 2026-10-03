@@ -96,12 +96,15 @@ pub struct Config {
 ///
 /// [todo.taskwarrior]
 /// path = "/opt/task"
+/// project = "agents"
 /// # "#).unwrap();
 /// # assert_eq!(cfg.todo.backend, TodoBackend::Taskwarrior);
 /// # assert_eq!(cfg.todo.taskwarrior.path, "/opt/task");
+/// # assert_eq!(cfg.todo.taskwarrior.project, "agents");
 /// # let empty = Config::parse("").unwrap();
 /// # assert_eq!(empty.todo.backend, TodoBackend::Builtin);
 /// # assert_eq!(empty.todo.taskwarrior.path, "task");
+/// # assert_eq!(empty.todo.taskwarrior.project, "devkit");
 /// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
 /// # assert!(Config::parse("[todo]\nbackends = \"builtin\"\n").is_err());
 /// ```
@@ -110,10 +113,11 @@ pub struct Config {
 pub struct TodoConfig {
     /// Which store keeps the todos. `builtin` is a JSON file in devkit's
     /// state directory. `taskwarrior` keeps them in the local taskwarrior
-    /// through taskwarrior 3's `task` program, on the project names
-    /// alacritree uses. Set it in `~/.config/devkit/config.toml`, not in a
-    /// repository's `devkit.toml`: a committed `taskwarrior` breaks every
-    /// machine without `task`, cloud sessions included.
+    /// through taskwarrior 3's `task` program, under the project
+    /// `[todo.taskwarrior] project` names. Set it in
+    /// `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:
+    /// a committed `taskwarrior` breaks every machine without `task`, cloud
+    /// sessions included.
     pub backend: TodoBackend,
     /// The `taskwarrior` backend's settings.
     pub taskwarrior: TaskwarriorConfig,
@@ -135,12 +139,19 @@ pub struct TaskwarriorConfig {
     /// The program to run. Its own name is looked up on PATH; any other value
     /// runs as written.
     pub path: String,
+    /// The taskwarrior project devkit keeps every todo under. Global todos
+    /// are filed on this project itself and every other node below it, as
+    /// `<project>.<node>`, so devkit never lists, claims or releases a task
+    /// in any other project. alacritree's taskwarrior tab shows these todos
+    /// only when it reads the same root.
+    pub project: String,
 }
 
 impl Default for TaskwarriorConfig {
     fn default() -> Self {
         Self {
             path: "task".to_string(),
+            project: "devkit".to_string(),
         }
     }
 }

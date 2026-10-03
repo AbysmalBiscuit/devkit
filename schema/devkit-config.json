@@ -1296,6 +1296,11 @@
           "default": "task",
           "description": "The program to run. Its own name is looked up on PATH; any other value\nruns as written.",
           "type": "string"
+        },
+        "project": {
+          "default": "devkit",
+          "description": "The taskwarrior project devkit keeps every todo under. Global todos\nare filed on this project itself and every other node below it, as\n`<project>.<node>`, so devkit never lists, claims or releases a task\nin any other project. alacritree's taskwarrior tab shows these todos\nonly when it reads the same root.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -1436,17 +1441,18 @@
     },
     "TodoConfig": {
       "additionalProperties": false,
-      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskwarrior\"\n\n[todo.taskwarrior]\npath = \"/opt/task\"\n```",
+      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskwarrior\"\n\n[todo.taskwarrior]\npath = \"/opt/task\"\nproject = \"agents\"\n```",
       "properties": {
         "backend": {
           "$ref": "#/$defs/TodoBackend",
           "default": "builtin",
-          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskwarrior` keeps them in the local taskwarrior\nthrough taskwarrior 3's `task` program, on the project names\nalacritree uses. Set it in `~/.config/devkit/config.toml`, not in a\nrepository's `devkit.toml`: a committed `taskwarrior` breaks every\nmachine without `task`, cloud sessions included."
+          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskwarrior` keeps them in the local taskwarrior\nthrough taskwarrior 3's `task` program, under the project\n`[todo.taskwarrior] project` names. Set it in\n`~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:\na committed `taskwarrior` breaks every machine without `task`, cloud\nsessions included."
         },
         "taskwarrior": {
           "$ref": "#/$defs/TaskwarriorConfig",
           "default": {
-            "path": "task"
+            "path": "task",
+            "project": "devkit"
           },
           "description": "The `taskwarrior` backend's settings."
         }
@@ -1714,7 +1720,8 @@
       "default": {
         "backend": "builtin",
         "taskwarrior": {
-          "path": "task"
+          "path": "task",
+          "project": "devkit"
         }
       },
       "description": "Where `devkit todo` and the todo hooks keep agent todo lists."

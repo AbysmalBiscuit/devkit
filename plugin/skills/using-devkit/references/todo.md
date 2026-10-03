@@ -39,12 +39,13 @@ Codex offers `update_plan` only when its config sets `[tools.update_plan] enable
 
 ## Backends
 
-The built-in store is the default: one file in devkit's state directory. `[todo] backend = "taskwarrior"` keeps the todos in the local taskwarrior instead, through taskwarrior 3's `task` program, on the same project names alacritree's taskwarrior tab reads. Set it in `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`: a committed value breaks every machine without `task`, cloud sessions included. `[todo.taskwarrior] path` names another `task` program. Agents use `devkit todo` or their native tool on either backend.
+The built-in store is the default: one file in devkit's state directory. `[todo] backend = "taskwarrior"` keeps the todos in the local taskwarrior instead, through taskwarrior 3's `task` program, all under one root project. Set it in `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`: a committed value breaks every machine without `task`, cloud sessions included. `[todo.taskwarrior] path` names another `task` program, and `[todo.taskwarrior] project` another root. Agents use `devkit todo` or their native tool on either backend.
 
 On taskwarrior:
 
 - A todo's id is its task's uuid, shown as the first 8 characters. Any prefix of 8 or more that names one task works wherever an id does.
-- A global todo is filed under the project `global`. A task with no project is never a todo, so your own unfiled tasks stay out of every list.
+- Todos live under the root project, `devkit` unless configured: a global todo on `devkit` itself, any other node on `devkit.<node>`, such as `devkit.repo.main`. A task outside the root is never a todo: no list shows it, `--all` included, and no claim or release touches it, so your own projects and unfiled tasks stay out.
+- alacritree's taskwarrior tab reads its nodes as top-level projects, so it does not show todos under the root.
 - A task started outside devkit, with `task start` or in alacritree, counts as held by a person when it has no `holder`, so no agent takes it over. A task that still carries an agent's `holder` stays that agent's claim, even after someone stops and restarts it with `task`.
 - devkit records who holds a todo in a `holder` attribute. To see it in your own `task` reports, add these lines to your taskrc:
 

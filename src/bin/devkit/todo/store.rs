@@ -22,9 +22,10 @@ impl Store {
     pub(crate) fn from_config(config: &TodoConfig) -> Self {
         match config.backend {
             TodoBackend::Builtin => Self::Builtin(BuiltinStore::open()),
-            TodoBackend::Taskwarrior => {
-                Self::Taskwarrior(TaskwarriorStore::new(&config.taskwarrior.path))
-            }
+            TodoBackend::Taskwarrior => Self::Taskwarrior(
+                TaskwarriorStore::new(&config.taskwarrior.path)
+                    .with_root(&config.taskwarrior.project),
+            ),
         }
     }
 

@@ -52,7 +52,7 @@ fn attribute_syntax_in_a_description_is_verbatim() {
             })
             .unwrap();
         assert_eq!(store.get(&id).unwrap().unwrap().description, replaced);
-        assert_eq!(exported(dir.path(), &id)["project"], "r.main");
+        assert_eq!(exported(dir.path(), &id)["project"], "devkit.r.main");
     }
 }
 
@@ -61,7 +61,7 @@ fn a_hand_started_task_is_held_by_human() {
     let Some((dir, store)) = private() else {
         return;
     };
-    let uuid = add_by_hand(dir.path(), &["project:r.main", "--", "t"]);
+    let uuid = add_by_hand(dir.path(), &["project:devkit.r.main", "--", "t"]);
     task(dir.path(), &[&uuid, "start"]);
     assert_eq!(
         store.get(&uuid).unwrap().unwrap().status,
@@ -114,10 +114,7 @@ fn unfiled_and_unrelated_tasks_stay_out() {
     let err = start(&store, &personal, "S").unwrap_err();
     assert!(err.to_string().contains("no todo"), "{err:#}");
     let err = start(&store, &chores, "S").unwrap_err();
-    assert!(
-        err.chain().any(|e| e.downcast_ref::<Claimed>().is_some()),
-        "{err:#}"
-    );
+    assert!(err.to_string().contains("no todo"), "{err:#}");
 
     store
         .apply(&Edit::ReleaseAll {
@@ -147,8 +144,8 @@ fn a_short_id_resolves_and_an_ambiguous_one_fails() {
     );
 
     let twins = r#"[
-        {"uuid":"abcdef12-0000-4000-8000-000000000001","description":"a","status":"pending","project":"r","entry":"20261003T120000Z"},
-        {"uuid":"abcdef12-0000-4000-8000-000000000002","description":"b","status":"pending","project":"r","entry":"20261003T120000Z"}
+        {"uuid":"abcdef12-0000-4000-8000-000000000001","description":"a","status":"pending","project":"devkit.r","entry":"20261003T120000Z"},
+        {"uuid":"abcdef12-0000-4000-8000-000000000002","description":"b","status":"pending","project":"devkit.r","entry":"20261003T120000Z"}
     ]"#;
     let file = dir.path().join("twins.json");
     std::fs::write(&file, twins).unwrap();
@@ -184,13 +181,75 @@ fn a_missing_program_names_the_config_key() {
 }
 
 #[test]
-fn global_todos_use_the_global_project() {
+fn todos_live_under_the_root_project() {
     let Some((dir, store)) = private() else {
         return;
     };
-    let id = store.add(new(None, "wide")).unwrap();
-    assert_eq!(exported(dir.path(), &id)["project"], "global");
-    assert_eq!(store.get(&id).unwrap().unwrap().project, None);
+    let global = store.add(new(None, "wide")).unwrap();
+    assert_eq!(exported(dir.path(), &global)["project"], "devkit");
+    assert_eq!(store.get(&global).unwrap().unwrap().project, None);
+    let filed = store.add(new(Some("r.main"), "narrow")).unwrap();
+    assert_eq!(exported(dir.path(), &filed)["project"], "devkit.r.main");
+    assert_eq!(
+        store.get(&filed).unwrap().unwrap().project.as_deref(),
+        Some("r.main")
+    );
+}
+
+/// Tasks a person keeps outside the root, even on a project named like a
+/// node, are never todos.
+#[test]
+fn tasks_outside_the_root_are_not_todos() {
+    let Some((dir, store)) = private() else {
+        return;
+    };
+    let chores = add_by_hand(dir.path(), &["project:home", "--", "chores"]);
+    let lookalike = add_by_hand(dir.path(), &["project:proj.main", "--", "lookalike"]);
+    let todo = store.add(new(Some("proj.main"), "todo")).unwrap();
+    for filter in [
+        Filter::all(),
+        Filter::exact(["proj.main".to_string()]),
+        Filter {
+            nodes: vec![NodeMatch::Subtree("proj".into())],
+        },
+    ] {
+        let listed: Vec<String> = store
+            .list(&filter)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(listed, std::slice::from_ref(&todo), "{filter:?}");
+    }
+    for outside in [&chores, &lookalike] {
+        assert_eq!(store.get(outside).unwrap(), None);
+        assert_eq!(store.get(&outside[..8]).unwrap(), None);
+        let err = start(&store, outside, "S").unwrap_err();
+        assert!(err.to_string().contains("no todo"), "{err:#}");
+        assert_eq!(
+            exported(dir.path(), outside)["start"],
+            serde_json::Value::Null
+        );
+    }
+}
+
+#[test]
+fn a_configured_root_scopes_the_todos() {
+    let Some((dir, store)) = private() else {
+        return;
+    };
+    let store = store.with_root("agents");
+    let id = store.add(new(Some("r"), "one")).unwrap();
+    assert_eq!(exported(dir.path(), &id)["project"], "agents.r");
+    let default_root = add_by_hand(dir.path(), &["project:devkit.r", "--", "other root"]);
+    let listed: Vec<String> = store
+        .list(&Filter::all())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(listed, [id]);
+    assert_eq!(store.get(&default_root).unwrap(), None);
 }
 
 #[test]

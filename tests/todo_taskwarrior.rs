@@ -34,6 +34,11 @@ impl Tw {
     /// `None` when `task` is not installed. Any other failure of a first
     /// export panics, so a broken backend never passes as a skip.
     fn in_repo(name: &str) -> Option<Self> {
+        Self::configured(name, "[todo]\nbackend = \"taskwarrior\"\n")
+    }
+
+    /// As [`Tw::in_repo`], with `home_config` as the home config.
+    fn configured(name: &str, home_config: &str) -> Option<Self> {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("taskrc"), "").unwrap();
         let store = TaskwarriorStore::new("task")
@@ -45,7 +50,7 @@ impl Tw {
                 result.expect("a private taskwarrior exports");
             }
         }
-        let p = Proj::named(name).home_config_of("[todo]\nbackend = \"taskwarrior\"\n");
+        let p = Proj::named(name).home_config_of(home_config);
         let [(_, taskrc), (_, taskdata)]: [(String, String); 2] =
             env(dir.path()).try_into().unwrap();
         Some(Self {
@@ -66,6 +71,25 @@ impl Tw {
         let out = self.p.devkit(args, &self.env(extra));
         assert!(out.status.success(), "{args:?}: {}", stderr(&out));
         out
+    }
+
+    /// Adds a task with `task` directly, as a person would, and returns its
+    /// uuid.
+    fn add_by_hand(&self, args: &[&str]) -> String {
+        let out = Command::new("task")
+            .envs(env(self.dir.path()))
+            .args(["rc.verbose=new-uuid", "add"])
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", stderr(&out));
+        let out = stdout(&out);
+        out.trim()
+            .strip_prefix("Created task ")
+            .and_then(|rest| rest.strip_suffix('.'))
+            .unwrap_or_else(|| panic!("no uuid in {out:?}"))
+            .to_string()
     }
 
     /// Every task in the private taskwarrior, as `task export` prints it.
@@ -118,7 +142,7 @@ fn the_cli_keeps_todos_in_taskwarrior() {
     assert_eq!(task["description"], "one");
     assert_eq!(task["status"], "completed");
     assert_eq!(task["holder"], "s1");
-    assert_eq!(task["project"], "proj.main.claude-s1");
+    assert_eq!(task["project"], "devkit.proj.main.claude-s1");
     assert!(
         !tw.p.state().join("todo/todos.json").exists(),
         "nothing lands in the built-in store"
@@ -265,4 +289,49 @@ fn the_home_backend_holds_under_an_explicit_config() {
     let tasks = tw.export();
     assert_eq!(tasks.len(), 1, "{tasks:?}");
     assert!(tasks[0]["uuid"].as_str().unwrap().starts_with(&id));
+}
+
+/// A person's own tasks outside the root project, even one named like a node,
+/// never list and cannot be claimed.
+#[test]
+fn tasks_outside_the_root_project_stay_out_of_the_cli() {
+    let Some(tw) = Tw::new() else {
+        return;
+    };
+    let chores = tw.add_by_hand(&["project:home", "--", "chores"]);
+    let lookalike = tw.add_by_hand(&["project:proj.main", "--", "lookalike"]);
+    let mine = short(&tw.devkit(&["todo", "add", "mine", "--node", "proj.main"], &[S1]));
+    let all = stdout(&tw.devkit(&["todo", "list", "--all"], &[S1]));
+    assert_eq!(all, format!("## proj.main\n- [ ] mine ({mine})\n"));
+    for outside in [&chores, &lookalike] {
+        let start =
+            tw.p.devkit(&["todo", "start", &outside[..8]], &tw.env(&[S1]));
+        assert_eq!(start.status.code(), Some(1));
+        assert!(stderr(&start).contains("no todo"), "{}", stderr(&start));
+    }
+    let untouched = tw.export();
+    assert!(
+        untouched
+            .iter()
+            .filter(|t| t["description"] != "mine")
+            .all(|t| t["start"].is_null()),
+        "{untouched:?}"
+    );
+}
+
+#[test]
+fn a_root_project_from_config_scopes_the_cli() {
+    let Some(tw) = Tw::configured(
+        "proj",
+        "[todo]\nbackend = \"taskwarrior\"\n[todo.taskwarrior]\nproject = \"agents\"\n",
+    ) else {
+        return;
+    };
+    tw.add_by_hand(&["project:devkit.proj.main", "--", "other root"]);
+    let id = short(&tw.devkit(&["todo", "add", "one"], &[S1]));
+    let tasks = tw.export();
+    let one = tasks.iter().find(|t| t["description"] == "one").unwrap();
+    assert_eq!(one["project"], "agents.proj.main.claude-s1");
+    let all = stdout(&tw.devkit(&["todo", "list", "--all"], &[S1]));
+    assert_eq!(all, format!("## proj.main.claude-s1\n- [ ] one ({id})\n"));
 }

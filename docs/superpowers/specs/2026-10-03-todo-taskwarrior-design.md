@@ -11,7 +11,7 @@ devkit keeps agent todo lists in its own JSON store. A person who already runs t
 `[todo] backend = "taskwarrior"` keeps every devkit todo in the local taskwarrior, through the `task` program, the way alacritree's backend does.
 
 - The CLI, the context injection, claim attribution, release and native capture work unchanged on either backend.
-- devkit's todos show in `task` reports and in alacritree's taskwarrior tab, on the same project names.
+- devkit's todos show in `task` reports, all under one root project (`devkit` by default), so the person's own projects never mix with them. alacritree's taskwarrior tab shows them only once alacritree reads the same root: its nodes are top-level projects today, so the tab does not see devkit's todos until it learns that root.
 - Each backend lives in its own crate. The binary picks one through an enum, not a trait object.
 - A machine with no config, such as a cloud session, keeps the built-in store.
 
@@ -74,6 +74,7 @@ backend = "taskwarrior"   # "builtin" (default) | "taskwarrior"
 
 [todo.taskwarrior]
 path = "task"             # its own name is looked up on PATH; any other value runs as written
+project = "devkit"        # the root project every todo is filed under
 ```
 
 `TodoConfig` and `TaskwarriorConfig` live in `devkit-config`, with doc comments that become the schema, and a doctest example on `TodoConfig`. The schema description of `backend` says it belongs in `~/.config/devkit/config.toml`: a project that commits `backend = "taskwarrior"` breaks every machine without `task`, cloud sessions included.
@@ -88,8 +89,8 @@ The CLI resolves config from the working directory. A hook resolves it from the 
 | `description` | `description` |
 | `parent` | `subof` (UDA, type `uuid`) |
 | `order` | `order` (UDA, type `numeric`), rounded to an integer on read |
-| `project`, `None` | `project:global` |
-| `project`, `Some(node)` | `project:<node>` |
+| `project`, `None` | `project:<root>` |
+| `project`, `Some(node)` | `project:<root>.<node>` |
 | `entry`, `modified` | `entry`, `modified`, converted from taskwarrior's `20261003T120000Z` to RFC 3339 |
 | `Pending` | `status:pending`, no `start` |
 | `InProgress { by }` | `status:pending`, `start` set, `holder:<by>` |
@@ -99,7 +100,8 @@ The CLI resolves config from the working directory. A hook resolves it from the 
 - `subof` and `order` are alacritree's attributes, so its tab nests and orders devkit's todos.
 - `holder` (UDA, type `string`) is devkit's. alacritree ignores it.
 - A pending task with `start` set and no `holder` was started outside devkit, by `task start` or alacritree. It reads as `InProgress { by: human }`, so no agent takes it over.
-- A global todo is written to `project:global`. A task with no project is never a devkit todo, so the person's own unfiled tasks stay out of every list.
+- `<root>` is `[todo.taskwarrior] project`, `devkit` by default. A global todo is written to the root itself and every other node below it; reading a task strips the root back off, so `Todo.project` is the bare node and the rest of devkit never sees the root.
+- A task outside the root (neither the root nor below `<root>.`) is never a devkit todo: no list includes it, `--all` included, `get` does not resolve it, and no claim or release touches it. The person's unfiled tasks and their own projects, even one named like a node, stay out.
 - Recurring templates and any status not in the table are not todos and never list.
 
 ### Running `task`
@@ -124,8 +126,8 @@ Ported from `alacritree_taskwarrior`:
 | `Describe` | `<uuid> modify -- <description>` |
 | `Move` | `<uuid> modify subof:<parent or empty> order:<n>` |
 | `Reorder` | `<uuid> modify order:<n>` |
-| `Relocate` | `<uuid> modify project:<node>` |
-| `ReleaseAll { holder }` | export `+ACTIVE`, keep those whose holder `holder` covers, then `<uuids> modify start: holder:` |
+| `Relocate` | `<uuid> modify project:<root>.<node>` |
+| `ReleaseAll { holder }` | export `+ACTIVE` under the root, keep those whose holder `holder` covers, then `<uuids> modify start: holder:` |
 | `Purge` | `<uuid> delete` unless already deleted, then `<uuid> purge` |
 
 `SetStatus` reads the task, runs `transition`, and writes the status it returns, all under a devkit file lock at `state_dir()/todo/taskwarrior.lock`. The same lock covers `add` and `Move` without an order, which read siblings to place the todo after the last one, and `ReleaseAll`. Taskwarrior has no compare-and-swap, so the lock serializes devkit's own callers only: a person running `task start` between devkit's read and write can lose to devkit's write. The crate documents that race.
@@ -138,7 +140,7 @@ The CLI accepts any id it is given. `TaskwarriorStore::get` resolves a prefix of
 
 ### Lists
 
-`list` exports `(<node filter>) (status:pending or status:completed or status:deleted)`. The node filter is alacritree's: `project.is:<node>` for an exact node, `(project.is:<node> or project:<node>.)` for a subtree, since a bare `project:r` would also match a repository named `r-web`. A filter of every node (`--all`) is `project.any:`, which still leaves out tasks with no project.
+`list` exports `(<node filter>) (status:pending or status:completed or status:deleted)`. Each node is first filed under the root, then matched the way alacritree matches its nodes: `project.is:<project>` for an exact node, `project.is:<project> or project:<project>.` for a subtree, since a bare `project:r` would also match a repository named `r-web`. A filter of every node (`--all`) is the root's subtree, which leaves out every task outside the root. Every project value is double-quoted, so a node holding a space or a quote stays one value.
 
 ### Failure
 

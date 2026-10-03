@@ -1,5 +1,6 @@
 //! Agent todo lists kept in the local taskwarrior, through the `task`
-//! program, on the project names alacritree's taskwarrior tab reads.
+//! program, under one root project: global todos on the root itself, every
+//! other node at `<root>.<node>`. A task outside the root is never a todo.
 //!
 //! Every write addresses tasks by full uuid. An id shorter than a uuid
 //! resolves when at least 8 characters long and unique.
