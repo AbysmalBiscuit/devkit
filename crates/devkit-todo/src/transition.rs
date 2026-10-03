@@ -66,7 +66,11 @@ impl std::error::Error for Claimed {}
 /// takes over a claim its session holds, so delegating does not lock it out.
 /// Any other change to a todo in progress needs an actor that covers the
 /// claimant.
-pub fn transition(current: &Status, to: StatusKind, actor: &Holder) -> Result<Option<Status>, Claimed> {
+pub fn transition(
+    current: &Status,
+    to: StatusKind,
+    actor: &Holder,
+) -> Result<Option<Status>, Claimed> {
     let claimant = match current {
         Status::InProgress { by } => {
             if to == StatusKind::InProgress && actor.covers(by) {
@@ -114,7 +118,10 @@ mod tests {
 
     #[test]
     fn the_session_repeating_its_sub_agents_claim_keeps_the_sub_agent() {
-        assert_eq!(transition(&ip("S/a1"), StatusKind::InProgress, &h("S")), Ok(None));
+        assert_eq!(
+            transition(&ip("S/a1"), StatusKind::InProgress, &h("S")),
+            Ok(None)
+        );
     }
 
     #[test]
@@ -128,16 +135,27 @@ mod tests {
     #[test]
     fn a_sibling_conflicts() {
         let claimed = Err(Claimed { by: h("S/a1") });
-        assert_eq!(transition(&ip("S/a1"), StatusKind::InProgress, &h("S/a2")), claimed);
-        assert_eq!(transition(&ip("S/a1"), StatusKind::Completed, &h("S/a2")), claimed);
-        assert_eq!(transition(&ip("S/a1"), StatusKind::Pending, &h("S/a2")), claimed);
+        assert_eq!(
+            transition(&ip("S/a1"), StatusKind::InProgress, &h("S/a2")),
+            claimed
+        );
+        assert_eq!(
+            transition(&ip("S/a1"), StatusKind::Completed, &h("S/a2")),
+            claimed
+        );
+        assert_eq!(
+            transition(&ip("S/a1"), StatusKind::Pending, &h("S/a2")),
+            claimed
+        );
     }
 
     #[test]
     fn finishing_under_a_covering_actor_credits_the_claimant() {
         assert_eq!(
             transition(&ip("S/a1"), StatusKind::Completed, &h("S")),
-            Ok(Some(Status::Completed { by: Some(h("S/a1")) }))
+            Ok(Some(Status::Completed {
+                by: Some(h("S/a1"))
+            }))
         );
     }
 
@@ -161,12 +179,18 @@ mod tests {
     fn same_kind_is_a_no_op_outside_in_progress() {
         let done = Status::Completed { by: Some(h("S")) };
         assert_eq!(transition(&done, StatusKind::Completed, &h("T")), Ok(None));
-        assert_eq!(transition(&Status::Pending, StatusKind::Pending, &h("T")), Ok(None));
+        assert_eq!(
+            transition(&Status::Pending, StatusKind::Pending, &h("T")),
+            Ok(None)
+        );
     }
 
     #[test]
     fn undone_drops_the_holder() {
         let done = Status::Completed { by: Some(h("S")) };
-        assert_eq!(transition(&done, StatusKind::Pending, &h("S")), Ok(Some(Status::Pending)));
+        assert_eq!(
+            transition(&done, StatusKind::Pending, &h("S")),
+            Ok(Some(Status::Pending))
+        );
     }
 }

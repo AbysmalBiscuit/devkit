@@ -204,6 +204,18 @@ impl Checkout {
             .flatten()
     }
 
+    /// Every worktree of the repository, main first. Empty outside one and
+    /// when the backend could not be run.
+    pub fn worktrees(&self) -> &[Worktree] {
+        &self.resolved().worktrees
+    }
+
+    /// The worktree containing the directory this was resolved from.
+    pub fn here(&self) -> Option<&Worktree> {
+        let r = self.resolved();
+        r.here.map(|i| &r.worktrees[i])
+    }
+
     /// The working tree containing `dir`, which can sit in any worktree of
     /// this repository or in none of them.
     ///
@@ -447,6 +459,33 @@ mod tests {
             std::fs::canonicalize(there.main_checkout().unwrap()).unwrap(),
             std::fs::canonicalize(repo.path()).unwrap()
         );
+    }
+
+    #[test]
+    fn checkout_lists_the_main_worktree_first_and_names_the_one_here() {
+        let repo = repo_with_commit();
+        let holder = tempfile::tempdir().unwrap();
+        let linked = holder.path().join("wt");
+        run(
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "side",
+            ],
+            repo.path(),
+        )
+        .unwrap();
+        let there = Checkout::at(&linked);
+        assert_eq!(
+            std::fs::canonicalize(&there.worktrees()[0].path).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+        assert_eq!(there.here().unwrap().branch, "side");
+        let outside = tempfile::tempdir().unwrap();
+        assert!(Checkout::at(outside.path()).here().is_none());
     }
 
     /// A directory below the checkout resolves to the checkout, not to itself.
