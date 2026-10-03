@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 
 const HUMAN: &str = "human";
 
+/// The variable the pre-tool-use hook sets on a sub-agent's `devkit todo`
+/// invocations, naming the sub-agent's holder.
+pub const HOLDER_VAR: &str = "DEVKIT_TODO_HOLDER";
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Holder(String);

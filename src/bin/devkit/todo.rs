@@ -1,22 +1,18 @@
 //! `devkit todo`: the todo lists agents and people share, kept in devkit's
 //! own store.
 
-use std::{
-    collections::BTreeSet,
-    hash::{DefaultHasher, Hash, Hasher},
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeSet, path::Path};
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use devkit_common::{
     caller::{self, Caller},
-    paths,
     vcs::Checkout,
 };
 use devkit_todo::{
     BuiltinStore, Edit, Filter, Holder, NewTodo, NodeMatch, ORDER_GAP, Status, StatusKind, Todo,
-    TodoStore,
+    TodoStore, builtin,
+    holder::HOLDER_VAR,
     native::NativeMap,
     node::{self, GLOBAL, Place, SessionRef},
     render, transition,
@@ -142,7 +138,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let session = node::session_from_env(get);
     let cwd = std::env::current_dir()?;
     let own_node = || Ok::<_, anyhow::Error>(node::node(&place_at(&cwd)?, session.as_ref()));
-    let store = store();
+    let store = BuiltinStore::open();
     match cli.command {
         TodoCommand::Scope => println!("{}", own_node()?),
         TodoCommand::List(args) => list(&store, &args, &cwd, session.as_ref(), &actor)?,
@@ -195,18 +191,10 @@ pub fn run(cli: TodoCli) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn store() -> BuiltinStore {
-    BuiltinStore::at(BuiltinStore::default_dir())
-}
-
 /// Where `dir` sits: global outside any repository.
 pub(crate) fn place_at(dir: &Path) -> Result<Place> {
     node::place_of(&Checkout::at(dir))
 }
-
-/// The variable the pre-tool-use hook sets on a sub-agent's `devkit todo`
-/// invocations, naming the sub-agent's holder.
-pub(crate) const HOLDER_VAR: &str = "DEVKIT_TODO_HOLDER";
 
 /// The holder a CLI call acts as: the sub-agent [`HOLDER_VAR`] names when its
 /// session covers it, else the harness session for an agent, `agent` for an
@@ -356,10 +344,12 @@ fn context(args: &ContextArgs) -> Option<String> {
     let viewer = to_todo_holder(&payload.holder().ok()?);
     let place = place_at(&hook::record::payload_cwd(&payload)).ok()?;
     let visible = node::visible_nodes(&place, Some(&session));
-    let todos = store().list(&Filter::exact(visible.clone())).ok()?;
+    let todos = BuiltinStore::open()
+        .list(&Filter::exact(visible.clone()))
+        .ok()?;
     let lists = render::render_lists(&visible, &todos, &viewer);
     let digest = render::digest(&lists);
-    let digest_path = digest_path(&viewer);
+    let digest_path = builtin::digest_path(&viewer);
     if args.if_changed && std::fs::read_to_string(&digest_path).is_ok_and(|seen| seen == digest) {
         return None;
     }
@@ -383,17 +373,6 @@ fn context(args: &ContextArgs) -> Option<String> {
         Some(envelope) => format!("{envelope}\n"),
         None => text,
     })
-}
-
-/// Keyed on a hash of the full holder, so a sub-agent's injection never
-/// suppresses its session's.
-pub(crate) fn digest_path(holder: &Holder) -> PathBuf {
-    let mut hasher = DefaultHasher::new();
-    holder.hash(&mut hasher);
-    paths::state_dir()
-        .join("todo")
-        .join("digests")
-        .join(format!("{:016x}", hasher.finish()))
 }
 
 #[cfg(test)]

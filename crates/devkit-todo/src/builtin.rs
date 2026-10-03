@@ -2,14 +2,21 @@
 //! guarded by a file lock. Lists are not per checkout, so removing a worktree
 //! never deletes the record of its work.
 
-use std::{collections::BTreeMap, path::PathBuf, time::SystemTime};
+use std::{
+    collections::BTreeMap,
+    hash::{DefaultHasher, Hash, Hasher},
+    path::PathBuf,
+    time::SystemTime,
+};
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, SecondsFormat, Utc};
 use devkit_common::{paths, store};
 use serde::{Deserialize, Serialize};
 
-use crate::{Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, one_line, transition};
+use crate::{
+    Edit, Filter, Holder, NewTodo, ORDER_GAP, Status, Todo, TodoStore, one_line, transition,
+};
 
 const VERSION: u32 = 1;
 
@@ -67,6 +74,17 @@ fn now() -> String {
     DateTime::<Utc>::from(SystemTime::now()).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+/// Where the lists last injected for `holder` are fingerprinted, keyed on a
+/// hash of the full holder so a sub-agent's injection never suppresses its
+/// session's.
+pub fn digest_path(holder: &Holder) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    holder.hash(&mut hasher);
+    BuiltinStore::default_dir()
+        .join("digests")
+        .join(format!("{:016x}", hasher.finish()))
+}
+
 pub struct BuiltinStore {
     dir: PathBuf,
 }
@@ -79,6 +97,11 @@ impl BuiltinStore {
 
     pub fn default_dir() -> PathBuf {
         paths::state_dir().join("todo")
+    }
+
+    /// The store in [`BuiltinStore::default_dir`].
+    pub fn open() -> Self {
+        Self::at(Self::default_dir())
     }
 
     fn with_doc<T>(&self, f: impl FnOnce(&mut Doc) -> Result<T>) -> Result<T> {

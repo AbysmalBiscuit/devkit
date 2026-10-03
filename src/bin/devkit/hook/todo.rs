@@ -6,7 +6,9 @@ use devkit_command::{Analysis, Dialect, Invocation};
 use devkit_common::vcs::Checkout;
 use devkit_todo::{
     BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, TodoStore,
+    builtin,
     diff::{Change, Step, diff, pair},
+    holder::HOLDER_VAR,
     native::NativeMap,
     node::{self, Harness, SessionRef},
     transition,
@@ -36,8 +38,8 @@ pub(crate) fn to_todo_holder(holder: &payload::Holder) -> Holder {
 pub(crate) fn release(holder: Option<payload::Holder>) {
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
-        let _ = std::fs::remove_file(crate::todo::digest_path(&holder));
-        let _ = crate::todo::store().apply(&Edit::ReleaseAll { holder });
+        let _ = std::fs::remove_file(builtin::digest_path(&holder));
+        let _ = BuiltinStore::open().apply(&Edit::ReleaseAll { holder });
     }
 }
 
@@ -83,7 +85,7 @@ pub(crate) fn check_claims(payload: &Payload, analysis: &Analysis) -> Option<Str
     if edits.is_empty() {
         return None;
     }
-    let todos = crate::todo::store().list(&Filter::all()).ok()?;
+    let todos = BuiltinStore::open().list(&Filter::all()).ok()?;
     edits.into_iter().find_map(|(to, id)| {
         let todo = todos.iter().find(|t| t.id == id)?;
         let Claimed { by } = transition(&todo.status, to, &actor).err()?;
@@ -127,11 +129,7 @@ fn with_holder(command: &str, analysis: &Analysis, holder: &str) -> Option<Strin
     }
     starts.sort_unstable();
     starts.dedup();
-    let prefix = format!(
-        "{}='{}' ",
-        crate::todo::HOLDER_VAR,
-        holder.replace('\'', "'\\''")
-    );
+    let prefix = format!("{}='{}' ", HOLDER_VAR, holder.replace('\'', "'\\''"));
     let mut out = command.to_string();
     for at in starts.into_iter().rev() {
         out.insert_str(at, &prefix);
@@ -189,7 +187,7 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
         session: to_todo_holder(&session),
         actor: to_todo_holder(&actor),
         node,
-        store: crate::todo::store(),
+        store: BuiltinStore::open(),
         map: NativeMap::at(BuiltinStore::default_dir()),
     };
     let raw = payload.raw();
