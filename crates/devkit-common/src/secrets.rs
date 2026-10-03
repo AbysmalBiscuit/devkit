@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_keys_round_trip_through_the_file() {
+    fn the_todo_sync_keys_round_trip_through_the_file() {
         let (_guard, p) = tmp();
         for key in [
             "devkit_todo_sync_url",
