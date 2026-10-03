@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use devkit_common::store::{with_file_lock, with_file_lock_for};
+use devkit_common::store::{LockBusy, with_file_lock, with_file_lock_for};
 use devkit_todo::{
     Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, by_prefix, is_uuid_prefix, one_line,
     transition,
@@ -144,7 +144,12 @@ impl TaskchampionStore {
         let lock = self.data_dir.join("devkit.lock");
         let run = || f(&mut self.open()?);
         match self.lock_wait {
-            Some(wait) => with_file_lock_for(&lock, wait, run),
+            Some(wait) => {
+                with_file_lock_for(&lock, wait, run).map_err(|e| match e.is::<LockBusy>() {
+                    true => e.context("todo store busy"),
+                    false => e,
+                })
+            }
             None => with_file_lock(&lock, run),
         }
     }

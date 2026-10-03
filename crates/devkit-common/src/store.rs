@@ -209,7 +209,7 @@ impl std::fmt::Display for LockBusy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "todo store busy: {} still locked after {} ms",
+            "{} still locked after {} ms",
             self.path.display(),
             self.wait.as_millis()
         )

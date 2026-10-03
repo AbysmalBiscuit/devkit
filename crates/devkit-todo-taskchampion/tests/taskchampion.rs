@@ -123,6 +123,10 @@ fn a_held_lock_fails_after_the_wait() {
     let err = store.add(new(Some("r.main"), "a")).unwrap_err();
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(format!("{err:#}").contains("todo store busy"), "{err:#}");
+    assert!(
+        err.downcast_ref::<devkit_common::store::LockBusy>()
+            .is_some()
+    );
     release.0.send(()).unwrap();
     holder.join().unwrap();
 }
