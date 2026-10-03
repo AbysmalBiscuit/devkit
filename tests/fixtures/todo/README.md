@@ -25,6 +25,6 @@ Codex fixtures come from codex-cli 0.160.0 (`codex --version`), run as `codex ex
 - **`TodoWrite`.** Not offered by Claude Code 2.1.288, with or without `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, nor with `--tools TodoWrite`; the model reported having no such tool each time. `claude-todowrite.jsonl` is written by hand in the input shape earlier Claude Code versions sent, `{"todos": [{"content", "status", "activeForm"}]}`, so capture still handles a harness version that offers it. That shape is unverified against a live harness.
 - **Codex `update_plan`.** Off unless `[tools.update_plan] enabled = true`. In code mode the model calls it from inside its `exec` tool, and `PostToolUse` still fires once per `update_plan` call with `tool_name: "update_plan"`.
 
-## Where the spec's capture table changed
+## Capture rule
 
-The spec records a `TaskCreate` mapping under the creating holder and looks a `TaskUpdate` up under its own holder, then its session's. Because Claude Code's native task list is shared across a session and its sub-agents, a parent updating a task its sub-agent created would miss under that rule. Capture records every `TaskCreate` mapping under the session's holder instead, and the lookup keeps its holder-then-session order. Status changes are still attributed to the payload's own holder.
+Capture records a `TaskCreate` mapping under the session's holder, whichever agent created the task, and looks a `TaskUpdate` up under its own holder first, then its session's. Claude Code shares one native task list between a session and its sub-agents, so a parent can update a task its sub-agent created, and the session's mapping is the one both of them find. Status changes are attributed to the payload's own holder.
