@@ -81,11 +81,14 @@ pub enum TodoCommand {
         #[arg(long)]
         order: Option<i64>,
     },
-    /// Remove a todo for good, such as one whose text holds a secret. Needs a
-    /// person at a terminal.
+    /// Remove a todo for good. Needs a person at a terminal.
+    ///
+    /// For text that must disappear, such as a pasted secret. Agents cancel
+    /// instead, which keeps the record.
     Purge { id: String },
-    /// Print the todo block a hook injects, reading the hook payload on
-    /// stdin. Prints nothing on any failure.
+    /// Print the todo block a hook injects.
+    ///
+    /// Reads the hook payload on stdin, and prints nothing on any failure.
     Context(ContextArgs),
 }
 
