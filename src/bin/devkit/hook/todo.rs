@@ -238,11 +238,16 @@ fn list_replace(c: &Capture, list: &Value, text_key: &str) -> Result<()> {
         .collect();
     let changes = diff(&previous, &next);
     let mut failed = None;
-    let mut apply = |edit: Edit| {
-        if let Err(e) = c.store.apply(&edit) {
+    let mut apply = |edit: Edit| match c.store.apply(&edit) {
+        Ok(()) => true,
+        Err(e) => {
             failed.get_or_insert(e);
+            false
         }
     };
+    // A step whose cancel was refused stays in the snapshot, so the next call
+    // retries it instead of forgetting the todo while it is still open.
+    let mut uncancelled = Vec::new();
     for change in changes {
         match change {
             Change::Add { index } => {
@@ -262,23 +267,35 @@ fn list_replace(c: &Capture, list: &Value, text_key: &str) -> Result<()> {
                 }
                 ids[index] = Some(id);
             }
-            Change::Status { todo, to } => apply(Edit::SetStatus {
-                id: todo,
-                to,
-                actor: c.actor.clone(),
-            }),
-            Change::Cancel { todo } => apply(Edit::SetStatus {
-                id: todo,
-                to: StatusKind::Cancelled,
-                actor: c.actor.clone(),
-            }),
-            Change::Reorder { todo, order } => apply(Edit::Reorder { id: todo, order }),
+            Change::Status { todo, to } => {
+                apply(Edit::SetStatus {
+                    id: todo,
+                    to,
+                    actor: c.actor.clone(),
+                });
+            }
+            Change::Cancel { todo } => {
+                let cancelled = apply(Edit::SetStatus {
+                    id: todo.clone(),
+                    to: StatusKind::Cancelled,
+                    actor: c.actor.clone(),
+                });
+                if !cancelled
+                    && let Some((text, ..)) = previous.iter().find(|(_, id, _)| *id == todo)
+                {
+                    uncancelled.push((text.clone(), todo));
+                }
+            }
+            Change::Reorder { todo, order } => {
+                apply(Edit::Reorder { id: todo, order });
+            }
         }
     }
     let snapshot = next
         .into_iter()
         .zip(ids)
         .filter_map(|(step, id)| Some((step.text, id?)))
+        .chain(uncancelled)
         .collect();
     c.map.set_snapshot(c.harness, &c.actor, snapshot)?;
     failed.map_or(Ok(()), Err)

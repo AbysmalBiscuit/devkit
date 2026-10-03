@@ -340,3 +340,25 @@ fn plan_todowrite_mirrors_into_the_store() {
     assert_eq!(by_text(&p, "two").status.kind(), StatusKind::Cancelled);
     assert_eq!(by_text(&p, "three").status, Status::Pending);
 }
+
+#[test]
+fn plan_a_cancel_refused_by_a_claim_is_retried_on_the_next_list() {
+    let p = Proj::new();
+    let mut lists = fixture(&p, "claude-todowrite.jsonl");
+    post_tool_use(&p, "claude-code", &lists[..1]);
+    let two = by_text(&p, "two").id;
+    claim(&p, &two, "human");
+    let mut empty = lists.remove(1);
+    empty["tool_input"]["todos"] = json!([]);
+    post_tool_use(&p, "claude-code", std::slice::from_ref(&empty));
+    assert_eq!(p.todo(&two).status, in_progress("human"));
+    p.store()
+        .apply(&Edit::SetStatus {
+            id: two.clone(),
+            to: StatusKind::Pending,
+            actor: Holder::human(),
+        })
+        .unwrap();
+    post_tool_use(&p, "claude-code", &[empty]);
+    assert_eq!(p.todo(&two).status.kind(), StatusKind::Cancelled);
+}
