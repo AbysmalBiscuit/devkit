@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use devkit_todo::{Filter, NewTodo, Todo, TodoStore};
+use devkit_todo::{Edit, Filter, Holder, NewTodo, Status, StatusKind, Todo, TodoStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
 use serde_json::{Value, json};
 use syncserver::{Refusing, Silent, SyncServer};
@@ -365,4 +365,185 @@ fn a_hook_gives_up_on_a_held_replica_within_its_budget() {
         "{took:?}"
     );
     assert!(replica(&p).is_empty());
+}
+
+/// A project whose home config syncs the taskchampion replica to
+/// `<sync>/server`, and a second replica on the same directory.
+struct Shared {
+    p: Proj,
+    sync: tempfile::TempDir,
+}
+
+impl Shared {
+    fn new() -> Self {
+        let sync = tempfile::tempdir().unwrap();
+        let config = format!(
+            "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\nserver_dir = \"{}\"\n",
+            sync.path().join("server").display()
+        );
+        Self {
+            p: Proj::with_home_config(&config),
+            sync,
+        }
+    }
+
+    fn other(&self) -> TaskchampionStore {
+        TaskchampionStore::at(self.sync.path().join("other"))
+            .with_target(SyncTarget::Dir(self.sync.path().join("server")))
+    }
+}
+
+fn add_on(store: &TaskchampionStore, node: &str, text: &str) -> String {
+    store
+        .add(NewTodo {
+            project: Some(node.into()),
+            description: text.into(),
+            parent: None,
+            order: None,
+        })
+        .unwrap()
+}
+
+fn context(p: &Proj, event: &str, env: &[(&str, &str)]) -> std::process::Output {
+    let payload = json!({
+        "hook_event_name": event,
+        "session_id": "s1",
+        "cwd": p.path,
+        "source": "startup",
+    });
+    p.devkit_in(
+        &p.path,
+        &["todo", "context", "--harness", "claude-code"],
+        env,
+        &payload.to_string(),
+    )
+}
+
+#[test]
+fn session_start_pulls_before_injecting() {
+    let shared = Shared::new();
+    let other = shared.other();
+    add_on(&other, "proj.main", "left by the last container");
+    other.sync_once().unwrap();
+    let out = context(&shared.p, "SessionStart", &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("left by the last container"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn session_start_is_bounded_when_the_server_hangs() {
+    let p = Proj::new();
+    let server = Silent::start();
+    let started = Instant::now();
+    let out = context(&p, "SessionStart", &server_env(&server.url));
+    let took = started.elapsed();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(took < Duration::from_secs(22), "{took:?}");
+    assert!(
+        stdout(&out).contains("Todo list, kept by devkit."),
+        "{}",
+        stdout(&out)
+    );
+    assert!(server.connections() > 0);
+}
+
+#[test]
+fn user_prompt_context_never_syncs() {
+    let shared = Shared::new();
+    let out = context(&shared.p, "UserPromptSubmit", &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!replica_dir(&shared.p).join("sync.lock").exists());
+}
+
+#[test]
+fn list_sync_pulls_and_plain_list_does_not() {
+    let shared = Shared::new();
+    let other = shared.other();
+    add_on(&other, "proj.main", "from elsewhere");
+    other.sync_once().unwrap();
+    let plain = shared.p.devkit(&["todo", "list", "--all"], &[]);
+    assert!(plain.status.success(), "{}", stderr(&plain));
+    assert!(
+        !stdout(&plain).contains("from elsewhere"),
+        "{}",
+        stdout(&plain)
+    );
+    let synced = shared.p.devkit(&["todo", "list", "--all", "--sync"], &[]);
+    assert!(synced.status.success(), "{}", stderr(&synced));
+    assert!(
+        stdout(&synced).contains("from elsewhere"),
+        "{}",
+        stdout(&synced)
+    );
+}
+
+#[test]
+fn list_sync_reports_a_failed_sync_and_lists_the_replica() {
+    let p = Proj::new();
+    let server = Refusing::start();
+    let env = server_env(&server.url);
+    let local = p.devkit(&["todo", "add", "kept here"], &backend("taskchampion"));
+    assert!(local.status.success(), "{}", stderr(&local));
+    let out = p.devkit(&["todo", "list", "--all", "--sync"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("devkit todo: sync failed:"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stdout(&out).contains("kept here"), "{}", stdout(&out));
+}
+
+#[test]
+fn session_end_pushes_the_release() {
+    let shared = Shared::new();
+    let here = TaskchampionStore::at(replica_dir(&shared.p))
+        .with_target(SyncTarget::Dir(shared.sync.path().join("server")));
+    let id = add_on(&here, "proj.main.claude-s1", "claimed");
+    here.apply(&Edit::SetStatus {
+        id: id.clone(),
+        to: StatusKind::InProgress,
+        actor: Holder::new("s1"),
+    })
+    .unwrap();
+    here.sync_once().unwrap();
+    let other = shared.other();
+    other.sync_once().unwrap();
+    assert!(matches!(
+        other.get(&id).unwrap().unwrap().status,
+        Status::InProgress { .. }
+    ));
+
+    let out = shared.p.hook(
+        "session-end",
+        "claude-code",
+        &json!({"session_id": "s1", "cwd": shared.p.path}),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    other.sync_once().unwrap();
+    assert_eq!(other.get(&id).unwrap().unwrap().status, Status::Pending);
+}
+
+#[test]
+fn the_session_end_timeout_allows_the_push() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/hooks");
+    for manifest in ["hooks.json", "hooks-codex.json"] {
+        let text = std::fs::read_to_string(root.join(manifest)).unwrap();
+        let hooks: Value = serde_json::from_str(&text).unwrap();
+        let groups = hooks["hooks"]["SessionEnd"].as_array().unwrap();
+        let timeouts: Vec<&Value> = groups
+            .iter()
+            .flat_map(|g| g["hooks"].as_array().unwrap())
+            .map(|h| &h["timeout"])
+            .collect();
+        assert!(!timeouts.is_empty(), "{manifest}");
+        assert!(
+            timeouts.iter().all(|t| **t == 25),
+            "{manifest}: {timeouts:?}"
+        );
+    }
 }

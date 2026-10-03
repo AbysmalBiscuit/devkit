@@ -87,7 +87,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         HookEvent::SubagentStop => with_payload(harness, cli.event, |p| {
             let cwd = record::payload_cwd(p);
             let checkout = devkit_common::vcs::Checkout::at(&cwd);
-            todo::release(p.subagent_holder(), &checkout, &cwd);
+            todo::release(p.subagent_holder(), &checkout, &cwd, todo::Push::Background);
             edit::release_subagent(p);
             record_in(p, cli.event, &checkout, &cwd);
             Ok(())
@@ -98,7 +98,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         HookEvent::SessionEnd => with_payload(harness, cli.event, |p| {
             let cwd = record::payload_cwd(p);
             let checkout = devkit_common::vcs::Checkout::at(&cwd);
-            todo::release(p.session_holder(), &checkout, &cwd);
+            todo::release(p.session_holder(), &checkout, &cwd, todo::Push::Wait);
             edit::release_session(p);
             clear_issue_receipts(p);
             let settings = record_in(p, cli.event, &checkout, &cwd);

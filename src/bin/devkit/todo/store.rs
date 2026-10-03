@@ -15,6 +15,8 @@ use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
 use devkit_todo_taskwarrior::TaskwarriorStore;
 use serde::{Deserialize, de::IntoDeserializer};
 
+use super::sync::SyncOutcome;
+
 /// Overrides `[todo] backend`, so a container can pick its store while the
 /// project's own config still loads.
 pub(crate) const BACKEND_VAR: &str = "DEVKIT_TODO_BACKEND";
@@ -148,6 +150,14 @@ impl Store {
     pub(crate) fn spawn_sync(&self, cwd: &Path) {
         if let Some(replica) = self.synced_replica() {
             super::sync::spawn(replica, cwd);
+        }
+    }
+
+    /// Syncs from `cwd`, waiting up to `wait` for it to finish.
+    pub(crate) fn sync(&self, cwd: &Path, wait: Duration) -> SyncOutcome {
+        match self.synced_replica() {
+            Some(replica) => super::sync::wait_for(replica, cwd, wait),
+            None => SyncOutcome::NoTarget,
         }
     }
 

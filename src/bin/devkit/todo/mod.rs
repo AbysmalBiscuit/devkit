@@ -22,7 +22,7 @@ use devkit_todo::{
 use pabal::AnyHarness;
 use serde_json::{Value, json};
 
-use self::store::Store;
+use self::{store::Store, sync::SyncOutcome};
 use crate::hook::{
     self, HookEvent,
     todo::{harness_of, to_todo_holder},
@@ -137,6 +137,9 @@ pub struct ListArgs {
     /// Print alacritree's task shape as JSON. Cancelled todos are left out.
     #[arg(long)]
     pub json: bool,
+    /// Sync the todo store before listing; waits up to 20 seconds.
+    #[arg(long)]
+    pub sync: bool,
 }
 
 pub fn run(cli: TodoCli) -> Result<()> {
@@ -292,7 +295,7 @@ fn move_todo(
 }
 
 fn list(
-    store: &impl TodoStore,
+    store: &Store,
     args: &ListArgs,
     cwd: &Path,
     session: Option<&SessionRef>,
@@ -310,6 +313,16 @@ fn list(
         (_, _, Some(visible)) => Filter::exact(visible.clone()),
         _ => Filter::all(),
     };
+    if args.sync {
+        match store.sync(cwd, sync::FRESH_WAIT) {
+            SyncOutcome::Failed(reason) => eprintln!("{}", sync::failure_text(&reason)),
+            SyncOutcome::StillRunning => eprintln!(
+                "devkit todo: sync still running after {} seconds; listing what this machine has",
+                sync::FRESH_WAIT.as_secs()
+            ),
+            SyncOutcome::Done | SyncOutcome::NoTarget => {}
+        }
+    }
     let todos = store.list(&filter)?;
     if args.json {
         let rows: Vec<Value> = todos.iter().filter_map(alacritree_json).collect();
@@ -366,7 +379,13 @@ fn context(args: &ContextArgs) -> Option<String> {
     filter
         .nodes
         .extend(workspace.iter().map(|w| NodeMatch::Subtree(w.clone())));
-    let (todos, siblings): (Vec<Todo>, Vec<Todo>) = Store::for_hook(&checkout, &cwd)
+    let at_start = payload.event_name().as_deref() == Some("SessionStart");
+    let store = Store::for_hook(&checkout, &cwd);
+    // A new container's replica is empty until it pulls the lists.
+    if at_start {
+        let _ = store.sync(&cwd, sync::FRESH_WAIT);
+    }
+    let (todos, siblings): (Vec<Todo>, Vec<Todo>) = store
         .list(&filter)
         .ok()?
         .into_iter()
@@ -379,7 +398,6 @@ fn context(args: &ContextArgs) -> Option<String> {
                 StatusKind::Pending | StatusKind::InProgress
             )
     });
-    let at_start = payload.event_name().as_deref() == Some("SessionStart");
     let pending = siblings
         .iter()
         .filter(|t| t.status.kind() == StatusKind::Pending)

@@ -33,7 +33,7 @@
           {
             "type": "command",
             "command": "devkit hook session-end --harness claude-code",
-            "timeout": 3
+            "timeout": 25
           }
         ]
       }

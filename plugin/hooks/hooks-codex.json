@@ -61,7 +61,7 @@
             "type": "command",
             "command": "devkit hook session-end --harness codex",
             "async": false,
-            "timeout": 3
+            "timeout": 25
           }
         ]
       }

@@ -8,7 +8,7 @@ use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::Duration,
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::Result;
@@ -101,6 +101,18 @@ pub(crate) fn run(store: &TaskchampionStore, background: bool) -> Result<()> {
     }
 }
 
+/// How long a caller that wants fresh lists waits for a sync.
+pub(crate) const FRESH_WAIT: Duration = Duration::from_secs(20);
+
+/// How a sync a caller waited for ended.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SyncOutcome {
+    Done,
+    Failed(String),
+    StillRunning,
+    NoTarget,
+}
+
 /// `devkit todo sync` as a detached child of this process, run in `cwd` so it
 /// resolves the same store. With null stdio it never writes to a terminal or
 /// a pipe its parent may have closed.
@@ -121,5 +133,35 @@ pub(crate) fn spawn(store: &TaskchampionStore, cwd: &Path) {
     mark_pending(store.data_dir());
     if let Ok(mut cmd) = sync_command(cwd, true) {
         let _ = cmd.spawn();
+    }
+}
+
+/// Starts a sync and waits for it up to `wait`. One still running at the
+/// bound is left to finish on its own.
+pub(crate) fn wait_for(store: &TaskchampionStore, cwd: &Path, wait: Duration) -> SyncOutcome {
+    let started = SystemTime::now();
+    let child = sync_command(cwd, false).and_then(|mut cmd| Ok(cmd.spawn()?));
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) => return SyncOutcome::Failed(format!("{e:#}")),
+    };
+    let deadline = Instant::now() + wait;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Ok(None) => return SyncOutcome::StillRunning,
+            Err(e) => return SyncOutcome::Failed(e.to_string()),
+        }
+    }
+    let failed = failed_path(store.data_dir());
+    let fresh = fs::metadata(&failed)
+        .and_then(|m| m.modified())
+        .is_ok_and(|at| at >= started);
+    match fresh {
+        true => SyncOutcome::Failed(fs::read_to_string(&failed).unwrap_or_default()),
+        false => SyncOutcome::Done,
     }
 }
