@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use devkit_command::Analysis;
+use devkit_common::vcs::Checkout;
 use devkit_todo::{
     BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, TodoStore,
     diff::{Change, Step, diff, pair},
@@ -101,8 +102,8 @@ pub(crate) fn attribute(payload: &Payload, analysis: &Analysis) -> Option<String
 /// Mirrors the harness's own task and plan tools into the store. The native
 /// tool has already run, so a failure, a claim conflict included, is reported
 /// on stderr and skipped.
-pub(crate) fn capture(payload: &Payload) {
-    if let Err(e) = try_capture(payload) {
+pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
+    if let Err(e) = try_capture(payload, checkout) {
         eprintln!("devkit todo: {e:#}");
     }
 }
@@ -118,14 +119,21 @@ struct Capture {
     map: NativeMap,
 }
 
-fn try_capture(payload: &Payload) -> Result<()> {
+fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
+    let tool = payload.tool_name();
+    if !matches!(
+        tool,
+        Some("TaskCreate" | "TaskUpdate" | "update_plan" | "TodoWrite")
+    ) {
+        return Ok(());
+    }
     let Some(harness) = harness_of(payload.harness()) else {
         return Ok(());
     };
     let (Some(session), Ok(actor)) = (payload.session_holder(), payload.holder()) else {
         return Ok(());
     };
-    let place = crate::todo::place_at(&super::record::payload_cwd(payload));
+    let place = node::place_of(checkout);
     let node = node::node(
         &place,
         Some(&SessionRef {
@@ -143,7 +151,7 @@ fn try_capture(payload: &Payload) -> Result<()> {
     };
     let raw = payload.raw();
     let input = &raw["tool_input"];
-    match payload.tool_name() {
+    match tool {
         Some("TaskCreate") => task_create(&c, input, &raw["tool_response"]),
         Some("TaskUpdate") => task_update(&c, input),
         Some("update_plan") => list_replace(&c, &input["plan"], "step"),

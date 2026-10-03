@@ -107,8 +107,10 @@ pub fn run(cli: HookCli) -> Result<()> {
             Ok(())
         }),
         HookEvent::PostToolUse => with_payload(harness, cli.event, |p| {
-            todo::capture(p);
-            record_only(p, cli.event);
+            let cwd = record::payload_cwd(p);
+            let checkout = devkit_common::vcs::Checkout::at(&cwd);
+            todo::capture(p, &checkout);
+            record_in(p, cli.event, &checkout, &cwd);
             Ok(())
         }),
         // Compaction is what drops the injected rules out of the agent's
@@ -151,12 +153,22 @@ fn clear_issue_receipts(payload: &Payload) {
 fn record_only(payload: &Payload, event: HookEvent) -> devkit_common::harness_log::Settings {
     let cwd = record::payload_cwd(payload);
     let checkout = devkit_common::vcs::Checkout::at(&cwd);
-    let settings = devkit_common::harness_log::resolve_in(&checkout, &cwd);
+    record_in(payload, event, &checkout, &cwd)
+}
+
+/// [`record_only`] for a verb that already resolved the payload's checkout.
+fn record_in(
+    payload: &Payload,
+    event: HookEvent,
+    checkout: &devkit_common::vcs::Checkout,
+    cwd: &std::path::Path,
+) -> devkit_common::harness_log::Settings {
+    let settings = devkit_common::harness_log::resolve_in(checkout, cwd);
     if !settings.enabled {
         return settings;
     }
     let kind = record::record_only(payload, event, &settings);
-    let rec = record::envelope(payload, event, &checkout, kind);
+    let rec = record::envelope(payload, event, checkout, kind);
     devkit_common::harness_log::record(&settings, &rec);
     settings
 }
