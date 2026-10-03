@@ -275,6 +275,20 @@ fn list_replace(c: &Capture, list: &Value, text_key: &str) -> Result<()> {
             Some((text, id, status))
         })
         .collect();
+    // The list follows its session, so open steps left on the node the
+    // session last wrote to move to the one it writes to now.
+    for (_, id, status) in &previous {
+        let open = matches!(status, StatusKind::Pending | StatusKind::InProgress);
+        let elsewhere = todos
+            .iter()
+            .any(|t| &t.id == id && t.project.as_deref() != Some(c.node.as_str()));
+        if open && elsewhere {
+            c.store.apply(&Edit::Relocate {
+                id: id.clone(),
+                project: Some(c.node.clone()),
+            })?;
+        }
+    }
     let mut ids: Vec<Option<String>> = pair(&previous, &next)
         .into_iter()
         .map(|p| p.map(|i| previous[i].1.clone()))

@@ -437,3 +437,31 @@ fn plan_purge_forgets_the_mirrored_text() {
     let native = std::fs::read_to_string(p.state().join("todo/native.json")).unwrap();
     assert!(!native.contains("SECRET-abc123"), "{native}");
 }
+
+#[test]
+fn plan_a_session_that_changes_checkout_brings_its_open_steps_along() {
+    let p = Proj::new();
+    let other = p.outside().join("other");
+    std::fs::create_dir(&other).unwrap();
+    devkit_git::Git::fixture(&other)
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    let mut first = fixture(&p, "claude-todowrite.jsonl").remove(0);
+    let session = first["session_id"].as_str().unwrap().to_string();
+    first["tool_input"]["todos"] =
+        json!([{"content": "a", "status": "pending", "activeForm": "a"}]);
+    let mut second = first.clone();
+    second["cwd"] = json!(other);
+    second["tool_input"]["todos"] = json!([
+        {"content": "a", "status": "in_progress", "activeForm": "a"},
+        {"content": "b", "status": "pending", "activeForm": "b"}
+    ]);
+    post_tool_use(&p, "claude-code", &[first, second]);
+    let node = format!("other.main.claude-{session}");
+    let a = by_text(&p, "a");
+    assert_eq!(a.project.as_deref(), Some(node.as_str()));
+    assert_eq!(a.status, in_progress(&session));
+    assert_eq!(by_text(&p, "b").project.as_deref(), Some(node.as_str()));
+    assert_eq!(p.todos().len(), 2);
+}

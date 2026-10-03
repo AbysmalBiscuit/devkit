@@ -81,6 +81,11 @@ pub enum Edit {
         id: String,
         order: i64,
     },
+    /// Moves the todo to another node, `None` being the global list.
+    Relocate {
+        id: String,
+        project: Option<String>,
+    },
     /// Every todo in progress by a holder `holder` covers goes back to
     /// pending. A human holder releases nothing.
     ReleaseAll {

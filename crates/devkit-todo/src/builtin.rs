@@ -154,6 +154,11 @@ impl TodoStore for BuiltinStore {
                     todo.order = Some(*order);
                     todo.modified = Some(now());
                 }
+                Edit::Relocate { id, project } => {
+                    let todo = doc.todo_mut(id)?;
+                    todo.project = project.clone();
+                    todo.modified = Some(now());
+                }
                 Edit::Reorder { id, order } => {
                     let todo = doc.todo_mut(id)?;
                     todo.order = Some(*order);
