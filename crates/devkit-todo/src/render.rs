@@ -43,14 +43,16 @@ fn section(node: &str, todos: &[&Todo], viewer: &Holder, full: bool) -> Option<S
             StatusKind::Cancelled => false,
         })
         .collect();
-    if shown.is_empty() {
+    let count = |kind| todos.iter().filter(|t| t.status.kind() == kind).count();
+    // A full listing keeps a node whose todos were all cancelled, so a person
+    // can still see what was abandoned there.
+    if shown.is_empty() && !(full && count(StatusKind::Cancelled) > 0) {
         return None;
     }
     let mut out = format!("## {node}\n");
     for (todo, depth) in tree(&shown) {
         let _ = writeln!(out, "{}{}", "  ".repeat(depth), line(todo, viewer));
     }
-    let count = |kind| todos.iter().filter(|t| t.status.kind() == kind).count();
     let mut finished = Vec::new();
     if !full && count(StatusKind::Completed) > 0 {
         finished.push(format!("{} done", count(StatusKind::Completed)));
@@ -256,6 +258,16 @@ mod tests {
             render_full(&nodes(), &todos, &Holder::new("S")),
             "## r.main\n- [x] a (1)\n1 cancelled\n"
         );
+    }
+
+    #[test]
+    fn a_full_listing_counts_a_node_holding_only_cancelled_todos() {
+        let todos = [todo("1", "a", None, 1024, Status::Cancelled { by: None })];
+        assert_eq!(
+            render_full(&nodes(), &todos, &Holder::new("S")),
+            "## r.main\n1 cancelled\n"
+        );
+        assert_eq!(render_lists(&nodes(), &todos, &Holder::new("S")), "");
     }
 
     #[test]
