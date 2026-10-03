@@ -31,7 +31,8 @@ const HINT_LINEAR: &str = "run: devkit auth linear   (https://linear.app/setting
 const HINT_SLACK: &str = "run: devkit auth slack    (Slack app -> OAuth & Permissions)";
 const HINT_WORKSPACE: &str = "optional — falls back to the Linear API for issue links";
 const HINT_GITHUB: &str = "run: gh auth login   (or set GH_TOKEN/GITHUB_TOKEN)";
-const HINT_TODO_SYNC: &str = "optional, the taskchampion replica stays local without all three";
+const HINT_TODO_SYNC: &str =
+    "optional, the taskchampion replica stays local without every sync credential";
 const HINT_HARNESS_LOG: &str =
     "off — set [harness.log] enabled = true in ~/.config/devkit/config.toml";
 

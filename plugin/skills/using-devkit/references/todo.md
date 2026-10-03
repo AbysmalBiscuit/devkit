@@ -85,7 +85,7 @@ Other injections and plain `devkit todo list` read the local replica, which hold
 
 Two machines claiming the same todo between syncs both succeed, and the later sync wins: the claim rule holds on one machine, sub-agents included, not across them.
 
-The server keeps the lists encrypted, so a person reads them through a replica of their own. A separate taskwarrior profile holding the same three values keeps those tasks apart from your own:
+The server keeps the lists encrypted, so a person reads them through a replica of their own. A separate taskwarrior profile holding the same URL, client id and secret keeps those tasks apart from your own:
 
 ```text
 TASKRC=~/.taskrc-agents TASKDATA=~/.task-agents task sync
