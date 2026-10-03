@@ -79,7 +79,7 @@ fn line(todo: &Todo, viewer: &Holder) -> String {
 
 /// Todos without an order follow the ordered ones, oldest first; the id
 /// settles ties.
-fn sort_key<'a>(t: &'a Todo) -> (bool, i64, Option<&'a str>, &'a str) {
+fn sort_key(t: &Todo) -> (bool, i64, Option<&str>, &str) {
     (
         t.order.is_none(),
         t.order.unwrap_or(0),
