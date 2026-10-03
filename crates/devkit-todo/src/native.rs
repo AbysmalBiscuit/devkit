@@ -21,10 +21,10 @@ struct Doc {
     /// `harness SEP holder SEP native id` to todo id.
     #[serde(default)]
     ids: BTreeMap<String, String>,
-    /// `harness SEP holder` to the last list a list-replace tool sent, as
-    /// (step text, todo id) in order.
+    /// `harness SEP holder` to the last list a list-replace tool sent, in
+    /// order.
     #[serde(default)]
-    snapshots: BTreeMap<String, Vec<(String, String)>>,
+    snapshots: BTreeMap<String, Vec<MirroredStep>>,
 }
 
 impl store::Document for Doc {
@@ -53,6 +53,13 @@ fn holder_key(harness: Harness, holder: &str) -> String {
 
 fn id_key(harness: Harness, holder: &str, native: &str) -> String {
     format!("{}{SEP}{native}", holder_key(harness, holder))
+}
+
+/// One step of a list-replace tool's last list and the todo it became.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MirroredStep {
+    pub text: String,
+    pub todo: String,
 }
 
 pub struct NativeMap {
@@ -111,13 +118,13 @@ impl NativeMap {
         self.with_doc(|doc| {
             doc.ids.retain(|_, id| id != todo);
             for steps in doc.snapshots.values_mut() {
-                steps.retain(|(_, id)| id != todo);
+                steps.retain(|step| step.todo != todo);
             }
             Ok(())
         })
     }
 
-    pub fn snapshot(&self, harness: Harness, holder: &Holder) -> Result<Vec<(String, String)>> {
+    pub fn snapshot(&self, harness: Harness, holder: &Holder) -> Result<Vec<MirroredStep>> {
         self.with_doc(|doc| {
             Ok(doc
                 .snapshots
@@ -131,7 +138,7 @@ impl NativeMap {
         &self,
         harness: Harness,
         holder: &Holder,
-        steps: Vec<(String, String)>,
+        steps: Vec<MirroredStep>,
     ) -> Result<()> {
         self.with_doc(|doc| {
             doc.snapshots.insert(holder_key(harness, holder), steps);
@@ -198,7 +205,10 @@ mod tests {
     fn snapshots_are_kept_per_holder() {
         let dir = tempfile::tempdir().unwrap();
         let map = NativeMap::at(dir.path().to_path_buf());
-        let steps = vec![("a".to_string(), "1".to_string())];
+        let steps = vec![MirroredStep {
+            text: "a".to_string(),
+            todo: "1".to_string(),
+        }];
         map.set_snapshot(Harness::Codex, &Holder::new("S"), steps.clone())
             .unwrap();
         assert_eq!(

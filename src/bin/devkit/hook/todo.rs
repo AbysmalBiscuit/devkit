@@ -7,9 +7,9 @@ use devkit_common::vcs::Checkout;
 use devkit_todo::{
     BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, TodoStore,
     builtin,
-    diff::{Change, Step, diff, pair},
+    diff::{Change, Mirrored, Step, diff, pair},
     holder::HOLDER_VAR,
-    native::NativeMap,
+    native::{MirroredStep, NativeMap},
     node::{self, Harness, SessionRef},
     transition,
 };
@@ -264,32 +264,32 @@ fn list_replace(c: &Capture, list: &Value, text_key: &str) -> Result<()> {
         })
         .collect();
     let todos = c.store.list(&Filter::all())?;
-    let previous: Vec<(String, String, StatusKind)> = c
+    let previous: Vec<Mirrored> = c
         .map
         .snapshot(c.harness, &c.actor)?
         .into_iter()
-        .filter_map(|(text, id)| {
-            let status = todos.iter().find(|t| t.id == id)?.status.kind();
-            Some((text, id, status))
+        .filter_map(|MirroredStep { text, todo }| {
+            let status = todos.iter().find(|t| t.id == todo)?.status.kind();
+            Some(Mirrored { text, todo, status })
         })
         .collect();
     // The list follows its session, so open steps left on the node the
     // session last wrote to move to the one it writes to now.
-    for (_, id, status) in &previous {
-        let open = matches!(status, StatusKind::Pending | StatusKind::InProgress);
+    for prev in &previous {
+        let open = matches!(prev.status, StatusKind::Pending | StatusKind::InProgress);
         let elsewhere = todos
             .iter()
-            .any(|t| &t.id == id && t.project.as_deref() != Some(c.node.as_str()));
+            .any(|t| t.id == prev.todo && t.project.as_deref() != Some(c.node.as_str()));
         if open && elsewhere {
             c.store.apply(&Edit::Relocate {
-                id: id.clone(),
+                id: prev.todo.clone(),
                 project: Some(c.node.clone()),
             })?;
         }
     }
     let mut ids: Vec<Option<String>> = pair(&previous, &next)
         .into_iter()
-        .map(|p| p.map(|i| previous[i].1.clone()))
+        .map(|p| p.map(|i| previous[i].todo.clone()))
         .collect();
     let changes = diff(&previous, &next);
     let mut failed = None;
@@ -335,10 +335,11 @@ fn list_replace(c: &Capture, list: &Value, text_key: &str) -> Result<()> {
                     to: StatusKind::Cancelled,
                     actor: c.actor.clone(),
                 });
-                if !cancelled
-                    && let Some((text, ..)) = previous.iter().find(|(_, id, _)| *id == todo)
-                {
-                    uncancelled.push((text.clone(), todo));
+                if !cancelled && let Some(prev) = previous.iter().find(|p| p.todo == todo) {
+                    uncancelled.push(MirroredStep {
+                        text: prev.text.clone(),
+                        todo,
+                    });
                 }
             }
             Change::Reorder { todo, order } => {
@@ -349,7 +350,12 @@ fn list_replace(c: &Capture, list: &Value, text_key: &str) -> Result<()> {
     let snapshot = next
         .into_iter()
         .zip(ids)
-        .filter_map(|(step, id)| Some((step.text, id?)))
+        .filter_map(|(step, id)| {
+            Some(MirroredStep {
+                text: step.text,
+                todo: id?,
+            })
+        })
         .chain(uncancelled)
         .collect();
     c.map.set_snapshot(c.harness, &c.actor, snapshot)?;
