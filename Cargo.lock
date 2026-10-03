@@ -596,6 +596,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "devkit-todo-taskwarrior"
+version = "0.14.9"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "devkit-common",
+ "devkit-todo",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "devkit-vcs"
 version = "0.14.9"
 dependencies = [
