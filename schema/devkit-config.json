@@ -1288,6 +1288,18 @@
       },
       "type": "object"
     },
+    "TaskwarriorConfig": {
+      "additionalProperties": false,
+      "description": "How devkit runs taskwarrior for `[todo] backend = \"taskwarrior\"`.",
+      "properties": {
+        "path": {
+          "default": "task",
+          "description": "The program to run. Its own name is looked up on PATH; any other value\nruns as written.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Templates": {
       "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context. Rendering is strict: an undefined variable is an\nerror, so a typo surfaces on the first run.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ issue }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ issue }}: {{ input }}\"\npr_body            = \"Closes {{ issue }}.\\n\\n{{ input }}\"\nissue_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`issue_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
       "properties": {
@@ -1410,6 +1422,33 @@
             "integer",
             "null"
           ]
+        }
+      },
+      "type": "object"
+    },
+    "TodoBackend": {
+      "description": "The store `[todo] backend` names.",
+      "enum": [
+        "builtin",
+        "taskwarrior"
+      ],
+      "type": "string"
+    },
+    "TodoConfig": {
+      "additionalProperties": false,
+      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskwarrior\"\n\n[todo.taskwarrior]\npath = \"/opt/task\"\n```",
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/TodoBackend",
+          "default": "builtin",
+          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskwarrior` keeps them in the local taskwarrior\nthrough taskwarrior 3's `task` program, on the project names\nalacritree uses. Set it in `~/.config/devkit/config.toml`, not in a\nrepository's `devkit.toml`: a committed `taskwarrior` breaks every\nmachine without `task`, cloud sessions included."
+        },
+        "taskwarrior": {
+          "$ref": "#/$defs/TaskwarriorConfig",
+          "default": {
+            "path": "task"
+          },
+          "description": "The `taskwarrior` backend's settings."
         }
       },
       "type": "object"
@@ -1669,6 +1708,16 @@
         "worktree_dir_max": null
       },
       "description": "Minijinja templates for the strings `issue setup` and `issue review`\ngenerate — branch names, worktree directories, PR fields, Slack bodies."
+    },
+    "todo": {
+      "$ref": "#/$defs/TodoConfig",
+      "default": {
+        "backend": "builtin",
+        "taskwarrior": {
+          "path": "task"
+        }
+      },
+      "description": "Where `devkit todo` and the todo hooks keep agent todo lists."
     },
     "tracker": {
       "$ref": "#/$defs/TrackerConfig",

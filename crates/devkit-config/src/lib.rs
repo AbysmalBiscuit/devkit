@@ -81,6 +81,68 @@ pub struct Config {
     /// The `devkit-mcp` server the agent plugins start.
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Where `devkit todo` and the todo hooks keep agent todo lists.
+    #[serde(default)]
+    pub todo: TodoConfig,
+}
+
+/// Where agent todo lists are kept.
+///
+/// ```
+/// # use devkit_config::{Config, TodoBackend};
+/// # let cfg = Config::parse(r#"
+/// [todo]
+/// backend = "taskwarrior"
+///
+/// [todo.taskwarrior]
+/// path = "/opt/task"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.todo.backend, TodoBackend::Taskwarrior);
+/// # assert_eq!(cfg.todo.taskwarrior.path, "/opt/task");
+/// # let empty = Config::parse("").unwrap();
+/// # assert_eq!(empty.todo.backend, TodoBackend::Builtin);
+/// # assert_eq!(empty.todo.taskwarrior.path, "task");
+/// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
+/// # assert!(Config::parse("[todo]\nbackends = \"builtin\"\n").is_err());
+/// ```
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TodoConfig {
+    /// Which store keeps the todos. `builtin` is a JSON file in devkit's
+    /// state directory. `taskwarrior` keeps them in the local taskwarrior
+    /// through taskwarrior 3's `task` program, on the project names
+    /// alacritree uses. Set it in `~/.config/devkit/config.toml`, not in a
+    /// repository's `devkit.toml`: a committed `taskwarrior` breaks every
+    /// machine without `task`, cloud sessions included.
+    pub backend: TodoBackend,
+    /// The `taskwarrior` backend's settings.
+    pub taskwarrior: TaskwarriorConfig,
+}
+
+/// The store `[todo] backend` names.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TodoBackend {
+    #[default]
+    Builtin,
+    Taskwarrior,
+}
+
+/// How devkit runs taskwarrior for `[todo] backend = "taskwarrior"`.
+#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskwarriorConfig {
+    /// The program to run. Its own name is looked up on PATH; any other value
+    /// runs as written.
+    pub path: String,
+}
+
+impl Default for TaskwarriorConfig {
+    fn default() -> Self {
+        Self {
+            path: "task".to_string(),
+        }
+    }
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the
