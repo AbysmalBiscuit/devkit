@@ -181,19 +181,25 @@ fn with_lock_via<D: Document, T>(
     })
 }
 
-/// Run `f` while holding the exclusive advisory lock at `lock_path`, for
-/// state kept somewhere other than a JSON document. The parent directory is
-/// created on demand.
-pub fn with_file_lock<T>(lock_path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+/// The advisory lock file at `lock_path`, created with its parent directory
+/// when missing and never truncated, ready to lock.
+pub fn open_lock(lock_path: &Path) -> Result<RwLock<File>> {
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let _ = OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
         .open(lock_path)?;
-    let mut lock = RwLock::new(File::open(lock_path)?);
+    Ok(RwLock::new(file))
+}
+
+/// Run `f` while holding the exclusive advisory lock at `lock_path`, for
+/// state kept somewhere other than a JSON document. The parent directory is
+/// created on demand.
+pub fn with_file_lock<T>(lock_path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let mut lock = open_lock(lock_path)?;
     let _guard = lock.write()?; // blocks until exclusive
     f()
 }
@@ -226,15 +232,7 @@ pub fn with_file_lock_for<T>(
     wait: std::time::Duration,
     f: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let _ = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(lock_path)?;
-    let mut lock = RwLock::new(File::open(lock_path)?);
+    let mut lock = open_lock(lock_path)?;
     let deadline = std::time::Instant::now() + wait;
     loop {
         match lock.try_write() {

@@ -4,7 +4,7 @@
 //! not seen, and `sync.failed` holds the last failure's reason.
 
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::ErrorKind,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -13,7 +13,6 @@ use std::{
 
 use anyhow::Result;
 use devkit_todo_taskchampion::TaskchampionStore;
-use fd_lock::RwLock;
 
 /// How long a failed sync holds off background attempts, so a server that is
 /// down costs one attempt this often.
@@ -60,14 +59,8 @@ pub(crate) fn run(store: &TaskchampionStore, background: bool) -> Result<()> {
     if background && failed_recently(dir) {
         return Ok(());
     }
-    fs::create_dir_all(dir)?;
     loop {
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(lock_path(dir))?;
-        let mut lock = RwLock::new(file);
+        let mut lock = devkit_common::store::open_lock(&lock_path(dir))?;
         let guard = if background {
             match lock.try_write() {
                 Ok(guard) => guard,
