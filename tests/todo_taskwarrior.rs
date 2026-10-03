@@ -195,32 +195,49 @@ fn purge_by_short_id_forgets_the_native_mapping() {
     assert!(!native().contains(&uuid), "{}", native());
 }
 
-/// A repository whose name taskwarrior's filter syntax would split: a space
-/// and a quote.
-const ODD_REPO: &str = "bob's repo";
+/// A repository whose name holds both quote characters, which no quoting of
+/// a taskwarrior filter value survives.
+const ODD_REPO: &str = r#"bob's "x" repo"#;
 
 /// Adds `text` to `node` and returns its short id.
 fn add_on(tw: &Tw, node: &str, text: &str) -> String {
     short(&tw.devkit(&["todo", "add", text, "--node", node], &[S1]))
 }
 
+/// `ODD_REPO`'s `main` node, beside `bob`, the node a filter that loses the
+/// quotes would read instead, holding a todo ordered far past the others.
+fn odd_repo_with_a_lookalike() -> Option<(Tw, String)> {
+    let tw = Tw::in_repo(ODD_REPO)?;
+    tw.devkit(
+        &[
+            "todo",
+            "add",
+            "lookalike",
+            "--node",
+            "bob",
+            "--order",
+            "5000",
+        ],
+        &[S1],
+    );
+    Some((tw, format!("{ODD_REPO}.main")))
+}
+
 #[test]
-fn an_exact_listing_matches_a_node_with_a_space() {
-    let Some(tw) = Tw::in_repo(ODD_REPO) else {
+fn an_exact_listing_matches_a_node_with_quotes() {
+    let Some((tw, main)) = odd_repo_with_a_lookalike() else {
         return;
     };
-    let shared = add_on(&tw, "bob's repo.main", "shared");
-    let second = add_on(&tw, "bob's repo.main", "second");
-    add_on(&tw, "bob's repo.main.claude-s1", "mine");
-    let list = stdout(&tw.devkit(&["todo", "list", "--node", "bob's repo.main"], &[S1]));
+    let shared = add_on(&tw, &main, "shared");
+    let second = add_on(&tw, &main, "second");
+    add_on(&tw, &format!("{main}.claude-s1"), "mine");
+    let list = stdout(&tw.devkit(&["todo", "list", "--node", &main], &[S1]));
     assert_eq!(
         list,
-        format!("## bob's repo.main\n- [ ] shared ({shared})\n- [ ] second ({second})\n")
+        format!("## {main}\n- [ ] shared ({shared})\n- [ ] second ({second})\n")
     );
     let json: Value = serde_json::from_str(&stdout(
-        &tw.devkit(&["todo", "list", "--node", "bob's repo.main", "--json"], &[
-            S1,
-        ]),
+        &tw.devkit(&["todo", "list", "--node", &main, "--json"], &[S1]),
     ))
     .unwrap();
     let orders: Vec<&Value> = json
@@ -233,34 +250,53 @@ fn an_exact_listing_matches_a_node_with_a_space() {
 }
 
 #[test]
-fn a_subtree_listing_matches_a_repository_with_a_space() {
-    let Some(tw) = Tw::in_repo(ODD_REPO) else {
+fn a_subtree_listing_matches_a_repository_with_quotes() {
+    let Some((tw, main)) = odd_repo_with_a_lookalike() else {
         return;
     };
-    let shared = add_on(&tw, "bob's repo.main", "shared");
-    let mine = add_on(&tw, "bob's repo.main.claude-s1", "mine");
-    add_on(&tw, "bob's repo-web", "elsewhere");
-    let list = stdout(&tw.devkit(&["todo", "list", "--subtree", "bob's repo"], &[S1]));
-    assert!(list.contains(&format!("- [ ] shared ({shared})")), "{list}");
-    assert!(list.contains(&format!("- [ ] mine ({mine})")), "{list}");
-    assert!(!list.contains("elsewhere"), "{list}");
+    let shared = add_on(&tw, &main, "shared");
+    let mine = add_on(&tw, &format!("{main}.claude-s1"), "mine");
+    add_on(&tw, &format!("{ODD_REPO}-web"), "elsewhere");
+    let list = stdout(&tw.devkit(&["todo", "list", "--subtree", ODD_REPO], &[S1]));
+    assert_eq!(
+        list,
+        format!("## {main}\n- [ ] shared ({shared})\n\n## {main}.claude-s1\n- [ ] mine ({mine})\n")
+    );
 }
 
 #[test]
-fn the_default_listing_matches_nodes_with_a_space() {
-    let Some(tw) = Tw::in_repo(ODD_REPO) else {
+fn the_default_listing_matches_nodes_with_quotes() {
+    let Some((tw, main)) = odd_repo_with_a_lookalike() else {
         return;
     };
     let mine = short(&tw.devkit(&["todo", "add", "mine"], &[S1]));
-    let shared = add_on(&tw, "bob's repo.main", "shared");
+    let shared = add_on(&tw, &main, "shared");
     let list = stdout(&tw.devkit(&["todo", "list"], &[S1]));
     assert_eq!(
         list,
         format!(
-            "## bob's repo.main.claude-s1\n- [ ] mine ({mine})\n\n\
-             ## bob's repo.main\n- [ ] shared ({shared})\n"
+            "## {main}.claude-s1\n- [ ] mine ({mine})\n\n\
+             ## {main}\n- [ ] shared ({shared})\n"
         )
     );
+}
+
+#[test]
+fn a_root_project_with_a_quote_is_refused() {
+    let Some(tw) = Tw::configured(
+        "proj",
+        "[todo]\nbackend = \"taskwarrior\"\n[todo.taskwarrior]\nproject = \"dev'kit\"\n",
+    ) else {
+        return;
+    };
+    let add = tw.p.devkit(&["todo", "add", "one"], &tw.env(&[S1]));
+    assert_eq!(add.status.code(), Some(1));
+    assert!(
+        stderr(&add).contains("[todo.taskwarrior] project"),
+        "{}",
+        stderr(&add)
+    );
+    assert!(tw.export().is_empty());
 }
 
 /// `[todo]` describes the machine, so the home config's backend holds under

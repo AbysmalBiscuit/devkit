@@ -140,7 +140,7 @@ The CLI accepts any id it is given. `TaskwarriorStore::get` resolves a prefix of
 
 ### Lists
 
-`list` exports `(<node filter>) (status:pending or status:completed or status:deleted)`. Each node is first filed under the root, then matched the way alacritree matches its nodes: `project.is:<project>` for an exact node, `project.is:<project> or project:<project>.` for a subtree, since a bare `project:r` would also match a repository named `r-web`. A filter of every node (`--all`) is the root's subtree, which leaves out every task outside the root. Every project value is double-quoted, so a node holding a space or a quote stays one value.
+`list` exports every task under the root, `(project.is:"<root>" or project:"<root>.") (status:pending or status:completed or status:deleted)`, and keeps the todos whose node passes `Filter::matches`, the rule the built-in store applies. A node never reaches a `task` filter: `sanitize` keeps quotes, git accepts a branch holding both `'` and `"`, and no taskwarrior quoting survives both. Placing a todo after its siblings matches their node the same way. The root is still a filter value, so `[todo.taskwarrior] project` may not hold `'` or `"`. A bare `project:<root>` would also match a sibling project such as `<root>-web`, which is why the root's subtree is spelled with the trailing dot.
 
 ### Failure
 

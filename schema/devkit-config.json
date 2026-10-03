@@ -1299,7 +1299,7 @@
         },
         "project": {
           "default": "devkit",
-          "description": "The taskwarrior project devkit keeps every todo under. Global todos\nare filed on this project itself and every other node below it, as\n`<project>.<node>`, so devkit never lists, claims or releases a task\nin any other project. alacritree's taskwarrior tab shows these todos\nonly when it reads the same root.",
+          "description": "The taskwarrior project devkit keeps every todo under. Global todos\nare filed on this project itself and every other node below it, as\n`<project>.<node>`, so devkit never lists, claims or releases a task\nin any other project. alacritree's taskwarrior tab shows these todos\nonly when it reads the same root. It may not hold `'` or `\"`: it is\nmatched inside taskwarrior filters, where no quoting survives both.",
           "type": "string"
         }
       },

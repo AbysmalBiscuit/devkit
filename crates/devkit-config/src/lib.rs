@@ -107,6 +107,8 @@ pub struct Config {
 /// # assert_eq!(empty.todo.taskwarrior.project, "devkit");
 /// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
 /// # assert!(Config::parse("[todo]\nbackends = \"builtin\"\n").is_err());
+/// # let quoted = Config::parse("[todo.taskwarrior]\nproject = \"dev'kit\"\n").unwrap_err();
+/// # assert!(format!("{quoted:#}").contains("[todo.taskwarrior] project"), "{quoted:#}");
 /// ```
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -143,8 +145,20 @@ pub struct TaskwarriorConfig {
     /// are filed on this project itself and every other node below it, as
     /// `<project>.<node>`, so devkit never lists, claims or releases a task
     /// in any other project. alacritree's taskwarrior tab shows these todos
-    /// only when it reads the same root.
+    /// only when it reads the same root. It may not hold `'` or `"`: it is
+    /// matched inside taskwarrior filters, where no quoting survives both.
+    #[serde(deserialize_with = "todo_root")]
     pub project: String,
+}
+
+fn todo_root<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let root = String::deserialize(d)?;
+    if root.contains(['\'', '"']) {
+        return Err(serde::de::Error::custom(format!(
+            "[todo.taskwarrior] project {root:?} may not contain ' or \""
+        )));
+    }
+    Ok(root)
 }
 
 impl Default for TaskwarriorConfig {

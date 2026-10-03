@@ -3,13 +3,12 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow, bail};
 use devkit_common::store::with_file_lock;
 use devkit_todo::{
-    Edit, Filter, NewTodo, NodeMatch, ORDER_GAP, Status, Todo, TodoStore, node::GLOBAL, one_line,
-    state_dir, transition,
+    Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, one_line, state_dir, transition,
 };
 
 use crate::{
     cli::Cli,
-    schema::{DEFAULT_ROOT, escaped, project_arg, project_of, status_args},
+    schema::{DEFAULT_ROOT, escaped, project_arg, status_args},
 };
 
 const STATUSES: &str = "(status:pending or status:completed or status:deleted)";
@@ -77,6 +76,13 @@ impl TaskwarriorStore {
             .collect())
     }
 
+    /// Every todo under the root. A node never reaches a `task` filter: no
+    /// quoting survives a name holding both `'` and `"`, so nodes are matched
+    /// here instead.
+    fn every_todo(&self) -> Result<Vec<Todo>> {
+        self.todos(&[in_root(&self.root), STATUSES.into()])
+    }
+
     fn resolve(&self, id: &str) -> Result<Todo> {
         self.get(id)?.ok_or_else(|| anyhow!("no todo {id}"))
     }
@@ -89,11 +95,14 @@ impl TaskwarriorStore {
         parent: Option<&str>,
         skip: Option<&str>,
     ) -> Result<i64> {
-        let node = format!("project.is:{}", quoted(&project_of(&self.root, project)));
-        let siblings = self.todos(&[node, STATUSES.into()])?;
+        let siblings = self.every_todo()?;
         Ok(siblings
             .iter()
-            .filter(|t| t.parent.as_deref() == parent && Some(t.id.as_str()) != skip)
+            .filter(|t| {
+                t.project.as_deref() == project
+                    && t.parent.as_deref() == parent
+                    && Some(t.id.as_str()) != skip
+            })
             .filter_map(|t| t.order)
             .max()
             .unwrap_or(0)
@@ -117,40 +126,12 @@ impl TaskwarriorStore {
     }
 }
 
-/// The filter words for `filter` under `root`, or `None` when it covers no
-/// node. A bare `project:r` is a left match that would also return a
-/// repository named `r-web`, so a subtree matches `r` itself and whatever sits
-/// below `r.`.
-fn node_filter(root: &str, filter: &Filter) -> Option<String> {
-    let nodes: Vec<String> = filter
-        .nodes
-        .iter()
-        .map(|m| match m {
-            NodeMatch::Subtree(node) if node.is_empty() => subtree(root),
-            NodeMatch::Subtree(node) if node == GLOBAL => exact(root),
-            NodeMatch::Subtree(node) => subtree(&project_of(root, Some(node))),
-            NodeMatch::Exact(node) => exact(&project_of(root, Some(node))),
-        })
-        .collect();
-    (!nodes.is_empty()).then(|| format!("({})", nodes.join(" or ")))
-}
-
-fn exact(project: &str) -> String {
-    format!("project.is:{}", quoted(project))
-}
-
-fn subtree(project: &str) -> String {
-    format!(
-        "{} or project:{}",
-        exact(project),
-        quoted(&format!("{project}."))
-    )
-}
-
-/// A node as a filter value. Unquoted, taskwarrior splits a name on a space
-/// or reads `'` and `(` as syntax; a backslash escape does not stop it.
-fn quoted(node: &str) -> String {
-    format!("\"{node}\"")
+/// The filter for every task under `root`: the root itself and whatever sits
+/// below `root.`. A bare `project:root` would also match a sibling project
+/// such as `root-web`. The root is a config value that holds no quote, so
+/// double quotes keep a space in it one value.
+fn in_root(root: &str) -> String {
+    format!(r#"(project.is:"{root}" or project:"{root}.")"#)
 }
 
 /// Whether `id` can name a task by uuid. Anything else would reach `task` as
@@ -161,10 +142,12 @@ fn is_uuid_prefix(id: &str) -> bool {
 
 impl TodoStore for TaskwarriorStore {
     fn list(&self, filter: &Filter) -> Result<Vec<Todo>> {
-        match node_filter(&self.root, filter) {
-            Some(nodes) => self.todos(&[nodes, STATUSES.into()]),
-            None => Ok(Vec::new()),
+        if filter.nodes.is_empty() {
+            return Ok(Vec::new());
         }
+        let mut todos = self.every_todo()?;
+        todos.retain(|t| filter.matches(t.project.as_deref()));
+        Ok(todos)
     }
 
     fn get(&self, id: &str) -> Result<Option<Todo>> {
@@ -256,8 +239,7 @@ impl TodoStore for TaskwarriorStore {
                     return Ok(());
                 }
                 self.locked(|| {
-                    let active =
-                        self.todos(&[format!("({})", subtree(&self.root)), "+ACTIVE".into()])?;
+                    let active = self.todos(&[in_root(&self.root), "+ACTIVE".into()])?;
                     let held: Vec<&str> = active
                         .iter()
                         .filter(
@@ -288,22 +270,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_filter_stays_under_the_root() {
-        let filter = Filter {
-            nodes: vec![
-                NodeMatch::Subtree("r".into()),
-                NodeMatch::Exact("global".into()),
-            ],
-        };
+    fn the_root_filter_keeps_sibling_projects_out() {
         assert_eq!(
-            node_filter("devkit", &filter).as_deref(),
-            Some(r#"(project.is:"devkit.r" or project:"devkit.r." or project.is:"devkit")"#)
+            in_root("devkit"),
+            r#"(project.is:"devkit" or project:"devkit.")"#
         );
-        assert_eq!(
-            node_filter("devkit", &Filter::all()).as_deref(),
-            Some(r#"(project.is:"devkit" or project:"devkit.")"#)
-        );
-        assert_eq!(node_filter("devkit", &Filter { nodes: Vec::new() }), None);
     }
 
     #[test]
