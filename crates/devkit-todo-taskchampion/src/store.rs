@@ -230,6 +230,12 @@ impl TaskchampionStore {
             .ok_or_else(|| anyhow!("no todo {id}"))
     }
 
+    /// The full id of the parent `id` names, `None` for the top level.
+    fn resolve_parent(&self, replica: &mut Replica, id: Option<&str>) -> Result<Option<String>> {
+        id.map(|id| self.resolve(replica, id).map(|parent| parent.id))
+            .transpose()
+    }
+
     /// The order that places a todo after the last of its siblings: the todos
     /// on `project` under `parent`, other than `skip`.
     fn after_last(
@@ -331,10 +337,7 @@ impl TodoStore for TaskchampionStore {
 
     fn add(&self, todo: NewTodo) -> Result<String> {
         self.locked(|replica| {
-            let parent = match &todo.parent {
-                Some(parent) => Some(self.resolve(replica, parent)?.id),
-                None => None,
-            };
+            let parent = self.resolve_parent(replica, todo.parent.as_deref())?;
             let order = match todo.order {
                 Some(order) => order,
                 None => {
@@ -375,10 +378,7 @@ impl TodoStore for TaskchampionStore {
             }
             Edit::Move { id, parent, order } => {
                 let todo = self.resolve(replica, id)?;
-                let parent = match parent {
-                    Some(parent) => Some(self.resolve(replica, parent)?.id),
-                    None => None,
-                };
+                let parent = self.resolve_parent(replica, parent.as_deref())?;
                 let order = match order {
                     Some(order) => *order,
                     None => self.after_last(
