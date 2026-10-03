@@ -131,8 +131,14 @@ pub fn place_from(main: Option<&Worktree>, here: Option<&Worktree>) -> Place {
     Place::Workspace { repo, branch }
 }
 
-pub fn place_of(checkout: &Checkout) -> Place {
-    place_from(checkout.worktrees().first(), checkout.here())
+/// Where `checkout` sits. An error when its version control could not be run:
+/// that is not "outside any repository", and reading it as such would file
+/// todos on the global list.
+pub fn place_of(checkout: &Checkout) -> anyhow::Result<Place> {
+    if let Some(error) = checkout.error() {
+        anyhow::bail!("cannot tell which repository this is: {error}");
+    }
+    Ok(place_from(checkout.worktrees().first(), checkout.here()))
 }
 
 /// Which nodes a listing covers. A todo matching none of them stays out.

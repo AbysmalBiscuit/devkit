@@ -141,18 +141,21 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let actor = actor_from_env(caller, get);
     let session = node::session_from_env(get);
     let cwd = std::env::current_dir()?;
-    let place = place_at(&cwd);
+    let own_node = || Ok::<_, anyhow::Error>(node::node(&place_at(&cwd)?, session.as_ref()));
     let store = store();
     match cli.command {
-        TodoCommand::Scope => println!("{}", node::node(&place, session.as_ref())),
-        TodoCommand::List(args) => list(&store, &args, &place, session.as_ref(), &actor)?,
+        TodoCommand::Scope => println!("{}", own_node()?),
+        TodoCommand::List(args) => list(&store, &args, &cwd, session.as_ref(), &actor)?,
         TodoCommand::Add {
             text,
             parent,
             order,
             node,
         } => {
-            let node = node.unwrap_or_else(|| node::node(&place, session.as_ref()));
+            let node = match node {
+                Some(node) => node,
+                None => own_node()?,
+            };
             let id = store.add(NewTodo {
                 project: project_of(node),
                 description: text,
@@ -197,7 +200,7 @@ pub(crate) fn store() -> BuiltinStore {
 }
 
 /// Where `dir` sits: global outside any repository.
-pub(crate) fn place_at(dir: &Path) -> Place {
+pub(crate) fn place_at(dir: &Path) -> Result<Place> {
     node::place_of(&Checkout::at(dir))
 }
 
@@ -271,18 +274,21 @@ fn move_todo(
 fn list(
     store: &BuiltinStore,
     args: &ListArgs,
-    place: &Place,
+    cwd: &Path,
     session: Option<&SessionRef>,
     viewer: &Holder,
 ) -> Result<()> {
-    let visible = node::visible_nodes(place, session);
-    let filter = match (&args.node, &args.subtree, args.all) {
+    let visible = match (&args.node, &args.subtree, args.all) {
+        (None, None, false) => Some(node::visible_nodes(&place_at(cwd)?, session)),
+        _ => None,
+    };
+    let filter = match (&args.node, &args.subtree, &visible) {
         (Some(n), ..) => Filter::exact([n.clone()]),
         (_, Some(n), _) => Filter {
             nodes: vec![NodeMatch::Subtree(n.clone())],
         },
-        (_, _, true) => Filter::all(),
-        _ => Filter::exact(visible.clone()),
+        (_, _, Some(visible)) => Filter::exact(visible.clone()),
+        _ => Filter::all(),
     };
     let todos = store.list(&filter)?;
     if args.json {
@@ -290,12 +296,10 @@ fn list(
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
-    let nodes = if args.node.is_none() && args.subtree.is_none() && !args.all {
-        visible
-    } else {
+    let nodes = visible.unwrap_or_else(|| {
         let present: BTreeSet<&str> = todos.iter().map(Todo::node).collect();
         present.into_iter().map(str::to_string).collect()
-    };
+    });
     print!("{}", render::render_full(&nodes, &todos, viewer));
     Ok(())
 }
@@ -332,7 +336,7 @@ fn context(args: &ContextArgs) -> Option<String> {
         id: payload.session_id()?.to_string(),
     };
     let viewer = to_todo_holder(&payload.holder().ok()?);
-    let place = place_at(&hook::record::payload_cwd(&payload));
+    let place = place_at(&hook::record::payload_cwd(&payload)).ok()?;
     let visible = node::visible_nodes(&place, Some(&session));
     let todos = store().list(&Filter::exact(visible.clone())).ok()?;
     let lists = render::render_lists(&visible, &todos, &viewer);

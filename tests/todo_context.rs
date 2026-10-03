@@ -94,3 +94,17 @@ fn post_compact_prints_plain_text() {
     assert!(out.starts_with("Todo list, kept by devkit."), "{out}");
     assert!(out.contains("- [ ] one (1)"), "{out}");
 }
+
+#[test]
+fn a_failed_repository_lookup_means_silence() {
+    let p = Proj::new();
+    let no_git = tempfile::tempdir().unwrap();
+    let out = p.devkit_in(
+        &p.path,
+        &["todo", "context", "--harness", "claude-code"],
+        &[("PATH", no_git.path().to_str().unwrap())],
+        &event(&p, "SessionStart").to_string(),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+}

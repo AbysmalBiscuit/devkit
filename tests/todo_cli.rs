@@ -149,3 +149,17 @@ fn move_nests_and_reorders() {
     );
     assert_eq!(p.todo("2").order, Some(7));
 }
+
+/// A checkout git could not be asked about is not "outside any repository",
+/// so nothing lands on the global list by mistake.
+#[test]
+fn a_failed_repository_lookup_is_an_error_not_global() {
+    let p = Proj::new();
+    let no_git = tempfile::tempdir().unwrap();
+    let path = no_git.path().to_str().unwrap();
+    let scope = p.devkit(&["todo", "scope"], &[("PATH", path), S1[0]]);
+    assert_eq!(scope.status.code(), Some(1), "{}", stdout(&scope));
+    let add = p.devkit(&["todo", "add", "lost"], &[("PATH", path), S1[0]]);
+    assert_eq!(add.status.code(), Some(1));
+    assert!(p.todos().is_empty());
+}

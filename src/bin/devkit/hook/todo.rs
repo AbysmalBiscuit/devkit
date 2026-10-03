@@ -133,7 +133,10 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
     let (Some(session), Ok(actor)) = (payload.session_holder(), payload.holder()) else {
         return Ok(());
     };
-    let place = node::place_of(checkout);
+    // A checkout git could not read says nothing about where the todo lives.
+    let Ok(place) = node::place_of(checkout) else {
+        return Ok(());
+    };
     let node = node::node(
         &place,
         Some(&SessionRef {
