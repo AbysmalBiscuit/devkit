@@ -1,12 +1,17 @@
 //! `devkit todo`: the todo lists agents and people share, kept in devkit's
 //! own store.
 
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::BTreeSet,
+    hash::{DefaultHasher, Hash, Hasher},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use devkit_common::{
     caller::{self, Caller},
+    paths,
     vcs::Checkout,
 };
 use devkit_todo::{
@@ -15,7 +20,13 @@ use devkit_todo::{
     node::{self, GLOBAL, Place, SessionRef},
     render,
 };
+use pabal::AnyHarness;
 use serde_json::{Value, json};
+
+use crate::hook::{
+    self, HookEvent,
+    todo::{harness_of, to_todo_holder},
+};
 
 #[derive(Args)]
 pub struct TodoCli {
@@ -73,6 +84,29 @@ pub enum TodoCommand {
     /// Remove a todo for good, such as one whose text holds a secret. Needs a
     /// person at a terminal.
     Purge { id: String },
+    /// Print the todo block a hook injects, reading the hook payload on
+    /// stdin. Prints nothing on any failure.
+    Context(ContextArgs),
+}
+
+#[derive(Args)]
+pub struct ContextArgs {
+    /// Which harness sent the payload.
+    #[arg(long)]
+    pub harness: AnyHarness,
+    /// Whether the agent guide precedes the lists.
+    #[arg(long, value_enum, default_value_t = Guide::Full)]
+    pub guide: Guide,
+    /// Print nothing when the lists match the last ones injected for this
+    /// agent.
+    #[arg(long)]
+    pub if_changed: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Guide {
+    Full,
+    None,
 }
 
 #[derive(Args)]
@@ -92,6 +126,12 @@ pub struct ListArgs {
 }
 
 pub fn run(cli: TodoCli) -> Result<()> {
+    if let TodoCommand::Context(args) = cli.command {
+        if let Some(text) = context(&args) {
+            print!("{text}");
+        }
+        return Ok(());
+    }
     let caller = caller::caller();
     let get = |key: &str| std::env::var(key).ok();
     let actor = actor_from_env(caller, get);
@@ -133,6 +173,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
             top,
             order,
         } => move_todo(&store, id, parent, top, order)?,
+        TodoCommand::Context(_) => unreachable!("answered before the store is opened"),
         TodoCommand::Purge { id } => {
             if caller == Caller::Agent {
                 bail!(
@@ -274,4 +315,56 @@ pub(crate) fn alacritree_json(todo: &Todo) -> Option<Value> {
         "entry": todo.entry,
         "modified": todo.modified,
     }))
+}
+
+/// The block to inject, or `None` for silence: no payload, no session, a
+/// harness without session nodes, nothing new under `--if-changed`, or any
+/// store failure.
+fn context(args: &ContextArgs) -> Option<String> {
+    let payload = hook::read_payload(Some(args.harness), HookEvent::SessionStart)?;
+    let session = SessionRef {
+        harness: harness_of(payload.harness())?,
+        id: payload.session_id()?.to_string(),
+    };
+    let viewer = to_todo_holder(&payload.holder().ok()?);
+    let place = place_at(&hook::record::payload_cwd(&payload));
+    let visible = node::visible_nodes(&place, Some(&session));
+    let todos = store().list(&Filter::exact(visible.clone())).ok()?;
+    let lists = render::render_lists(&visible, &todos, &viewer);
+    let digest = render::digest(&lists);
+    let digest_path = digest_path(&viewer);
+    if args.if_changed && std::fs::read_to_string(&digest_path).is_ok_and(|seen| seen == digest) {
+        return None;
+    }
+    let text = match args.guide {
+        Guide::Full => {
+            let guide = render::guide(&node::node(&place, Some(&session)));
+            if lists.is_empty() {
+                guide
+            } else {
+                format!("{guide}\n{lists}")
+            }
+        }
+        Guide::None if lists.is_empty() => return None,
+        Guide::None => lists,
+    };
+    if let Some(dir) = digest_path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&digest_path, digest);
+    Some(match payload.context_answer(&text) {
+        Some(envelope) => format!("{envelope}\n"),
+        None => text,
+    })
+}
+
+/// Keyed on a hash of the full holder, so a sub-agent's injection never
+/// suppresses its session's.
+fn digest_path(holder: &Holder) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    holder.hash(&mut hasher);
+    paths::state_dir()
+        .join("todo")
+        .join("digests")
+        .join(format!("{:016x}", hasher.finish()))
 }

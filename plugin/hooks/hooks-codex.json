@@ -27,6 +27,11 @@
             "command": "devkit rules context --additional-context",
             "async": false,
             "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "devkit todo context --harness codex",
+            "async": false
           }
         ]
       },
@@ -92,6 +97,11 @@
           {
             "type": "command",
             "command": "devkit hook subagent-start --harness codex",
+            "async": false
+          },
+          {
+            "type": "command",
+            "command": "devkit todo context --harness codex",
             "async": false
           }
         ]
@@ -159,6 +169,11 @@
             "type": "command",
             "command": "devkit hook post-compact --harness codex",
             "async": false
+          },
+          {
+            "type": "command",
+            "command": "devkit todo context --harness codex",
+            "async": false
           }
         ]
       }
@@ -169,6 +184,11 @@
           {
             "type": "command",
             "command": "devkit hook user-prompt-submit --harness codex",
+            "async": false
+          },
+          {
+            "type": "command",
+            "command": "devkit todo context --harness codex --guide none --if-changed",
             "async": false
           }
         ]

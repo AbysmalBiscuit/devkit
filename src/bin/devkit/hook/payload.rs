@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use pabal::{AnyHarness, AnyPayload, AnyView, Fields, Response, Tool};
+use pabal::{AddContext, AnyHarness, AnyPayload, AnyView, Fields, Response, Tool};
 use serde_json::Value;
 
 use super::HookEvent;
@@ -143,6 +143,19 @@ impl Payload {
 
     pub fn tool(&self) -> Option<Tool<'_>> {
         self.0.tool()
+    }
+
+    /// The answer that adds `text` to the agent's context on an event whose
+    /// hook output the harness reads as JSON. `None` on any other event, and
+    /// where the harness has no such channel.
+    pub fn context_answer(&self, text: &str) -> Option<String> {
+        let response = match self.0.view() {
+            AnyView::SessionStart(v) => Some(v.add_context(text)),
+            AnyView::SubagentStart(v) => v.add_context(text),
+            AnyView::UserPromptSubmit(v) => v.add_context(text),
+            _ => None,
+        };
+        response.map(|r| r.to_string())
     }
 
     /// A `PreToolUse` answer that adds `text` to the agent's context and

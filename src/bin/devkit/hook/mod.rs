@@ -22,10 +22,11 @@ mod dialect;
 mod edit;
 mod gate;
 mod mcp;
-mod payload;
+pub(crate) mod payload;
 pub mod record;
 pub(crate) mod rules;
 mod shell;
+pub(crate) mod todo;
 mod writes;
 
 use std::io::{Read, Write};
@@ -156,7 +157,7 @@ fn record_only(payload: &Payload, event: HookEvent) -> devkit_common::harness_lo
 /// Read the hook payload from stdin. `None` covers an unreadable pipe, text
 /// that is not JSON, and JSON that is not an object: none is a payload to
 /// judge, and the caller's fail-closed rule is the same for all three.
-fn read_payload(harness: Option<AnyHarness>, event: HookEvent) -> Option<Payload> {
+pub(crate) fn read_payload(harness: Option<AnyHarness>, event: HookEvent) -> Option<Payload> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf).ok()?;
     Payload::new(harness, event, serde_json::from_str::<Value>(&buf).ok()?)
