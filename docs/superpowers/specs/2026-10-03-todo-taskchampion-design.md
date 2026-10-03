@@ -76,7 +76,7 @@ Some but not all server credentials resolving, or a client id that is not a UUID
 Each of the three names resolves through, in order:
 
 1. **The environment.** A container sets them at deploy time; launching the harness under `doppler run` also puts them here.
-2. **Doppler**, only when `doppler_project` is set. One `doppler secrets get DEVKIT_TODO_SYNC_URL DEVKIT_TODO_SYNC_CLIENT_ID DEVKIT_TODO_SYNC_SECRET --json --project <p> [--config <c>]` call resolves all three. Any failure, including a missing `doppler`, falls through, and its message is dropped, so a value can never reach a log.
+2. **Doppler**, only when `doppler_project` is set. One `doppler secrets get DEVKIT_TODO_SYNC_URL DEVKIT_TODO_SYNC_CLIENT_ID DEVKIT_TODO_SYNC_SECRET --json --no-exit-on-missing-secret --attempts 1 --timeout 5s --project <p> [--config <c>]` call resolves all three; a name it lacks, or one whose `computed` value is null, counts as unresolved. Any failure, including a missing `doppler`, falls through, and its message is dropped, so a value can never reach a log.
 3. **The secrets file**, `~/.config/devkit/secrets.toml`, under `devkit_todo_sync_url`, `devkit_todo_sync_client_id` and `devkit_todo_sync_secret`, the lowercase spelling `secrets::resolve` already maps environment names to.
 
 Changes to `devkit_common::secrets`:

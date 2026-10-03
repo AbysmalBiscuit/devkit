@@ -65,7 +65,7 @@ pub fn resolve_many(names: &[&str], doppler: Option<&DopplerScope>) -> Vec<(Opti
 #[test] fn the_new_keys_round_trip_through_the_file()  // store_at(path, "devkit_todo_sync_secret", ..) then load
 ```
 
-Doppler's call is `doppler secrets get <NAMES...> --json --project <p> [--config <c>]`, and stdout is `{"<NAME>": {"computed": "<value>", ...}, ...}`. The fake prints that shape. Before relying on it, confirm the shape in Doppler's CLI documentation or `doppler secrets get --help` on a machine that has `doppler`, and fix the parser and the fake together if it differs.
+Doppler's call is `doppler secrets get <NAMES...> --json --no-exit-on-missing-secret --attempts 1 --timeout 5s --project <p> [--config <c>]`. Without `--no-exit-on-missing-secret`, one missing name fails the whole call. The defaults of 5 attempts and a 10-second timeout per attempt are too slow for a store open. stdout is `{"<NAME>": {"computed": "<value>" | null, "note": ..., ...}, ...}` (Doppler CLI 3.76.6, `pkg/printer/enclave.go:282-302`). A `null` computed value, or an absent name, counts as unresolved. The fake prints that shape.
 
 - [ ] **Step 2: Run** `cargo nextest run -p devkit-common secrets`. Expected: FAIL to compile.
 - [ ] **Step 3: Implement**, with `Source::Doppler` handled in `doctor.rs`'s match, printed as `doppler`.
@@ -301,5 +301,4 @@ sync.encryption_secret=<secret>
 
 ## Unresolved
 
-- The exact JSON shape of `doppler secrets get --json`. Task 1 checks it before the parser is trusted. `doppler` is not installed on the machine this plan was written on.
 - How to stall a taskchampion sync partway for `an_interrupted_sync_rolls_back`. Task 4 tries an external stall first and falls back to a test-only failpoint.
