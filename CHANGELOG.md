@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.10](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.9...v0.14.10) (2026-10-03)
+
+
+### Features
+
+* **todo:** track agent todo lists in devkit ([#219](https://github.com/AbysmalBiscuit/devkit/issues/219)) ([7bda9b4](https://github.com/AbysmalBiscuit/devkit/commit/7bda9b459f25ce2366ac4b48e53faad9b2ee74bd))
+
 ## [0.14.9](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.8...v0.14.9) (2026-09-30)
 
 
