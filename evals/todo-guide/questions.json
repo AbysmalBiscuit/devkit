@@ -1,0 +1,36 @@
+[
+  {
+    "id": "own-node",
+    "question": "Which node do you write your own todos to?",
+    "kind": "text",
+    "expect": [
+      "acme.main.claude-s1"
+    ],
+    "proof": "tests/todo_context.rs session_start_injects_the_guide_and_lists"
+  },
+  {
+    "id": "sub-agent-claim",
+    "question": "You are a sub-agent this session started, asked to work on the todo `write the migration`. What command do you run before working on it?",
+    "kind": "command",
+    "expect": [
+      "devkit todo start 2"
+    ],
+    "proof": "tests/todo_hooks.rs attribution_a_sub_agents_start_is_recorded_as_the_sub_agent"
+  },
+  {
+    "id": "drop",
+    "question": "The todo `set up the schema` is no longer needed. What command drops it?",
+    "kind": "command",
+    "expect": [
+      "devkit todo cancel 1"
+    ],
+    "proof": "tests/todo_cli.rs json_matches_alacritrees_task_shape"
+  },
+  {
+    "id": "native-tool",
+    "question": "Suppose you also had a built-in task tool. Should you track your steps with it rather than with `devkit todo` commands?",
+    "kind": "bool",
+    "expect": true,
+    "proof": "tests/todo_hooks.rs capture_task_create_and_update_mirror_into_the_store"
+  }
+]
