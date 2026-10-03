@@ -562,3 +562,27 @@ fn a_sync_failure_never_shows_the_urls_credentials() {
         }
     }
 }
+
+#[test]
+fn list_sync_reports_a_sync_that_could_not_run() {
+    let shared = Shared::new();
+    let out = shared.p.devkit(&["todo", "add", "one"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let dir = replica_dir(&shared.p);
+    poll_until(Duration::from_secs(30), "the background sync", || {
+        !dir.join("sync.pending").exists()
+    });
+    let lock = dir.join("sync.lock");
+    poll_until(Duration::from_secs(30), "the sync lock to free", || {
+        std::fs::remove_file(&lock).is_ok() || !lock.exists()
+    });
+    std::fs::create_dir(&lock).unwrap();
+    let out = shared.p.devkit(&["todo", "list", "--all", "--sync"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("devkit todo: sync failed:"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stdout(&out).contains("one"), "{}", stdout(&out));
+}

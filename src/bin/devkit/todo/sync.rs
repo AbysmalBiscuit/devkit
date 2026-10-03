@@ -152,22 +152,23 @@ pub(crate) fn wait_for(store: &TaskchampionStore, cwd: &Path, wait: Duration) ->
         Err(e) => return SyncOutcome::Failed(format!("{e:#}")),
     };
     let deadline = Instant::now() + wait;
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(50));
             }
             Ok(None) => return SyncOutcome::StillRunning,
             Err(e) => return SyncOutcome::Failed(e.to_string()),
         }
-    }
+    };
     let failed = failed_path(store.data_dir());
     let fresh = fs::metadata(&failed)
         .and_then(|m| m.modified())
         .is_ok_and(|at| at >= started);
-    match fresh {
-        true => SyncOutcome::Failed(fs::read_to_string(&failed).unwrap_or_default()),
-        false => SyncOutcome::Done,
+    match (fresh, status.success()) {
+        (true, _) => SyncOutcome::Failed(fs::read_to_string(&failed).unwrap_or_default()),
+        (false, true) => SyncOutcome::Done,
+        (false, false) => SyncOutcome::Failed(format!("devkit todo sync exited with {status}")),
     }
 }
