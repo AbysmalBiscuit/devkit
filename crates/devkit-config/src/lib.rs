@@ -1871,7 +1871,8 @@ pub fn home_config_path() -> Option<PathBuf> {
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct LayerMarker {
     /// Stop walking upward at this file, and drop
-    /// `~/.config/devkit/config.toml` from the layer stack.
+    /// `~/.config/devkit/config.toml` from the layer stack, all but its
+    /// `[todo]` table, which describes the machine rather than a project.
     #[serde(default)]
     pub root: bool,
 }
@@ -1886,27 +1887,31 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
 }
 
 /// Build the ordered layer list (lowest->highest precedence): the home config
-/// (unless a `root = true` marker cuts it off), then the project layers
-/// `project_layers` finds for `start`. An explicit path or `$DEVKIT_CONFIG` is
-/// the sole layer.
+/// (only its `[todo]` table when a `root = true` marker cuts it off), then the
+/// project layers `project_layers` finds for `start`. An explicit path or
+/// `$DEVKIT_CONFIG` replaces the project layers and the home config, all but
+/// its `[todo]` table.
 fn discover(
     explicit: Option<&Path>,
     start: &Path,
     main_checkout: Option<&Path>,
     home: Option<&Path>,
 ) -> Result<Vec<(PathBuf, toml::Table)>> {
+    let explicit = explicit
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("DEVKIT_CONFIG").map(PathBuf::from));
     if let Some(p) = explicit {
-        return Ok(vec![read_layer(p)?]);
-    }
-    if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
-        return Ok(vec![read_layer(&PathBuf::from(p))?]);
+        let mut layers: Vec<_> = home_todo_layer(home)?.into_iter().collect();
+        layers.push(read_layer(&p)?);
+        return Ok(layers);
     }
 
     let found = layers::project_layers_rooted(start, main_checkout)?;
 
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
-    if !found.rooted
-        && let Some(h) = home
+    if found.rooted {
+        layers.extend(home_todo_layer(home)?);
+    } else if let Some(h) = home
         && h.is_file()
     {
         layers.push(read_layer(h)?);
@@ -1924,6 +1929,21 @@ fn discover(
         return Err(anyhow::Error::new(NoConfig));
     }
     Ok(layers)
+}
+
+/// The home config's `[todo]` table alone, as the base layer under an explicit
+/// or rooted config that otherwise drops the home config. Where todos are
+/// kept is a fact about the machine, so a project's config never cuts it off.
+fn home_todo_layer(home: Option<&Path>) -> Result<Option<(PathBuf, toml::Table)>> {
+    let Some(h) = home.filter(|h| h.is_file()) else {
+        return Ok(None);
+    };
+    let (path, mut table) = read_layer(h)?;
+    Ok(table.remove("todo").map(|todo| {
+        let mut only = toml::Table::new();
+        only.insert("todo".to_string(), todo);
+        (path, only)
+    }))
 }
 
 /// No config file exists anywhere the search looks. Carried as a distinct type

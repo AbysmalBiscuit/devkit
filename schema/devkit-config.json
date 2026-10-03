@@ -753,7 +753,7 @@
       "properties": {
         "root": {
           "default": false,
-          "description": "Stop walking upward at this file, and drop\n`~/.config/devkit/config.toml` from the layer stack.",
+          "description": "Stop walking upward at this file, and drop\n`~/.config/devkit/config.toml` from the layer stack, all but its\n`[todo]` table, which describes the machine rather than a project.",
           "type": "boolean"
         }
       },

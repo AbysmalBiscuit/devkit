@@ -238,3 +238,31 @@ fn the_default_listing_matches_nodes_with_a_space() {
         )
     );
 }
+
+/// `[todo]` describes the machine, so the home config's backend holds under
+/// a project config that cuts the home layer off.
+#[test]
+fn the_home_backend_holds_under_a_rooted_project_config() {
+    let Some(tw) = Tw::new() else {
+        return;
+    };
+    std::fs::write(tw.p.path.join("devkit.toml"), "[config]\nroot = true\n").unwrap();
+    let id = short(&tw.devkit(&["todo", "add", "one"], &[S1]));
+    let tasks = tw.export();
+    assert_eq!(tasks.len(), 1, "{tasks:?}");
+    assert!(tasks[0]["uuid"].as_str().unwrap().starts_with(&id));
+}
+
+#[test]
+fn the_home_backend_holds_under_an_explicit_config() {
+    let Some(tw) = Tw::new() else {
+        return;
+    };
+    let explicit = tw.p.outside().join("explicit.toml");
+    std::fs::write(&explicit, "[parallelism]\nthreads = 2\n").unwrap();
+    let explicit = explicit.to_string_lossy().into_owned();
+    let id = short(&tw.devkit(&["todo", "add", "one"], &[S1, ("DEVKIT_CONFIG", &explicit)]));
+    let tasks = tw.export();
+    assert_eq!(tasks.len(), 1, "{tasks:?}");
+    assert!(tasks[0]["uuid"].as_str().unwrap().starts_with(&id));
+}
