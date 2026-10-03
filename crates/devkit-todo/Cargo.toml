@@ -1,0 +1,16 @@
+[package]
+name = "devkit-todo"
+description = "Agent todo lists: the model, the claim rule, node naming and the built-in store"
+edition.workspace = true
+version = "0.14.9" # x-release-please-version
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+chrono.workspace = true
+devkit-common.workspace = true
+devkit-vcs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

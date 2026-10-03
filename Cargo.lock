@@ -569,6 +569,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "devkit-todo"
+version = "0.14.9"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "devkit-common",
+ "devkit-vcs",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "devkit-vcs"
 version = "0.14.9"
 dependencies = [
