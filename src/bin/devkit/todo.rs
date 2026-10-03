@@ -17,6 +17,7 @@ use devkit_common::{
 use devkit_todo::{
     BuiltinStore, Edit, Filter, Holder, NewTodo, NodeMatch, ORDER_GAP, Status, StatusKind, Todo,
     TodoStore,
+    native::NativeMap,
     node::{self, GLOBAL, Place, SessionRef},
     render,
 };
@@ -184,7 +185,8 @@ pub fn run(cli: TodoCli) -> Result<()> {
                      (devkit todo cancel <id>)"
                 );
             }
-            store.apply(&Edit::Purge(id))?;
+            store.apply(&Edit::Purge(id.clone()))?;
+            NativeMap::at(BuiltinStore::default_dir()).forget(&id)?;
         }
     }
     Ok(())

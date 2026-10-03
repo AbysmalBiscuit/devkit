@@ -362,3 +362,16 @@ fn plan_a_cancel_refused_by_a_claim_is_retried_on_the_next_list() {
     post_tool_use(&p, "claude-code", &[empty]);
     assert_eq!(p.todo(&two).status.kind(), StatusKind::Cancelled);
 }
+
+#[test]
+fn plan_purge_forgets_the_mirrored_text() {
+    let p = Proj::new();
+    let mut first = fixture(&p, "claude-todowrite.jsonl").remove(0);
+    first["tool_input"]["todos"][0]["content"] = json!("SECRET-abc123");
+    post_tool_use(&p, "claude-code", &[first]);
+    let id = by_text(&p, "SECRET-abc123").id;
+    let purge = p.devkit(&["todo", "purge", &id], &[("DEVKIT_CALLER", "human")]);
+    assert!(purge.status.success(), "{}", todoenv::stderr(&purge));
+    let native = std::fs::read_to_string(p.state().join("todo/native.json")).unwrap();
+    assert!(!native.contains("SECRET-abc123"), "{native}");
+}

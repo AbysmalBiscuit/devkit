@@ -109,6 +109,18 @@ impl NativeMap {
         })
     }
 
+    /// Drops every native id and snapshot step that points at `todo`, so a
+    /// purged todo's text leaves no copy here.
+    pub fn forget(&self, todo: &str) -> Result<()> {
+        self.with_doc(|doc| {
+            doc.ids.retain(|_, id| id != todo);
+            for steps in doc.snapshots.values_mut() {
+                steps.retain(|(_, id)| id != todo);
+            }
+            Ok(())
+        })
+    }
+
     pub fn snapshot(&self, harness: Harness, holder: &Holder) -> Result<Vec<(String, String)>> {
         self.with_doc(|doc| {
             Ok(doc
