@@ -12,7 +12,8 @@ use devkit_todo::{
 };
 use devkit_todo_taskwarrior::schema::{DEFAULT_ROOT, Exported, project_of};
 use taskchampion::{
-    Operations, Replica, StorageConfig, Task, Uuid, chrono::Utc, storage::AccessMode,
+    Operations, Replica, Server, ServerConfig, StorageConfig, Task, Uuid, chrono::Utc,
+    storage::AccessMode,
 };
 
 /// Where a replica syncs.
@@ -38,6 +39,30 @@ impl fmt::Debug for SyncTarget {
                 .field("secret", &"<redacted>")
                 .finish(),
         }
+    }
+}
+
+impl SyncTarget {
+    fn server(&self) -> Result<Box<dyn Server>> {
+        let config = match self {
+            Self::Dir(dir) => {
+                std::fs::create_dir_all(dir)
+                    .with_context(|| format!("creating the todo sync dir {}", dir.display()))?;
+                ServerConfig::Local {
+                    server_dir: dir.clone(),
+                }
+            }
+            Self::Server {
+                url,
+                client_id,
+                secret,
+            } => ServerConfig::Remote {
+                url: url.clone(),
+                client_id: *client_id,
+                encryption_secret: secret.clone(),
+            },
+        };
+        Ok(config.into_server()?)
     }
 }
 
@@ -92,6 +117,21 @@ impl TaskchampionStore {
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// One full sync with the target under the replica lock, a no-op with no
+    /// target. taskchampion runs a sync as one transaction, so a sync that
+    /// stops partway leaves the replica as it was; nothing in devkit stops one
+    /// on purpose.
+    pub fn sync_once(&self) -> Result<()> {
+        let Some(target) = &self.target else {
+            return Ok(());
+        };
+        self.locked(|replica| {
+            let mut server = target.server()?;
+            replica.sync(&mut server, false)?;
+            Ok(())
+        })
     }
 
     /// Runs `f` on the replica, opened under `<data_dir>/devkit.lock`.

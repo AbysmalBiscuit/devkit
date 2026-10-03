@@ -135,6 +135,22 @@ fn data_dir(config: &TaskchampionConfig) -> std::path::PathBuf {
 }
 
 impl Store {
+    /// The taskchampion replica this store syncs: `None` for another backend
+    /// or a replica with no sync target.
+    pub(crate) fn synced_replica(&self) -> Option<&TaskchampionStore> {
+        match self {
+            Self::Taskchampion(replica) if replica.target().is_some() => Some(replica),
+            _ => None,
+        }
+    }
+
+    /// After a write: starts a background sync from `cwd` and returns at once.
+    pub(crate) fn spawn_sync(&self, cwd: &Path) {
+        if let Some(replica) = self.synced_replica() {
+            super::sync::spawn(replica, cwd);
+        }
+    }
+
     pub(crate) fn from_config(config: &TodoConfig) -> Self {
         match config.backend {
             TodoBackend::Builtin => Self::Builtin(BuiltinStore::open()),

@@ -5,7 +5,7 @@
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
 };
 
 use devkit_todo::{Filter, Todo, TodoStore};
@@ -87,6 +87,24 @@ impl Proj {
         env: &[(&str, &str)],
         stdin: &str,
     ) -> Output {
+        let mut child = self.start(dir, program, args, env);
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// `devkit` started in the checkout with `env` set, left running.
+    pub fn devkit_child(&self, args: &[&str], env: &[(&str, &str)]) -> Child {
+        let mut child = self.start(&self.path, env!("CARGO_BIN_EXE_devkit"), args, env);
+        drop(child.stdin.take());
+        child
+    }
+
+    fn start(&self, dir: &Path, program: &str, args: &[&str], env: &[(&str, &str)]) -> Child {
         let mut cmd = Command::new(program);
         cmd.env("HOME", self.home.path())
             .env("XDG_STATE_HOME", self.home.path())
@@ -105,14 +123,7 @@ impl Proj {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = cmd.spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
+        cmd.spawn().unwrap()
     }
 
     pub fn devkit(&self, args: &[&str], env: &[(&str, &str)]) -> Output {

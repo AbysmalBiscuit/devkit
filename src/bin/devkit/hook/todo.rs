@@ -12,7 +12,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
-use devkit_common::vcs::Checkout;
+use devkit_common::{store::LockBusy, vcs::Checkout};
 use devkit_todo::{
     Claimed, Edit, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
@@ -51,7 +51,10 @@ pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout, cwd:
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
         let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
-        let _ = Store::for_hook(checkout, cwd).apply(&Edit::ReleaseAll { holder });
+        let store = Store::for_hook(checkout, cwd);
+        if store.apply(&Edit::ReleaseAll { holder }).is_ok() {
+            store.spawn_sync(cwd);
+        }
     }
 }
 
@@ -156,9 +159,12 @@ fn with_holder(command: &str, analysis: &Analysis, holder: &str) -> Option<Strin
 
 /// Mirrors the harness's own task and plan tools into the store. The native
 /// tool has already run, so a failure, a claim conflict included, is reported
-/// on stderr and skipped.
+/// on stderr and skipped. A store whose lock stayed busy past a hook's wait
+/// is skipped in silence.
 pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
-    if let Err(e) = try_capture(payload, checkout) {
+    if let Err(e) = try_capture(payload, checkout)
+        && e.downcast_ref::<LockBusy>().is_none()
+    {
         eprintln!("devkit todo: {e:#}");
     }
 }
@@ -220,12 +226,13 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
             id: session.to_string(),
         }),
     );
+    let cwd = record::payload_cwd(payload);
     let c = Capture {
         harness,
         session: to_todo_holder(&session),
         actor: to_todo_holder(&actor),
         node,
-        store: Store::for_hook(checkout, &record::payload_cwd(payload)),
+        store: Store::for_hook(checkout, &cwd),
         map: NativeMap::at(devkit_todo::state_dir()),
     };
     let raw = payload.raw();
@@ -235,7 +242,9 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
         NativeTool::TaskUpdate => task_update(&c, input),
         NativeTool::UpdatePlan => list_replace(&c, &input["plan"], "step"),
         NativeTool::TodoWrite => list_replace(&c, &input["todos"], "content"),
-    }
+    }?;
+    c.store.spawn_sync(&cwd);
+    Ok(())
 }
 
 /// Claude Code's task list is shared by a session and its sub-agents, so the

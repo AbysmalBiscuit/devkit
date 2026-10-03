@@ -13,7 +13,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::ErrorKind,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
@@ -198,9 +198,29 @@ pub fn with_file_lock<T>(lock_path: &Path, f: impl FnOnce() -> Result<T>) -> Res
     f()
 }
 
-/// As [`with_file_lock`], but gives up once the lock has been held by someone
-/// else for `wait`, with an error saying the todo store is busy, for a caller
-/// that must not block behind a long holder.
+/// [`with_file_lock_for`]'s error when the lock stayed held past its wait.
+#[derive(Debug)]
+pub struct LockBusy {
+    pub path: PathBuf,
+    pub wait: std::time::Duration,
+}
+
+impl std::fmt::Display for LockBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "todo store busy: {} still locked after {} ms",
+            self.path.display(),
+            self.wait.as_millis()
+        )
+    }
+}
+
+impl std::error::Error for LockBusy {}
+
+/// As [`with_file_lock`], but gives up with [`LockBusy`] once someone else has
+/// held the lock for `wait`, for a caller that must not block behind a long
+/// holder.
 pub fn with_file_lock_for<T>(
     lock_path: &Path,
     wait: std::time::Duration,
@@ -221,11 +241,11 @@ pub fn with_file_lock_for<T>(
             Ok(_guard) => return f(),
             Err(e) if e.kind() != std::io::ErrorKind::WouldBlock => return Err(e.into()),
             Err(_) if std::time::Instant::now() >= deadline => {
-                anyhow::bail!(
-                    "todo store busy: {} still locked after {} ms",
-                    lock_path.display(),
-                    wait.as_millis()
-                )
+                return Err(LockBusy {
+                    path: lock_path.to_path_buf(),
+                    wait,
+                }
+                .into());
             }
             Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
         }

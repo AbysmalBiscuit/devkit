@@ -1,14 +1,20 @@
 //! `devkit todo` and the todo hooks on the taskchampion backend, chosen by
 //! `DEVKIT_TODO_BACKEND` as a container chooses it.
 
+#[path = "common/syncserver.rs"]
+mod syncserver;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
-use devkit_todo::{Filter, Todo, TodoStore};
-use devkit_todo_taskchampion::TaskchampionStore;
+use devkit_todo::{Filter, NewTodo, Todo, TodoStore};
+use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
 use serde_json::{Value, json};
+use syncserver::{Refusing, Silent, SyncServer};
 use todoenv::{Proj, stderr, stdout};
 
 const SESSION: &str = "732b6b74-6009-478a-abe2-4129415b6007";
@@ -152,4 +158,211 @@ fn a_half_set_server_config_names_what_is_missing() {
     let err = stderr(&out);
     assert!(err.contains("DEVKIT_TODO_SYNC_CLIENT_ID"), "{err}");
     assert!(!err.contains(SECRET), "{err}");
+}
+
+/// The variables that select the backend and point it at the server `url`.
+fn server_env(url: &str) -> [(&str, &str); 4] {
+    [
+        ("DEVKIT_TODO_BACKEND", "taskchampion"),
+        ("DEVKIT_TODO_SYNC_URL", url),
+        ("DEVKIT_TODO_SYNC_CLIENT_ID", CLIENT_ID),
+        ("DEVKIT_TODO_SYNC_SECRET", SECRET),
+    ]
+}
+
+/// A replica outside any `Proj`, syncing with the server at `url` as the
+/// same client.
+fn other_replica(dir: &std::path::Path, url: &str) -> TaskchampionStore {
+    TaskchampionStore::at(dir.join("other")).with_target(SyncTarget::Server {
+        url: url.to_string(),
+        client_id: Uuid::parse_str(CLIENT_ID).unwrap(),
+        secret: SECRET.as_bytes().to_vec(),
+    })
+}
+
+fn descriptions(store: &TaskchampionStore) -> Vec<String> {
+    let mut out: Vec<String> = store
+        .list(&Filter::all())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.description)
+        .collect();
+    out.sort();
+    out
+}
+
+/// Polls `done` until it holds, panicking with `what` after `limit`.
+fn poll_until(limit: Duration, what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + limit;
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn add_returns_before_an_unanswering_server() {
+    let p = Proj::new();
+    let server = Silent::start();
+    let started = Instant::now();
+    let out = p.devkit(&["todo", "add", "one"], &server_env(&server.url));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    poll_until(
+        Duration::from_secs(30),
+        "the background sync to connect",
+        || server.connections() > 0,
+    );
+}
+
+#[test]
+fn a_failed_sync_holds_off_background_attempts() {
+    let p = Proj::new();
+    let server = Refusing::start();
+    let env = server_env(&server.url);
+    let out = p.devkit(&["todo", "add", "one"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let failed = replica_dir(&p).join("sync.failed");
+    poll_until(Duration::from_secs(30), "sync.failed", || failed.exists());
+    let after_failure = server.accepts();
+    assert!(after_failure > 0);
+
+    let out = p.devkit(&["todo", "add", "two"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let started = Instant::now();
+    let out = p.devkit(&["todo", "sync", "--background"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(server.accepts(), after_failure);
+    assert!(replica_dir(&p).join("sync.pending").exists());
+}
+
+#[test]
+fn todo_sync_reports_failure_and_exits_zero() {
+    let p = Proj::new();
+    let server = Refusing::start();
+    let out = p.devkit(&["todo", "sync"], &server_env(&server.url));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("devkit todo: sync failed:"), "{err}");
+    assert!(err.contains("changes are saved"), "{err}");
+    assert!(!err.contains(SECRET) && !err.contains(CLIENT_ID), "{err}");
+}
+
+#[test]
+fn a_sync_carries_writes_made_while_it_ran() {
+    let p = Proj::new();
+    let server = SyncServer::start();
+    let env = server_env(&server.url);
+    let seeded = p.devkit(&["todo", "add", "first"], &env);
+    assert!(seeded.status.success(), "{}", stderr(&seeded));
+    let pending = replica_dir(&p).join("sync.pending");
+    poll_until(Duration::from_secs(30), "the first sync", || {
+        server.versions().len() == 1 && !pending.exists()
+    });
+
+    server.hang_on_child_of(None);
+    let mut running = p.devkit_child(&["todo", "sync"], &env);
+    server.wait_hung(Duration::from_secs(30));
+    let mut writer = p.devkit_child(&["todo", "add", "second"], &env);
+    server.release();
+    assert!(running.wait().unwrap().success());
+    assert!(writer.wait().unwrap().success());
+
+    let dir = tempfile::tempdir().unwrap();
+    let other = other_replica(dir.path(), &server.url);
+    poll_until(
+        Duration::from_secs(30),
+        "the second todo on the server",
+        || {
+            other.sync_once().unwrap();
+            descriptions(&other) == ["first", "second"]
+        },
+    );
+}
+
+#[test]
+fn an_interrupted_sync_rolls_back() {
+    let server = SyncServer::start();
+    let dir = tempfile::tempdir().unwrap();
+    let other = other_replica(dir.path(), &server.url);
+    for text in ["one", "two"] {
+        other
+            .add(NewTodo {
+                project: Some("proj.main".into()),
+                description: text.into(),
+                parent: None,
+                order: None,
+            })
+            .unwrap();
+        other.sync_once().unwrap();
+    }
+    let versions = server.versions();
+    assert_eq!(versions.len(), 2);
+
+    let p = Proj::new();
+    let local = p.devkit(&["todo", "add", "mine"], &backend("taskchampion"));
+    assert!(local.status.success(), "{}", stderr(&local));
+    server.hang_on_child_of(Some(&versions[0]));
+    let mut sync = p.devkit_child(&["todo", "sync"], &server_env(&server.url));
+    server.wait_hung(Duration::from_secs(30));
+    sync.kill().unwrap();
+    sync.wait().unwrap();
+    server.release();
+
+    let mine: Vec<String> = replica(&p).into_iter().map(|t| t.description).collect();
+    assert_eq!(mine, ["mine"]);
+    let out = p.devkit(&["todo", "sync"], &server_env(&server.url));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    let mut all: Vec<String> = replica(&p).into_iter().map(|t| t.description).collect();
+    all.sort();
+    assert_eq!(all, ["mine", "one", "two"]);
+}
+
+#[test]
+fn a_hook_gives_up_on_a_held_replica_within_its_budget() {
+    let p = Proj::new();
+    let lock = replica_dir(&p).join("devkit.lock");
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        devkit_common::store::with_file_lock(&lock, || {
+            held_tx.send(()).unwrap();
+            release_rx.recv().ok();
+            Ok(())
+        })
+        .unwrap();
+    });
+    held_rx.recv().unwrap();
+    let create = json!({
+        "session_id": SESSION,
+        "cwd": p.path,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "TaskCreate",
+        "tool_input": {"subject": "alpha", "description": "alpha"},
+        "tool_response": {"task": {"id": "1", "subject": "alpha"}},
+    });
+    let started = Instant::now();
+    let out = p.hook_with(
+        "post-tool-use",
+        "claude-code",
+        &create,
+        &backend("taskchampion"),
+    );
+    let took = started.elapsed();
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(stdout(&out), "");
+    assert_eq!(stderr(&out), "");
+    assert!(
+        took >= Duration::from_millis(1500) && took < Duration::from_secs(4),
+        "{took:?}"
+    );
+    assert!(replica(&p).is_empty());
 }

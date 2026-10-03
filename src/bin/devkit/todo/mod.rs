@@ -2,6 +2,7 @@
 //! `[todo] backend` names.
 
 pub(crate) mod store;
+pub(crate) mod sync;
 
 use std::{collections::BTreeSet, path::Path};
 
@@ -85,6 +86,17 @@ pub enum TodoCommand {
     /// For text that must disappear, such as a pasted secret. Agents cancel
     /// instead, which keeps the record.
     Purge { id: String },
+    /// Sync the todo store with its sync target.
+    ///
+    /// Only a taskchampion store with a sync target syncs. A failure is
+    /// reported on stderr and exits 0: changes stay saved and sync with the
+    /// next write.
+    Sync {
+        /// Give up at once when another sync is running or one failed in
+        /// the last minute. What a write starts after it commits.
+        #[arg(long, hide = true)]
+        background: bool,
+    },
     /// Print the todo block a hook injects.
     ///
     /// Reads the hook payload on stdin, and prints nothing on any failure.
@@ -141,6 +153,10 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let own_node = || Ok::<_, anyhow::Error>(node::node(&place_at(&cwd)?, session.as_ref()));
     let store = Store::for_cli(&cwd)?;
+    let writes = !matches!(
+        cli.command,
+        TodoCommand::Scope | TodoCommand::List(_) | TodoCommand::Sync { .. }
+    );
     match cli.command {
         TodoCommand::Scope => println!("{}", own_node()?),
         TodoCommand::List(args) => list(&store, &args, &cwd, session.as_ref(), &actor)?,
@@ -178,6 +194,11 @@ pub fn run(cli: TodoCli) -> Result<()> {
             top,
             order,
         } => move_todo(&store, id, parent, top, order)?,
+        TodoCommand::Sync { background } => match store.synced_replica() {
+            Some(replica) => sync::run(replica, background)?,
+            None if !background => eprintln!("devkit todo: this todo store has no sync target"),
+            None => {}
+        },
         TodoCommand::Context(_) => unreachable!("answered before the store is opened"),
         TodoCommand::Purge { id } => {
             if caller == Caller::Agent {
@@ -192,6 +213,9 @@ pub fn run(cli: TodoCli) -> Result<()> {
             store.apply(&Edit::Purge(todo.id.clone()))?;
             NativeMap::at(devkit_todo::state_dir()).forget(&todo.id)?;
         }
+    }
+    if writes {
+        store.spawn_sync(&cwd);
     }
     Ok(())
 }
