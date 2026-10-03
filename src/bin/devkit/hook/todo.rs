@@ -4,7 +4,8 @@
 use anyhow::Result;
 use devkit_command::Analysis;
 use devkit_todo::{
-    BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, StatusKind, TodoStore,
+    BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, TodoStore,
+    diff::{Change, Step, diff, pair},
     native::NativeMap,
     node::{self, Harness, SessionRef},
 };
@@ -145,6 +146,8 @@ fn try_capture(payload: &Payload) -> Result<()> {
     match payload.tool_name() {
         Some("TaskCreate") => task_create(&c, input, &raw["tool_response"]),
         Some("TaskUpdate") => task_update(&c, input),
+        Some("update_plan") => list_replace(&c, &input["plan"], "step"),
+        Some("TodoWrite") => list_replace(&c, &input["todos"], "content"),
         _ => Ok(()),
     }
 }
@@ -193,6 +196,84 @@ fn task_update(c: &Capture, input: &Value) -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+/// A tool that resends its whole list on every call, diffed against the
+/// acting holder's previous list. Each agent context keeps its own list, so a
+/// sub-agent's first call never cancels its session's steps.
+fn list_replace(c: &Capture, list: &Value, text_key: &str) -> Result<()> {
+    let Some(list) = list.as_array() else {
+        return Ok(());
+    };
+    let next: Vec<Step> = list
+        .iter()
+        .filter_map(|item| {
+            Some(Step {
+                text: devkit_todo::one_line(item[text_key].as_str()?),
+                status: item["status"].as_str().and_then(native_status)?,
+            })
+        })
+        .collect();
+    let todos = c.store.list(&Filter::all())?;
+    let previous: Vec<(String, String, StatusKind)> = c
+        .map
+        .snapshot(c.harness, &c.actor)?
+        .into_iter()
+        .filter_map(|(text, id)| {
+            let status = todos.iter().find(|t| t.id == id)?.status.kind();
+            Some((text, id, status))
+        })
+        .collect();
+    let mut ids: Vec<Option<String>> = pair(&previous, &next)
+        .into_iter()
+        .map(|p| p.map(|i| previous[i].1.clone()))
+        .collect();
+    let changes = diff(&previous, &next);
+    let mut failed = None;
+    let mut apply = |edit: Edit| {
+        if let Err(e) = c.store.apply(&edit) {
+            failed.get_or_insert(e);
+        }
+    };
+    for change in changes {
+        match change {
+            Change::Add { index } => {
+                let step = &next[index];
+                let id = c.store.add(NewTodo {
+                    project: Some(c.node.clone()),
+                    description: step.text.clone(),
+                    parent: None,
+                    order: Some(index as i64 * ORDER_GAP),
+                })?;
+                if step.status != StatusKind::Pending {
+                    apply(Edit::SetStatus {
+                        id: id.clone(),
+                        to: step.status,
+                        actor: c.actor.clone(),
+                    });
+                }
+                ids[index] = Some(id);
+            }
+            Change::Status { todo, to } => apply(Edit::SetStatus {
+                id: todo,
+                to,
+                actor: c.actor.clone(),
+            }),
+            Change::Cancel { todo } => apply(Edit::SetStatus {
+                id: todo,
+                to: StatusKind::Cancelled,
+                actor: c.actor.clone(),
+            }),
+            Change::Reorder { todo, order } => apply(Edit::Reorder { id: todo, order }),
+        }
+    }
+    let snapshot = next
+        .into_iter()
+        .zip(ids)
+        .filter_map(|(step, id)| Some((step.text, id?)))
+        .collect();
+    c.map.set_snapshot(c.harness, &c.actor, snapshot)?;
+    failed.map_or(Ok(()), Err)
 }
 
 fn native_status(status: &str) -> Option<StatusKind> {

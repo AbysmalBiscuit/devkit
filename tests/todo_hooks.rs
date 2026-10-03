@@ -273,3 +273,70 @@ fn capture_a_parent_updates_a_task_its_sub_agent_created() {
     post_tool_use(&p, "claude-code", &payloads);
     assert_eq!(by_text(&p, "gamma").status.kind(), StatusKind::Completed);
 }
+
+const PLAN_SESSION: &str = "01a10214-8027-70e1-b13f-0bb35d607bed";
+
+fn on_node(p: &Proj, node: &str) -> Vec<devkit_todo::Todo> {
+    let mut todos: Vec<_> = p
+        .todos()
+        .into_iter()
+        .filter(|t| t.project.as_deref() == Some(node))
+        .collect();
+    todos.sort_by_key(|t| t.order);
+    todos
+}
+
+#[test]
+fn plan_update_plan_sequence_mirrors_into_the_store() {
+    let p = Proj::new();
+    post_tool_use(&p, "codex", &fixture(&p, "codex-update-plan.jsonl"));
+    let todos = on_node(&p, &format!("proj.main.codex-{PLAN_SESSION}"));
+    let open: Vec<(&str, StatusKind)> = todos
+        .iter()
+        .filter(|t| t.status.kind() != StatusKind::Cancelled)
+        .map(|t| (t.description.as_str(), t.status.kind()))
+        .collect();
+    assert_eq!(
+        open,
+        [
+            ("run tests", StatusKind::Completed),
+            ("run tests", StatusKind::InProgress)
+        ],
+        "both repeats are kept, in the last plan's order"
+    );
+    let build = by_text(&p, "build");
+    assert_eq!(build.status, Status::Cancelled {
+        by: Some(Holder::new(PLAN_SESSION))
+    });
+    assert_eq!(todos.len(), 3, "no step was added twice");
+}
+
+#[test]
+fn plan_a_sub_agents_first_list_leaves_the_parent_alone() {
+    let p = Proj::new();
+    let parent = fixture(&p, "codex-update-plan.jsonl").remove(0);
+    let mut sub = fixture(&p, "codex-subagent-plan.jsonl").remove(0);
+    sub["session_id"] = json!(PLAN_SESSION);
+    let agent = sub["agent_id"].as_str().unwrap().to_string();
+    post_tool_use(&p, "codex", &[parent, sub]);
+    let todos = on_node(&p, &format!("proj.main.codex-{PLAN_SESSION}"));
+    let parents: Vec<_> = todos
+        .iter()
+        .filter(|t| t.description != "sub step")
+        .map(|t| t.status.clone())
+        .collect();
+    assert_eq!(parents, [Status::Pending, Status::Pending, Status::Pending]);
+    assert_eq!(
+        by_text(&p, "sub step").status,
+        in_progress(&format!("{PLAN_SESSION}/{agent}"))
+    );
+}
+
+#[test]
+fn plan_todowrite_mirrors_into_the_store() {
+    let p = Proj::new();
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-todowrite.jsonl"));
+    assert_eq!(by_text(&p, "one").status.kind(), StatusKind::Completed);
+    assert_eq!(by_text(&p, "two").status.kind(), StatusKind::Cancelled);
+    assert_eq!(by_text(&p, "three").status, Status::Pending);
+}

@@ -106,5 +106,6 @@ pub trait TodoStore: Send + Sync {
 pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+pub mod diff;
 pub mod native;
 pub mod render;
