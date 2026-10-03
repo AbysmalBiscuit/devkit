@@ -31,16 +31,10 @@ impl store::Document for Doc {
         self.version = VERSION;
     }
 
-    /// Required by the trait, never called: the store loads strictly, so an
-    /// unreadable file fails the call instead of losing a list.
-    fn salvage(raw: &str) -> Option<Self> {
-        let todos: BTreeMap<u64, Todo> = store::salvage_map(raw, "todos", |k| k.parse().ok())?;
-        let next_id = todos.keys().next_back().map_or(0, |k| k + 1);
-        Some(Self {
-            version: 0,
-            next_id,
-            todos,
-        })
+    /// Never called: the store loads strictly, so an unreadable file fails
+    /// the call instead of losing a list.
+    fn salvage(_: &str) -> Option<Self> {
+        None
     }
 
     fn label() -> &'static str {

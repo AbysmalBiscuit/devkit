@@ -32,14 +32,10 @@ impl store::Document for Doc {
         self.version = VERSION;
     }
 
-    /// Required by the trait, never called: the map loads strictly.
-    fn salvage(raw: &str) -> Option<Self> {
-        Some(Self {
-            version: 0,
-            ids: store::salvage_map(raw, "ids", |k| Some(k.to_string()))?,
-            snapshots: store::salvage_map(raw, "snapshots", |k| Some(k.to_string()))
-                .unwrap_or_default(),
-        })
+    /// Never called: the store loads strictly, so an unreadable file fails
+    /// the call instead of losing a list.
+    fn salvage(_: &str) -> Option<Self> {
+        None
     }
 
     fn label() -> &'static str {
