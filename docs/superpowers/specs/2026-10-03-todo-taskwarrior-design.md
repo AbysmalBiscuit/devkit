@@ -153,7 +153,7 @@ The rule from #211 holds: a hook never changes a verdict or writes stdout becaus
   uda.holder.label=Holder
   ```
 
-- The guide injected into agents does not change: agents use `devkit todo` or their native tool on either backend.
+- The guide injected into agents keeps its instructions: agents use `devkit todo` or their native tool on either backend. One line changes: "Ids are the numbers in parentheses." becomes "Ids are in parentheses.", since a taskwarrior id is a hex uuid prefix, not a number.
 
 ## Testing
 
