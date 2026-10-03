@@ -11,7 +11,6 @@ use devkit_common::{
 };
 use devkit_todo::{
     BuiltinStore, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
-    builtin,
     holder::HOLDER_VAR,
     native::NativeMap,
     node::{self, GLOBAL, Place, SessionRef},
@@ -185,7 +184,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 );
             }
             store.apply(&Edit::Purge(id.clone()))?;
-            NativeMap::at(BuiltinStore::default_dir()).forget(&id)?;
+            NativeMap::at(devkit_todo::state_dir()).forget(&id)?;
         }
     }
     Ok(())
@@ -363,7 +362,7 @@ fn context(args: &ContextArgs) -> Option<String> {
         lists.push('\n');
     }
     let digest = render::digest(&lists);
-    let digest_path = builtin::digest_path(&viewer);
+    let digest_path = devkit_todo::digest_path(&viewer);
     if args.if_changed && std::fs::read_to_string(&digest_path).is_ok_and(|seen| seen == digest) {
         return None;
     }

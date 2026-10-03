@@ -1,8 +1,12 @@
 use std::{fs, path::Path, thread};
 
-use devkit_todo::{
-    BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, Status, StatusKind, Todo, TodoStore,
-};
+use devkit_todo::{BuiltinStore, Filter, NewTodo, Todo, TodoStore};
+
+devkit_todo::contract_tests!(|| {
+    let dir = tempfile::tempdir().unwrap();
+    let store = BuiltinStore::at(dir.path().to_path_buf());
+    (dir, store)
+});
 
 fn new(description: &str) -> NewTodo {
     NewTodo {
@@ -15,18 +19,6 @@ fn new(description: &str) -> NewTodo {
 
 fn all(store: &BuiltinStore) -> Vec<Todo> {
     store.list(&Filter::all()).unwrap()
-}
-
-fn get(store: &BuiltinStore, id: &str) -> Todo {
-    all(store).into_iter().find(|t| t.id == id).unwrap()
-}
-
-fn start(store: &BuiltinStore, id: &str, actor: &str) -> anyhow::Result<()> {
-    store.apply(&Edit::SetStatus {
-        id: id.into(),
-        to: StatusKind::InProgress,
-        actor: Holder::new(actor),
-    })
 }
 
 fn todos_file(dir: &Path) -> std::path::PathBuf {
@@ -46,102 +38,14 @@ fn ids_are_sequential_and_sort_numerically() {
 }
 
 #[test]
-fn add_without_order_appends_after_the_last_sibling() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = BuiltinStore::at(dir.path().to_path_buf());
-    store.add(new("a")).unwrap();
-    store.add(new("b")).unwrap();
-    let child = store
-        .add(NewTodo {
-            parent: Some("1".into()),
-            ..new("a1")
-        })
-        .unwrap();
-    assert_eq!(get(&store, "1").order, Some(1024));
-    assert_eq!(get(&store, "2").order, Some(2048));
-    assert_eq!(get(&store, &child).order, Some(1024));
-}
-
-#[test]
-fn descriptions_are_one_line() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = BuiltinStore::at(dir.path().to_path_buf());
-    let id = store.add(new("a\n\tb  c")).unwrap();
-    assert_eq!(get(&store, &id).description, "a b c");
-    store
-        .apply(&Edit::Describe {
-            id: id.clone(),
-            description: "x\r\ny".into(),
-        })
-        .unwrap();
-    assert_eq!(get(&store, &id).description, "x y");
-}
-
-#[test]
-fn set_status_goes_through_transition() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = BuiltinStore::at(dir.path().to_path_buf());
-    store.add(new("a")).unwrap();
-    start(&store, "1", "S/a1").unwrap();
-    let err = start(&store, "1", "S/a2").unwrap_err();
-    assert_eq!(
-        err.downcast_ref::<Claimed>().map(|c| c.by.to_string()),
-        Some("S/a1".to_string())
-    );
-    assert_eq!(get(&store, "1").status, Status::InProgress {
-        by: Holder::new("S/a1")
-    });
-}
-
-#[test]
-fn release_all_returns_covered_claims_to_pending() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = BuiltinStore::at(dir.path().to_path_buf());
-    store.add(new("a")).unwrap();
-    store.add(new("b")).unwrap();
-    start(&store, "1", "S/a1").unwrap();
-    start(&store, "2", "T").unwrap();
-    store
-        .apply(&Edit::ReleaseAll {
-            holder: Holder::new("S"),
-        })
-        .unwrap();
-    assert_eq!(get(&store, "1").status, Status::Pending);
-    assert_eq!(get(&store, "2").status, Status::InProgress {
-        by: Holder::new("T")
-    });
-    store
-        .apply(&Edit::ReleaseAll {
-            holder: Holder::human(),
-        })
-        .unwrap();
-    assert_eq!(get(&store, "2").status.kind(), StatusKind::InProgress);
-}
-
-#[test]
-fn purge_removes_the_record() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = BuiltinStore::at(dir.path().to_path_buf());
-    store.add(new("secret")).unwrap();
-    store.apply(&Edit::Purge("1".into())).unwrap();
-    assert!(all(&store).is_empty());
-    let err = store.apply(&Edit::Purge("7".into())).unwrap_err();
-    assert_eq!(err.to_string(), "no todo 7");
-}
-
-#[test]
-fn unknown_ids_are_refused() {
+fn a_refused_edit_leaves_the_file_alone() {
     let dir = tempfile::tempdir().unwrap();
     let store = BuiltinStore::at(dir.path().to_path_buf());
     store.add(new("a")).unwrap();
     let before = fs::read(todos_file(dir.path())).unwrap();
-    let err = store
-        .apply(&Edit::Describe {
-            id: "99".into(),
-            description: "x".into(),
-        })
+    store
+        .apply(&devkit_todo::Edit::Purge("99".into()))
         .unwrap_err();
-    assert!(err.to_string().contains("no todo 99"), "{err:#}");
     assert_eq!(fs::read(todos_file(dir.path())).unwrap(), before);
 }
 
@@ -180,27 +84,4 @@ fn concurrent_adds_all_land() {
     ids.dedup();
     assert_eq!(ids.len(), 200);
     assert_eq!(all(&BuiltinStore::at(dir.path().to_path_buf())).len(), 200);
-}
-
-#[test]
-fn move_without_order_lands_after_the_new_siblings() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = BuiltinStore::at(dir.path().to_path_buf());
-    store.add(new("parent")).unwrap();
-    let child = |text: &str| NewTodo {
-        parent: Some("1".into()),
-        ..new(text)
-    };
-    store.add(child("a")).unwrap();
-    store.add(child("b")).unwrap();
-    store.add(new("loose")).unwrap();
-    store
-        .apply(&Edit::Move {
-            id: "4".into(),
-            parent: Some("1".into()),
-            order: None,
-        })
-        .unwrap();
-    assert_eq!(get(&store, "4").parent.as_deref(), Some("1"));
-    assert_eq!(get(&store, "4").order, Some(3 * 1024));
 }

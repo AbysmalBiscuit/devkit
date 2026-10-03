@@ -573,9 +573,11 @@ dependencies = [
 name = "devkit-todo"
 version = "0.14.9"
 dependencies = [
+ "ambassador",
  "anyhow",
  "chrono",
  "devkit-common",
+ "devkit-todo",
  "devkit-vcs",
  "serde",
  "serde_json",

@@ -1,12 +1,21 @@
-//! Agent todo lists: who holds a todo, where a list lives, and the store
-//! that keeps them.
+//! Agent todo lists: who holds a todo, where a list lives, and the trait a
+//! store that keeps them implements.
+
+// ambassador copies the trait's signatures verbatim into the dispatching
+// crate, so they use absolute paths that must resolve here too.
+extern crate self as devkit_todo;
 
 pub mod builtin;
+#[cfg(feature = "test-support")]
+pub mod contract;
 pub mod holder;
 pub mod node;
 pub mod transition;
 
+use std::path::PathBuf;
+
 pub use builtin::BuiltinStore;
+use devkit_common::paths;
 pub use holder::Holder;
 pub use node::{Filter, NodeMatch};
 use serde::{Deserialize, Serialize};
@@ -98,14 +107,44 @@ pub enum Edit {
 
 /// Where todos are kept. A backend that cannot apply an edit atomically
 /// documents the race.
-pub trait TodoStore: Send + Sync {
+#[ambassador::delegatable_trait]
+pub trait TodoStore {
     /// Every todo `filter` covers, whatever its status.
-    fn list(&self, filter: &Filter) -> anyhow::Result<Vec<Todo>>;
+    fn list(
+        &self,
+        filter: &::devkit_todo::Filter,
+    ) -> ::anyhow::Result<::std::vec::Vec<::devkit_todo::Todo>>;
+    /// The todo `id` names. A backend whose ids can be abbreviated resolves a
+    /// unique abbreviation; an ambiguous one is an error that names the
+    /// matches.
+    fn get(&self, id: &str) -> ::anyhow::Result<::std::option::Option<::devkit_todo::Todo>>;
     /// Returns the new todo's id.
-    fn add(&self, todo: NewTodo) -> anyhow::Result<String>;
+    fn add(&self, todo: ::devkit_todo::NewTodo) -> ::anyhow::Result<::std::string::String>;
     /// A refused status change is an error whose root cause is [`Claimed`];
     /// an unknown id is the error `no todo <id>`.
-    fn apply(&self, edit: &Edit) -> anyhow::Result<()>;
+    fn apply(&self, edit: &::devkit_todo::Edit) -> ::anyhow::Result<()>;
+}
+
+/// Where devkit keeps todo state of its own, whichever backend holds the
+/// todos: the native map, the context digests, and the built-in store.
+pub fn state_dir() -> PathBuf {
+    paths::state_dir().join("todo")
+}
+
+/// Where the lists last injected for `holder` are fingerprinted, keyed on a
+/// hash of the full holder so a sub-agent's injection never suppresses its
+/// session's.
+pub fn digest_path(holder: &Holder) -> PathBuf {
+    state_dir().join("digests").join(render::digest(holder))
+}
+
+/// `id` as text an agent reads it: a uuid shortens to its first 8
+/// characters, taskwarrior's `uuid.short`; any other id stays whole.
+pub fn short_id(id: &str) -> &str {
+    let is_uuid = id.len() == 36
+        && id.matches('-').count() == 4
+        && id.chars().all(|c| c == '-' || c.is_ascii_hexdigit());
+    if is_uuid { &id[..8] } else { id }
 }
 
 /// `text` on one line, every whitespace run collapsed to a single space.
@@ -115,3 +154,22 @@ pub fn one_line(text: &str) -> String {
 pub mod diff;
 pub mod native;
 pub mod render;
+
+#[cfg(test)]
+mod tests {
+    use super::short_id;
+
+    #[test]
+    fn a_uuid_shortens_to_its_first_eight_characters() {
+        assert_eq!(short_id("96432cd6-082a-4d8c-a9cb-adef8823ff92"), "96432cd6");
+    }
+
+    #[test]
+    fn other_ids_stay_whole() {
+        assert_eq!(short_id("17"), "17");
+        let not_a_uuid = "x".repeat(36);
+        assert_eq!(short_id(&not_a_uuid), not_a_uuid);
+        let dashes = "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz";
+        assert_eq!(short_id(dashes), dashes);
+    }
+}

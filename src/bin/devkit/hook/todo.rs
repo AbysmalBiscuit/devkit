@@ -13,7 +13,6 @@ use devkit_command::{Analysis, Dialect, Invocation};
 use devkit_common::vcs::Checkout;
 use devkit_todo::{
     BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, TodoStore,
-    builtin,
     diff::{Change, Mirrored, Step, diff, pair},
     holder::HOLDER_VAR,
     native::{MirroredStep, NativeMap},
@@ -45,7 +44,7 @@ pub(crate) fn to_todo_holder(holder: &payload::Holder) -> Holder {
 pub(crate) fn release(holder: Option<payload::Holder>) {
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
-        let _ = std::fs::remove_file(builtin::digest_path(&holder));
+        let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
         let _ = BuiltinStore::open().apply(&Edit::ReleaseAll { holder });
     }
 }
@@ -216,7 +215,7 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
         actor: to_todo_holder(&actor),
         node,
         store: BuiltinStore::open(),
-        map: NativeMap::at(BuiltinStore::default_dir()),
+        map: NativeMap::at(devkit_todo::state_dir()),
     };
     let raw = payload.raw();
     let input = &raw["tool_input"];
