@@ -27,9 +27,13 @@ struct Tw {
 }
 
 impl Tw {
+    fn new() -> Option<Self> {
+        Self::in_repo("proj")
+    }
+
     /// `None` when `task` is not installed. Any other failure of a first
     /// export panics, so a broken backend never passes as a skip.
-    fn new() -> Option<Self> {
+    fn in_repo(name: &str) -> Option<Self> {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("taskrc"), "").unwrap();
         let store = TaskwarriorStore::new("task")
@@ -41,7 +45,7 @@ impl Tw {
                 result.expect("a private taskwarrior exports");
             }
         }
-        let p = Proj::with_home_config("[todo]\nbackend = \"taskwarrior\"\n");
+        let p = Proj::named(name).home_config_of("[todo]\nbackend = \"taskwarrior\"\n");
         let [(_, taskrc), (_, taskdata)]: [(String, String); 2] =
             env(dir.path()).try_into().unwrap();
         Some(Self {
@@ -165,4 +169,72 @@ fn purge_by_short_id_forgets_the_native_mapping() {
     tw.devkit(&["todo", "purge", &uuid[..8]], &[HUMAN]);
     assert!(tw.export().is_empty());
     assert!(!native().contains(&uuid), "{}", native());
+}
+
+/// A repository whose name taskwarrior's filter syntax would split: a space
+/// and a quote.
+const ODD_REPO: &str = "bob's repo";
+
+/// Adds `text` to `node` and returns its short id.
+fn add_on(tw: &Tw, node: &str, text: &str) -> String {
+    short(&tw.devkit(&["todo", "add", text, "--node", node], &[S1]))
+}
+
+#[test]
+fn an_exact_listing_matches_a_node_with_a_space() {
+    let Some(tw) = Tw::in_repo(ODD_REPO) else {
+        return;
+    };
+    let shared = add_on(&tw, "bob's repo.main", "shared");
+    let second = add_on(&tw, "bob's repo.main", "second");
+    add_on(&tw, "bob's repo.main.claude-s1", "mine");
+    let list = stdout(&tw.devkit(&["todo", "list", "--node", "bob's repo.main"], &[S1]));
+    assert_eq!(
+        list,
+        format!("## bob's repo.main\n- [ ] shared ({shared})\n- [ ] second ({second})\n")
+    );
+    let json: Value = serde_json::from_str(&stdout(
+        &tw.devkit(&["todo", "list", "--node", "bob's repo.main", "--json"], &[
+            S1,
+        ]),
+    ))
+    .unwrap();
+    let orders: Vec<&Value> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| &t["order"])
+        .collect();
+    assert_eq!(orders, [1024, 2048], "{json}");
+}
+
+#[test]
+fn a_subtree_listing_matches_a_repository_with_a_space() {
+    let Some(tw) = Tw::in_repo(ODD_REPO) else {
+        return;
+    };
+    let shared = add_on(&tw, "bob's repo.main", "shared");
+    let mine = add_on(&tw, "bob's repo.main.claude-s1", "mine");
+    add_on(&tw, "bob's repo-web", "elsewhere");
+    let list = stdout(&tw.devkit(&["todo", "list", "--subtree", "bob's repo"], &[S1]));
+    assert!(list.contains(&format!("- [ ] shared ({shared})")), "{list}");
+    assert!(list.contains(&format!("- [ ] mine ({mine})")), "{list}");
+    assert!(!list.contains("elsewhere"), "{list}");
+}
+
+#[test]
+fn the_default_listing_matches_nodes_with_a_space() {
+    let Some(tw) = Tw::in_repo(ODD_REPO) else {
+        return;
+    };
+    let mine = short(&tw.devkit(&["todo", "add", "mine"], &[S1]));
+    let shared = add_on(&tw, "bob's repo.main", "shared");
+    let list = stdout(&tw.devkit(&["todo", "list"], &[S1]));
+    assert_eq!(
+        list,
+        format!(
+            "## bob's repo.main.claude-s1\n- [ ] mine ({mine})\n\n\
+             ## bob's repo.main\n- [ ] shared ({shared})\n"
+        )
+    );
 }

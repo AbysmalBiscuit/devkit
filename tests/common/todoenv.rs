@@ -22,8 +22,13 @@ pub struct Proj {
 
 impl Proj {
     pub fn new() -> Self {
+        Self::named("proj")
+    }
+
+    /// A checkout whose directory, and so whose repository node, is `name`.
+    pub fn named(name: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("proj");
+        let path = root.path().join(name);
         std::fs::create_dir(&path).unwrap();
         devkit_git::Git::fixture(&path)
             .args(["init", "-q", "-b", "main"])
@@ -36,11 +41,16 @@ impl Proj {
     /// As [`Proj::new`], with `toml` as the isolated home's
     /// `~/.config/devkit/config.toml`.
     pub fn with_home_config(toml: &str) -> Self {
-        let p = Self::new();
-        let dir = p.home.path().join(".config/devkit");
+        Self::new().home_config_of(toml)
+    }
+
+    /// This checkout with `toml` as the isolated home's
+    /// `~/.config/devkit/config.toml`.
+    pub fn home_config_of(self, toml: &str) -> Self {
+        let dir = self.home.path().join(".config/devkit");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.toml"), toml).unwrap();
-        p
+        self
     }
 
     pub fn home_config(&self) -> PathBuf {

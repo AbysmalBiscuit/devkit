@@ -77,7 +77,7 @@ impl TaskwarriorStore {
         parent: Option<&str>,
         skip: Option<&str>,
     ) -> Result<i64> {
-        let node = format!("project.is:{}", project.unwrap_or(GLOBAL_PROJECT));
+        let node = format!("project.is:{}", quoted(project.unwrap_or(GLOBAL_PROJECT)));
         let siblings = self.todos(&[node, STATUSES.into()])?;
         Ok(siblings
             .iter()
@@ -115,11 +115,21 @@ fn node_filter(filter: &Filter) -> Option<String> {
         .map(|m| match m {
             // The space keeps `)` from being read as the value.
             NodeMatch::Subtree(node) if node.is_empty() => "project.any: ".to_string(),
-            NodeMatch::Subtree(node) => format!("project.is:{node} or project:{node}."),
-            NodeMatch::Exact(node) => format!("project.is:{node}"),
+            NodeMatch::Subtree(node) => format!(
+                "project.is:{} or project:{}",
+                quoted(node),
+                quoted(&format!("{node}."))
+            ),
+            NodeMatch::Exact(node) => format!("project.is:{}", quoted(node)),
         })
         .collect();
     (!nodes.is_empty()).then(|| format!("({})", nodes.join(" or ")))
+}
+
+/// A node as a filter value. Unquoted, taskwarrior splits a name on a space
+/// or reads `'` and `(` as syntax; a backslash escape does not stop it.
+fn quoted(node: &str) -> String {
+    format!("\"{node}\"")
 }
 
 /// Whether `id` can name a task by uuid. Anything else would reach `task` as
@@ -265,7 +275,7 @@ mod tests {
         };
         assert_eq!(
             node_filter(&filter).as_deref(),
-            Some("(project.is:r or project:r. or project.is:global)")
+            Some(r#"(project.is:"r" or project:"r." or project.is:"global")"#)
         );
         assert_eq!(
             node_filter(&Filter::all()).as_deref(),
