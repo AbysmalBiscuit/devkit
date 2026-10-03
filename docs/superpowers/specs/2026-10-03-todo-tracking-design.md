@@ -98,7 +98,7 @@ pub fn transition(current: &Status, to: StatusKind, actor: &Holder)
 
 - `Ok(None)` means nothing changes.
 - To `InProgress` from `InProgress { by: a }`, by an actor that covers `a`, is a no-op. A sub-agent's claim survives the parent session repeating it.
-- To `InProgress` from `InProgress { by: a }`, by an actor that `a` covers, hands the claim down: it records `by: actor`. A parent that started a todo and then delegates it does not lock its own sub-agent out.
+- To `InProgress` from `InProgress { by: a }`, by an actor that `a` covers, hands the claim down: it records `by: actor`. A parent that started a todo and then delegates it does not lock its own sub-agent out. A person's claim is never handed down: `human` covers every holder, so this rule alone would let any agent take it.
 - Any other change from `InProgress { by: a }`, by an actor that does not cover `a`, fails with `Claimed { by: a }`. Siblings always conflict.
 - To `Completed` or `Cancelled` from `InProgress { by: a }`, by an actor that covers `a`, records `by: Some(a)`. Otherwise it records `by: Some(actor)`.
 - To `Pending` drops the holder.
@@ -221,7 +221,7 @@ Codex's `update_plan` takes `{ explanation?, plan: [{ step, status }] }` with `p
 | Claude `TaskUpdate` | Looks up the native id. `pending`, `in_progress`, `completed` and `deleted` become `SetStatus` to `Pending`, `InProgress`, `Completed` and `Cancelled` with the payload's holder as actor. A changed `subject` becomes `Describe`. Other fields are ignored |
 | Codex `update_plan`, Claude `TodoWrite` | Each call resends the whole list, which is diffed against the holder's previous list (see List-replace diffing) |
 
-- **Native id map.** `(harness, holder, native id) -> todo id`, kept apart from the todos in `state_dir()/todo/native.json` under its own `store` lock, so every backend gets capture. `TaskCreate` records under its own holder. `TaskUpdate` looks up its own holder first, then the session's holder, so updates work whether or not a sub-agent shares its parent's native list. A crash between `add` and the map write leaves a todo whose later native updates are skipped.
+- **Native id map.** `(harness, holder, native id) -> todo id`, kept apart from the todos in `state_dir()/todo/native.json` under its own `store` lock, so every backend gets capture. `TaskCreate` records under the session's holder, because a Claude Code sub-agent shares its parent's native task ids. `TaskUpdate` looks up its own holder first, then the session's holder, so updates work whether or not a sub-agent shares its parent's native list. A crash between `add` and the map write leaves a todo whose later native updates are skipped.
 - **Reused ids.** A `TaskCreate` whose native id is already mapped for that holder replaces the mapping. A resumed session that numbers from 1 again cannot edit the previous run's todos.
 - **List-replace snapshots.** The previous list is kept per holder, beside the map. Each agent context keeps its own list, so a sub-agent's first call never reads as cancelling its parent's steps.
 
