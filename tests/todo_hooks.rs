@@ -175,3 +175,101 @@ fn attribution_skips_the_session_itself() {
     assert_eq!(stdout(&out), "");
     assert_eq!(p.todo(&id).status, Status::Pending);
 }
+
+/// The recorded payloads in `tests/fixtures/todo/<name>`, pointed at `p`.
+fn fixture(p: &Proj, name: &str) -> Vec<serde_json::Value> {
+    let body = std::fs::read_to_string(format!("tests/fixtures/todo/{name}")).unwrap();
+    body.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+            v["cwd"] = json!(p.path);
+            if v.get("transcript_path").is_some() {
+                v["transcript_path"] = json!(p.outside().join("t.jsonl"));
+            }
+            v
+        })
+        .collect()
+}
+
+fn post_tool_use(p: &Proj, harness: &str, payloads: &[serde_json::Value]) {
+    for payload in payloads {
+        let out = p.hook("post-tool-use", harness, payload);
+        assert_eq!(out.status.code(), Some(0), "{}", todoenv::stderr(&out));
+        assert_eq!(stdout(&out), "", "capture writes nothing to stdout");
+    }
+}
+
+fn by_text(p: &Proj, text: &str) -> devkit_todo::Todo {
+    p.todos()
+        .into_iter()
+        .find(|t| t.description == text)
+        .unwrap_or_else(|| panic!("no todo {text:?} in {:#?}", p.todos()))
+}
+
+const TASKS_SESSION: &str = "732b6b74-6009-478a-abe2-4129415b6007";
+
+#[test]
+fn capture_task_create_and_update_mirror_into_the_store() {
+    let p = Proj::new();
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
+    let alpha = by_text(&p, "alpha");
+    assert_eq!(
+        alpha.project.as_deref(),
+        Some(format!("proj.main.claude-{TASKS_SESSION}").as_str())
+    );
+    assert_eq!(alpha.status, Status::Pending);
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-update.jsonl"));
+    assert_eq!(by_text(&p, "alpha").status, Status::Completed {
+        by: Some(Holder::new(TASKS_SESSION))
+    });
+    assert_eq!(by_text(&p, "beta").status, Status::Pending);
+}
+
+#[test]
+fn capture_deleted_becomes_cancelled() {
+    let p = Proj::new();
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-deleted.jsonl"));
+    assert_eq!(by_text(&p, "beta").status, Status::Cancelled {
+        by: Some(Holder::new(TASKS_SESSION))
+    });
+}
+
+#[test]
+fn capture_a_sub_agents_native_tasks_are_attributed_to_it() {
+    let p = Proj::new();
+    post_tool_use(
+        &p,
+        "claude-code",
+        &fixture(&p, "claude-subagent-tasks.jsonl"),
+    );
+    let session = "c967902f-a6ca-4488-b58d-5c8c0a6cacc6";
+    assert_eq!(by_text(&p, "gamma").status, Status::Completed {
+        by: Some(Holder::new(format!("{session}/a06ce5e051ede4454")))
+    });
+    assert_eq!(by_text(&p, "parent-step").status, Status::Completed {
+        by: Some(Holder::new(session))
+    });
+    assert_eq!(
+        by_text(&p, "gamma").project,
+        by_text(&p, "parent-step").project,
+        "a sub-agent writes to its session's node"
+    );
+}
+
+#[test]
+fn capture_a_parent_updates_a_task_its_sub_agent_created() {
+    let p = Proj::new();
+    let mut payloads = fixture(&p, "claude-subagent-tasks.jsonl");
+    payloads.truncate(2);
+    let mut parent_done = payloads[1].clone();
+    for key in ["agent_id", "agent_type"] {
+        parent_done.as_object_mut().unwrap().remove(key);
+    }
+    parent_done["tool_name"] = json!("TaskUpdate");
+    parent_done["tool_input"] = json!({"taskId": "2", "status": "completed"});
+    payloads.push(parent_done);
+    post_tool_use(&p, "claude-code", &payloads);
+    assert_eq!(by_text(&p, "gamma").status.kind(), StatusKind::Completed);
+}

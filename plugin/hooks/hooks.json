@@ -52,7 +52,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|PowerShell",
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|PowerShell|TaskCreate|TaskUpdate|TodoWrite",
         "hooks": [
           {
             "type": "command",

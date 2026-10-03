@@ -106,6 +106,11 @@ pub fn run(cli: HookCli) -> Result<()> {
             }
             Ok(())
         }),
+        HookEvent::PostToolUse => with_payload(harness, cli.event, |p| {
+            todo::capture(p);
+            record_only(p, cli.event);
+            Ok(())
+        }),
         // Compaction is what drops the injected rules out of the agent's
         // context, so clearing the set is what lets them inject again.
         HookEvent::PostCompact => with_payload(harness, cli.event, |p| {

@@ -1,9 +1,15 @@
 //! The todo store's side of the hooks: who a payload acts as, and the
 //! harness its session belongs to.
 
+use anyhow::Result;
 use devkit_command::Analysis;
-use devkit_todo::{Claimed, Edit, Holder, StatusKind, TodoStore, node::Harness};
+use devkit_todo::{
+    BuiltinStore, Claimed, Edit, Filter, Holder, NewTodo, StatusKind, TodoStore,
+    native::NativeMap,
+    node::{self, Harness, SessionRef},
+};
 use pabal::AnyHarness;
+use serde_json::Value;
 
 use super::payload::{self, Payload};
 
@@ -89,6 +95,114 @@ pub(crate) fn attribute(payload: &Payload, analysis: &Analysis) -> Option<String
         }
     }
     None
+}
+
+/// Mirrors the harness's own task and plan tools into the store. The native
+/// tool has already run, so a failure, a claim conflict included, is reported
+/// on stderr and skipped.
+pub(crate) fn capture(payload: &Payload) {
+    if let Err(e) = try_capture(payload) {
+        eprintln!("devkit todo: {e:#}");
+    }
+}
+
+/// What a native capture needs from a payload: which harness's ids it uses,
+/// who acted, and the node its session writes to.
+struct Capture {
+    harness: Harness,
+    session: Holder,
+    actor: Holder,
+    node: String,
+    store: BuiltinStore,
+    map: NativeMap,
+}
+
+fn try_capture(payload: &Payload) -> Result<()> {
+    let Some(harness) = harness_of(payload.harness()) else {
+        return Ok(());
+    };
+    let (Some(session), Ok(actor)) = (payload.session_holder(), payload.holder()) else {
+        return Ok(());
+    };
+    let place = crate::todo::place_at(&super::record::payload_cwd(payload));
+    let node = node::node(
+        &place,
+        Some(&SessionRef {
+            harness,
+            id: session.to_string(),
+        }),
+    );
+    let c = Capture {
+        harness,
+        session: to_todo_holder(&session),
+        actor: to_todo_holder(&actor),
+        node,
+        store: crate::todo::store(),
+        map: NativeMap::at(BuiltinStore::default_dir()),
+    };
+    let raw = payload.raw();
+    let input = &raw["tool_input"];
+    match payload.tool_name() {
+        Some("TaskCreate") => task_create(&c, input, &raw["tool_response"]),
+        Some("TaskUpdate") => task_update(&c, input),
+        _ => Ok(()),
+    }
+}
+
+/// Claude Code's task list is shared by a session and its sub-agents, so the
+/// mapping is recorded under the session for either to update it.
+fn task_create(c: &Capture, input: &Value, response: &Value) -> Result<()> {
+    let (Some(subject), Some(native)) =
+        (input["subject"].as_str(), response["task"]["id"].as_str())
+    else {
+        return Ok(());
+    };
+    let id = c.store.add(NewTodo {
+        project: Some(c.node.clone()),
+        description: subject.to_string(),
+        parent: None,
+        order: None,
+    })?;
+    c.map.record(c.harness, &c.session, native, &id)
+}
+
+fn task_update(c: &Capture, input: &Value) -> Result<()> {
+    let Some(native) = input["taskId"].as_str() else {
+        return Ok(());
+    };
+    let Some(id) = c.map.lookup(c.harness, &c.actor, native)? else {
+        return Ok(());
+    };
+    if let Some(subject) = input["subject"].as_str() {
+        let current = c.store.list(&Filter::all())?;
+        if current
+            .iter()
+            .any(|t| t.id == id && t.description != devkit_todo::one_line(subject))
+        {
+            c.store.apply(&Edit::Describe {
+                id: id.clone(),
+                description: subject.to_string(),
+            })?;
+        }
+    }
+    if let Some(to) = input["status"].as_str().and_then(native_status) {
+        c.store.apply(&Edit::SetStatus {
+            id,
+            to,
+            actor: c.actor.clone(),
+        })?;
+    }
+    Ok(())
+}
+
+fn native_status(status: &str) -> Option<StatusKind> {
+    match status {
+        "pending" => Some(StatusKind::Pending),
+        "in_progress" => Some(StatusKind::InProgress),
+        "completed" => Some(StatusKind::Completed),
+        "deleted" => Some(StatusKind::Cancelled),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
