@@ -276,10 +276,6 @@ fn write_status(
     ops: &mut Operations,
 ) -> Result<(), taskchampion::Error> {
     let holder = |by: &devkit_todo::Holder| Some(by.to_string());
-    let stop = |task: &mut Task, ops: &mut Operations| match task.is_active() {
-        true => task.stop(ops),
-        false => Ok(()),
-    };
     match status {
         Status::Pending => {
             task.set_status(taskchampion::Status::Pending, ops)?;
@@ -291,18 +287,30 @@ fn write_status(
             task.start(ops)?;
             task.set_value("holder", holder(by), ops)
         }
-        Status::Completed { by } | Status::Cancelled { by } => {
-            let next = match status {
-                Status::Completed { .. } => taskchampion::Status::Completed,
-                _ => taskchampion::Status::Deleted,
-            };
-            stop(task, ops)?;
-            task.set_status(next, ops)?;
-            match by {
-                Some(by) => task.set_value("holder", holder(by), ops),
-                None => Ok(()),
-            }
-        }
+        Status::Completed { by } => close(task, taskchampion::Status::Completed, by.as_ref(), ops),
+        Status::Cancelled { by } => close(task, taskchampion::Status::Deleted, by.as_ref(), ops),
+    }
+}
+
+fn stop(task: &mut Task, ops: &mut Operations) -> Result<(), taskchampion::Error> {
+    match task.is_active() {
+        true => task.stop(ops),
+        false => Ok(()),
+    }
+}
+
+/// Ends `task` as `status`, completed or deleted, recording `by` when known.
+fn close(
+    task: &mut Task,
+    status: taskchampion::Status,
+    by: Option<&devkit_todo::Holder>,
+    ops: &mut Operations,
+) -> Result<(), taskchampion::Error> {
+    stop(task, ops)?;
+    task.set_status(status, ops)?;
+    match by {
+        Some(by) => task.set_value("holder", Some(by.to_string()), ops),
+        None => Ok(()),
     }
 }
 
