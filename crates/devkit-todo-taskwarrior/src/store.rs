@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use devkit_common::store::with_file_lock;
 use devkit_todo::{
-    Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, one_line, state_dir, transition,
+    Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, by_prefix, is_uuid_prefix, one_line,
+    state_dir, transition,
 };
 
 use crate::{
@@ -12,9 +13,6 @@ use crate::{
 };
 
 const STATUSES: &str = "(status:pending or status:completed or status:deleted)";
-
-/// The shortest uuid prefix an id may be, taskwarrior's `uuid.short`.
-const SHORT_ID: usize = 8;
 
 /// Todos kept in the local taskwarrior, run as `program`, under one root
 /// project. See the crate docs for the race a person's own `task` call can
@@ -134,12 +132,6 @@ fn in_root(root: &str) -> String {
     format!(r#"(project.is:"{root}" or project:"{root}.")"#)
 }
 
-/// Whether `id` can name a task by uuid. Anything else would reach `task` as
-/// filter syntax.
-fn is_uuid_prefix(id: &str) -> bool {
-    (SHORT_ID..=36).contains(&id.len()) && id.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
-}
-
 impl TodoStore for TaskwarriorStore {
     fn list(&self, filter: &Filter) -> Result<Vec<Todo>> {
         if filter.nodes.is_empty() {
@@ -154,17 +146,7 @@ impl TodoStore for TaskwarriorStore {
         if !is_uuid_prefix(id) {
             return Ok(None);
         }
-        let mut matches: Vec<Todo> = self
-            .todos(&[id.to_string()])?
-            .into_iter()
-            .filter(|t| t.id.starts_with(id))
-            .collect();
-        if matches.len() > 1 {
-            matches.sort_by(|a, b| a.id.cmp(&b.id));
-            let uuids: Vec<&str> = matches.iter().map(|t| t.id.as_str()).collect();
-            bail!("todo id {id} is ambiguous: {}", uuids.join(", "));
-        }
-        Ok(matches.pop())
+        by_prefix(id, self.todos(&[id.to_string()])?)
     }
 
     fn add(&self, todo: NewTodo) -> Result<String> {
@@ -275,14 +257,5 @@ mod tests {
             in_root("devkit"),
             r#"(project.is:"devkit" or project:"devkit.")"#
         );
-    }
-
-    #[test]
-    fn only_hex_of_a_short_ids_length_names_a_uuid() {
-        assert!(is_uuid_prefix("abcdef12"));
-        assert!(is_uuid_prefix("96432cd6-082a-4d8c-a9cb-adef8823ff92"));
-        assert!(!is_uuid_prefix("abcdef1"));
-        assert!(!is_uuid_prefix("status:pending"));
-        assert!(!is_uuid_prefix("abcdef12 or project:x"));
     }
 }

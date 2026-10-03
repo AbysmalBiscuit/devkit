@@ -198,6 +198,40 @@ pub fn with_file_lock<T>(lock_path: &Path, f: impl FnOnce() -> Result<T>) -> Res
     f()
 }
 
+/// As [`with_file_lock`], but gives up once the lock has been held by someone
+/// else for `wait`, with an error saying the todo store is busy, for a caller
+/// that must not block behind a long holder.
+pub fn with_file_lock_for<T>(
+    lock_path: &Path,
+    wait: std::time::Duration,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let _ = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)?;
+    let mut lock = RwLock::new(File::open(lock_path)?);
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match lock.try_write() {
+            Ok(_guard) => return f(),
+            Err(e) if e.kind() != std::io::ErrorKind::WouldBlock => return Err(e.into()),
+            Err(_) if std::time::Instant::now() >= deadline => {
+                anyhow::bail!(
+                    "todo store busy: {} still locked after {} ms",
+                    lock_path.display(),
+                    wait.as_millis()
+                )
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
+}
+
 /// Run `f` while holding the exclusive advisory lock at `lock_path`, against
 /// the JSON document at `data_path`; persists the (version-stamped) result. The
 /// parent directory is created on demand. Keep the work inside `f` minimal —
