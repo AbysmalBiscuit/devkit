@@ -639,6 +639,7 @@ dependencies = [
  "devkit-common",
  "devkit-todo",
  "devkit-todo-taskwarrior",
+ "serde_json",
  "taskchampion",
  "tempfile",
 ]

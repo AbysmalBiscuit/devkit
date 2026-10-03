@@ -15,3 +15,4 @@ devkit-todo-taskwarrior.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 devkit-todo = { workspace = true, features = ["test-support"] }
+serde_json.workspace = true
