@@ -14,4 +14,5 @@ devkit-todo.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+serde_json.workspace = true
 devkit-todo = { workspace = true, features = ["test-support"] }

@@ -172,6 +172,19 @@ fn with_lock_via<D: Document, T>(
     load: impl FnOnce(&Path) -> Result<D>,
     f: impl FnOnce(&mut D) -> Result<T>,
 ) -> Result<T> {
+    with_file_lock(lock_path, || {
+        let mut data = load(data_path)?;
+        let out = f(&mut data)?;
+        data.stamp_version();
+        write(data_path, &data)?;
+        Ok(out)
+    })
+}
+
+/// Run `f` while holding the exclusive advisory lock at `lock_path`, for
+/// state kept somewhere other than a JSON document. The parent directory is
+/// created on demand.
+pub fn with_file_lock<T>(lock_path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -182,11 +195,7 @@ fn with_lock_via<D: Document, T>(
         .open(lock_path)?;
     let mut lock = RwLock::new(File::open(lock_path)?);
     let _guard = lock.write()?; // blocks until exclusive
-    let mut data = load(data_path)?;
-    let out = f(&mut data)?;
-    data.stamp_version();
-    write(data_path, &data)?;
-    Ok(out)
+    f()
 }
 
 /// Run `f` while holding the exclusive advisory lock at `lock_path`, against

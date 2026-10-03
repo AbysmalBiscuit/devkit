@@ -25,6 +25,7 @@ macro_rules! contract_tests {
             a_persons_claim_is_never_taken,
             undone_drops_the_holder,
             cancel_keeps_the_record,
+            a_cancelled_todo_can_be_finished,
             release_all_returns_covered_claims_to_pending,
             purge_removes_the_record,
             unknown_ids_are_refused,
@@ -201,19 +202,36 @@ pub fn cancel_keeps_the_record(s: &impl TodoStore) {
     );
 }
 
+pub fn a_cancelled_todo_can_be_finished(s: &impl TodoStore) {
+    let id = add(s, "a");
+    set(s, &id, StatusKind::Cancelled, "S").unwrap();
+    set(s, &id, StatusKind::Completed, "T").unwrap();
+    assert_eq!(get(s, &id).status, Status::Completed {
+        by: Some(Holder::new("T"))
+    });
+}
+
+/// Several claims at once, as many as a bulk edit that might ask for
+/// confirmation.
 pub fn release_all_returns_covered_claims_to_pending(s: &impl TodoStore) {
     let own = add(s, "own");
-    let sub = add(s, "sub");
+    let subs: Vec<String> = ["a", "b", "c"]
+        .map(|name| {
+            let id = add(s, name);
+            set(s, &id, StatusKind::InProgress, &format!("S/{name}")).unwrap();
+            id
+        })
+        .into();
     let other = add(s, "other");
     set(s, &own, StatusKind::InProgress, "S").unwrap();
-    set(s, &sub, StatusKind::InProgress, "S/a").unwrap();
     set(s, &other, StatusKind::InProgress, "T").unwrap();
     s.apply(&Edit::ReleaseAll {
         holder: Holder::new("S"),
     })
     .unwrap();
-    assert_eq!(get(s, &own).status, Status::Pending);
-    assert_eq!(get(s, &sub).status, Status::Pending);
+    for id in subs.iter().chain([&own]) {
+        assert_eq!(get(s, id).status, Status::Pending, "{id}");
+    }
     assert_eq!(get(s, &other).status, in_progress("T"));
     s.apply(&Edit::ReleaseAll {
         holder: Holder::human(),
