@@ -200,3 +200,38 @@ pub fn stdout(out: &Output) -> String {
 pub fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
+
+/// The advisory lock at a path, held by another thread until this drops.
+pub struct HeldLock {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    holder: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HeldLock {
+    pub fn at(path: std::path::PathBuf) -> Self {
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            devkit_common::store::with_file_lock(&path, || {
+                held_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+                Ok(())
+            })
+            .unwrap();
+        });
+        held_rx.recv().unwrap();
+        Self {
+            release: Some(release_tx),
+            holder: Some(holder),
+        }
+    }
+}
+
+impl Drop for HeldLock {
+    fn drop(&mut self) {
+        drop(self.release.take());
+        if let Some(holder) = self.holder.take() {
+            let _ = holder.join();
+        }
+    }
+}

@@ -15,7 +15,7 @@ use devkit_todo::{Edit, Filter, Holder, NewTodo, Status, StatusKind, Todo, TodoS
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
 use serde_json::{Value, json};
 use syncserver::{Refusing, Silent, SyncServer};
-use todoenv::{Proj, stderr, stdout};
+use todoenv::{HeldLock, Proj, stderr, stdout};
 
 const SESSION: &str = "732b6b74-6009-478a-abe2-4129415b6007";
 const CLIENT_ID: &str = "0b8d4c2e-5f6a-4b7c-8d9e-0f1a2b3c4d5e";
@@ -327,18 +327,7 @@ fn an_interrupted_sync_rolls_back() {
 #[test]
 fn a_hook_gives_up_on_a_held_replica_within_its_budget() {
     let p = Proj::new();
-    let lock = replica_dir(&p).join("devkit.lock");
-    let (held_tx, held_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-    let holder = std::thread::spawn(move || {
-        devkit_common::store::with_file_lock(&lock, || {
-            held_tx.send(()).unwrap();
-            release_rx.recv().ok();
-            Ok(())
-        })
-        .unwrap();
-    });
-    held_rx.recv().unwrap();
+    let held = HeldLock::at(replica_dir(&p).join("devkit.lock"));
     let create = json!({
         "session_id": SESSION,
         "cwd": p.path,
@@ -355,8 +344,7 @@ fn a_hook_gives_up_on_a_held_replica_within_its_budget() {
         &backend("taskchampion"),
     );
     let took = started.elapsed();
-    release_tx.send(()).unwrap();
-    holder.join().unwrap();
+    drop(held);
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(stdout(&out), "");
     assert_eq!(stderr(&out), "");

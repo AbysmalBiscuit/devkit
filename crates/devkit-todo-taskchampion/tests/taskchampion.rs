@@ -31,6 +31,41 @@ fn replica(data_dir: &Path) -> Replica {
     )
 }
 
+/// The advisory lock at a path, held by another thread until this drops.
+struct HeldLock {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    holder: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HeldLock {
+    fn at(path: std::path::PathBuf) -> Self {
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            devkit_common::store::with_file_lock(&path, || {
+                held_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+                Ok(())
+            })
+            .unwrap();
+        });
+        held_rx.recv().unwrap();
+        Self {
+            release: Some(release_tx),
+            holder: Some(holder),
+        }
+    }
+}
+
+impl Drop for HeldLock {
+    fn drop(&mut self) {
+        drop(self.release.take());
+        if let Some(holder) = self.holder.take() {
+            let _ = holder.join();
+        }
+    }
+}
+
 #[test]
 fn global_todos_are_filed_on_the_root() {
     let dir = tempfile::tempdir().unwrap();
@@ -99,25 +134,7 @@ fn ids_resolve_by_unique_prefix() {
 fn a_held_lock_fails_after_the_wait() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("tc");
-    std::fs::create_dir_all(&data).unwrap();
-    let lock = data.join("devkit.lock");
-    let (held, release) = (
-        std::sync::mpsc::channel::<()>(),
-        std::sync::mpsc::channel::<()>(),
-    );
-    let holder = {
-        let lock = lock.clone();
-        let (held_tx, release_rx) = (held.0, release.1);
-        std::thread::spawn(move || {
-            devkit_common::store::with_file_lock(&lock, || {
-                held_tx.send(()).unwrap();
-                release_rx.recv().ok();
-                Ok(())
-            })
-            .unwrap();
-        })
-    };
-    held.1.recv().unwrap();
+    let _held = HeldLock::at(data.join("devkit.lock"));
     let store = TaskchampionStore::at(data).with_lock_wait(Duration::from_millis(200));
     let started = std::time::Instant::now();
     let err = store.add(new(Some("r.main"), "a")).unwrap_err();
@@ -127,8 +144,6 @@ fn a_held_lock_fails_after_the_wait() {
         err.downcast_ref::<devkit_common::store::LockBusy>()
             .is_some()
     );
-    release.0.send(()).unwrap();
-    holder.join().unwrap();
 }
 
 #[test]
@@ -137,23 +152,10 @@ fn reads_never_wait_for_the_lock() {
     let data = dir.path().join("tc");
     let writer = TaskchampionStore::at(data.clone());
     let id = writer.add(new(Some("r.main"), "a")).unwrap();
-    let lock = data.join("devkit.lock");
-    let (held_tx, held_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-    let holder = std::thread::spawn(move || {
-        devkit_common::store::with_file_lock(&lock, || {
-            held_tx.send(()).unwrap();
-            release_rx.recv().ok();
-            Ok(())
-        })
-        .unwrap();
-    });
-    held_rx.recv().unwrap();
+    let _held = HeldLock::at(data.join("devkit.lock"));
     let reader = TaskchampionStore::at(data).with_lock_wait(Duration::from_millis(200));
     assert_eq!(reader.list(&Filter::all()).unwrap().len(), 1);
     assert!(reader.get(&id).unwrap().is_some());
-    release_tx.send(()).unwrap();
-    holder.join().unwrap();
 }
 
 #[test]
