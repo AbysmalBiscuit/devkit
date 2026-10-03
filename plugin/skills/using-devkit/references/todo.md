@@ -63,7 +63,7 @@ On taskwarrior:
 The replica syncs to the first of these that applies, or stays local:
 
 1. `[todo.taskchampion] server_dir`, a directory shared with other replicas.
-2. A taskchampion sync server, when `DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` (a UUID) and `DEVKIT_TODO_SYNC_SECRET` all resolve. Some of them without the rest is an error naming the missing ones.
+2. A taskchampion sync server, when `DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` (a UUID) and `DEVKIT_TODO_SYNC_SECRET` all resolve. Some of them without the rest makes `devkit todo sync` fail, naming the missing ones.
 
 Each credential resolves from the environment first, then from Doppler when `[todo.taskchampion] doppler_project` (and optionally `doppler_config`) is set, then from `~/.config/devkit/secrets.toml`. The file takes these lines, added by hand:
 

@@ -69,7 +69,7 @@ Decided in this order:
 2. **Server.** `DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` and `DEVKIT_TODO_SYNC_SECRET` all resolve: `ServerConfig::Remote`.
 3. **None.** The replica stays local.
 
-Some but not all server credentials resolving, or a client id that is not a UUID, is an error naming the variables, never their values. In the CLI it fails the call. In a hook the store opens with no sync target and says nothing.
+Only the `devkit todo sync` process resolves the target. Some but not all server credentials resolving, or a client id that is not a UUID, fails it with an error naming the variables, never their values. Every other caller decides whether to start a sync from what is named, without resolving a credential: `server_dir`, `doppler_project`, or any of the three variables in the environment or the secrets file. So no hook or writer waits on Doppler.
 
 ### Credentials
 

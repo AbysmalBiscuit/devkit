@@ -197,8 +197,8 @@ pub fn run(cli: TodoCli) -> Result<()> {
             top,
             order,
         } => move_todo(&store, id, parent, top, order)?,
-        TodoCommand::Sync { background } => match store.synced_replica() {
-            Some(replica) => sync::run(replica, background)?,
+        TodoCommand::Sync { background } => match Store::sync_replica(&cwd)? {
+            Some(replica) => sync::run(&replica, background)?,
             None if !background => eprintln!("devkit todo: this todo store has no sync target"),
             None => {}
         },

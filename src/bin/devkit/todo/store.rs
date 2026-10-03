@@ -38,7 +38,28 @@ const HOOK_LOCK_WAIT: Duration = Duration::from_secs(2);
 pub(crate) enum Store {
     Builtin(BuiltinStore),
     Taskwarrior(TaskwarriorStore),
-    Taskchampion(TaskchampionStore),
+    Taskchampion(Replica),
+}
+
+/// The taskchampion replica, and whether its config points it at a sync
+/// target. Only `devkit todo sync` resolves the target, credentials and all,
+/// so no other caller waits on Doppler.
+#[derive(Delegate)]
+#[delegate(TodoStore, target = "store")]
+pub(crate) struct Replica {
+    store: TaskchampionStore,
+    syncs: bool,
+}
+
+/// Whether `config` and the environment name any sync target, judged without
+/// resolving a credential: a sync directory, a Doppler project, or any sync
+/// variable in the environment or the secrets file.
+fn names_a_target(config: &TaskchampionConfig) -> bool {
+    config.server_dir.is_some()
+        || config.doppler_project.is_some()
+        || SYNC_VARS
+            .iter()
+            .any(|v| secrets::source(v) != Source::Unset)
 }
 
 /// Where the effective backend came from.
@@ -139,9 +160,9 @@ fn data_dir(config: &TaskchampionConfig) -> std::path::PathBuf {
 impl Store {
     /// The taskchampion replica this store syncs: `None` for another backend
     /// or a replica with no sync target.
-    pub(crate) fn synced_replica(&self) -> Option<&TaskchampionStore> {
+    fn synced_replica(&self) -> Option<&TaskchampionStore> {
         match self {
-            Self::Taskchampion(replica) if replica.target().is_some() => Some(replica),
+            Self::Taskchampion(Replica { store, syncs: true }) => Some(store),
             _ => None,
         }
     }
@@ -165,7 +186,10 @@ impl Store {
         match config.backend {
             TodoBackend::Builtin => Self::Builtin(BuiltinStore::open()),
             TodoBackend::Taskwarrior => Self::Taskwarrior(Self::taskwarrior(config)),
-            TodoBackend::Taskchampion => Self::Taskchampion(Self::taskchampion(config)),
+            TodoBackend::Taskchampion => Self::Taskchampion(Replica {
+                store: Self::taskchampion(config),
+                syncs: names_a_target(&config.taskchampion),
+            }),
         }
     }
 
@@ -177,34 +201,48 @@ impl Store {
         TaskchampionStore::at(data_dir(&config.taskchampion)).with_root(&config.taskwarrior.project)
     }
 
-    /// The store a CLI call in `cwd` uses. No config anywhere, as in a cloud
-    /// session, is the default config; a config that fails to load, an
-    /// unknown `DEVKIT_TODO_BACKEND` or a broken sync target is an error.
+    /// The config a CLI call in `cwd` reads: `None` when there is none
+    /// anywhere, as in a cloud session.
+    fn cli_config(cwd: &Path) -> Result<Option<TodoConfig>> {
+        match devkit_common::config::resolve(None, cwd) {
+            Ok((config, _)) => Ok(Some(config.todo)),
+            Err(e) if e.downcast_ref::<NoConfig>().is_some() => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The store a CLI call in `cwd` uses. No config anywhere is the default
+    /// config; a config that fails to load or an unknown
+    /// `DEVKIT_TODO_BACKEND` is an error.
     pub(crate) fn for_cli(cwd: &Path) -> Result<Self> {
-        let config = match devkit_common::config::resolve(None, cwd) {
-            Ok((config, _)) => Some(config.todo),
-            Err(e) if e.downcast_ref::<NoConfig>().is_some() => None,
-            Err(e) => return Err(e),
-        };
+        let config = Self::cli_config(cwd)?;
         let env = std::env::var(BACKEND_VAR).ok();
         let (backend, _) = effective_backend(config.as_ref(), env.as_deref())?;
+        Ok(Self::from_config(&TodoConfig {
+            backend,
+            ..config.unwrap_or_default()
+        }))
+    }
+
+    /// The replica `devkit todo sync` in `cwd` syncs, its target resolved:
+    /// `None` for another backend or when no target resolves. Some but not
+    /// all server credentials, or a client id that is not a UUID, is an
+    /// error naming the variables.
+    pub(crate) fn sync_replica(cwd: &Path) -> Result<Option<TaskchampionStore>> {
+        let config = Self::cli_config(cwd)?;
+        let env = std::env::var(BACKEND_VAR).ok();
+        let (backend, _) = effective_backend(config.as_ref(), env.as_deref())?;
+        if backend != TodoBackend::Taskchampion {
+            return Ok(None);
+        }
         let config = config.unwrap_or_default();
-        Ok(match backend {
-            TodoBackend::Taskchampion => {
-                let store = Self::taskchampion(&config);
-                Self::Taskchampion(match sync_target(&config.taskchampion)? {
-                    Some(target) => store.with_target(target),
-                    None => store,
-                })
-            }
-            backend => Self::from_config(&TodoConfig { backend, ..config }),
-        })
+        Ok(sync_target(&config.taskchampion)?
+            .map(|target| Self::taskchampion(&config).with_target(target)))
     }
 
     /// The store a hook in `cwd` uses. A hook never fails on the store's
     /// account: a config that fails to load or an unknown
-    /// `DEVKIT_TODO_BACKEND` is the built-in store, and a broken sync target
-    /// is no target.
+    /// `DEVKIT_TODO_BACKEND` is the built-in store.
     pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Self {
         let config = match devkit_common::config::resolve_in(checkout, None, cwd) {
             Ok((config, _)) => Some(config.todo),
@@ -215,16 +253,15 @@ impl Store {
         let Ok((backend, _)) = effective_backend(config.as_ref(), env.as_deref()) else {
             return Self::Builtin(BuiltinStore::open());
         };
-        let config = config.unwrap_or_default();
-        match backend {
-            TodoBackend::Taskchampion => {
-                let store = Self::taskchampion(&config).with_lock_wait(HOOK_LOCK_WAIT);
-                Self::Taskchampion(match sync_target(&config.taskchampion) {
-                    Ok(Some(target)) => store.with_target(target),
-                    _ => store,
-                })
-            }
-            backend => Self::from_config(&TodoConfig { backend, ..config }),
+        match Self::from_config(&TodoConfig {
+            backend,
+            ..config.unwrap_or_default()
+        }) {
+            Self::Taskchampion(Replica { store, syncs }) => Self::Taskchampion(Replica {
+                store: store.with_lock_wait(HOOK_LOCK_WAIT),
+                syncs,
+            }),
+            store => store,
         }
     }
 }

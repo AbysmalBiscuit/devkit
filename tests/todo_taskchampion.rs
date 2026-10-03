@@ -153,7 +153,7 @@ fn a_half_set_server_config_names_what_is_missing() {
         ("DEVKIT_TODO_SYNC_URL", "https://sync.invalid"),
         ("DEVKIT_TODO_SYNC_SECRET", SECRET),
     ];
-    let out = p.devkit(&["todo", "list"], &env);
+    let out = p.devkit(&["todo", "sync"], &env);
     assert!(!out.status.success());
     let err = stderr(&out);
     assert!(err.contains("DEVKIT_TODO_SYNC_CLIENT_ID"), "{err}");
@@ -636,4 +636,43 @@ fn a_capture_that_fails_partway_still_syncs_what_it_wrote() {
             .unwrap()
             .is_some_and(|t| t.description == "renamed")
     });
+}
+
+#[cfg(unix)]
+#[test]
+fn only_the_sync_child_waits_on_doppler() {
+    use std::os::unix::fs::PermissionsExt;
+    let p = Proj::with_home_config(
+        "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\ndoppler_project = \"devkit\"\n",
+    );
+    let bin = tempfile::tempdir().unwrap();
+    let doppler = bin.path().join("doppler");
+    std::fs::write(&doppler, "#!/bin/sh\nsleep 5\necho '{}'\n").unwrap();
+    std::fs::set_permissions(&doppler, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let env = [("PATH", path.as_str())];
+
+    let started = Instant::now();
+    let out = context(&p, "UserPromptSubmit", &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let started_add = Instant::now();
+    let add = p.devkit(&["todo", "add", "one"], &env);
+    assert!(add.status.success(), "{}", stderr(&add));
+    assert!(
+        started_add.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started_add.elapsed()
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        replica_dir(&p).join("sync.pending").exists() || replica_dir(&p).join("sync.lock").exists()
+    );
 }
