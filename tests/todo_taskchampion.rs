@@ -365,9 +365,10 @@ struct Shared {
 impl Shared {
     fn new() -> Self {
         let sync = tempfile::tempdir().unwrap();
+        let server = sync.path().join("server").display().to_string();
         let config = format!(
-            "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\nserver_dir = \"{}\"\n",
-            sync.path().join("server").display()
+            "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\nserver_dir = {}\n",
+            toml::Value::String(server)
         );
         Self {
             p: Proj::with_home_config(&config),
