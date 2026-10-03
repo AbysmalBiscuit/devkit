@@ -81,6 +81,93 @@ pub struct Config {
     /// The `devkit-mcp` server the agent plugins start.
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Where `devkit todo` and the todo hooks keep agent todo lists.
+    #[serde(default)]
+    pub todo: TodoConfig,
+}
+
+/// Where agent todo lists are kept.
+///
+/// ```
+/// # use devkit_config::{Config, TodoBackend};
+/// # let cfg = Config::parse(r#"
+/// [todo]
+/// backend = "taskwarrior"
+///
+/// [todo.taskwarrior]
+/// path = "/opt/task"
+/// project = "agents"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.todo.backend, TodoBackend::Taskwarrior);
+/// # assert_eq!(cfg.todo.taskwarrior.path, "/opt/task");
+/// # assert_eq!(cfg.todo.taskwarrior.project, "agents");
+/// # let empty = Config::parse("").unwrap();
+/// # assert_eq!(empty.todo.backend, TodoBackend::Builtin);
+/// # assert_eq!(empty.todo.taskwarrior.path, "task");
+/// # assert_eq!(empty.todo.taskwarrior.project, "devkit");
+/// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
+/// # assert!(Config::parse("[todo]\nbackends = \"builtin\"\n").is_err());
+/// # let quoted = Config::parse("[todo.taskwarrior]\nproject = \"dev'kit\"\n").unwrap_err();
+/// # assert!(format!("{quoted:#}").contains("[todo.taskwarrior] project"), "{quoted:#}");
+/// ```
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TodoConfig {
+    /// Which store keeps the todos. `builtin` is a JSON file in devkit's
+    /// state directory. `taskwarrior` keeps them in the local taskwarrior
+    /// through taskwarrior 3's `task` program, under the project
+    /// `[todo.taskwarrior] project` names. Set it in
+    /// `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:
+    /// a committed `taskwarrior` breaks every machine without `task`, cloud
+    /// sessions included.
+    pub backend: TodoBackend,
+    /// The `taskwarrior` backend's settings.
+    pub taskwarrior: TaskwarriorConfig,
+}
+
+/// The store `[todo] backend` names.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TodoBackend {
+    #[default]
+    Builtin,
+    Taskwarrior,
+}
+
+/// How devkit runs taskwarrior for `[todo] backend = "taskwarrior"`.
+#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskwarriorConfig {
+    /// The program to run. Its own name is looked up on PATH; any other value
+    /// runs as written.
+    pub path: String,
+    /// The taskwarrior project devkit keeps every todo under. Global todos
+    /// are filed on this project itself and every other node below it, as
+    /// `<project>.<node>`, so devkit never lists, claims or releases a task
+    /// in any other project. alacritree's taskwarrior tab shows these todos
+    /// only when it reads the same root. It may not hold `'` or `"`: it is
+    /// matched inside taskwarrior filters, where no quoting survives both.
+    #[serde(deserialize_with = "todo_root")]
+    pub project: String,
+}
+
+fn todo_root<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let root = String::deserialize(d)?;
+    if root.contains(['\'', '"']) {
+        return Err(serde::de::Error::custom(format!(
+            "[todo.taskwarrior] project {root:?} may not contain ' or \""
+        )));
+    }
+    Ok(root)
+}
+
+impl Default for TaskwarriorConfig {
+    fn default() -> Self {
+        Self {
+            path: "task".to_string(),
+            project: "devkit".to_string(),
+        }
+    }
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the
@@ -1809,7 +1896,8 @@ pub fn home_config_path() -> Option<PathBuf> {
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct LayerMarker {
     /// Stop walking upward at this file, and drop
-    /// `~/.config/devkit/config.toml` from the layer stack.
+    /// `~/.config/devkit/config.toml` from the layer stack, all but its
+    /// `[todo]` table, which describes the machine rather than a project.
     #[serde(default)]
     pub root: bool,
 }
@@ -1824,27 +1912,31 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
 }
 
 /// Build the ordered layer list (lowest->highest precedence): the home config
-/// (unless a `root = true` marker cuts it off), then the project layers
-/// `project_layers` finds for `start`. An explicit path or `$DEVKIT_CONFIG` is
-/// the sole layer.
+/// (only its `[todo]` table when a `root = true` marker cuts it off), then the
+/// project layers `project_layers` finds for `start`. An explicit path or
+/// `$DEVKIT_CONFIG` replaces the project layers and the home config, all but
+/// its `[todo]` table.
 fn discover(
     explicit: Option<&Path>,
     start: &Path,
     main_checkout: Option<&Path>,
     home: Option<&Path>,
 ) -> Result<Vec<(PathBuf, toml::Table)>> {
+    let explicit = explicit
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("DEVKIT_CONFIG").map(PathBuf::from));
     if let Some(p) = explicit {
-        return Ok(vec![read_layer(p)?]);
-    }
-    if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
-        return Ok(vec![read_layer(&PathBuf::from(p))?]);
+        let mut layers: Vec<_> = home_todo_layer(home)?.into_iter().collect();
+        layers.push(read_layer(&p)?);
+        return Ok(layers);
     }
 
     let found = layers::project_layers_rooted(start, main_checkout)?;
 
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
-    if !found.rooted
-        && let Some(h) = home
+    if found.rooted {
+        layers.extend(home_todo_layer(home)?);
+    } else if let Some(h) = home
         && h.is_file()
     {
         layers.push(read_layer(h)?);
@@ -1862,6 +1954,21 @@ fn discover(
         return Err(anyhow::Error::new(NoConfig));
     }
     Ok(layers)
+}
+
+/// The home config's `[todo]` table alone, as the base layer under an explicit
+/// or rooted config that otherwise drops the home config. Where todos are
+/// kept is a fact about the machine, so a project's config never cuts it off.
+fn home_todo_layer(home: Option<&Path>) -> Result<Option<(PathBuf, toml::Table)>> {
+    let Some(h) = home.filter(|h| h.is_file()) else {
+        return Ok(None);
+    };
+    let (path, mut table) = read_layer(h)?;
+    Ok(table.remove("todo").map(|todo| {
+        let mut only = toml::Table::new();
+        only.insert("todo".to_string(), todo);
+        (path, only)
+    }))
 }
 
 /// No config file exists anywhere the search looks. Carried as a distinct type
@@ -1985,9 +2092,10 @@ pub(crate) fn resolve_with_home(
     if let Some(warning) = check_baseline_path(&origin, home)? {
         eprintln!("{warning}");
     }
-    let mut cfg: Config = toml::Value::Table(merged)
-        .try_into()
-        .context("deserializing merged devkit config")?;
+    let mut cfg: Config = toml::Value::Table(merged).try_into().with_context(|| {
+        let layers: Vec<String> = order.iter().map(|p| p.display().to_string()).collect();
+        format!("deserializing merged devkit config ({})", layers.join(", "))
+    })?;
     reject_reserved_variables(&cfg, &origin)?;
     reject_never_without_default(&cfg, &origin)?;
     resolve_defaults(&mut cfg, &origin, checkout_root, default_worktree_root)?;

@@ -85,19 +85,23 @@ pub fn run(cli: HookCli) -> Result<()> {
         // The two verbs that release, which is the half with a correctness
         // consequence, so it runs before the record.
         HookEvent::SubagentStop => with_payload(harness, cli.event, |p| {
-            todo::release(p.subagent_holder());
+            let cwd = record::payload_cwd(p);
+            let checkout = devkit_common::vcs::Checkout::at(&cwd);
+            todo::release(p.subagent_holder(), &checkout, &cwd);
             edit::release_subagent(p);
-            record_only(p, cli.event);
+            record_in(p, cli.event, &checkout, &cwd);
             Ok(())
         }),
         // Release, then record, then sweep. Release first because it is the
         // one step with a correctness consequence; the sweep last because it is
         // the only one that can be skipped without loss.
         HookEvent::SessionEnd => with_payload(harness, cli.event, |p| {
-            todo::release(p.session_holder());
+            let cwd = record::payload_cwd(p);
+            let checkout = devkit_common::vcs::Checkout::at(&cwd);
+            todo::release(p.session_holder(), &checkout, &cwd);
             edit::release_session(p);
             clear_issue_receipts(p);
-            let settings = record_only(p, cli.event);
+            let settings = record_in(p, cli.event, &checkout, &cwd);
             if settings.auto_prune && settings.enabled {
                 // A retention cap nothing enforces is not a promise. Fail-open:
                 // the outcome is discarded, so a sweep failure never changes

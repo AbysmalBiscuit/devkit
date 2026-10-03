@@ -73,7 +73,11 @@ fn line(todo: &Todo, viewer: &Holder) -> String {
         Status::Completed { .. } => ('x', String::new()),
         Status::Pending | Status::Cancelled { .. } => (' ', String::new()),
     };
-    format!("- [{mark}] {} ({}{note})", todo.description, todo.id)
+    format!(
+        "- [{mark}] {} ({}{note})",
+        todo.description,
+        crate::short_id(&todo.id)
+    )
 }
 
 /// Todos without an order follow the ordered ones, oldest first; the id
@@ -159,7 +163,7 @@ pub fn guide(own_node: &str) -> String {
          Otherwise use `devkit todo add \"<text>\"` (prints the id), `devkit todo start <id>`, \
          `devkit todo done <id>` and `devkit todo cancel <id>`.\n\
          - A sub-agent claims a todo with `devkit todo start <id>` before working on it.\n\
-         - Ids are the numbers in parentheses.\n"
+         - Ids are in parentheses.\n"
     )
 }
 
@@ -278,6 +282,21 @@ mod tests {
             "## r.main\n1 cancelled\n"
         );
         assert_eq!(render_lists(&nodes(), &todos, &Holder::new("S")), "");
+    }
+
+    #[test]
+    fn a_uuid_id_renders_short() {
+        let todos = [todo(
+            "96432cd6-082a-4d8c-a9cb-adef8823ff92",
+            "x",
+            None,
+            1024,
+            Status::Pending,
+        )];
+        assert_eq!(
+            render_lists(&nodes(), &todos, &Holder::new("S")),
+            "## r.main\n- [ ] x (96432cd6)\n"
+        );
     }
 
     #[test]

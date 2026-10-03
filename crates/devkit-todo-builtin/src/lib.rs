@@ -6,12 +6,11 @@ use std::{collections::BTreeMap, path::PathBuf, time::SystemTime};
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, SecondsFormat, Utc};
-use devkit_common::{paths, store};
-use serde::{Deserialize, Serialize};
-
-use crate::{
-    Edit, Filter, Holder, NewTodo, ORDER_GAP, Status, Todo, TodoStore, one_line, render, transition,
+use devkit_common::store;
+use devkit_todo::{
+    Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, one_line, state_dir, transition,
 };
+use serde::{Deserialize, Serialize};
 
 const VERSION: u32 = 1;
 
@@ -80,15 +79,6 @@ fn now() -> String {
     DateTime::<Utc>::from(SystemTime::now()).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Where the lists last injected for `holder` are fingerprinted, keyed on a
-/// hash of the full holder so a sub-agent's injection never suppresses its
-/// session's.
-pub fn digest_path(holder: &Holder) -> PathBuf {
-    BuiltinStore::default_dir()
-        .join("digests")
-        .join(render::digest(holder))
-}
-
 pub struct BuiltinStore {
     dir: PathBuf,
 }
@@ -99,13 +89,9 @@ impl BuiltinStore {
         Self { dir }
     }
 
-    pub fn default_dir() -> PathBuf {
-        paths::state_dir().join("todo")
-    }
-
-    /// The store in [`BuiltinStore::default_dir`].
+    /// The store in [`state_dir`].
     pub fn open() -> Self {
-        Self::at(Self::default_dir())
+        Self::at(state_dir())
     }
 
     fn with_doc<T>(&self, f: impl FnOnce(&mut Doc) -> Result<T>) -> Result<T> {
@@ -123,6 +109,13 @@ impl TodoStore for BuiltinStore {
                 .cloned()
                 .collect())
         })
+    }
+
+    fn get(&self, id: &str) -> Result<Option<Todo>> {
+        let Ok(key) = id.parse::<u64>() else {
+            return Ok(None);
+        };
+        self.with_doc(|doc| Ok(doc.todos.get(&key).cloned()))
     }
 
     fn add(&self, todo: NewTodo) -> Result<String> {

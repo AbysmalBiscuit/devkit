@@ -8,7 +8,8 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
-use devkit_todo::{BuiltinStore, Filter, Todo, TodoStore};
+use devkit_todo::{Filter, Todo, TodoStore};
+use devkit_todo_builtin::BuiltinStore;
 
 #[path = "testenv.rs"]
 mod testenv;
@@ -21,8 +22,13 @@ pub struct Proj {
 
 impl Proj {
     pub fn new() -> Self {
+        Self::named("proj")
+    }
+
+    /// A checkout whose directory, and so whose repository node, is `name`.
+    pub fn named(name: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("proj");
+        let path = root.path().join(name);
         std::fs::create_dir(&path).unwrap();
         devkit_git::Git::fixture(&path)
             .args(["init", "-q", "-b", "main"])
@@ -30,6 +36,25 @@ impl Proj {
             .unwrap();
         let (home, _) = testenv::isolated(env!("CARGO_BIN_EXE_devkit"));
         Proj { root, home, path }
+    }
+
+    /// As [`Proj::new`], with `toml` as the isolated home's
+    /// `~/.config/devkit/config.toml`.
+    pub fn with_home_config(toml: &str) -> Self {
+        Self::new().home_config_of(toml)
+    }
+
+    /// This checkout with `toml` as the isolated home's
+    /// `~/.config/devkit/config.toml`.
+    pub fn home_config_of(self, toml: &str) -> Self {
+        let dir = self.home.path().join(".config/devkit");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), toml).unwrap();
+        self
+    }
+
+    pub fn home_config(&self) -> PathBuf {
+        self.home.path().join(".config/devkit/config.toml")
     }
 
     /// `devkit` run in `dir` with `env` set and no ambient session.
@@ -82,10 +107,21 @@ impl Proj {
 
     /// `devkit hook <verb> --harness <harness>` with `payload` on stdin.
     pub fn hook(&self, verb: &str, harness: &str, payload: &serde_json::Value) -> Output {
+        self.hook_with(verb, harness, payload, &[])
+    }
+
+    /// As [`Proj::hook`], with `env` set.
+    pub fn hook_with(
+        &self,
+        verb: &str,
+        harness: &str,
+        payload: &serde_json::Value,
+        env: &[(&str, &str)],
+    ) -> Output {
         self.devkit_in(
             &self.path,
             &["hook", verb, "--harness", harness],
-            &[],
+            env,
             &payload.to_string(),
         )
     }

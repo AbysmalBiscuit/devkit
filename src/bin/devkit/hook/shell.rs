@@ -325,7 +325,7 @@ fn respond(
     // A sub-agent's command that would change a todo another holder has in
     // progress is denied, naming the holder.
     if blocks.is_empty()
-        && let Some(reason) = super::todo::check_claims(payload, &analysis)
+        && let Some(reason) = super::todo::check_claims(payload, &analysis, &checkout, &cwd)
     {
         blocks.push(reason);
     }
