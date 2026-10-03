@@ -19,7 +19,7 @@ use devkit_todo::{
     TodoStore,
     native::NativeMap,
     node::{self, GLOBAL, Place, SessionRef},
-    render,
+    render, transition,
 };
 use pabal::AnyHarness;
 use serde_json::{Value, json};
@@ -228,6 +228,15 @@ fn set_status(
 ) -> Result<()> {
     if ids.is_empty() {
         bail!("name at least one todo id");
+    }
+    // Every id is checked against one listing before any is written, so a
+    // batch with one unknown or claimed todo changes nothing.
+    let todos = store.list(&Filter::all())?;
+    for id in &ids {
+        let Some(todo) = todos.iter().find(|t| &t.id == id) else {
+            bail!("no todo {id}");
+        };
+        transition(&todo.status, to, actor)?;
     }
     for id in ids {
         store.apply(&Edit::SetStatus {

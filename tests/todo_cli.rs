@@ -3,7 +3,7 @@
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use devkit_todo::{Holder, Status};
+use devkit_todo::{Holder, Status, TodoStore};
 use serde_json::Value;
 use todoenv::{Proj, stderr, stdout};
 
@@ -162,4 +162,33 @@ fn a_failed_repository_lookup_is_an_error_not_global() {
     let add = p.devkit(&["todo", "add", "lost"], &[("PATH", path), S1[0]]);
     assert_eq!(add.status.code(), Some(1));
     assert!(p.todos().is_empty());
+}
+
+#[test]
+fn a_batch_with_one_claimed_todo_changes_nothing() {
+    let p = Proj::new();
+    for text in ["one", "two"] {
+        p.devkit(&["todo", "add", text], &S1);
+    }
+    p.store()
+        .apply(&devkit_todo::Edit::SetStatus {
+            id: "2".into(),
+            to: devkit_todo::StatusKind::InProgress,
+            actor: Holder::new("s1/a2"),
+        })
+        .unwrap();
+    let out = p.devkit(&["todo", "start", "1", "2"], &[(
+        "CLAUDE_CODE_SESSION_ID",
+        "t",
+    )]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("in progress by s1/a2"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(p.todo("1").status, Status::Pending);
+    let unknown = p.devkit(&["todo", "done", "1", "99"], &S1);
+    assert!(stderr(&unknown).contains("no todo 99"));
+    assert_eq!(p.todo("1").status, Status::Pending);
 }
