@@ -54,7 +54,7 @@ pub fn status_query(slug: &str, issue: u64, project: &ProjectRef, field: &str) -
   repository(owner: {o}, name: {n}) {{
     issue(number: {issue}) {{
       id
-      projectItems(first: 20, includeArchived: true) {{
+      projectItems(first: 100, includeArchived: true) {{
         nodes {{
           id
           project {{ id number }}
@@ -457,6 +457,7 @@ mod tests {
             "Status",
         );
         assert!(q.contains("repositoryOwner(login: \"org\")"), "{q}");
+        assert!(q.contains("projectItems(first: 100"), "a full page of items: {q}");
         assert!(
             q.contains("projectV2(number: 7)") && q.contains("issue(number: 65)"),
             "{q}"
