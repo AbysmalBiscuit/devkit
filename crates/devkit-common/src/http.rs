@@ -129,7 +129,7 @@ fn trust_store() -> String {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{BufRead, BufReader},
+        io::{BufRead, BufReader, Write},
         net::TcpListener,
     };
 
@@ -150,6 +150,35 @@ mod tests {
             }
         });
         format!("http://127.0.0.1:{port}/")
+    }
+
+    #[test]
+    fn a_gzip_encoded_body_is_decoded() {
+        // gzip of "decoded"
+        const BODY: [u8; 27] = [
+            31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 75, 73, 77, 206, 79, 73, 77, 1, 0, 246, 154, 240,
+            26, 7, 0, 0, 0,
+        ];
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut tcp in listener.incoming().flatten() {
+                let mut reader = BufReader::new(&tcp);
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n",
+                    BODY.len()
+                );
+                let _ = tcp.write_all(head.as_bytes());
+                let _ = tcp.write_all(&BODY);
+            }
+        });
+        let resp = send(client().get(format!("http://127.0.0.1:{port}/"))).unwrap();
+        assert_eq!(resp.text().unwrap(), "decoded");
     }
 
     #[test]

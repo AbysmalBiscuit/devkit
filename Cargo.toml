@@ -113,7 +113,7 @@ pabal = { version = "0.2", features = ["clap"] }
 ambassador = "0.5.1"
 # The 0.12 line taskchampion builds on, so the binary links one HTTP stack.
 # Roots come from `http::tls_config`, handed in as a preconfigured rustls config.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-manual-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "gzip", "json", "rustls-tls-manual-roots"] }
 # An embedded taskchampion replica, on the 3.1 line taskwarrior 3.5 links, so
 # the replica matches the `task` a person reads the lists with. Sync builds its
 # own reqwest client, so its roots come from `tls-native-roots`.
