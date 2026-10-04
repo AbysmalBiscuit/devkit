@@ -71,6 +71,17 @@ pub enum RunEnd {
     Lost,
 }
 
+impl RunEnd {
+    /// The name the log and `--json` spell it with.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::SessionEnded => "session_ended",
+            Self::Lost => "lost",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimEnd {

@@ -28,7 +28,7 @@ Before running a project build, profiling flow, or verification command by hand,
 | `references/templates.md` | text for a tool devkit does not send to (a Linear update, a Jira comment, a release note), a branch or worktree named by the project's template, or a PR body or Slack message to read before it goes out |
 | `references/issues.md` | starting an issue worktree, checking out a PR, shipping for review, tearing down |
 | `references/config.md` | writing or changing a `devkit.toml`: how layers merge, reading a table's rules before editing it, checking the edit |
-| `references/todo.md` | tracking work of three or more steps, a todo list in your context, claiming a todo as a sub-agent, or a todo denied as in progress by another holder |
+| `references/todo.md` | tracking work of three or more steps, a todo list in your context, claiming a todo as a sub-agent, a todo denied as in progress by another holder, or reporting subagent runs and held time |
 | `references/diagnostics.md` | a `devkit.toml` key's name, type or default is in question, a credential is missing, or you need `doctor` or `brief` |
 
 Global flags go **before** the subcommand (`issue -C ~/git/acme/app status`): `-C/--dir <path>` on `issue`/`devrun`/`portm`, `--config <file>` and `--timing[=trace]` / `--timing-log <FILE>` on `issue`/`devrun`.

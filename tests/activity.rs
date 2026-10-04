@@ -228,3 +228,66 @@ fn a_record_that_cannot_be_written_changes_no_verdict() {
         by: devkit_todo::Holder::new("S")
     });
 }
+
+#[test]
+fn the_report_groups_parallel_runs_by_session_type_and_todo() {
+    let p = Proj::new();
+    start(&p, "a1", Some("reviewer"));
+    start(&p, "a2", Some("reviewer"));
+    start(&p, "afork", None);
+    stop(&p, "a2", Some("reviewer"));
+    stop(&p, "a1", Some("reviewer"));
+    let id = todo(&p, &["add", "a"], &[]);
+    todo(&p, &["start", &id], &[AS_SUB_AGENT]);
+    todo(&p, &["done", &id], &[AS_SUB_AGENT]);
+
+    let out = p.devkit(&["activity", "--json"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let sessions = report["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "{report:#}");
+    assert_eq!(sessions[0]["session"], "S");
+    let runs = sessions[0]["runs"].as_array().unwrap();
+    let agents: Vec<&str> = runs.iter().map(|r| r["agent"].as_str().unwrap()).collect();
+    assert_eq!(agents, ["a1", "a2", "afork"], "{report:#}");
+    assert_eq!(runs[2]["agent_type"], Value::Null);
+    assert_eq!(runs[2]["end"], Value::Null);
+    let types: Vec<(&str, u64)> = report["agent_types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["agent_type"].as_str().unwrap(),
+                t["runs"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert!(types.contains(&("reviewer", 2)), "{report:#}");
+    assert!(types.contains(&("subagent", 1)), "{report:#}");
+    let todos = report["todos"].as_array().unwrap();
+    assert_eq!(todos.len(), 1, "{report:#}");
+    assert_eq!(todos[0]["todo"], id);
+    assert_eq!(todos[0]["intervals"][0]["holder"], "S/a1");
+    assert_eq!(todos[0]["intervals"][0]["outcome"], "completed");
+
+    let out = p.devkit(&["activity"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    for want in [
+        "S", "a1", "a2", "afork", "reviewer", "subagent", "running", "S/a1",
+    ] {
+        assert!(text.contains(want), "{want} missing from:\n{text}");
+    }
+}
+
+#[test]
+fn the_report_keeps_to_its_range() {
+    let p = Proj::new();
+    start(&p, "a1", Some("Explore"));
+    stop(&p, "a1", Some("Explore"));
+    let out = p.devkit(&["activity", "--json", "--until", "2000-01-01"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(report["sessions"], json!([]), "{report:#}");
+}

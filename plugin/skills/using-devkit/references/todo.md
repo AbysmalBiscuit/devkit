@@ -37,6 +37,15 @@ Codex offers `update_plan` only when its config sets `[tools.update_plan] enable
 
 `devkit todo purge` deletes a record for good, for text that must disappear such as a pasted secret. It needs a person at a terminal and refuses an agent; cancel instead.
 
+## Activity
+
+devkit records each subagent run and each stretch a todo spends in progress, beside the todo state on every backend, whether or not the harness log is on. `devkit activity` reports them over a date range, grouped by session, agent type and todo, and `--json` gives the same report as JSON. `devkit activity -h` gives the range's defaults.
+
+- A run starts at the subagent's start hook and ends at its stop. Without a stop it ends at its session's end. Without either, it ends as `lost` at the agent's last hook once the agent has been silent past a backstop, so no run stays open for good. Parallel runs, two of one type included, are told apart by agent id.
+- A run whose payload names no agent type, such as a Claude Code fork, stores none and reports as `subagent`.
+- An interval starts when a holder claims a todo and ends `completed`, `cancelled`, `released` (stopped, or released when its holder ended), or `handed` when another holder takes it over, whose own interval starts there.
+- Only what devkit sees is recorded. A todo started with `task start` or in alacritree has no interval, and Cursor runs are not recorded because its manifest wires no subagent start.
+
 ## Backends
 
 The built-in store is the default: one file in devkit's state directory. `[todo] backend = "taskwarrior"` keeps the todos in the local taskwarrior instead, through taskwarrior 3's `task` program, all under one root project. Set it in `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`: a committed value breaks every machine without `task`, cloud sessions included. `[todo.taskwarrior] path` names another `task` program, and `[todo] project` another root. Agents use `devkit todo` or their native tool on either backend.
