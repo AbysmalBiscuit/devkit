@@ -752,8 +752,6 @@ fn hanging_hook(command: &str, slow_gate: Option<Duration>) -> String {
         "tool_input": {"command": command},
         "cwd": p.path,
     });
-    let file = dir.path().join("payload.json");
-    std::fs::write(&file, payload.to_string()).unwrap();
     let holder = slow_gate.map(|delay| {
         std::fs::write(
             p.path.join("devkit.toml"),
@@ -779,14 +777,20 @@ fn hanging_hook(command: &str, slow_gate: Option<Duration>) -> String {
         holder
     });
     let started = Instant::now();
-    let out = p.shell(
-        &format!(
-            "timeout 10 devkit hook pre-tool-use --harness claude-code < '{}'",
-            file.display()
-        ),
+    let mut child = p.devkit_fed(
+        &["hook", "pre-tool-use", "--harness", "claude-code"],
         &[(DATABASE_VAR, "postgres://agent@127.0.0.1:1/todos")],
+        &payload.to_string(),
     );
+    while child.try_wait().unwrap().is_none() {
+        if started.elapsed() > Duration::from_secs(10) {
+            child.kill().unwrap();
+            panic!("the hook was still running after 10s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let took = started.elapsed();
+    let out = child.wait_with_output().unwrap();
     if let Some(holder) = holder {
         holder.join().unwrap();
     }

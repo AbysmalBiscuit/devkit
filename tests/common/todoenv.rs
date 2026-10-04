@@ -101,6 +101,19 @@ impl Proj {
         child.wait_with_output().unwrap()
     }
 
+    /// `devkit` started in the checkout with `env` set and `stdin` written to
+    /// it, left running so a test can bound how long it waits.
+    pub fn devkit_fed(&self, args: &[&str], env: &[(&str, &str)], stdin: &str) -> Child {
+        let mut child = self.start(&self.path, env!("CARGO_BIN_EXE_devkit"), args, env);
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child
+    }
+
     /// `devkit` started in the checkout with `env` set, left running.
     pub fn devkit_child(&self, args: &[&str], env: &[(&str, &str)]) -> Child {
         let mut child = self.start(&self.path, env!("CARGO_BIN_EXE_devkit"), args, env);
