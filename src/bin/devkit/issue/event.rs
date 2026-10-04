@@ -10,7 +10,7 @@ use devkit_common::{
     record,
     tracker::{
         self,
-        status::{StatusWriter, same_status, target, writer_for},
+        status::{StatusWriter, Target, target, writer_for},
     },
     worktree::IssueId,
 };
@@ -71,14 +71,12 @@ pub(crate) fn fire(
     let current = writer.status(&id)?;
     let shown = current.as_deref().unwrap_or("(none)");
     Ok(match target(t, current.as_deref()) {
-        Some(to) => {
+        Target::To(to) => {
             writer.set_status(&id, to)?;
             format!("moved {id}: {shown} -> {to}")
         }
-        None if current.as_deref().is_some_and(|c| same_status(c, &t.to)) => {
-            format!("{id} is already {shown}")
-        }
-        None => format!("{id} is {shown}, not in [issue.events.{event}] from"),
+        Target::Already => format!("{id} is already {shown}"),
+        Target::NotFrom => format!("{id} is {shown}, not in [issue.events.{event}] from"),
     })
 }
 

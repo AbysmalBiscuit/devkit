@@ -68,19 +68,33 @@ fn writer_with_key(
     }
 }
 
-/// The status an issue at `current` moves to under `t`: `to`, or `None` when
-/// the issue is already there or `current` matches no `from` entry. `*`
-/// matches any status, the empty string matches no status, and names compare
-/// case-insensitively after trimming.
-pub fn target<'a>(t: &'a EventTransition, current: Option<&str>) -> Option<&'a str> {
+/// What a transition does to an issue at some status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target<'a> {
+    /// Move the issue to this status.
+    To(&'a str),
+    /// The issue is already at `to`, whatever `from` says.
+    Already,
+    /// The issue's status matches no `from` entry.
+    NotFrom,
+}
+
+/// What `t` does to an issue at `current`. `*` matches any status, the empty
+/// string matches no status, and names compare case-insensitively after
+/// trimming.
+pub fn target<'a>(t: &'a EventTransition, current: Option<&str>) -> Target<'a> {
     if current.is_some_and(|c| same_status(c, &t.to)) {
-        return None;
+        return Target::Already;
     }
     let current = current.unwrap_or("");
-    t.from
+    if t.from
         .iter()
         .any(|f| f.trim() == "*" || same_status(f, current))
-        .then_some(t.to.as_str())
+    {
+        Target::To(&t.to)
+    } else {
+        Target::NotFrom
+    }
 }
 
 /// The entry in `names` that `wanted` names, compared like [`target`].
@@ -105,19 +119,19 @@ mod tests {
     fn target_applies_from_and_skips_when_already_there() {
         assert_eq!(
             target(&t(&["*"], "In progress"), Some("Todo")),
-            Some("In progress")
+            Target::To("In progress")
         );
         assert_eq!(
             target(&t(&["Todo"], "In progress"), Some("In review")),
-            None
+            Target::NotFrom
         );
         assert_eq!(
             target(&t(&["*"], "In progress"), Some(" in PROGRESS ")),
-            None
+            Target::Already
         );
         assert_eq!(
             target(&t(&["todo "], "In progress"), Some("Todo")),
-            Some("In progress")
+            Target::To("In progress")
         );
     }
 
@@ -125,10 +139,13 @@ mod tests {
     fn no_status_matches_the_empty_string_and_star_only() {
         assert_eq!(
             target(&t(&["", "Todo"], "In progress"), None),
-            Some("In progress")
+            Target::To("In progress")
         );
-        assert_eq!(target(&t(&["*"], "In progress"), None), Some("In progress"));
-        assert_eq!(target(&t(&["Todo"], "In progress"), None), None);
+        assert_eq!(
+            target(&t(&["*"], "In progress"), None),
+            Target::To("In progress")
+        );
+        assert_eq!(target(&t(&["Todo"], "In progress"), None), Target::NotFrom);
     }
 
     #[test]
