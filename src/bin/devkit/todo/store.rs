@@ -159,19 +159,12 @@ pub(crate) fn effective_backend(
     })
 }
 
-/// The Doppler scope `config` names, if any.
-pub(crate) fn doppler_scope(config: &TaskchampionConfig) -> Option<DopplerScope> {
-    config.doppler_project.as_ref().map(|project| DopplerScope {
-        project: project.clone(),
-        config: config.doppler_config.clone(),
-    })
-}
-
-/// The Doppler scope the Postgres backend's `config` names, if any.
-pub(crate) fn database_scope(config: &PostgresConfig) -> Option<DopplerScope> {
-    config.doppler_project.as_ref().map(|project| DopplerScope {
-        project: project.clone(),
-        config: config.doppler_config.clone(),
+/// The Doppler scope a backend's `doppler_project` and `doppler_config`
+/// name, `None` without a project.
+pub(crate) fn doppler_scope(project: Option<&str>, config: Option<&str>) -> Option<DopplerScope> {
+    project.map(|project| DopplerScope {
+        project: project.to_string(),
+        config: config.map(str::to_string),
     })
 }
 
@@ -182,7 +175,14 @@ pub(crate) fn open_database(
     config: &PostgresConfig,
     wait: Duration,
 ) -> (Result<Arc<Database>, String>, Source) {
-    let [(url, source)] = secrets::resolve_many(&[DATABASE_VAR], database_scope(config).as_ref());
+    let [(url, source)] = secrets::resolve_many(
+        &[DATABASE_VAR],
+        doppler_scope(
+            config.doppler_project.as_deref(),
+            config.doppler_config.as_deref(),
+        )
+        .as_ref(),
+    );
     let db = match url {
         None => Err(format!("{DATABASE_VAR} is not set")),
         Some(url) => Database::new(&url, wait).map_err(|e| format!("{DATABASE_VAR}: {e:#}")),
@@ -230,7 +230,11 @@ fn sync_target_with(
     if let Some(dir) = &config.server_dir {
         return Ok(Some(SyncTarget::Dir(expand_tilde(dir))));
     }
-    let resolved = resolve(&SYNC_VARS, doppler_scope(config).as_ref());
+    let scope = doppler_scope(
+        config.doppler_project.as_deref(),
+        config.doppler_config.as_deref(),
+    );
+    let resolved = resolve(&SYNC_VARS, scope.as_ref());
     let missing: Vec<&str> = SYNC_VARS
         .iter()
         .zip(&resolved)

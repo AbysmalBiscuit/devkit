@@ -633,7 +633,8 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
     }
     let tc = config.taskchampion;
     if backend == devkit_config::TodoBackend::Taskchampion && tc.server_dir.is_none() {
-        let resolved = secrets::resolve_many(&SYNC_VARS, doppler_scope(&tc).as_ref());
+        let scope = doppler_scope(tc.doppler_project.as_deref(), tc.doppler_config.as_deref());
+        let resolved = secrets::resolve_many(&SYNC_VARS, scope.as_ref());
         rows.extend(
             TODO_SYNC_KEYS
                 .into_iter()
