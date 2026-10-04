@@ -69,9 +69,9 @@ fn block_on<F: Future>(work: F) -> Result<F::Output> {
 enum State {
     Closed,
     Open(Client),
-    /// The last connection attempt failed, and attempts wait out `wait`
-    /// before trying again, so a process that finds the database unreachable
-    /// pays its wait once.
+    /// The last attempt failed to connect or got no answer in time, and
+    /// attempts wait out `wait` before trying again, so a process that finds
+    /// the database unreachable or stalled pays its wait once.
     Failed {
         at: Instant,
         reason: String,
@@ -156,7 +156,8 @@ impl Database {
 
     /// Runs `op` on the connection within the wait, creating a missing
     /// schema and running `op` once more. A connection that times out or
-    /// closes is dropped, so the server rolls back what it left open.
+    /// closes is dropped, so the server rolls back what it left open, and a
+    /// timeout fails the calls after it until the wait has passed again.
     pub(crate) fn run<T>(&self, op: impl AsyncFn(&mut Client) -> Result<T>) -> Result<T> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let attempt = async {
@@ -182,14 +183,19 @@ impl Database {
             true => e.context(format!("todo database {}", self.target())),
             false => e,
         });
+        let failed = match &*state {
+            State::Closed => out.is_err(),
+            State::Open(_) => timed_out,
+            State::Failed { .. } => false,
+        };
         match (&*state, &out) {
-            (State::Open(client), _) if timed_out || client.is_closed() => *state = State::Closed,
-            (State::Closed, Err(e)) => {
+            (_, Err(e)) if failed => {
                 *state = State::Failed {
                     at: Instant::now(),
                     reason: format!("{e:#}"),
                 }
             }
+            (State::Open(client), _) if client.is_closed() => *state = State::Closed,
             _ => {}
         }
         out

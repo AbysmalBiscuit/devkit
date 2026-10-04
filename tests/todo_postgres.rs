@@ -4,6 +4,8 @@
 //! else `DEVKIT_TEST_POSTGRES_URL`, and return early when neither is set;
 //! `crates/devkit-todo-postgres/testdb/up.sh` starts both.
 
+#[path = "common/pgstall.rs"]
+mod pgstall;
 #[path = "common/syncserver.rs"]
 mod syncserver;
 #[path = "common/todoenv.rs"]
@@ -19,6 +21,7 @@ use devkit_todo::{
     activity::{ActivityStore, ClaimEnd, RunEnd},
 };
 use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore};
+use pgstall::Stalled;
 use serde_json::{Value, json};
 use syncserver::Silent;
 use todoenv::{Proj, stderr, stdout};
@@ -192,9 +195,23 @@ fn silent_url(silent: &Silent) -> String {
 #[test]
 fn a_hook_with_the_database_unreachable_does_nothing_in_time() {
     let silent = Silent::start();
+    hooks_do_nothing_in_time(&silent_url(&silent));
+    assert!(silent.connections() > 0, "the hooks tried the database");
+}
+
+#[test]
+fn a_hook_with_the_database_stalled_after_connecting_does_nothing_in_time() {
+    let stalled = Stalled::start();
+    hooks_do_nothing_in_time(&format!("postgres://agent@{}/todos", stalled.addr));
+}
+
+/// Every todo hook against the database at `url`: each exits within its
+/// budget with the verdict a reachable database gets, and nothing is
+/// written anywhere else.
+fn hooks_do_nothing_in_time(url: &str) {
     let p = proj("devkit");
     let env = [
-        (DATABASE_VAR, silent_url(&silent)),
+        (DATABASE_VAR, url.to_string()),
         ("CLAUDE_CODE_SESSION_ID", "S".to_string()),
     ];
     let env = borrowed(&env);
@@ -246,7 +263,6 @@ fn a_hook_with_the_database_unreachable_does_nothing_in_time() {
         ""
     );
 
-    assert!(silent.connections() > 0, "the hooks tried the database");
     assert!(p.todos().is_empty(), "nothing fell back to the local store");
     assert!(!p.state().join("todo/activity/events.jsonl").exists());
 }
