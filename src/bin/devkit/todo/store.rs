@@ -294,6 +294,7 @@ pub(crate) fn open_database(
         (Some(scope), UrlLookup::CachedOnly) if !from_env => cached_url(scope, None),
         _ => None,
     };
+    let from_cache = cached.is_some();
     let (url, source) = match cached {
         Some(url) => (Some(url), Source::Doppler),
         None => {
@@ -310,7 +311,10 @@ pub(crate) fn open_database(
     };
     let db = Database::new(&url, wait, &trust).map_err(|e| format!("{DATABASE_VAR}: {e:#}"));
     if let (Ok(db), Source::Doppler, Some(scope)) = (&db, &source, &scope) {
-        cache_url(scope, &url);
+        // Only a fresh answer resets the copy's age; reusing it must not.
+        if !from_cache {
+            cache_url(scope, &url);
+        }
         let path = url_cache_path(scope);
         db.on_connect_failure(move || {
             let _ = std::fs::remove_file(&path);

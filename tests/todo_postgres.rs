@@ -860,3 +860,68 @@ fn a_skewed_clock_never_makes_a_live_run_lost() {
         );
     }
 }
+
+/// Sets the modification time of `path`, which the URL cache reads as the
+/// copy's age, to `by` ago.
+#[cfg(unix)]
+fn backdate(path: &std::path::Path, by: Duration) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::now() - by)
+        .unwrap();
+}
+
+#[cfg(unix)]
+fn modified_ago(path: &std::path::Path) -> Duration {
+    std::fs::metadata(path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .elapsed()
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cached_url_past_its_hour_makes_a_hook_ask_doppler() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    let p = doppler_proj(&fresh_root());
+    let bin = tempfile::tempdir().unwrap();
+    let path = fake_doppler(bin.path(), &url);
+    let env = [("PATH", path.as_str())];
+    let hook = |agent: &str| {
+        let out = p.hook_with(
+            "subagent-start",
+            "claude-code",
+            &subagent(&p, "SubagentStart", agent),
+            &env,
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+    };
+    hook("a1");
+    assert_eq!(doppler_calls(bin.path()), 1);
+    let cache = cached_url_file(&p);
+    backdate(&cache, Duration::from_secs(59 * 60));
+    hook("a2");
+    assert_eq!(
+        doppler_calls(bin.path()),
+        1,
+        "a fresh copy stands in for Doppler"
+    );
+    let kept = modified_ago(&cache);
+    assert!(
+        kept > Duration::from_secs(58 * 60),
+        "reusing the copy made it look {kept:?} old"
+    );
+    backdate(&cache, Duration::from_secs(61 * 60));
+    hook("a3");
+    assert_eq!(
+        doppler_calls(bin.path()),
+        2,
+        "a copy past its hour is asked again"
+    );
+}
