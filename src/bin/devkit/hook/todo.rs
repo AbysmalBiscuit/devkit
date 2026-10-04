@@ -15,7 +15,7 @@ use std::{path::Path, time::Duration};
 
 use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
-use devkit_common::{store::LockBusy, vcs::Checkout};
+use devkit_common::{store::LockBusy, ui::printable, vcs::Checkout};
 use devkit_todo::{
     Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
@@ -226,7 +226,9 @@ pub(crate) fn check_claims(
             let todo = store.get(&id).ok()??;
             let Claimed { by } = transition(&todo.status, to, &actor).err()?;
             Some(format!(
-                "devkit todo: todo {id} is in progress by {by}; pick another todo"
+                "devkit todo: todo {} is in progress by {}; pick another todo",
+                printable(&id),
+                printable(&by)
             ))
         })
     };
