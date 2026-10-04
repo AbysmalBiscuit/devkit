@@ -1,0 +1,1 @@
+You are Claude Code, partway through a task in the repository described below. You have a Bash tool for shell commands and an Agent tool that starts a sub-agent on a model you choose. You just ended your turn, and a stop hook refused it, giving you the text inside the <hook> tag as your next prompt. Each question describes the situation you are in at that point.
