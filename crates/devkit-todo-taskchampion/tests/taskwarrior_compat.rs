@@ -1,6 +1,7 @@
-//! A replica synced to a directory reads the same in taskwarrior, and
-//! taskwarrior's edits read back in devkit. Each test returns early when
-//! `task` is not installed.
+//! A replica synced to a directory reads the same in taskwarrior 3.5 or
+//! later, the releases on devkit's taskchampion line, and taskwarrior's edits
+//! read back in devkit. CI runs them against Homebrew's taskwarrior. Each test
+//! returns early when `task` is not installed.
 
 use std::{
     path::Path,

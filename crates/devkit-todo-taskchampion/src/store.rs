@@ -2,6 +2,7 @@ use std::{
     cell::Cell,
     fmt,
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -13,9 +14,29 @@ use devkit_todo::{
 };
 use devkit_todo_taskwarrior::schema::{DEFAULT_ROOT, Exported, project_of};
 use taskchampion::{
-    Operations, Replica, Server, ServerConfig, StorageConfig, Task, Uuid, chrono::Utc,
-    storage::AccessMode,
+    Operations, Server, ServerConfig, SqliteStorage, Task, Uuid, chrono::Utc, storage::AccessMode,
 };
+use tokio::runtime::Runtime;
+
+type Replica = taskchampion::Replica<SqliteStorage>;
+
+/// Runs `work` on this process's taskchampion runtime, started on first use.
+/// It is a current-thread runtime with every driver enabled: sync's HTTP
+/// client panics without the timer.
+fn block_on<T>(work: impl Future<Output = Result<T>>) -> Result<T> {
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    let runtime = match RUNTIME.get() {
+        Some(runtime) => runtime,
+        None => {
+            let built = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("starting the taskchampion runtime")?;
+            RUNTIME.get_or_init(|| built)
+        }
+    };
+    runtime.block_on(work)
+}
 
 /// Where a replica syncs.
 pub enum SyncTarget {
@@ -44,7 +65,7 @@ impl fmt::Debug for SyncTarget {
 }
 
 impl SyncTarget {
-    fn server(&self) -> Result<Box<dyn Server>> {
+    async fn server(&self) -> Result<Box<dyn Server>> {
         let config = match self {
             Self::Dir(dir) => {
                 std::fs::create_dir_all(dir)
@@ -63,7 +84,7 @@ impl SyncTarget {
                 encryption_secret: secret.clone(),
             },
         };
-        Ok(config.into_server()?)
+        Ok(config.into_server().await?)
     }
 }
 
@@ -179,9 +200,9 @@ impl TaskchampionStore {
         let Some(target) = &self.target else {
             return Ok(());
         };
-        self.locked(|replica| {
-            let mut server = target.server()?;
-            replica.sync(&mut server, false)?;
+        self.locked(async |replica| {
+            let mut server = target.server().await?;
+            replica.sync(&mut server, false).await?;
             Ok(())
         })
         .map_err(|e| match target {
@@ -194,10 +215,11 @@ impl TaskchampionStore {
     /// taskchampion holds a write transaction across a whole sync, longer than
     /// SQLite's busy timeout, so devkit's processes queue on this lock instead
     /// of failing on a busy database.
-    fn locked<T>(&self, f: impl FnOnce(&mut Replica) -> Result<T>) -> Result<T> {
+    fn locked<T>(&self, f: impl AsyncFnOnce(&mut Replica) -> Result<T>) -> Result<T> {
+        let run = || block_on(async { f(&mut self.open().await?).await });
         match self.held.get() {
-            true => f(&mut self.open()?),
-            false => self.hold(|| f(&mut self.open()?)),
+            true => run(),
+            false => self.hold(run),
         }
     }
 
@@ -236,29 +258,25 @@ impl TaskchampionStore {
     /// write-ahead log lets a reader see the last committed state while
     /// another process writes or syncs, so a read never waits behind a sync.
     /// A replica not created yet reads as `empty`.
-    fn reading<T>(&self, empty: T, f: impl FnOnce(&mut Replica) -> Result<T>) -> Result<T> {
+    fn reading<T>(&self, empty: T, f: impl AsyncFnOnce(&mut Replica) -> Result<T>) -> Result<T> {
         // taskchampion's database file, the name taskwarrior also opens.
         if !self.data_dir.join("taskchampion.sqlite3").exists() {
             return Ok(empty);
         }
-        let storage = StorageConfig::OnDisk {
-            taskdb_dir: self.data_dir.clone(),
-            create_if_missing: false,
-            access_mode: AccessMode::ReadOnly,
-        }
-        .into_storage()
-        .with_context(|| format!("opening the todo replica at {}", self.data_dir.display()))?;
-        f(&mut Replica::new(storage))
+        block_on(async {
+            let storage = SqliteStorage::new(&self.data_dir, AccessMode::ReadOnly, false)
+                .await
+                .with_context(|| {
+                    format!("opening the todo replica at {}", self.data_dir.display())
+                })?;
+            f(&mut Replica::new(storage)).await
+        })
     }
 
-    fn open(&self) -> Result<Replica> {
-        let storage = StorageConfig::OnDisk {
-            taskdb_dir: self.data_dir.clone(),
-            create_if_missing: true,
-            access_mode: AccessMode::ReadWrite,
-        }
-        .into_storage()
-        .with_context(|| format!("opening the todo replica at {}", self.data_dir.display()))?;
+    async fn open(&self) -> Result<Replica> {
+        let storage = SqliteStorage::new(&self.data_dir, AccessMode::ReadWrite, true)
+            .await
+            .with_context(|| format!("opening the todo replica at {}", self.data_dir.display()))?;
         Ok(Replica::new(storage))
     }
 
@@ -285,38 +303,47 @@ impl TaskchampionStore {
         .into_todo(&self.root)
     }
 
-    fn todos(&self, replica: &mut Replica) -> Result<Vec<Todo>> {
+    async fn todos(&self, replica: &mut Replica) -> Result<Vec<Todo>> {
         Ok(replica
-            .all_tasks()?
+            .all_tasks()
+            .await?
             .values()
             .filter_map(|task| self.todo_of(task))
             .collect())
     }
 
-    fn find(&self, replica: &mut Replica, id: &str) -> Result<Option<Todo>> {
+    async fn find(&self, replica: &mut Replica, id: &str) -> Result<Option<Todo>> {
         if !is_uuid_prefix(id) {
             return Ok(None);
         }
         if let Ok(uuid) = Uuid::try_parse(id) {
-            return Ok(replica.get_task(uuid)?.and_then(|task| self.todo_of(&task)));
+            let task = replica.get_task(uuid).await?;
+            return Ok(task.and_then(|task| self.todo_of(&task)));
         }
-        by_prefix(id, self.todos(replica)?)
+        by_prefix(id, self.todos(replica).await?)
     }
 
-    fn resolve(&self, replica: &mut Replica, id: &str) -> Result<Todo> {
-        self.find(replica, id)?
+    async fn resolve(&self, replica: &mut Replica, id: &str) -> Result<Todo> {
+        self.find(replica, id)
+            .await?
             .ok_or_else(|| anyhow!("no todo {id}"))
     }
 
     /// The full id of the parent `id` names, `None` for the top level.
-    fn resolve_parent(&self, replica: &mut Replica, id: Option<&str>) -> Result<Option<String>> {
-        id.map(|id| self.resolve(replica, id).map(|parent| parent.id))
-            .transpose()
+    async fn resolve_parent(
+        &self,
+        replica: &mut Replica,
+        id: Option<&str>,
+    ) -> Result<Option<String>> {
+        match id {
+            Some(id) => Ok(Some(self.resolve(replica, id).await?.id)),
+            None => Ok(None),
+        }
     }
 
     /// The order that places a todo after the last of its siblings: the todos
     /// on `project` under `parent`, other than `skip`.
-    fn after_last(
+    async fn after_last(
         &self,
         replica: &mut Replica,
         project: Option<&str>,
@@ -325,7 +352,8 @@ impl TaskchampionStore {
     ) -> Result<i64> {
         let node = project_of(&self.root, project);
         Ok(self
-            .todos(replica)?
+            .todos(replica)
+            .await?
             .iter()
             .filter(|t| project_of(&self.root, t.project.as_deref()) == node)
             .filter(|t| t.parent.as_deref() == parent && Some(t.id.as_str()) != skip)
@@ -336,17 +364,18 @@ impl TaskchampionStore {
     }
 
     /// Applies `change` to the task behind `todo` and commits it.
-    fn change(
+    async fn change(
         replica: &mut Replica,
         todo: &Todo,
         change: impl FnOnce(&mut Task, &mut Operations) -> Result<(), taskchampion::Error>,
     ) -> Result<()> {
         let mut task = replica
-            .get_task(Uuid::try_parse(&todo.id)?)?
+            .get_task(Uuid::try_parse(&todo.id)?)
+            .await?
             .ok_or_else(|| anyhow!("no todo {}", todo.id))?;
         let mut ops = Operations::new();
         change(&mut task, &mut ops)?;
-        replica.commit_operations(ops)?;
+        replica.commit_operations(ops).await?;
         Ok(())
     }
 }
@@ -400,9 +429,10 @@ fn close(
 
 impl TodoStore for TaskchampionStore {
     fn list(&self, filter: &Filter) -> Result<Vec<Todo>> {
-        self.reading(Vec::new(), |replica| {
+        self.reading(Vec::new(), async |replica| {
             Ok(self
-                .todos(replica)?
+                .todos(replica)
+                .await?
                 .into_iter()
                 .filter(|t| filter.matches(t.project.as_deref()))
                 .collect())
@@ -410,21 +440,22 @@ impl TodoStore for TaskchampionStore {
     }
 
     fn get(&self, id: &str) -> Result<Option<Todo>> {
-        self.reading(None, |replica| self.find(replica, id))
+        self.reading(None, async |replica| self.find(replica, id).await)
     }
 
     fn add(&self, todo: NewTodo) -> Result<String> {
-        self.locked(|replica| {
-            let parent = self.resolve_parent(replica, todo.parent.as_deref())?;
+        self.locked(async |replica| {
+            let parent = self.resolve_parent(replica, todo.parent.as_deref()).await?;
             let order = match todo.order {
                 Some(order) => order,
                 None => {
-                    self.after_last(replica, todo.project.as_deref(), parent.as_deref(), None)?
+                    self.after_last(replica, todo.project.as_deref(), parent.as_deref(), None)
+                        .await?
                 }
             };
             let uuid = Uuid::new_v4();
             let mut ops = Operations::new();
-            let mut task = replica.create_task(uuid, &mut ops)?;
+            let mut task = replica.create_task(uuid, &mut ops).await?;
             task.set_description(one_line(&todo.description), &mut ops)?;
             task.set_status(taskchampion::Status::Pending, &mut ops)?;
             task.set_entry(Some(Utc::now()), &mut ops)?;
@@ -432,64 +463,72 @@ impl TodoStore for TaskchampionStore {
             task.set_value("project", Some(project), &mut ops)?;
             task.set_value("order", Some(order.to_string()), &mut ops)?;
             task.set_value("subof", parent, &mut ops)?;
-            replica.commit_operations(ops)?;
+            replica.commit_operations(ops).await?;
             Ok(uuid.to_string())
         })
     }
 
     fn apply(&self, edit: &Edit) -> Result<()> {
-        self.locked(|replica| match edit {
+        self.locked(async |replica| match edit {
             Edit::SetStatus { id, to, actor } => {
-                let todo = self.resolve(replica, id)?;
+                let todo = self.resolve(replica, id).await?;
                 match transition(&todo.status, *to, actor)? {
                     Some(next) => {
                         Self::change(replica, &todo, |task, ops| write_status(task, &next, ops))
+                            .await
                     }
                     None => Ok(()),
                 }
             }
             Edit::Describe { id, description } => {
-                let todo = self.resolve(replica, id)?;
+                let todo = self.resolve(replica, id).await?;
                 Self::change(replica, &todo, |task, ops| {
                     task.set_description(one_line(description), ops)
                 })
+                .await
             }
             Edit::Move { id, parent, order } => {
-                let todo = self.resolve(replica, id)?;
-                let parent = self.resolve_parent(replica, parent.as_deref())?;
+                let todo = self.resolve(replica, id).await?;
+                let parent = self.resolve_parent(replica, parent.as_deref()).await?;
                 let order = match order {
                     Some(order) => *order,
-                    None => self.after_last(
-                        replica,
-                        todo.project.as_deref(),
-                        parent.as_deref(),
-                        Some(&todo.id),
-                    )?,
+                    None => {
+                        self.after_last(
+                            replica,
+                            todo.project.as_deref(),
+                            parent.as_deref(),
+                            Some(&todo.id),
+                        )
+                        .await?
+                    }
                 };
                 Self::change(replica, &todo, |task, ops| {
                     task.set_value("subof", parent, ops)?;
                     task.set_value("order", Some(order.to_string()), ops)
                 })
+                .await
             }
             Edit::Reorder { id, order } => {
-                let todo = self.resolve(replica, id)?;
+                let todo = self.resolve(replica, id).await?;
                 Self::change(replica, &todo, |task, ops| {
                     task.set_value("order", Some(order.to_string()), ops)
                 })
+                .await
             }
             Edit::Relocate { id, project } => {
-                let todo = self.resolve(replica, id)?;
+                let todo = self.resolve(replica, id).await?;
                 let project = project_of(&self.root, project.as_deref());
                 Self::change(replica, &todo, |task, ops| {
                     task.set_value("project", Some(project), ops)
                 })
+                .await
             }
             Edit::ReleaseAll { holder } => {
                 if holder.is_human() {
                     return Ok(());
                 }
                 let mut ops = Operations::new();
-                for task in replica.all_tasks()?.values_mut() {
+                for task in replica.all_tasks().await?.values_mut() {
                     let held = matches!(
                         self.todo_of(task).map(|t| t.status),
                         Some(Status::InProgress { by }) if holder.covers(&by)
@@ -499,17 +538,18 @@ impl TodoStore for TaskchampionStore {
                         task.set_value("holder", None, &mut ops)?;
                     }
                 }
-                replica.commit_operations(ops)?;
+                replica.commit_operations(ops).await?;
                 Ok(())
             }
             Edit::Purge(id) => {
-                let todo = self.resolve(replica, id)?;
+                let todo = self.resolve(replica, id).await?;
                 let mut data = replica
-                    .get_task_data(Uuid::try_parse(&todo.id)?)?
+                    .get_task_data(Uuid::try_parse(&todo.id)?)
+                    .await?
                     .ok_or_else(|| anyhow!("no todo {id}"))?;
                 let mut ops = Operations::new();
                 data.delete(&mut ops);
-                replica.commit_operations(ops)?;
+                replica.commit_operations(ops).await?;
                 Ok(())
             }
         })

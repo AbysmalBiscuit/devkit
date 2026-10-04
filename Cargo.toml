@@ -114,9 +114,12 @@ ambassador = "0.5.1"
 # The 0.12 line taskchampion builds on, so the binary links one HTTP stack.
 # Roots come from `http::tls_config`, handed in as a preconfigured rustls config.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-manual-roots"] }
-# An embedded taskchampion replica. Stays on the 2.0.2 line taskwarrior pins,
-# so its wire format matches the `task` a person reads the lists with.
-taskchampion = { version = "~2.0.2", default-features = false, features = ["server-sync", "bundled"] }
+# An embedded taskchampion replica, on the 3.1 line taskwarrior 3.5 links, so
+# the replica matches the `task` a person reads the lists with. Sync builds its
+# own reqwest client, so its roots come from `tls-native-roots`.
+taskchampion = { version = "3.1", default-features = false, features = ["server-sync", "server-local", "storage-sqlite", "bundled", "tls-native-roots"] }
+# Drives taskchampion's async API. Sync's HTTP client needs the timer driver.
+tokio = { version = "1", default-features = false, features = ["rt", "time", "net"] }
 # reqwest's TLS stack. Default features off: they pull aws-lc-rs, reqwest uses ring.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 webpki-roots = "0.26"
