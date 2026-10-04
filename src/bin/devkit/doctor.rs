@@ -272,7 +272,7 @@ fn issue_events_row(
     if !events.any() {
         return None;
     }
-    let configured: Vec<_> = [IssueEvent::Setup, IssueEvent::Start, IssueEvent::PrOpen]
+    let configured: Vec<_> = IssueEvent::ALL
         .into_iter()
         .filter_map(|e| events.get(e).map(|t| (e, t)))
         .collect();

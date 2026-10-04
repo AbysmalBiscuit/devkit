@@ -777,6 +777,9 @@ pub enum IssueEvent {
 }
 
 impl IssueEvent {
+    /// Every event, in the order each fires on an issue.
+    pub const ALL: [IssueEvent; 3] = [IssueEvent::Setup, IssueEvent::Start, IssueEvent::PrOpen];
+
     /// The `[issue.events]` spelling, which is also the serialized form.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -858,7 +861,7 @@ impl IssueEventsConfig {
 
     /// Whether any event is configured.
     pub fn any(&self) -> bool {
-        self.setup.is_some() || self.start.is_some() || self.pr_open.is_some()
+        IssueEvent::ALL.into_iter().any(|e| self.get(e).is_some())
     }
 }
 
