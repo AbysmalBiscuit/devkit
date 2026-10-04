@@ -109,7 +109,7 @@ indicatif = "0.17"
 console = "0.15"
 supports-hyperlinks = "3"
 strum = { version = "0.27", features = ["derive"] }
-pabal = { version = "0.2.1", features = ["clap"] }
+pabal = { version = "0.2.2", features = ["clap"] }
 ambassador = "0.5.1"
 # The 0.12 line taskchampion builds on, so the binary links one HTTP stack.
 # Roots come from `http::tls_config`, handed in as a preconfigured rustls config.

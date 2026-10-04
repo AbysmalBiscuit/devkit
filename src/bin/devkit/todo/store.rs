@@ -343,13 +343,6 @@ impl Store {
     /// backend is unknown, or `[todo] hold_stop` is off: the built-in store's
     /// lists are not the configured store's, so holding an agent to them
     /// would be wrong.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the stop hook calls it once pabal can block a stop"
-        )
-    )]
     pub(crate) fn for_hold(
         checkout: &Checkout,
         cwd: &Path,

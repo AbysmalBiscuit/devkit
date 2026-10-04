@@ -1465,9 +1465,9 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "pabal"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edf0b1f1dc6c54e7de4b3d60d5ae89b3a058a5a72360a5725b3b20318da79c4a"
+checksum = "3f9305fddda0e3a2390af42b9cc19c6e080600aac9f9109430f2cf2c00f0a004"
 dependencies = [
  "ambassador",
  "clap",

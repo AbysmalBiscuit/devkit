@@ -8,6 +8,8 @@
 //!   CLI acts as the sub-agent when the invocation runs.
 //! - Native capture: the harness's own task and plan tools are mirrored into
 //!   the store after they run.
+//! - Hold: a stop is refused, once per unchanged list, while the agent has open
+//!   todos.
 
 use std::path::Path;
 
@@ -15,12 +17,13 @@ use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
 use devkit_common::{store::LockBusy, vcs::Checkout};
 use devkit_todo::{
-    Claimed, Edit, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
+    Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
+    hold,
     holder::HOLDER_VAR,
     native::{MirroredStep, NativeMap},
-    node::{self, Harness, SessionRef},
-    transition,
+    node::{self, Harness, Place, SessionRef},
+    render, transition,
 };
 use pabal::AnyHarness;
 use serde::{Deserialize, Serialize};
@@ -32,7 +35,7 @@ use super::{
 };
 use crate::todo::{
     queue::{self, Deferred},
-    store::Store,
+    store::{BACKEND_VAR, Store},
 };
 
 /// The harnesses whose sessions name a todo node.
@@ -73,6 +76,82 @@ pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout, cwd:
             store.spawn_sync(cwd);
         }
     }
+}
+
+/// What follows the open todos in a hold's reason.
+const HOLD_ADVICE: &str = "Finish each one, or cancel one that no longer applies \
+(`devkit todo cancel <id>`, or delete it in your task tool).
+Before you stop to ask the user something:
+- With a clear recommendation, take it and say so in your final report.
+- Without one, ask a sub-agent on a bigger model and take its answer.
+- Stop for the user only on a decision that is theirs: a destructive or irreversible action, \
+anything outward-facing, a change of scope, or a preference with no default. To stop for one, \
+end your turn again: this reminder comes once per unchanged list.";
+
+/// The answer that refuses `holder`'s stop, or `None` to let it stop. A
+/// stop is refused while `holder` has open todos (see [`hold::open_for`])
+/// and was not already refused over the same list; a session's pending
+/// todos count only on its own workspace node. Fails open: a harness whose
+/// sessions name no node, a payload that cannot block, an unreadable config
+/// or store, and a fingerprint that cannot be written all let it stop.
+pub(crate) fn hold(
+    payload: &Payload,
+    holder: &payload::Holder,
+    checkout: &Checkout,
+    cwd: &Path,
+) -> Option<String> {
+    let harness = harness_of(payload.harness())?;
+    let backend_var = std::env::var(BACKEND_VAR).ok();
+    let store = Store::for_hold(checkout, cwd, backend_var.as_deref())?;
+    if let Some(replica) = store.queued_replica() {
+        drain(replica.data_dir());
+    }
+    let holder = to_todo_holder(holder);
+    let session = holder.session();
+    let place = node::place_of(checkout).ok()?;
+    let pending_node = match place {
+        Place::Workspace { .. } if holder == session => Some(node::node(
+            &place,
+            Some(&SessionRef {
+                harness,
+                id: session.to_string(),
+            }),
+        )),
+        _ => None,
+    };
+    let todos = store.list(&Filter::all()).ok()?;
+    let open = hold::open_for(&todos, &holder, pending_node.as_deref());
+    if open.is_empty() {
+        return None;
+    }
+    let fingerprint = hold::fingerprint(&open);
+    let path = hold::hold_path(&holder);
+    if std::fs::read_to_string(&path).is_ok_and(|seen| seen == fingerprint) {
+        return None;
+    }
+    let mut nodes: Vec<String> = open.iter().map(|t| t.node().to_string()).collect();
+    nodes.dedup();
+    let open: Vec<Todo> = open.into_iter().cloned().collect();
+    let lists = render::render_lists(&nodes, &open, &holder);
+    let reason = format!(
+        "devkit todo: you have open todos.\n\n{}\n\n{HOLD_ADVICE}",
+        lists.trim_end()
+    );
+    let answer = payload.block(&reason)?;
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    std::fs::write(&path, fingerprint).ok()?;
+    Some(answer)
+}
+
+/// Forgets the list `holder` was last refused over, so its next stop with
+/// open todos is refused again.
+pub(crate) fn rearm(holder: &payload::Holder) {
+    let _ = std::fs::remove_file(hold::hold_path(&to_todo_holder(holder)));
+}
+
+/// Forgets every list `session` and its sub-agents were refused over.
+pub(crate) fn forget_holds(session: &payload::Holder) {
+    let _ = std::fs::remove_dir_all(hold::hold_dir(&to_todo_holder(session)));
 }
 
 /// Records one hook write: on a replica with a queue, appends `entry` (given
