@@ -442,6 +442,30 @@
         }
       ]
     },
+    "EventTransition": {
+      "additionalProperties": false,
+      "description": "A status move: from any status in `from` to `to`.",
+      "properties": {
+        "from": {
+          "default": [
+            "*"
+          ],
+          "description": "The statuses the issue may move from. `*` matches any status, and the\nempty string matches an issue with no status (on GitHub, one outside\n`[github] project` or with the field unset). Names match\ncase-insensitively, ignoring surrounding whitespace. `[\"*\"]` when\nunset.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "The status the issue moves to, matched like `from`. An issue already\nthere is left alone, whatever `from` says.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "to"
+      ],
+      "type": "object"
+    },
     "Fidelity": {
       "description": "What a logged command carries. Ordered least to most revealing, so\nresolving across config layers is `min` and no layer can raise it.",
       "oneOf": [
@@ -555,11 +579,31 @@
     },
     "GithubConfig": {
       "additionalProperties": false,
-      "description": "Which GitHub repository holds this project's issues, for the GitHub\ntracker. The repository pull requests go to is `[forge] repo`, since a\nproject on any forge has one.\n\nUnknown keys are refused: a misspelled `issue_repo` ignored would default\nfrom `origin` and query another repository's issues.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\n```",
+      "description": "Which GitHub repository holds this project's issues, for the GitHub\ntracker, and which Projects v2 project holds their status for\n`[issue.events]`. The repository pull requests go to is `[forge] repo`,\nsince a project on any forge has one.\n\nUnknown keys are refused: a misspelled `issue_repo` ignored would default\nfrom `origin` and query another repository's issues.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\nproject = \"org/3\"\nstatus_field = \"Status\"\n```",
       "properties": {
         "issues_repo": {
           "default": null,
           "description": "Repository holding the issues, e.g. `org/planning`. Defaults from an\n`origin` remote on the GitHub host the forge names (github.com unless\n`[forge] host` says otherwise; an ssh alias is resolved with\n`ssh -G`); otherwise the error names this key.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The Projects v2 project whose single-select field holds the issues'\nstatus, which `[issue.events]` moves under the GitHub tracker:\n`\"owner/N\"`, or a bare `N` owned by `issues_repo`'s owner. Without it,\na GitHub tracker's events fail naming this key."
+        },
+        "status_field": {
+          "default": null,
+          "description": "The single-select field on `project` that holds the status. `Status`\nwhen unset.",
           "type": [
             "string",
             "null"
@@ -681,6 +725,65 @@
             "type": "array"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "IssueConfig": {
+      "additionalProperties": false,
+      "description": "The `[issue]` table. Each event moves the issue's status (a Linear state,\nor `[github] status_field`) from a `from` status to `to`; an event with no\ntable does nothing. The statuses name one board, so keep the events in the\nrepository's `devkit.toml`: tables merge key by key across layers.\n\n```toml\n[issue.events.setup]\nto = \"Todo\"\n\n[issue.events.start]\nfrom = [\"\", \"Todo\", \"Backlog\"]\nto = \"In progress\"\n\n[issue.events.pr_open]\nto = \"In review\"\n\n[github]\nproject = 3            # or \"some-org/7\"\nstatus_field = \"Status\"\n```",
+      "properties": {
+        "events": {
+          "$ref": "#/$defs/IssueEventsConfig",
+          "default": {
+            "pr_open": null,
+            "setup": null,
+            "start": null
+          },
+          "description": "Status moves, keyed by the event that fires them. The event names are\nfixed, so a misspelled one is a parse error."
+        }
+      },
+      "type": "object"
+    },
+    "IssueEventsConfig": {
+      "additionalProperties": false,
+      "description": "One optional status move per event.",
+      "properties": {
+        "pr_open": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fired by `issue pr create`, whether it opened the PR or found one open.\nA failed move warns and the PR stays as it is."
+        },
+        "setup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fired by `issue setup` as its last step, after the\n`after_worktree_create` hooks. A failed move warns and setup succeeds."
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fired by the first agent session in a worktree `issue setup` created,\nonce per worktree, in the background. `issue pr checkout` worktrees\nnever fire it. List the states work starts from in `from`: `[\"*\"]` lets\na second worktree pull an issue back from review."
         }
       },
       "type": "object"
@@ -1052,6 +1155,21 @@
         "to"
       ],
       "type": "object"
+    },
+    "ProjectRef": {
+      "anyOf": [
+        {
+          "description": "Project `N` of `issues_repo`'s owner.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "description": "`\"owner/N\"`: project `N` of the user or organization `owner`.",
+          "type": "string"
+        }
+      ],
+      "description": "A GitHub Projects v2 project: its number, and its owner when that is not\nthe issues repository's owner."
     },
     "PromptFidelity": {
       "description": "What a logged prompt carries. Same ordering rule as [`Fidelity`], with an\n`off` below every level of it: a corpus can carry full command text without\ncarrying what the human typed.",
@@ -1667,9 +1785,11 @@
     "github": {
       "$ref": "#/$defs/GithubConfig",
       "default": {
-        "issues_repo": null
+        "issues_repo": null,
+        "project": null,
+        "status_field": null
       },
-      "description": "Which GitHub repository backs the GitHub tracker's issues."
+      "description": "Which GitHub repository backs the GitHub tracker's issues, and which\nProjects v2 project holds their status."
     },
     "harness": {
       "$ref": "#/$defs/HarnessSection",
@@ -1684,6 +1804,17 @@
         "before_worktree_remove": []
       },
       "description": "Commands devkit runs when a lifecycle event fires, keyed\n`{before,after}_<event>`."
+    },
+    "issue": {
+      "$ref": "#/$defs/IssueConfig",
+      "default": {
+        "events": {
+          "pr_open": null,
+          "setup": null,
+          "start": null
+        }
+      },
+      "description": "What devkit does to an issue's tracker status when it acts on that\nissue."
     },
     "linear": {
       "$ref": "#/$defs/LinearConfig",

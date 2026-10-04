@@ -279,6 +279,7 @@ mod tests {
             &devkit_config::GithubConfig {
                 issues_repo: issues.map(String::from),
                 pr_repo: None,
+                ..Default::default()
             },
             &devkit_config::ForgeConfig {
                 repo: prs.map(String::from),

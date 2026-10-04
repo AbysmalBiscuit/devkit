@@ -733,6 +733,7 @@ mod tests {
         GithubConfig {
             issues_repo: issues.map(str::to_string),
             pr_repo: legacy_prs.map(str::to_string),
+            ..Default::default()
         }
     }
 
