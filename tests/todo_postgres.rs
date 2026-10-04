@@ -853,5 +853,10 @@ fn a_skewed_clock_never_makes_a_live_run_lost() {
             Value::Null,
             "writer skew {writer}s, reader skew {reader}s: {runs:?}"
         );
+        let seconds = runs[0]["seconds"].as_i64().unwrap();
+        assert!(
+            seconds < 600,
+            "writer skew {writer}s, reader skew {reader}s: the open run reads as {seconds}s long"
+        );
     }
 }

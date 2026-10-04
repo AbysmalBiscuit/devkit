@@ -7,9 +7,7 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use clap::Args;
 use devkit_common::ui::printable;
-use devkit_todo::activity::{
-    Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, local_now, stamp,
-};
+use devkit_todo::activity::{Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, stamp};
 use serde::Serialize;
 
 #[derive(Args)]
@@ -35,15 +33,19 @@ fn parse_time(s: &str) -> Result<DateTime<Utc>> {
         .map_err(|_| anyhow!("expected a date like 2026-10-01 or an RFC 3339 time, got {s:?}"))
 }
 
+/// The range defaults and the open runs and claims all measure from the log's
+/// own now, the database's on a shared log, so no reader's clock decides
+/// what the report shows.
 pub fn run(cli: ActivityCli) -> Result<()> {
-    let now: DateTime<Utc> = local_now().into();
+    let log = crate::todo::store::Store::activity_for_cli(&std::env::current_dir()?)?;
+    let activity = log.read_now()?;
+    let now = activity.as_of;
     let range = Range {
         since: cli.since.unwrap_or(now - TimeDelta::days(7)),
         until: cli.until.unwrap_or(now),
         now,
     };
-    let log = crate::todo::store::Store::activity_for_cli(&std::env::current_dir()?)?;
-    let report = Report::of(log.read_now()?, &range);
+    let report = Report::of(activity, &range);
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -123,6 +125,7 @@ impl Report {
         let Activity {
             mut runs,
             mut claims,
+            ..
         } = activity;
         runs.sort_by_key(|r| r.start);
         claims.sort_by_key(|c| c.start);
@@ -289,6 +292,7 @@ mod tests {
         let activity = Activity {
             runs: Vec::new(),
             claims: vec![held("r.later", 10, 15), held("r.first", 0, 5)],
+            ..Activity::default()
         };
         let range = Range {
             since: t(-60),

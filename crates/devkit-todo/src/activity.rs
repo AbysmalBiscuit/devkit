@@ -127,6 +127,9 @@ pub struct Interval {
 pub struct Activity {
     pub runs: Vec<Run>,
     pub claims: Vec<Interval>,
+    /// The time the records were judged as of, by the store's clock.
+    #[serde(default)]
+    pub as_of: DateTime<Utc>,
 }
 
 /// This machine's clock. Debug builds shift it by
@@ -198,6 +201,7 @@ impl Activity {
                 run.outcome = Some(RunEnd::Lost);
             }
         }
+        activity.as_of = now;
         activity
     }
 }
