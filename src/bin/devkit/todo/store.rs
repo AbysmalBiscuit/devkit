@@ -175,11 +175,24 @@ pub(crate) fn database_scope(config: &PostgresConfig) -> Option<DopplerScope> {
     })
 }
 
-/// The todo database `config` and [`DATABASE_VAR`] name, opened with `wait`.
-/// A process resolves the URL and connects once per config, so a hook asks
-/// Doppler at most once and waits on an unreachable database once. A URL
-/// that is missing or does not parse gives a database every call on fails,
-/// naming the variable and never the URL.
+/// The todo database `config` and [`DATABASE_VAR`] name, opened with `wait`
+/// and not yet connected, and where its URL resolved from. A URL that is
+/// missing or does not parse is an error naming the variable, never the URL.
+pub(crate) fn open_database(
+    config: &PostgresConfig,
+    wait: Duration,
+) -> (Result<Arc<Database>, String>, Source) {
+    let [(url, source)] = secrets::resolve_many(&[DATABASE_VAR], database_scope(config).as_ref());
+    let db = match url {
+        None => Err(format!("{DATABASE_VAR} is not set")),
+        Some(url) => Database::new(&url, wait).map_err(|e| format!("{DATABASE_VAR}: {e:#}")),
+    };
+    (db, source)
+}
+
+/// [`open_database`], resolved and connected once per config in a process,
+/// so a hook asks Doppler at most once and waits on an unreachable database
+/// once. A URL that does not resolve gives a database every call on fails.
 pub(crate) fn database(config: &PostgresConfig, wait: Duration) -> Arc<Database> {
     type Key = (Option<String>, Option<String>, Duration);
     static OPEN: Mutex<Option<HashMap<Key, Arc<Database>>>> = Mutex::new(None);
@@ -192,13 +205,9 @@ pub(crate) fn database(config: &PostgresConfig, wait: Duration) -> Arc<Database>
     open.get_or_insert_default()
         .entry(key)
         .or_insert_with(|| {
-            let [(url, _)] =
-                secrets::resolve_many(&[DATABASE_VAR], database_scope(config).as_ref());
-            match url.map(|url| Database::new(&url, wait)) {
-                None => Database::unusable(format!("{DATABASE_VAR} is not set")),
-                Some(Err(e)) => Database::unusable(format!("{DATABASE_VAR}: {e:#}")),
-                Some(Ok(db)) => db,
-            }
+            open_database(config, wait)
+                .0
+                .unwrap_or_else(Database::unusable)
         })
         .clone()
 }

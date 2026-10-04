@@ -658,12 +658,10 @@ const TODO_DATABASE_WAIT: std::time::Duration = std::time::Duration::from_secs(5
 /// Where the todo database's URL resolves from and whether the database
 /// answers. The URL, which carries the password, is never shown.
 fn todo_database_row(config: &devkit_config::PostgresConfig) -> Row {
-    use crate::todo::store::{DATABASE_VAR, database_scope};
-    let [(url, source)] = secrets::resolve_many(&[DATABASE_VAR], database_scope(config).as_ref());
-    let check = match url.map(|url| devkit_todo_postgres::Database::new(&url, TODO_DATABASE_WAIT)) {
-        None => Check::Invalid(format!("{DATABASE_VAR} is not set")),
-        Some(Err(e)) => Check::Invalid(format!("{DATABASE_VAR}: {e:#}")),
-        Some(Ok(db)) => match db.check() {
+    let (db, source) = crate::todo::store::open_database(config, TODO_DATABASE_WAIT);
+    let check = match db {
+        Err(e) => Check::Invalid(e),
+        Ok(db) => match db.check() {
             Ok(()) => Check::Ok(format!("reachable at {}", db.target())),
             Err(e) if devkit_todo_postgres::is_unreachable(&e) => {
                 Check::Warn(format!("unreachable: {e:#}"))
