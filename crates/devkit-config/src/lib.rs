@@ -261,9 +261,9 @@ pub struct TaskchampionConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct PostgresConfig {
     /// Read the connection URL, when the environment lacks it, from this
-    /// Doppler project, before the secrets file. Every hook then asks
-    /// Doppler, so a machine running many agents does better with the URL in
-    /// its environment or secrets file.
+    /// Doppler project, before the secrets file. Hooks reuse the URL Doppler
+    /// last gave, kept in devkit's state directory, until it ages out or
+    /// fails to connect.
     pub doppler_project: Option<String>,
     /// The Doppler config to read it from. Doppler's own default when absent.
     pub doppler_config: Option<String>,

@@ -89,6 +89,8 @@ pub struct Database {
     wait: Duration,
     /// When set, every operation gives up by then, whatever its wait.
     deadline: Mutex<Option<Instant>>,
+    /// Called each time connecting fails, refused or rejected alike.
+    on_connect_failure: OnceLock<Box<dyn Fn() + Send + Sync>>,
     state: Mutex<State>,
 }
 
@@ -114,6 +116,7 @@ impl Database {
             config: Some(config),
             wait,
             deadline: Mutex::new(None),
+            on_connect_failure: OnceLock::new(),
             state: Mutex::new(State::Closed),
         }))
     }
@@ -125,6 +128,7 @@ impl Database {
             config: None,
             wait: Duration::ZERO,
             deadline: Mutex::new(None),
+            on_connect_failure: OnceLock::new(),
             state: Mutex::new(State::Failed {
                 at: Instant::now(),
                 reason: reason.to_string(),
@@ -136,6 +140,12 @@ impl Database {
     /// one budget for all of its database work stays inside it.
     pub fn finish_by(&self, at: Instant) {
         *self.deadline.lock().unwrap_or_else(|e| e.into_inner()) = Some(at);
+    }
+
+    /// Runs `f` each time connecting fails, for a caller whose URL may have
+    /// gone stale.
+    pub fn on_connect_failure(&self, f: impl Fn() + Send + Sync + 'static) {
+        let _ = self.on_connect_failure.set(Box::new(f));
     }
 
     /// How long the next operation may take: its wait, cut short by the
@@ -210,6 +220,10 @@ impl Database {
             true => e.context(format!("todo database {}", self.target())),
             false => e,
         });
+        let connect_failed = matches!(*state, State::Closed) && out.is_err();
+        if connect_failed && let Some(f) = self.on_connect_failure.get() {
+            f();
+        }
         let failed = match &*state {
             State::Closed => out.is_err(),
             State::Open(_) => timed_out,

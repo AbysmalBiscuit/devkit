@@ -1105,7 +1105,7 @@
         },
         "doppler_project": {
           "default": null,
-          "description": "Read the connection URL, when the environment lacks it, from this\nDoppler project, before the secrets file. Every hook then asks\nDoppler, so a machine running many agents does better with the URL in\nits environment or secrets file.",
+          "description": "Read the connection URL, when the environment lacks it, from this\nDoppler project, before the secrets file. Hooks reuse the URL Doppler\nlast gave, kept in devkit's state directory, until it ages out or\nfails to connect.",
           "type": [
             "string",
             "null"

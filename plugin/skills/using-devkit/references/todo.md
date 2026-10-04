@@ -131,7 +131,7 @@ The connection URL comes from `DEVKIT_TODO_DATABASE_URL`, resolved like the sync
 devkit_todo_database_url = "postgres://..."
 ```
 
-Every hook resolves it, so a machine running many agents does better with the URL in its environment or the secrets file than in Doppler. `DEVKIT_TODO_BACKEND=postgres` chooses the backend without a config change. `devkit doctor` shows the backend, where the URL resolved from, and whether the database answers, never the URL itself.
+A URL Doppler gives is kept in devkit's state directory, readable only by you, and hooks reuse it for a while instead of asking Doppler each time. Every `devkit todo` command and `devkit doctor` ask Doppler afresh and refresh the kept copy, and a hook that fails to connect with it, refused or rejected, drops it, so the next hook picks up a rotated credential or a moved database. `DEVKIT_TODO_BACKEND=postgres` chooses the backend without a config change. `devkit doctor` shows the backend, where the URL resolved from, and whether the database answers, never the URL itself.
 
 devkit creates its tables in a `devkit` schema on first use, so the role in the URL needs to create a schema once; afterwards it only reads and writes those tables. Todos live under the `[todo] project` root, so several roots share one database without seeing each other's lists. Ids are uuids, shown and accepted as 8-character prefixes, as on taskchampion. The connection is encrypted whenever the server offers TLS, without verifying its certificate, as libpq does by default; `sslmode=disable` in the URL turns it off.
 

@@ -402,3 +402,96 @@ fn session_end_finishes_its_database_work_inside_the_budget() {
 
     admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
 }
+
+/// A `doppler` that counts its calls in `calls` and gives `url` as the
+/// database URL, and the `PATH` that finds it first.
+#[cfg(unix)]
+fn fake_doppler(dir: &std::path::Path, url: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let doppler = dir.join("doppler");
+    let body = json!({DATABASE_VAR: {"computed": url}}).to_string();
+    let script = format!(
+        "#!/bin/sh\necho call >> '{}'\necho '{body}'\n",
+        dir.join("calls").display()
+    );
+    std::fs::write(&doppler, script).unwrap();
+    std::fs::set_permissions(&doppler, std::fs::Permissions::from_mode(0o755)).unwrap();
+    format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+#[cfg(unix)]
+fn doppler_calls(dir: &std::path::Path) -> usize {
+    std::fs::read_to_string(dir.join("calls"))
+        .map(|calls| calls.lines().count())
+        .unwrap_or(0)
+}
+
+#[cfg(unix)]
+fn doppler_proj(root: &str) -> Proj {
+    Proj::with_home_config(&format!(
+        "[todo]\nbackend = \"postgres\"\nproject = \"{root}\"\n\
+         [todo.postgres]\ndoppler_project = \"swarm\"\n"
+    ))
+}
+
+#[cfg(unix)]
+#[test]
+fn hooks_reuse_the_url_doppler_gave() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(url) = test_url() else {
+        return;
+    };
+    let root = fresh_root();
+    let p = doppler_proj(&root);
+    let bin = tempfile::tempdir().unwrap();
+    let path = fake_doppler(bin.path(), &url);
+    let env = [("PATH", path.as_str())];
+    for agent in ["a1", "a2", "a3"] {
+        let out = p.hook_with(
+            "subagent-start",
+            "claude-code",
+            &subagent(&p, "SubagentStart", agent),
+            &env,
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    assert_eq!(doppler_calls(bin.path()), 1);
+    let runs = PostgresActivity::new(Database::new(&url, Duration::from_secs(10)).unwrap(), &root)
+        .read(SystemTime::now().into())
+        .unwrap()
+        .runs;
+    assert_eq!(runs.len(), 3, "{runs:?}");
+    let cached = std::fs::read_dir(p.state().join("todo"))
+        .unwrap()
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().contains("database-url"))
+        .expect("the URL is cached under the state directory");
+    let mode = cached.metadata().unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hook_that_cannot_connect_asks_doppler_again() {
+    let refused = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = refused.local_addr().unwrap();
+    drop(refused);
+    let p = doppler_proj("devkit");
+    let bin = tempfile::tempdir().unwrap();
+    let path = fake_doppler(bin.path(), &format!("postgres://agent:pw@{addr}/todos"));
+    let env = [("PATH", path.as_str())];
+    for agent in ["a1", "a2"] {
+        let out = p.hook_with(
+            "subagent-start",
+            "claude-code",
+            &subagent(&p, "SubagentStart", agent),
+            &env,
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    assert_eq!(doppler_calls(bin.path()), 2);
+}

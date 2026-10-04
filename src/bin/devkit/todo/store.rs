@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
@@ -25,7 +25,7 @@ use devkit_todo_builtin::BuiltinStore;
 use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
 use devkit_todo_taskwarrior::TaskwarriorStore;
-use serde::{Deserialize, de::IntoDeserializer};
+use serde::{Deserialize, Serialize, de::IntoDeserializer};
 
 use super::sync::SyncOutcome;
 
@@ -183,34 +183,119 @@ pub(crate) fn doppler_scope(project: Option<&str>, config: Option<&str>) -> Opti
     })
 }
 
+/// How long a hook reuses the URL Doppler last gave before asking again.
+const URL_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+
+/// The database URL Doppler last gave for one scope, kept so hooks skip
+/// Doppler.
+#[derive(Serialize, Deserialize)]
+struct CachedUrl {
+    project: String,
+    config: Option<String>,
+    url: String,
+}
+
+fn url_cache_path() -> PathBuf {
+    devkit_todo::state_dir().join("database-url.json")
+}
+
+/// The cached URL for `scope`, when one is younger than [`URL_CACHE_TTL`].
+fn cached_url(scope: &DopplerScope) -> Option<String> {
+    let path = url_cache_path();
+    let age = std::fs::metadata(&path)
+        .ok()?
+        .modified()
+        .ok()?
+        .elapsed()
+        .ok()?;
+    if age > URL_CACHE_TTL {
+        return None;
+    }
+    let cached: CachedUrl = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    (cached.project == scope.project && cached.config == scope.config).then_some(cached.url)
+}
+
+/// Keeps `url` for `scope`, readable by its owner alone. Best-effort: a
+/// cache that cannot be written leaves hooks asking Doppler.
+fn cache_url(scope: &DopplerScope, url: &str) {
+    let cached = CachedUrl {
+        project: scope.project.clone(),
+        config: scope.config.clone(),
+        url: url.to_string(),
+    };
+    let path = url_cache_path();
+    let Ok(body) = serde_json::to_vec(&cached) else {
+        return;
+    };
+    let tmp = path.with_extension(format!("json.{}", std::process::id()));
+    let written = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            std::io::Write::write_all(&mut options.open(&tmp)?, &body)
+        })
+        .and_then(|()| std::fs::rename(&tmp, &path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
 /// The todo database `config` and [`DATABASE_VAR`] name, opened with `wait`
 /// and not yet connected, and where its URL resolved from. A URL that is
 /// missing or does not parse is an error naming the variable, never the URL.
+///
+/// A URL Doppler gives is cached under the state directory. With
+/// `reuse_cached`, as for a hook, a fresh cached URL stands in for Doppler.
+/// Every Doppler answer rewrites the cache, and failing to connect with a
+/// Doppler URL drops it, so a rotated credential or a moved database is
+/// asked for again on the next call.
 pub(crate) fn open_database(
     config: &PostgresConfig,
     wait: Duration,
+    reuse_cached: bool,
 ) -> (Result<Arc<Database>, String>, Source) {
-    let [(url, source)] = secrets::resolve_many(
-        &[DATABASE_VAR],
-        doppler_scope(
-            config.doppler_project.as_deref(),
-            config.doppler_config.as_deref(),
-        )
-        .as_ref(),
+    let scope = doppler_scope(
+        config.doppler_project.as_deref(),
+        config.doppler_config.as_deref(),
     );
+    let from_env = std::env::var(DATABASE_VAR).is_ok_and(|url| !url.trim().is_empty());
+    let cached = scope
+        .as_ref()
+        .filter(|_| reuse_cached && !from_env)
+        .and_then(cached_url);
+    let (url, source) = match cached {
+        Some(url) => (Some(url), Source::Doppler),
+        None => {
+            let [(url, source)] = secrets::resolve_many(&[DATABASE_VAR], scope.as_ref());
+            if let (Some(scope), Some(url), Source::Doppler) = (&scope, &url, &source) {
+                cache_url(scope, url);
+            }
+            (url, source)
+        }
+    };
     let db = match url {
         None => Err(format!("{DATABASE_VAR} is not set")),
         Some(url) => Database::new(&url, wait).map_err(|e| format!("{DATABASE_VAR}: {e:#}")),
     };
+    if let (Ok(db), Source::Doppler) = (&db, &source) {
+        db.on_connect_failure(|| {
+            let _ = std::fs::remove_file(url_cache_path());
+        });
+    }
     (db, source)
 }
 
 /// [`open_database`], resolved and connected once per config in a process,
 /// so a hook asks Doppler at most once and waits on an unreachable database
 /// once. A URL that does not resolve gives a database every call on fails.
-pub(crate) fn database(config: &PostgresConfig, wait: Duration) -> Arc<Database> {
+fn database(config: &PostgresConfig, opener: Opener) -> Arc<Database> {
     type Key = (Option<String>, Option<String>, Duration);
     static OPEN: Mutex<Option<HashMap<Key, Arc<Database>>>> = Mutex::new(None);
+    let wait = opener.database_wait();
     let key = (
         config.doppler_project.clone(),
         config.doppler_config.clone(),
@@ -221,7 +306,8 @@ pub(crate) fn database(config: &PostgresConfig, wait: Duration) -> Arc<Database>
         .get_or_insert_default()
         .entry(key)
         .or_insert_with(|| {
-            open_database(config, wait)
+            let reuse_cached = matches!(opener, Opener::Hook);
+            open_database(config, wait, reuse_cached)
                 .0
                 .unwrap_or_else(Database::unusable)
         })
@@ -282,7 +368,7 @@ fn sync_target_with(
 }
 
 /// Where the taskchampion replica lives.
-fn data_dir(config: &TaskchampionConfig) -> std::path::PathBuf {
+fn data_dir(config: &TaskchampionConfig) -> PathBuf {
     match &config.data_dir {
         Some(dir) => expand_tilde(dir),
         None => devkit_todo::state_dir().join("taskchampion"),
@@ -300,7 +386,7 @@ impl Activity {
     fn of(config: &TodoConfig, opener: Opener) -> Self {
         match config.backend {
             TodoBackend::Postgres => Self::Postgres(PostgresActivity::new(
-                database(&config.postgres, opener.database_wait()),
+                database(&config.postgres, opener),
                 &config.project,
             )),
             TodoBackend::Builtin | TodoBackend::Taskwarrior | TodoBackend::Taskchampion => {
@@ -328,7 +414,7 @@ impl Store {
                 syncs: names_a_target(&config.taskchampion),
             }),
             TodoBackend::Postgres => Backend::Postgres(PostgresStore::new(
-                database(&config.postgres, opener.database_wait()),
+                database(&config.postgres, opener),
                 &config.project,
             )),
         };
