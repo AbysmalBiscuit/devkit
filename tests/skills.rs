@@ -133,7 +133,7 @@ fn every_committed_openai_yaml_matches_its_skill() {
 }
 
 #[test]
-fn the_generated_cloud_openai_yaml_matches_the_hand_written_one() {
+fn the_cloud_openai_yaml_maps_name_description_and_policy() {
     let cloud = Path::new(REPO_SKILLS).join("cloud");
     assert_eq!(
         openai_yaml(&cloud),
