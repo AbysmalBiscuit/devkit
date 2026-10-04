@@ -12,6 +12,7 @@ pub mod github;
 pub mod linear;
 pub mod none;
 mod select;
+pub mod status;
 
 pub use select::{Selected, select};
 
