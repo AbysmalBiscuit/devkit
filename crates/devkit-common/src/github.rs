@@ -145,9 +145,8 @@ impl Api {
     }
 
     /// POST a raw GraphQL query, returning the response envelope whole
-    /// (`{ "data": ..., "errors": ... }`) with no error handling of its own:
-    /// [`Api::graphql`] and [`Api::graphql_partial`] each apply their own
-    /// acceptance rule to the same request.
+    /// (`{ "data": ..., "errors": ... }`) with no error handling of its own,
+    /// so the caller decides which errors it accepts.
     pub fn graphql_value(&self, query: &str) -> Result<Value> {
         let _span = devkit_timing::io_span("github graphql", "graphql").entered();
         Ok(http::send(
