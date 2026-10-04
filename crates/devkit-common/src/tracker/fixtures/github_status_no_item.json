@@ -1,0 +1,30 @@
+{
+  "data": {
+    "repository": {
+      "issue": {
+        "id": "I_65",
+        "projectItems": {
+          "nodes": [
+            {
+              "id": "PVTI_1",
+              "project": { "id": "PVT_1", "number": 1 },
+              "fieldValueByName": { "name": "Todo", "optionId": "opt_todo_1" }
+            }
+          ]
+        }
+      }
+    },
+    "repositoryOwner": {
+      "projectV2": {
+        "id": "PVT_3",
+        "field": {
+          "id": "PVTSSF_status",
+          "options": [
+            { "id": "opt_todo", "name": "Todo" },
+            { "id": "opt_doing", "name": "In progress" }
+          ]
+        }
+      }
+    }
+  }
+}

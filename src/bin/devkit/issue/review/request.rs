@@ -16,7 +16,7 @@ use super::{
 use crate::{
     issue::pr::{
         Gate, add_reviewers, gate_ready, require_existing_pr,
-        resolve::{Existing, assert_belongs, parse_pr_flag, record_with_pr, resolve_existing},
+        resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
         reviewer_logins,
     },
     template::VarArgs,
@@ -202,8 +202,8 @@ pub fn run(args: Args) -> Result<()> {
         })?;
     }
 
-    if let Some(rec) = record_with_pr(record.as_ref(), locator) {
-        devkit_common::record::write(std::path::Path::new(&toplevel), &rec)?;
+    if record.is_some() {
+        record_pr(std::path::Path::new(&toplevel), locator)?;
     }
 
     if args.no_notify {

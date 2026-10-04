@@ -255,6 +255,59 @@ fn tasks_row(start: &std::path::Path) -> Option<Row> {
     })
 }
 
+/// Each `[issue.events]` transition, checked against the tracker: on GitHub,
+/// that the project and its single-select field exist, hold every status the
+/// events name, and that the token may read them. None when no event is
+/// configured or the config does not load, which the `config` row reports.
+fn issue_events_row(
+    start: &std::path::Path,
+    selection: &(Resolved, devkit_common::forge::Resolved),
+    steps: &Steps,
+) -> Option<Row> {
+    use devkit_common::tracker::status::{Writer, writer_for};
+    use devkit_config::IssueEvent;
+
+    let (cfg, _) = devkit_common::config::resolve(None, start).ok()?;
+    let events = &cfg.issue.events;
+    if !events.any() {
+        return None;
+    }
+    let configured: Vec<_> = IssueEvent::ALL
+        .into_iter()
+        .filter_map(|e| events.get(e).map(|t| (e, t)))
+        .collect();
+    let summary = configured
+        .iter()
+        .map(|(e, t)| {
+            let from: Vec<&str> = t
+                .from
+                .iter()
+                .map(|f| if f.trim().is_empty() { "(none)" } else { f })
+                .collect();
+            format!("{e}: {} -> {}", from.join(", "), t.to)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let check = match writer_for(selection.0.tracker.kind(), &cfg.github, &selection.1.repos) {
+        Err(e) => Check::Invalid(format!("{e:#}")),
+        Ok(Writer::Linear(_)) => Check::Ok(summary),
+        Ok(Writer::Github(w)) => {
+            match steps.during("Checking the project board...", || {
+                w.check_board(&configured)
+            }) {
+                Ok(()) => Check::Ok(summary),
+                Err(e) => Check::Invalid(format!("{e:#}")),
+            }
+        }
+    };
+    Some(Row {
+        key: "issue_events",
+        data: serde_json::Value::Null,
+        source: Source::Unset,
+        check,
+    })
+}
+
 fn docs_cache_check() -> Check {
     let root = devkit_docs::cache::docs_root();
     if !root.is_dir() {
@@ -520,6 +573,11 @@ fn gather(steps: &Steps) -> Vec<Row> {
         harness_log_row(),
     ];
     rows.extend(tasks_row(std::path::Path::new(".")));
+    rows.extend(issue_events_row(
+        std::path::Path::new("."),
+        &selection,
+        steps,
+    ));
     rows.extend(todo_rows(std::path::Path::new(".")));
     rows.extend(steps.during("Checking shim links...", shim_rows));
     rows

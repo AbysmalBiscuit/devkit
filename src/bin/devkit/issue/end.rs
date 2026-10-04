@@ -680,6 +680,7 @@ mod tests {
             summary: Some(summary.display().to_string()),
             pr: None,
             baseline: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -701,6 +702,7 @@ mod tests {
             summary: None,
             pr: None,
             baseline: None,
+            ..Default::default()
         })
         .unwrap();
         assert!(recorded_leftovers(dir.path(), false).unwrap().0.is_none());
@@ -739,6 +741,7 @@ mod tests {
             summary: Some(summary.display().to_string()),
             pr: None,
             baseline: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -905,6 +908,7 @@ mod tests {
                 sha: "d13d90b724bf8a3c".into(),
                 path: baseline.display().to_string(),
             }),
+            ..Default::default()
         })
         .unwrap();
     }
@@ -1041,6 +1045,7 @@ mod tests {
             summary: Some(recorded.display().to_string()),
             pr: None,
             baseline: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -1284,6 +1289,7 @@ mod tests {
             summary: None,
             pr: None,
             baseline: None,
+            ..Default::default()
         })
         .unwrap();
         let approved = vec![approved_row(wt.to_str().unwrap(), "lev/eng-9-fix", "ENG-9")];

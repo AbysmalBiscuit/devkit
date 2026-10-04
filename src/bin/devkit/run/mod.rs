@@ -1670,6 +1670,7 @@ mod tests {
                 sha: "d13d90b724bf8a3c".into(),
                 path: baseline.to_string_lossy().into_owned(),
             }),
+            ..Default::default()
         })
         .unwrap();
     }

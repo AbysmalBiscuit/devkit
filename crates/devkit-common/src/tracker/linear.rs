@@ -38,7 +38,7 @@ pub struct LinearIssueRef {
 /// leading zero (`number: { eq: 01 }`, from a branch like `env-config-01`) is a
 /// syntax error that Linear rejects with a 500, taking every other alias in a
 /// batched query down with it.
-fn parse_id(id: &str) -> Option<(String, u64)> {
+pub(crate) fn parse_id(id: &str) -> Option<(String, u64)> {
     let (team, num) = id.split_once('-')?;
     if !team.starts_with(|c: char| c.is_ascii_alphabetic())
         || !team.chars().all(|c| c.is_ascii_alphanumeric())
@@ -246,7 +246,7 @@ fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::
     .json()?)
 }
 
-fn post_graphql(query: &str, key: &str, detail: &str) -> Result<serde_json::Value> {
+pub(crate) fn post_graphql(query: &str, key: &str, detail: &str) -> Result<serde_json::Value> {
     let v = send(serde_json::json!({ "query": query }), key, detail)?;
     if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
         && !errors.is_empty()

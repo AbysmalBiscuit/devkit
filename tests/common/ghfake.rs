@@ -190,6 +190,28 @@ github = "sweeper[bot]"
             .expect("write graphql answer");
     }
 
+    /// Answer every `gh api graphql` query with `body`. Without one the fake
+    /// fails the call.
+    pub fn serve_graphql(&self, body: &str) {
+        std::fs::write(self.bin.path().join("graphql.json"), body).expect("write graphql answer");
+    }
+
+    /// Answer every `gh api graphql` mutation with `body`. Without one the
+    /// fake fails the call.
+    pub fn serve_mutation(&self, body: &str) {
+        std::fs::write(self.bin.path().join("graphql_mutation.json"), body)
+            .expect("write mutation answer");
+    }
+
+    /// Add `keys` to the config's `[github]` table, which `extra` cannot
+    /// reopen.
+    pub fn github_keys(&self, keys: &str) {
+        let path = self.project().join("devkit.toml");
+        let toml = std::fs::read_to_string(&path).expect("read devkit.toml");
+        let toml = toml.replacen("[github]\n", &format!("[github]\n{keys}\n"), 1);
+        std::fs::write(&path, toml).expect("write devkit.toml");
+    }
+
     /// Make the project an `issue setup` worktree for issue `id`.
     pub fn record_issue(&self, id: &str) {
         devkit_common::record::write(self.project(), &devkit_common::record::IssueRecord {
@@ -199,6 +221,7 @@ github = "sweeper[bot]"
             summary: None,
             pr: None,
             baseline: None,
+            ..Default::default()
         })
         .expect("write issue record");
     }
@@ -233,25 +256,38 @@ github = "sweeper[bot]"
 
     /// [`Fake::issue`] with `stdin` piped in.
     pub fn issue_with_stdin(&self, args: &[&str], stdin: &[u8]) -> std::process::Output {
-        use std::{io::Write, process::Stdio};
+        with_stdin(self.issue_cmd(args), stdin)
+    }
 
-        let mut child = self
-            .issue_cmd(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn devkit issue");
-        child
-            .stdin
-            .take()
-            .expect("piped stdin")
-            .write_all(stdin)
-            .expect("write stdin");
-        child.wait_with_output().expect("wait devkit issue")
+    /// Run `devkit ARGS` against the fake `gh`, with `stdin` piped in, in the
+    /// environment [`Fake::issue`] sets up. A process it spawns inherits that
+    /// environment.
+    pub fn devkit_with_stdin(&self, args: &[&str], stdin: &[u8]) -> std::process::Output {
+        let mut cmd = self.devkit_cmd();
+        cmd.args(args);
+        with_stdin(cmd, stdin)
+    }
+
+    /// Run `devkit ARGS` from the project directory, against the fake `gh`,
+    /// with no Linear key to validate or detect.
+    pub fn devkit_here(&self, args: &[&str]) -> std::process::Output {
+        self.devkit_cmd()
+            .current_dir(self.project.path())
+            .env_remove("LINEAR_API_KEY")
+            .args(args)
+            .output()
+            .expect("spawn devkit")
     }
 
     fn issue_cmd(&self, args: &[&str]) -> Command {
+        let mut cmd = self.devkit_cmd();
+        cmd.args(["issue", "-C"])
+            .arg(self.project.path())
+            .args(args);
+        cmd
+    }
+
+    fn devkit_cmd(&self) -> Command {
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         let path = std::env::join_paths(
             std::iter::once(self.bin.path().to_path_buf()).chain(std::env::split_paths(&inherited)),
@@ -269,12 +305,27 @@ github = "sweeper[bot]"
             .env_remove("GH_HOST")
             .env_remove("GH_REPO")
             .env_remove("SLACK_TOKEN")
-            .env_remove("DEVKIT_CALLER")
-            .args(["issue", "-C"])
-            .arg(self.project.path())
-            .args(args);
+            .env_remove("DEVKIT_CALLER");
         cmd
     }
+}
+
+fn with_stdin(mut cmd: Command, stdin: &[u8]) -> std::process::Output {
+    use std::{io::Write, process::Stdio};
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn devkit");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(stdin)
+        .expect("write stdin");
+    child.wait_with_output().expect("wait devkit")
 }
 
 /// `pr` as `gh --json` reports it, on this project's branch at `head`.

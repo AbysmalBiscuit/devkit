@@ -1,0 +1,15 @@
+{
+  "data": {
+    "repository": {
+      "issue": { "id": "I_65", "projectItems": { "nodes": [] } }
+    },
+    "repositoryOwner": { "projectV2": null }
+  },
+  "errors": [
+    {
+      "type": "NOT_FOUND",
+      "path": ["repositoryOwner", "projectV2"],
+      "message": "Could not resolve to a ProjectV2 with the number 3."
+    }
+  ]
+}

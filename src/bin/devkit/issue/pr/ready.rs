@@ -9,7 +9,7 @@ use devkit_common::{
 
 use super::{
     Gate, add_reviewers, gate_ready, require_existing_pr,
-    resolve::{Existing, assert_belongs, parse_pr_flag, record_with_pr, resolve_existing},
+    resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
     reviewer_logins,
 };
 use crate::issue::review::{Target, guard_branch, resolve_target};
@@ -76,8 +76,8 @@ pub fn run(args: Args) -> Result<()> {
     // PR is resolved and verified, and a run that dies mid-flight then leaves
     // the record naming a PR that exists rather than the forge holding a state
     // change nothing local knows about.
-    if let Some(rec) = record_with_pr(record.as_ref(), locator) {
-        devkit_common::record::write(&toplevel, &rec)?;
+    if record.is_some() {
+        record_pr(&toplevel, locator)?;
     }
 
     let f = forge.forge.as_ref();

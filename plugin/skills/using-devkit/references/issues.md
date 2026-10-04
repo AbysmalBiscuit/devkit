@@ -20,6 +20,7 @@ issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size 
 issue dashboard [--chart bar|line] [--bucket B] [--mode M] [--aggregate cumulative|period] [--all-roles] [--author gh] [--no-plots] [--no-cache]
 issue review request ["<message>"] [--to <alias|#channel>] [--pr <URL|number>] [--no-push] [--no-notify] [--arg k=v] [--arg-file k=path]
 issue review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg k=v] [--arg-file k=path]
+issue event <setup|start|pr_open> [ID|URL]
 ```
 
 ## `setup` — start an issue
@@ -146,6 +147,22 @@ However the PR was resolved, its head commit must equal this worktree's `HEAD` o
 Announces over Slack that you finished reviewing. `--to` (repeatable) defaults to the PR author. The PR comes from `--pr <n>`, else the worktree's record, else the branch; `--pr` applies to that run and rewrites nothing.
 
 No head-commit check here: this is the reviewer's command, run in a worktree `pr checkout` built, where `HEAD` falls behind as soon as the author pushes again. `[BODY]` fills the `review_finish` template's `{{ input }}`.
+
+## Status events
+
+`[issue.events]` moves the issue's tracker status when devkit acts on the issue: a Linear workflow state, or on GitHub the single-select field of the Projects v2 project `[github] project` names. Each event moves the issue only from a status its `from` lists, and an issue already at `to` is left alone. With no `[issue.events]`, devkit reads and writes no tracker status. `devkit schema` documents the keys.
+
+| Event | Fires | Where |
+|---|---|---|
+| `setup` | as `issue setup`'s last step, after the `after_worktree_create` hooks | the worktree it creates, when it names a tracker issue |
+| `start` | in the background, when the first agent session starts in the worktree | `issue setup` worktrees only, never `issue pr checkout` ones, so a reviewer's session cannot pull an issue back from review |
+| `pr_open` | when `issue pr create` opens the PR or finds one already open | any worktree whose record names a tracker issue |
+
+Each event fires once per worktree. The worktree's `.devkit/issue.toml` records it before the tracker is asked, and a failed move keeps that record, so a tracker that is down costs one missed move rather than a retry on every session. `issue end` removes the record, and the marks go with it. `setup` and `pr_open` print a failed move as a warning and the command still succeeds. The background `start` run appends its outcome or error to `.devkit/issue-event.log` in the worktree.
+
+`issue event <event> [ID|URL]` reruns one event by hand, for the worktree's own issue when no id is given: it retries a failed move or shows its error, whatever the record says. It prints what it did: the move, that the issue is already there, or that its status is not in `from`. `devkit doctor`'s `issue_events` row lists each transition. On GitHub it also checks the project, its status field and every status name, which proves the token can read the project but not that it can write: a token with only `read:project` passes the row and fails on the first move. On Linear it only lists them, since a team's states are known once an issue is read, so an unknown name surfaces on the first move.
+
+On GitHub the token needs the `project` scope. Without it each move fails naming the remedy: `gh auth refresh -s project` for a token `gh` supplies, or reissuing the variable it came from (`GH_TOKEN`, say) with `project` for a token from the environment.
 
 ## Triage and teardown
 

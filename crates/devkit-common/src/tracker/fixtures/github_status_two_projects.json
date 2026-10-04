@@ -1,0 +1,36 @@
+{
+  "data": {
+    "repository": {
+      "issue": {
+        "id": "I_65",
+        "projectItems": {
+          "nodes": [
+            {
+              "id": "PVTI_1",
+              "project": { "id": "PVT_1", "number": 1 },
+              "fieldValueByName": { "name": "Done", "optionId": "opt_done_1" }
+            },
+            {
+              "id": "PVTI_3",
+              "project": { "id": "PVT_3", "number": 3 },
+              "fieldValueByName": { "name": "Todo", "optionId": "opt_todo" }
+            }
+          ]
+        }
+      }
+    },
+    "repositoryOwner": {
+      "projectV2": {
+        "id": "PVT_3",
+        "field": {
+          "id": "PVTSSF_status",
+          "options": [
+            { "id": "opt_todo", "name": "Todo" },
+            { "id": "opt_doing", "name": "In progress" },
+            { "id": "opt_done", "name": "Done" }
+          ]
+        }
+      }
+    }
+  }
+}

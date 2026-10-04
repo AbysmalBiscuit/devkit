@@ -37,7 +37,8 @@ pub struct Config {
     /// Linear lookups that cost an extra API round trip.
     #[serde(default)]
     pub linear: LinearConfig,
-    /// Which GitHub repository backs the GitHub tracker's issues.
+    /// Which GitHub repository backs the GitHub tracker's issues, and which
+    /// Projects v2 project holds their status.
     #[serde(default)]
     pub github: GithubConfig,
     /// Which forge holds this project's pull requests. Detected when the table
@@ -47,6 +48,10 @@ pub struct Config {
     /// Which issue tracker backs `issue`. Detected when the table is absent.
     #[serde(default)]
     pub tracker: TrackerConfig,
+    /// What devkit does to an issue's tracker status when it acts on that
+    /// issue.
+    #[serde(default)]
+    pub issue: IssueConfig,
     /// Width of the shared worker pool. Machine tuning; carries no project
     /// convention, so a config may hold it alone.
     #[serde(default)]
@@ -658,19 +663,23 @@ pub struct LinearConfig {
 }
 
 /// Which GitHub repository holds this project's issues, for the GitHub
-/// tracker. The repository pull requests go to is `[forge] repo`, since a
-/// project on any forge has one.
+/// tracker, and which Projects v2 project holds their status for
+/// `[issue.events]`. The repository pull requests go to is `[forge] repo`,
+/// since a project on any forge has one.
 ///
 /// Unknown keys are refused: a misspelled `issue_repo` ignored would default
 /// from `origin` and query another repository's issues.
 ///
 /// ```
-/// # use devkit_config::Config;
+/// # use devkit_config::{Config, ProjectRef};
 /// # let cfg = Config::parse(r#"
 /// [github]
 /// issues_repo = "org/planning"
+/// project = "org/3"
+/// status_field = "Status"
 /// # "#).unwrap();
 /// # assert_eq!(cfg.github.issues_repo.as_deref(), Some("org/planning"));
+/// # assert_eq!(cfg.github.project, Some(ProjectRef { owner: Some("org".into()), number: 3 }));
 /// # assert!(Config::parse("[github]\nissue_repo = \"org/planning\"\n").is_err());
 /// ```
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
@@ -687,6 +696,193 @@ pub struct GithubConfig {
     #[schemars(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_repo: Option<String>,
+    /// The Projects v2 project whose single-select field holds the issues'
+    /// status, which `[issue.events]` moves under the GitHub tracker:
+    /// `"owner/N"`, or a bare `N` owned by `issues_repo`'s owner. Without it,
+    /// a GitHub tracker's events fail naming this key.
+    pub project: Option<ProjectRef>,
+    /// The single-select field on `project` that holds the status. `Status`
+    /// when unset.
+    pub status_field: Option<String>,
+}
+
+impl GithubConfig {
+    /// `status_field`, or `Status` when unset.
+    pub fn status_field(&self) -> &str {
+        self.status_field.as_deref().unwrap_or("Status")
+    }
+}
+
+/// A GitHub Projects v2 project: its number, and its owner when that is not
+/// the issues repository's owner.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(try_from = "ProjectSpec", into = "ProjectSpec")]
+pub struct ProjectRef {
+    pub owner: Option<String>,
+    pub number: u64,
+}
+
+/// `[github] project` as written: a bare number or `"owner/N"`.
+#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(untagged)]
+enum ProjectSpec {
+    /// Project `N` of `issues_repo`'s owner.
+    Number(u64),
+    /// `"owner/N"`: project `N` of the user or organization `owner`.
+    Owned(String),
+}
+
+impl TryFrom<ProjectSpec> for ProjectRef {
+    type Error = String;
+
+    fn try_from(spec: ProjectSpec) -> Result<Self, String> {
+        match spec {
+            ProjectSpec::Number(number) => Ok(ProjectRef {
+                owner: None,
+                number,
+            }),
+            ProjectSpec::Owned(s) => s
+                .split_once('/')
+                .and_then(|(owner, n)| {
+                    let number = n.parse().ok()?;
+                    (!owner.is_empty()).then(|| ProjectRef {
+                        owner: Some(owner.to_string()),
+                        number,
+                    })
+                })
+                .ok_or_else(|| format!("project `{s}`: expected a number or \"owner/N\"")),
+        }
+    }
+}
+
+impl From<ProjectRef> for ProjectSpec {
+    fn from(p: ProjectRef) -> Self {
+        match p.owner {
+            Some(owner) => ProjectSpec::Owned(format!("{owner}/{}", p.number)),
+            None => ProjectSpec::Number(p.number),
+        }
+    }
+}
+
+/// An event devkit fires on an issue it acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueEvent {
+    /// `issue setup` created the issue's worktree.
+    Setup,
+    /// The first agent session started in a worktree `issue setup` created.
+    Start,
+    /// `issue pr create` opened the issue's PR or found it open.
+    PrOpen,
+}
+
+impl IssueEvent {
+    /// Every event, in the order each fires on an issue.
+    pub const ALL: [IssueEvent; 3] = [IssueEvent::Setup, IssueEvent::Start, IssueEvent::PrOpen];
+
+    /// The `[issue.events]` spelling, which is also the serialized form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IssueEvent::Setup => "setup",
+            IssueEvent::Start => "start",
+            IssueEvent::PrOpen => "pr_open",
+        }
+    }
+}
+
+impl std::fmt::Display for IssueEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The `[issue]` table. Each event moves the issue's status (a Linear state,
+/// or `[github] status_field`) from a `from` status to `to`; an event with no
+/// table does nothing. The statuses name one board, so keep the events in the
+/// repository's `devkit.toml`: tables merge key by key across layers.
+///
+/// ```
+/// # use devkit_config::{Config, IssueEvent, ProjectRef};
+/// # let cfg = Config::parse(r#"
+/// [issue.events.setup]
+/// to = "Todo"
+///
+/// [issue.events.start]
+/// from = ["", "Todo", "Backlog"]
+/// to = "In progress"
+///
+/// [issue.events.pr_open]
+/// to = "In review"
+///
+/// [github]
+/// project = 3            # or "some-org/7"
+/// status_field = "Status"
+/// # "#).unwrap();
+/// # let events = &cfg.issue.events;
+/// # assert_eq!(events.get(IssueEvent::Setup).unwrap().from, ["*"]);
+/// # assert_eq!(events.get(IssueEvent::Start).unwrap().from, ["", "Todo", "Backlog"]);
+/// # assert_eq!(events.get(IssueEvent::PrOpen).unwrap().to, "In review");
+/// # assert_eq!(cfg.github.project, Some(ProjectRef { owner: None, number: 3 }));
+/// ```
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IssueConfig {
+    /// Status moves, keyed by the event that fires them. The event names are
+    /// fixed, so a misspelled one is a parse error.
+    pub events: IssueEventsConfig,
+}
+
+/// One optional status move per event.
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IssueEventsConfig {
+    /// Fired by `issue setup` as its last step, after the
+    /// `after_worktree_create` hooks. A failed move warns and setup succeeds.
+    pub setup: Option<EventTransition>,
+    /// Fired by the first agent session in a worktree `issue setup` created,
+    /// once per worktree, in the background. `issue pr checkout` worktrees
+    /// never fire it. List the states work starts from in `from`: `["*"]` lets
+    /// a second worktree pull an issue back from review.
+    pub start: Option<EventTransition>,
+    /// Fired by `issue pr create`, whether it opened the PR or found one open.
+    /// A failed move warns and the PR stays as it is.
+    pub pr_open: Option<EventTransition>,
+}
+
+impl IssueEventsConfig {
+    /// The transition configured for `event`, if any.
+    pub fn get(&self, event: IssueEvent) -> Option<&EventTransition> {
+        match event {
+            IssueEvent::Setup => self.setup.as_ref(),
+            IssueEvent::Start => self.start.as_ref(),
+            IssueEvent::PrOpen => self.pr_open.as_ref(),
+        }
+    }
+
+    /// Whether any event is configured.
+    pub fn any(&self) -> bool {
+        IssueEvent::ALL.into_iter().any(|e| self.get(e).is_some())
+    }
+}
+
+/// A status move: from any status in `from` to `to`.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventTransition {
+    /// The statuses the issue may move from. `*` matches any status, and the
+    /// empty string matches an issue with no status (on GitHub, one outside
+    /// `[github] project` or with the field unset). Names match
+    /// case-insensitively, ignoring surrounding whitespace. `["*"]` when
+    /// unset.
+    #[serde(default = "any_status")]
+    pub from: Vec<String>,
+    /// The status the issue moves to, matched like `from`. An issue already
+    /// there is left alone, whatever `from` says.
+    pub to: String,
+}
+
+fn any_status() -> Vec<String> {
+    vec!["*".to_string()]
 }
 
 /// A git forge devkit's PR commands can talk to.
@@ -4154,5 +4350,71 @@ steps = [
         let cfg: Config = toml::from_str("").unwrap();
         assert!(cfg.hooks.after_worktree_remove.is_empty());
         assert!(cfg.hooks.after_end.is_empty());
+    }
+
+    #[test]
+    fn issue_events_parse_and_default_from_to_any() {
+        let cfg = Config::parse("[issue.events.start]\nto = \"In progress\"\n").unwrap();
+        let t = cfg.issue.events.get(IssueEvent::Start).unwrap();
+        assert_eq!(
+            (t.from.clone(), t.to.as_str()),
+            (vec!["*".to_string()], "In progress")
+        );
+        assert!(cfg.issue.events.get(IssueEvent::Setup).is_none());
+        assert!(cfg.issue.events.any());
+        assert!(!Config::parse("").unwrap().issue.events.any());
+    }
+
+    #[test]
+    fn an_unknown_event_name_fails_to_parse() {
+        assert!(Config::parse("[issue.events.started]\nto = \"x\"\n").is_err());
+        assert!(Config::parse("[issue.events.start]\nfrom = [\"Todo\"]\n").is_err());
+    }
+
+    #[test]
+    fn github_project_takes_a_number_or_owner_slash_number() {
+        let n = Config::parse("[github]\nproject = 3\n").unwrap();
+        assert_eq!(
+            n.github.project,
+            Some(ProjectRef {
+                owner: None,
+                number: 3
+            })
+        );
+        let o = Config::parse("[github]\nproject = \"some-org/7\"\n").unwrap();
+        assert_eq!(
+            o.github.project,
+            Some(ProjectRef {
+                owner: Some("some-org".into()),
+                number: 7
+            })
+        );
+        assert!(Config::parse("[github]\nproject = \"7\"\n").is_err());
+        assert!(Config::parse("[github]\nproject = \"org/x\"\n").is_err());
+        assert_eq!(n.github.status_field(), "Status");
+        let f = Config::parse("[github]\nstatus_field = \"Stage\"\n").unwrap();
+        assert_eq!(f.github.status_field(), "Stage");
+    }
+
+    #[test]
+    fn a_project_ref_serializes_back_to_its_written_form() {
+        let n = toml::Value::try_from(ProjectRef {
+            owner: None,
+            number: 3,
+        })
+        .unwrap();
+        assert_eq!(n, toml::Value::Integer(3));
+        let o = toml::Value::try_from(ProjectRef {
+            owner: Some("org".into()),
+            number: 7,
+        })
+        .unwrap();
+        assert_eq!(o, toml::Value::String("org/7".into()));
+    }
+
+    #[test]
+    fn issue_event_display_matches_the_config_spelling() {
+        assert_eq!(IssueEvent::PrOpen.to_string(), "pr_open");
+        assert_eq!(IssueEvent::Start.to_string(), "start");
     }
 }

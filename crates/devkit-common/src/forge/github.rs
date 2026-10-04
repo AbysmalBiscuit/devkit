@@ -16,7 +16,7 @@ use super::{
     Section, locate_on,
 };
 use crate::{
-    cmd::{gh_capture, gh_json, gh_json_in},
+    cmd::{gh_capture, gh_json_in},
     github::Api,
 };
 
@@ -782,14 +782,9 @@ impl GithubForge {
     }
 
     fn graphql_or_gh(&self, query: &str) -> Result<Value> {
-        if let Ok(v) = self.api.graphql(query) {
-            return Ok(v);
-        }
-        let arg = format!("query={query}");
-        gh_json(
-            &["api", "graphql", "--hostname", self.api.host(), "-f", &arg],
-            ".",
-        )
+        self.api
+            .graphql(query)
+            .or_else(|_| self.api.gh_graphql(query))
     }
 }
 

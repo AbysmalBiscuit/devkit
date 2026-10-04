@@ -145,10 +145,9 @@ impl Api {
     }
 
     /// POST a raw GraphQL query, returning the response envelope whole
-    /// (`{ "data": ..., "errors": ... }`) with no error handling of its own:
-    /// [`Api::graphql`] and [`Api::graphql_partial`] each apply their own
-    /// acceptance rule to the same request.
-    fn graphql_request(&self, query: &str) -> Result<Value> {
+    /// (`{ "data": ..., "errors": ... }`) with no error handling of its own,
+    /// so the caller decides which errors it accepts.
+    pub fn graphql_value(&self, query: &str) -> Result<Value> {
         let _span = devkit_timing::io_span("github graphql", "graphql").entered();
         Ok(http::send(
             client()
@@ -163,7 +162,7 @@ impl Api {
     /// POST a raw GraphQL query. The response envelope is returned whole
     /// (`{ "data": ... }`); a non-empty `errors` array is an error.
     pub fn graphql(&self, query: &str) -> Result<Value> {
-        let v = self.graphql_request(query)?;
+        let v = self.graphql_value(query)?;
         if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
             && !errors.is_empty()
         {
@@ -176,11 +175,41 @@ impl Api {
     /// partial answer: an aliased batch reports one missing id that way while
     /// returning real data for the rest. Any other error class still fails.
     pub fn graphql_partial(&self, query: &str) -> Result<Value> {
-        let v = self.graphql_request(query)?;
+        let v = self.graphql_value(query)?;
         if accepts_partial(&v) {
             return Ok(v);
         }
         anyhow::bail!("GitHub GraphQL error: {}", graphql_error_message(&v));
+    }
+
+    /// Send `query` through `with_token` (one of the `graphql*` methods,
+    /// whose acceptance rule applies) when this host has a token, else
+    /// through [`Api::gh_graphql`], since `gh` may still reach the host.
+    pub fn graphql_or_gh(
+        &self,
+        query: &str,
+        with_token: impl FnOnce(&Api, &str) -> Result<Value>,
+    ) -> Result<Value> {
+        match self.token() {
+            Some(_) => with_token(self, query),
+            None => self.gh_graphql(query),
+        }
+    }
+
+    /// Send `query` with `gh api graphql --hostname <host>`, returning what
+    /// `gh` prints.
+    pub fn gh_graphql(&self, query: &str) -> Result<Value> {
+        crate::cmd::gh_json(
+            &[
+                "api",
+                "graphql",
+                "--hostname",
+                self.host(),
+                "-f",
+                &format!("query={query}"),
+            ],
+            ".",
+        )
     }
 
     /// GET `path` under the REST root. `Ok(Some(json))` on 2xx, `Ok(None)` on

@@ -11,7 +11,6 @@ use anyhow::{Context, Result};
 
 use super::{AssignedIssue, IssueDetails, IssueRef, PrRef, State, StateKind, Tracker, TrackerKind};
 use crate::{
-    cmd::gh_json,
     forge::{Repo, remote::same_host},
     github::Api,
 };
@@ -610,22 +609,7 @@ impl Tracker for GithubTracker {
             .parse()
             .with_context(|| format!("bad issue number {id}"))?;
         let query = issue_query(&self.repo.slug, n);
-        let resp = match self.api.token() {
-            Some(_) => self.api.graphql_partial(&query)?,
-            // The same fallback the forge takes: with no bearer token for
-            // this host, `gh` may still reach it.
-            None => gh_json(
-                &[
-                    "api",
-                    "graphql",
-                    "--hostname",
-                    self.api.host(),
-                    "-f",
-                    &format!("query={query}"),
-                ],
-                ".",
-            )?,
-        };
+        let resp = self.api.graphql_or_gh(&query, Api::graphql_partial)?;
         Ok(parse_issue(&resp, id))
     }
 
@@ -739,6 +723,7 @@ impl Tracker for GithubTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tracker::fixture;
 
     fn repo(slug: &str) -> Repo {
         Repo {
@@ -754,16 +739,6 @@ mod tests {
             url: format!("https://github.com/{repo}/pull/{number}"),
             repo: repo.to_string(),
         }
-    }
-
-    fn fixture(name: &str) -> serde_json::Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/tracker/fixtures")
-            .join(name);
-        let data = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("reading fixture {}: {e}", path.display()));
-        serde_json::from_str(&data)
-            .unwrap_or_else(|e| panic!("parsing fixture {}: {e}", path.display()))
     }
 
     #[test]

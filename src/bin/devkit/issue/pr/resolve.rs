@@ -126,16 +126,14 @@ pub(crate) fn verify_created(
         .context("the PR just created does not carry this worktree's commits")
 }
 
-/// The record to write once a PR is resolved: the existing record with its
-/// `pr` field replaced. `None` when there is no record to attach it to, as in
-/// a run outside a worktree `issue setup` created.
-pub(crate) fn record_with_pr(
-    record: Option<&devkit_common::record::IssueRecord>,
-    loc: PrLocator,
-) -> Option<devkit_common::record::IssueRecord> {
-    record.map(|r| devkit_common::record::IssueRecord {
-        pr: Some(loc),
-        ..r.clone()
+/// Point the worktree's record at its resolved PR, leaving its other fields
+/// alone. A worktree with no record, as outside one `issue setup` created,
+/// gets none.
+pub(crate) fn record_pr(worktree: &Path, loc: PrLocator) -> Result<()> {
+    devkit_common::record::update(worktree, |rec| {
+        if let Some(rec) = rec {
+            rec.pr = Some(loc);
+        }
     })
 }
 
@@ -260,26 +258,29 @@ mod tests {
     }
 
     #[test]
-    fn record_with_pr_replaces_only_the_pr_field() {
+    fn record_pr_replaces_only_the_pr_field() {
+        let wt = tempfile::tempdir().unwrap();
         let base = devkit_common::record::IssueRecord {
             issue: "ENG-1".into(),
             slug: "fix-login".into(),
             apps: vec!["web".into()],
-            summary: None,
-            pr: None,
-            baseline: None,
+            ..Default::default()
         };
+        devkit_common::record::write(wt.path(), &base).unwrap();
         let loc = PrLocator {
             repo: Some("o/r".into()),
             number: 9,
         };
-        let got = record_with_pr(Some(&base), loc.clone()).expect("a record to update");
-        assert_eq!(got.pr, Some(loc.clone()));
-        assert_eq!(got.issue, base.issue);
-        assert_eq!(got.slug, base.slug);
-        assert_eq!(got.apps, base.apps);
+        record_pr(wt.path(), loc.clone()).unwrap();
+        let got = devkit_common::record::read(wt.path()).unwrap();
+        assert_eq!(got, devkit_common::record::IssueRecord {
+            pr: Some(loc.clone()),
+            ..base
+        });
 
-        assert!(record_with_pr(None, loc).is_none());
+        let bare = tempfile::tempdir().unwrap();
+        record_pr(bare.path(), loc).unwrap();
+        assert!(devkit_common::record::read(bare.path()).is_none());
     }
 
     #[test]
