@@ -19,6 +19,16 @@ fn stop(p: &Proj, session: &str) -> serde_json::Value {
     })
 }
 
+fn codex_stop(p: &Proj) -> Value {
+    json!({
+        "hook_event_name": "Stop",
+        "turn_id": "t",
+        "session_id": "S",
+        "stop_hook_active": false,
+        "cwd": p.path,
+    })
+}
+
 fn set(p: &Proj, id: &str, to: StatusKind, by: &str) {
     p.store()
         .apply(&Edit::SetStatus {
@@ -65,18 +75,14 @@ fn seed(p: &Proj, node: &str, text: &str) -> String {
 fn config_off_never_holds() {
     let p = Proj::with_home_config("[todo]\nhold_stop = false\n");
     seed(&p, "proj.main.claude-S", "write the migration");
-    let out = p.hook("stop", "claude-code", &stop(&p, "S"));
-    assert!(out.status.success());
-    assert_eq!(stdout(&out), "");
+    silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
 }
 
 #[test]
 fn a_broken_config_never_holds() {
     let p = Proj::with_home_config("[todo]\nbackend = 3\n");
     seed(&p, "proj.main.claude-S", "write the migration");
-    let out = p.hook("stop", "claude-code", &stop(&p, "S"));
-    assert!(out.status.success());
-    assert_eq!(stdout(&out), "");
+    silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
 }
 
 #[test]
@@ -85,9 +91,7 @@ fn a_missing_task_binary_never_holds() {
         "[todo]\nbackend = \"taskwarrior\"\n[todo.taskwarrior]\npath = \"/nonexistent/task\"\n",
     );
     seed(&p, MAIN, "write the migration");
-    let out = p.hook("stop", "claude-code", &stop(&p, "S"));
-    assert!(out.status.success());
-    assert_eq!(stdout(&out), "");
+    silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
 }
 
 #[test]
@@ -221,34 +225,14 @@ fn a_codex_interrupt_goes_through() {
         "cwd": p.path,
     });
     silent(&p.hook("stop", "codex", &interrupt));
-    blocked(&p.hook(
-        "stop",
-        "codex",
-        &json!({
-            "hook_event_name": "Stop",
-            "turn_id": "t",
-            "session_id": "S",
-            "stop_hook_active": false,
-            "cwd": p.path,
-        }),
-    ));
+    blocked(&p.hook("stop", "codex", &codex_stop(&p)));
 }
 
 #[test]
 fn a_codex_stop_blocks() {
     let p = Proj::new();
     seed(&p, "proj.main.codex-S", "write the migration");
-    let reason = blocked(&p.hook(
-        "stop",
-        "codex",
-        &json!({
-            "hook_event_name": "Stop",
-            "turn_id": "t",
-            "session_id": "S",
-            "stop_hook_active": false,
-            "cwd": p.path,
-        }),
-    ));
+    let reason = blocked(&p.hook("stop", "codex", &codex_stop(&p)));
     assert!(reason.contains("write the migration"), "{reason}");
 }
 
