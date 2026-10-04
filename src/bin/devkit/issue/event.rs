@@ -72,7 +72,9 @@ pub(crate) fn fire(
     let shown = current.as_deref().unwrap_or("(none)");
     Ok(match target(t, current.as_deref()) {
         Target::To(to) => {
-            writer.set_status(&id, to)?;
+            writer
+                .set_status(&id, to)
+                .with_context(|| format!("[issue.events.{event}] to"))?;
             format!("moved {id}: {shown} -> {to}")
         }
         Target::Already => format!("{id} is already {shown}"),

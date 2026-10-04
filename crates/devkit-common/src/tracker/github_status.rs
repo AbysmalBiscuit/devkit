@@ -94,7 +94,7 @@ impl Board {
     pub fn option_id(&self, to: &str, field: &str) -> Result<&str> {
         find_id(&self.options, to).with_context(|| {
             format!(
-                "no option `{to}` in `{field}` ([github] status_field); options: {}",
+                "no option `{to}` in `{field}`; options: {}",
                 names(&self.options)
             )
         })

@@ -144,7 +144,9 @@ fn an_unknown_target_fails_listing_the_options() {
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("no option `Shipping` in `Status`")
-            && stderr(&out).contains("Todo, In progress, In review"),
+            && stderr(&out).contains("Todo, In progress, In review")
+            && stderr(&out).contains("[issue.events.pr_open] to")
+            && !stderr(&out).contains("[github] status_field"),
         "{}",
         stderr(&out)
     );
