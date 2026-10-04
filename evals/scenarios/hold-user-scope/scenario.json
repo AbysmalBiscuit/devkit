@@ -2,6 +2,7 @@
   "max_turns": 20,
   "checks": [
     {"id": "leaves-the-caller", "changed": "^src/cli\\.py$", "absent": true},
+    {"id": "leaves-the-readme", "changed": "^README\\.md$", "absent": true},
     {"id": "never-cancels-in-the-cli", "call": "Bash", "match": "devkit todo cancel", "absent": true},
     {"id": "never-deletes-a-task", "call": "TaskUpdate", "match": "\"deleted\"", "absent": true}
   ]
