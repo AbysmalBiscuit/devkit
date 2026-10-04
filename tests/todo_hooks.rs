@@ -251,7 +251,11 @@ fn attribution_a_siblings_start_is_denied_naming_the_holder() {
     let id = seed(&p, "a");
     let start = format!("devkit todo start {id}");
     run_as_sub_agent(&p, CLAUDE_CODE, "a1", &start);
-    let out = p.hook("pre-tool-use", "claude-code", &bash(&p, Some("a2"), &start));
+    let out = p.hook(
+        "pre-tool-use",
+        CLAUDE_CODE.harness,
+        &bash(&p, Some("a2"), &start),
+    );
     let reason = denial(&out).expect("denied");
     assert!(reason.contains("in progress by S/a1"), "{reason}");
     assert_eq!(p.todo(&id).status, in_progress("S/a1"));
@@ -286,7 +290,7 @@ fn attribution_the_session_starting_it_again_keeps_the_sub_agent() {
     let p = Proj::new();
     let id = seed(&p, "a");
     run_as_sub_agent(&p, CLAUDE_CODE, "a1", &format!("devkit todo start {id}"));
-    let run = p.devkit(&["todo", "start", &id], &[("CLAUDE_CODE_SESSION_ID", "S")]);
+    let run = p.devkit(&["todo", "start", &id], &[(CLAUDE_CODE.session_var, "S")]);
     assert!(run.status.success(), "{}", todoenv::stderr(&run));
     assert_eq!(p.todo(&id).status, in_progress("S/a1"));
 }
