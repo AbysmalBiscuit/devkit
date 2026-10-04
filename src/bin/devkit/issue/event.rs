@@ -12,7 +12,6 @@ use devkit_common::{
         self,
         status::{StatusWriter, Target, target, writer_for},
     },
-    worktree::IssueId,
 };
 use devkit_config::{Health, IssueEvent};
 
@@ -39,8 +38,7 @@ impl From<EventArg> for IssueEvent {
 fn recorded_issue(dir: &Path) -> Result<String> {
     let root = devkit_common::vcs::checkout_root(dir)?;
     record::read(&root)
-        .and_then(|r| r.issue.parse::<IssueId>().ok())
-        .and_then(|id| id.tracker().map(String::from))
+        .and_then(|r| r.tracker_issue())
         .with_context(|| format!("{} records no tracker issue; pass ISSUE", root.display()))
 }
 

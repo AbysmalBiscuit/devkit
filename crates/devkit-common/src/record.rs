@@ -140,6 +140,16 @@ pub fn claim(worktree: &Path, event: IssueEvent) -> Result<bool> {
 }
 
 impl IssueRecord {
+    /// The tracker issue this record names, `None` for a worktree with no
+    /// issue or an unknown one.
+    pub fn tracker_issue(&self) -> Option<String> {
+        self.issue
+            .parse::<crate::worktree::IssueId>()
+            .ok()?
+            .tracker()
+            .map(String::from)
+    }
+
     /// Add `event` to `events`, returning `false` when it was already there.
     pub fn claim(&mut self, event: IssueEvent) -> bool {
         let events = self.events.get_or_insert_with(Vec::new);

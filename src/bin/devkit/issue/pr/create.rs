@@ -6,7 +6,6 @@ use devkit_common::{
     forge::{self, Forge, NewPr, PrLocator},
     progress::Steps,
     vcs::{Vcs, VersionControl},
-    worktree::IssueId,
 };
 use devkit_config::{IssueEvent, PrCreateState};
 use devkit_ports::templates::worktree_context;
@@ -302,13 +301,10 @@ pub fn run(args: Args) -> Result<()> {
         None
     };
 
-    let issue = record
-        .as_ref()
-        .and_then(|r| r.issue.parse::<IssueId>().ok());
-    let tracker_issue = issue.as_ref().and_then(IssueId::tracker);
+    let tracker_issue = record.as_ref().and_then(|r| r.tracker_issue());
     if let (Some(variable), Some(issue), Caller::Agent) = (
         &loaded.config.defaults.pr_proof_variable,
-        tracker_issue,
+        tracker_issue.as_deref(),
         caller,
     ) {
         let tracker =
@@ -378,7 +374,7 @@ pub fn run(args: Args) -> Result<()> {
     })?;
 
     println!("{}", resolved.url);
-    if let (true, Some(issue)) = (resolved.pr_open_claimed, tracker_issue) {
+    if let (true, Some(issue)) = (resolved.pr_open_claimed, tracker_issue.as_deref()) {
         crate::issue::event::fire_inline(
             here,
             args.config.as_deref().map(Path::new),

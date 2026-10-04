@@ -12,7 +12,6 @@ use devkit_common::{
     record::{self, IssueRecord, RecordOrigin, RecordState},
     tracker::{self, TrackerKind},
     vcs::Checkout,
-    worktree::IssueId,
 };
 use devkit_config::IssueEvent;
 
@@ -28,10 +27,7 @@ pub(crate) fn log_path(root: &Path) -> std::path::PathBuf {
 /// record carrying a PR but no `events` is.
 fn qualifies(rec: &IssueRecord) -> bool {
     let from_setup = matches!(rec.origin, None | Some(RecordOrigin::Setup));
-    let tracker_issue = rec
-        .issue
-        .parse::<IssueId>()
-        .is_ok_and(|id| id.tracker().is_some());
+    let tracker_issue = rec.tracker_issue().is_some();
     let legacy_past_start = rec.events.is_none() && rec.pr.is_some();
     from_setup && tracker_issue && !legacy_past_start
 }
