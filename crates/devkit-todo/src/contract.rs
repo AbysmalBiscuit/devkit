@@ -4,6 +4,7 @@
 
 use crate::{
     Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
+    activity::{Activity, ActivityLog, ClaimEnd, Interval, Recorded},
 };
 
 /// One `#[test]` per contract case. `$make` builds a fresh store and a guard
@@ -32,6 +33,9 @@ macro_rules! contract_tests {
             get_returns_the_todo,
             move_reorder_and_relocate,
             filters_match_exact_and_subtree,
+            claiming_then_completing_records_one_completed_interval,
+            releasing_records_each_released_interval,
+            a_handed_claim_closes_one_interval_and_opens_the_next,
         );
     };
     (@each $make:expr; $($case:ident),* $(,)?) => {
@@ -352,4 +356,74 @@ pub fn filters_match_exact_and_subtree(s: &impl TodoStore) {
     assert_eq!(projects(Filter::exact(["r".to_string()])), ["r"]);
     assert_eq!(projects(Filter::all()), ["r", "r-web", "r.main"]);
     assert!(projects(Filter { nodes: Vec::new() }).is_empty());
+}
+
+/// `s` recording into a fresh log, and the guard that keeps the log alive.
+fn recorded<S: TodoStore>(s: S) -> (tempfile::TempDir, Recorded<S>) {
+    let dir = tempfile::tempdir().unwrap();
+    let log = ActivityLog::at(dir.path().to_path_buf());
+    (dir, Recorded::new(s, log))
+}
+
+fn claims<S>(r: &Recorded<S>) -> Vec<Interval> {
+    let Activity { claims, .. } = r.log().read(std::time::SystemTime::now().into()).unwrap();
+    claims
+}
+
+fn ended(claim: &Interval) -> (&str, &str, Option<ClaimEnd>) {
+    assert!(claim.end.is_none_or(|end| end >= claim.start), "{claim:?}");
+    (&claim.todo, &claim.holder, claim.outcome)
+}
+
+pub fn claiming_then_completing_records_one_completed_interval(s: &impl TodoStore) {
+    let (_dir, r) = recorded(s);
+    let id = add(&r, "a");
+    set(&r, &id, StatusKind::InProgress, "S/a").unwrap();
+    set(&r, &id, StatusKind::Completed, "S/a").unwrap();
+    let claims = claims(&r);
+    assert_eq!(claims.len(), 1, "{claims:?}");
+    assert_eq!(
+        ended(&claims[0]),
+        (id.as_str(), "S/a", Some(ClaimEnd::Completed))
+    );
+    assert!(claims[0].end.is_some());
+    assert_eq!(claims[0].node, "r.main");
+}
+
+pub fn releasing_records_each_released_interval(s: &impl TodoStore) {
+    let (_dir, r) = recorded(s);
+    let (own, sub, other) = (add(&r, "own"), add(&r, "sub"), add(&r, "other"));
+    set(&r, &own, StatusKind::InProgress, "S").unwrap();
+    set(&r, &sub, StatusKind::InProgress, "S/a").unwrap();
+    set(&r, &other, StatusKind::InProgress, "T").unwrap();
+    r.apply(&Edit::ReleaseAll {
+        holder: Holder::new("S"),
+    })
+    .unwrap();
+    let claims = claims(&r);
+    let outcome = |id: &str| {
+        claims
+            .iter()
+            .find(|c| c.todo == id)
+            .map(|c| ended(c).2)
+            .unwrap_or_else(|| panic!("no interval for {id}: {claims:?}"))
+    };
+    assert_eq!(outcome(&own), Some(ClaimEnd::Released));
+    assert_eq!(outcome(&sub), Some(ClaimEnd::Released));
+    assert_eq!(outcome(&other), None);
+}
+
+pub fn a_handed_claim_closes_one_interval_and_opens_the_next(s: &impl TodoStore) {
+    let (_dir, r) = recorded(s);
+    let id = add(&r, "a");
+    set(&r, &id, StatusKind::InProgress, "S").unwrap();
+    set(&r, &id, StatusKind::InProgress, "S/a").unwrap();
+    let claims = claims(&r);
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    assert_eq!(
+        ended(&claims[0]),
+        (id.as_str(), "S", Some(ClaimEnd::Handed))
+    );
+    assert_eq!(ended(&claims[1]), (id.as_str(), "S/a", None));
+    assert_eq!(claims[0].end, Some(claims[1].start));
 }

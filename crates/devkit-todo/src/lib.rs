@@ -5,6 +5,7 @@
 // crate, so they use absolute paths that must resolve here too.
 extern crate self as devkit_todo;
 
+pub mod activity;
 #[cfg(feature = "test-support")]
 pub mod contract;
 pub mod holder;
@@ -123,8 +124,27 @@ pub trait TodoStore {
     fn apply(&self, edit: &::devkit_todo::Edit) -> ::anyhow::Result<()>;
 }
 
+impl<T: TodoStore + ?Sized> TodoStore for &T {
+    fn list(&self, filter: &Filter) -> anyhow::Result<Vec<Todo>> {
+        (**self).list(filter)
+    }
+
+    fn get(&self, id: &str) -> anyhow::Result<Option<Todo>> {
+        (**self).get(id)
+    }
+
+    fn add(&self, todo: NewTodo) -> anyhow::Result<String> {
+        (**self).add(todo)
+    }
+
+    fn apply(&self, edit: &Edit) -> anyhow::Result<()> {
+        (**self).apply(edit)
+    }
+}
+
 /// Where devkit keeps todo state of its own, whichever backend holds the
-/// todos: the native map, the context digests, and the built-in store.
+/// todos: the native map, the context digests, the activity log, and the
+/// built-in store.
 pub fn state_dir() -> PathBuf {
     paths::state_dir().join("todo")
 }
