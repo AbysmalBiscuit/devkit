@@ -803,3 +803,55 @@ fn hanging_hook(command: &str, slow_gate: Option<Duration>) -> String {
 /// hook's own deadline plus process start.
 #[cfg(unix)]
 const PRE_TOOL_USE_LIMIT: Duration = Duration::from_millis(3400);
+
+/// Debug builds read this as an offset, in seconds, to the clock a hook and
+/// `devkit activity` take as their own.
+const CLOCK_SKEW_VAR: &str = "DEVKIT_TEST_CLOCK_SKEW_SECS";
+
+/// The runs `devkit activity` reports for `p`, read with `env`.
+fn reported_runs(p: &Proj, env: &[(&'static str, String)]) -> Vec<Value> {
+    let out = devkit(p, &["activity", "--json"], env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    report["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["runs"].as_array().unwrap().clone())
+        .collect()
+}
+
+#[test]
+fn a_skewed_clock_never_makes_a_live_run_lost() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    for (writer, reader) in [("-3600", "0"), ("0", "3600")] {
+        let p = proj(&fresh_root());
+        let mut env = session("S", &url);
+        env.push((CLOCK_SKEW_VAR, writer.to_string()));
+        for event in ["SubagentStart", "PreToolUse"] {
+            let verb = if event == "SubagentStart" {
+                "subagent-start"
+            } else {
+                "pre-tool-use"
+            };
+            let out = p.hook_with(
+                verb,
+                "claude-code",
+                &subagent(&p, event, "a1"),
+                &borrowed(&env),
+            );
+            assert!(out.status.success(), "{}", stderr(&out));
+        }
+        let mut env = session("S", &url);
+        env.push((CLOCK_SKEW_VAR, reader.to_string()));
+        let runs = reported_runs(&p, &env);
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!(
+            runs[0]["outcome"],
+            Value::Null,
+            "writer skew {writer}s, reader skew {reader}s: {runs:?}"
+        );
+    }
+}

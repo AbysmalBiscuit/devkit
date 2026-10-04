@@ -41,6 +41,42 @@ impl ActivityStore for PostgresActivity {
         })
     }
 
+    fn record_now(&self, what: &What) -> Result<()> {
+        let what = serde_json::to_string(what)?;
+        self.db.run(async |client| {
+            client
+                .execute_typed(
+                    "INSERT INTO devkit.activity (root, at, event)
+                     VALUES ($1, clock_timestamp(), $2::jsonb)",
+                    &[(&self.root, Type::TEXT), (&what, Type::TEXT)],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn seen(&self, session: &str, agent: &str) -> Result<()> {
+        self.db.run(async |client| {
+            client
+                .execute_typed(
+                    "INSERT INTO devkit.seen (root, session, agent, at)
+                     VALUES ($1, $2, $3, clock_timestamp())
+                     ON CONFLICT (root, session, agent) DO UPDATE SET at = excluded.at",
+                    &[
+                        (&self.root, Type::TEXT),
+                        (&session, Type::TEXT),
+                        (&agent, Type::TEXT),
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn read_now(&self) -> Result<Activity> {
+        self.read_as_of(None)
+    }
+
     fn seen_at(&self, session: &str, agent: &str, when: SystemTime) -> Result<()> {
         let when = DateTime::<Utc>::from(when);
         self.db.run(async |client| {
@@ -79,7 +115,16 @@ impl ActivityStore for PostgresActivity {
 
     /// An event whose payload does not parse is skipped.
     fn read(&self, now: DateTime<Utc>) -> Result<Activity> {
-        let (events, seen) = self.db.run(async |client| {
+        self.read_as_of(Some(now))
+    }
+}
+
+impl PostgresActivity {
+    /// Every run and interval as of `now`, or as of the database's clock when
+    /// `None`, read from one snapshot. An event whose payload does not parse
+    /// is skipped.
+    fn read_as_of(&self, now: Option<DateTime<Utc>>) -> Result<Activity> {
+        let (events, seen, now) = self.db.run(async |client| {
             // One snapshot for both queries, so a stop that lands between
             // them cannot leave a run open with its last-seen mark gone.
             let tx = client
@@ -100,8 +145,15 @@ impl ActivityStore for PostgresActivity {
                     &[(&self.root, Type::TEXT)],
                 )
                 .await?;
+            let now = match now {
+                Some(now) => now,
+                None => tx
+                    .query_typed_one("SELECT clock_timestamp()", &[])
+                    .await?
+                    .get(0),
+            };
             tx.commit().await?;
-            Ok((events, seen))
+            Ok((events, seen, now))
         })?;
         let events = events
             .iter()

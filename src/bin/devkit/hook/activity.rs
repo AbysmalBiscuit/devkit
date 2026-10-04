@@ -3,13 +3,10 @@
 //! it seen for the backstop. Silent: a failed write changes nothing the hook
 //! does.
 
-use std::{
-    path::Path,
-    time::{Duration, SystemTime},
-};
+use std::{path::Path, time::Duration};
 
 use devkit_common::vcs::Checkout;
-use devkit_todo::activity::{ActivityStore, Event, What};
+use devkit_todo::activity::{ActivityStore, What};
 
 use super::{HookEvent, gate, payload::Payload};
 use crate::todo::store::Store;
@@ -46,13 +43,7 @@ fn observe(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path)
         return;
     }
     let log = Store::activity_for_hook(checkout, cwd);
-    let now = SystemTime::now();
-    let record = |what| {
-        log.record(&Event {
-            at: now.into(),
-            what,
-        })
-    };
+    let record = |what| log.record_now(&what);
     let session = session.to_string();
     let _ = match (event, agent) {
         (HookEvent::SessionEnd, _) => record(What::SessionEnd {
@@ -64,13 +55,13 @@ fn observe(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path)
             agent: agent.clone(),
             agent_type: payload.agent_type().map(str::to_string),
         })
-        .and_then(|()| log.seen_at(&session, &agent, now)),
+        .and_then(|()| log.seen(&session, &agent)),
         (HookEvent::SubagentStop, Some(agent)) => record(What::SubagentStop {
             session: session.clone(),
             agent: agent.clone(),
         })
         .and_then(|()| log.forget(&session, Some(&agent))),
-        (_, Some(agent)) => log.seen_at(&session, &agent, now),
+        (_, Some(agent)) => log.seen(&session, &agent),
         (_, None) => Ok(()),
     };
 }
@@ -89,7 +80,6 @@ pub(crate) fn seen_within(payload: &Payload, checkout: &Checkout, cwd: &Path) {
     let (session, agent) = (session.to_string(), agent.to_string());
     let (checkout, cwd) = (checkout.clone(), cwd.to_path_buf());
     let _ = gate::with_deadline(wait, move || {
-        let log = Store::activity_for_hook(&checkout, &cwd);
-        let _ = log.seen_at(&session, &agent, SystemTime::now());
+        let _ = Store::activity_for_hook(&checkout, &cwd).seen(&session, &agent);
     });
 }

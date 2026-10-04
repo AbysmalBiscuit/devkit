@@ -1,13 +1,15 @@
 //! `devkit activity`: subagent runs and the time todos were held, over a date
 //! range, from the activity log.
 
-use std::{collections::BTreeMap, time::SystemTime};
+use std::collections::BTreeMap;
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use clap::Args;
 use devkit_common::ui::printable;
-use devkit_todo::activity::{Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, stamp};
+use devkit_todo::activity::{
+    Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, local_now, stamp,
+};
 use serde::Serialize;
 
 #[derive(Args)]
@@ -34,14 +36,14 @@ fn parse_time(s: &str) -> Result<DateTime<Utc>> {
 }
 
 pub fn run(cli: ActivityCli) -> Result<()> {
-    let now: DateTime<Utc> = SystemTime::now().into();
+    let now: DateTime<Utc> = local_now().into();
     let range = Range {
         since: cli.since.unwrap_or(now - TimeDelta::days(7)),
         until: cli.until.unwrap_or(now),
         now,
     };
     let log = crate::todo::store::Store::activity_for_cli(&std::env::current_dir()?)?;
-    let report = Report::of(log.read(now)?, &range);
+    let report = Report::of(log.read_now()?, &range);
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
