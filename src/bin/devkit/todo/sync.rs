@@ -144,6 +144,15 @@ pub(crate) fn background_help() -> String {
     )
 }
 
+/// `todo sync`'s closing help, stating how long a failure holds off the
+/// background syncs writes start.
+pub(crate) fn hold_help() -> String {
+    format!(
+        "After a failed sync, the background syncs writes start wait {} seconds before the next attempt.",
+        FAILURE_HOLD.as_secs()
+    )
+}
+
 /// How a sync a caller waited for ended.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SyncOutcome {

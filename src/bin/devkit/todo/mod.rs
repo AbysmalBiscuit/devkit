@@ -92,6 +92,7 @@ pub enum TodoCommand {
     /// Only a taskchampion store with a sync target syncs. A failure is
     /// reported on stderr and exits 0: changes stay saved and sync with the
     /// next write.
+    #[command(after_help = sync::hold_help())]
     Sync {
         #[arg(long, hide = true, help = sync::background_help())]
         background: bool,

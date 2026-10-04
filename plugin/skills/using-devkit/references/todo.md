@@ -77,7 +77,7 @@ devkit_todo_sync_secret = "<secret>"
 
 When it syncs:
 
-- After every write, in a background `devkit todo sync` process. The write is saved locally first, so a failed sync loses nothing, and no hook waits on the network. After a failure, background syncs hold off before the next attempt, so a server that is down costs an occasional attempt rather than one per write.
+- After every write, in a background `devkit todo sync` process. The write is saved locally first, so a failed sync loses nothing, and no hook waits on the network. After a failure, background syncs hold off before the next attempt, for the time `devkit todo sync -h` states, so a server that is down costs an occasional attempt rather than one per write.
 - At session start, before the lists are injected, so a new container sees where the last one stopped. `devkit todo list --sync` does the same. Each waits a bounded time, which `devkit todo list -h` states; past that, the sync carries on by itself and you get what this machine has.
 - A session's end releases its claims locally and leaves the push to a background sync, so a harness that caps the hook's run cannot cut it short.
 - `devkit todo sync` syncs now. It reports a failure and exits 0.

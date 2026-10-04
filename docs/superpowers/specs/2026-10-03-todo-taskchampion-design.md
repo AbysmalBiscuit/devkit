@@ -132,7 +132,7 @@ The rule from #211 holds: a hook never changes a verdict or writes stdout becaus
 
 ### Documentation
 
-`plugin/skills/using-devkit/references/todo.md`'s backend section gains taskchampion: when to choose it; `DEVKIT_TODO_BACKEND` for containers; the three variable names and their resolution order, including the secrets-file lines to add by hand; that `HTTPS_PROXY` is honoured; when it syncs, and that background attempts after a failure are held off for a bounded time, pointing at `devkit todo sync --background -h` for the figure; `devkit todo sync`; the profile for reading the lists; and the cross-replica claim caveat.
+`plugin/skills/using-devkit/references/todo.md`'s backend section gains taskchampion: when to choose it; `DEVKIT_TODO_BACKEND` for containers; the three variable names and their resolution order, including the secrets-file lines to add by hand; that `HTTPS_PROXY` is honoured; when it syncs, and that background attempts after a failure are held off for a bounded time, pointing at `devkit todo sync -h` for the figure; `devkit todo sync`; the profile for reading the lists; and the cross-replica claim caveat.
 
 ## Testing
 
