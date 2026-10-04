@@ -20,12 +20,35 @@ fn quoted(s: &str) -> Value {
     Value::from(s)
 }
 
+/// The project's status field, read through `repositoryOwner`, which resolves
+/// a user or an organization alike. A bare project number belongs to the
+/// owner of `slug`.
+fn board_fields(slug: &str, project: &ProjectRef, field: &str) -> String {
+    let repo_owner = slug.split_once('/').map_or(slug, |(o, _)| o);
+    format!(
+        r#"repositoryOwner(login: {po}) {{
+    ... on ProjectV2Owner {{
+      projectV2(number: {p}) {{
+        id
+        field(name: {f}) {{ ... on ProjectV2SingleSelectField {{ id options {{ id name }} }} }}
+      }}
+    }}
+  }}"#,
+        po = quoted(project.owner.as_deref().unwrap_or(repo_owner)),
+        p = project.number,
+        f = quoted(field),
+    )
+}
+
+/// One query reading the project's status field alone.
+pub fn board_query(slug: &str, project: &ProjectRef, field: &str) -> String {
+    format!("query {{\n  {}\n}}", board_fields(slug, project, field))
+}
+
 /// One query reading the issue's node id, its item in each project, and the
-/// configured project's status field. The project is read through
-/// `repositoryOwner`, which resolves a user or an organization alike.
+/// configured project's status field.
 pub fn status_query(slug: &str, issue: u64, project: &ProjectRef, field: &str) -> String {
     let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
-    let project_owner = project.owner.as_deref().unwrap_or(owner);
     format!(
         r#"query {{
   repository(owner: {o}, name: {n}) {{
@@ -40,39 +63,37 @@ pub fn status_query(slug: &str, issue: u64, project: &ProjectRef, field: &str) -
       }}
     }}
   }}
-  repositoryOwner(login: {po}) {{
-    ... on ProjectV2Owner {{
-      projectV2(number: {p}) {{
-        id
-        field(name: {f}) {{ ... on ProjectV2SingleSelectField {{ id options {{ id name }} }} }}
-      }}
-    }}
-  }}
+  {board}
 }}"#,
         o = quoted(owner),
         n = quoted(name),
         f = quoted(field),
-        po = quoted(project_owner),
-        p = project.number,
+        board = board_fields(slug, project, field),
     )
+}
+
+/// The configured project and its status field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Board {
+    pub project_id: String,
+    pub field_id: String,
+    /// `(option id, name)` for each option of the field.
+    pub options: Vec<(String, String)>,
 }
 
 /// What [`status_query`] read: everything a status write needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusRead {
     pub issue_id: String,
-    pub project_id: String,
     /// The issue's item in the configured project; `None` when the issue is
     /// not in it.
     pub item_id: Option<String>,
-    pub field_id: String,
     /// The item's status, `None` when it has no item or the field is unset.
     pub current: Option<String>,
-    /// `(option id, name)` for each option of the field.
-    pub options: Vec<(String, String)>,
+    pub board: Board,
 }
 
-impl StatusRead {
+impl Board {
     /// The id of the option named `to`, matched case-insensitively.
     pub fn option_id(&self, to: &str, field: &str) -> Result<&str> {
         let name =
@@ -96,10 +117,8 @@ fn str_at<'a>(v: &'a Value, pointer: &str) -> Option<&'a str> {
     v.pointer(pointer).and_then(Value::as_str)
 }
 
-/// The [`StatusRead`] in a [`status_query`] response. Only the item in the
-/// configured project counts: an issue in several projects has an item, and a
-/// status, in each.
-pub fn parse_status(resp: &Value, field: &str) -> Result<StatusRead> {
+/// The [`Board`] in a [`board_query`] or [`status_query`] response.
+pub fn parse_board(resp: &Value, field: &str) -> Result<Board> {
     let project = resp
         .pointer("/data/repositoryOwner/projectV2")
         .filter(|p| !p.is_null())
@@ -123,7 +142,18 @@ pub fn parse_status(resp: &Value, field: &str) -> Result<StatusRead> {
             ))
         })
         .collect();
+    Ok(Board {
+        project_id: project_id.to_string(),
+        field_id: field_id.to_string(),
+        options,
+    })
+}
 
+/// The [`StatusRead`] in a [`status_query`] response. Only the item in the
+/// configured project counts: an issue in several projects has an item, and a
+/// status, in each.
+pub fn parse_status(resp: &Value, field: &str) -> Result<StatusRead> {
+    let board = parse_board(resp, field)?;
     let issue = resp
         .pointer("/data/repository/issue")
         .filter(|i| !i.is_null())
@@ -133,18 +163,16 @@ pub fn parse_status(resp: &Value, field: &str) -> Result<StatusRead> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .find(|n| str_at(n, "/project/id") == Some(project_id));
+        .find(|n| str_at(n, "/project/id") == Some(board.project_id.as_str()));
     Ok(StatusRead {
         issue_id: str_at(issue, "/id")
             .context("issue without an id")?
             .to_string(),
-        project_id: project_id.to_string(),
         item_id: item.and_then(|i| str_at(i, "/id")).map(String::from),
-        field_id: field_id.to_string(),
         current: item
             .and_then(|i| str_at(i, "/fieldValueByName/name"))
             .map(String::from),
-        options,
+        board,
     })
 }
 
@@ -261,6 +289,19 @@ impl GithubWriter {
         Ok(resp)
     }
 
+    /// Read the project and its status field, and confirm it holds every
+    /// status in `names`; `*` and the empty string name no option.
+    pub fn check_board<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Result<()> {
+        let resp = self.send(&board_query(&self.repo.slug, &self.project, &self.field))?;
+        let board = parse_board(&resp, &self.field)?;
+        for name in names {
+            if !matches!(name.trim(), "" | "*") {
+                board.option_id(name, &self.field)?;
+            }
+        }
+        Ok(())
+    }
+
     fn read(&self, n: u64) -> Result<StatusRead> {
         let resp = self.send(&status_query(
             &self.repo.slug,
@@ -294,17 +335,18 @@ impl StatusWriter for GithubWriter {
             Some((cached, read)) if cached == n => read,
             _ => self.read(n)?,
         };
-        let option = read.option_id(to, &self.field)?;
+        let board = &read.board;
+        let option = board.option_id(to, &self.field)?;
         let item = match &read.item_id {
             Some(item) => item.clone(),
-            None => {
-                parse_added_item(&self.send(&add_item_mutation(&read.project_id, &read.issue_id))?)?
-            }
+            None => parse_added_item(
+                &self.send(&add_item_mutation(&board.project_id, &read.issue_id))?,
+            )?,
         };
         self.send(&set_field_mutation(
-            &read.project_id,
+            &board.project_id,
             &item,
-            &read.field_id,
+            &board.field_id,
             option,
         ))?;
         Ok(())
@@ -330,11 +372,28 @@ mod tests {
             (Some("PVTI_3"), Some("Todo"))
         );
         assert_eq!(
-            (r.issue_id.as_str(), r.project_id.as_str()),
+            (r.issue_id.as_str(), r.board.project_id.as_str()),
             ("I_65", "PVT_3")
         );
-        assert_eq!(r.field_id, "PVTSSF_status");
-        assert_eq!(r.options.len(), 3);
+        assert_eq!(r.board.field_id, "PVTSSF_status");
+        assert_eq!(r.board.options.len(), 3);
+    }
+
+    #[test]
+    fn the_board_query_reads_the_project_alone() {
+        let project = ProjectRef {
+            owner: None,
+            number: 3,
+        };
+        let q = board_query("me/repo", &project, "Status");
+        assert!(
+            q.contains("repositoryOwner(login: \"me\")") && !q.contains("issue("),
+            "{q}"
+        );
+        let board = parse_board(&fixture("github_status_two_projects.json"), "Status").unwrap();
+        assert_eq!(board.project_id, "PVT_3");
+        let e = parse_board(&fixture("github_status_no_project.json"), "Status").unwrap_err();
+        assert!(e.to_string().contains("[github] project"), "{e}");
     }
 
     #[test]
@@ -420,8 +479,15 @@ mod tests {
     #[test]
     fn options_resolve_case_insensitively_and_an_unknown_one_lists_them() {
         let r = parse_status(&fixture("github_status_two_projects.json"), "Status").unwrap();
-        assert_eq!(r.option_id(" in PROGRESS", "Status").unwrap(), "opt_doing");
-        let e = r.option_id("Shipping", "Status").unwrap_err().to_string();
+        assert_eq!(
+            r.board.option_id(" in PROGRESS", "Status").unwrap(),
+            "opt_doing"
+        );
+        let e = r
+            .board
+            .option_id("Shipping", "Status")
+            .unwrap_err()
+            .to_string();
         assert!(
             e.contains("no option `Shipping` in `Status`") && e.contains("Todo, In progress, Done"),
             "{e}"

@@ -268,6 +268,17 @@ github = "sweeper[bot]"
         with_stdin(cmd, stdin)
     }
 
+    /// Run `devkit ARGS` from the project directory, against the fake `gh`,
+    /// with no Linear key to validate or detect.
+    pub fn devkit_here(&self, args: &[&str]) -> std::process::Output {
+        self.devkit_cmd()
+            .current_dir(self.project.path())
+            .env_remove("LINEAR_API_KEY")
+            .args(args)
+            .output()
+            .expect("spawn devkit")
+    }
+
     fn issue_cmd(&self, args: &[&str]) -> Command {
         let mut cmd = self.devkit_cmd();
         cmd.args(["issue", "-C"])
