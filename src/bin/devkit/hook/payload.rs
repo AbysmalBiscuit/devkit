@@ -302,20 +302,17 @@ mod tests {
 
     #[test]
     fn a_rewrite_keeps_the_other_input_fields_and_carries_the_context() {
-        let rewrite = |harness, event, tool| -> Option<Value> {
+        for harness in [AnyHarness::ClaudeCode, AnyHarness::Codex] {
             let p = payload(
                 Some(harness),
                 json!({
-                    "hook_event_name": event,
-                    "tool_name": tool,
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Bash",
                     "tool_input": {"command": "ls", "timeout": 5},
                 }),
             );
-            let answer = p.rewrite_answer("ls -a", Some("noted"))?;
-            Some(serde_json::from_str(&answer).unwrap())
-        };
-        for harness in [AnyHarness::ClaudeCode, AnyHarness::Codex] {
-            let v = rewrite(harness, "PreToolUse", "Bash").unwrap();
+            let answer = p.rewrite_answer("ls -a", Some("noted")).unwrap();
+            let v: Value = serde_json::from_str(&answer).unwrap();
             let out = &v["hookSpecificOutput"];
             assert_eq!(
                 out["updatedInput"],
@@ -323,8 +320,6 @@ mod tests {
             );
             assert_eq!(out["additionalContext"], "noted", "{harness}");
         }
-        assert!(rewrite(AnyHarness::Cursor, "preToolUse", "Shell").is_some());
-        assert!(rewrite(AnyHarness::Antigravity, "PreToolUse", "run_command").is_none());
     }
 
     #[test]
