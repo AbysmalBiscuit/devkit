@@ -268,6 +268,18 @@ fn cache_url(scope: &DopplerScope, url: &str) {
     }
 }
 
+/// Drops the copy kept for `scope` if it still holds `url`, so a call that
+/// failed with an old URL leaves alone one another call has since refreshed.
+fn forget_url(scope: &DopplerScope, url: &str) {
+    let path = url_cache_path(scope);
+    let held = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<CachedUrl>(&text).ok());
+    if held.is_some_and(|held| held.url == url) {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 /// The todo database `config` and [`DATABASE_VAR`] name, opened with `wait`
 /// and not yet connected, and where its URL resolved from. A URL that is
 /// missing or does not parse is an error naming the variable, never the URL.
@@ -315,10 +327,8 @@ pub(crate) fn open_database(
         if !from_cache {
             cache_url(scope, &url);
         }
-        let path = url_cache_path(scope);
-        db.on_connect_failure(move || {
-            let _ = std::fs::remove_file(&path);
-        });
+        let scope = scope.clone();
+        db.on_connect_failure(move || forget_url(&scope, &url));
     }
     (db, source)
 }

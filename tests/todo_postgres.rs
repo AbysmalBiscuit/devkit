@@ -925,3 +925,35 @@ fn a_cached_url_past_its_hour_makes_a_hook_ask_doppler() {
         "a copy past its hour is asked again"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_connect_failure_leaves_a_url_another_call_refreshed() {
+    let silent = Silent::start();
+    let p = doppler_proj("devkit");
+    let bin = tempfile::tempdir().unwrap();
+    let stale = silent_url(&silent);
+    let path = fake_doppler(bin.path(), &stale);
+    let mut hook = p.devkit_fed(
+        &["hook", "subagent-stop", "--harness", "claude-code"],
+        &[("PATH", path.as_str())],
+        &subagent(&p, "SubagentStop", "a1").to_string(),
+    );
+    let cache = cached_url_file(&p);
+    let started = Instant::now();
+    while !std::fs::read_to_string(&cache)
+        .unwrap_or_default()
+        .contains("hunter2")
+    {
+        assert!(started.elapsed() < Duration::from_secs(5), "never cached");
+        assert!(hook.try_wait().unwrap().is_none(), "the hook ended first");
+        std::thread::yield_now();
+    }
+    let fresh = "postgres://agent:rotated@db.example/todos";
+    let refreshed = json!({"project": "swarm", "config": null, "url": fresh}).to_string();
+    std::fs::write(&cache, refreshed).unwrap();
+    assert!(hook.wait().unwrap().success());
+    assert!(silent.connections() > 0, "the hook tried the stale URL");
+    let held = std::fs::read_to_string(&cache).expect("the refreshed URL is kept");
+    assert!(held.contains("rotated"), "{held}");
+}
