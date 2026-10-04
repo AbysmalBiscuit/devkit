@@ -23,7 +23,7 @@ When other sessions on your workspace left pending todos, the injected context s
 
 Ids are in parentheses in the injected lists and in `devkit todo list`. `devkit todo add` prints the new one.
 
-`devkit todo start <id>` claims a todo for you. A todo another agent has in progress shows `in progress: <name>`, and starting, finishing or dropping it fails naming the holder: pick another todo. A sub-agent claims a todo with `start` before working on it, so two sub-agents never work on the same one. A sub-agent may take over a todo its own session started, and its session starting that todo again leaves the sub-agent's claim in place. When an agent or sub-agent ends, the todos it still has in progress return to pending. In Claude Code and Codex a sub-agent's `devkit todo` commands act as that sub-agent.
+`devkit todo start <id>` claims a todo for you. A todo another agent has in progress shows `in progress: <name>`, and starting, finishing or dropping it fails naming the holder: pick another todo. A sub-agent claims a todo with `start` before working on it, so two sub-agents never work on the same one. A sub-agent may take over a todo its own session started, and its session starting that todo again leaves the sub-agent's claim in place. When an agent or sub-agent ends, the todos it still has in progress return to pending. In Claude Code and Codex, a sub-agent's `devkit todo` commands run in Bash act as that sub-agent. Run in any other shell, such as PowerShell (Codex's shell on Windows), they act as its session, so those sub-agents do not exclude each other.
 
 ## Native task and plan tools
 
