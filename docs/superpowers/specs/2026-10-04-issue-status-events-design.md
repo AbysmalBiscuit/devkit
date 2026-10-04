@@ -156,7 +156,7 @@ It does no network IO, writes no stdout, never exits 2, and never changes a verd
 
 ### `devkit doctor`
 
-When any event is configured, an `issue events` row lists each event's transition and checks it against the tracker. On GitHub it runs the read query and confirms that the project exists, that `status_field` is a single-select field holding every `to` and `from` name, and that the token has Projects access (no `INSUFFICIENT_SCOPES`). A GitHub Enterprise Server without Projects v2 fails schema validation on `projectV2`, and the row reports it. With no writer, the row says which key is missing.
+When any event is configured, an `issue events` row lists each event's transition and checks it against the tracker. On GitHub it runs the read query and confirms that the project exists, that `status_field` is a single-select field holding every `to` and `from` name, and that the token can read the project (no `INSUFFICIENT_SCOPES`). It does not prove write access: a read-only token passes and fails on the first move, since `viewerCanUpdate` is documented against the viewer rather than the token's scope. A GitHub Enterprise Server without Projects v2 fails schema validation on `projectV2`, and the row reports it. With no writer, the row says which key is missing.
 
 ### Documentation
 
