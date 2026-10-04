@@ -127,9 +127,8 @@ An event is claimed by adding it to `events` through `update`, before any networ
 
 `start` fires only when all of these hold:
 
-- `origin` is `setup`, or absent.
-- `issue` parses as a tracker id through `worktree::IssueId::tracker`, which rejects `UNKNOWN`, an empty id and a branch name. This excludes `issue setup --slug` worktrees and the records `devrun up` synthesizes for hand-made worktrees.
-- The record is not a legacy one already past `start`: a record with no `events` field that carries `pr` fires nothing.
+- `origin` is `setup`. A record with no `origin` does not qualify: `devrun up` synthesizes one for a hand-made worktree, named after its branch, and a branch like `ENG-123` parses as a tracker id. Worktrees set up before `origin` existed therefore never fire `start`.
+- `issue` parses as a tracker id through `worktree::IssueId::tracker`, which rejects `UNKNOWN` and an empty id. This excludes `issue setup --slug` worktrees.
 
 A reviewer's `pr checkout` worktree therefore never fires `start`, so a reviewer's first session cannot pull an issue back from review.
 
@@ -167,7 +166,7 @@ When any event is configured, an `issue events` row lists each event's transitio
 - **Hook:**
   - The first SessionStart in a qualifying worktree with `start` configured claims the event and spawns one run.
   - A second session spawns nothing, and two sessions starting together spawn one run.
-  - Nothing spawns for a `checkout` worktree, a worktree whose issue is not a tracker id, a legacy record that carries `pr`, a tracker of kind `none`, or no `start` configured.
+  - Nothing spawns for a `checkout` worktree, a worktree whose issue is not a tracker id, a record with no `origin` (a legacy one, or one `devrun up` synthesized), a tracker of kind `none`, or no `start` configured.
   - The hook's output is unchanged when the run fails.
 - **CLI:** `issue setup` and `issue pr create` fire their events, including when `pr create` reuses an existing PR, and stay successful when the write fails. `issue status` is unchanged.
 - **Config:** an unknown event name fails to parse; `project` takes `N` and `"owner/N"`; the schema is regenerated.

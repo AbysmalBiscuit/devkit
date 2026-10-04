@@ -167,6 +167,30 @@ fn a_legacy_record_carrying_a_pr_claims_nothing() {
     assert_eq!(events(&gh), None);
 }
 
+/// `devrun up` gives a hand-made worktree a record named after its branch,
+/// with no origin. A branch like `ENG-123` parses as a tracker id, so only
+/// the missing origin keeps that worktree from moving an issue.
+#[test]
+fn a_record_devrun_up_synthesized_claims_nothing() {
+    let rec = IssueRecord {
+        issue: "ENG-123".into(),
+        slug: "ENG-123".into(),
+        baseline: Some(record::BaselinePin {
+            sha: "abc".into(),
+            path: "/b/abc".into(),
+        }),
+        ..Default::default()
+    };
+    let gh = worktree(START, Some(rec));
+    let before = std::fs::read_to_string(record::path(gh.project())).unwrap();
+    session_start(&gh, gh.project());
+    assert_eq!(
+        std::fs::read_to_string(record::path(gh.project())).unwrap(),
+        before
+    );
+    assert_eq!(events(&gh), None);
+}
+
 #[test]
 fn a_corrupt_record_is_ignored_silently() {
     let gh = worktree(START, None);

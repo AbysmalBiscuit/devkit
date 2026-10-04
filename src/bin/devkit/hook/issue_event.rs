@@ -22,14 +22,11 @@ pub(crate) fn log_path(root: &Path) -> std::path::PathBuf {
 }
 
 /// Whether a session starting in this worktree may fire `start`: a worktree
-/// `issue setup` created (or one whose record predates `origin`), for a
-/// tracker issue, and not a legacy record already past `start`, which a
-/// record carrying a PR but no `events` is.
+/// `issue setup` created, for a tracker issue. The origin is required, not
+/// inferred: `devrun up` gives a hand-made worktree a record named after its
+/// branch, and a branch like `ENG-123` reads as a tracker id.
 fn qualifies(rec: &IssueRecord) -> bool {
-    let from_setup = matches!(rec.origin, None | Some(RecordOrigin::Setup));
-    let tracker_issue = rec.tracker_issue().is_some();
-    let legacy_past_start = rec.events.is_none() && rec.pr.is_some();
-    from_setup && tracker_issue && !legacy_past_start
+    rec.origin == Some(RecordOrigin::Setup) && rec.tracker_issue().is_some()
 }
 
 /// Claim `start` for the checkout and spawn its run, when the worktree
@@ -87,17 +84,16 @@ mod tests {
             events: Some(vec![]),
             ..Default::default()
         };
-        let pr = Some(devkit_common::forge::PrLocator {
-            repo: None,
-            number: 7,
-        });
         assert!(qualifies(&base));
         assert!(qualifies(&IssueRecord {
-            origin: None,
+            pr: Some(devkit_common::forge::PrLocator {
+                repo: None,
+                number: 7,
+            }),
             ..base.clone()
         }));
-        assert!(qualifies(&IssueRecord {
-            pr: pr.clone(),
+        assert!(!qualifies(&IssueRecord {
+            origin: None,
             ..base.clone()
         }));
         assert!(!qualifies(&IssueRecord {
@@ -110,11 +106,6 @@ mod tests {
         }));
         assert!(!qualifies(&IssueRecord {
             issue: String::new(),
-            ..base.clone()
-        }));
-        assert!(!qualifies(&IssueRecord {
-            events: None,
-            pr,
             ..base
         }));
     }
