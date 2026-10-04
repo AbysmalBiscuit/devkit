@@ -4,20 +4,53 @@
 //! facade and the MCP server hold trackers and never write to one.
 
 use anyhow::{Context, Result, bail};
-use devkit_config::{EventTransition, GithubConfig, TrackerKind};
+use devkit_config::{EventTransition, GithubConfig, IssueEvent, TrackerKind};
 use serde_json::Value;
 
 use super::{github_status::GithubWriter, linear_status::LinearWriter};
 use crate::forge::Repos;
 
-/// Reads and writes one tracker's issue status.
+/// Moves one tracker's issue status.
 #[ambassador::delegatable_trait]
 pub trait StatusWriter {
-    /// The issue's current status name, `None` when it has none.
-    fn status(&self, id: &str) -> Result<Option<String>>;
-    /// Move the issue to the status named `to`. An unknown name is an error
-    /// that lists the names the tracker has.
-    fn set_status(&self, id: &str, to: &str) -> Result<()>;
+    /// Read the issue's status and move it as `event`'s transition `t`
+    /// allows, in one read and at most the writes the move needs. A `to` the
+    /// tracker lacks is an error naming `[issue.events.<event>] to` and listing
+    /// the names the tracker has.
+    fn move_status(&self, id: &str, event: IssueEvent, t: &EventTransition) -> Result<Outcome>;
+}
+
+/// What [`StatusWriter::move_status`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// Moved from `from` (`None` for no status) to `to`.
+    Moved { from: Option<String>, to: String },
+    /// Already at `to`; nothing was written.
+    Already(String),
+    /// At a status `from` does not list (`None` for no status); nothing was
+    /// written.
+    NotFrom(Option<String>),
+}
+
+/// Apply `event`'s transition `t` to an issue at `current`, calling `write`
+/// with the status to move to only when it moves.
+pub fn apply(
+    event: IssueEvent,
+    t: &EventTransition,
+    current: Option<String>,
+    write: impl FnOnce(&str) -> Result<()>,
+) -> Result<Outcome> {
+    Ok(match target(t, current.as_deref()) {
+        Target::To(to) => {
+            write(to).with_context(|| format!("[issue.events.{event}] to"))?;
+            Outcome::Moved {
+                from: current,
+                to: to.to_string(),
+            }
+        }
+        Target::Already => Outcome::Already(current.unwrap_or_default()),
+        Target::NotFrom => Outcome::NotFrom(current),
+    })
 }
 
 /// The status writer for the resolved tracker.
@@ -203,6 +236,37 @@ mod tests {
         assert_eq!(board.id("Done"), None);
         assert_eq!(statuses(&["ГОТОВО"]).id("готово"), Some("id-ГОТОВО"));
         assert_eq!(board.names(), "Todo, In Progress");
+    }
+
+    #[test]
+    fn apply_writes_only_a_move_and_names_the_key_when_it_fails() {
+        let t = t(&["Todo"], "In progress");
+        let mut wrote = Vec::new();
+        let moved = apply(IssueEvent::Start, &t, Some("Todo".into()), |to| {
+            wrote.push(to.to_string());
+            Ok(())
+        });
+        assert_eq!(moved.unwrap(), Outcome::Moved {
+            from: Some("Todo".into()),
+            to: "In progress".into()
+        });
+        assert_eq!(wrote, ["In progress"]);
+
+        let never = |_: &str| -> Result<()> { panic!("no write expected") };
+        assert_eq!(
+            apply(IssueEvent::Start, &t, Some("in progress".into()), never).unwrap(),
+            Outcome::Already("in progress".into())
+        );
+        assert_eq!(
+            apply(IssueEvent::Start, &t, None, never).unwrap(),
+            Outcome::NotFrom(None)
+        );
+
+        let failed = apply(IssueEvent::PrOpen, &t, Some("Todo".into()), |_| {
+            bail!("no option")
+        })
+        .unwrap_err();
+        assert!(format!("{failed:#}").starts_with("[issue.events.pr_open] to: no option"));
     }
 
     #[test]

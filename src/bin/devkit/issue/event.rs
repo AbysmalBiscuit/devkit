@@ -10,7 +10,7 @@ use devkit_common::{
     record,
     tracker::{
         self,
-        status::{StatusWriter, Target, target, writer_for},
+        status::{Outcome, StatusWriter, writer_for},
     },
 };
 use devkit_config::{Health, IssueEvent};
@@ -66,17 +66,14 @@ pub(crate) fn fire(
         Some(input) => sel.tracker.tracker.issue_ref(input)?.id,
         None => recorded_issue(dir)?,
     };
-    let current = writer.status(&id)?;
-    let shown = current.as_deref().unwrap_or("(none)");
-    Ok(match target(t, current.as_deref()) {
-        Target::To(to) => {
-            writer
-                .set_status(&id, to)
-                .with_context(|| format!("[issue.events.{event}] to"))?;
-            format!("moved {id}: {shown} -> {to}")
-        }
-        Target::Already => format!("{id} is already {shown}"),
-        Target::NotFrom => format!("{id} is {shown}, not in [issue.events.{event}] from"),
+    let shown = |s: &Option<String>| s.clone().unwrap_or_else(|| "(none)".into());
+    Ok(match writer.move_status(&id, event, t)? {
+        Outcome::Moved { from, to } => format!("moved {id}: {} -> {to}", shown(&from)),
+        Outcome::Already(current) => format!("{id} is already {current}"),
+        Outcome::NotFrom(current) => format!(
+            "{id} is {}, not in [issue.events.{event}] from",
+            shown(&current)
+        ),
     })
 }
 

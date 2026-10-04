@@ -1,13 +1,12 @@
 //! Reading and writing a Linear issue's workflow state.
 
-use std::cell::RefCell;
-
 use anyhow::{Context, Result, ensure};
+use devkit_config::{EventTransition, IssueEvent};
 use serde_json::Value;
 
 use super::{
     linear::{parse_id, post_graphql},
-    status::{StatusWriter, Statuses},
+    status::{Outcome, StatusWriter, Statuses, apply},
 };
 
 /// One query reading the issue's UUID, its state, and its team's states.
@@ -71,17 +70,11 @@ pub fn set_state_mutation(issue_id: &str, state_id: &str) -> String {
 /// Linear workflow states, through the API key `key`.
 pub struct LinearWriter {
     key: String,
-    /// The read [`StatusWriter::status`] made, which the
-    /// [`StatusWriter::set_status`] after it reuses instead of reading again.
-    last: RefCell<Option<(String, LinearStatus)>>,
 }
 
 impl LinearWriter {
     pub fn new(key: String) -> Self {
-        LinearWriter {
-            key,
-            last: RefCell::new(None),
-        }
+        LinearWriter { key }
     }
 
     fn read(&self, id: &str) -> Result<LinearStatus> {
@@ -91,18 +84,16 @@ impl LinearWriter {
 }
 
 impl StatusWriter for LinearWriter {
-    fn status(&self, id: &str) -> Result<Option<String>> {
+    fn move_status(&self, id: &str, event: IssueEvent, t: &EventTransition) -> Result<Outcome> {
         let read = self.read(id)?;
         let current = Some(read.current.clone()).filter(|c| !c.is_empty());
-        *self.last.borrow_mut() = Some((id.to_string(), read));
-        Ok(current)
+        apply(event, t, current, |to| self.write(id, &read, to))
     }
+}
 
-    fn set_status(&self, id: &str, to: &str) -> Result<()> {
-        let read = match self.last.borrow_mut().take() {
-            Some((cached, read)) if cached == id => read,
-            _ => self.read(id)?,
-        };
+impl LinearWriter {
+    /// Move the issue `read` describes to the team state `to`.
+    fn write(&self, id: &str, read: &LinearStatus, to: &str) -> Result<()> {
         let state = read.state_id(to)?;
         let resp = post_graphql(
             &set_state_mutation(&read.issue_id, state),

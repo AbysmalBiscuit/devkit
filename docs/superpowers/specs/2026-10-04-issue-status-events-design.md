@@ -57,11 +57,16 @@ The `Tracker` trait stays read-only: its contract says `devkit-issue` never muta
 
 ```rust
 pub trait StatusWriter {
-    /// The issue's current status name, `None` when it has none.
-    fn status(&self, id: &str) -> Result<Option<String>>;
-    /// Move the issue to the status named `to`. An unknown name is an error
-    /// that lists the names the tracker has.
-    fn set_status(&self, id: &str, to: &str) -> Result<()>;
+    /// Read the issue's status and move it as `event`'s transition `t`
+    /// allows. A `to` the tracker lacks is an error naming
+    /// `[issue.events.<event>] to` and listing the names the tracker has.
+    fn move_status(&self, id: &str, event: IssueEvent, t: &EventTransition) -> Result<Outcome>;
+}
+
+pub enum Outcome {
+    Moved { from: Option<String>, to: String },
+    Already(String),
+    NotFrom(Option<String>),
 }
 ```
 

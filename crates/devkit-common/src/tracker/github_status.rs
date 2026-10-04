@@ -3,13 +3,11 @@
 //! Split like `github.rs`: query builders and response parsers, tested over
 //! recorded responses, and a networked [`GithubWriter`] over them.
 
-use std::cell::RefCell;
-
 use anyhow::{Context, Result, anyhow, bail};
 use devkit_config::{EventTransition, IssueEvent, ProjectRef};
 use serde_json::Value;
 
-use super::status::{StatusWriter, Statuses};
+use super::status::{Outcome, StatusWriter, Statuses, apply};
 use crate::{
     cmd::gh_json,
     forge::Repo,
@@ -227,9 +225,6 @@ pub struct GithubWriter {
     api: Api,
     project: ProjectRef,
     field: String,
-    /// The read [`StatusWriter::status`] made, which the
-    /// [`StatusWriter::set_status`] after it reuses instead of reading again.
-    last: RefCell<Option<(u64, StatusRead)>>,
 }
 
 impl GithubWriter {
@@ -240,7 +235,6 @@ impl GithubWriter {
             api,
             project,
             field,
-            last: RefCell::new(None),
         }
     }
 
@@ -303,20 +297,16 @@ fn number(id: &str) -> Result<u64> {
 }
 
 impl StatusWriter for GithubWriter {
-    fn status(&self, id: &str) -> Result<Option<String>> {
-        let n = number(id)?;
-        let read = self.read(n)?;
-        let current = read.current.clone();
-        *self.last.borrow_mut() = Some((n, read));
-        Ok(current)
+    fn move_status(&self, id: &str, event: IssueEvent, t: &EventTransition) -> Result<Outcome> {
+        let read = self.read(number(id)?)?;
+        apply(event, t, read.current.clone(), |to| self.write(&read, to))
     }
+}
 
-    fn set_status(&self, id: &str, to: &str) -> Result<()> {
-        let n = number(id)?;
-        let read = match self.last.borrow_mut().take() {
-            Some((cached, read)) if cached == n => read,
-            _ => self.read(n)?,
-        };
+impl GithubWriter {
+    /// Set the issue's status to `to`, adding it to the project first when
+    /// it has no item there.
+    fn write(&self, read: &StatusRead, to: &str) -> Result<()> {
         let board = &read.board;
         let option = board.option_id(to, &self.field)?;
         let item = match &read.item_id {
