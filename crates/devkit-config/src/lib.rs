@@ -99,6 +99,7 @@ pub struct Config {
 /// [todo]
 /// backend = "taskwarrior"
 /// project = "agents"
+/// hold_stop = true
 ///
 /// [todo.taskwarrior]
 /// path = "/opt/task"
@@ -124,6 +125,9 @@ pub struct Config {
 /// # assert_eq!(empty.todo.backend, TodoBackend::Builtin);
 /// # assert_eq!(empty.todo.taskwarrior.path, "task");
 /// # assert_eq!(empty.todo.project, "devkit");
+/// # assert!(empty.todo.hold_stop);
+/// # let off = Config::parse("[todo]\nhold_stop = false\n").unwrap();
+/// # assert!(!off.todo.hold_stop);
 /// # assert!(Config::parse("[todo.taskwarrior]\nproject = \"agents\"\n").is_err());
 /// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
 /// # assert!(Config::parse("[todo]\nbackends = \"builtin\"\n").is_err());
@@ -153,6 +157,11 @@ pub struct TodoConfig {
     /// where no quoting survives both.
     #[serde(deserialize_with = "todo_root")]
     pub project: String,
+    /// Whether a stop hook sends an agent back to its open todos: its
+    /// session's pending todos in a workspace and the todos it has in
+    /// progress. One reminder per unchanged list; stopping again goes
+    /// through.
+    pub hold_stop: bool,
     /// The `taskwarrior` backend's settings.
     pub taskwarrior: TaskwarriorConfig,
     /// The `taskchampion` backend's settings.
@@ -164,6 +173,7 @@ impl Default for TodoConfig {
         Self {
             backend: TodoBackend::default(),
             project: "devkit".to_string(),
+            hold_stop: true,
             taskwarrior: TaskwarriorConfig::default(),
             taskchampion: TaskchampionConfig::default(),
         }

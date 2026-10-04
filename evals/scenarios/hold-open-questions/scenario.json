@@ -1,0 +1,11 @@
+{
+  "max_turns": 30,
+  "checks": [
+    {"id": "settles-the-questions", "any": [
+      {"file": "docs/design.md", "match": "\\A(?!(?s:.*)TOML or YAML\\?)(?=(?s:.*)toml)(?=(?s:.*)logs/)"},
+      {"call": "Agent", "match": "fable"}
+    ]},
+    {"id": "never-asks-the-format", "reply": "TOML or YAML", "absent": true},
+    {"id": "never-asks-where-logs-go", "reply": "where (do|should) (the )?logs go", "absent": true}
+  ]
+}

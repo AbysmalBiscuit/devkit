@@ -304,25 +304,56 @@ impl Store {
             .map(|target| taskchampion(&config).with_target(target)))
     }
 
+    /// The `[todo]` config a hook in `cwd` reads, with `backend_var`, the
+    /// value of `DEVKIT_TODO_BACKEND`, applied. No config anywhere is the
+    /// default config; a config that fails to load or an unknown backend is
+    /// an error.
+    fn hook_config(
+        checkout: &Checkout,
+        cwd: &Path,
+        backend_var: Option<&str>,
+    ) -> Result<TodoConfig> {
+        let config = match devkit_common::config::resolve_in(checkout, None, cwd) {
+            Ok((config, _)) => Some(config.todo),
+            Err(e) if e.downcast_ref::<NoConfig>().is_some() => None,
+            Err(e) => return Err(e),
+        };
+        let (backend, _) = effective_backend(config.as_ref(), backend_var)?;
+        Ok(TodoConfig {
+            backend,
+            ..config.unwrap_or_default()
+        })
+    }
+
     /// The store a hook in `cwd` uses. A hook never fails on the store's
     /// account: a config that fails to load or an unknown
     /// `DEVKIT_TODO_BACKEND` is the built-in store.
     pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Self {
-        let config = match devkit_common::config::resolve_in(checkout, None, cwd) {
-            Ok((config, _)) => Some(config.todo),
-            Err(e) if e.downcast_ref::<NoConfig>().is_some() => None,
-            Err(_) => return Backend::Builtin(BuiltinStore::open()).recorded(),
-        };
-        let env = std::env::var(BACKEND_VAR).ok();
-        let Ok((backend, _)) = effective_backend(config.as_ref(), env.as_deref()) else {
-            return Backend::Builtin(BuiltinStore::open()).recorded();
-        };
-        Backend::from_config(&TodoConfig {
-            backend,
-            ..config.unwrap_or_default()
-        })
-        .waiting(HOOK_LOCK_WAIT)
+        let backend_var = std::env::var(BACKEND_VAR).ok();
+        match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
+            Ok(config) => Backend::from_config(&config).waiting(HOOK_LOCK_WAIT),
+            Err(_) => Backend::Builtin(BuiltinStore::open()),
+        }
         .recorded()
+    }
+
+    /// The store a stop hook in `cwd` reads open todos from, as
+    /// [`Store::for_hook`] builds it, `backend_var` being the value of
+    /// `DEVKIT_TODO_BACKEND`. `None` when the config fails to load, the
+    /// backend is unknown, or `[todo] hold_stop` is off: the built-in store's
+    /// lists are not the configured store's, so holding an agent to them
+    /// would be wrong.
+    pub(crate) fn for_hold(
+        checkout: &Checkout,
+        cwd: &Path,
+        backend_var: Option<&str>,
+    ) -> Option<Self> {
+        let config = Self::hook_config(checkout, cwd, backend_var).ok()?;
+        config.hold_stop.then(|| {
+            Backend::from_config(&config)
+                .waiting(HOOK_LOCK_WAIT)
+                .recorded()
+        })
     }
 }
 
@@ -440,6 +471,47 @@ mod tests {
         .to_string();
         assert!(err.contains("DEVKIT_TODO_SYNC_CLIENT_ID"), "{err}");
         assert!(!err.contains("nope"), "{err}");
+    }
+
+    /// A repository whose `devkit.toml` is `toml`, cut off from every config
+    /// above it but the home config's `[todo]` table.
+    fn repo_with(toml: &str) -> (tempfile::TempDir, Checkout) {
+        let dir = tempfile::tempdir().unwrap();
+        devkit_git::Git::fixture(dir.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            format!("[config]\nroot = true\n\n{toml}"),
+        )
+        .unwrap();
+        let checkout = Checkout::at(dir.path());
+        (dir, checkout)
+    }
+
+    #[test]
+    fn a_loadable_config_with_the_hold_on_holds() {
+        let (dir, checkout) = repo_with("[todo]\nhold_stop = true\n");
+        assert!(Store::for_hold(&checkout, dir.path(), None).is_some());
+    }
+
+    #[test]
+    fn a_config_that_fails_to_load_never_holds() {
+        let (dir, checkout) = repo_with("[todo]\nbackend = 3\n");
+        assert!(Store::for_hold(&checkout, dir.path(), None).is_none());
+    }
+
+    #[test]
+    fn an_unknown_backend_never_holds() {
+        let (dir, checkout) = repo_with("[todo]\nhold_stop = true\n");
+        assert!(Store::for_hold(&checkout, dir.path(), Some("jira")).is_none());
+    }
+
+    #[test]
+    fn hold_stop_off_never_holds() {
+        let (dir, checkout) = repo_with("[todo]\nhold_stop = false\n");
+        assert!(Store::for_hold(&checkout, dir.path(), None).is_none());
     }
 
     #[test]

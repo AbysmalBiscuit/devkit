@@ -25,6 +25,18 @@ Ids are in parentheses in the injected lists and in `devkit todo list`. `devkit 
 
 `devkit todo start <id>` claims a todo for you. A todo another agent has in progress shows `in progress: <name>`, and starting, finishing or dropping it fails naming the holder: pick another todo. A sub-agent claims a todo with `start` before working on it, so two sub-agents never work on the same one. A sub-agent may take over a todo its own session started, and its session starting that todo again leaves the sub-agent's claim in place. When an agent or sub-agent ends, the todos it still has in progress return to pending. In Claude Code and Codex, a sub-agent's `devkit todo` commands run in Bash act as that sub-agent. Run in any other shell, such as PowerShell (Codex's shell on Windows), they act as its session, so those sub-agents do not exclude each other.
 
+## Stopping with open todos
+
+In Claude Code and Codex, ending your turn while you have open todos is refused once: the stop hook sends you back with the list. Open todos are the pending todos on your own session's node and the todos you have in progress on any node. A sub-agent's are only the todos it has in progress. Finish each one, or cancel one that no longer applies (`devkit todo cancel <id>`, or delete it in your task tool).
+
+Before you stop to ask the user something:
+
+- With a clear recommendation, take it and say so in your final report.
+- Without one, ask a sub-agent on a bigger model and take its answer.
+- Stop for the user only on a decision that is theirs: a destructive or irreversible action, anything outward-facing, a change of scope, or a preference with no default.
+
+Ending your turn again with the list unchanged goes through, so that is how you stop for such a decision. A change to the list, a new prompt or a compaction re-arms the reminder. `[todo] hold_stop = false` turns it off.
+
 ## Native task and plan tools
 
 When your harness gives you a task or plan tool (Claude Code's `TaskCreate` and `TaskUpdate`, Codex's `update_plan`), use it: devkit mirrors each call into your session's node, attributed to you. Without one, use `devkit todo add`, `start`, `done` and `cancel`. Edit a mirrored todo through the native tool that made it, so the two stay in step.

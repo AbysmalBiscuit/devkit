@@ -165,6 +165,19 @@ impl Payload {
         response.map(|r| r.to_string())
     }
 
+    /// A `Stop` or `SubagentStop` answer that keeps the agent from ending its
+    /// turn, giving it `reason` as its next prompt. `None` on any other
+    /// event, a Codex `Interrupt` among them, and where the harness cannot
+    /// block.
+    pub fn block(&self, reason: &str) -> Option<String> {
+        let response = match self.0.view() {
+            AnyView::Stop(v) => v.block(reason),
+            AnyView::SubagentStop(v) => v.block(reason),
+            _ => None,
+        };
+        response.map(|r| r.to_string())
+    }
+
     /// A `PreToolUse` answer that runs `command` in place of the shell
     /// command the payload carries, adding `context` when given. The harness
     /// still runs its own permission check on the command it runs. `None` on

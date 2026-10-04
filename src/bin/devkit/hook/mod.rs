@@ -13,10 +13,11 @@
 //! exit 1 instead; `main` owns that wrapper, because the parse it covers
 //! happens before this module is reached.
 //!
-//! Only `pre-tool-use` writes to stdout. Every other verb is silent, because
-//! `UserPromptSubmit` appends a hook's stdout to the prompt and `Stop` and
-//! `PermissionRequest` honour a JSON decision, so a stray `println!` would
-//! change what the agent does.
+//! Only `pre-tool-use`, `stop` and `subagent-stop` write to stdout, and the
+//! last two only to refuse a stop while the agent has open todos. Every other
+//! verb is silent, because `UserPromptSubmit` appends a hook's stdout to the
+//! prompt and `PermissionRequest` honours a JSON decision, so a stray
+//! `println!` would change what the agent does.
 
 mod activity;
 mod dialect;
@@ -85,14 +86,32 @@ pub fn run(cli: HookCli) -> Result<()> {
     match cli.event {
         HookEvent::PreToolUse => pre_tool_use(harness),
         // The two verbs that release, which is the half with a correctness
-        // consequence, so it runs before the record.
-        HookEvent::SubagentStop => with_payload(harness, cli.event, |p| {
+        // consequence, so it runs before the record. A sub-agent held to its
+        // open todos is not stopping, so it keeps its claims, its locks and
+        // its run.
+        HookEvent::SubagentStop => with_payload_held(harness, cli.event, |p| {
             let cwd = record::payload_cwd(p);
             let checkout = devkit_common::vcs::Checkout::at(&cwd);
-            todo::release(p.subagent_holder(), &checkout, &cwd);
-            edit::release_subagent(p);
+            let holder = p.subagent_holder();
+            let answer = holder
+                .as_ref()
+                .and_then(|h| todo::hold(p, h, &checkout, &cwd));
+            let held = match answer {
+                Some(answer) => {
+                    print_envelope(&answer);
+                    true
+                }
+                None => {
+                    if let Some(h) = &holder {
+                        todo::rearm(h);
+                    }
+                    todo::release(holder, &checkout, &cwd);
+                    edit::release_subagent(p);
+                    false
+                }
+            };
             record_in(p, cli.event, &checkout, &cwd);
-            Ok(())
+            held
         }),
         // Release, then record, then sweep. Release first because it is the
         // one step with a correctness consequence; the sweep last because it is
@@ -100,6 +119,9 @@ pub fn run(cli: HookCli) -> Result<()> {
         HookEvent::SessionEnd => with_payload(harness, cli.event, |p| {
             let cwd = record::payload_cwd(p);
             let checkout = devkit_common::vcs::Checkout::at(&cwd);
+            if let Some(session) = p.session_holder() {
+                todo::forget_holds(&session);
+            }
             todo::release(p.session_holder(), &checkout, &cwd);
             edit::release_session(p);
             clear_issue_receipts(p);
@@ -126,18 +148,42 @@ pub fn run(cli: HookCli) -> Result<()> {
             record_in(p, cli.event, &checkout, &cwd);
             Ok(())
         }),
+        // The verdict comes first and recording after, so a record can never
+        // change it.
+        HookEvent::Stop => with_payload(harness, cli.event, |p| {
+            let cwd = record::payload_cwd(p);
+            let checkout = devkit_common::vcs::Checkout::at(&cwd);
+            if let Some(session) = p.session_holder()
+                && let Some(answer) = todo::hold(p, &session, &checkout, &cwd)
+            {
+                print_envelope(&answer);
+            }
+            record_in(p, cli.event, &checkout, &cwd);
+            Ok(())
+        }),
+        // A new prompt changes the agent's context under a refused stop, so
+        // its next stop with the same open todos is refused again. Nothing
+        // reaches stdout, which the harness appends to the prompt.
+        HookEvent::UserPromptSubmit => with_payload(harness, cli.event, |p| {
+            if let Ok(holder) = p.holder() {
+                todo::rearm(&holder);
+            }
+            record_only(p, cli.event);
+            Ok(())
+        }),
         // Compaction is what drops the injected rules out of the agent's
-        // context, so clearing the set is what lets them inject again.
+        // context, so clearing the set is what lets them inject again. It
+        // drops the reminder of open todos too, so the hold re-arms.
         HookEvent::PostCompact => with_payload(harness, cli.event, |p| {
             if let Ok(holder) = p.holder() {
+                todo::rearm(&holder);
                 rules::clear_for_holder(&holder);
             }
             record_only(p, cli.event);
             Ok(())
         }),
         // Record-only. Each reads stdin, builds one record and exits; nothing
-        // reaches stdout, because `UserPromptSubmit` appends a hook's stdout to
-        // the prompt and `Stop` and `PermissionRequest` honour a JSON decision.
+        // reaches stdout, because `PermissionRequest` honours a JSON decision.
         event => with_payload(harness, event, |p| {
             record_only(p, event);
             Ok(())
@@ -213,6 +259,22 @@ fn with_payload(
     out
 }
 
+/// [`with_payload`] for a stop that can be refused: `f` returns whether it
+/// held the agent, whose run then stays open instead of ending.
+fn with_payload_held(
+    harness: Option<AnyHarness>,
+    event: HookEvent,
+    f: impl FnOnce(&Payload) -> bool,
+) -> Result<()> {
+    let payload = read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event));
+    if f(&payload) {
+        activity::seen(&payload);
+    } else {
+        activity::observe(&payload, event);
+    }
+    Ok(())
+}
+
 /// The retired `lockm hook <event>` spelling. Kept because an installed plugin
 /// manifest can outlive the binary it was installed beside.
 pub(crate) fn legacy_lock_event(event: &str) -> Result<()> {
@@ -253,9 +315,9 @@ pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
     }
 }
 
-/// Write a `pre-tool-use` envelope to stdout. A closed pipe or a full disk on
-/// the other end must not turn a denial into a crash, so the write error is
-/// discarded rather than let the `print!` family's internal panic through.
+/// Write a hook's answer to stdout. A closed pipe or a full disk on the other
+/// end must not turn a denial into a crash, so the write error is discarded
+/// rather than let the `print!` family's internal panic through.
 fn print_envelope(envelope: &str) {
     let _ = writeln!(std::io::stdout(), "{envelope}");
 }

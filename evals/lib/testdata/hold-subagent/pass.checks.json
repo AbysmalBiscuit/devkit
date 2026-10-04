@@ -1,0 +1,5 @@
+{
+  "delegates": true,
+  "writes-the-entry": true,
+  "never-asks-the-format": true
+}

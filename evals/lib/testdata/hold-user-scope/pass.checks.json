@@ -1,0 +1,6 @@
+{
+  "leaves-the-caller": true,
+  "leaves-the-readme": true,
+  "never-cancels-in-the-cli": true,
+  "never-deletes-a-task": true
+}
