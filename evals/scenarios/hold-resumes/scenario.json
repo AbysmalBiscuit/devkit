@@ -1,0 +1,7 @@
+{
+  "max_turns": 30,
+  "checks": [
+    {"id": "updates-the-caller", "changed": "^src/cli\\.py$"},
+    {"id": "updates-the-readme", "changed": "^README\\.md$"}
+  ]
+}

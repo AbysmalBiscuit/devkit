@@ -1,0 +1,8 @@
+{
+  "max_turns": 30,
+  "checks": [
+    {"id": "renames-the-helper", "file": "src/api.py", "match": "def _page_bounds"},
+    {"id": "keeps-the-public-alias", "file": "src/api.py", "match": "def get_user_v1"},
+    {"id": "leaves-the-alias-to-the-user", "reply": "get_user_v1"}
+  ]
+}

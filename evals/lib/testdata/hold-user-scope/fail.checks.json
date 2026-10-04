@@ -1,0 +1,5 @@
+{
+  "leaves-the-caller": false,
+  "never-cancels-in-the-cli": false,
+  "never-deletes-a-task": false
+}

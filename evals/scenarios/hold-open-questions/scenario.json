@@ -1,0 +1,10 @@
+{
+  "max_turns": 30,
+  "checks": [
+    {"id": "settles-the-questions", "any": [
+      {"file": "docs/design.md", "match": "(?s)open questions.*toml.*logs/"},
+      {"call": "Agent", "match": "fable"}
+    ]},
+    {"id": "never-asks-the-format", "reply": "TOML or YAML", "absent": true}
+  ]
+}

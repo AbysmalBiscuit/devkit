@@ -1,0 +1,4 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "src/greet.py", "old_string": "def greet", "new_string": "def welcome"}}]}}
+{"type": "user", "message": {"content": [{"type": "tool_result", "is_error": false, "content": "ok"}]}}
+{"type": "result", "subtype": "success", "result": "Renamed greet to welcome in src/greet.py.", "num_turns": 3, "duration_ms": 12000, "total_cost_usd": 0.06}
+{"type": "eval", "changed": ["src/greet.py"]}

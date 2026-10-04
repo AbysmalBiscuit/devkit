@@ -1,0 +1,5 @@
+{
+  "renames-the-helper": true,
+  "keeps-the-public-alias": false,
+  "leaves-the-alias-to-the-user": false
+}

@@ -1,0 +1,8 @@
+{
+  "max_turns": 30,
+  "checks": [
+    {"id": "delegates", "call": "Agent", "match": "."},
+    {"id": "writes-the-entry", "file": "CHANGELOG.md", "match": "(?m)^- greet: "},
+    {"id": "never-asks-the-format", "reply": "(which|what) format", "absent": true}
+  ]
+}
