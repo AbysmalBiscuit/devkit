@@ -110,8 +110,8 @@ fn denial(out: &std::process::Output) -> Option<String> {
 /// What the pre-tool-use hook hands back for a sub-agent's Bash command: the
 /// command the harness runs in its place, or the original when the hook left
 /// it alone.
-fn guarded(p: &Proj, harness: &str, agent: &str, command: &str) -> String {
-    let out = p.hook("pre-tool-use", harness, &bash(p, Some(agent), command));
+fn guarded(p: &Proj, on: Attributed, agent: &str, command: &str) -> String {
+    let out = p.hook("pre-tool-use", on.harness, &(on.call)(p, agent, command));
     assert_eq!(out.status.code(), Some(0), "{}", todoenv::stderr(&out));
     let s = stdout(&out);
     if s.trim().is_empty() {
@@ -125,23 +125,35 @@ fn guarded(p: &Proj, harness: &str, agent: &str, command: &str) -> String {
         .to_string()
 }
 
-/// A harness whose sub-agents' todo commands are attributed, and the variable
-/// its shell carries the session id in.
+/// A harness whose sub-agents' todo commands are attributed: the variable its
+/// shell carries the session id in, and its `PreToolUse` payload for
+/// sub-agent `agent` of session `S` running `command`.
 #[derive(Clone, Copy)]
 struct Attributed {
     harness: &'static str,
     session_var: &'static str,
+    call: fn(&Proj, &str, &str) -> serde_json::Value,
 }
 
 const CLAUDE_CODE: Attributed = Attributed {
     harness: "claude-code",
     session_var: "CLAUDE_CODE_SESSION_ID",
+    call: |p, agent, command| bash(p, Some(agent), command),
 };
 
 const ATTRIBUTED: [Attributed; 2] = [CLAUDE_CODE, Attributed {
     harness: "codex",
     session_var: "CODEX_SESSION_ID",
+    call: codex_shell,
 }];
+
+fn codex_shell(p: &Proj, agent: &str, command: &str) -> serde_json::Value {
+    let mut call = fixture(p, "codex-subagent-shell.jsonl").remove(0);
+    call["session_id"] = json!("S");
+    call["agent_id"] = json!(agent);
+    call["tool_input"]["command"] = json!(command);
+    call
+}
 
 /// A checkout whose hooks read commands as bash, with `harness` added to its
 /// `[harness]` table. Codex on Windows otherwise reads as PowerShell.
@@ -158,7 +170,7 @@ fn bash_proj(harness: &str) -> Proj {
 /// `command` from sub-agent `agent` of session `S`, through the hook and then
 /// run the way the harness would run what the hook returned.
 fn run_as_sub_agent(p: &Proj, on: Attributed, agent: &str, command: &str) -> std::process::Output {
-    let rewritten = guarded(p, on.harness, agent, command);
+    let rewritten = guarded(p, on, agent, command);
     p.shell(&rewritten, &[(on.session_var, "S")])
 }
 
@@ -166,12 +178,7 @@ fn run_as_sub_agent(p: &Proj, on: Attributed, agent: &str, command: &str) -> std
 fn attribution_a_sub_agents_start_runs_as_the_sub_agent() {
     let p = Proj::new();
     let id = seed(&p, "a");
-    let rewritten = guarded(
-        &p,
-        CLAUDE_CODE.harness,
-        "a1",
-        &format!("devkit todo start {id}"),
-    );
+    let rewritten = guarded(&p, CLAUDE_CODE, "a1", &format!("devkit todo start {id}"));
     assert_eq!(
         p.todo(&id).status,
         Status::Pending,
@@ -188,7 +195,7 @@ fn attribution_a_rewrite_carries_the_guards_note() {
         let p = bash_proj("enforce_writes = true\nunresolved_writes = \"warn\"\n");
         let id = seed(&p, "a");
         let command = format!("echo x > \"$OUT\"; devkit todo start {id}");
-        let out = p.hook("pre-tool-use", on.harness, &bash(&p, Some("a1"), &command));
+        let out = p.hook("pre-tool-use", on.harness, &(on.call)(&p, "a1", &command));
         let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
         let answer = &v["hookSpecificOutput"];
         assert_eq!(
