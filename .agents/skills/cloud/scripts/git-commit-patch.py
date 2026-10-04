@@ -207,7 +207,7 @@ def check_merge_drivers(git: Git, base: str, selected: str, prior: str, empty_in
 
 def wrap_tree(git: Git, tree: str) -> str:
     """An unreferenced commit holding `tree`, for `git merge-tree`, which takes only
-    commits on some Git versions that support `--write-tree`, such as 2.43."""
+    commits before Git 2.45."""
     throwaway = replace(git, env={**git.env, **THROWAWAY_IDENTITY})
     return throwaway.text("commit-tree", "--no-gpg-sign", "-m", "git-commit-patch merge input", tree)
 
