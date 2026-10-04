@@ -96,17 +96,20 @@ pub fn run(cli: HookCli) -> Result<()> {
             let answer = holder
                 .as_ref()
                 .and_then(|h| todo::hold(p, h, &checkout, &cwd));
-            let held = answer.is_some();
-            match answer {
-                Some(answer) => print_envelope(&answer),
+            let held = match answer {
+                Some(answer) => {
+                    print_envelope(&answer);
+                    true
+                }
                 None => {
                     if let Some(h) = &holder {
                         todo::rearm(h);
                     }
                     todo::release(holder, &checkout, &cwd);
                     edit::release_subagent(p);
+                    false
                 }
-            }
+            };
             record_in(p, cli.event, &checkout, &cwd);
             held
         }),
