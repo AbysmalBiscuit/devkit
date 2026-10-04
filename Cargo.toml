@@ -110,7 +110,7 @@ indicatif = "0.17"
 console = "0.15"
 supports-hyperlinks = "3"
 strum = { version = "0.27", features = ["derive"] }
-pabal = { version = "0.2", features = ["clap"] }
+pabal = { version = "0.2.1", features = ["clap"] }
 ambassador = "0.5.1"
 ureq = { version = "2", features = ["json", "proxy-from-env"] }
 # An embedded taskchampion replica. Stays on the 2.0.2 line taskwarrior pins,
