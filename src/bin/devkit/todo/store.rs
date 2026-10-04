@@ -248,11 +248,11 @@ fn cache_url(scope: &DopplerScope, url: &str) {
 /// and not yet connected, and where its URL resolved from. A URL that is
 /// missing or does not parse is an error naming the variable, never the URL.
 ///
-/// A URL Doppler gives is cached under the state directory. With
-/// `reuse_cached`, as for a hook, a fresh cached URL stands in for Doppler.
-/// Every Doppler answer rewrites the cache, and failing to connect with a
-/// Doppler URL drops it, so a rotated credential or a moved database is
-/// asked for again on the next call.
+/// A URL Doppler gives is cached under the state directory once it parses.
+/// With `reuse_cached`, as for a hook, a fresh cached URL stands in for
+/// Doppler. Every Doppler answer rewrites the cache, and failing to connect
+/// with a Doppler URL drops it, so a rotated credential or a moved database
+/// is asked for again on the next call.
 pub(crate) fn open_database(
     config: &PostgresConfig,
     wait: Duration,
@@ -271,22 +271,20 @@ pub(crate) fn open_database(
         Some(url) => (Some(url), Source::Doppler),
         None => {
             let [(url, source)] = secrets::resolve_many(&[DATABASE_VAR], scope.as_ref());
-            if let (Some(scope), Some(url), Source::Doppler) = (&scope, &url, &source) {
-                cache_url(scope, url);
-            }
             (url, source)
         }
     };
-    let db = match url {
-        None => Err(format!("{DATABASE_VAR} is not set")),
-        Some(url) => {
-            let trust = Trust {
-                ca_file: config.ca_file.as_deref().map(expand_tilde),
-            };
-            Database::new(&url, wait, &trust).map_err(|e| format!("{DATABASE_VAR}: {e:#}"))
-        }
+    let Some(url) = url else {
+        return (Err(format!("{DATABASE_VAR} is not set")), source);
     };
+    let trust = Trust {
+        ca_file: config.ca_file.as_deref().map(expand_tilde),
+    };
+    let db = Database::new(&url, wait, &trust).map_err(|e| format!("{DATABASE_VAR}: {e:#}"));
     if let (Ok(db), Source::Doppler) = (&db, &source) {
+        if let Some(scope) = &scope {
+            cache_url(scope, &url);
+        }
         db.on_connect_failure(|| {
             let _ = std::fs::remove_file(url_cache_path());
         });

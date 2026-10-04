@@ -501,3 +501,26 @@ fn a_hook_that_cannot_connect_asks_doppler_again() {
     }
     assert_eq!(doppler_calls(bin.path()), 2);
 }
+
+#[cfg(unix)]
+fn cached_url_file(p: &Proj) -> std::path::PathBuf {
+    p.state().join("todo/database-url.json")
+}
+
+#[cfg(unix)]
+#[test]
+fn a_malformed_doppler_url_is_not_kept() {
+    let p = doppler_proj("devkit");
+    let bin = tempfile::tempdir().unwrap();
+    let path = fake_doppler(bin.path(), "postgres://agent:pw@host:notaport/todos");
+    let env = [("PATH", path.as_str())];
+    let out = p.hook_with(
+        "subagent-start",
+        "claude-code",
+        &subagent(&p, "SubagentStart", "a1"),
+        &env,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(doppler_calls(bin.path()), 1);
+    assert!(!cached_url_file(&p).exists());
+}
