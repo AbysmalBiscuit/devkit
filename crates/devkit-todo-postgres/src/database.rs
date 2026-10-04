@@ -106,7 +106,7 @@ impl Database {
     pub fn new(url: &str, wait: Duration) -> Result<Arc<Self>> {
         let config = url
             .parse::<Config>()
-            .map_err(|e| anyhow!("the todo database URL does not parse: {e}"))?;
+            .context("the todo database URL does not parse")?;
         Ok(Arc::new(Self {
             config: Some(config),
             wait,
