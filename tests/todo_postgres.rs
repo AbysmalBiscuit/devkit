@@ -688,6 +688,29 @@ fn a_hook_releases_many_claims_in_one_go() {
 #[cfg(unix)]
 #[test]
 fn a_hook_whose_activity_setup_hangs_still_answers_in_time() {
+    let out = with_a_hanging_ca_file("devkit todo list");
+    assert!(
+        out.contains("DEVKIT_TODO_HOLDER='S/a1' devkit todo list"),
+        "{out}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_claim_check_whose_store_hangs_lets_the_command_through_in_time() {
+    let out = with_a_hanging_ca_file("devkit todo start abcdef12");
+    assert!(!out.contains("\"deny\""), "{out}");
+    assert!(
+        out.contains("DEVKIT_TODO_HOLDER='S/a1' devkit todo start abcdef12"),
+        "the verdict an unreachable store gets: {out}"
+    );
+}
+
+/// The pre-tool-use verdict for a sub-agent's `command` when the todo
+/// database's `ca_file` is a FIFO no one writes, so reading it never ends.
+/// The hook must answer well inside its harness timeout.
+#[cfg(unix)]
+fn with_a_hanging_ca_file(command: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
     let fifo = dir.path().join("ca.crt");
     let made = std::process::Command::new("mkfifo")
@@ -705,7 +728,7 @@ fn a_hook_whose_activity_setup_hangs_still_answers_in_time() {
         "agent_id": "a1",
         "agent_type": "general-purpose",
         "tool_name": "Bash",
-        "tool_input": {"command": "devkit todo list"},
+        "tool_input": {"command": command},
         "cwd": p.path,
     });
     let file = dir.path().join("payload.json");
@@ -721,9 +744,5 @@ fn a_hook_whose_activity_setup_hangs_still_answers_in_time() {
     let took = started.elapsed();
     assert!(out.status.success(), "{:?}: {}", out.status, stderr(&out));
     assert!(took < Duration::from_secs(3), "the hook took {took:?}");
-    assert!(
-        stdout(&out).contains("DEVKIT_TODO_HOLDER='S/a1' devkit todo list"),
-        "{}",
-        stdout(&out)
-    );
+    stdout(&out)
 }

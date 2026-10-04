@@ -11,7 +11,7 @@
 //! - Hold: a stop is refused, once per unchanged list, while the agent has open
 //!   todos.
 
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
@@ -206,7 +206,8 @@ pub(crate) fn status_edits(analysis: &Analysis) -> Vec<(StatusKind, String)> {
 
 /// A block reason when a sub-agent's command would change a todo another
 /// holder has in progress. Writes nothing: the command makes its own changes
-/// when it runs, attributed by [`rewrite`]. A store failure blocks nothing.
+/// when it runs, attributed by [`rewrite`]. A store failure, or a
+/// store with no answer within [`CLAIM_CHECK_WAIT`], blocks nothing.
 pub(crate) fn check_claims(
     payload: &Payload,
     analysis: &Analysis,
@@ -218,15 +219,28 @@ pub(crate) fn check_claims(
     if edits.is_empty() {
         return None;
     }
-    let store = Store::for_hook(checkout, cwd);
-    edits.into_iter().find_map(|(to, id)| {
-        let todo = store.get(&id).ok()??;
-        let Claimed { by } = transition(&todo.status, to, &actor).err()?;
-        Some(format!(
-            "devkit todo: todo {id} is in progress by {by}; pick another todo"
-        ))
-    })
+    let (checkout, cwd) = (checkout.clone(), cwd.to_path_buf());
+    let check = move || {
+        let store = Store::for_hook(&checkout, &cwd);
+        edits.into_iter().find_map(|(to, id)| {
+            let todo = store.get(&id).ok()??;
+            let Claimed { by } = transition(&todo.status, to, &actor).err()?;
+            Some(format!(
+                "devkit todo: todo {id} is in progress by {by}; pick another todo"
+            ))
+        })
+    };
+    // A store that never answers is a store that failed: the check blocks
+    // nothing rather than hold the hook until its harness lets the call
+    // through anyway.
+    super::gate::with_deadline(CLAIM_CHECK_WAIT, check)
+        .ok()
+        .flatten()
 }
+
+/// How long the claim check waits for the store, setup included, before it
+/// blocks nothing.
+const CLAIM_CHECK_WAIT: Duration = Duration::from_secs(1);
 
 /// A sub-agent's command with each `devkit todo` invocation prefixed by the
 /// sub-agent's holder, so the CLI acts as the sub-agent when, and only if, the
