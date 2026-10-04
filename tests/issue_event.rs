@@ -361,3 +361,27 @@ fn setup_worktree(out: &std::process::Output) -> std::path::PathBuf {
         .unwrap_or_else(|e| panic!("setup JSON: {e}: {}", String::from_utf8_lossy(&out.stdout)));
     json["worktree"].as_str().expect("worktree key").into()
 }
+
+#[test]
+fn pr_create_fires_pr_open_when_it_opens_the_pr() {
+    let gh = ghfake::Fake::without_pr(&format!(
+        "{GITHUB}[issue.events.pr_open]\nto = \"In review\"\n"
+    ));
+    gh.github_keys("project = 3");
+    gh.record_issue("65");
+    gh.create_opens(&PR_7);
+    gh.serve_graphql(&status_answer(Some("In progress")));
+    gh.serve_mutation("{\"data\":{}}");
+
+    let out = gh.issue(&["pr", "create", "--no-push", "--pr-title", "t"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(gh.calls().contains("pr create"), "{}", gh.calls());
+    assert!(
+        stderr(&out).contains("moved 65: In progress -> In review"),
+        "{}",
+        stderr(&out)
+    );
+    let rec = devkit_common::record::read(gh.project()).unwrap();
+    assert_eq!(rec.events, Some(vec![devkit_config::IssueEvent::PrOpen]));
+}
