@@ -223,17 +223,16 @@ fn url_cache_path(scope: &DopplerScope) -> PathBuf {
 }
 
 /// The cached URL for `scope`, when one is younger than `max_age` or no
-/// `max_age` applies.
+/// `max_age` applies. A copy dated ahead of now, as after the clock was set
+/// back, counts as just written.
 fn cached_url(scope: &DopplerScope, max_age: Option<Duration>) -> Option<String> {
     let path = url_cache_path(scope);
-    let age = std::fs::metadata(&path)
-        .ok()?
-        .modified()
-        .ok()?
-        .elapsed()
-        .ok()?;
-    if max_age.is_some_and(|max_age| age > max_age) {
-        return None;
+    if let Some(max_age) = max_age {
+        let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+        let age = modified.elapsed().unwrap_or(Duration::ZERO);
+        if age > max_age {
+            return None;
+        }
     }
     let cached: CachedUrl = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
     (cached.project == scope.project && cached.config == scope.config).then_some(cached.url)

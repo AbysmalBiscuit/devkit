@@ -1063,3 +1063,37 @@ fn session_end_with_a_hanging_ca_file_finishes_inside_its_budget() {
     assert!(child.wait().unwrap().success());
     assert!(took < HOOK_BUDGET, "session-end took {took:?}");
 }
+
+#[cfg(unix)]
+#[test]
+fn session_end_releases_through_a_future_dated_cached_url() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    let root = fresh_root();
+    let p = doppler_proj(&root);
+    let bin = tempfile::tempdir().unwrap();
+    let path = fake_doppler(bin.path(), &url);
+    let env = [
+        ("PATH", path.clone()),
+        ("CLAUDE_CODE_SESSION_ID", "S".to_string()),
+    ];
+    let id = added(&p, "held", &env);
+    let out = devkit(&p, &["todo", "start", &id], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    // A clock set back after the copy was written leaves it dated ahead.
+    std::fs::File::options()
+        .write(true)
+        .open(cached_url_file(&p))
+        .expect("the command kept the URL")
+        .set_modified(SystemTime::now() + Duration::from_secs(60 * 60))
+        .unwrap();
+    let calls = doppler_calls(bin.path());
+
+    let end = json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path});
+    let out = p.hook_with("session-end", "claude-code", &end, &borrowed(&env));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(doppler_calls(bin.path()), calls);
+    let todos = store(&url, &root).list(&Filter::all()).unwrap();
+    assert_eq!(todos[0].status, Status::Pending, "{todos:?}");
+}
