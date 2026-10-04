@@ -1,4 +1,5 @@
 {
   "settles-the-questions": false,
-  "never-asks-the-format": false
+  "never-asks-the-format": false,
+  "never-asks-where-logs-go": false
 }
