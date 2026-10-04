@@ -304,25 +304,50 @@ impl Store {
             .map(|target| taskchampion(&config).with_target(target)))
     }
 
+    /// The `[todo]` config a hook in `cwd` reads, `DEVKIT_TODO_BACKEND`
+    /// applied. No config anywhere is the default config; a config that
+    /// fails to load or an unknown `DEVKIT_TODO_BACKEND` is an error.
+    fn hook_config(checkout: &Checkout, cwd: &Path) -> Result<TodoConfig> {
+        let config = match devkit_common::config::resolve_in(checkout, None, cwd) {
+            Ok((config, _)) => Some(config.todo),
+            Err(e) if e.downcast_ref::<NoConfig>().is_some() => None,
+            Err(e) => return Err(e),
+        };
+        let env = std::env::var(BACKEND_VAR).ok();
+        let (backend, _) = effective_backend(config.as_ref(), env.as_deref())?;
+        Ok(TodoConfig {
+            backend,
+            ..config.unwrap_or_default()
+        })
+    }
+
     /// The store a hook in `cwd` uses. A hook never fails on the store's
     /// account: a config that fails to load or an unknown
     /// `DEVKIT_TODO_BACKEND` is the built-in store.
     pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Self {
-        let config = match devkit_common::config::resolve_in(checkout, None, cwd) {
-            Ok((config, _)) => Some(config.todo),
-            Err(e) if e.downcast_ref::<NoConfig>().is_some() => None,
-            Err(_) => return Backend::Builtin(BuiltinStore::open()).recorded(),
-        };
-        let env = std::env::var(BACKEND_VAR).ok();
-        let Ok((backend, _)) = effective_backend(config.as_ref(), env.as_deref()) else {
-            return Backend::Builtin(BuiltinStore::open()).recorded();
-        };
-        Backend::from_config(&TodoConfig {
-            backend,
-            ..config.unwrap_or_default()
-        })
-        .waiting(HOOK_LOCK_WAIT)
+        match Self::hook_config(checkout, cwd) {
+            Ok(config) => Backend::from_config(&config).waiting(HOOK_LOCK_WAIT),
+            Err(_) => Backend::Builtin(BuiltinStore::open()),
+        }
         .recorded()
+    }
+
+    /// The store a stop hook in `cwd` reads open todos from, as
+    /// [`Store::for_hook`] builds it. `None` when the config fails to load,
+    /// `DEVKIT_TODO_BACKEND` is unknown, or `[todo] hold_stop` is off: the
+    /// built-in store's lists are not the configured store's, so holding an
+    /// agent to them would be wrong.
+    #[expect(
+        dead_code,
+        reason = "the stop hook calls it once pabal can block a stop"
+    )]
+    pub(crate) fn for_hold(checkout: &Checkout, cwd: &Path) -> Option<Self> {
+        let config = Self::hook_config(checkout, cwd).ok()?;
+        config.hold_stop.then(|| {
+            Backend::from_config(&config)
+                .waiting(HOOK_LOCK_WAIT)
+                .recorded()
+        })
     }
 }
 
