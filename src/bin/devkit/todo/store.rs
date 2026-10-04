@@ -48,7 +48,7 @@ pub(crate) const DATABASE_VAR: &str = "DEVKIT_TODO_DATABASE_URL";
 /// How long a hook waits for the taskchampion replica's lock before it
 /// queues its write instead, and for each answer from the todo database,
 /// connecting included, before it gives up.
-const HOOK_LOCK_WAIT: Duration = Duration::from_secs(1);
+const HOOK_WAIT: Duration = Duration::from_secs(1);
 
 /// How long a CLI call waits for each answer from the todo database,
 /// connecting included.
@@ -97,14 +97,14 @@ impl Opener {
     fn lock_wait(self) -> Duration {
         match self {
             Self::Cli => CLI_LOCK_WAIT,
-            Self::Hook => HOOK_LOCK_WAIT,
+            Self::Hook => HOOK_WAIT,
         }
     }
 
     fn database_wait(self) -> Duration {
         match self {
             Self::Cli => CLI_DATABASE_WAIT,
-            Self::Hook => HOOK_LOCK_WAIT,
+            Self::Hook => HOOK_WAIT,
         }
     }
 }
@@ -257,26 +257,6 @@ fn data_dir(config: &TaskchampionConfig) -> std::path::PathBuf {
 }
 
 impl Backend {
-    /// The store `config` names, its claim changes recorded in the activity
-    /// log that goes with it.
-    fn open(config: &TodoConfig, opener: Opener) -> Store {
-        let backend = match config.backend {
-            TodoBackend::Builtin => Self::Builtin(BuiltinStore::open()),
-            TodoBackend::Taskwarrior => Self::Taskwarrior(
-                TaskwarriorStore::new(&config.taskwarrior.path).with_root(&config.project),
-            ),
-            TodoBackend::Taskchampion => Self::Taskchampion(Replica {
-                store: taskchampion(config).with_lock_wait(opener.lock_wait()),
-                syncs: names_a_target(&config.taskchampion),
-            }),
-            TodoBackend::Postgres => Self::Postgres(PostgresStore::new(
-                database(&config.postgres, opener.database_wait()),
-                &config.project,
-            )),
-        };
-        Store(Recorded::new(backend, Activity::of(config, opener)))
-    }
-
     fn recorded(self) -> Store {
         Store(Recorded::new(self, Activity::Local(ActivityLog::open())))
     }
@@ -302,6 +282,26 @@ fn taskchampion(config: &TodoConfig) -> TaskchampionStore {
 }
 
 impl Store {
+    /// The store `config` names, its claim changes recorded in the activity
+    /// log that goes with it.
+    fn open(config: &TodoConfig, opener: Opener) -> Self {
+        let backend = match config.backend {
+            TodoBackend::Builtin => Backend::Builtin(BuiltinStore::open()),
+            TodoBackend::Taskwarrior => Backend::Taskwarrior(
+                TaskwarriorStore::new(&config.taskwarrior.path).with_root(&config.project),
+            ),
+            TodoBackend::Taskchampion => Backend::Taskchampion(Replica {
+                store: taskchampion(config).with_lock_wait(opener.lock_wait()),
+                syncs: names_a_target(&config.taskchampion),
+            }),
+            TodoBackend::Postgres => Backend::Postgres(PostgresStore::new(
+                database(&config.postgres, opener.database_wait()),
+                &config.project,
+            )),
+        };
+        Self(Recorded::new(backend, Activity::of(config, opener)))
+    }
+
     fn backend(&self) -> &Backend {
         self.0.inner()
     }
@@ -355,10 +355,7 @@ impl Store {
 
     /// The store a CLI call in `cwd` uses.
     pub(crate) fn for_cli(cwd: &Path) -> Result<Self> {
-        Ok(Backend::open(
-            &Self::effective_cli_config(cwd)?,
-            Opener::Cli,
-        ))
+        Ok(Self::open(&Self::effective_cli_config(cwd)?, Opener::Cli))
     }
 
     /// The activity log a CLI call in `cwd` reads.
@@ -391,7 +388,7 @@ impl Store {
         Backend::Taskchampion(Replica {
             store: TaskchampionStore::at(dir.to_path_buf())
                 .with_root(root)
-                .with_lock_wait(HOOK_LOCK_WAIT),
+                .with_lock_wait(HOOK_WAIT),
             syncs: false,
         })
         .recorded()
@@ -440,7 +437,7 @@ impl Store {
     pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Self {
         let backend_var = std::env::var(BACKEND_VAR).ok();
         match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
-            Ok(config) => Backend::open(&config, Opener::Hook),
+            Ok(config) => Self::open(&config, Opener::Hook),
             Err(_) => Backend::Builtin(BuiltinStore::open()).recorded(),
         }
     }
@@ -467,9 +464,7 @@ impl Store {
         backend_var: Option<&str>,
     ) -> Option<Self> {
         let config = Self::hook_config(checkout, cwd, backend_var).ok()?;
-        config
-            .hold_stop
-            .then(|| Backend::open(&config, Opener::Hook))
+        config.hold_stop.then(|| Self::open(&config, Opener::Hook))
     }
 }
 
