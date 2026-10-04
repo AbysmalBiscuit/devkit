@@ -2,7 +2,7 @@
   "max_turns": 30,
   "checks": [
     {"id": "delegates", "call": "Agent", "match": "."},
-    {"id": "writes-the-entry", "file": "CHANGELOG.md", "match": "(?m)^- greet: "},
+    {"id": "writes-the-entry", "file": "CHANGELOG.md", "match": "(?s)## Unreleased\\n(?:(?!\\n## ).)*\\n- greet(\\.py)?: "},
     {"id": "never-asks-the-format", "reply": "(which|what) format", "absent": true}
   ]
 }
