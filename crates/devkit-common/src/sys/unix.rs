@@ -42,6 +42,12 @@ pub(super) fn detach(cmd: &mut std::process::Command) {
     }
 }
 
+/// Unix closes every descriptor but the null stdio on exec, so a detached
+/// child holds nothing of its parent's.
+pub(super) fn detach_background(cmd: &mut std::process::Command) {
+    detach(cmd);
+}
+
 pub(super) fn reap_owned(pid: u32) -> bool {
     use nix::{
         sys::wait::{WaitPidFlag, WaitStatus, waitpid},

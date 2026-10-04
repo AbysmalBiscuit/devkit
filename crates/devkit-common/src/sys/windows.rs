@@ -74,6 +74,34 @@ pub(super) fn detach(cmd: &mut std::process::Command) {
     cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
+/// No console for the child, which has null stdio anyway.
+const DETACHED_PROCESS: u32 = 0x0000_0008;
+
+/// Windows spawns with `bInheritHandles`, so every inheritable handle in this
+/// process reaches the child, this process's stdio among them: a parent's
+/// reader would then wait for the child to exit before it sees end of file.
+/// std duplicates a handle it passes as inherited stdio, so clearing the
+/// flag on the originals changes nothing for other spawns.
+pub(super) fn detach_background(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+
+    use windows_sys::Win32::{
+        Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation},
+        System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
+    };
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle returns this process's handle or null/invalid,
+        // and SetHandleInformation only changes a flag on a handle we own.
+        unsafe {
+            let handle = GetStdHandle(which);
+            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+}
+
 pub(super) fn reap_owned(pid: u32) -> bool {
     // Windows has no zombies: an owned child is "reaped" once it is no longer
     // alive, so liveness is the whole story.

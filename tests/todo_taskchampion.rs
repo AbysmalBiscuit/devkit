@@ -676,3 +676,24 @@ fn only_the_sync_child_waits_on_doppler() {
         replica_dir(&p).join("sync.pending").exists() || replica_dir(&p).join("sync.lock").exists()
     );
 }
+
+#[test]
+fn a_write_returns_while_its_sync_still_runs() {
+    let p = Proj::new();
+    let server = Silent::start();
+    let env = server_env(&server.url);
+    let started = Instant::now();
+    let out = p.devkit(&["todo", "add", "one"], &env);
+    let took = started.elapsed();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(took < Duration::from_secs(2), "{took:?}");
+    let lock = replica_dir(&p).join("sync.lock");
+    poll_until(
+        Duration::from_secs(30),
+        "the sync child to hold its lock",
+        || {
+            let held = devkit_common::store::with_file_lock_for(&lock, Duration::ZERO, || Ok(()));
+            held.is_err_and(|e| e.is::<devkit_common::store::LockBusy>())
+        },
+    );
+}

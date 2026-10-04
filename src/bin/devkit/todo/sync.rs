@@ -7,7 +7,7 @@ use std::{
     fs::{self, File},
     io::ErrorKind,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -119,35 +119,28 @@ pub(crate) enum SyncOutcome {
     NoTarget,
 }
 
-/// `devkit todo sync` as a detached child of this process, run in `cwd` so it
-/// resolves the same store. With null stdio it never writes to a terminal or
-/// a pipe its parent may have closed.
-fn sync_command(cwd: &Path, background: bool) -> Result<Command> {
+/// Starts `devkit todo sync` detached from this process, in `cwd` so it
+/// resolves the same store. It holds none of this process's handles, so it
+/// never writes to a terminal or keeps a caller's pipe open.
+fn start_sync(cwd: &Path, background: bool) -> Result<Child> {
     let mut cmd = Command::new(std::env::current_exe()?);
     cmd.args(["todo", "sync"])
         .args(background.then_some("--background"))
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    devkit_common::sys::detach(&mut cmd);
-    Ok(cmd)
+        .current_dir(cwd);
+    Ok(devkit_common::sys::spawn_background(&mut cmd)?)
 }
 
 /// Marks the replica pending and starts a background sync, without waiting.
 pub(crate) fn spawn(store: &TaskchampionStore, cwd: &Path) {
     mark_pending(store.data_dir());
-    if let Ok(mut cmd) = sync_command(cwd, true) {
-        let _ = cmd.spawn();
-    }
+    let _ = start_sync(cwd, true);
 }
 
 /// Starts a sync and waits for it up to `wait`. One still running at the
 /// bound is left to finish on its own.
 pub(crate) fn wait_for(store: &TaskchampionStore, cwd: &Path, wait: Duration) -> SyncOutcome {
     let started = SystemTime::now();
-    let child = sync_command(cwd, false).and_then(|mut cmd| Ok(cmd.spawn()?));
-    let mut child = match child {
+    let mut child = match start_sync(cwd, false) {
         Ok(child) => child,
         Err(e) => return SyncOutcome::Failed(format!("{e:#}")),
     };
