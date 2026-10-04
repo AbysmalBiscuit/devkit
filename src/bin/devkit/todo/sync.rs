@@ -78,6 +78,7 @@ pub(crate) fn run(
     result: Option<&Path>,
 ) -> Result<()> {
     let dir = store.data_dir();
+    sweep_results(dir);
     if background && failed_recently(dir) {
         return Ok(());
     }
@@ -177,6 +178,37 @@ pub(crate) fn spawn(store: &TaskchampionStore, cwd: &Path) {
     let _ = start_sync(cwd, &["--background".as_ref()]);
 }
 
+/// How old a `sync.result.*` file can be while its waiter still runs, with
+/// room to spare: a waiter gives up `FRESH_WAIT` after starting its child,
+/// and the child writes the file before it exits, within one sync attempt,
+/// which `CLI_LOCK_WAIT` outlasts.
+const RESULT_LIFETIME: Duration = FRESH_WAIT.saturating_add(super::store::CLI_LOCK_WAIT);
+
+/// Removes the `sync.result.*` files in `data_dir` older than
+/// [`RESULT_LIFETIME`]: a child that outlived its waiter wrote them for no
+/// one.
+fn sweep_results(data_dir: &Path) {
+    let Ok(entries) = fs::read_dir(data_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let named = entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("sync.result.");
+        let stale = named
+            && entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|old| old > RESULT_LIFETIME);
+        if stale {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// A result file no other waiter uses: this process's id and the time.
 fn result_path(data_dir: &Path) -> PathBuf {
     let nanos = SystemTime::now()
@@ -188,6 +220,7 @@ fn result_path(data_dir: &Path) -> PathBuf {
 /// Starts a sync and waits for it up to `wait`. One still running at the
 /// bound is left to finish on its own.
 pub(crate) fn wait_for(store: &TaskchampionStore, cwd: &Path, wait: Duration) -> SyncOutcome {
+    sweep_results(store.data_dir());
     let result = result_path(store.data_dir());
     let mut child = match start_sync(cwd, &["--result-file".as_ref(), result.as_os_str()]) {
         Ok(child) => child,
@@ -210,5 +243,30 @@ pub(crate) fn wait_for(store: &TaskchampionStore, cwd: &Path, wait: Duration) ->
         (Some(reason), _) => SyncOutcome::Failed(reason),
         (None, true) => SyncOutcome::Done,
         (None, false) => SyncOutcome::Failed(format!("devkit todo sync exited with {status}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn aged(path: &Path, age: Duration) {
+        let file = File::create(path).unwrap();
+        file.set_modified(SystemTime::now() - age).unwrap();
+    }
+
+    #[test]
+    fn a_result_older_than_any_waiter_is_swept_and_a_fresh_one_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("sync.result.1.1");
+        let fresh = dir.path().join("sync.result.2.2");
+        let other = dir.path().join("sync.failed");
+        aged(&old, RESULT_LIFETIME + Duration::from_secs(1));
+        aged(&fresh, FRESH_WAIT);
+        aged(&other, RESULT_LIFETIME + Duration::from_secs(1));
+        sweep_results(dir.path());
+        assert!(!old.exists());
+        assert!(fresh.exists());
+        assert!(other.exists());
     }
 }

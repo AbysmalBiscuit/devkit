@@ -36,7 +36,7 @@ const HOOK_LOCK_WAIT: Duration = Duration::from_secs(1);
 /// than one sync attempt against a server that stops answering (a 10 s
 /// connect and a 60 s read), so a write outlasts a stuck sync and fails only
 /// behind something stuck for good.
-const CLI_LOCK_WAIT: Duration = Duration::from_secs(75);
+pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(75);
 
 /// The store `[todo] backend` names.
 #[derive(Delegate)]
