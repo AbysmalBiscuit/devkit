@@ -180,6 +180,10 @@ pub(crate) enum Cmd {
         event: event::EventArg,
         /// Issue id or issue URL. Defaults to this worktree's issue.
         issue: Option<String>,
+        /// Also append the outcome, or the error, to FILE with a timestamp.
+        /// The background run the SessionStart hook spawns writes here.
+        #[arg(long, value_name = "FILE", hide = true)]
+        log_file: Option<PathBuf>,
     },
     /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
     ///
@@ -502,11 +506,16 @@ pub fn run(cli: IssueCli) -> Result<()> {
             config: cli.config,
         }),
         Some(Cmd::Status { ids }) => status::run(&start(&cli.dir), &ids, cli.config.as_deref()),
-        Some(Cmd::Event { event, issue }) => event::run(
+        Some(Cmd::Event {
+            event,
+            issue,
+            log_file,
+        }) => event::run(
             Path::new(&start(&cli.dir)),
             cli.config.as_deref().map(Path::new),
             event,
             issue.as_deref(),
+            log_file.as_deref(),
         ),
         Some(Cmd::Info {
             selector,

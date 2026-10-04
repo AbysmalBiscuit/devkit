@@ -256,25 +256,27 @@ github = "sweeper[bot]"
 
     /// [`Fake::issue`] with `stdin` piped in.
     pub fn issue_with_stdin(&self, args: &[&str], stdin: &[u8]) -> std::process::Output {
-        use std::{io::Write, process::Stdio};
+        with_stdin(self.issue_cmd(args), stdin)
+    }
 
-        let mut child = self
-            .issue_cmd(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn devkit issue");
-        child
-            .stdin
-            .take()
-            .expect("piped stdin")
-            .write_all(stdin)
-            .expect("write stdin");
-        child.wait_with_output().expect("wait devkit issue")
+    /// Run `devkit ARGS` against the fake `gh`, with `stdin` piped in, in the
+    /// environment [`Fake::issue`] sets up. A process it spawns inherits that
+    /// environment.
+    pub fn devkit_with_stdin(&self, args: &[&str], stdin: &[u8]) -> std::process::Output {
+        let mut cmd = self.devkit_cmd();
+        cmd.args(args);
+        with_stdin(cmd, stdin)
     }
 
     fn issue_cmd(&self, args: &[&str]) -> Command {
+        let mut cmd = self.devkit_cmd();
+        cmd.args(["issue", "-C"])
+            .arg(self.project.path())
+            .args(args);
+        cmd
+    }
+
+    fn devkit_cmd(&self) -> Command {
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         let path = std::env::join_paths(
             std::iter::once(self.bin.path().to_path_buf()).chain(std::env::split_paths(&inherited)),
@@ -292,12 +294,27 @@ github = "sweeper[bot]"
             .env_remove("GH_HOST")
             .env_remove("GH_REPO")
             .env_remove("SLACK_TOKEN")
-            .env_remove("DEVKIT_CALLER")
-            .args(["issue", "-C"])
-            .arg(self.project.path())
-            .args(args);
+            .env_remove("DEVKIT_CALLER");
         cmd
     }
+}
+
+fn with_stdin(mut cmd: Command, stdin: &[u8]) -> std::process::Output {
+    use std::{io::Write, process::Stdio};
+
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn devkit");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(stdin)
+        .expect("write stdin");
+    child.wait_with_output().expect("wait devkit")
 }
 
 /// `pr` as `gh --json` reports it, on this project's branch at `head`.

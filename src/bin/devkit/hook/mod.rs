@@ -21,6 +21,7 @@
 mod dialect;
 mod edit;
 mod gate;
+mod issue_event;
 mod mcp;
 pub(crate) mod payload;
 pub mod record;
@@ -114,6 +115,13 @@ pub fn run(cli: HookCli) -> Result<()> {
             let cwd = record::payload_cwd(p);
             let checkout = devkit_common::vcs::Checkout::at(&cwd);
             todo::capture(p, &checkout);
+            record_in(p, cli.event, &checkout, &cwd);
+            Ok(())
+        }),
+        HookEvent::SessionStart => with_payload(harness, cli.event, |p| {
+            let cwd = record::payload_cwd(p);
+            let checkout = devkit_common::vcs::Checkout::at(&cwd);
+            issue_event::on_session_start(&checkout);
             record_in(p, cli.event, &checkout, &cwd);
             Ok(())
         }),

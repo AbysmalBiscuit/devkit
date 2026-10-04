@@ -96,9 +96,35 @@ pub(crate) fn run(
     config: Option<&Path>,
     event: EventArg,
     issue: Option<&str>,
+    log_file: Option<&Path>,
 ) -> Result<()> {
     let event = IssueEvent::from(event);
-    let line = fire(dir, config, event, issue).with_context(|| format!("issue event {event}"))?;
-    eprintln!("{line}");
+    let fired = fire(dir, config, event, issue).with_context(|| format!("issue event {event}"));
+    if let Some(path) = log_file {
+        let line = match &fired {
+            Ok(line) => line.clone(),
+            Err(e) => format!("error: {e:#}"),
+        };
+        append_log(path, &line);
+    }
+    eprintln!("{}", fired?);
     Ok(())
+}
+
+/// Append `line` to `path` with a timestamp. Best-effort: a log that cannot
+/// be written must not turn a successful move into a failure.
+fn append_log(path: &Path, line: &str) {
+    use std::io::Write;
+
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let now = devkit_common::harness_log::writer::now_rfc3339();
+        let _ = writeln!(f, "{now} {line}");
+    }
 }
