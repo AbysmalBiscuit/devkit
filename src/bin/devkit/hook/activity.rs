@@ -40,10 +40,7 @@ pub(crate) fn observe(payload: &Payload, event: HookEvent) {
             agent: agent.clone(),
         })
         .and_then(|()| log.forget(&session, Some(&agent))),
-        (_, Some(_)) => {
-            seen(payload);
-            Ok(())
-        }
+        (_, Some(agent)) => log.seen(&session, &agent),
         (_, None) => Ok(()),
     };
 }
