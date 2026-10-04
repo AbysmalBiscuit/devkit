@@ -7,7 +7,7 @@ use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
     io::{ErrorKind, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::SystemTime,
 };
 
@@ -22,7 +22,7 @@ use crate::{Edit, Filter, Holder, NewTodo, Status, Todo, TodoStore, transition};
 pub const BACKSTOP: TimeDelta = TimeDelta::minutes(30);
 
 /// The label a run without an agent type reports under.
-pub const SUBAGENT: &str = "subagent";
+const SUBAGENT: &str = "subagent";
 
 const EVENTS: &str = "events.jsonl";
 const SEEN: &str = "seen";
@@ -143,10 +143,6 @@ impl ActivityLog {
     /// The log beside the todo state, whichever backend holds the todos.
     pub fn open() -> Self {
         Self::at(crate::state_dir().join("activity"))
-    }
-
-    pub fn dir(&self) -> &Path {
-        &self.dir
     }
 
     /// Appends `event` as one line, in a single write so concurrent appends
