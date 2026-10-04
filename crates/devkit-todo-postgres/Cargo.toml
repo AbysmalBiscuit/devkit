@@ -11,7 +11,7 @@ serde_json.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-postgres-rustls.workspace = true
-rustls.workspace = true
+devkit-common.workspace = true
 devkit-todo.workspace = true
 
 [dev-dependencies]

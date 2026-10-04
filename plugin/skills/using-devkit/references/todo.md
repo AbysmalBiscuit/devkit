@@ -133,12 +133,21 @@ devkit_todo_database_url = "postgres://..."
 
 A URL Doppler gives is kept in devkit's state directory, readable only by you, and hooks reuse it for a while instead of asking Doppler each time. Every `devkit todo` command and `devkit doctor` ask Doppler afresh and refresh the kept copy, and a hook that fails to connect with it, refused or rejected, drops it, so the next hook picks up a rotated credential or a moved database. `DEVKIT_TODO_BACKEND=postgres` chooses the backend without a config change. `devkit doctor` shows the backend, where the URL resolved from, and whether the database answers, never the URL itself.
 
-devkit creates its tables in a `devkit` schema on first use, so the role in the URL needs to create a schema once; afterwards it only reads and writes those tables. Todos live under the `[todo] project` root, so several roots share one database without seeing each other's lists. Ids are uuids, shown and accepted as 8-character prefixes, as on taskchampion. The connection is encrypted whenever the server offers TLS, without verifying its certificate, as libpq does by default; `sslmode=disable` in the URL turns it off.
+devkit creates its tables in a `devkit` schema on first use, so the role in the URL needs to create a schema once; afterwards it only reads and writes those tables. Todos live under the `[todo] project` root, so several roots share one database without seeing each other's lists. Ids are uuids, shown and accepted as 8-character prefixes, as on taskchampion.
+
+The connection is encrypted whenever the server offers TLS, and the server's certificate is always verified: against the Mozilla roots bundled into devkit, the platform's certificate store, and the PEM file `[todo.postgres] ca_file` names, if any. A certificate none of them vouches for fails the connection rather than falling back. `sslmode=require` in the URL also refuses a server that offers no TLS, and `sslmode=disable` turns TLS off.
 
 On Supabase, use the transaction pooler, which suits short-lived clients such as hooks. Copy its URL from the project's Connect panel, under Transaction pooler:
 
 ```text
 postgres://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres
+```
+
+Supabase signs its database certificates with its own CA. Download it from the project's database settings, under SSL Configuration, and name the file:
+
+```toml
+[todo.postgres]
+ca_file = "~/.config/devkit/supabase-ca.crt"
 ```
 
 devkit uses nothing the transaction pooler lacks: no prepared statement outlives its transaction, and no session setting, `LISTEN` or advisory lock is used. The direct connection (`db.<project-ref>.supabase.co:5432`) works too, but each hook then holds one of the database's own connections while it runs. Any other transaction-mode pooler, such as PgBouncer, works the same way.

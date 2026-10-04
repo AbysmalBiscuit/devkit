@@ -113,6 +113,7 @@ pub struct Config {
 /// [todo.postgres]
 /// doppler_project = "swarm"
 /// doppler_config = "agents"
+/// ca_file = "~/.config/devkit/supabase-ca.crt"
 /// # "#).unwrap();
 /// # assert_eq!(cfg.todo.backend, TodoBackend::Taskwarrior);
 /// # assert_eq!(cfg.todo.taskwarrior.path, "/opt/task");
@@ -127,6 +128,7 @@ pub struct Config {
 /// # let pg = &cfg.todo.postgres;
 /// # assert_eq!(pg.doppler_project.as_deref(), Some("swarm"));
 /// # assert_eq!(pg.doppler_config.as_deref(), Some("agents"));
+/// # assert_eq!(pg.ca_file.as_deref(), Some("~/.config/devkit/supabase-ca.crt"));
 /// # let postgres = Config::parse("[todo]\nbackend = \"postgres\"\n").unwrap();
 /// # assert_eq!(postgres.todo.backend, TodoBackend::Postgres);
 /// # assert!(Config::parse("[todo.postgres]\nurl = \"postgres://x\"\n").is_err());
@@ -267,6 +269,11 @@ pub struct PostgresConfig {
     pub doppler_project: Option<String>,
     /// The Doppler config to read it from. Doppler's own default when absent.
     pub doppler_config: Option<String>,
+    /// A PEM file of CA certificates to trust, besides the bundled and
+    /// platform roots, when verifying the database's certificate. Supabase
+    /// signs its certificates with its own CA, which its dashboard offers
+    /// for download.
+    pub ca_file: Option<String>,
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the

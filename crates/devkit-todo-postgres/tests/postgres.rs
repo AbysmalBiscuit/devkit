@@ -9,7 +9,7 @@ use std::{
 };
 
 use devkit_todo::TodoStore;
-use devkit_todo_postgres::{Database, PostgresStore};
+use devkit_todo_postgres::{Database, PostgresStore, Trust};
 
 const DIRECT: &str = "DEVKIT_TEST_POSTGRES_URL";
 const POOLER: &str = "DEVKIT_TEST_POOLER_URL";
@@ -33,7 +33,7 @@ fn fresh_root() -> String {
 }
 
 fn store(var: &str) -> Option<((), PostgresStore)> {
-    let db = Database::new(&url(var)?, Duration::from_secs(10)).unwrap();
+    let db = Database::new(&url(var)?, Duration::from_secs(10), &Trust::default()).unwrap();
     Some(((), PostgresStore::new(db, fresh_root())))
 }
 
@@ -103,7 +103,7 @@ fn a_role_that_cannot_create_the_schema_is_told_why() {
     let (_, host_and_db) = direct.rsplit_once('@').unwrap();
     let (host, _) = host_and_db.rsplit_once('/').unwrap();
     let limited = format!("postgres://{name}:pw@{host}/{name}");
-    let db = Database::new(&limited, Duration::from_secs(10)).unwrap();
+    let db = Database::new(&limited, Duration::from_secs(10), &Trust::default()).unwrap();
     let err = PostgresStore::new(db, "r")
         .list(&devkit_todo::Filter::all())
         .unwrap_err();
@@ -111,4 +111,46 @@ fn a_role_that_cannot_create_the_schema_is_told_why() {
     assert!(shown.contains("permission denied"), "{shown}");
     admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
     admin(&direct, &format!("DROP ROLE {name}"));
+}
+
+const TLS: &str = "DEVKIT_TEST_POSTGRES_TLS_URL";
+const CA: &str = "DEVKIT_TEST_POSTGRES_CA";
+
+#[test]
+fn a_certificate_no_trusted_root_vouches_for_is_refused() {
+    let Some(tls) = url(TLS) else {
+        return;
+    };
+    let db = Database::new(&tls, Duration::from_secs(10), &Trust::default()).unwrap();
+    let err = format!("{:#}", db.check().unwrap_err());
+    assert!(err.contains("certificate"), "{err}");
+}
+
+#[test]
+fn a_ca_file_lets_the_certificate_verify() {
+    let (Some(tls), Some(ca)) = (url(TLS), url(CA)) else {
+        return;
+    };
+    let trust = Trust {
+        ca_file: Some(ca.into()),
+    };
+    let db = Database::new(
+        &format!("{tls}?sslmode=require"),
+        Duration::from_secs(10),
+        &trust,
+    )
+    .unwrap();
+    db.check().unwrap();
+}
+
+#[test]
+fn a_ca_file_that_cannot_be_read_is_named() {
+    let trust = Trust {
+        ca_file: Some("/nonexistent/ca.crt".into()),
+    };
+    let err = Database::new("postgres://h/db", Duration::from_secs(1), &trust).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("/nonexistent/ca.crt"),
+        "{err:#}"
+    );
 }

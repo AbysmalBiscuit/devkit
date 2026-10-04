@@ -1095,6 +1095,14 @@
       "additionalProperties": false,
       "description": "Where `[todo] backend = \"postgres\"` finds its database: the connection\nURL `DEVKIT_TODO_DATABASE_URL` resolves to, from the environment, then\nthis Doppler scope when set, then the secrets file.",
       "properties": {
+        "ca_file": {
+          "default": null,
+          "description": "A PEM file of CA certificates to trust, besides the bundled and\nplatform roots, when verifying the database's certificate. Supabase\nsigns its certificates with its own CA, which its dashboard offers\nfor download.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "doppler_config": {
           "default": null,
           "description": "The Doppler config to read it from. Doppler's own default when absent.",
@@ -1618,25 +1626,26 @@
     },
     "TodoConfig": {
       "additionalProperties": false,
-      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskwarrior\"\nproject = \"agents\"\n\n[todo.taskwarrior]\npath = \"/opt/task\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\n```",
+      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskwarrior\"\nproject = \"agents\"\nhold_stop = true\n\n[todo.taskwarrior]\npath = \"/opt/task\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n```",
       "properties": {
         "backend": {
           "$ref": "#/$defs/TodoBackend",
           "default": "builtin",
           "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskwarrior` keeps them in the local taskwarrior\nthrough taskwarrior 3's `task` program, under the project `project`\nnames. `taskchampion` keeps them in a taskchampion replica devkit\nembeds, under the same project, and can sync it to a directory or a\nsync server. `postgres` keeps them in a Postgres database every\nmachine shares, under the same project, with the activity log beside\nthem. Set it in\n`~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:\na committed `taskwarrior` breaks every machine without `task`, cloud\nsessions included. `DEVKIT_TODO_BACKEND`, when set, overrides it with\nthe same spellings."
         },
-        "postgres": {
-          "$ref": "#/$defs/PostgresConfig",
-          "default": {
-            "doppler_config": null,
-            "doppler_project": null
-          },
-          "description": "The `postgres` backend's settings."
-        },
         "hold_stop": {
           "default": true,
           "description": "Whether a stop hook sends an agent back to its open todos: its\nsession's pending todos in a workspace and the todos it has in\nprogress. One reminder per unchanged list; stopping again goes\nthrough.",
           "type": "boolean"
+        },
+        "postgres": {
+          "$ref": "#/$defs/PostgresConfig",
+          "default": {
+            "ca_file": null,
+            "doppler_config": null,
+            "doppler_project": null
+          },
+          "description": "The `postgres` backend's settings."
         },
         "project": {
           "default": "devkit",
@@ -1936,7 +1945,9 @@
       "$ref": "#/$defs/TodoConfig",
       "default": {
         "backend": "builtin",
+        "hold_stop": true,
         "postgres": {
+          "ca_file": null,
           "doppler_config": null,
           "doppler_project": null
         },

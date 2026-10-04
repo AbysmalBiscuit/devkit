@@ -5,12 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use rustls::{
-    DigitallySignedStruct, SignatureScheme,
-    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    crypto::CryptoProvider,
-    pki_types::{CertificateDer, ServerName, UnixTime},
-};
+use devkit_common::tls::Trust;
 use tokio::runtime::Runtime;
 use tokio_postgres::{Client, Config, error::SqlState};
 use tokio_postgres_rustls::MakeRustlsConnect;
@@ -86,6 +81,7 @@ enum State {
 /// database may sit behind a transaction-mode pooler.
 pub struct Database {
     config: Option<Config>,
+    tls: Option<MakeRustlsConnect>,
     wait: Duration,
     /// When set, every operation gives up by then, whatever its wait.
     deadline: Mutex<Option<Instant>>,
@@ -106,14 +102,17 @@ impl fmt::Debug for Database {
 impl Database {
     /// The database `url` names, a `postgres://` URL or libpq's `key=value`
     /// form, not connected yet. TLS is used whenever the server offers it,
-    /// unless `sslmode=disable`; as with libpq's `prefer` and `require`, the
-    /// server's certificate is not verified.
-    pub fn new(url: &str, wait: Duration) -> Result<Arc<Self>> {
+    /// unless `sslmode=disable`, and `sslmode=require` refuses a server that
+    /// does not. The server's certificate is always verified, against the
+    /// default roots and `trust`.
+    pub fn new(url: &str, wait: Duration, trust: &Trust) -> Result<Arc<Self>> {
         let config = url
             .parse::<Config>()
             .context("the todo database URL does not parse")?;
+        let tls = MakeRustlsConnect::new(trust.client_config()?);
         Ok(Arc::new(Self {
             config: Some(config),
+            tls: Some(tls),
             wait,
             deadline: Mutex::new(None),
             on_connect_failure: OnceLock::new(),
@@ -126,6 +125,7 @@ impl Database {
     pub fn unusable(reason: impl fmt::Display) -> Arc<Self> {
         Arc::new(Self {
             config: None,
+            tls: None,
             wait: Duration::ZERO,
             deadline: Mutex::new(None),
             on_connect_failure: OnceLock::new(),
@@ -255,8 +255,10 @@ impl Database {
             *state = State::Closed;
         }
         if let State::Closed = state {
-            let config = self.config.as_ref().ok_or_else(|| anyhow!("no database"))?;
-            let (client, connection) = config.connect(tls()).await?;
+            let (Some(config), Some(tls)) = (&self.config, &self.tls) else {
+                return Err(anyhow!("no database"));
+            };
+            let (client, connection) = config.connect(tls.clone()).await?;
             tokio::spawn(connection);
             *state = State::Open(client);
         }
@@ -288,66 +290,4 @@ fn missing_schema(e: &anyhow::Error) -> bool {
                 *code == SqlState::UNDEFINED_TABLE || *code == SqlState::INVALID_SCHEMA_NAME
             })
     })
-}
-
-fn tls() -> MakeRustlsConnect {
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = rustls::ClientConfig::builder_with_provider(provider.clone())
-        .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])
-        .expect("ring supports TLS 1.2 and 1.3")
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(Unverified(provider)))
-        .with_no_client_auth();
-    MakeRustlsConnect::new(config)
-}
-
-/// Accepts any server certificate while still checking the handshake's
-/// signatures, as libpq does under `sslmode=prefer` and `require`: managed
-/// Postgres hosts, Supabase among them, sign theirs with a private CA.
-#[derive(Debug)]
-struct Unverified(Arc<CryptoProvider>);
-
-impl ServerCertVerifier for Unverified {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
-    }
 }

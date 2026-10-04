@@ -2,5 +2,5 @@
 # Removes what `up.sh` started on the same ports.
 set -euo pipefail
 name=devkit-todo-pg-${PG_PORT:-55432}
-docker rm -f "$name" "$name-pooler" >/dev/null 2>&1 || true
+docker rm -f "$name" "$name-pooler" "$name-tls" >/dev/null 2>&1 || true
 docker network rm "$name" >/dev/null 2>&1 || true

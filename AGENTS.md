@@ -13,7 +13,7 @@ devrun task fmt                                         # nightly rustfmt; stabl
 
 Run all of them before committing. CI runs them on ubuntu, macos and windows.
 
-The Postgres todo tests return early unless `DEVKIT_TEST_POSTGRES_URL` and `DEVKIT_TEST_POOLER_URL` name a database, directly and through a transaction-mode pooler. `crates/devkit-todo-postgres/testdb/up.sh` starts both in docker and prints the two variables; CI's `postgres` job runs them that way.
+The Postgres todo tests return early unless `DEVKIT_TEST_POSTGRES_URL` and `DEVKIT_TEST_POOLER_URL` name a database, directly and through a transaction-mode pooler, and the certificate tests unless `DEVKIT_TEST_POSTGRES_TLS_URL` and `DEVKIT_TEST_POSTGRES_CA` name a server offering TLS and its CA. `crates/devkit-todo-postgres/testdb/up.sh` starts them in docker and prints the variables; CI's `postgres` job runs them that way.
 
 Text written for agents (the brief, hook injections, help an agent reads) also has an opt-in eval, since CI cannot judge whether an agent understands it. It needs a logged-in `claude`, and every run is billed:
 

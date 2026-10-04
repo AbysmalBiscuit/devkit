@@ -20,7 +20,7 @@ use devkit_todo::{
     Filter, Status, TodoStore,
     activity::{ActivityStore, ClaimEnd, RunEnd},
 };
-use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore};
+use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore, Trust};
 use pgstall::Stalled;
 use serde_json::{Value, json};
 use syncserver::Silent;
@@ -57,7 +57,10 @@ fn proj(root: &str) -> Proj {
 }
 
 fn store(url: &str, root: &str) -> PostgresStore {
-    PostgresStore::new(Database::new(url, Duration::from_secs(10)).unwrap(), root)
+    PostgresStore::new(
+        Database::new(url, Duration::from_secs(10), &Trust::default()).unwrap(),
+        root,
+    )
 }
 
 fn session(id: &str, url: &str) -> Vec<(&'static str, String)> {
@@ -158,7 +161,7 @@ fn activity_lands_in_the_database() {
     }
     hook("subagent-stop", "SubagentStop");
 
-    let db = Database::new(&url, Duration::from_secs(10)).unwrap();
+    let db = Database::new(&url, Duration::from_secs(10), &Trust::default()).unwrap();
     let activity = PostgresActivity::new(db, &root)
         .read(SystemTime::now().into())
         .unwrap();
@@ -460,10 +463,13 @@ fn hooks_reuse_the_url_doppler_gave() {
         assert!(out.status.success(), "{}", stderr(&out));
     }
     assert_eq!(doppler_calls(bin.path()), 1);
-    let runs = PostgresActivity::new(Database::new(&url, Duration::from_secs(10)).unwrap(), &root)
-        .read(SystemTime::now().into())
-        .unwrap()
-        .runs;
+    let runs = PostgresActivity::new(
+        Database::new(&url, Duration::from_secs(10), &Trust::default()).unwrap(),
+        &root,
+    )
+    .read(SystemTime::now().into())
+    .unwrap()
+    .runs;
     assert_eq!(runs.len(), 3, "{runs:?}");
     let cached = std::fs::read_dir(p.state().join("todo"))
         .unwrap()

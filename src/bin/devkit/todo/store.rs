@@ -22,7 +22,7 @@ use devkit_todo::{
     ambassador_impl_TodoStore,
 };
 use devkit_todo_builtin::BuiltinStore;
-use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore};
+use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore, Trust};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
 use devkit_todo_taskwarrior::TaskwarriorStore;
 use serde::{Deserialize, Serialize, de::IntoDeserializer};
@@ -279,7 +279,12 @@ pub(crate) fn open_database(
     };
     let db = match url {
         None => Err(format!("{DATABASE_VAR} is not set")),
-        Some(url) => Database::new(&url, wait).map_err(|e| format!("{DATABASE_VAR}: {e:#}")),
+        Some(url) => {
+            let trust = Trust {
+                ca_file: config.ca_file.as_deref().map(expand_tilde),
+            };
+            Database::new(&url, wait, &trust).map_err(|e| format!("{DATABASE_VAR}: {e:#}"))
+        }
     };
     if let (Ok(db), Source::Doppler) = (&db, &source) {
         db.on_connect_failure(|| {

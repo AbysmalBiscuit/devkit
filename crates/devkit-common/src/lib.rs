@@ -27,6 +27,7 @@ pub mod store;
 pub mod supervise;
 pub mod sys;
 pub mod template;
+pub mod tls;
 pub mod tracker;
 pub mod ui;
 pub mod vcs;
