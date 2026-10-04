@@ -28,7 +28,10 @@ use super::{
     payload::{self, Payload},
     record,
 };
-use crate::todo::store::Store;
+use crate::todo::{
+    queue::{self, Deferred},
+    store::Store,
+};
 
 /// The harnesses whose sessions name a todo node.
 pub(crate) fn harness_of(harness: AnyHarness) -> Option<Harness> {
@@ -67,7 +70,20 @@ pub(crate) fn release(
         let holder = to_todo_holder(&holder);
         let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
         let store = Store::for_hook(checkout, cwd);
-        if store.apply(&Edit::ReleaseAll { holder }).is_err() {
+        let released = match store.queue_dir() {
+            Some(dir) => {
+                let entry = Deferred::Release {
+                    holder: holder.to_string(),
+                    cwd: cwd.to_path_buf(),
+                };
+                queue::push(dir, &entry).is_ok() && {
+                    drain(dir);
+                    true
+                }
+            }
+            None => store.apply(&Edit::ReleaseAll { holder }).is_ok(),
+        };
+        if !released {
             return;
         }
         match push {
@@ -183,10 +199,60 @@ fn with_holder(command: &str, analysis: &Analysis, holder: &str) -> Option<Strin
 /// on stderr and skipped. A store whose lock stayed busy past a hook's wait
 /// is skipped in silence.
 pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
-    if let Err(e) = try_capture(payload, checkout)
+    if payload.tool_name().and_then(NativeTool::parse).is_none() {
+        return;
+    }
+    let cwd = record::payload_cwd(payload);
+    let store = Store::for_hook(checkout, &cwd);
+    match store.queue_dir() {
+        Some(dir) => {
+            let entry = Deferred::Capture {
+                harness: payload.harness().to_string(),
+                payload: payload.raw().clone(),
+            };
+            if queue::push(dir, &entry).is_ok() {
+                drain(dir);
+            }
+        }
+        None => report(try_capture(payload, checkout)),
+    }
+    // A capture can fail after some of its writes committed.
+    store.spawn_sync(&cwd);
+}
+
+fn report(result: Result<()>) {
+    if let Err(e) = result
         && e.downcast_ref::<LockBusy>().is_none()
     {
         eprintln!("devkit todo: {e:#}");
+    }
+}
+
+/// Applies the hook writes queued beside the replica in `dir`, oldest first,
+/// and returns how many it applied. One that finds the replica lock still
+/// busy stays queued for the next write or sync.
+pub(crate) fn drain(dir: &Path) -> usize {
+    queue::drain(dir, apply_deferred, |e| report(Err(e)))
+}
+
+fn apply_deferred(entry: &Deferred) -> Result<()> {
+    match entry {
+        Deferred::Capture { harness, payload } => {
+            let harness = harness.parse::<AnyHarness>()?;
+            let Some(payload) = Payload::new(
+                Some(harness),
+                super::HookEvent::PostToolUse,
+                payload.clone(),
+            ) else {
+                return Ok(());
+            };
+            try_capture(&payload, &Checkout::at(&record::payload_cwd(&payload)))
+        }
+        Deferred::Release { holder, cwd } => {
+            Store::for_hook(&Checkout::at(cwd), cwd).apply(&Edit::ReleaseAll {
+                holder: Holder::new(holder),
+            })
+        }
     }
 }
 
@@ -258,15 +324,12 @@ fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
     };
     let raw = payload.raw();
     let input = &raw["tool_input"];
-    let captured = match tool {
+    match tool {
         NativeTool::TaskCreate => task_create(&c, input, &raw["tool_response"]),
         NativeTool::TaskUpdate => task_update(&c, input),
         NativeTool::UpdatePlan => list_replace(&c, &input["plan"], "step"),
         NativeTool::TodoWrite => list_replace(&c, &input["todos"], "content"),
-    };
-    // A capture can fail after some of its writes committed.
-    c.store.spawn_sync(&cwd);
-    captured
+    }
 }
 
 /// Claude Code's task list is shared by a session and its sub-agents, so the

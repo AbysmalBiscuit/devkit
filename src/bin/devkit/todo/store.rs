@@ -28,9 +28,15 @@ pub(crate) const SYNC_VARS: [&str; 3] = [
     "DEVKIT_TODO_SYNC_SECRET",
 ];
 
-/// How long a hook waits for the taskchampion replica's lock before it acts
-/// as if the store had failed.
-const HOOK_LOCK_WAIT: Duration = Duration::from_secs(2);
+/// How long a hook waits for the taskchampion replica's lock before it
+/// queues its write instead.
+const HOOK_LOCK_WAIT: Duration = Duration::from_secs(1);
+
+/// How long a CLI write waits for the taskchampion replica's lock: longer
+/// than one sync attempt against a server that stops answering (a 10 s
+/// connect and a 60 s read), so a write outlasts a stuck sync and fails only
+/// behind something stuck for good.
+const CLI_LOCK_WAIT: Duration = Duration::from_secs(75);
 
 /// The store `[todo] backend` names.
 #[derive(Delegate)]
@@ -221,7 +227,28 @@ impl Store {
         Ok(Self::from_config(&TodoConfig {
             backend,
             ..config.unwrap_or_default()
-        }))
+        })
+        .waiting(CLI_LOCK_WAIT))
+    }
+
+    /// This store with taskchampion's replica lock wait bounded by `wait`.
+    fn waiting(self, wait: Duration) -> Self {
+        match self {
+            Self::Taskchampion(Replica { store, syncs }) => Self::Taskchampion(Replica {
+                store: store.with_lock_wait(wait),
+                syncs,
+            }),
+            store => store,
+        }
+    }
+
+    /// Where hook writes queue while the replica lock is busy: `None` for a
+    /// backend whose writes always wait.
+    pub(crate) fn queue_dir(&self) -> Option<&Path> {
+        match self {
+            Self::Taskchampion(replica) => Some(replica.store.data_dir()),
+            _ => None,
+        }
     }
 
     /// The replica `devkit todo sync` in `cwd` syncs, its target resolved:
@@ -253,16 +280,11 @@ impl Store {
         let Ok((backend, _)) = effective_backend(config.as_ref(), env.as_deref()) else {
             return Self::Builtin(BuiltinStore::open());
         };
-        match Self::from_config(&TodoConfig {
+        Self::from_config(&TodoConfig {
             backend,
             ..config.unwrap_or_default()
-        }) {
-            Self::Taskchampion(Replica { store, syncs }) => Self::Taskchampion(Replica {
-                store: store.with_lock_wait(HOOK_LOCK_WAIT),
-                syncs,
-            }),
-            store => store,
-        }
+        })
+        .waiting(HOOK_LOCK_WAIT)
     }
 }
 

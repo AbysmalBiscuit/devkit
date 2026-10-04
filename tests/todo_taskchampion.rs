@@ -325,7 +325,7 @@ fn an_interrupted_sync_rolls_back() {
 }
 
 #[test]
-fn a_hook_gives_up_on_a_held_replica_within_its_budget() {
+fn a_hook_queues_its_write_behind_a_held_replica() {
     let p = Proj::new();
     let held = HeldLock::at(replica_dir(&p).join("devkit.lock"));
     let create = json!({
@@ -349,10 +349,15 @@ fn a_hook_gives_up_on_a_held_replica_within_its_budget() {
     assert_eq!(stdout(&out), "");
     assert_eq!(stderr(&out), "");
     assert!(
-        took >= Duration::from_millis(1500) && took < Duration::from_secs(4),
+        took >= Duration::from_millis(800) && took < Duration::from_secs(3),
         "{took:?}"
     );
     assert!(replica(&p).is_empty());
+    let next = p.devkit(&["todo", "add", "next"], &backend("taskchampion"));
+    assert!(next.status.success(), "{}", stderr(&next));
+    let mut texts: Vec<String> = replica(&p).into_iter().map(|t| t.description).collect();
+    texts.sort();
+    assert_eq!(texts, ["alpha", "next"]);
 }
 
 /// A project whose home config syncs the taskchampion replica to
@@ -696,4 +701,49 @@ fn a_write_returns_while_its_sync_still_runs() {
             held.is_err_and(|e| e.is::<devkit_common::store::LockBusy>())
         },
     );
+}
+
+#[test]
+fn writes_during_a_slow_sync_all_land() {
+    let p = Proj::new();
+    let server = SyncServer::start();
+    let env = server_env(&server.url);
+    let seeded = p.devkit(&["todo", "add", "first"], &env);
+    assert!(seeded.status.success(), "{}", stderr(&seeded));
+    let dir = replica_dir(&p);
+    poll_until(Duration::from_secs(30), "the first sync", || {
+        server.versions().len() == 1 && !dir.join("sync.pending").exists()
+    });
+
+    server.hang_on_child_of(None);
+    let mut slow = p.devkit_child(&["todo", "sync"], &env);
+    server.wait_hung(Duration::from_secs(30));
+    let mut writer = p.devkit_child(&["todo", "add", "second"], &env);
+    let create = json!({
+        "session_id": SESSION,
+        "cwd": p.path,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "TaskCreate",
+        "tool_input": {"subject": "alpha", "description": "alpha"},
+        "tool_response": {"task": {"id": "1", "subject": "alpha"}},
+    });
+    let started = Instant::now();
+    let out = p.hook_with("post-tool-use", "claude-code", &create, &env);
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(stdout(&out), "");
+    server.release();
+    assert!(slow.wait().unwrap().success());
+    assert!(writer.wait().unwrap().success());
+
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = other_replica(other_dir.path(), &server.url);
+    poll_until(Duration::from_secs(30), "every write on the server", || {
+        other.sync_once().unwrap();
+        descriptions(&other) == ["alpha", "first", "second"]
+    });
 }

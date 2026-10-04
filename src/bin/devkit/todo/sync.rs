@@ -85,6 +85,7 @@ pub(crate) fn run(store: &TaskchampionStore, background: bool) -> Result<()> {
         };
         let succeeded = loop {
             let _ = fs::remove_file(pending_path(dir));
+            crate::hook::todo::drain(dir);
             if let Err(e) = store.sync_once() {
                 let reason = format!("{e:#}");
                 write_private(&failed_path(dir), &reason);
@@ -94,6 +95,10 @@ pub(crate) fn run(store: &TaskchampionStore, background: bool) -> Result<()> {
                 break false;
             }
             let _ = fs::remove_file(failed_path(dir));
+            // Hook writes queued behind this sync's lock go out on a rerun.
+            if crate::hook::todo::drain(dir) > 0 {
+                mark_pending(dir);
+            }
             if !pending_path(dir).exists() {
                 break true;
             }

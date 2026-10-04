@@ -1,6 +1,7 @@
 //! `devkit todo`: the todo lists agents and people share, kept in the store
 //! `[todo] backend` names.
 
+pub(crate) mod queue;
 pub(crate) mod store;
 pub(crate) mod sync;
 
@@ -218,6 +219,9 @@ pub fn run(cli: TodoCli) -> Result<()> {
         }
     }
     if writes {
+        if let Some(dir) = store.queue_dir() {
+            crate::hook::todo::drain(dir);
+        }
         store.spawn_sync(&cwd);
     }
     Ok(())
