@@ -34,10 +34,6 @@ impl PostgresStore {
         }
     }
 
-    pub fn database(&self) -> &Arc<Database> {
-        &self.db
-    }
-
     /// The activity log kept beside these todos, under the same root.
     pub fn activity(&self) -> PostgresActivity {
         PostgresActivity::new(self.db.clone(), &self.root)
