@@ -160,6 +160,16 @@ impl PostgresActivity {
                 .read_only(true)
                 .start()
                 .await?;
+            // The snapshot is taken at the transaction's first statement, so
+            // reading the clock first makes `now` the moment the records
+            // are read as of.
+            let now = match now {
+                Some(now) => now,
+                None => tx
+                    .query_typed_one("SELECT clock_timestamp()", &[])
+                    .await?
+                    .get(0),
+            };
             let events = tx
                 .query_typed(
                     "SELECT at, event::text FROM devkit.activity WHERE root = $1 ORDER BY at, id",
@@ -172,13 +182,6 @@ impl PostgresActivity {
                     &[(&self.root, Type::TEXT)],
                 )
                 .await?;
-            let now = match now {
-                Some(now) => now,
-                None => tx
-                    .query_typed_one("SELECT clock_timestamp()", &[])
-                    .await?
-                    .get(0),
-            };
             tx.commit().await?;
             Ok((events, seen, now))
         })?;
