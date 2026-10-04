@@ -91,6 +91,24 @@ jobs:
       - name: Build without default features
         run: cargo build --workspace --no-default-features
 
+  postgres:
+    name: postgres todo backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      # The Postgres tests return early without a database, so the test job
+      # skips them. Here they run against Postgres directly and through a
+      # transaction-mode PgBouncer that keeps no prepared statement, as
+      # Supabase's pooler does.
+      - name: Start Postgres and the pooler
+        run: crates/devkit-todo-postgres/testdb/up.sh | sed 's/^export //' >> "$GITHUB_ENV"
+      - name: Test the postgres backend
+        run: cargo nextest run --workspace --no-fail-fast -E 'package(devkit-todo-postgres) | binary(todo_postgres)'
+
   cloud:
     name: cloud agent scripts
     runs-on: ubuntu-latest
