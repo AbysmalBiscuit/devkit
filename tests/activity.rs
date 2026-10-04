@@ -311,3 +311,14 @@ fn a_subagents_hooks_move_where_a_lost_run_ends() {
         "{end} outside the pre-tool-use hook's {before_hook}..{after_hook}"
     );
 }
+
+#[test]
+fn an_unreadable_log_is_an_error_naming_its_path() {
+    let p = Proj::new();
+    std::fs::create_dir_all(p.state().join("todo")).unwrap();
+    std::fs::write(p.state().join("todo/activity"), "not a directory").unwrap();
+    let out = p.devkit(&["activity"], &[]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("events.jsonl"), "{err}");
+}

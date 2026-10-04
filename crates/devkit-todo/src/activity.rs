@@ -11,7 +11,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -152,15 +152,14 @@ impl ActivityLog {
         line.push(b'\n');
         let path = self.dir.join(EVENTS);
         let open = || OpenOptions::new().create(true).append(true).open(&path);
-        let mut file = match open() {
+        let append = || match open() {
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 fs::create_dir_all(&self.dir)?;
-                open()?
+                open()?.write_all(&line)
             }
-            file => file?,
+            file => file?.write_all(&line),
         };
-        file.write_all(&line)?;
-        Ok(())
+        append().with_context(|| format!("appending to {}", path.display()))
     }
 
     /// Notes that `agent` of `session` fired a hook now.
@@ -177,17 +176,16 @@ impl ActivityLog {
                 .truncate(false)
                 .open(&path)
         };
-        let file = match open() {
+        let touch = || match open() {
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                open()?
+                open()?.set_modified(when)
             }
-            file => file?,
+            file => file?.set_modified(when),
         };
-        file.set_modified(when)?;
-        Ok(())
+        touch().with_context(|| format!("marking {} seen", path.display()))
     }
 
     /// Drops the last-hook marks of `agent`, or of every agent of `session`
@@ -199,7 +197,9 @@ impl ActivityLog {
             None => fs::remove_dir_all(&path),
         };
         match removed {
-            Err(e) if e.kind() != ErrorKind::NotFound => Err(e.into()),
+            Err(e) if e.kind() != ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("removing {}", path.display()))
+            }
             _ => Ok(()),
         }
     }
@@ -222,9 +222,10 @@ impl ActivityLog {
     /// Every run and interval in the log as of `now`. A line that does not
     /// parse is skipped.
     pub fn read(&self, now: DateTime<Utc>) -> Result<Activity> {
-        let text = match fs::read_to_string(self.dir.join(EVENTS)) {
+        let path = self.dir.join(EVENTS);
+        let text = match fs::read_to_string(&path) {
             Err(e) if e.kind() == ErrorKind::NotFound => String::new(),
-            text => text?,
+            text => text.with_context(|| format!("reading {}", path.display()))?,
         };
         let mut events: Vec<Event> = text
             .lines()
