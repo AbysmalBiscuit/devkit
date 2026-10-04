@@ -9,7 +9,6 @@ use serde_json::Value;
 
 use super::status::{Outcome, StatusWriter, Statuses, apply};
 use crate::{
-    cmd::gh_json,
     forge::Repo,
     github::{Api, TokenSource},
 };
@@ -239,22 +238,9 @@ impl GithubWriter {
     }
 
     /// Send `query` with the host's token, or through `gh` when none
-    /// resolves, the fallback `GithubTracker::details` takes.
+    /// resolves, and fail on the errors [`check`] rejects.
     fn send(&self, query: &str) -> Result<Value> {
-        let resp = match self.api.token() {
-            Some(_) => self.api.graphql_value(query)?,
-            None => gh_json(
-                &[
-                    "api",
-                    "graphql",
-                    "--hostname",
-                    self.api.host(),
-                    "-f",
-                    &format!("query={query}"),
-                ],
-                ".",
-            )?,
-        };
+        let resp = self.api.graphql_or_gh(query, Api::graphql_value)?;
         check(&resp, self.api.token_source())?;
         Ok(resp)
     }

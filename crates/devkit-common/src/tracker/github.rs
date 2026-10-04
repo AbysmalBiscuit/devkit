@@ -11,7 +11,6 @@ use anyhow::{Context, Result};
 
 use super::{AssignedIssue, IssueDetails, IssueRef, PrRef, State, StateKind, Tracker, TrackerKind};
 use crate::{
-    cmd::gh_json,
     forge::{Repo, remote::same_host},
     github::Api,
 };
@@ -610,22 +609,7 @@ impl Tracker for GithubTracker {
             .parse()
             .with_context(|| format!("bad issue number {id}"))?;
         let query = issue_query(&self.repo.slug, n);
-        let resp = match self.api.token() {
-            Some(_) => self.api.graphql_partial(&query)?,
-            // The same fallback the forge takes: with no bearer token for
-            // this host, `gh` may still reach it.
-            None => gh_json(
-                &[
-                    "api",
-                    "graphql",
-                    "--hostname",
-                    self.api.host(),
-                    "-f",
-                    &format!("query={query}"),
-                ],
-                ".",
-            )?,
-        };
+        let resp = self.api.graphql_or_gh(&query, Api::graphql_partial)?;
         Ok(parse_issue(&resp, id))
     }
 

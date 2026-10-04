@@ -182,6 +182,36 @@ impl Api {
         anyhow::bail!("GitHub GraphQL error: {}", graphql_error_message(&v));
     }
 
+    /// Send `query` through `with_token` (one of the `graphql*` methods,
+    /// whose acceptance rule applies) when this host has a token, else
+    /// through [`Api::gh_graphql`], since `gh` may still reach the host.
+    pub fn graphql_or_gh(
+        &self,
+        query: &str,
+        with_token: impl FnOnce(&Api, &str) -> Result<Value>,
+    ) -> Result<Value> {
+        match self.token() {
+            Some(_) => with_token(self, query),
+            None => self.gh_graphql(query),
+        }
+    }
+
+    /// Send `query` with `gh api graphql --hostname <host>`, returning what
+    /// `gh` prints.
+    pub fn gh_graphql(&self, query: &str) -> Result<Value> {
+        crate::cmd::gh_json(
+            &[
+                "api",
+                "graphql",
+                "--hostname",
+                self.host(),
+                "-f",
+                &format!("query={query}"),
+            ],
+            ".",
+        )
+    }
+
     /// GET `path` under the REST root. `Ok(Some(json))` on 2xx, `Ok(None)` on
     /// 404 (a clean "absent" the caller can act on), `Err` on any other status
     /// or transport error.
