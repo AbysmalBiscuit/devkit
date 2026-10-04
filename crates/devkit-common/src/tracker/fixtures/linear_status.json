@@ -1,0 +1,23 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "9f1c2b4e-1111-4c1e-9a0a-5d3b2a1c0e01",
+          "state": { "name": "Todo" },
+          "team": {
+            "states": {
+              "nodes": [
+                { "id": "st-backlog", "name": "Backlog" },
+                { "id": "st-todo", "name": "Todo" },
+                { "id": "st-doing", "name": "In Progress" },
+                { "id": "st-review", "name": "In Review" },
+                { "id": "st-done", "name": "Done" }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

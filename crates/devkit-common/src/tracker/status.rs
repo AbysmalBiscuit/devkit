@@ -16,6 +16,14 @@ pub trait StatusWriter {
     fn set_status(&self, id: &str, to: &str) -> Result<()>;
 }
 
+/// The status writer for the resolved tracker.
+#[derive(ambassador::Delegate)]
+#[delegate(StatusWriter)]
+pub enum Writer {
+    Github(crate::tracker::github_status::GithubWriter),
+    Linear(crate::tracker::linear_status::LinearWriter),
+}
+
 fn same(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }

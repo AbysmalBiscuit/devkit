@@ -11,6 +11,7 @@ pub mod fake;
 pub mod github;
 pub mod github_status;
 pub mod linear;
+pub mod linear_status;
 pub mod none;
 mod select;
 pub mod status;
