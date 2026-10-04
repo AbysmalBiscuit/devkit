@@ -97,6 +97,10 @@ pub enum TodoCommand {
         /// the last minute. What a write starts after it commits.
         #[arg(long, hide = true)]
         background: bool,
+        /// Write this sync's failure reason here. What a caller waiting on
+        /// the sync passes, to learn its own result.
+        #[arg(long, hide = true)]
+        result_file: Option<std::path::PathBuf>,
     },
     /// Print the todo block a hook injects.
     ///
@@ -198,8 +202,11 @@ pub fn run(cli: TodoCli) -> Result<()> {
             top,
             order,
         } => move_todo(&store, id, parent, top, order)?,
-        TodoCommand::Sync { background } => match Store::sync_replica(&cwd)? {
-            Some(replica) => sync::run(&replica, background)?,
+        TodoCommand::Sync {
+            background,
+            result_file,
+        } => match Store::sync_replica(&cwd)? {
+            Some(replica) => sync::run(&replica, background, result_file.as_deref())?,
             None if !background => eprintln!("devkit todo: this todo store has no sync target"),
             None => {}
         },

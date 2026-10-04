@@ -4,6 +4,7 @@
 //! not seen, and `sync.failed` holds the last failure's reason.
 
 use std::{
+    ffi::OsStr,
     fs::{self, File},
     io::ErrorKind,
     path::{Path, PathBuf},
@@ -67,7 +68,15 @@ pub(crate) fn failure_text(reason: &str) -> String {
 /// otherwise it waits its turn. Each pass clears `sync.pending` first and
 /// reruns when a write set it meanwhile. A failure is reported, never
 /// returned: the writes stay in the replica for the next sync.
-pub(crate) fn run(store: &TaskchampionStore, background: bool) -> Result<()> {
+///
+/// `result`, when given, receives this invocation's own failure reason, so a
+/// caller waiting on this process learns its result even when another sync
+/// fails meanwhile; `sync.failed` only holds off background attempts.
+pub(crate) fn run(
+    store: &TaskchampionStore,
+    background: bool,
+    result: Option<&Path>,
+) -> Result<()> {
     let dir = store.data_dir();
     if background && failed_recently(dir) {
         return Ok(());
@@ -89,6 +98,9 @@ pub(crate) fn run(store: &TaskchampionStore, background: bool) -> Result<()> {
             if let Err(e) = store.sync_once() {
                 let reason = format!("{e:#}");
                 write_private(&failed_path(dir), &reason);
+                if let Some(result) = result {
+                    write_private(result, &reason);
+                }
                 if !background {
                     eprintln!("{}", failure_text(&reason));
                 }
@@ -127,25 +139,31 @@ pub(crate) enum SyncOutcome {
 /// Starts `devkit todo sync` detached from this process, in `cwd` so it
 /// resolves the same store. It holds none of this process's handles, so it
 /// never writes to a terminal or keeps a caller's pipe open.
-fn start_sync(cwd: &Path, background: bool) -> Result<Child> {
+fn start_sync(cwd: &Path, extra: &[&OsStr]) -> Result<Child> {
     let mut cmd = Command::new(std::env::current_exe()?);
-    cmd.args(["todo", "sync"])
-        .args(background.then_some("--background"))
-        .current_dir(cwd);
+    cmd.args(["todo", "sync"]).args(extra).current_dir(cwd);
     Ok(devkit_common::sys::spawn_background(&mut cmd)?)
 }
 
 /// Marks the replica pending and starts a background sync, without waiting.
 pub(crate) fn spawn(store: &TaskchampionStore, cwd: &Path) {
     mark_pending(store.data_dir());
-    let _ = start_sync(cwd, true);
+    let _ = start_sync(cwd, &["--background".as_ref()]);
+}
+
+/// A result file no other waiter uses: this process's id and the time.
+fn result_path(data_dir: &Path) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    data_dir.join(format!("sync.result.{}.{nanos}", std::process::id()))
 }
 
 /// Starts a sync and waits for it up to `wait`. One still running at the
 /// bound is left to finish on its own.
 pub(crate) fn wait_for(store: &TaskchampionStore, cwd: &Path, wait: Duration) -> SyncOutcome {
-    let started = SystemTime::now();
-    let mut child = match start_sync(cwd, false) {
+    let result = result_path(store.data_dir());
+    let mut child = match start_sync(cwd, &["--result-file".as_ref(), result.as_os_str()]) {
         Ok(child) => child,
         Err(e) => return SyncOutcome::Failed(format!("{e:#}")),
     };
@@ -160,13 +178,11 @@ pub(crate) fn wait_for(store: &TaskchampionStore, cwd: &Path, wait: Duration) ->
             Err(e) => return SyncOutcome::Failed(e.to_string()),
         }
     };
-    let failed = failed_path(store.data_dir());
-    let fresh = fs::metadata(&failed)
-        .and_then(|m| m.modified())
-        .is_ok_and(|at| at >= started);
-    match (fresh, status.success()) {
-        (true, _) => SyncOutcome::Failed(fs::read_to_string(&failed).unwrap_or_default()),
-        (false, true) => SyncOutcome::Done,
-        (false, false) => SyncOutcome::Failed(format!("devkit todo sync exited with {status}")),
+    let reason = fs::read_to_string(&result).ok();
+    let _ = fs::remove_file(&result);
+    match (reason, status.success()) {
+        (Some(reason), _) => SyncOutcome::Failed(reason),
+        (None, true) => SyncOutcome::Done,
+        (None, false) => SyncOutcome::Failed(format!("devkit todo sync exited with {status}")),
     }
 }

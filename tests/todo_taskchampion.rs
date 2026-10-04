@@ -774,3 +774,34 @@ fn writes_during_a_slow_sync_all_land() {
         descriptions(&other) == ["alpha", "first", "second"]
     });
 }
+
+#[test]
+fn each_waited_sync_reports_its_own_result() {
+    let p = Proj::new();
+    let server = SyncServer::start();
+    let local = p.devkit(&["todo", "add", "one"], &backend("taskchampion"));
+    assert!(local.status.success(), "{}", stderr(&local));
+
+    server.hang_on_child_of(None);
+    let good = server_env(&server.url);
+    let succeeding = p.devkit_child(&["todo", "list", "--all", "--sync"], &good);
+    server.wait_hung(Duration::from_secs(30));
+    let bad = server_env("http://[unparsable");
+    let failing = p.devkit_child(&["todo", "list", "--all", "--sync"], &bad);
+    server.release();
+    let (succeeding, failing) = (
+        succeeding.wait_with_output().unwrap(),
+        failing.wait_with_output().unwrap(),
+    );
+    assert!(succeeding.status.success() && failing.status.success());
+    assert!(
+        !stderr(&succeeding).contains("sync failed"),
+        "{}",
+        stderr(&succeeding)
+    );
+    assert!(
+        stderr(&failing).contains("devkit todo: sync failed:"),
+        "{}",
+        stderr(&failing)
+    );
+}
