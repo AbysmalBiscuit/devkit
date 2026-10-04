@@ -366,3 +366,39 @@ fn doctor_names_the_variable_when_no_url_resolves() {
         "{database}"
     );
 }
+
+#[test]
+fn session_end_finishes_its_database_work_inside_the_budget() {
+    let Some(direct) = var("DEVKIT_TEST_POSTGRES_URL") else {
+        return;
+    };
+    let name = format!("devkit_{}", fresh_root().replace('-', "_"));
+    admin(&direct, &format!("CREATE DATABASE {name}"));
+    let url = with_dbname(&test_url().unwrap(), &name);
+    let p = proj("devkit");
+    let env = session("S", &url);
+    let id = added(&p, "held", &env);
+    let out = devkit(&p, &["todo", "start", &id], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    // Every write the session's end makes now answers just inside a hook's
+    // wait for one call, and all of them together well past the budget.
+    admin(
+        &with_dbname(&direct, &name),
+        "CREATE FUNCTION devkit.slow() RETURNS trigger LANGUAGE plpgsql AS
+             $$ BEGIN PERFORM pg_sleep(0.7); RETURN NULL; END $$;
+         CREATE TRIGGER slow AFTER UPDATE ON devkit.todos
+             FOR EACH STATEMENT EXECUTE FUNCTION devkit.slow();
+         CREATE TRIGGER slow AFTER INSERT ON devkit.activity
+             FOR EACH STATEMENT EXECUTE FUNCTION devkit.slow();
+         CREATE TRIGGER slow AFTER DELETE ON devkit.seen
+             FOR EACH STATEMENT EXECUTE FUNCTION devkit.slow();",
+    );
+    let end = json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path});
+    let started = Instant::now();
+    let out = p.hook_with("session-end", "claude-code", &end, &borrowed(&env));
+    let took = started.elapsed();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(took < HOOK_BUDGET, "session-end took {took:?}");
+
+    admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
+}

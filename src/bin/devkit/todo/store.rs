@@ -3,8 +3,8 @@
 use std::{
     collections::HashMap,
     path::Path,
-    sync::{Arc, Mutex},
-    time::Duration,
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use ambassador::Delegate;
@@ -49,6 +49,21 @@ pub(crate) const DATABASE_VAR: &str = "DEVKIT_TODO_DATABASE_URL";
 /// queues its write instead, and for each answer from the todo database,
 /// connecting included, before it gives up.
 const HOOK_WAIT: Duration = Duration::from_secs(1);
+
+/// All the time the session-end hook gives its todo database work, the
+/// release and the activity records together: the harness gives that hook
+/// two seconds in all, and process start and the other releases need the
+/// rest.
+pub(crate) const SESSION_END_DATABASE_BUDGET: Duration = Duration::from_millis(1500);
+
+/// Set once a hook has one budget for all of its database work.
+static DATABASE_DEADLINE: OnceLock<Instant> = OnceLock::new();
+
+/// Makes every todo database this process opens, before or after, give up
+/// by `budget` from now.
+pub(crate) fn finish_database_work_within(budget: Duration) {
+    let _ = DATABASE_DEADLINE.set(Instant::now() + budget);
+}
 
 /// How long a CLI call waits for each answer from the todo database,
 /// connecting included.
@@ -202,14 +217,19 @@ pub(crate) fn database(config: &PostgresConfig, wait: Duration) -> Arc<Database>
         wait,
     );
     let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
-    open.get_or_insert_default()
+    let db = open
+        .get_or_insert_default()
         .entry(key)
         .or_insert_with(|| {
             open_database(config, wait)
                 .0
                 .unwrap_or_else(Database::unusable)
         })
-        .clone()
+        .clone();
+    if let Some(at) = DATABASE_DEADLINE.get() {
+        db.finish_by(*at);
+    }
+    db
 }
 
 /// The replica's sync target: `server_dir` when set, without reading any

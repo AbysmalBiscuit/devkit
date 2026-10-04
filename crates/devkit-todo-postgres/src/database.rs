@@ -79,13 +79,16 @@ enum State {
 }
 
 /// One database, connected on first use and shared by the stores and logs
-/// built on it. Each operation, connecting included, gives up after `wait`.
+/// built on it. Each operation, connecting included, gives up after `wait`,
+/// or sooner at a deadline [`Database::finish_by`] sets.
 ///
 /// No statement is named and no state outlives a transaction, so the
 /// database may sit behind a transaction-mode pooler.
 pub struct Database {
     config: Option<Config>,
     wait: Duration,
+    /// When set, every operation gives up by then, whatever its wait.
+    deadline: Mutex<Option<Instant>>,
     state: Mutex<State>,
 }
 
@@ -110,6 +113,7 @@ impl Database {
         Ok(Arc::new(Self {
             config: Some(config),
             wait,
+            deadline: Mutex::new(None),
             state: Mutex::new(State::Closed),
         }))
     }
@@ -120,11 +124,27 @@ impl Database {
         Arc::new(Self {
             config: None,
             wait: Duration::ZERO,
+            deadline: Mutex::new(None),
             state: Mutex::new(State::Failed {
                 at: Instant::now(),
                 reason: reason.to_string(),
             }),
         })
+    }
+
+    /// Makes every operation from now on give up by `at`, so a caller with
+    /// one budget for all of its database work stays inside it.
+    pub fn finish_by(&self, at: Instant) {
+        *self.deadline.lock().unwrap_or_else(|e| e.into_inner()) = Some(at);
+    }
+
+    /// How long the next operation may take: its wait, cut short by the
+    /// deadline.
+    fn budget(&self) -> Duration {
+        match *self.deadline.lock().unwrap_or_else(|e| e.into_inner()) {
+            Some(at) => self.wait.min(at.saturating_duration_since(Instant::now())),
+            None => self.wait,
+        }
     }
 
     /// `host:port/dbname`, without the user or password.
@@ -178,10 +198,11 @@ impl Database {
                 out => out,
             }
         };
+        let budget = self.budget();
         let (out, timed_out) =
-            match block_on(async { tokio::time::timeout(self.wait, attempt).await })? {
+            match block_on(async { tokio::time::timeout(budget, attempt).await })? {
                 Ok(out) => (out, false),
-                Err(_) => (Err(anyhow!("no answer within {:?}", self.wait)), true),
+                Err(_) => (Err(anyhow!("no answer within {budget:?}")), true),
             };
         // The store's own refusals, an unknown id or a claim, read as they
         // are; anything the database or the network said names the database.
