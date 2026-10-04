@@ -3,7 +3,9 @@
 //! starts from an empty store and uses only the ids `add` returns.
 
 use crate::{
-    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
+    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusChange, StatusKind, Todo,
+    TodoStore,
+    activity::{Activity, ActivityLog, ClaimEnd, Interval, Recorded},
 };
 
 /// One `#[test]` per contract case. `$make` builds a fresh store and a guard
@@ -32,6 +34,10 @@ macro_rules! contract_tests {
             get_returns_the_todo,
             move_reorder_and_relocate,
             filters_match_exact_and_subtree,
+            apply_reports_each_status_change_it_made,
+            claiming_then_completing_records_one_completed_interval,
+            releasing_records_each_released_interval,
+            a_handed_claim_closes_one_interval_and_opens_the_next,
         );
     };
     (@each $make:expr; $($case:ident),* $(,)?) => {
@@ -77,6 +83,7 @@ fn set(s: &impl TodoStore, id: &str, to: StatusKind, actor: &str) -> anyhow::Res
         to,
         actor: Holder::new(actor),
     })
+    .map(drop)
 }
 
 fn in_progress(by: &str) -> Status {
@@ -352,4 +359,131 @@ pub fn filters_match_exact_and_subtree(s: &impl TodoStore) {
     assert_eq!(projects(Filter::exact(["r".to_string()])), ["r"]);
     assert_eq!(projects(Filter::all()), ["r", "r-web", "r.main"]);
     assert!(projects(Filter { nodes: Vec::new() }).is_empty());
+}
+
+/// Each change as `(todo, from, to)`, sorted by todo.
+fn changed(changes: Vec<StatusChange>) -> Vec<(String, Status, Option<Status>)> {
+    for change in &changes {
+        assert_eq!(change.node, "r.main", "{change:?}");
+    }
+    let mut out: Vec<_> = changes
+        .into_iter()
+        .map(|c| (c.todo, c.from, c.to))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+fn claim_edit(id: &str, by: &str) -> Edit {
+    Edit::SetStatus {
+        id: id.into(),
+        to: StatusKind::InProgress,
+        actor: Holder::new(by),
+    }
+}
+
+pub fn apply_reports_each_status_change_it_made(s: &impl TodoStore) {
+    let (a, b) = (add(s, "a"), add(s, "b"));
+    assert_eq!(changed(s.apply(&claim_edit(&a, "S")).unwrap()), [(
+        a.clone(),
+        Status::Pending,
+        Some(in_progress("S"))
+    )]);
+    assert!(s.apply(&claim_edit(&a, "S")).unwrap().is_empty());
+    let described = s.apply(&Edit::Describe {
+        id: a.clone(),
+        description: "a2".into(),
+    });
+    assert!(described.unwrap().is_empty());
+    assert_eq!(changed(s.apply(&claim_edit(&a, "S/x")).unwrap()), [(
+        a.clone(),
+        in_progress("S"),
+        Some(in_progress("S/x"))
+    )]);
+    s.apply(&claim_edit(&b, "S")).unwrap();
+    let release = Edit::ReleaseAll {
+        holder: Holder::new("S"),
+    };
+    let mut want = vec![
+        (a.clone(), in_progress("S/x"), Some(Status::Pending)),
+        (b.clone(), in_progress("S"), Some(Status::Pending)),
+    ];
+    want.sort_by(|x, y| x.0.cmp(&y.0));
+    assert_eq!(changed(s.apply(&release).unwrap()), want);
+    s.apply(&claim_edit(&a, "S")).unwrap();
+    assert_eq!(changed(s.apply(&Edit::Purge(a.clone())).unwrap()), [(
+        a,
+        in_progress("S"),
+        None
+    )]);
+}
+
+/// `s` recording into a fresh log, and the guard that keeps the log alive.
+fn recorded<S: TodoStore>(s: S) -> (tempfile::TempDir, Recorded<S>) {
+    let dir = tempfile::tempdir().unwrap();
+    let log = ActivityLog::at(dir.path().to_path_buf());
+    (dir, Recorded::new(s, log))
+}
+
+fn claims<S>(r: &Recorded<S>) -> Vec<Interval> {
+    let Activity { claims, .. } = r.log().read(std::time::SystemTime::now().into()).unwrap();
+    claims
+}
+
+fn ended(claim: &Interval) -> (&str, &str, Option<ClaimEnd>) {
+    assert!(claim.end.is_none_or(|end| end >= claim.start), "{claim:?}");
+    (&claim.todo, &claim.holder, claim.outcome)
+}
+
+pub fn claiming_then_completing_records_one_completed_interval(s: &impl TodoStore) {
+    let (_dir, r) = recorded(s);
+    let id = add(&r, "a");
+    set(&r, &id, StatusKind::InProgress, "S/a").unwrap();
+    set(&r, &id, StatusKind::Completed, "S/a").unwrap();
+    let claims = claims(&r);
+    assert_eq!(claims.len(), 1, "{claims:?}");
+    assert_eq!(
+        ended(&claims[0]),
+        (id.as_str(), "S/a", Some(ClaimEnd::Completed))
+    );
+    assert!(claims[0].end.is_some());
+    assert_eq!(claims[0].node, "r.main");
+}
+
+pub fn releasing_records_each_released_interval(s: &impl TodoStore) {
+    let (_dir, r) = recorded(s);
+    let (own, sub, other) = (add(&r, "own"), add(&r, "sub"), add(&r, "other"));
+    set(&r, &own, StatusKind::InProgress, "S").unwrap();
+    set(&r, &sub, StatusKind::InProgress, "S/a").unwrap();
+    set(&r, &other, StatusKind::InProgress, "T").unwrap();
+    r.apply(&Edit::ReleaseAll {
+        holder: Holder::new("S"),
+    })
+    .unwrap();
+    let claims = claims(&r);
+    let outcome = |id: &str| {
+        claims
+            .iter()
+            .find(|c| c.todo == id)
+            .map(|c| ended(c).2)
+            .unwrap_or_else(|| panic!("no interval for {id}: {claims:?}"))
+    };
+    assert_eq!(outcome(&own), Some(ClaimEnd::Released));
+    assert_eq!(outcome(&sub), Some(ClaimEnd::Released));
+    assert_eq!(outcome(&other), None);
+}
+
+pub fn a_handed_claim_closes_one_interval_and_opens_the_next(s: &impl TodoStore) {
+    let (_dir, r) = recorded(s);
+    let id = add(&r, "a");
+    set(&r, &id, StatusKind::InProgress, "S").unwrap();
+    set(&r, &id, StatusKind::InProgress, "S/a").unwrap();
+    let claims = claims(&r);
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    assert_eq!(
+        ended(&claims[0]),
+        (id.as_str(), "S", Some(ClaimEnd::Handed))
+    );
+    assert_eq!(ended(&claims[1]), (id.as_str(), "S/a", None));
+    assert_eq!(claims[0].end, Some(claims[1].start));
 }

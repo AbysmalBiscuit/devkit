@@ -8,7 +8,8 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, SecondsFormat, Utc};
 use devkit_common::store;
 use devkit_todo::{
-    Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, one_line, state_dir, transition,
+    Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore, one_line, state_dir,
+    transition,
 };
 use serde::{Deserialize, Serialize};
 
@@ -144,12 +145,14 @@ impl TodoStore for BuiltinStore {
         })
     }
 
-    fn apply(&self, edit: &Edit) -> Result<()> {
+    fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
         self.with_doc(|doc| {
+            let mut changes = Vec::new();
             match edit {
                 Edit::SetStatus { id, to, actor } => {
                     let todo = doc.todo_mut(id)?;
                     if let Some(next) = transition(&todo.status, *to, actor)? {
+                        changes.push(StatusChange::of(todo, Some(next.clone())));
                         todo.status = next;
                         todo.modified = Some(now());
                     }
@@ -182,13 +185,14 @@ impl TodoStore for BuiltinStore {
                 }
                 Edit::ReleaseAll { holder } => {
                     if holder.is_human() {
-                        return Ok(());
+                        return Ok(changes);
                     }
                     let stamp = now();
                     for todo in doc.todos.values_mut() {
                         if let Status::InProgress { by } = &todo.status
                             && holder.covers(by)
                         {
+                            changes.push(StatusChange::of(todo, Some(Status::Pending)));
                             todo.status = Status::Pending;
                             todo.modified = Some(stamp.clone());
                         }
@@ -196,10 +200,11 @@ impl TodoStore for BuiltinStore {
                 }
                 Edit::Purge(id) => {
                     let key = id.parse::<u64>().map_err(|_| no_todo(id))?;
-                    doc.todos.remove(&key).ok_or_else(|| no_todo(id))?;
+                    let todo = doc.todos.remove(&key).ok_or_else(|| no_todo(id))?;
+                    changes.push(StatusChange::of(&todo, None));
                 }
             }
-            Ok(())
+            Ok(changes)
         })
     }
 }

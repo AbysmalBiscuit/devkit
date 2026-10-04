@@ -63,9 +63,11 @@ pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout, cwd:
             holder: holder.clone(),
         };
         let direct = || {
-            store.apply(&Edit::ReleaseAll {
-                holder: holder.clone(),
-            })
+            store
+                .apply(&Edit::ReleaseAll {
+                    holder: holder.clone(),
+                })
+                .map(drop)
         };
         if record_write(&store, entry, direct).is_ok() {
             store.spawn_sync(cwd);
@@ -229,11 +231,11 @@ pub(crate) fn drain(dir: &Path) -> usize {
 fn apply_deferred(dir: &Path, entry: &Deferred) -> Result<()> {
     match entry {
         Deferred::Capture { root, mirror } => mirror.apply(&Store::queued_at(dir, root)),
-        Deferred::Release { root, holder } => {
-            Store::queued_at(dir, root).apply(&Edit::ReleaseAll {
+        Deferred::Release { root, holder } => Store::queued_at(dir, root)
+            .apply(&Edit::ReleaseAll {
                 holder: holder.clone(),
             })
-        }
+            .map(drop),
     }
 }
 
@@ -440,7 +442,7 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
     let changes = diff(&previous, &next);
     let mut failed = None;
     let mut apply = |edit: Edit| match c.store.apply(&edit) {
-        Ok(()) => true,
+        Ok(_) => true,
         Err(e) => {
             failed.get_or_insert(e);
             false

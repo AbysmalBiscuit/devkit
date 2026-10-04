@@ -5,6 +5,7 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use devkit::completions::{self, Shell};
 use strum::IntoEnumIterator;
 
+mod activity;
 mod auth;
 mod baseline;
 mod brief;
@@ -154,6 +155,11 @@ enum Cmd {
     /// Todo lists shared by agents and people across sessions.
     #[command(display_name = "devkit todo")]
     Todo(todo::TodoCli),
+    /// Report subagent runs and how long todos were held.
+    ///
+    /// Groups the runs by session and agent type, and the held time by todo.
+    /// A run with no agent type reports as `subagent`.
+    Activity(activity::ActivityCli),
     /// Install the old command names as hardlinks beside this binary.
     ///
     /// Creates hardlinks such as `issue` and `devrun` beside this
@@ -427,6 +433,7 @@ fn main() -> Result<()> {
                 Cmd::Rules(c) => rules::run(c),
                 Cmd::Template(c) => template::run(c),
                 Cmd::Todo(c) => todo::run(c),
+                Cmd::Activity(c) => activity::run(c),
                 Cmd::InstallLinks(a) => links::run(a),
             }
         }

@@ -190,10 +190,12 @@ pub fn run(cli: TodoCli) -> Result<()> {
         }
         TodoCommand::Done { ids } => set_status(&store, ids, StatusKind::Completed, &actor)?,
         TodoCommand::Cancel { ids } => set_status(&store, ids, StatusKind::Cancelled, &actor)?,
-        TodoCommand::Describe { id, text } => store.apply(&Edit::Describe {
-            id,
-            description: text,
-        })?,
+        TodoCommand::Describe { id, text } => {
+            store.apply(&Edit::Describe {
+                id,
+                description: text,
+            })?;
+        }
         TodoCommand::Move {
             id,
             parent,
@@ -298,9 +300,9 @@ fn move_todo(
         let Some(order) = order else {
             bail!("name a new --parent, --top or an --order");
         };
-        return store.apply(&Edit::Reorder { id, order });
+        return store.apply(&Edit::Reorder { id, order }).map(drop);
     }
-    store.apply(&Edit::Move { id, parent, order })
+    store.apply(&Edit::Move { id, parent, order }).map(drop)
 }
 
 fn list(

@@ -18,11 +18,13 @@ fn new(project: Option<&str>, description: &str) -> NewTodo {
 }
 
 fn start(store: &TaskwarriorStore, id: &str, actor: &str) -> anyhow::Result<()> {
-    store.apply(&Edit::SetStatus {
-        id: id.into(),
-        to: StatusKind::InProgress,
-        actor: Holder::new(actor),
-    })
+    store
+        .apply(&Edit::SetStatus {
+            id: id.into(),
+            to: StatusKind::InProgress,
+            actor: Holder::new(actor),
+        })
+        .map(drop)
 }
 
 #[test]

@@ -18,6 +18,7 @@
 //! `PermissionRequest` honour a JSON decision, so a stray `println!` would
 //! change what the agent does.
 
+mod activity;
 mod dialect;
 mod edit;
 mod gate;
@@ -191,13 +192,17 @@ pub(crate) fn read_payload(harness: Option<AnyHarness>, event: HookEvent) -> Opt
 /// is silence rather than a denial.
 ///
 /// An absent payload is read as an empty object rather than skipped, so a verb
-/// a harness fires with no body still records that it fired.
+/// a harness fires with no body still records that it fired. The activity log
+/// is written after the verb, whose releases come first.
 fn with_payload(
     harness: Option<AnyHarness>,
     event: HookEvent,
     f: impl FnOnce(&Payload) -> Result<()>,
 ) -> Result<()> {
-    f(&read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event)))
+    let payload = read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event));
+    let out = f(&payload);
+    activity::observe(&payload, event);
+    out
 }
 
 /// The retired `lockm hook <event>` spelling. Kept because an installed plugin
@@ -230,6 +235,7 @@ pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
     let Some(payload) = read_payload(harness, HookEvent::PreToolUse) else {
         return shell::deny_unreadable_payload(harness);
     };
+    activity::observe(&payload, HookEvent::PreToolUse);
     if let Some(write) = edit::write(&payload) {
         return edit::guard(&payload, write);
     }

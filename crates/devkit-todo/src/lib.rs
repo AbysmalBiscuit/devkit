@@ -5,6 +5,7 @@
 // crate, so they use absolute paths that must resolve here too.
 extern crate self as devkit_todo;
 
+pub mod activity;
 #[cfg(feature = "test-support")]
 pub mod contract;
 pub mod holder;
@@ -103,6 +104,32 @@ pub enum Edit {
     Purge(String),
 }
 
+/// One todo's status as an edit changed it, seen while the store held the
+/// lock it wrote under, so a recorder needs no read of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusChange {
+    pub todo: String,
+    pub node: String,
+    pub from: Status,
+    /// `None` when the edit removed the record.
+    pub to: Option<Status>,
+    /// When the store made the change, taken under that lock.
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
+impl StatusChange {
+    /// `todo` moving to `to`, now.
+    pub fn of(todo: &Todo, to: Option<Status>) -> Self {
+        Self {
+            todo: todo.id.clone(),
+            node: todo.node().to_string(),
+            from: todo.status.clone(),
+            to,
+            at: std::time::SystemTime::now().into(),
+        }
+    }
+}
+
 /// Where todos are kept. A backend that cannot apply an edit atomically
 /// documents the race.
 #[ambassador::delegatable_trait]
@@ -118,13 +145,36 @@ pub trait TodoStore {
     fn get(&self, id: &str) -> ::anyhow::Result<::std::option::Option<::devkit_todo::Todo>>;
     /// Returns the new todo's id.
     fn add(&self, todo: ::devkit_todo::NewTodo) -> ::anyhow::Result<::std::string::String>;
-    /// A refused status change is an error whose root cause is [`Claimed`];
-    /// an unknown id is the error `no todo <id>`.
-    fn apply(&self, edit: &::devkit_todo::Edit) -> ::anyhow::Result<()>;
+    /// Returns every status change the edit made, seen under the lock it
+    /// wrote under. A refused status change is an error whose root cause is
+    /// [`Claimed`]; an unknown id is the error `no todo <id>`.
+    fn apply(
+        &self,
+        edit: &::devkit_todo::Edit,
+    ) -> ::anyhow::Result<::std::vec::Vec<::devkit_todo::StatusChange>>;
+}
+
+impl<T: TodoStore + ?Sized> TodoStore for &T {
+    fn list(&self, filter: &Filter) -> anyhow::Result<Vec<Todo>> {
+        (**self).list(filter)
+    }
+
+    fn get(&self, id: &str) -> anyhow::Result<Option<Todo>> {
+        (**self).get(id)
+    }
+
+    fn add(&self, todo: NewTodo) -> anyhow::Result<String> {
+        (**self).add(todo)
+    }
+
+    fn apply(&self, edit: &Edit) -> anyhow::Result<Vec<StatusChange>> {
+        (**self).apply(edit)
+    }
 }
 
 /// Where devkit keeps todo state of its own, whichever backend holds the
-/// todos: the native map, the context digests, and the built-in store.
+/// todos: the native map, the context digests, the activity log, and the
+/// built-in store.
 pub fn state_dir() -> PathBuf {
     paths::state_dir().join("todo")
 }

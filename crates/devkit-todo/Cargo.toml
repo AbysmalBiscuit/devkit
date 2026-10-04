@@ -8,12 +8,15 @@ version = "0.14.9" # x-release-please-version
 anyhow.workspace = true
 ambassador.workspace = true
 serde = { workspace = true }
+serde_json.workspace = true
+chrono = { workspace = true, features = ["serde"] }
 devkit-common.workspace = true
 devkit-vcs.workspace = true
+tempfile = { workspace = true, optional = true }
 
 [features]
 # The backend contract suite, `contract` and `contract_tests!`.
-test-support = []
+test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 tempfile.workspace = true

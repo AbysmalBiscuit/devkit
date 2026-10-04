@@ -9,8 +9,8 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use devkit_common::store::{LockBusy, with_file_lock, with_file_lock_for};
 use devkit_todo::{
-    Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, by_prefix, is_uuid_prefix, one_line,
-    transition,
+    Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore, by_prefix,
+    is_uuid_prefix, one_line, transition,
 };
 use devkit_todo_taskwarrior::schema::{DEFAULT_ROOT, Exported, project_of};
 use taskchampion::{
@@ -478,16 +478,18 @@ impl TodoStore for TaskchampionStore {
         })
     }
 
-    fn apply(&self, edit: &Edit) -> Result<()> {
+    fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
         self.locked(async |replica| match edit {
             Edit::SetStatus { id, to, actor } => {
                 let todo = self.resolve(replica, id).await?;
                 match transition(&todo.status, *to, actor)? {
                     Some(next) => {
+                        let change = StatusChange::of(&todo, Some(next.clone()));
                         Self::change(replica, &todo, |task, ops| write_status(task, &next, ops))
-                            .await
+                            .await?;
+                        Ok(vec![change])
                     }
-                    None => Ok(()),
+                    None => Ok(Vec::new()),
                 }
             }
             Edit::Describe { id, description } => {
@@ -495,7 +497,8 @@ impl TodoStore for TaskchampionStore {
                 Self::change(replica, &todo, |task, ops| {
                     task.set_description(one_line(description), ops)
                 })
-                .await
+                .await?;
+                Ok(Vec::new())
             }
             Edit::Move { id, parent, order } => {
                 let todo = self.resolve(replica, id).await?;
@@ -516,14 +519,16 @@ impl TodoStore for TaskchampionStore {
                     task.set_value("subof", parent, ops)?;
                     task.set_value("order", Some(order.to_string()), ops)
                 })
-                .await
+                .await?;
+                Ok(Vec::new())
             }
             Edit::Reorder { id, order } => {
                 let todo = self.resolve(replica, id).await?;
                 Self::change(replica, &todo, |task, ops| {
                     task.set_value("order", Some(order.to_string()), ops)
                 })
-                .await
+                .await?;
+                Ok(Vec::new())
             }
             Edit::Relocate { id, project } => {
                 let todo = self.resolve(replica, id).await?;
@@ -531,25 +536,27 @@ impl TodoStore for TaskchampionStore {
                 Self::change(replica, &todo, |task, ops| {
                     task.set_value("project", Some(project), ops)
                 })
-                .await
+                .await?;
+                Ok(Vec::new())
             }
             Edit::ReleaseAll { holder } => {
                 if holder.is_human() {
-                    return Ok(());
+                    return Ok(Vec::new());
                 }
                 let mut ops = Operations::new();
+                let mut changes = Vec::new();
                 for task in replica.all_tasks().await?.values_mut() {
-                    let held = matches!(
-                        self.todo_of(task).map(|t| t.status),
-                        Some(Status::InProgress { by }) if holder.covers(&by)
-                    );
-                    if held {
+                    let Some(todo) = self.todo_of(task) else {
+                        continue;
+                    };
+                    if matches!(&todo.status, Status::InProgress { by } if holder.covers(by)) {
                         task.stop(&mut ops)?;
                         task.set_value("holder", None, &mut ops)?;
+                        changes.push(StatusChange::of(&todo, Some(Status::Pending)));
                     }
                 }
                 replica.commit_operations(ops).await?;
-                Ok(())
+                Ok(changes)
             }
             Edit::Purge(id) => {
                 let todo = self.resolve(replica, id).await?;
@@ -560,7 +567,7 @@ impl TodoStore for TaskchampionStore {
                 let mut ops = Operations::new();
                 data.delete(&mut ops);
                 replica.commit_operations(ops).await?;
-                Ok(())
+                Ok(vec![StatusChange::of(&todo, None)])
             }
         })
     }
