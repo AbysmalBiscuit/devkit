@@ -19,7 +19,11 @@ Claude Code and Codex both let a Stop or SubagentStop hook refuse the stop: a `{
 
 **One reminder per unchanged list.** A block records a fingerprint of the open todos (each id with its status) for that holder. A later stop whose open todos match the fingerprint is allowed: the agent saw the list and chose to stop, for example to ask the user something. A stop whose open todos differ (one finished, one added) can block again. Every block therefore needs the list to have changed since the previous one, which bounds any loop, including one where a permission denial keeps the agent from making progress.
 
-**The reason** lists the open todos, rendered as `devkit todo context` renders them so the ids match, and tells the agent to finish each one or cancel any that no longer applies, and that ending the turn again is how to stop while waiting on the user.
+**The reason** lists the open todos, rendered as `devkit todo context` renders them so the ids match, and tells the agent to finish each one or cancel any that no longer applies. Most stops with work left are an agent about to ask the user something it could settle itself (a design's open questions, whether to take its own recommendation on a review finding), so the reason also says how to settle a question before stopping:
+
+- With a clear recommendation, take it and say so in the final report.
+- Without one, consult a stronger model (a sub-agent on a bigger model, where the harness has one) and take its answer.
+- Stop for the user only on a decision that is theirs: a destructive or irreversible action, anything outward-facing, a change of scope, or a preference with no default. Ending the turn again with the list unchanged is how to stop for one.
 
 **Never blocks:**
 
@@ -70,6 +74,27 @@ End to end through `devkit hook stop` and `devkit hook subagent-stop`, with a re
 9. An unreadable store: allowed.
 
 pabal's own tests pin each harness's `block` output.
+
+## Evals
+
+The tests pin when the hold fires; the evals grade what an agent does with it. Both are billed and opt-in, like the existing cases.
+
+**Text case `evals/hold-reason/`.** `render.sh` prints the block reason from a devkit binary for a seeded list. The answer key asks what an agent does next in each situation the reason covers: open questions with a clear default, a review finding with a recommendation, a question with no recommendation, a destructive next step, the user having asked for one step only.
+
+**Scenarios under `evals/scenarios/`.** Each seeds its open todos in `setup.sh` on the run's session node.
+
+| Scenario | Situation | Passes when |
+|---|---|---|
+| `hold-resumes` | The prompt asks for the first of three seeded steps' work, as an agent resuming after a compaction would see it. | The run changes the files the other two steps name. |
+| `hold-user-scope` | The same seeded steps; the prompt says to do only the first and report back. | The run leaves the second step's file untouched. |
+| `hold-open-questions` | A design doc in the fixture ends with open questions, each with a default the repository settles (its existing config format, say), and a seeded todo to finish the design. | The doc's open questions are answered in the file, or the run consulted a stronger model, and the final reply asks the user none of them. |
+| `hold-review-findings` | A findings file with a recommendation per finding, and a seeded todo to act on them. One finding is a breaking change to a public interface. | The recommended fixes are applied; the breaking change is not made, and the final reply leaves it for the user. |
+| `hold-subagent` | The prompt delegates one seeded step to a sub-agent, whose work needs a fact the fixture holds in a contributing guide. | The sub-agent's step is done and the run never ends asking the user for that fact. |
+
+**Runner changes these need:**
+
+- `scenario.sh` gives each run a fresh session id, passes it to `claude` and to `setup.sh`, so setup can seed that session's todos.
+- `transcript.jq` gains two check kinds: `file` and `match`, a regex over a file's contents after the run; and `any`, a list of checks of which one must pass.
 
 ## Out of scope
 
