@@ -92,6 +92,20 @@ pub fn detach(cmd: &mut std::process::Command) {
     imp::detach(cmd)
 }
 
+/// Spawns `cmd` detached as [`detach`] does, with null stdio and no handle of
+/// this process: a caller that reads this process's output to its end is not
+/// held open by the child. On Windows a spawn inherits every inheritable
+/// handle, this process's own stdio included, so those stop being inheritable
+/// first, and the child gets no console.
+pub fn spawn_background(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    imp::detach_background(cmd);
+    cmd.spawn()
+}
+
 /// Non-blocking reap/poll of an owned child. Returns `true` once it has exited.
 pub fn reap_owned(pid: u32) -> bool {
     imp::reap_owned(pid)

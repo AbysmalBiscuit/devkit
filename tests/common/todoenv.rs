@@ -5,7 +5,7 @@
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
 };
 
 use devkit_todo::{Filter, Todo, TodoStore};
@@ -13,6 +13,17 @@ use devkit_todo_builtin::BuiltinStore;
 
 #[path = "testenv.rs"]
 mod testenv;
+
+/// Variables a developer's shell may set that would pick a test's todo
+/// backend, its sync target, or credentials doctor validates over the network.
+const AMBIENT_TODO_VARS: [&str; 6] = [
+    "DEVKIT_TODO_BACKEND",
+    "DEVKIT_TODO_SYNC_URL",
+    "DEVKIT_TODO_SYNC_CLIENT_ID",
+    "DEVKIT_TODO_SYNC_SECRET",
+    "LINEAR_API_KEY",
+    "SLACK_TOKEN",
+];
 
 pub struct Proj {
     root: tempfile::TempDir,
@@ -76,6 +87,24 @@ impl Proj {
         env: &[(&str, &str)],
         stdin: &str,
     ) -> Output {
+        let mut child = self.start(dir, program, args, env);
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// `devkit` started in the checkout with `env` set, left running.
+    pub fn devkit_child(&self, args: &[&str], env: &[(&str, &str)]) -> Child {
+        let mut child = self.start(&self.path, env!("CARGO_BIN_EXE_devkit"), args, env);
+        drop(child.stdin.take());
+        child
+    }
+
+    fn start(&self, dir: &Path, program: &str, args: &[&str], env: &[(&str, &str)]) -> Child {
         let mut cmd = Command::new(program);
         cmd.env("HOME", self.home.path())
             .env("XDG_STATE_HOME", self.home.path())
@@ -84,6 +113,9 @@ impl Proj {
             .env_remove("DEVKIT_CONFIG")
             .env_remove("DEVKIT_ENFORCE_WRITES")
             .env_remove("DEVKIT_ENFORCE_COMMANDS");
+        for var in AMBIENT_TODO_VARS {
+            cmd.env_remove(var);
+        }
         testenv::scrub_identity(&mut cmd);
         cmd.args(args)
             .envs(env.iter().copied())
@@ -91,14 +123,7 @@ impl Proj {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = cmd.spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
+        cmd.spawn().unwrap()
     }
 
     pub fn devkit(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
@@ -174,4 +199,39 @@ pub fn stdout(out: &Output) -> String {
 
 pub fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// The advisory lock at a path, held by another thread until this drops.
+pub struct HeldLock {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    holder: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HeldLock {
+    pub fn at(path: std::path::PathBuf) -> Self {
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            devkit_common::store::with_file_lock(&path, || {
+                held_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+                Ok(())
+            })
+            .unwrap();
+        });
+        held_rx.recv().unwrap();
+        Self {
+            release: Some(release_tx),
+            holder: Some(holder),
+        }
+    }
+}
+
+impl Drop for HeldLock {
+    fn drop(&mut self) {
+        drop(self.release.take());
+        if let Some(holder) = self.holder.take() {
+            let _ = holder.join();
+        }
+    }
 }

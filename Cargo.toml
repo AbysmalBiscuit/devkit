@@ -47,6 +47,7 @@ devkit-timing.workspace = true
 devkit-todo.workspace = true
 devkit-todo-builtin.workspace = true
 devkit-todo-taskwarrior.workspace = true
+devkit-todo-taskchampion.workspace = true
 ambassador.workspace = true
 pabal.workspace = true
 same-file.workspace = true
@@ -67,7 +68,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskwarrior"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskwarrior", "crates/devkit-todo-taskchampion"]
 
 [workspace.package]
 edition = "2024"
@@ -111,7 +112,10 @@ supports-hyperlinks = "3"
 strum = { version = "0.27", features = ["derive"] }
 pabal = { version = "0.2", features = ["clap"] }
 ambassador = "0.5.1"
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "2", features = ["json", "proxy-from-env"] }
+# An embedded taskchampion replica. Stays on the 2.0.2 line taskwarrior pins,
+# so its wire format matches the `task` a person reads the lists with.
+taskchampion = { version = "~2.0.2", default-features = false, features = ["server-sync", "bundled"] }
 # ureq's TLS stack. Default features off: they pull aws-lc-rs, ureq uses ring.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 webpki-roots = "0.26"
@@ -138,6 +142,7 @@ devkit-git = { path = "crates/devkit-git" }
 devkit-timing = { path = "crates/devkit-timing" }
 devkit-todo = { path = "crates/devkit-todo" }
 devkit-todo-builtin = { path = "crates/devkit-todo-builtin" }
+devkit-todo-taskchampion = { path = "crates/devkit-todo-taskchampion" }
 devkit-todo-taskwarrior = { path = "crates/devkit-todo-taskwarrior" }
 tree-sitter = "0.27"
 tree-sitter-bash = "0.25"

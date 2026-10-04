@@ -145,6 +145,31 @@ pub fn short_id(id: &str) -> &str {
     if is_uuid { &id[..8] } else { id }
 }
 
+/// The shortest uuid prefix an id may be, taskwarrior's `uuid.short`.
+const SHORT_ID: usize = 8;
+
+/// Whether `id` can name a uuid by prefix: at least [`short_id`]'s 8
+/// characters, and only hex digits and dashes. Anything else would reach a
+/// store's query as syntax.
+pub fn is_uuid_prefix(id: &str) -> bool {
+    (SHORT_ID..=36).contains(&id.len()) && id.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
+}
+
+/// The one todo in `todos` whose uuid starts with `id`, for a backend whose
+/// ids are uuids. More than one is an error naming every match.
+pub fn by_prefix(id: &str, todos: impl IntoIterator<Item = Todo>) -> anyhow::Result<Option<Todo>> {
+    if !is_uuid_prefix(id) {
+        return Ok(None);
+    }
+    let mut matches: Vec<Todo> = todos.into_iter().filter(|t| t.id.starts_with(id)).collect();
+    if matches.len() > 1 {
+        matches.sort_by(|a, b| a.id.cmp(&b.id));
+        let uuids: Vec<&str> = matches.iter().map(|t| t.id.as_str()).collect();
+        anyhow::bail!("todo id {id} is ambiguous: {}", uuids.join(", "));
+    }
+    Ok(matches.pop())
+}
+
 /// `text` on one line, every whitespace run collapsed to a single space.
 pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -155,7 +180,16 @@ pub mod render;
 
 #[cfg(test)]
 mod tests {
-    use super::short_id;
+    use super::{is_uuid_prefix, short_id};
+
+    #[test]
+    fn only_hex_of_a_short_ids_length_names_a_uuid() {
+        assert!(is_uuid_prefix("abcdef12"));
+        assert!(is_uuid_prefix("96432cd6-082a-4d8c-a9cb-adef8823ff92"));
+        assert!(!is_uuid_prefix("abcdef1"));
+        assert!(!is_uuid_prefix("status:pending"));
+        assert!(!is_uuid_prefix("abcdef12 or project:x"));
+    }
 
     #[test]
     fn a_uuid_shortens_to_its_first_eight_characters() {

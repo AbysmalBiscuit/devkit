@@ -1,0 +1,18 @@
+[package]
+name = "devkit-todo-taskchampion"
+description = "Agent todo lists kept in an embedded taskchampion replica, local or synced"
+edition.workspace = true
+version = "0.14.9" # x-release-please-version
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+taskchampion.workspace = true
+devkit-common.workspace = true
+devkit-todo.workspace = true
+devkit-todo-taskwarrior.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+devkit-todo = { workspace = true, features = ["test-support"] }
+serde_json.workspace = true

@@ -13,7 +13,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::ErrorKind,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
@@ -181,21 +181,73 @@ fn with_lock_via<D: Document, T>(
     })
 }
 
-/// Run `f` while holding the exclusive advisory lock at `lock_path`, for
-/// state kept somewhere other than a JSON document. The parent directory is
-/// created on demand.
-pub fn with_file_lock<T>(lock_path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+/// The advisory lock file at `lock_path`, created with its parent directory
+/// when missing and never truncated, ready to lock.
+pub fn open_lock(lock_path: &Path) -> Result<RwLock<File>> {
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let _ = OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
         .open(lock_path)?;
-    let mut lock = RwLock::new(File::open(lock_path)?);
+    Ok(RwLock::new(file))
+}
+
+/// Run `f` while holding the exclusive advisory lock at `lock_path`, for
+/// state kept somewhere other than a JSON document. The parent directory is
+/// created on demand.
+pub fn with_file_lock<T>(lock_path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let mut lock = open_lock(lock_path)?;
     let _guard = lock.write()?; // blocks until exclusive
     f()
+}
+
+/// [`with_file_lock_for`]'s error when the lock stayed held past its wait.
+#[derive(Debug)]
+pub struct LockBusy {
+    pub path: PathBuf,
+    pub wait: std::time::Duration,
+}
+
+impl std::fmt::Display for LockBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} still locked after {} ms",
+            self.path.display(),
+            self.wait.as_millis()
+        )
+    }
+}
+
+impl std::error::Error for LockBusy {}
+
+/// As [`with_file_lock`], but gives up with [`LockBusy`] once someone else has
+/// held the lock for `wait`, for a caller that must not block behind a long
+/// holder.
+pub fn with_file_lock_for<T>(
+    lock_path: &Path,
+    wait: std::time::Duration,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let mut lock = open_lock(lock_path)?;
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match lock.try_write() {
+            Ok(_guard) => return f(),
+            Err(e) if e.kind() != std::io::ErrorKind::WouldBlock => return Err(e.into()),
+            Err(_) if std::time::Instant::now() >= deadline => {
+                return Err(LockBusy {
+                    path: lock_path.to_path_buf(),
+                    wait,
+                }
+                .into());
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
 }
 
 /// Run `f` while holding the exclusive advisory lock at `lock_path`, against

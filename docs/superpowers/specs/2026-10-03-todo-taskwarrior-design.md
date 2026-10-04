@@ -71,10 +71,10 @@ The claim check in the shell guard reads the todos a command names. On the built
 ```toml
 [todo]
 backend = "taskwarrior"   # "builtin" (default) | "taskwarrior"
+project = "devkit"        # the root project every todo is filed under, shared with taskchampion
 
 [todo.taskwarrior]
 path = "task"             # its own name is looked up on PATH; any other value runs as written
-project = "devkit"        # the root project every todo is filed under
 ```
 
 `TodoConfig` and `TaskwarriorConfig` live in `devkit-config`, with doc comments that become the schema, and a doctest example on `TodoConfig`. The schema description of `backend` says it belongs in `~/.config/devkit/config.toml`: a project that commits `backend = "taskwarrior"` breaks every machine without `task`, cloud sessions included.
@@ -100,7 +100,7 @@ The CLI resolves config from the working directory. A hook resolves it from the 
 - `subof` and `order` are alacritree's attributes, so its tab nests and orders devkit's todos.
 - `holder` (UDA, type `string`) is devkit's. alacritree ignores it.
 - A pending task with `start` set and no `holder` was started outside devkit, by `task start` or alacritree. It reads as `InProgress { by: human }`, so no agent takes it over.
-- `<root>` is `[todo.taskwarrior] project`, `devkit` by default. A global todo is written to the root itself and every other node below it; reading a task strips the root back off, so `Todo.project` is the bare node and the rest of devkit never sees the root.
+- `<root>` is `[todo] project`, `devkit` by default. A global todo is written to the root itself and every other node below it; reading a task strips the root back off, so `Todo.project` is the bare node and the rest of devkit never sees the root.
 - A task outside the root (neither the root nor below `<root>.`) is never a devkit todo: no list includes it, `--all` included, `get` does not resolve it, and no claim or release touches it. The person's unfiled tasks and their own projects, even one named like a node, stay out.
 - Recurring templates and any status not in the table are not todos and never list.
 
@@ -140,7 +140,7 @@ The CLI accepts any id it is given. `TaskwarriorStore::get` resolves a prefix of
 
 ### Lists
 
-`list` exports every task under the root, `(project.is:"<root>" or project:"<root>.") (status:pending or status:completed or status:deleted)`, and keeps the todos whose node passes `Filter::matches`, the rule the built-in store applies. A node never reaches a `task` filter: `sanitize` keeps quotes, git accepts a branch holding both `'` and `"`, and no taskwarrior quoting survives both. Placing a todo after its siblings matches their node the same way. The root is still a filter value, so `[todo.taskwarrior] project` may not hold `'` or `"`. A bare `project:<root>` would also match a sibling project such as `<root>-web`, which is why the root's subtree is spelled with the trailing dot.
+`list` exports every task under the root, `(project.is:"<root>" or project:"<root>.") (status:pending or status:completed or status:deleted)`, and keeps the todos whose node passes `Filter::matches`, the rule the built-in store applies. A node never reaches a `task` filter: `sanitize` keeps quotes, git accepts a branch holding both `'` and `"`, and no taskwarrior quoting survives both. Placing a todo after its siblings matches their node the same way. The root is still a filter value, so `[todo] project` may not hold `'` or `"`. A bare `project:<root>` would also match a sibling project such as `<root>-web`, which is why the root's subtree is spelled with the trailing dot.
 
 ### Failure
 

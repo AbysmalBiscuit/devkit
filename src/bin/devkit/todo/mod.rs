@@ -1,7 +1,9 @@
 //! `devkit todo`: the todo lists agents and people share, kept in the store
 //! `[todo] backend` names.
 
+pub(crate) mod queue;
 pub(crate) mod store;
+pub(crate) mod sync;
 
 use std::{collections::BTreeSet, path::Path};
 
@@ -21,7 +23,7 @@ use devkit_todo::{
 use pabal::AnyHarness;
 use serde_json::{Value, json};
 
-use self::store::Store;
+use self::{store::Store, sync::SyncOutcome};
 use crate::hook::{
     self, HookEvent,
     todo::{harness_of, to_todo_holder},
@@ -85,6 +87,20 @@ pub enum TodoCommand {
     /// For text that must disappear, such as a pasted secret. Agents cancel
     /// instead, which keeps the record.
     Purge { id: String },
+    /// Sync the todo store with its sync target.
+    ///
+    /// Only a taskchampion store with a sync target syncs. A failure is
+    /// reported on stderr and exits 0: changes stay saved and sync with the
+    /// next write.
+    #[command(after_help = sync::hold_help())]
+    Sync {
+        #[arg(long, hide = true, help = sync::background_help())]
+        background: bool,
+        /// Write this sync's failure reason here. What a caller waiting on
+        /// the sync passes, to learn its own result.
+        #[arg(long, hide = true)]
+        result_file: Option<std::path::PathBuf>,
+    },
     /// Print the todo block a hook injects.
     ///
     /// Reads the hook payload on stdin, and prints nothing on any failure.
@@ -125,6 +141,8 @@ pub struct ListArgs {
     /// Print alacritree's task shape as JSON. Cancelled todos are left out.
     #[arg(long)]
     pub json: bool,
+    #[arg(long, help = sync::list_sync_help())]
+    pub sync: bool,
 }
 
 pub fn run(cli: TodoCli) -> Result<()> {
@@ -141,6 +159,10 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let own_node = || Ok::<_, anyhow::Error>(node::node(&place_at(&cwd)?, session.as_ref()));
     let store = Store::for_cli(&cwd)?;
+    let writes = !matches!(
+        cli.command,
+        TodoCommand::Scope | TodoCommand::List(_) | TodoCommand::Sync { .. }
+    );
     match cli.command {
         TodoCommand::Scope => println!("{}", own_node()?),
         TodoCommand::List(args) => list(&store, &args, &cwd, session.as_ref(), &actor)?,
@@ -178,6 +200,14 @@ pub fn run(cli: TodoCli) -> Result<()> {
             top,
             order,
         } => move_todo(&store, id, parent, top, order)?,
+        TodoCommand::Sync {
+            background,
+            result_file,
+        } => match Store::sync_replica(&cwd)? {
+            Some(replica) => sync::run(&replica, background, result_file.as_deref())?,
+            None if !background => eprintln!("devkit todo: this todo store has no sync target"),
+            None => {}
+        },
         TodoCommand::Context(_) => unreachable!("answered before the store is opened"),
         TodoCommand::Purge { id } => {
             if caller == Caller::Agent {
@@ -192,6 +222,12 @@ pub fn run(cli: TodoCli) -> Result<()> {
             store.apply(&Edit::Purge(todo.id.clone()))?;
             NativeMap::at(devkit_todo::state_dir()).forget(&todo.id)?;
         }
+    }
+    if writes {
+        if let Some(replica) = store.queued_replica() {
+            crate::hook::todo::drain(replica.data_dir());
+        }
+        store.spawn_sync(&cwd);
     }
     Ok(())
 }
@@ -268,7 +304,7 @@ fn move_todo(
 }
 
 fn list(
-    store: &impl TodoStore,
+    store: &Store,
     args: &ListArgs,
     cwd: &Path,
     session: Option<&SessionRef>,
@@ -286,6 +322,16 @@ fn list(
         (_, _, Some(visible)) => Filter::exact(visible.clone()),
         _ => Filter::all(),
     };
+    if args.sync {
+        match store.sync(cwd, sync::FRESH_WAIT) {
+            SyncOutcome::Failed(reason) => eprintln!("{}", sync::failure_text(&reason)),
+            SyncOutcome::StillRunning => eprintln!(
+                "devkit todo: sync still running after {} seconds; listing what this machine has",
+                sync::FRESH_WAIT.as_secs()
+            ),
+            SyncOutcome::Done | SyncOutcome::NoTarget => {}
+        }
+    }
     let todos = store.list(&filter)?;
     if args.json {
         let rows: Vec<Value> = todos.iter().filter_map(alacritree_json).collect();
@@ -342,7 +388,13 @@ fn context(args: &ContextArgs) -> Option<String> {
     filter
         .nodes
         .extend(workspace.iter().map(|w| NodeMatch::Subtree(w.clone())));
-    let (todos, siblings): (Vec<Todo>, Vec<Todo>) = Store::for_hook(&checkout, &cwd)
+    let at_start = payload.event_name().as_deref() == Some("SessionStart");
+    let store = Store::for_hook(&checkout, &cwd);
+    // A new container's replica is empty until it pulls the lists.
+    if at_start {
+        let _ = store.sync(&cwd, sync::FRESH_WAIT);
+    }
+    let (todos, siblings): (Vec<Todo>, Vec<Todo>) = store
         .list(&filter)
         .ok()?
         .into_iter()
@@ -355,7 +407,6 @@ fn context(args: &ContextArgs) -> Option<String> {
                 StatusKind::Pending | StatusKind::InProgress
             )
     });
-    let at_start = payload.event_name().as_deref() == Some("SessionStart");
     let pending = siblings
         .iter()
         .filter(|t| t.status.kind() == StatusKind::Pending)

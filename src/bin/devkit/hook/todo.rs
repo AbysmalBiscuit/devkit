@@ -12,7 +12,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
-use devkit_common::vcs::Checkout;
+use devkit_common::{store::LockBusy, vcs::Checkout};
 use devkit_todo::{
     Claimed, Edit, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
@@ -22,13 +22,17 @@ use devkit_todo::{
     transition,
 };
 use pabal::AnyHarness;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
     payload::{self, Payload},
     record,
 };
-use crate::todo::store::Store;
+use crate::todo::{
+    queue::{self, Deferred},
+    store::Store,
+};
 
 /// The harnesses whose sessions name a todo node.
 pub(crate) fn harness_of(harness: AnyHarness) -> Option<Harness> {
@@ -45,14 +49,44 @@ pub(crate) fn to_todo_holder(holder: &payload::Holder) -> Holder {
 
 /// Returns every todo `holder` covers from in progress to pending, so a
 /// crashed agent's todos do not show as in progress forever, and forgets the
-/// lists last injected for it. Silent: a store failure leaves the claims for
-/// a person to reset.
+/// lists last injected for it. The release is local and the sync that pushes
+/// it runs detached, so no harness's cap on a session-end hook cuts it short.
+/// Silent: a store failure leaves the claims for a person to reset.
 pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout, cwd: &Path) {
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
         let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
-        let _ = Store::for_hook(checkout, cwd).apply(&Edit::ReleaseAll { holder });
+        let store = Store::for_hook(checkout, cwd);
+        let entry = |root: &str| Deferred::Release {
+            root: root.to_string(),
+            holder: holder.clone(),
+        };
+        let direct = || {
+            store.apply(&Edit::ReleaseAll {
+                holder: holder.clone(),
+            })
+        };
+        if record_write(&store, entry, direct).is_ok() {
+            store.spawn_sync(cwd);
+        }
     }
+}
+
+/// Records one hook write: on a replica with a queue, appends `entry` (given
+/// the replica's root) and applies the queue; on any other store, makes the
+/// write with `direct`. `Ok` once the write is applied or safely queued.
+fn record_write(
+    store: &Store,
+    entry: impl FnOnce(&str) -> Deferred,
+    direct: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let Some(replica) = store.queued_replica() else {
+        return direct();
+    };
+    let dir = replica.data_dir();
+    let queued = queue::push(dir, &entry(replica.root()));
+    drain(dir);
+    queued
 }
 
 /// The arguments after `todo` when `inv` runs `devkit todo`.
@@ -156,21 +190,134 @@ fn with_holder(command: &str, analysis: &Analysis, holder: &str) -> Option<Strin
 
 /// Mirrors the harness's own task and plan tools into the store. The native
 /// tool has already run, so a failure, a claim conflict included, is reported
-/// on stderr and skipped.
+/// on stderr and skipped. A store whose lock stays busy past a hook's wait
+/// keeps the write queued, and the next write or sync applies it.
 pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
-    if let Err(e) = try_capture(payload, checkout) {
+    let Some(mirror) = Mirror::of(payload, checkout) else {
+        return;
+    };
+    let cwd = record::payload_cwd(payload);
+    let store = Store::for_hook(checkout, &cwd);
+    let entry = |root: &str| Deferred::Capture {
+        root: root.to_string(),
+        mirror: mirror.clone(),
+    };
+    report(record_write(&store, entry, || mirror.apply(&store)));
+    // A capture can fail after some of its writes committed.
+    store.spawn_sync(&cwd);
+}
+
+fn report(result: Result<()>) {
+    if let Err(e) = result
+        && e.downcast_ref::<LockBusy>().is_none()
+    {
         eprintln!("devkit todo: {e:#}");
     }
 }
 
-/// What a native capture needs from a payload: which harness's ids it uses,
+/// Applies the hook writes queued beside the replica in `dir`, oldest first,
+/// and returns how many it applied. One that finds the replica lock still
+/// busy stays queued for the next write or sync.
+pub(crate) fn drain(dir: &Path) -> usize {
+    queue::drain(dir, |entry| apply_deferred(dir, entry), |e| report(Err(e)))
+}
+
+/// Applies a queued write to the replica at `dir`, under the root and node it
+/// was resolved with: the checkout may have changed branch or gone since.
+fn apply_deferred(dir: &Path, entry: &Deferred) -> Result<()> {
+    match entry {
+        Deferred::Capture { root, mirror } => mirror.apply(&Store::queued_at(dir, root)),
+        Deferred::Release { root, holder } => {
+            Store::queued_at(dir, root).apply(&Edit::ReleaseAll {
+                holder: holder.clone(),
+            })
+        }
+    }
+}
+
+/// A native tool call as a hook resolved it: the tool, whose ids it uses,
 /// who acted, and the node its session writes to.
-struct Capture<S: TodoStore> {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Mirror {
+    tool: String,
+    /// The harness's node prefix, `claude` or `codex`.
+    harness: String,
+    session: Holder,
+    actor: Holder,
+    node: String,
+    input: Value,
+    response: Value,
+}
+
+impl Mirror {
+    /// `None` for a call capture does not mirror: another tool, a harness
+    /// without session nodes, no session, or a checkout git cannot read.
+    fn of(payload: &Payload, checkout: &Checkout) -> Option<Self> {
+        let tool = payload
+            .tool_name()
+            .filter(|t| NativeTool::parse(t).is_some())?;
+        let harness = harness_of(payload.harness())?;
+        let (Some(session), Ok(actor)) = (payload.session_holder(), payload.holder()) else {
+            return None;
+        };
+        let place = node::place_of(checkout).ok()?;
+        let node = node::node(
+            &place,
+            Some(&SessionRef {
+                harness,
+                id: session.to_string(),
+            }),
+        );
+        let raw = payload.raw();
+        Some(Self {
+            tool: tool.to_string(),
+            harness: harness.prefix().to_string(),
+            session: to_todo_holder(&session),
+            actor: to_todo_holder(&actor),
+            node,
+            input: raw["tool_input"].clone(),
+            response: raw["tool_response"].clone(),
+        })
+    }
+
+    /// Mirrors the call into `store` under one hold of its lock: a queued
+    /// capture that found the lock busy partway would otherwise replay the
+    /// writes that had landed.
+    fn apply(&self, store: &Store) -> Result<()> {
+        let Some(tool) = NativeTool::parse(&self.tool) else {
+            return Ok(());
+        };
+        let harness = match self.harness.as_str() {
+            "claude" => Harness::Claude,
+            "codex" => Harness::Codex,
+            other => anyhow::bail!("queued capture names an unknown harness {other:?}"),
+        };
+        let c = Capture {
+            harness,
+            session: self.session.clone(),
+            actor: self.actor.clone(),
+            node: self.node.clone(),
+            store,
+            map: NativeMap::at(devkit_todo::state_dir()),
+        };
+        let input = &self.input;
+        store.while_locked(|| match tool {
+            NativeTool::TaskCreate => task_create(&c, input, &self.response),
+            NativeTool::TaskUpdate => task_update(&c, input),
+            NativeTool::UpdatePlan => list_replace(&c, &input["plan"], "step"),
+            NativeTool::TodoWrite => list_replace(&c, &input["todos"], "content"),
+        })
+    }
+}
+
+/// What mirroring a native call needs: whose ids it uses, who acted, the
+/// node its session writes to, and the store.
+struct Capture<'a> {
     harness: Harness,
     session: Holder,
     actor: Holder,
     node: String,
-    store: S,
+    store: &'a Store,
     map: NativeMap,
 }
 
@@ -199,48 +346,9 @@ impl NativeTool {
     }
 }
 
-fn try_capture(payload: &Payload, checkout: &Checkout) -> Result<()> {
-    let Some(tool) = payload.tool_name().and_then(NativeTool::parse) else {
-        return Ok(());
-    };
-    let Some(harness) = harness_of(payload.harness()) else {
-        return Ok(());
-    };
-    let (Some(session), Ok(actor)) = (payload.session_holder(), payload.holder()) else {
-        return Ok(());
-    };
-    // A checkout git could not read says nothing about where the todo lives.
-    let Ok(place) = node::place_of(checkout) else {
-        return Ok(());
-    };
-    let node = node::node(
-        &place,
-        Some(&SessionRef {
-            harness,
-            id: session.to_string(),
-        }),
-    );
-    let c = Capture {
-        harness,
-        session: to_todo_holder(&session),
-        actor: to_todo_holder(&actor),
-        node,
-        store: Store::for_hook(checkout, &record::payload_cwd(payload)),
-        map: NativeMap::at(devkit_todo::state_dir()),
-    };
-    let raw = payload.raw();
-    let input = &raw["tool_input"];
-    match tool {
-        NativeTool::TaskCreate => task_create(&c, input, &raw["tool_response"]),
-        NativeTool::TaskUpdate => task_update(&c, input),
-        NativeTool::UpdatePlan => list_replace(&c, &input["plan"], "step"),
-        NativeTool::TodoWrite => list_replace(&c, &input["todos"], "content"),
-    }
-}
-
 /// Claude Code's task list is shared by a session and its sub-agents, so the
 /// mapping is recorded under the session for either to update it.
-fn task_create(c: &Capture<impl TodoStore>, input: &Value, response: &Value) -> Result<()> {
+fn task_create(c: &Capture<'_>, input: &Value, response: &Value) -> Result<()> {
     let (Some(subject), Some(native)) =
         (input["subject"].as_str(), response["task"]["id"].as_str())
     else {
@@ -255,7 +363,7 @@ fn task_create(c: &Capture<impl TodoStore>, input: &Value, response: &Value) -> 
     c.map.record(c.harness, &c.session, native, &id)
 }
 
-fn task_update(c: &Capture<impl TodoStore>, input: &Value) -> Result<()> {
+fn task_update(c: &Capture<'_>, input: &Value) -> Result<()> {
     let Some(native) = input["taskId"].as_str() else {
         return Ok(());
     };
@@ -284,7 +392,7 @@ fn task_update(c: &Capture<impl TodoStore>, input: &Value) -> Result<()> {
 /// A tool that resends its whole list on every call, diffed against the
 /// acting holder's previous list. Each agent context keeps its own list, so a
 /// sub-agent's first call never cancels its session's steps.
-fn list_replace(c: &Capture<impl TodoStore>, list: &Value, text_key: &str) -> Result<()> {
+fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
     let Some(list) = list.as_array() else {
         return Ok(());
     };

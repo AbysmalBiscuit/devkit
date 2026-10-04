@@ -39,7 +39,7 @@ Codex offers `update_plan` only when its config sets `[tools.update_plan] enable
 
 ## Backends
 
-The built-in store is the default: one file in devkit's state directory. `[todo] backend = "taskwarrior"` keeps the todos in the local taskwarrior instead, through taskwarrior 3's `task` program, all under one root project. Set it in `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`: a committed value breaks every machine without `task`, cloud sessions included. `[todo.taskwarrior] path` names another `task` program, and `[todo.taskwarrior] project` another root. Agents use `devkit todo` or their native tool on either backend.
+The built-in store is the default: one file in devkit's state directory. `[todo] backend = "taskwarrior"` keeps the todos in the local taskwarrior instead, through taskwarrior 3's `task` program, all under one root project. Set it in `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`: a committed value breaks every machine without `task`, cloud sessions included. `[todo.taskwarrior] path` names another `task` program, and `[todo] project` another root. Agents use `devkit todo` or their native tool on either backend.
 
 On taskwarrior:
 
@@ -53,3 +53,47 @@ On taskwarrior:
   uda.holder.type=string
   uda.holder.label=Holder
   ```
+
+### Taskchampion
+
+`[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it for a container or cloud session, whose todos would otherwise be deleted with it, or to watch a session's lists from another machine. The replica holds the same tasks as the taskwarrior backend, under the same `[todo] project` root, with the same ids. It lives in devkit's state directory unless `[todo.taskchampion] data_dir` names another.
+
+`DEVKIT_TODO_BACKEND=taskchampion` chooses it without a config change, so a container sets it next to the sync credentials and keeps loading the project's `devkit.toml`. It accepts the same values as `[todo] backend` and wins over it. `devkit doctor` shows the backend in effect and where it came from.
+
+The replica syncs to the first of these that applies, or stays local:
+
+1. `[todo.taskchampion] server_dir`, a directory shared with other replicas.
+2. A taskchampion sync server, when `DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` (a UUID) and `DEVKIT_TODO_SYNC_SECRET` all resolve. Some of them without the rest makes `devkit todo sync` fail, naming the missing ones.
+
+Each credential resolves from the environment first, then from Doppler when `[todo.taskchampion] doppler_project` (and optionally `doppler_config`) is set, then from `~/.config/devkit/secrets.toml`. The file takes these lines, added by hand:
+
+```toml
+devkit_todo_sync_url = "https://..."
+devkit_todo_sync_client_id = "<uuid>"
+devkit_todo_sync_secret = "<secret>"
+```
+
+`devkit doctor` shows where each one resolved from, never its value. The sync client honours `HTTPS_PROXY` and `NO_PROXY`.
+
+When it syncs:
+
+- After every write, in a background `devkit todo sync` process. The write is saved locally first, so a failed sync loses nothing, and no hook waits on the network. After a failure, background syncs hold off before the next attempt, for the time `devkit todo sync -h` states, so a server that is down costs an occasional attempt rather than one per write.
+- At session start, before the lists are injected, so a new container sees where the last one stopped. `devkit todo list --sync` does the same. Each waits a bounded time, which `devkit todo list -h` states; past that, the sync carries on by itself and you get what this machine has.
+- A session's end releases its claims locally and leaves the push to a background sync, so a harness that caps the hook's run cannot cut it short.
+- `devkit todo sync` syncs now. It reports a failure and exits 0.
+
+Other injections and plain `devkit todo list` read the local replica, which holds this machine's own writes.
+
+Two machines claiming the same todo between syncs both succeed, and the later sync wins: the claim rule holds on one machine, sub-agents included, not across them.
+
+The server keeps the lists encrypted, so a person reads them through a replica of their own. A separate taskwarrior profile holding the same URL, client id and secret keeps those tasks apart from your own:
+
+```text
+TASKRC=~/.taskrc-agents TASKDATA=~/.task-agents task sync
+# ~/.taskrc-agents
+sync.server.url=<url>
+sync.server.client_id=<uuid>
+sync.encryption_secret=<secret>
+```
+
+Then `task project:devkit.<repo>` shows the agents' lists. Pointing your everyday taskwarrior at the same server also works, but hands every container that holds the credentials read and write access to all of your tasks.
