@@ -56,7 +56,7 @@ On taskwarrior:
 
 ### Taskchampion
 
-`[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it for a container or cloud session, whose todos would otherwise be deleted with it, or to watch a session's lists from another machine. The replica holds the same tasks as the taskwarrior backend, under the same `[todo] project` root, with the same ids. taskwarrior 3.5 or later reads a synced replica's lists. It lives in devkit's state directory unless `[todo.taskchampion] data_dir` names another.
+`[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it for a container or cloud session, whose todos would otherwise be deleted with it, or to watch a session's lists from another machine. The replica holds the same tasks as the taskwarrior backend, under the same `[todo] project` root, with the same ids. It lives in devkit's state directory unless `[todo.taskchampion] data_dir` names another. taskwarrior 3.5 or later reads a synced replica's lists.
 
 `DEVKIT_TODO_BACKEND=taskchampion` chooses it without a config change, so a container sets it next to the sync credentials and keeps loading the project's `devkit.toml`. It accepts the same values as `[todo] backend` and wins over it. `devkit doctor` shows the backend in effect and where it came from.
 
