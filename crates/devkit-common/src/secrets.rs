@@ -177,10 +177,10 @@ pub struct DopplerScope {
 /// trimmed, and a value that trims to empty counts as unset. A Doppler failure
 /// of any kind falls through to the file without a message, so nothing Doppler
 /// prints can reach a log.
-pub fn resolve_many(
-    names: &[&str],
+pub fn resolve_many<const N: usize>(
+    names: &[&str; N],
     doppler: Option<&DopplerScope>,
-) -> Vec<(Option<String>, Source)> {
+) -> [(Option<String>, Source); N] {
     resolve_many_with(
         names,
         doppler,
@@ -194,18 +194,17 @@ pub fn resolve_many(
 /// (`--attempts 1 --timeout 5s`); this bound only covers a wedged process.
 const DOPPLER_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn resolve_many_with(
-    names: &[&str],
+fn resolve_many_with<const N: usize>(
+    names: &[&str; N],
     doppler: Option<&DopplerScope>,
     program: &str,
     env: impl Fn(&str) -> Option<String>,
     file: &Secrets,
-) -> Vec<(Option<String>, Source)> {
+) -> [(Option<String>, Source); N] {
     let trimmed = |v: Option<String>| v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-    let from_env: Vec<Option<String>> = names.iter().map(|n| trimmed(env(n))).collect();
-    let missing: Vec<&str> = names
+    let from_env = names.map(|n| (n, trimmed(env(n))));
+    let missing: Vec<&str> = from_env
         .iter()
-        .zip(&from_env)
         .filter(|(_, v)| v.is_none())
         .map(|(n, _)| *n)
         .collect();
@@ -213,27 +212,23 @@ fn resolve_many_with(
         Some(scope) if !missing.is_empty() => doppler_get(program, scope, &missing),
         _ => serde_json::Map::new(),
     };
-    names
-        .iter()
-        .zip(from_env)
-        .map(|(name, env_val)| {
-            if env_val.is_some() {
-                return (env_val, Source::Env);
-            }
-            let computed = from_doppler
-                .get(*name)
-                .and_then(|v| v.get("computed"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string);
-            if let Some(v) = trimmed(computed) {
-                return (Some(v), Source::Doppler);
-            }
-            match trimmed(file.get(&name.to_ascii_lowercase()).map(str::to_string)) {
-                Some(v) => (Some(v), Source::File),
-                None => (None, Source::Unset),
-            }
-        })
-        .collect()
+    from_env.map(|(name, env_val)| {
+        if env_val.is_some() {
+            return (env_val, Source::Env);
+        }
+        let computed = from_doppler
+            .get(name)
+            .and_then(|v| v.get("computed"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        if let Some(v) = trimmed(computed) {
+            return (Some(v), Source::Doppler);
+        }
+        match trimmed(file.get(&name.to_ascii_lowercase()).map(str::to_string)) {
+            Some(v) => (Some(v), Source::File),
+            None => (None, Source::Unset),
+        }
+    })
 }
 
 /// `doppler secrets get <names> --json`, parsed; empty on any failure.
@@ -396,7 +391,7 @@ mod tests {
                 env_with(&[("A", "from-env")]),
                 &file,
             );
-            assert_eq!(got, vec![
+            assert_eq!(got, [
                 (Some("from-env".into()), Source::Env),
                 (Some("from-doppler-b".into()), Source::Doppler),
                 (Some("from-file".into()), Source::File),
@@ -439,7 +434,7 @@ mod tests {
             let f = fake("echo loud >&2; exit 1");
             let got =
                 resolve_many_with(&["A"], None, &f.program, env_with(&[]), &Secrets::default());
-            assert_eq!(got, vec![(None, Source::Unset)]);
+            assert_eq!(got, [(None, Source::Unset)]);
             assert_eq!(call_count(&f), 0);
         }
 
@@ -457,7 +452,7 @@ mod tests {
                 env_with(&[]),
                 &file,
             );
-            assert_eq!(got, vec![
+            assert_eq!(got, [
                 (Some("https://file".into()), Source::File),
                 (None, Source::Unset),
             ]);
@@ -478,7 +473,7 @@ mod tests {
                 env_with(&[("A", "  abc\n"), ("D", " \n")]),
                 &file,
             );
-            assert_eq!(got, vec![
+            assert_eq!(got, [
                 (Some("abc".into()), Source::Env),
                 (Some("b".into()), Source::Doppler),
                 (Some("c".into()), Source::File),

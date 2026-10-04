@@ -21,8 +21,10 @@ use super::sync::SyncOutcome;
 /// project's own config still loads.
 pub(crate) const BACKEND_VAR: &str = "DEVKIT_TODO_BACKEND";
 
+type SyncVars = [&'static str; 3];
+
 /// The server credentials, in the order [`SyncTarget::Server`] takes them.
-pub(crate) const SYNC_VARS: [&str; 3] = [
+pub(crate) const SYNC_VARS: SyncVars = [
     "DEVKIT_TODO_SYNC_URL",
     "DEVKIT_TODO_SYNC_CLIENT_ID",
     "DEVKIT_TODO_SYNC_SECRET",
@@ -115,18 +117,15 @@ pub(crate) fn sync_target(config: &TaskchampionConfig) -> Result<Option<SyncTarg
 
 fn sync_target_with(
     config: &TaskchampionConfig,
-    resolve: impl FnOnce(&[&str], Option<&DopplerScope>) -> Vec<(Option<String>, Source)>,
+    resolve: impl FnOnce(
+        &SyncVars,
+        Option<&DopplerScope>,
+    ) -> [(Option<String>, Source); SYNC_VARS.len()],
 ) -> Result<Option<SyncTarget>> {
     if let Some(dir) = &config.server_dir {
         return Ok(Some(SyncTarget::Dir(expand_tilde(dir))));
     }
     let resolved = resolve(&SYNC_VARS, doppler_scope(config).as_ref());
-    let Ok(resolved) = <[(Option<String>, Source); SYNC_VARS.len()]>::try_from(resolved) else {
-        bail!(
-            "resolving {} gave the wrong number of values",
-            SYNC_VARS.join(", ")
-        );
-    };
     let missing: Vec<&str> = SYNC_VARS
         .iter()
         .zip(&resolved)
@@ -356,13 +355,10 @@ mod tests {
 
     fn resolved(
         values: [Option<&str>; 3],
-    ) -> impl FnOnce(&[&str], Option<&DopplerScope>) -> Vec<(Option<String>, Source)> {
+    ) -> impl FnOnce(&SyncVars, Option<&DopplerScope>) -> [(Option<String>, Source); 3] {
         move |names, _| {
-            assert_eq!(names, SYNC_VARS);
-            values
-                .iter()
-                .map(|v| (v.map(str::to_string), Source::Env))
-                .collect()
+            assert_eq!(*names, SYNC_VARS);
+            values.map(|v| (v.map(str::to_string), Source::Env))
         }
     }
 
@@ -424,17 +420,6 @@ mod tests {
         .to_string();
         assert!(err.contains("DEVKIT_TODO_SYNC_CLIENT_ID"), "{err}");
         assert!(!err.contains("nope"), "{err}");
-    }
-
-    #[test]
-    fn a_resolution_of_the_wrong_length_is_an_error() {
-        let short = |_: &[&str], _: Option<&DopplerScope>| {
-            vec![
-                (Some("https://s".to_string()), Source::Env),
-                (Some(UUID.to_string()), Source::Env),
-            ]
-        };
-        assert!(sync_target_with(&TaskchampionConfig::default(), short).is_err());
     }
 
     #[test]
