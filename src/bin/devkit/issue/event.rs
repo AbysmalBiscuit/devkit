@@ -1,0 +1,95 @@
+//! `devkit issue event`: move an issue's tracker status as `[issue.events]`
+//! configures one event. Every trigger ends here: `issue setup` and
+//! `issue pr create` inline, the SessionStart hook in the background, and a
+//! person rerunning one by hand.
+
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+use devkit_common::{
+    record,
+    tracker::{
+        self,
+        status::{StatusWriter, same_status, target, writer_for},
+    },
+    worktree::IssueId,
+};
+use devkit_config::{Health, IssueEvent};
+
+/// The `issue event` argument, spelled as `[issue.events]` spells it.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub(crate) enum EventArg {
+    Setup,
+    Start,
+    #[value(name = "pr_open")]
+    PrOpen,
+}
+
+impl From<EventArg> for IssueEvent {
+    fn from(e: EventArg) -> Self {
+        match e {
+            EventArg::Setup => IssueEvent::Setup,
+            EventArg::Start => IssueEvent::Start,
+            EventArg::PrOpen => IssueEvent::PrOpen,
+        }
+    }
+}
+
+/// The issue `dir`'s worktree record names, when it names a tracker issue.
+fn recorded_issue(dir: &Path) -> Result<String> {
+    let root = devkit_common::vcs::checkout_root(dir)?;
+    record::read(&root)
+        .and_then(|r| r.issue.parse::<IssueId>().ok())
+        .and_then(|id| id.tracker().map(String::from))
+        .with_context(|| format!("{} records no tracker issue; pass ISSUE", root.display()))
+}
+
+/// Fire `event` for `issue`, or for the issue `dir`'s worktree records:
+/// read its status and move it when `[issue.events.<event>]` allows. Returns
+/// the line that reports what happened. Claiming the event is the trigger's
+/// job, not this one's, so a rerun by hand always runs.
+pub(crate) fn fire(
+    dir: &Path,
+    config: Option<&Path>,
+    event: IssueEvent,
+    issue: Option<&str>,
+) -> Result<String> {
+    let start = dir.to_string_lossy();
+    let sel = tracker::select(config, &start, None);
+    if let Health::Broken(e) = &sel.health {
+        bail!("devkit.toml does not load: {e}");
+    }
+    let cfg = sel.config.unwrap_or_default();
+    let Some(t) = cfg.issue.events.get(event) else {
+        return Ok(format!("[issue.events.{event}] is not configured"));
+    };
+    let writer = writer_for(sel.tracker.tracker.kind(), &cfg.github, &sel.forge.repos)?;
+    let id = match issue {
+        Some(input) => sel.tracker.tracker.issue_ref(input)?.id,
+        None => recorded_issue(dir)?,
+    };
+    let current = writer.status(&id)?;
+    let shown = current.as_deref().unwrap_or("(none)");
+    Ok(match target(t, current.as_deref()) {
+        Some(to) => {
+            writer.set_status(&id, to)?;
+            format!("moved {id}: {shown} -> {to}")
+        }
+        None if current.as_deref().is_some_and(|c| same_status(c, &t.to)) => {
+            format!("{id} is already {shown}")
+        }
+        None => format!("{id} is {shown}, not in [issue.events.{event}] from"),
+    })
+}
+
+pub(crate) fn run(
+    dir: &Path,
+    config: Option<&Path>,
+    event: EventArg,
+    issue: Option<&str>,
+) -> Result<()> {
+    let event = IssueEvent::from(event);
+    let line = fire(dir, config, event, issue).with_context(|| format!("issue event {event}"))?;
+    eprintln!("{line}");
+    Ok(())
+}

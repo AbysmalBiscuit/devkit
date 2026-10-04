@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -10,6 +10,7 @@ pub(crate) mod checkout;
 mod create;
 mod dashboard;
 mod end;
+mod event;
 mod hooks;
 mod info;
 mod info_cache;
@@ -168,6 +169,17 @@ pub(crate) enum Cmd {
     Status {
         /// Issue ids to report on; omit for every issue worktree.
         ids: Vec<String>,
+    },
+    /// Move the issue's tracker status as [issue.events] configures EVENT.
+    ///
+    /// Reads the status and moves it to the event's `to` when it is in the
+    /// event's `from`. setup, start and pr_open already fire on their own;
+    /// this reruns one, to retry a failed move or see its error.
+    Event {
+        /// The event whose transition to apply.
+        event: event::EventArg,
+        /// Issue id or issue URL. Defaults to this worktree's issue.
+        issue: Option<String>,
     },
     /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
     ///
@@ -490,6 +502,12 @@ pub fn run(cli: IssueCli) -> Result<()> {
             config: cli.config,
         }),
         Some(Cmd::Status { ids }) => status::run(&start(&cli.dir), &ids, cli.config.as_deref()),
+        Some(Cmd::Event { event, issue }) => event::run(
+            Path::new(&start(&cli.dir)),
+            cli.config.as_deref().map(Path::new),
+            event,
+            issue.as_deref(),
+        ),
         Some(Cmd::Info {
             selector,
             json,

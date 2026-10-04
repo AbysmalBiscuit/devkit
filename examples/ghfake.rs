@@ -63,7 +63,12 @@ fn main() {
         return;
     }
     if joined.starts_with("api graphql") {
-        match std::fs::read_to_string(dir.join("graphql.json")) {
+        let file = if joined.contains("query=mutation") {
+            "graphql_mutation.json"
+        } else {
+            "graphql.json"
+        };
+        match std::fs::read_to_string(dir.join(file)) {
             Ok(answer) => print!("{answer}"),
             Err(_) => std::process::exit(1),
         }

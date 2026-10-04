@@ -190,6 +190,28 @@ github = "sweeper[bot]"
             .expect("write graphql answer");
     }
 
+    /// Answer every `gh api graphql` query with `body`. Without one the fake
+    /// fails the call.
+    pub fn serve_graphql(&self, body: &str) {
+        std::fs::write(self.bin.path().join("graphql.json"), body).expect("write graphql answer");
+    }
+
+    /// Answer every `gh api graphql` mutation with `body`. Without one the
+    /// fake fails the call.
+    pub fn serve_mutation(&self, body: &str) {
+        std::fs::write(self.bin.path().join("graphql_mutation.json"), body)
+            .expect("write mutation answer");
+    }
+
+    /// Add `keys` to the config's `[github]` table, which `extra` cannot
+    /// reopen.
+    pub fn github_keys(&self, keys: &str) {
+        let path = self.project().join("devkit.toml");
+        let toml = std::fs::read_to_string(&path).expect("read devkit.toml");
+        let toml = toml.replacen("[github]\n", &format!("[github]\n{keys}\n"), 1);
+        std::fs::write(&path, toml).expect("write devkit.toml");
+    }
+
     /// Make the project an `issue setup` worktree for issue `id`.
     pub fn record_issue(&self, id: &str) {
         devkit_common::record::write(self.project(), &devkit_common::record::IssueRecord {
