@@ -220,6 +220,16 @@ impl Database {
     }
 }
 
+/// Whether `e` is an operation that got no answer from the server: it could
+/// not connect, timed out, or lost the connection.
+pub fn is_unreachable(e: &anyhow::Error) -> bool {
+    !e.chain().any(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .is_some_and(|e| e.as_db_error().is_some())
+    })
+}
+
 /// Whether `e` is the server reporting that devkit's schema or one of its
 /// tables does not exist yet.
 fn missing_schema(e: &anyhow::Error) -> bool {

@@ -1,6 +1,11 @@
 //! The one place that names every todo backend.
 
-use std::{path::Path, time::Duration};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use ambassador::Delegate;
 use anyhow::{Result, bail};
@@ -8,13 +13,16 @@ use devkit_common::{
     secrets::{self, DopplerScope, Source},
     vcs::Checkout,
 };
-use devkit_config::{NoConfig, TaskchampionConfig, TodoBackend, TodoConfig, expand_tilde};
+use devkit_config::{
+    NoConfig, PostgresConfig, TaskchampionConfig, TodoBackend, TodoConfig, expand_tilde,
+};
 use devkit_todo::{
     TodoStore,
-    activity::{ActivityLog, Recorded},
+    activity::{ActivityLog, ActivityStore, Recorded, ambassador_impl_ActivityStore},
     ambassador_impl_TodoStore,
 };
 use devkit_todo_builtin::BuiltinStore;
+use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
 use devkit_todo_taskwarrior::TaskwarriorStore;
 use serde::{Deserialize, de::IntoDeserializer};
@@ -34,9 +42,17 @@ pub(crate) const SYNC_VARS: SyncVars = [
     "DEVKIT_TODO_SYNC_SECRET",
 ];
 
+/// The Postgres backend's connection URL.
+pub(crate) const DATABASE_VAR: &str = "DEVKIT_TODO_DATABASE_URL";
+
 /// How long a hook waits for the taskchampion replica's lock before it
-/// queues its write instead.
+/// queues its write instead, and for each answer from the todo database,
+/// connecting included, before it gives up.
 const HOOK_LOCK_WAIT: Duration = Duration::from_secs(1);
+
+/// How long a CLI call waits for each answer from the todo database,
+/// connecting included.
+const CLI_DATABASE_WAIT: Duration = Duration::from_secs(15);
 
 /// How long a CLI write waits for the taskchampion replica's lock: longer
 /// than one sync attempt against a server that stops answering (a 10 s
@@ -48,7 +64,7 @@ pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(75);
 /// activity log.
 #[derive(Delegate)]
 #[delegate(TodoStore)]
-pub(crate) struct Store(Recorded<Backend>);
+pub(crate) struct Store(Recorded<Backend, Activity>);
 
 #[derive(Delegate)]
 #[delegate(TodoStore)]
@@ -56,6 +72,41 @@ pub(crate) enum Backend {
     Builtin(BuiltinStore),
     Taskwarrior(TaskwarriorStore),
     Taskchampion(Replica),
+    Postgres(PostgresStore),
+}
+
+/// Where the activity log is kept: in the todo database on the Postgres
+/// backend, so a swarm reports from one place, and under devkit's state
+/// directory on every other.
+#[derive(Delegate)]
+#[delegate(ActivityStore)]
+pub(crate) enum Activity {
+    Local(ActivityLog),
+    Postgres(PostgresActivity),
+}
+
+/// Who opens a store, which sets how long it waits on a busy replica lock
+/// or a slow database.
+#[derive(Clone, Copy)]
+enum Opener {
+    Cli,
+    Hook,
+}
+
+impl Opener {
+    fn lock_wait(self) -> Duration {
+        match self {
+            Self::Cli => CLI_LOCK_WAIT,
+            Self::Hook => HOOK_LOCK_WAIT,
+        }
+    }
+
+    fn database_wait(self) -> Duration {
+        match self {
+            Self::Cli => CLI_DATABASE_WAIT,
+            Self::Hook => HOOK_LOCK_WAIT,
+        }
+    }
 }
 
 /// The taskchampion replica, and whether its config points it at a sync
@@ -116,6 +167,42 @@ pub(crate) fn doppler_scope(config: &TaskchampionConfig) -> Option<DopplerScope>
     })
 }
 
+/// The Doppler scope the Postgres backend's `config` names, if any.
+pub(crate) fn database_scope(config: &PostgresConfig) -> Option<DopplerScope> {
+    config.doppler_project.as_ref().map(|project| DopplerScope {
+        project: project.clone(),
+        config: config.doppler_config.clone(),
+    })
+}
+
+/// The todo database `config` and [`DATABASE_VAR`] name, opened with `wait`.
+/// A process resolves the URL and connects once per config, so a hook asks
+/// Doppler at most once and waits on an unreachable database once. A URL
+/// that is missing or does not parse gives a database every call on fails,
+/// naming the variable and never the URL.
+pub(crate) fn database(config: &PostgresConfig, wait: Duration) -> Arc<Database> {
+    type Key = (Option<String>, Option<String>, Duration);
+    static OPEN: Mutex<Option<HashMap<Key, Arc<Database>>>> = Mutex::new(None);
+    let key = (
+        config.doppler_project.clone(),
+        config.doppler_config.clone(),
+        wait,
+    );
+    let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
+    open.get_or_insert_default()
+        .entry(key)
+        .or_insert_with(|| {
+            let [(url, _)] =
+                secrets::resolve_many(&[DATABASE_VAR], database_scope(config).as_ref());
+            match url.map(|url| Database::new(&url, wait)) {
+                None => Database::unusable(format!("{DATABASE_VAR} is not set")),
+                Some(Err(e)) => Database::unusable(format!("{DATABASE_VAR}: {e:#}")),
+                Some(Ok(db)) => db,
+            }
+        })
+        .clone()
+}
+
 /// The replica's sync target: `server_dir` when set, without reading any
 /// credential; a server when all of [`SYNC_VARS`] resolve; none when none
 /// do. Some but not all resolving, or a client id that is not a UUID, is an
@@ -170,32 +257,43 @@ fn data_dir(config: &TaskchampionConfig) -> std::path::PathBuf {
 }
 
 impl Backend {
-    fn from_config(config: &TodoConfig) -> Self {
-        match config.backend {
+    /// The store `config` names, its claim changes recorded in the activity
+    /// log that goes with it.
+    fn open(config: &TodoConfig, opener: Opener) -> Store {
+        let backend = match config.backend {
             TodoBackend::Builtin => Self::Builtin(BuiltinStore::open()),
             TodoBackend::Taskwarrior => Self::Taskwarrior(
                 TaskwarriorStore::new(&config.taskwarrior.path).with_root(&config.project),
             ),
             TodoBackend::Taskchampion => Self::Taskchampion(Replica {
-                store: taskchampion(config),
+                store: taskchampion(config).with_lock_wait(opener.lock_wait()),
                 syncs: names_a_target(&config.taskchampion),
             }),
-        }
-    }
-
-    /// This backend with taskchampion's replica lock wait bounded by `wait`.
-    fn waiting(self, wait: Duration) -> Self {
-        match self {
-            Self::Taskchampion(Replica { store, syncs }) => Self::Taskchampion(Replica {
-                store: store.with_lock_wait(wait),
-                syncs,
-            }),
-            backend => backend,
-        }
+            TodoBackend::Postgres => Self::Postgres(PostgresStore::new(
+                database(&config.postgres, opener.database_wait()),
+                &config.project,
+            )),
+        };
+        Store(Recorded::new(backend, Activity::of(config, opener)))
     }
 
     fn recorded(self) -> Store {
-        Store(Recorded::new(self, ActivityLog::open()))
+        Store(Recorded::new(self, Activity::Local(ActivityLog::open())))
+    }
+}
+
+impl Activity {
+    /// The log that goes with the store `config` names.
+    fn of(config: &TodoConfig, opener: Opener) -> Self {
+        match config.backend {
+            TodoBackend::Postgres => Self::Postgres(PostgresActivity::new(
+                database(&config.postgres, opener.database_wait()),
+                &config.project,
+            )),
+            TodoBackend::Builtin | TodoBackend::Taskwarrior | TodoBackend::Taskchampion => {
+                Self::Local(ActivityLog::open())
+            }
+        }
     }
 }
 
@@ -242,19 +340,30 @@ impl Store {
         }
     }
 
-    /// The store a CLI call in `cwd` uses. No config anywhere is the default
-    /// config; a config that fails to load or an unknown
-    /// `DEVKIT_TODO_BACKEND` is an error.
-    pub(crate) fn for_cli(cwd: &Path) -> Result<Self> {
+    /// The todo config a CLI call in `cwd` reads, its backend the effective
+    /// one. No config anywhere is the default config; a config that fails to
+    /// load or an unknown `DEVKIT_TODO_BACKEND` is an error.
+    fn effective_cli_config(cwd: &Path) -> Result<TodoConfig> {
         let config = Self::cli_config(cwd)?;
         let env = std::env::var(BACKEND_VAR).ok();
         let (backend, _) = effective_backend(config.as_ref(), env.as_deref())?;
-        Ok(Backend::from_config(&TodoConfig {
+        Ok(TodoConfig {
             backend,
             ..config.unwrap_or_default()
         })
-        .waiting(CLI_LOCK_WAIT)
-        .recorded())
+    }
+
+    /// The store a CLI call in `cwd` uses.
+    pub(crate) fn for_cli(cwd: &Path) -> Result<Self> {
+        Ok(Backend::open(
+            &Self::effective_cli_config(cwd)?,
+            Opener::Cli,
+        ))
+    }
+
+    /// The activity log a CLI call in `cwd` reads.
+    pub(crate) fn activity_for_cli(cwd: &Path) -> Result<Activity> {
+        Ok(Activity::of(&Self::effective_cli_config(cwd)?, Opener::Cli))
     }
 
     /// Runs `f` with taskchampion's replica lock held throughout, so a busy
@@ -331,10 +440,19 @@ impl Store {
     pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Self {
         let backend_var = std::env::var(BACKEND_VAR).ok();
         match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
-            Ok(config) => Backend::from_config(&config).waiting(HOOK_LOCK_WAIT),
-            Err(_) => Backend::Builtin(BuiltinStore::open()),
+            Ok(config) => Backend::open(&config, Opener::Hook),
+            Err(_) => Backend::Builtin(BuiltinStore::open()).recorded(),
         }
-        .recorded()
+    }
+
+    /// The activity log a hook in `cwd` writes, the one that goes with
+    /// [`Store::for_hook`]'s store.
+    pub(crate) fn activity_for_hook(checkout: &Checkout, cwd: &Path) -> Activity {
+        let backend_var = std::env::var(BACKEND_VAR).ok();
+        match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
+            Ok(config) => Activity::of(&config, Opener::Hook),
+            Err(_) => Activity::Local(ActivityLog::open()),
+        }
     }
 
     /// The store a stop hook in `cwd` reads open todos from, as
@@ -349,11 +467,9 @@ impl Store {
         backend_var: Option<&str>,
     ) -> Option<Self> {
         let config = Self::hook_config(checkout, cwd, backend_var).ok()?;
-        config.hold_stop.then(|| {
-            Backend::from_config(&config)
-                .waiting(HOOK_LOCK_WAIT)
-                .recorded()
-        })
+        config
+            .hold_stop
+            .then(|| Backend::open(&config, Opener::Hook))
     }
 }
 

@@ -47,6 +47,7 @@ devkit-todo.workspace = true
 devkit-todo-builtin.workspace = true
 devkit-todo-taskwarrior.workspace = true
 devkit-todo-taskchampion.workspace = true
+devkit-todo-postgres.workspace = true
 ambassador.workspace = true
 pabal.workspace = true
 same-file.workspace = true
@@ -60,6 +61,8 @@ devkit-common = { workspace = true, features = ["test-support"] }
 devkit-git = { workspace = true, features = ["test-support"] }
 same-file.workspace = true
 serde_yaml_ng.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
 
 # Used only by the Unix-only supervision integration test (POSIX signals).
 [target.'cfg(unix)'.dev-dependencies]

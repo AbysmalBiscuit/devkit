@@ -532,6 +532,7 @@ dependencies = [
  "devkit-timing",
  "devkit-todo",
  "devkit-todo-builtin",
+ "devkit-todo-postgres",
  "devkit-todo-taskchampion",
  "devkit-todo-taskwarrior",
  "fd-lock",
@@ -550,6 +551,8 @@ dependencies = [
  "strum 0.27.2",
  "tempfile",
  "textplots",
+ "tokio",
+ "tokio-postgres",
  "toml",
 ]
 

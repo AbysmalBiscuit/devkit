@@ -6,5 +6,5 @@ mod database;
 mod store;
 
 pub use activity::PostgresActivity;
-pub use database::Database;
+pub use database::{Database, is_unreachable};
 pub use store::PostgresStore;

@@ -6,9 +6,7 @@ use std::{collections::BTreeMap, time::SystemTime};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use clap::Args;
-use devkit_todo::activity::{
-    Activity, ActivityLog, ActivityStore, ClaimEnd, Interval, Run, RunEnd, stamp,
-};
+use devkit_todo::activity::{Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, stamp};
 use serde::Serialize;
 
 #[derive(Args)]
@@ -41,7 +39,8 @@ pub fn run(cli: ActivityCli) -> Result<()> {
         until: cli.until.unwrap_or(now),
         now,
     };
-    let report = Report::of(ActivityLog::open().read(now)?, &range);
+    let log = crate::todo::store::Store::activity_for_cli(&std::env::current_dir()?)?;
+    let report = Report::of(log.read(now)?, &range);
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
