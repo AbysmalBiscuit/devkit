@@ -78,6 +78,7 @@ Each rule's reasoning is documented at the named site. Read it before changing t
 - Every user-facing verb is a `devkit` subcommand.
 - Each fact has one home, and that home is generated or loaded: a config key's meaning is the doc comment on its field (it becomes the schema description), a flag's is its clap help, and behavior an agent needs goes in the skill references. `docs/` restates none of them.
 - A config type's `devkit.toml` example is a doctest on that type. `schema/devkit-config.json` is committed; regenerate it with `DEVKIT_UPDATE_SCHEMA=1 cargo test`.
+- Each skill's `agents/openai.yaml` is generated from its `SKILL.md` frontmatter and committed; regenerate it with `DEVKIT_UPDATE_OPENAI_YAML=1 cargo test --test skills`.
 - Help text stays ASCII (see `src/completions.rs`).
 - Conventional Commits.
 - `CODING_STANDARDS.md` holds the judgement calls review checks, such as when a trait is held as an enum rather than `dyn`.

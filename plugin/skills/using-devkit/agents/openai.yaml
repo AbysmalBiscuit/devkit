@@ -1,0 +1,5 @@
+interface:
+  display_name: using-devkit
+  short_description: Use when editing in a checkout other sessions share, when a write or command is denied naming a holder, before running a build or test by hand, for dev servers and ports, for issue worktrees and review, and when editing `devkit.toml`. Covers `devkit`, `devrun`, `issue`, `lockm`, `portm`.
+policy:
+  allow_implicit_invocation: true
