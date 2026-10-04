@@ -84,6 +84,7 @@ fn a_missing_task_binary_never_holds() {
     let p = Proj::with_home_config(
         "[todo]\nbackend = \"taskwarrior\"\n[todo.taskwarrior]\npath = \"/nonexistent/task\"\n",
     );
+    seed(&p, MAIN, "write the migration");
     let out = p.hook("stop", "claude-code", &stop(&p, "S"));
     assert!(out.status.success());
     assert_eq!(stdout(&out), "");
