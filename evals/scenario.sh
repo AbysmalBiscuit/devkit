@@ -42,10 +42,34 @@ isolated() {
     "$@"
 }
 
+# A lowercase UUID, the form `claude --session-id` takes.
+mint_session() {
+  if command -v uuidgen > /dev/null; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  else
+    cat /proc/sys/kernel/random/uuid
+  fi
+}
+
+# The scenario's files that `file` checks name, as `{path: contents}`, null
+# for a file the run left missing.
+captured_files() {
+  local spec=$1 repo=$2 files='{}' path
+  while IFS= read -r path; do
+    if [[ -f $repo/$path ]]; then
+      files=$(jq -c --arg p "$path" --rawfile c "$repo/$path" '. + {($p): $c}' <<< "$files")
+    else
+      files=$(jq -c --arg p "$path" '. + {($p): null}' <<< "$files")
+    fi
+  done < <(jq -r '[.checks | .. | objects | .file // empty] | unique[]' "$spec")
+  printf '%s\n' "$files"
+}
+
 run_one() {
   local label=$1 dir=$2 rep=$3
-  local scenario plugin label_dir=$scratch/$1 work
+  local scenario plugin label_dir=$scratch/$1 work session
   scenario=$(basename "$dir")
+  session=$(mint_session)
   plugin=$(cat "$label_dir/plugin")
   work=$label_dir/$scenario-$rep
   mkdir -p "$work/repo"
@@ -54,8 +78,10 @@ run_one() {
   git -C "$work/repo" add -A
   git -C "$work/repo" -c user.name=eval -c user.email=eval@example.invalid \
     commit -q --allow-empty -m fixture
+  # setup.sh alone sees the session, so the todos it seeds land on the node
+  # the run's own hooks resolve.
   if [[ -x $dir/setup.sh ]]; then
-    (cd "$work/repo" && isolated "$label_dir" "$dir/setup.sh")
+    (cd "$work/repo" && isolated "$label_dir" env CLAUDE_CODE_SESSION_ID="$session" "$dir/setup.sh")
   fi
 
   local transcript=$out/$label-$scenario-$rep.jsonl
@@ -63,12 +89,13 @@ run_one() {
   # permission prompts leaves every devkit verdict in force.
   (cd "$work/repo" && isolated "$label_dir" timeout "${EVAL_TIMEOUT:-600}" \
     claude -p --setting-sources project --plugin-dir "$plugin" \
-    --permission-mode bypassPermissions --no-session-persistence \
+    --permission-mode bypassPermissions --no-session-persistence --session-id "$session" \
     --model "$model" --max-turns "$(jq -r '.max_turns' "$dir/scenario.json")" \
     --output-format stream-json --verbose \
     < "$dir/prompt.md" > "$transcript" 2> "$out/$label-$scenario-$rep.err") || true
   git -C "$work/repo" status --porcelain --untracked-files=all |
-    jq -Rsc '{type: "eval", changed: (split("\n") | map(select(. != "") | .[3:]))}' >> "$transcript"
+    jq -Rsc --argjson files "$(captured_files "$dir/scenario.json" "$work/repo")" \
+      '{type: "eval", changed: (split("\n") | map(select(. != "") | .[3:])), files: $files}' >> "$transcript"
   if [[ -x $dir/teardown.sh ]]; then
     (cd "$work/repo" && isolated "$label_dir" "$dir/teardown.sh")
   fi

@@ -1,0 +1,18 @@
+{
+  "max_turns": 1,
+  "checks": [
+    {"id": "file-matches", "file": "notes.md", "match": "status: done"},
+    {"id": "file-misses", "file": "notes.md", "match": "pending"},
+    {"id": "file-missing", "file": "gone.md", "match": "."},
+    {"id": "file-absent", "file": "notes.md", "match": "pending", "absent": true},
+    {"id": "any-passes", "any": [
+      {"reply": "which one"},
+      {"call": "Bash", "match": "devkit todo done"}
+    ]},
+    {"id": "any-fails", "any": [
+      {"reply": "which one"},
+      {"changed": "^nope$"}
+    ]},
+    {"id": "any-absent", "any": [{"reply": "finished"}], "absent": true}
+  ]
+}

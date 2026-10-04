@@ -1,0 +1,9 @@
+{
+  "file-matches": true,
+  "file-misses": false,
+  "file-missing": false,
+  "file-absent": true,
+  "any-passes": true,
+  "any-fails": false,
+  "any-absent": false
+}

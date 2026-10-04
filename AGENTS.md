@@ -29,7 +29,7 @@ devrun task eval-scenario                                # every scenario, this 
 evals/scenario.sh held-lock main=/path/to/old/checkout new=.   # compare checkouts
 ```
 
-A scenario under `evals/scenarios/` is a `prompt.md`, an optional `fixture/` copied in as the first commit, optional `setup.sh` and `teardown.sh` run in the repository, and a `scenario.json` holding `max_turns` and the checks. `evals/lib/transcript.jq` documents the check kinds: a tool call, the final reply, or a path the run changed. The table gives each check's pass count per label, how many runs passed every check, and the mean turns, guard denials and seconds, plus total cost. Transcripts land in `target/evals/scenarios/`.
+A scenario under `evals/scenarios/` is a `prompt.md`, an optional `fixture/` copied in as the first commit, optional `setup.sh` and `teardown.sh` run in the repository, and a `scenario.json` holding `max_turns` and the checks. `setup.sh` runs with `CLAUDE_CODE_SESSION_ID` set to the run's own session id, so todos it adds land on that session's list. `evals/lib/transcript.jq` documents the check kinds: a tool call, the final reply, a path the run changed, a file's contents after the run, or any of several checks. `bash evals/lib/transcript.test.sh` grades the hand-written transcripts under `evals/lib/testdata/` for free, to check a scenario's checks before paying for a run. The table gives each check's pass count per label, how many runs passed every check, and the mean turns, guard denials and seconds, plus total cost. Transcripts land in `target/evals/scenarios/`.
 
 ## Layout
 
