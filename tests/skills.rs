@@ -16,12 +16,11 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const SKILLS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/plugin/skills");
 
-/// Every directory whose skills Codex can load: the ones the plugin ships and
-/// the ones this repository's own agents use.
-const CODEX_SKILL_ROOTS: [&str; 2] = [
-    SKILLS,
-    concat!(env!("CARGO_MANIFEST_DIR"), "/.agents/skills"),
-];
+/// The skills this repository's own agents use, which the plugin does not ship.
+const REPO_SKILLS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/.agents/skills");
+
+/// Every directory whose skills Codex can load.
+const CODEX_SKILL_ROOTS: [&str; 2] = [SKILLS, REPO_SKILLS];
 
 const REGENERATE: &str = "DEVKIT_UPDATE_OPENAI_YAML=1 cargo test --test skills";
 
@@ -135,7 +134,7 @@ fn every_committed_openai_yaml_matches_its_skill() {
 
 #[test]
 fn the_generated_cloud_openai_yaml_matches_the_hand_written_one() {
-    let cloud = Path::new(CODEX_SKILL_ROOTS[1]).join("cloud");
+    let cloud = Path::new(REPO_SKILLS).join("cloud");
     assert_eq!(
         openai_yaml(&cloud),
         "interface:\n  \
