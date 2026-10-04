@@ -367,7 +367,7 @@ pub fn stamp(at: DateTime<Utc>) -> String {
 
 /// A store whose claim changes are recorded in an [`ActivityStore`]. A
 /// failure to record never fails the edit.
-pub struct Recorded<S, L = ActivityLog> {
+pub struct Recorded<S, L> {
     store: S,
     log: L,
 }
