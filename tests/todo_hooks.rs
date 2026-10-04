@@ -154,13 +154,18 @@ fn run_as_sub_agent(p: &Proj, on: Attributed, agent: &str, command: &str) -> std
 fn attribution_a_sub_agents_start_runs_as_the_sub_agent() {
     let p = Proj::new();
     let id = seed(&p, "a");
-    let rewritten = guarded(&p, "claude-code", "a1", &format!("devkit todo start {id}"));
+    let rewritten = guarded(
+        &p,
+        CLAUDE_CODE.harness,
+        "a1",
+        &format!("devkit todo start {id}"),
+    );
     assert_eq!(
         p.todo(&id).status,
         Status::Pending,
         "the hook writes nothing"
     );
-    let run = p.shell(&rewritten, &[("CLAUDE_CODE_SESSION_ID", "S")]);
+    let run = p.shell(&rewritten, &[(CLAUDE_CODE.session_var, "S")]);
     assert!(run.status.success(), "{}", todoenv::stderr(&run));
     assert_eq!(p.todo(&id).status, in_progress("S/a1"));
 }
