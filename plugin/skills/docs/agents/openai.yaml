@@ -1,0 +1,5 @@
+interface:
+  display_name: docs
+  short_description: 'Use when the answer depends on how third-party software behaves: a library, framework, CLI, engine, or app. Trigger even when you already know the answer, because training knowledge is version-stale. Trigger too when the question arrives wrapped in project context (file paths, "fix our code") and answering it requires knowing what a dependency does or expects.'
+policy:
+  allow_implicit_invocation: true
