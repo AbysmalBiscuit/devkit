@@ -1,0 +1,9 @@
+{
+  "errors": [
+    {
+      "type": "INSUFFICIENT_SCOPES",
+      "locations": [{ "line": 1, "column": 120 }],
+      "message": "Your token has not been granted the required scopes to execute this query. The 'id' field requires one of the following scopes: ['read:project'], but your token has only been granted the: ['gist', 'read:org', 'repo'] scopes. Please modify your token's scopes at: https://github.com/settings/tokens."
+    }
+  ]
+}

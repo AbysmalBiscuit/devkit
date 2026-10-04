@@ -148,7 +148,7 @@ impl Api {
     /// (`{ "data": ..., "errors": ... }`) with no error handling of its own:
     /// [`Api::graphql`] and [`Api::graphql_partial`] each apply their own
     /// acceptance rule to the same request.
-    fn graphql_request(&self, query: &str) -> Result<Value> {
+    pub fn graphql_value(&self, query: &str) -> Result<Value> {
         let _span = devkit_timing::io_span("github graphql", "graphql").entered();
         Ok(http::send(
             client()
@@ -163,7 +163,7 @@ impl Api {
     /// POST a raw GraphQL query. The response envelope is returned whole
     /// (`{ "data": ... }`); a non-empty `errors` array is an error.
     pub fn graphql(&self, query: &str) -> Result<Value> {
-        let v = self.graphql_request(query)?;
+        let v = self.graphql_value(query)?;
         if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
             && !errors.is_empty()
         {
@@ -176,7 +176,7 @@ impl Api {
     /// partial answer: an aliased batch reports one missing id that way while
     /// returning real data for the rest. Any other error class still fails.
     pub fn graphql_partial(&self, query: &str) -> Result<Value> {
-        let v = self.graphql_request(query)?;
+        let v = self.graphql_value(query)?;
         if accepts_partial(&v) {
             return Ok(v);
         }
