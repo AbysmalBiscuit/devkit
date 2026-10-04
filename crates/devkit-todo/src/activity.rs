@@ -72,7 +72,7 @@ pub enum RunEnd {
 }
 
 impl RunEnd {
-    /// The name the log and `--json` spell it with.
+    /// The text report's spelling, the same as serde's snake_case.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Stopped => "stopped",
