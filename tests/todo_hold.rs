@@ -248,6 +248,16 @@ fn cursor_never_holds() {
         "workspace_roots": [p.path],
     });
     silent(&p.hook("stop", "cursor", &cursor));
+    let sub = seed(&p, MAIN, "run the migration");
+    set(&p, &sub, StatusKind::InProgress, "S/a1");
+    let sub_agent_stop = json!({
+        "hook_event_name": "subagentStop",
+        "conversation_id": "S",
+        "subagent_id": "a1",
+        "subagent_type": "explore",
+        "cwd": p.path,
+    });
+    silent(&p.hook("subagent-stop", "cursor", &sub_agent_stop));
 }
 
 #[test]
