@@ -78,34 +78,46 @@ pub fn write(payload: &Payload) -> Option<Write> {
 
 /// Claim the write targets a structured-edit payload names, before the tool
 /// runs. A panic once the gate applies denies the call.
-pub fn guard(payload: &Payload, write: Write) -> anyhow::Result<()> {
-    let _ = gate::guarded(|armed| respond(payload, write, &WriteGate::live(), armed));
+pub fn guard(
+    payload: &Payload,
+    write: Write,
+    checkout: &Checkout,
+    cwd: &Path,
+) -> anyhow::Result<()> {
+    let _ =
+        gate::guarded(|armed| respond(payload, write, &WriteGate::live(), armed, checkout, cwd));
     Ok(())
 }
 
 /// The edit path's single emission site. Anything appended to stdout after a
 /// denial makes the whole output unparseable, and a harness that cannot parse
 /// a hook's stdout proceeds with the call it was asked to gate.
-fn respond(payload: &Payload, write: Write, gate: &WriteGate, armed: &Armed) {
-    let cwd = record::payload_cwd(payload);
-    // One `git worktree list` for the whole invocation, shared by the
-    // enforcement gate, the lock scoping and the log settings. It resolves
-    // lazily, so a tool that writes nothing spawns nothing.
-    let checkout = Checkout::at(&cwd);
+///
+/// `checkout` is the hook's one `git worktree list`, shared by the
+/// enforcement gate, the lock scoping and the log settings. It resolves
+/// lazily, so a tool that writes nothing spawns nothing.
+fn respond(
+    payload: &Payload,
+    write: Write,
+    gate: &WriteGate,
+    armed: &Armed,
+    checkout: &Checkout,
+    cwd: &Path,
+) {
     let harness = payload.harness();
-    let enabled = gate::enabled(harness, &checkout, &cwd);
+    let enabled = gate::enabled(harness, checkout, cwd);
     if enabled {
         armed.arm(harness);
     }
     let blocks = if enabled {
-        blocks(&write, gate, &checkout, &cwd)
+        blocks(&write, gate, checkout, cwd)
     } else {
         Vec::new()
     };
     let targets = match write {
         Write::Targets { paths, holder } => {
             if blocks.is_empty() {
-                rules::inject(payload, &checkout, &cwd, &paths, &holder);
+                rules::inject(payload, checkout, cwd, &paths, &holder);
             }
             paths
         }
@@ -119,12 +131,12 @@ fn respond(payload: &Payload, write: Write, gate: &WriteGate, armed: &Armed) {
     // envelope exists runs into the manifest timeout, and a harness timeout
     // allows the call.
     let _ = std::io::Write::flush(&mut std::io::stdout());
-    let settings = harness_log::resolve_in(&checkout, &cwd);
+    let settings = harness_log::resolve_in(checkout, cwd);
     if settings.enabled {
         let rec = record::envelope(
             payload,
             HookEvent::PreToolUse,
-            &checkout,
+            checkout,
             Kind::EditPre(EditPre {
                 tool_name: payload.tool_name().map(str::to_string),
                 targets,

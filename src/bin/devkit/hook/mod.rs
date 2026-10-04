@@ -32,10 +32,14 @@ mod shell;
 pub(crate) mod todo;
 mod writes;
 
-use std::io::{Read, Write};
+use std::{
+    io::{Read, Write},
+    path::Path,
+};
 
 use anyhow::Result;
 use clap::{Args, ValueEnum};
+use devkit_common::vcs::Checkout;
 use pabal::AnyHarness;
 use payload::Payload;
 use serde_json::Value;
@@ -89,13 +93,11 @@ pub fn run(cli: HookCli) -> Result<()> {
         // consequence, so it runs before the record. A sub-agent held to its
         // open todos is not stopping, so it keeps its claims, its locks and
         // its run.
-        HookEvent::SubagentStop => with_payload_held(harness, cli.event, |p| {
-            let cwd = record::payload_cwd(p);
-            let checkout = devkit_common::vcs::Checkout::at(&cwd);
+        HookEvent::SubagentStop => with_payload_held(harness, cli.event, |p, checkout, cwd| {
             let holder = p.subagent_holder();
             let answer = holder
                 .as_ref()
-                .and_then(|h| todo::hold(p, h, &checkout, &cwd));
+                .and_then(|h| todo::hold(p, h, checkout, cwd));
             let held = match answer {
                 Some(answer) => {
                     print_envelope(&answer);
@@ -105,27 +107,25 @@ pub fn run(cli: HookCli) -> Result<()> {
                     if let Some(h) = &holder {
                         todo::rearm(h);
                     }
-                    todo::release(holder, &checkout, &cwd);
+                    todo::release(holder, checkout, cwd);
                     edit::release_subagent(p);
                     false
                 }
             };
-            record_in(p, cli.event, &checkout, &cwd);
+            record_in(p, cli.event, checkout, cwd);
             held
         }),
         // Release, then record, then sweep. Release first because it is the
         // one step with a correctness consequence; the sweep last because it is
         // the only one that can be skipped without loss.
-        HookEvent::SessionEnd => with_payload(harness, cli.event, |p| {
-            let cwd = record::payload_cwd(p);
-            let checkout = devkit_common::vcs::Checkout::at(&cwd);
+        HookEvent::SessionEnd => with_payload(harness, cli.event, |p, checkout, cwd| {
             if let Some(session) = p.session_holder() {
                 todo::forget_holds(&session);
             }
-            todo::release(p.session_holder(), &checkout, &cwd);
+            todo::release(p.session_holder(), checkout, cwd);
             edit::release_session(p);
-            clear_issue_receipts(p);
-            let settings = record_in(p, cli.event, &checkout, &cwd);
+            clear_issue_receipts(p, checkout);
+            let settings = record_in(p, cli.event, checkout, cwd);
             if settings.auto_prune && settings.enabled {
                 // A retention cap nothing enforces is not a promise. Fail-open:
                 // the outcome is discarded, so a sweep failure never changes
@@ -134,58 +134,52 @@ pub fn run(cli: HookCli) -> Result<()> {
             }
             Ok(())
         }),
-        HookEvent::PostToolUse => with_payload(harness, cli.event, |p| {
-            let cwd = record::payload_cwd(p);
-            let checkout = devkit_common::vcs::Checkout::at(&cwd);
-            todo::capture(p, &checkout);
-            record_in(p, cli.event, &checkout, &cwd);
+        HookEvent::PostToolUse => with_payload(harness, cli.event, |p, checkout, cwd| {
+            todo::capture(p, checkout);
+            record_in(p, cli.event, checkout, cwd);
             Ok(())
         }),
-        HookEvent::SessionStart => with_payload(harness, cli.event, |p| {
-            let cwd = record::payload_cwd(p);
-            let checkout = devkit_common::vcs::Checkout::at(&cwd);
-            issue_event::on_session_start(&checkout);
-            record_in(p, cli.event, &checkout, &cwd);
+        HookEvent::SessionStart => with_payload(harness, cli.event, |p, checkout, cwd| {
+            issue_event::on_session_start(checkout);
+            record_in(p, cli.event, checkout, cwd);
             Ok(())
         }),
         // The verdict comes first and recording after, so a record can never
         // change it.
-        HookEvent::Stop => with_payload(harness, cli.event, |p| {
-            let cwd = record::payload_cwd(p);
-            let checkout = devkit_common::vcs::Checkout::at(&cwd);
+        HookEvent::Stop => with_payload(harness, cli.event, |p, checkout, cwd| {
             if let Some(session) = p.session_holder()
-                && let Some(answer) = todo::hold(p, &session, &checkout, &cwd)
+                && let Some(answer) = todo::hold(p, &session, checkout, cwd)
             {
                 print_envelope(&answer);
             }
-            record_in(p, cli.event, &checkout, &cwd);
+            record_in(p, cli.event, checkout, cwd);
             Ok(())
         }),
         // A new prompt changes the agent's context under a refused stop, so
         // its next stop with the same open todos is refused again. Nothing
         // reaches stdout, which the harness appends to the prompt.
-        HookEvent::UserPromptSubmit => with_payload(harness, cli.event, |p| {
+        HookEvent::UserPromptSubmit => with_payload(harness, cli.event, |p, checkout, cwd| {
             if let Ok(holder) = p.holder() {
                 todo::rearm(&holder);
             }
-            record_only(p, cli.event);
+            record_in(p, cli.event, checkout, cwd);
             Ok(())
         }),
         // Compaction is what drops the injected rules out of the agent's
         // context, so clearing the set is what lets them inject again. It
         // drops the reminder of open todos too, so the hold re-arms.
-        HookEvent::PostCompact => with_payload(harness, cli.event, |p| {
+        HookEvent::PostCompact => with_payload(harness, cli.event, |p, checkout, cwd| {
             if let Ok(holder) = p.holder() {
                 todo::rearm(&holder);
                 rules::clear_for_holder(&holder);
             }
-            record_only(p, cli.event);
+            record_in(p, cli.event, checkout, cwd);
             Ok(())
         }),
         // Record-only. Each reads stdin, builds one record and exits; nothing
         // reaches stdout, because `PermissionRequest` honours a JSON decision.
-        event => with_payload(harness, event, |p| {
-            record_only(p, event);
+        event => with_payload(harness, event, |p, checkout, cwd| {
+            record_in(p, event, checkout, cwd);
             Ok(())
         }),
     }
@@ -193,12 +187,10 @@ pub fn run(cli: HookCli) -> Result<()> {
 
 /// Delete the ending session's `issue render` receipts in the payload's
 /// checkout. Best-effort: a receipt left behind is swept by a later render.
-fn clear_issue_receipts(payload: &Payload) {
-    let cwd = record::payload_cwd(payload);
-    let checkout = devkit_common::vcs::Checkout::at(&cwd);
+fn clear_issue_receipts(payload: &Payload, checkout: &Checkout) {
     if let (Some(session), Some(root)) = (
         payload.session_id(),
-        crate::issue::receipt::store_root(&checkout),
+        crate::issue::receipt::store_root(checkout),
     ) {
         let _ = crate::issue::receipt::clear_session(&root, session);
     }
@@ -209,13 +201,6 @@ fn clear_issue_receipts(payload: &Payload) {
 ///
 /// With logging off this is one global config read: no project layer, no git,
 /// no tree-sitter.
-fn record_only(payload: &Payload, event: HookEvent) -> devkit_common::harness_log::Settings {
-    let cwd = record::payload_cwd(payload);
-    let checkout = devkit_common::vcs::Checkout::at(&cwd);
-    record_in(payload, event, &checkout, &cwd)
-}
-
-/// [`record_only`] for a verb that already resolved the payload's checkout.
 fn record_in(
     payload: &Payload,
     event: HookEvent,
@@ -247,15 +232,18 @@ pub(crate) fn read_payload(harness: Option<AnyHarness>, event: HookEvent) -> Opt
 ///
 /// An absent payload is read as an empty object rather than skipped, so a verb
 /// a harness fires with no body still records that it fired. The activity log
-/// is written after the verb, whose releases come first.
+/// is written after the verb, whose releases come first. Both read the one
+/// checkout the payload's directory resolves to.
 fn with_payload(
     harness: Option<AnyHarness>,
     event: HookEvent,
-    f: impl FnOnce(&Payload) -> Result<()>,
+    f: impl FnOnce(&Payload, &Checkout, &Path) -> Result<()>,
 ) -> Result<()> {
     let payload = read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event));
-    let out = f(&payload);
-    activity::observe(&payload, event);
+    let cwd = record::payload_cwd(&payload);
+    let checkout = Checkout::at(&cwd);
+    let out = f(&payload, &checkout, &cwd);
+    activity::observe(&payload, event, &checkout, &cwd);
     out
 }
 
@@ -264,13 +252,15 @@ fn with_payload(
 fn with_payload_held(
     harness: Option<AnyHarness>,
     event: HookEvent,
-    f: impl FnOnce(&Payload) -> bool,
+    f: impl FnOnce(&Payload, &Checkout, &Path) -> bool,
 ) -> Result<()> {
     let payload = read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event));
-    if f(&payload) {
-        activity::seen(&payload);
+    let cwd = record::payload_cwd(&payload);
+    let checkout = Checkout::at(&cwd);
+    if f(&payload, &checkout, &cwd) {
+        activity::seen(&payload, &checkout, &cwd);
     } else {
-        activity::observe(&payload, event);
+        activity::observe(&payload, event, &checkout, &cwd);
     }
     Ok(())
 }
@@ -280,11 +270,11 @@ fn with_payload_held(
 pub(crate) fn legacy_lock_event(event: &str) -> Result<()> {
     match event {
         "pretooluse" => pre_tool_use(None),
-        "subagent-stop" => with_payload(None, HookEvent::SubagentStop, |p| {
+        "subagent-stop" => with_payload(None, HookEvent::SubagentStop, |p, _, _| {
             edit::release_subagent(p);
             Ok(())
         }),
-        "session-end" => with_payload(None, HookEvent::SessionEnd, |p| {
+        "session-end" => with_payload(None, HookEvent::SessionEnd, |p, _, _| {
             edit::release_session(p);
             Ok(())
         }),
@@ -305,13 +295,15 @@ pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
     let Some(payload) = read_payload(harness, HookEvent::PreToolUse) else {
         return shell::deny_unreadable_payload(harness);
     };
-    activity::observe(&payload, HookEvent::PreToolUse);
+    let cwd = record::payload_cwd(&payload);
+    let checkout = Checkout::at(&cwd);
+    activity::observe(&payload, HookEvent::PreToolUse, &checkout, &cwd);
     if let Some(write) = edit::write(&payload) {
-        return edit::guard(&payload, write);
+        return edit::guard(&payload, write, &checkout, &cwd);
     }
     match payload.tool() {
-        Some(pabal::Tool::Mcp { .. }) => mcp::guard(&payload),
-        _ => shell::guard(&payload),
+        Some(pabal::Tool::Mcp { .. }) => mcp::guard(&payload, &checkout, &cwd),
+        _ => shell::guard(&payload, &checkout),
     }
 }
 

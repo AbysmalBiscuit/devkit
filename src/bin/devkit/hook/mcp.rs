@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::{
     payload::{self, Payload},
-    print_envelope, record,
+    print_envelope,
 };
 use crate::issue::{
     receipt::{self, Field},
@@ -45,10 +45,11 @@ pub(super) struct Context<'a> {
 /// this tool has nothing to enforce; after a match every failure denies,
 /// panics included, because an enforcement rule that fails open enforces
 /// nothing.
-pub(super) fn guard(payload: &Payload) -> Result<()> {
+pub(super) fn guard(payload: &Payload, checkout: &Checkout, cwd: &Path) -> Result<()> {
     let matched: OnceLock<()> = OnceLock::new();
-    let outcome =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| respond(payload, &matched)));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        respond(payload, &matched, checkout, cwd)
+    }));
     match outcome {
         Ok(Verdict::Deny(reason)) => print_envelope(&payload::deny(payload.harness(), &reason)),
         Ok(Verdict::Allow) => {}
@@ -61,7 +62,7 @@ pub(super) fn guard(payload: &Payload) -> Result<()> {
     Ok(())
 }
 
-fn respond(payload: &Payload, matched: &OnceLock<()>) -> Verdict {
+fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: &Path) -> Verdict {
     let Some(Tool::Mcp {
         server,
         tool,
@@ -70,9 +71,7 @@ fn respond(payload: &Payload, matched: &OnceLock<()>) -> Verdict {
     else {
         return Verdict::Allow;
     };
-    let cwd = record::payload_cwd(payload);
-    let checkout = Checkout::at(&cwd);
-    let (rules, _) = harness::resolve_rules_in(&checkout, &cwd);
+    let (rules, _) = harness::resolve_rules_in(checkout, cwd);
     let Some(rule) = rules
         .issue_tools
         .values()
@@ -94,7 +93,7 @@ fn respond(payload: &Payload, matched: &OnceLock<()>) -> Verdict {
              no `devkit issue render` receipt can match it."
         ));
     }
-    let Some(root) = receipt::store_root(&checkout) else {
+    let Some(root) = receipt::store_root(checkout) else {
         return Verdict::Deny(format!(
             "devkit issue guard: {} is not inside a git checkout, where `devkit issue render` \
              keeps its receipts.",
@@ -102,7 +101,7 @@ fn respond(payload: &Payload, matched: &OnceLock<()>) -> Verdict {
         ));
     };
     let ctx = Context {
-        hint: &|| required_hint(&checkout, &cwd),
+        hint: &|| required_hint(checkout, cwd),
         session_seen: receipt::session_dir(&root, session).is_dir(),
     };
     let server = server.unwrap_or(tool);

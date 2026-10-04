@@ -3,18 +3,18 @@
 //! it seen for the backstop. Silent: a failed write changes nothing the hook
 //! does.
 
-use std::time::SystemTime;
+use std::{path::Path, time::SystemTime};
 
 use devkit_common::vcs::Checkout;
 use devkit_todo::activity::{ActivityStore, Event, What};
 
-use super::{HookEvent, payload::Payload, record};
+use super::{HookEvent, payload::Payload};
 use crate::todo::store::Store;
 
 /// Records what `event` means for the payload's run, in the log that goes
 /// with the checkout's todo store. Keyed on the raw agent id, so a fork,
 /// which has no agent type, still gets a run.
-pub(crate) fn observe(payload: &Payload, event: HookEvent) {
+pub(crate) fn observe(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path) {
     let Some(session) = payload.session_id() else {
         return;
     };
@@ -22,8 +22,7 @@ pub(crate) fn observe(payload: &Payload, event: HookEvent) {
     if agent.is_none() && event != HookEvent::SessionEnd {
         return;
     }
-    let cwd = record::payload_cwd(payload);
-    let log = Store::activity_for_hook(&Checkout::at(&cwd), &cwd);
+    let log = Store::activity_for_hook(checkout, cwd);
     let now = SystemTime::now();
     let record = |what| {
         log.record(&Event {
@@ -55,10 +54,9 @@ pub(crate) fn observe(payload: &Payload, event: HookEvent) {
 
 /// Marks the payload's agent seen, for the backstop, without ending its run,
 /// in the log that goes with the checkout's todo store.
-pub(crate) fn seen(payload: &Payload) {
+pub(crate) fn seen(payload: &Payload, checkout: &Checkout, cwd: &Path) {
     if let (Some(session), Some(agent)) = (payload.session_id(), payload.agent_id()) {
-        let cwd = record::payload_cwd(payload);
-        let log = Store::activity_for_hook(&Checkout::at(&cwd), &cwd);
+        let log = Store::activity_for_hook(checkout, cwd);
         let _ = log.seen_at(session, agent, SystemTime::now());
     }
 }
