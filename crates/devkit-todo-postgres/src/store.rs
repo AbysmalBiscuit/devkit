@@ -135,23 +135,20 @@ async fn after_last(
     Ok(row.get(0))
 }
 
-/// Writes one todo's column and stamps it modified. Returns when the
-/// database made the change.
+/// Writes one todo's column and stamps it modified.
 async fn update(
     db: &impl GenericClient,
     id: &str,
     set: &str,
     value: &(dyn tokio_postgres::types::ToSql + Sync),
     kind: Type,
-) -> Result<DateTime<Utc>> {
+) -> Result<()> {
     let sql = format!(
-        "UPDATE devkit.todos SET {set} = $2, modified = clock_timestamp()
-         WHERE id = $1::uuid RETURNING modified"
+        "UPDATE devkit.todos SET {set} = $2, modified = clock_timestamp() WHERE id = $1::uuid"
     );
-    let row = db
-        .query_typed_one(&sql, &[(&id, Type::TEXT), (value, kind)])
+    db.execute_typed(&sql, &[(&id, Type::TEXT), (value, kind)])
         .await?;
-    Ok(row.get(0))
+    Ok(())
 }
 
 async fn write_status(db: &impl GenericClient, id: &str, status: &Status) -> Result<DateTime<Utc>> {
