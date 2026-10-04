@@ -136,15 +136,19 @@ pub fn claim(worktree: &Path, event: IssueEvent) -> Result<bool> {
     if !path(worktree).exists() {
         return Ok(false);
     }
-    update(worktree, |rec| {
-        let Some(rec) = rec else { return false };
-        let events = rec.events.get_or_insert_with(Vec::new);
+    update(worktree, |rec| rec.as_mut().is_some_and(|r| r.claim(event)))
+}
+
+impl IssueRecord {
+    /// Add `event` to `events`, returning `false` when it was already there.
+    pub fn claim(&mut self, event: IssueEvent) -> bool {
+        let events = self.events.get_or_insert_with(Vec::new);
         let fresh = !events.contains(&event);
         if fresh {
             events.push(event);
         }
         fresh
-    })
+    }
 }
 
 /// Read the record from `<worktree>/.devkit/issue.toml`, or `None` if absent or

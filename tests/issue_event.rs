@@ -193,3 +193,169 @@ fn a_worktree_without_an_issue_id_is_an_error() {
     );
     assert!(gh.calls().is_empty(), "{}", gh.calls());
 }
+
+const PR_7: ghfake::Pr = ghfake::Pr {
+    number: 7,
+    state: "OPEN",
+    is_draft: true,
+    author: "LevValle",
+};
+
+/// A bare `origin` holding the project's commit as `main`, which `issue setup`
+/// and `issue pr checkout` fetch and branch from.
+fn push_origin(gh: &ghfake::Fake) -> tempfile::TempDir {
+    let origin = tempfile::tempdir().unwrap();
+    devkit_git::Git::fixture(origin.path())
+        .args(["init", "-q", "--bare"])
+        .output()
+        .unwrap();
+    let git = || devkit_git::Git::fixture(gh.project());
+    git()
+        .args(["remote", "add", "origin", origin.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    git()
+        .args(["push", "-q", "origin", "HEAD:main"])
+        .output()
+        .unwrap();
+    origin
+}
+
+const ALL_EVENTS: &str = "[issue.events.setup]\nto = \"Todo\"\n\
+                          [issue.events.start]\nto = \"In progress\"\n\
+                          [issue.events.pr_open]\nto = \"In review\"\n";
+
+#[test]
+fn setup_records_and_fires_its_event_and_warns_without_failing() {
+    let gh = ghfake::Fake::without_pr(&format!("{GITHUB}[issue.events.setup]\nto = \"Todo\"\n"));
+    gh.github_keys("project = 3");
+    let _origin = push_origin(&gh);
+    gh.serve_graphql(include_str!(
+        "../crates/devkit-common/src/tracker/fixtures/github_status_insufficient_scopes.json"
+    ));
+
+    let out = gh.issue(&["setup", "65", "--slug", "fix", "--no-gitignore"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("warning: issue event setup")
+            && stderr(&out).contains("gh auth refresh -s project"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(graphql_calls(&gh).len(), 1, "{}", gh.calls());
+    let rec = devkit_common::record::read(&setup_worktree(&out)).expect("setup record");
+    assert_eq!(
+        (rec.origin, rec.events),
+        (
+            Some(devkit_common::record::RecordOrigin::Setup),
+            Some(vec![devkit_config::IssueEvent::Setup])
+        )
+    );
+}
+
+#[test]
+fn setup_without_the_event_claims_nothing_and_reads_no_tracker() {
+    let gh = ghfake::Fake::without_pr(&format!(
+        "{GITHUB}[issue.events.start]\nto = \"In progress\"\n"
+    ));
+    gh.github_keys("project = 3");
+    let _origin = push_origin(&gh);
+
+    let out = gh.issue(&["setup", "65", "--slug", "fix", "--no-gitignore"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(graphql_calls(&gh).is_empty(), "{}", gh.calls());
+    let rec = devkit_common::record::read(&setup_worktree(&out)).expect("setup record");
+    assert_eq!(rec.events, Some(vec![]));
+}
+
+#[test]
+fn pr_create_fires_pr_open_when_it_reuses_a_pr() {
+    let gh = ghfake::Fake::new(
+        &format!("{GITHUB}[issue.events.pr_open]\nto = \"In review\"\n"),
+        &PR_7,
+    );
+    gh.github_keys("project = 3");
+    gh.record_issue("65");
+    gh.serve_pr(&PR_7);
+    gh.serve_graphql(&status_answer(Some("In progress")));
+    gh.serve_mutation("{\"data\":{}}");
+
+    let out = gh.issue(&["pr", "create", "--no-push"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("moved 65: In progress -> In review"),
+        "{}",
+        stderr(&out)
+    );
+    let rec = devkit_common::record::read(gh.project()).unwrap();
+    assert_eq!(rec.events, Some(vec![devkit_config::IssueEvent::PrOpen]));
+    assert_eq!(rec.pr.map(|p| p.number), Some(7));
+
+    let again = gh.issue(&["pr", "create", "--no-push"]);
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert_eq!(
+        graphql_calls(&gh).len(),
+        2,
+        "a second run fires nothing: {}",
+        gh.calls()
+    );
+}
+
+#[test]
+fn a_failed_pr_open_warns_and_the_pr_stands() {
+    let gh = ghfake::Fake::new(
+        &format!("{GITHUB}[issue.events.pr_open]\nto = \"In review\"\n"),
+        &PR_7,
+    );
+    gh.github_keys("project = 3");
+    gh.record_issue("65");
+
+    let out = gh.issue(&["pr", "create", "--no-push"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("warning: issue event pr_open"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        devkit_common::record::read(gh.project())
+            .unwrap()
+            .pr
+            .map(|p| p.number),
+        Some(7)
+    );
+}
+
+#[test]
+fn checkout_records_its_origin_and_fires_nothing() {
+    let gh = ghfake::Fake::without_pr(&format!("{GITHUB}{ALL_EVENTS}"));
+    gh.github_keys("project = 3");
+    gh.serve_pr(&PR_7);
+    let _origin = push_origin(&gh);
+    let scratch = tempfile::tempdir().unwrap();
+    let worktree = scratch.path().join("pr-7");
+
+    let out = gh.issue(&["pr", "checkout", "#7", worktree.to_str().unwrap()]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    let rec = devkit_common::record::read(&worktree).expect("checkout record");
+    assert_eq!(
+        (rec.origin, rec.events),
+        (
+            Some(devkit_common::record::RecordOrigin::Checkout),
+            Some(vec![])
+        )
+    );
+    assert!(graphql_calls(&gh).is_empty(), "{}", gh.calls());
+}
+
+/// The worktree `issue setup` reported creating, from its JSON on stdout.
+fn setup_worktree(out: &std::process::Output) -> std::path::PathBuf {
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("setup JSON: {e}: {}", String::from_utf8_lossy(&out.stdout)));
+    json["worktree"].as_str().expect("worktree key").into()
+}

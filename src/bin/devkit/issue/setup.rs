@@ -8,10 +8,11 @@ use devkit_common::{
     cmd::capture,
     gitfetch,
     progress::Steps,
+    record::RecordOrigin,
     tracker::{IssueDetails, IssueRef, Resolved, Tracker},
     vcs::{NewWorktree, Vcs, VersionControl},
 };
-use devkit_config::{PrepFile, expand_tilde};
+use devkit_config::{IssueEvent, PrepFile, expand_tilde};
 use devkit_ports::load;
 
 pub struct SetupArgs {
@@ -590,6 +591,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
         }
         None => None,
     };
+    // The setup event is claimed in the record's first write, so firing it
+    // costs no second one.
+    let fires_setup = !issue.is_empty() && cfg.issue.events.setup.is_some();
     devkit_common::record::write(&worktree, &devkit_common::record::IssueRecord {
         issue: issue.clone(),
         slug: slug.clone(),
@@ -598,7 +602,12 @@ pub fn run(args: SetupArgs) -> Result<()> {
         // `issue setup` has no PR to record — there is none yet.
         pr: None,
         baseline: None,
-        ..Default::default()
+        origin: Some(RecordOrigin::Setup),
+        events: Some(if fires_setup {
+            vec![IssueEvent::Setup]
+        } else {
+            vec![]
+        }),
     })?;
     if !args.no_gitignore
         && let Err(e) = devkit_common::gitignore::ensure_devkit_ignored()
@@ -650,6 +659,14 @@ pub fn run(args: SetupArgs) -> Result<()> {
         &[],
         &steps,
     );
+    if fires_setup {
+        crate::issue::event::fire_inline(
+            Path::new(&start),
+            args.config.as_deref().map(Path::new),
+            IssueEvent::Setup,
+            &issue,
+        );
+    }
     Ok(())
 }
 

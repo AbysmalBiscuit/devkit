@@ -82,6 +82,15 @@ pub(crate) fn fire(
     })
 }
 
+/// Fire `event` from inside another command: report the outcome on stderr,
+/// and turn a failure into a warning so the command it rides on succeeds.
+pub(crate) fn fire_inline(dir: &Path, config: Option<&Path>, event: IssueEvent, issue: &str) {
+    match fire(dir, config, event, Some(issue)) {
+        Ok(line) => eprintln!("{line}"),
+        Err(e) => eprintln!("warning: issue event {event}: {e:#}"),
+    }
+}
+
 pub(crate) fn run(
     dir: &Path,
     config: Option<&Path>,

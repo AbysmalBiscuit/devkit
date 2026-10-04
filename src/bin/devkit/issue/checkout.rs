@@ -418,7 +418,10 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
                 number: meta.number,
             }),
             baseline: None,
-            ..Default::default()
+            // A reviewer's worktree fires no status event: its first session
+            // must not pull the issue back from review.
+            origin: Some(devkit_common::record::RecordOrigin::Checkout),
+            events: Some(vec![]),
         })?;
         Ok(issue)
     })?;

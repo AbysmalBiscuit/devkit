@@ -8,16 +8,14 @@ use devkit_common::{
     vcs::{Vcs, VersionControl},
     worktree::IssueId,
 };
-use devkit_config::PrCreateState;
+use devkit_config::{IssueEvent, PrCreateState};
 use devkit_ports::templates::worktree_context;
 
 use super::{
     add_reviewers,
     proof::require_proof,
     require_reviewer_for_ready,
-    resolve::{
-        Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing, verify_created,
-    },
+    resolve::{Existing, assert_belongs, parse_pr_flag, resolve_existing, verify_created},
     reviewer_logins,
 };
 use crate::{
@@ -127,6 +125,9 @@ fn check_attachments(forge: &dyn Forge, dir: &Path, attach: &[String]) -> Result
 pub(crate) struct Resolved {
     pub url: String,
     pub locator: PrLocator,
+    /// Whether this run claimed the `pr_open` event, in the record write
+    /// that names the PR, and so fires it.
+    pub pr_open_claimed: bool,
 }
 
 /// Renders the PR title on demand.
@@ -158,6 +159,9 @@ pub(crate) struct Ensure<'a> {
     /// demands a human reviewer.
     pub require_reviewer: bool,
     pub steps: &'a Steps,
+    /// Claim the `pr_open` event in the record, which holds a tracker issue
+    /// and has `[issue.events.pr_open]` configured.
+    pub claim_pr_open: bool,
 }
 
 /// Resolve this branch's PR and, when there is none, open one. A reused PR
@@ -170,7 +174,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
 
     let action = action_for(found.pr.as_ref().map(|p| p.state.as_str()));
 
-    let resolved = match action {
+    let mut resolved = match action {
         PrAction::Stop(reason) => bail!("{reason}"),
         PrAction::AddReviewer => {
             let pr = found.pr.expect("AddReviewer implies an existing PR");
@@ -194,6 +198,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             Resolved {
                 url: pr.url,
                 locator,
+                pr_open_claimed: false,
             }
         }
         PrAction::Create => {
@@ -231,13 +236,21 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             // notification goes out.
             verify_created(forge, &created_repo, locator.number, args.head)
                 .with_context(|| format!("{url} is open with nothing recorded"))?;
-            Resolved { url, locator }
+            Resolved {
+                url,
+                locator,
+                pr_open_claimed: false,
+            }
         }
     };
 
     if args.existing.record.is_some() {
         let toplevel = devkit_common::vcs::checkout_root(Path::new(start))?;
-        record_pr(&toplevel, resolved.locator.clone())?;
+        resolved.pr_open_claimed = devkit_common::record::update(&toplevel, |rec| {
+            let Some(rec) = rec else { return false };
+            rec.pr = Some(resolved.locator.clone());
+            args.claim_pr_open && rec.claim(IssueEvent::PrOpen)
+        })?;
     }
     Ok(resolved)
 }
@@ -292,9 +305,10 @@ pub fn run(args: Args) -> Result<()> {
     let issue = record
         .as_ref()
         .and_then(|r| r.issue.parse::<IssueId>().ok());
+    let tracker_issue = issue.as_ref().and_then(IssueId::tracker);
     if let (Some(variable), Some(issue), Caller::Agent) = (
         &loaded.config.defaults.pr_proof_variable,
-        issue.as_ref().and_then(IssueId::tracker),
+        tracker_issue,
         caller,
     ) {
         let tracker =
@@ -360,9 +374,18 @@ pub fn run(args: Args) -> Result<()> {
         attachments: &args.attach,
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
         steps: &steps,
+        claim_pr_open: tracker_issue.is_some() && loaded.config.issue.events.pr_open.is_some(),
     })?;
 
     println!("{}", resolved.url);
+    if let (true, Some(issue)) = (resolved.pr_open_claimed, tracker_issue) {
+        crate::issue::event::fire_inline(
+            here,
+            args.config.as_deref().map(Path::new),
+            IssueEvent::PrOpen,
+            issue,
+        );
+    }
     Ok(())
 }
 
