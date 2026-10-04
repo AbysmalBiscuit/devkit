@@ -80,6 +80,7 @@ Each rule's reasoning is documented at the named site. Read it before changing t
 - A config type's `devkit.toml` example is a doctest on that type. `schema/devkit-config.json` is committed; regenerate it with `DEVKIT_UPDATE_SCHEMA=1 cargo test`.
 - Help text stays ASCII (see `src/completions.rs`).
 - Conventional Commits.
+- `CODING_STANDARDS.md` holds the judgement calls review checks, such as when a trait is held as an enum rather than `dyn`.
 
 ## Worktrees and locks
 
