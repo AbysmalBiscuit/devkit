@@ -135,7 +135,7 @@ A URL Doppler gives is kept in devkit's state directory, readable only by you, a
 
 devkit creates its tables in a `devkit` schema on first use, so the role in the URL needs to create a schema once; afterwards it only reads and writes those tables. Todos live under the `[todo] project` root, so several roots share one database without seeing each other's lists. Ids are uuids, shown and accepted as 8-character prefixes, as on taskchampion.
 
-The connection is encrypted whenever the server offers TLS, and the server's certificate is always verified: against the Mozilla roots bundled into devkit, the platform's certificate store, and the PEM file `[todo.postgres] ca_file` names, if any. A certificate none of them vouches for fails the connection rather than falling back. `sslmode=require` in the URL also refuses a server that offers no TLS, and `sslmode=disable` turns TLS off.
+The connection always uses TLS and verifies the server's certificate: against the Mozilla roots bundled into devkit, the platform's certificate store, and the PEM file `[todo.postgres] ca_file` names, if any. A server that offers no TLS, or a certificate none of them vouches for, fails the connection rather than falling back to plaintext, whatever `sslmode` the URL gives, `prefer` included. Only `sslmode=disable` in the URL connects in plaintext, for a database on the same machine or network.
 
 On Supabase, use the transaction pooler, which suits short-lived clients such as hooks. Copy its URL from the project's Connect panel, under Transaction pooler:
 

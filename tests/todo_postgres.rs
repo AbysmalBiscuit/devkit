@@ -205,7 +205,10 @@ fn a_hook_with_the_database_unreachable_does_nothing_in_time() {
 #[test]
 fn a_hook_with_the_database_stalled_after_connecting_does_nothing_in_time() {
     let stalled = Stalled::start();
-    hooks_do_nothing_in_time(&format!("postgres://agent@{}/todos", stalled.addr));
+    hooks_do_nothing_in_time(&format!(
+        "postgres://agent@{}/todos?sslmode=disable",
+        stalled.addr
+    ));
 }
 
 /// Every todo hook against the database at `url`: each exits within its
@@ -285,10 +288,16 @@ fn admin(url: &str, sql: &str) {
     });
 }
 
-/// `url` naming the database `name` on the same server.
+/// `url` naming the database `name` on the same server, its query kept.
 fn with_dbname(url: &str, name: &str) -> String {
-    let (server, _) = url.rsplit_once('/').unwrap();
-    format!("{server}/{name}")
+    let (base, query) = url
+        .split_once('?')
+        .map_or((url, None), |(b, q)| (b, Some(q)));
+    let (server, _) = base.rsplit_once('/').unwrap();
+    match query {
+        Some(query) => format!("{server}/{name}?{query}"),
+        None => format!("{server}/{name}"),
+    }
 }
 
 #[test]

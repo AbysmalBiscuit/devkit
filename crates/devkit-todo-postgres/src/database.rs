@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use devkit_common::tls::Trust;
 use tokio::runtime::Runtime;
-use tokio_postgres::{Client, Config, error::SqlState};
+use tokio_postgres::{Client, Config, config::SslMode, error::SqlState};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 /// Everything devkit keeps, in a schema of its own so it stays out of the
@@ -101,14 +101,19 @@ impl fmt::Debug for Database {
 
 impl Database {
     /// The database `url` names, a `postgres://` URL or libpq's `key=value`
-    /// form, not connected yet. TLS is used whenever the server offers it,
-    /// unless `sslmode=disable`, and `sslmode=require` refuses a server that
-    /// does not. The server's certificate is always verified, against the
-    /// default roots and `trust`.
+    /// form, not connected yet. The connection always uses TLS and verifies
+    /// the server's certificate against the default roots and `trust`; a
+    /// server that offers no TLS is refused. `sslmode=disable` is the one way
+    /// to connect in plaintext.
     pub fn new(url: &str, wait: Duration, trust: &Trust) -> Result<Arc<Self>> {
-        let config = url
+        let mut config = url
             .parse::<Config>()
             .context("the todo database URL does not parse")?;
+        // tokio-postgres's default, `prefer`, falls back to plaintext when
+        // the server, or anyone between, declines TLS.
+        if config.get_ssl_mode() == SslMode::Prefer {
+            config.ssl_mode(SslMode::Require);
+        }
         let tls = MakeRustlsConnect::new(trust.client_config()?);
         Ok(Arc::new(Self {
             config: Some(config),

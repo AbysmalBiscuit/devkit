@@ -53,7 +53,8 @@ for _ in $(seq 60); do
 done
 docker exec "$name-tls" pg_isready -U postgres -h 127.0.0.1 >/dev/null
 
-echo "export DEVKIT_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:$pg_port/postgres"
-echo "export DEVKIT_TEST_POOLER_URL=postgres://postgres:postgres@127.0.0.1:$pooler_port/postgres"
+# These two speak plaintext on purpose, so their URLs say so.
+echo "export DEVKIT_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:$pg_port/postgres?sslmode=disable"
+echo "export DEVKIT_TEST_POOLER_URL=postgres://postgres:postgres@127.0.0.1:$pooler_port/postgres?sslmode=disable"
 echo "export DEVKIT_TEST_POSTGRES_TLS_URL=postgres://postgres:postgres@127.0.0.1:$tls_port/postgres"
 echo "export DEVKIT_TEST_POSTGRES_CA=$certs/ca.crt"

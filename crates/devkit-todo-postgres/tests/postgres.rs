@@ -102,7 +102,7 @@ fn a_role_that_cannot_create_the_schema_is_told_why() {
     admin(&direct, &format!("CREATE ROLE {name} LOGIN PASSWORD 'pw'"));
     let (_, host_and_db) = direct.rsplit_once('@').unwrap();
     let (host, _) = host_and_db.rsplit_once('/').unwrap();
-    let limited = format!("postgres://{name}:pw@{host}/{name}");
+    let limited = format!("postgres://{name}:pw@{host}/{name}?sslmode=disable");
     let db = Database::new(&limited, Duration::from_secs(10), &Trust::default()).unwrap();
     let err = PostgresStore::new(db, "r")
         .list(&devkit_todo::Filter::all())
@@ -153,4 +153,27 @@ fn a_ca_file_that_cannot_be_read_is_named() {
         format!("{err:#}").contains("/nonexistent/ca.crt"),
         "{err:#}"
     );
+}
+
+/// `url` without its query, so its `sslmode` falls back to the default.
+fn without_query(url: &str) -> &str {
+    url.split_once('?').map_or(url, |(base, _)| base)
+}
+
+#[test]
+fn a_server_without_tls_is_refused_unless_the_url_disables_it() {
+    let Some(direct) = url(DIRECT) else {
+        return;
+    };
+    let base = without_query(&direct);
+    for refused in [base.to_string(), format!("{base}?sslmode=prefer")] {
+        let db = Database::new(&refused, Duration::from_secs(10), &Trust::default()).unwrap();
+        let err = format!("{:#}", db.check().unwrap_err());
+        assert!(err.contains("TLS"), "{refused}: {err}");
+    }
+    let plain = format!("{base}?sslmode=disable");
+    Database::new(&plain, Duration::from_secs(10), &Trust::default())
+        .unwrap()
+        .check()
+        .unwrap();
 }
