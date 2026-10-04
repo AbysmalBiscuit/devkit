@@ -73,7 +73,7 @@ devkit_todo_sync_client_id = "<uuid>"
 devkit_todo_sync_secret = "<secret>"
 ```
 
-`devkit doctor` shows where each one resolved from, never its value. The sync client goes through `HTTPS_PROXY`, or `HTTP_PROXY` for an `http://` server, and ignores `NO_PROXY`. It trusts the platform certificate store, or `SSL_CERT_FILE` and `SSL_CERT_DIR` when set, without the bundled Mozilla roots devkit's other requests add.
+`devkit doctor` shows where each one resolved from, never its value. The sync client goes through `HTTPS_PROXY`, or `HTTP_PROXY` for an `http://` server, and ignores `NO_PROXY` when either is set. With neither set, it uses `ALL_PROXY` and honours `NO_PROXY`. It trusts the platform certificate store, or `SSL_CERT_FILE` and `SSL_CERT_DIR` when set, without the bundled Mozilla roots devkit's other requests add.
 
 When it syncs:
 
