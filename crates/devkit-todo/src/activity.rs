@@ -5,9 +5,9 @@
 
 use std::{
     collections::HashMap,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{ErrorKind, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::SystemTime,
 };
 
@@ -151,15 +151,9 @@ impl ActivityLog {
         let mut line = serde_json::to_vec(event)?;
         line.push(b'\n');
         let path = self.dir.join(EVENTS);
-        let open = || OpenOptions::new().create(true).append(true).open(&path);
-        let append = || match open() {
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                fs::create_dir_all(&self.dir)?;
-                open()?.write_all(&line)
-            }
-            file => file?.write_all(&line),
-        };
-        append().with_context(|| format!("appending to {}", path.display()))
+        open_creating(&path, OpenOptions::new().create(true).append(true))
+            .and_then(|mut file| file.write_all(&line))
+            .with_context(|| format!("appending to {}", path.display()))
     }
 
     /// Notes that `agent` of `session` fired a hook now.
@@ -169,23 +163,12 @@ impl ActivityLog {
 
     pub fn seen_at(&self, session: &str, agent: &str, when: SystemTime) -> Result<()> {
         let path = self.seen_path(session, Some(agent));
-        let open = || {
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(false)
-                .open(&path)
-        };
-        let touch = || match open() {
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                open()?.set_modified(when)
-            }
-            file => file?.set_modified(when),
-        };
-        touch().with_context(|| format!("marking {} seen", path.display()))
+        open_creating(
+            &path,
+            OpenOptions::new().create(true).write(true).truncate(false),
+        )
+        .and_then(|file| file.set_modified(when))
+        .with_context(|| format!("marking {} seen", path.display()))
     }
 
     /// Drops the last-hook marks of `agent`, or of every agent of `session`
@@ -243,6 +226,19 @@ impl ActivityLog {
             }
         }
         Ok(activity)
+    }
+}
+
+/// `path` opened with `options`, its parent directories created when missing.
+fn open_creating(path: &Path, options: &OpenOptions) -> std::io::Result<File> {
+    match options.open(path) {
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            options.open(path)
+        }
+        file => file,
     }
 }
 
