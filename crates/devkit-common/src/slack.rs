@@ -3,12 +3,13 @@ use anyhow::{Result, bail};
 /// Post a message to a Slack channel/user id via chat.postMessage.
 pub fn post_message(token: &str, channel: &str, text: &str) -> Result<()> {
     let _span = devkit_timing::io_span("slack", "chat.postMessage").entered();
-    let resp: serde_json::Value = crate::http::agent()
-        .post("https://slack.com/api/chat.postMessage")
-        .set("Authorization", &format!("Bearer {token}"))
-        .send_json(ureq::json!({ "channel": channel, "text": text }))
-        .map_err(crate::http::explain)?
-        .into_json()?;
+    let resp: serde_json::Value = crate::http::send(
+        crate::http::client()
+            .post("https://slack.com/api/chat.postMessage")
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "channel": channel, "text": text })),
+    )?
+    .json()?;
     check_response(&resp)
 }
 
@@ -31,17 +32,17 @@ pub struct SlackIdentity {
     pub url: String,
 }
 
-/// Validate `token` via `auth.test`, returning the bot/user identity. The ureq
-/// error is preserved as the top-level error (no `.context`) so a caller can
-/// downcast it to tell an unreachable host from a rejected token.
+/// Validate `token` via `auth.test`, returning the bot/user identity. The
+/// reqwest error is preserved as the top-level error (no `.context`) so a
+/// caller can downcast it to tell an unreachable host from a rejected token.
 pub fn validate(token: &str) -> Result<SlackIdentity> {
     let _span = devkit_timing::io_span("slack", "auth.test").entered();
-    let resp: serde_json::Value = crate::http::agent()
-        .post("https://slack.com/api/auth.test")
-        .set("Authorization", &format!("Bearer {token}"))
-        .call()
-        .map_err(crate::http::explain)?
-        .into_json()?;
+    let resp: serde_json::Value = crate::http::send(
+        crate::http::client()
+            .post("https://slack.com/api/auth.test")
+            .bearer_auth(token),
+    )?
+    .json()?;
     parse_identity(&resp)
 }
 

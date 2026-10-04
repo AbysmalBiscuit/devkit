@@ -233,21 +233,21 @@ pub fn issues_by_number(n: u64, key: &str) -> Result<Vec<LinearIssueRef>> {
 /// The single transport for every Linear GraphQL call: POST the body, decode
 /// the JSON envelope. `detail` labels the call for timing (see
 /// [`devkit_timing`]). GraphQL-level error interpretation stays with each
-/// caller — this preserves the raw `ureq` error so `validate` can downcast to
-/// distinguish an unreachable host from a rejected key.
+/// caller — this preserves the raw `reqwest` error so `validate` can downcast
+/// to distinguish an unreachable host from a rejected key.
 fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value> {
     let _span = devkit_timing::io_span("linear graphql", detail).entered();
-    let v: serde_json::Value = crate::http::agent()
-        .post("https://api.linear.app/graphql")
-        .set("Authorization", key)
-        .send_json(body)
-        .map_err(crate::http::explain)?
-        .into_json()?;
-    Ok(v)
+    Ok(crate::http::send(
+        crate::http::client()
+            .post("https://api.linear.app/graphql")
+            .header("Authorization", key)
+            .json(&body),
+    )?
+    .json()?)
 }
 
 fn post_graphql(query: &str, key: &str, detail: &str) -> Result<serde_json::Value> {
-    let v = send(ureq::json!({ "query": query }), key, detail)?;
+    let v = send(serde_json::json!({ "query": query }), key, detail)?;
     if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
         && !errors.is_empty()
     {
@@ -260,12 +260,12 @@ fn post_graphql(query: &str, key: &str, detail: &str) -> Result<serde_json::Valu
     Ok(v)
 }
 
-/// Validate `key` against Linear, returning the caller's identity. The ureq
+/// Validate `key` against Linear, returning the caller's identity. The reqwest
 /// error is preserved as the top-level error (no `.context`) so a caller can
 /// downcast it to distinguish an unreachable host from a rejected key.
 pub fn validate(key: &str) -> Result<LinearIdentity> {
     let resp = send(
-        ureq::json!({
+        serde_json::json!({
             "query": "query { viewer { email } organization { urlKey name } }"
         }),
         key,
@@ -403,7 +403,7 @@ pub fn issues_for_prs(urls: &[String], key: Option<&str>) -> HashMap<String, Vec
     let mut out = HashMap::new();
     for (query, vars, aliases) in issues_for_prs_queries(urls) {
         match send(
-            ureq::json!({ "query": query, "variables": vars }),
+            serde_json::json!({ "query": query, "variables": vars }),
             key,
             "issues_for_prs",
         ) {
@@ -432,7 +432,7 @@ pub fn workspace_url_key() -> Option<String> {
 
 fn fetch_url_key(key: &str) -> Result<Option<String>> {
     let resp = send(
-        ureq::json!({ "query": "query { organization { urlKey } }" }),
+        serde_json::json!({ "query": "query { organization { urlKey } }" }),
         key,
         "workspace_url_key",
     )?;
@@ -446,7 +446,7 @@ fn fetch(
     aliases: &HashMap<String, String>,
     key: &str,
 ) -> Result<HashMap<String, State>> {
-    let resp = send(ureq::json!({ "query": query }), key, "states")?;
+    let resp = send(serde_json::json!({ "query": query }), key, "states")?;
     let mut out = HashMap::new();
     if let Some(data) = resp.get("data").and_then(|d| d.as_object()) {
         for (alias, block) in data {
@@ -522,7 +522,7 @@ pub fn assigned_issue_history_with_progress(
     let mut after: Option<String> = None;
     loop {
         let resp = send(
-            ureq::json!({ "query": assigned_query(after.as_deref()) }),
+            serde_json::json!({ "query": assigned_query(after.as_deref()) }),
             key,
             "assigned_history",
         )?;
@@ -546,7 +546,7 @@ pub fn assigned_issue_history_with_progress(
 /// createdAt of my Linear account — the timeline origin.
 pub fn viewer_created_at(key: &str) -> Result<String> {
     let resp = send(
-        ureq::json!({ "query": "query { viewer { createdAt } }" }),
+        serde_json::json!({ "query": "query { viewer { createdAt } }" }),
         key,
         "viewer",
     )?;

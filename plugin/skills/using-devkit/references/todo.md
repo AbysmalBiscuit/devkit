@@ -56,7 +56,7 @@ On taskwarrior:
 
 ### Taskchampion
 
-`[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it for a container or cloud session, whose todos would otherwise be deleted with it, or to watch a session's lists from another machine. The replica holds the same tasks as the taskwarrior backend, under the same `[todo] project` root, with the same ids. It lives in devkit's state directory unless `[todo.taskchampion] data_dir` names another.
+`[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it for a container or cloud session, whose todos would otherwise be deleted with it, or to watch a session's lists from another machine. The replica holds the same tasks as the taskwarrior backend, under the same `[todo] project` root, with the same ids. It lives in devkit's state directory unless `[todo.taskchampion] data_dir` names another. taskwarrior 3.5 or later reads a synced replica's lists.
 
 `DEVKIT_TODO_BACKEND=taskchampion` chooses it without a config change, so a container sets it next to the sync credentials and keeps loading the project's `devkit.toml`. It accepts the same values as `[todo] backend` and wins over it. `devkit doctor` shows the backend in effect and where it came from.
 
@@ -73,7 +73,7 @@ devkit_todo_sync_client_id = "<uuid>"
 devkit_todo_sync_secret = "<secret>"
 ```
 
-`devkit doctor` shows where each one resolved from, never its value. The sync client honours `HTTPS_PROXY` and `NO_PROXY`.
+`devkit doctor` shows where each one resolved from, never its value. The sync client goes through `HTTPS_PROXY`, or `HTTP_PROXY` for an `http://` server, and ignores `NO_PROXY` when either is set. With neither set, it uses `ALL_PROXY` and honours `NO_PROXY`. It trusts the platform certificate store, or `SSL_CERT_FILE` and `SSL_CERT_DIR` when set, without the bundled Mozilla roots devkit's other requests add.
 
 When it syncs:
 

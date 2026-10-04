@@ -48,20 +48,13 @@ fn worst_exit(rows: &[Row]) -> i32 {
     }
 }
 
-fn is_unreachable(e: &anyhow::Error) -> bool {
-    matches!(
-        e.downcast_ref::<ureq::Error>(),
-        Some(ureq::Error::Transport(_))
-    )
-}
-
 /// A credential check that could not complete. A rejected TLS certificate is a
 /// transport error too, but it says nothing about the credential and has a
 /// local fix, so it is reported by name instead of as `unreachable`.
 fn validation_failure(e: anyhow::Error) -> Check {
     if e.is::<http::UntrustedCertificate>() {
         Check::Warn(e.to_string())
-    } else if is_unreachable(&e) {
+    } else if http::is_unreachable(&e) {
         Check::Unreachable
     } else {
         Check::Invalid(e.to_string())

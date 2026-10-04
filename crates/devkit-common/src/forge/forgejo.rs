@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use super::{
     CheckRun, CheckState, Checks, Forge, ForgeKind, HeadLookup, NewPr, OpenPr, OpenPrPage, PrBrief,
     PrLocator, PrTimeline, Repo, Review, ReviewState, Reviewers, Role, Section, locate_on, remote,
-    rest::{Rest, encode},
+    rest::{Method, Rest, encode},
 };
 
 /// Written in front of a draft's title. Forgejo's default
@@ -515,7 +515,7 @@ impl Forge for ForgejoForge {
         });
         let created = self
             .rest
-            .send("POST", &format!("/repos/{}/pulls", repo.slug), &body)
+            .send(Method::POST, &format!("/repos/{}/pulls", repo.slug), &body)
             .with_context(|| format!("opening a pull request from {}", pr.head))?;
         let url = created["html_url"]
             .as_str()
@@ -554,7 +554,7 @@ impl Forge for ForgejoForge {
             repo.slug
         );
         self.rest
-            .send("PATCH", &path, &json!({ "title": ready }))
+            .send(Method::PATCH, &path, &json!({ "title": ready }))
             .with_context(|| format!("marking #{n} in {} ready", repo.slug))?;
         Ok(())
     }
@@ -566,7 +566,7 @@ impl Forge for ForgejoForge {
         self.authed()?;
         self.rest
             .send(
-                "POST",
+                Method::POST,
                 &format!("/repos/{}/pulls/{n}/requested_reviewers", repo.slug),
                 &json!({ "reviewers": logins }),
             )
@@ -650,10 +650,8 @@ impl Forge for ForgejoForge {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        super::rest::stub::{self, Route, Stub},
-        *,
-    };
+    use super::*;
+    use crate::http::stub::{self, Route, Stub};
 
     fn repo() -> Repo {
         Repo {

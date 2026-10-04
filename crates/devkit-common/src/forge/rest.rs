@@ -1,10 +1,12 @@
 //! A JSON REST client for the forges devkit reaches over a plain HTTP API
-//! (GitLab, Forgejo), plus a loopback stub server their tests drive it with.
+//! (GitLab, Forgejo).
 
 use anyhow::{Context, Result};
+pub use reqwest::Method;
+use reqwest::blocking::RequestBuilder;
 use serde_json::Value;
 
-use crate::http::{agent, explain};
+use crate::http::{self, StatusCode, client};
 
 const UA: &str = "devkit";
 
@@ -39,13 +41,13 @@ impl Rest {
         &self.base
     }
 
-    fn request(&self, method: &str, path: &str) -> ureq::Request {
-        let mut req = agent()
-            .request(method, &format!("{}{path}", self.base))
-            .set("User-Agent", UA)
-            .set("Accept", "application/json");
+    fn request(&self, method: Method, path: &str) -> RequestBuilder {
+        let mut req = client()
+            .request(method, format!("{}{path}", self.base))
+            .header("User-Agent", UA)
+            .header("Accept", "application/json");
         if let Some((header, value)) = &self.auth {
-            req = req.set(header, value);
+            req = req.header(*header, value);
         }
         req
     }
@@ -53,10 +55,10 @@ impl Rest {
     /// GET `path`. `Ok(None)` on 404, a clean "absent" the caller can act on.
     pub fn get_opt(&self, path: &str) -> Result<Option<Value>> {
         let _span = devkit_timing::io_span("forge REST", path).entered();
-        match self.request("GET", path).call() {
-            Ok(r) => Ok(Some(r.into_json().context("parsing a forge response")?)),
-            Err(ureq::Error::Status(404, _)) => Ok(None),
-            Err(e) => Err(explain(e)).with_context(|| format!("GET {path}")),
+        match http::send(self.request(Method::GET, path)) {
+            Ok(r) => Ok(Some(r.json().context("parsing a forge response")?)),
+            Err(e) if http::status(&e) == Some(StatusCode::NOT_FOUND) => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("GET {path}")),
         }
     }
 
@@ -69,28 +71,23 @@ impl Rest {
     /// GET one page of a list endpoint, with the number of the next page.
     pub fn get_page(&self, path: &str) -> Result<Page> {
         let _span = devkit_timing::io_span("forge REST", path).entered();
-        let resp = self
-            .request("GET", path)
-            .call()
-            .map_err(explain)
-            .with_context(|| format!("GET {path}"))?;
-        let next = next_page(resp.header("x-next-page"), resp.header("link"));
+        let resp =
+            http::send(self.request(Method::GET, path)).with_context(|| format!("GET {path}"))?;
+        let header = |name| resp.headers().get(name).and_then(|v| v.to_str().ok());
+        let next = next_page(header("x-next-page"), header("link"));
         Ok(Page {
-            body: resp.into_json().context("parsing a forge response")?,
+            body: resp.json().context("parsing a forge response")?,
             next,
         })
     }
 
     /// Send `body` with `method` (`POST`, `PUT`, `PATCH`) and return the
     /// response body, or `Value::Null` when the forge answers with none.
-    pub fn send(&self, method: &str, path: &str, body: &Value) -> Result<Value> {
+    pub fn send(&self, method: Method, path: &str, body: &Value) -> Result<Value> {
         let _span = devkit_timing::io_span("forge REST", path).entered();
-        let resp = self
-            .request(method, path)
-            .send_json(body)
-            .map_err(explain)
+        let resp = http::send(self.request(method.clone(), path).json(body))
             .with_context(|| format!("{method} {path}"))?;
-        let text = resp.into_string().context("reading a forge response")?;
+        let text = resp.text().context("reading a forge response")?;
         if text.trim().is_empty() {
             return Ok(Value::Null);
         }
@@ -131,154 +128,12 @@ pub fn encode(s: &str) -> String {
     out
 }
 
-/// A loopback HTTP/1.1 server answering from canned responses, for testing a
-/// backend over its real transport. Each request is answered by the first
-/// route whose method matches and whose path-and-query starts with the
-/// route's prefix; an unmatched request gets a 404. Every request is recorded.
-#[cfg(any(test, feature = "test-support"))]
-pub mod stub {
-    use std::{
-        io::{BufRead, BufReader, Read, Write},
-        net::TcpListener,
-        sync::{Arc, Mutex},
-    };
-
-    /// One canned answer.
-    #[derive(Clone, Debug)]
-    pub struct Route {
-        pub method: &'static str,
-        pub prefix: String,
-        pub status: u16,
-        pub body: String,
-        /// Extra response headers, such as `("X-Next-Page", "2")`.
-        pub headers: Vec<(String, String)>,
-    }
-
-    impl Route {
-        pub fn new(method: &'static str, prefix: &str, status: u16, body: &str) -> Route {
-            Route {
-                method,
-                prefix: prefix.to_string(),
-                status,
-                body: body.to_string(),
-                headers: Vec::new(),
-            }
-        }
-
-        pub fn header(mut self, name: &str, value: &str) -> Route {
-            self.headers.push((name.to_string(), value.to_string()));
-            self
-        }
-    }
-
-    /// One request the stub received.
-    #[derive(Clone, Debug)]
-    pub struct Request {
-        pub method: String,
-        /// Path and query, as sent.
-        pub path: String,
-        pub headers: Vec<(String, String)>,
-        pub body: String,
-    }
-
-    impl Request {
-        pub fn header(&self, name: &str) -> Option<&str> {
-            self.headers
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(name))
-                .map(|(_, v)| v.as_str())
-        }
-    }
-
-    pub struct Stub {
-        pub port: u16,
-        log: Arc<Mutex<Vec<Request>>>,
-    }
-
-    impl Stub {
-        /// `http://127.0.0.1:<port>`, to which a backend appends its API path.
-        pub fn url(&self) -> String {
-            format!("http://127.0.0.1:{}", self.port)
-        }
-
-        pub fn requests(&self) -> Vec<Request> {
-            self.log.lock().unwrap().clone()
-        }
-    }
-
-    /// Serve `routes` on an ephemeral loopback port until the process exits.
-    pub fn serve(routes: Vec<Route>) -> Stub {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let seen = log.clone();
-        std::thread::spawn(move || {
-            for mut tcp in listener.incoming().flatten() {
-                let Some(req) = read_request(&mut tcp) else {
-                    continue;
-                };
-                let route = routes
-                    .iter()
-                    .find(|r| r.method == req.method && req.path.starts_with(&r.prefix));
-                seen.lock().unwrap().push(req);
-                let (status, body, headers) = match route {
-                    Some(r) => (r.status, r.body.clone(), r.headers.clone()),
-                    None => (404, "{\"message\":\"404 Not Found\"}".into(), Vec::new()),
-                };
-                let mut head = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n",
-                    body.len()
-                );
-                for (k, v) in headers {
-                    head.push_str(&format!("{k}: {v}\r\n"));
-                }
-                head.push_str("\r\n");
-                let _ = tcp.write_all(head.as_bytes());
-                let _ = tcp.write_all(body.as_bytes());
-            }
-        });
-        Stub { port, log }
-    }
-
-    fn read_request(tcp: &mut std::net::TcpStream) -> Option<Request> {
-        let mut reader = BufReader::new(tcp);
-        let mut line = String::new();
-        reader.read_line(&mut line).ok()?;
-        let mut parts = line.split_whitespace();
-        let method = parts.next()?.to_string();
-        let path = parts.next()?.to_string();
-        let mut headers = Vec::new();
-        loop {
-            let mut h = String::new();
-            if reader.read_line(&mut h).ok()? <= 2 {
-                break;
-            }
-            if let Some((k, v)) = h.trim_end().split_once(':') {
-                headers.push((k.trim().to_string(), v.trim().to_string()));
-            }
-        }
-        let len: usize = headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
-            .and_then(|(_, v)| v.parse().ok())
-            .unwrap_or(0);
-        let mut body = vec![0; len];
-        reader.read_exact(&mut body).ok()?;
-        Some(Request {
-            method,
-            path,
-            headers,
-            body: String::from_utf8_lossy(&body).into_owned(),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{stub::Route, *};
+    use super::*;
+    use crate::http::stub::{self, Route};
 
     #[test]
     fn the_next_page_comes_from_either_header() {
@@ -316,7 +171,8 @@ mod tests {
         assert_eq!(page.body, json!([1, 2]));
         assert_eq!(page.next, Some(2));
         assert_eq!(
-            rest.send("PUT", "/thing", &json!({"x": true})).unwrap(),
+            rest.send(Method::PUT, "/thing", &json!({"x": true}))
+                .unwrap(),
             Value::Null
         );
 

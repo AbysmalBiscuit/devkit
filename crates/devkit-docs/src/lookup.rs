@@ -15,28 +15,19 @@ pub struct Http;
 
 impl Registry for Http {
     fn repo_url(&self, eco: Ecosystem, package: &str) -> Result<String> {
-        let v: serde_json::Value = match eco {
-            Ecosystem::Rust => devkit_common::http::agent()
-                .get(&format!("https://crates.io/api/v1/crates/{package}"))
-                .set(
+        let client = devkit_common::http::client();
+        let req = match eco {
+            Ecosystem::Rust => client
+                .get(format!("https://crates.io/api/v1/crates/{package}"))
+                .header(
                     "User-Agent",
                     "devkit-docm (https://github.com/AbysmalBiscuit/devkit)",
-                )
-                .call()
-                .map_err(devkit_common::http::explain)?
-                .into_json()?,
-            Ecosystem::Js => devkit_common::http::agent()
-                .get(&format!("https://registry.npmjs.org/{package}"))
-                .call()
-                .map_err(devkit_common::http::explain)?
-                .into_json()?,
-            Ecosystem::Python => devkit_common::http::agent()
-                .get(&format!("https://pypi.org/pypi/{package}/json"))
-                .call()
-                .map_err(devkit_common::http::explain)?
-                .into_json()?,
+                ),
+            Ecosystem::Js => client.get(format!("https://registry.npmjs.org/{package}")),
+            Ecosystem::Python => client.get(format!("https://pypi.org/pypi/{package}/json")),
             Ecosystem::Git => bail!("git entries carry an explicit repo URL"),
         };
+        let v: serde_json::Value = devkit_common::http::send(req)?.json()?;
         extract(eco, &v)
     }
 }

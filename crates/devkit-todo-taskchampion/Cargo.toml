@@ -8,11 +8,13 @@ version = "0.14.9" # x-release-please-version
 anyhow.workspace = true
 chrono.workspace = true
 taskchampion.workspace = true
+tokio.workspace = true
 devkit-common.workspace = true
 devkit-todo.workspace = true
 devkit-todo-taskwarrior.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+devkit-common = { workspace = true, features = ["test-support"] }
 devkit-todo = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true

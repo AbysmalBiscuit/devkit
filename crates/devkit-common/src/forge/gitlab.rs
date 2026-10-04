@@ -13,7 +13,7 @@ use super::{
     CheckRun, CheckState, Checks, Forge, ForgeKind, HeadLookup, NewPr, OpenPr, OpenPrPage, PrBrief,
     PrLocator, PrTimeline, Repo, Review, ReviewDecision, ReviewState, Reviewers, Role, Section,
     locate_on,
-    rest::{Rest, encode},
+    rest::{Method, Rest, encode},
 };
 
 const TOKEN_ENV: &str = "GITLAB_TOKEN";
@@ -509,7 +509,7 @@ impl GitlabForge {
         let created = self
             .rest
             .send(
-                "POST",
+                Method::POST,
                 &format!("{}/merge_requests", project(source)),
                 &body,
             )
@@ -587,7 +587,7 @@ impl Forge for GitlabForge {
         let updated: Mr = parse(
             self.rest
                 .send(
-                    "PUT",
+                    Method::PUT,
                     &mr_path(repo, n),
                     &json!({ "title": strip_draft(&mr.title) }),
                 )
@@ -625,7 +625,11 @@ impl Forge for GitlabForge {
             return Ok(());
         }
         self.rest
-            .send("PUT", &mr_path(repo, n), &json!({ "reviewer_ids": ids }))
+            .send(
+                Method::PUT,
+                &mr_path(repo, n),
+                &json!({ "reviewer_ids": ids }),
+            )
             .with_context(|| format!("requesting reviewers on MR !{n} in {}", repo.slug))?;
         Ok(())
     }
@@ -735,7 +739,7 @@ impl Forge for GitlabForge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::forge::rest::stub::{self, Route};
+    use crate::http::stub::{self, Route};
 
     fn repo() -> Repo {
         Repo {

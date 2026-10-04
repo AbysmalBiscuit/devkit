@@ -50,27 +50,42 @@ fn serve() -> u16 {
     port
 }
 
+/// A client that trusts the bundled Mozilla roots alone, as a client that
+/// never read the platform store does.
+fn bundled_only() -> reqwest::blocking::Client {
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let tls = rustls::ClientConfig::builder_with_provider(
+        rustls::crypto::ring::default_provider().into(),
+    )
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    reqwest::blocking::Client::builder()
+        .use_preconfigured_tls(tls)
+        .build()
+        .unwrap()
+}
+
 /// One sequential test: `SSL_CERT_FILE` is process-global and
-/// `http::agent` reads it once, on first use.
+/// `http::client` reads it once, on first use.
 #[test]
 fn ssl_cert_file_ca_is_trusted_and_an_untrusted_one_is_named() {
     let ca = fixture("ca.pem");
     unsafe { std::env::set_var("SSL_CERT_FILE", &ca) };
     let url = format!("https://127.0.0.1:{}/", serve());
 
-    let body = devkit_common::http::agent()
-        .get(&url)
-        .call()
-        .map_err(devkit_common::http::explain)
+    let body = devkit_common::http::send(devkit_common::http::client().get(&url))
         .expect("a CA named by SSL_CERT_FILE must be trusted")
-        .into_string()
+        .text()
         .unwrap();
     assert_eq!(body, "ok");
 
     // The bundled roots alone reject the same server, as a proxy's CA is
     // rejected by a client that never read the platform store.
-    let bundled_only = ureq::agent().get(&url).call().unwrap_err();
-    let err = devkit_common::http::explain(bundled_only);
+    let err = devkit_common::http::send(bundled_only().get(&url)).unwrap_err();
     let msg = format!("{err:#}");
     assert!(msg.contains("not trusted"), "{msg}");
     assert!(
@@ -79,10 +94,8 @@ fn ssl_cert_file_ca_is_trusted_and_an_untrusted_one_is_named() {
     );
     assert!(err.is::<devkit_common::http::UntrustedCertificate>());
     assert!(
-        matches!(
-            err.downcast_ref::<ureq::Error>(),
-            Some(ureq::Error::Transport(_))
-        ),
-        "the ureq error must stay downcastable"
+        err.downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_connect),
+        "the reqwest error must stay downcastable"
     );
 }

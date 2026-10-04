@@ -2,7 +2,7 @@ use std::{path::Path, time::Duration};
 
 use devkit_todo::{Filter, NewTodo, TodoStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore};
-use taskchampion::{Operations, Replica, Status, StorageConfig, Uuid, storage::AccessMode};
+use taskchampion::{Operations, Replica, SqliteStorage, Status, Uuid, storage::AccessMode};
 
 devkit_todo::contract_tests!(|| {
     let dir = tempfile::tempdir().unwrap();
@@ -19,16 +19,17 @@ fn new(project: Option<&str>, description: &str) -> NewTodo {
     }
 }
 
-fn replica(data_dir: &Path) -> Replica {
-    Replica::new(
-        StorageConfig::OnDisk {
-            taskdb_dir: data_dir.to_path_buf(),
-            create_if_missing: false,
-            access_mode: AccessMode::ReadWrite,
-        }
-        .into_storage()
-        .unwrap(),
-    )
+/// Runs `work` against the replica at `data_dir`, opened directly.
+fn with_replica<T>(data_dir: &Path, work: impl AsyncFnOnce(&mut Replica<SqliteStorage>) -> T) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let storage = SqliteStorage::new(data_dir, AccessMode::ReadWrite, false)
+                .await
+                .unwrap();
+            work(&mut Replica::new(storage)).await
+        })
 }
 
 /// The advisory lock at a path, held by another thread until this drops.
@@ -73,13 +74,15 @@ fn global_todos_are_filed_on_the_root() {
     let store = TaskchampionStore::at(data.clone());
     let global = store.add(new(None, "g")).unwrap();
     let filed = store.add(new(Some("r.main"), "f")).unwrap();
-    let mut raw = replica(&data);
-    let mut project = |id: &str| {
-        raw.get_task(Uuid::parse_str(id).unwrap())
-            .unwrap()
-            .unwrap()
-            .get_value("project")
-            .map(str::to_string)
+    let project = |id: &str| {
+        with_replica(&data, async |raw| {
+            raw.get_task(Uuid::parse_str(id).unwrap())
+                .await
+                .unwrap()
+                .unwrap()
+                .get_value("project")
+                .map(str::to_string)
+        })
     };
     assert_eq!(project(&global).as_deref(), Some("devkit"));
     assert_eq!(project(&filed).as_deref(), Some("devkit.r.main"));
@@ -91,17 +94,18 @@ fn a_task_outside_the_root_never_lists() {
     let data = dir.path().join("tc");
     let store = TaskchampionStore::at(data.clone());
     store.add(new(None, "make the replica")).unwrap();
-    let mut raw = replica(&data);
-    let mut ops = Operations::new();
-    for project in [None, Some("other"), Some("devkitx.r")] {
-        let mut task = raw.create_task(Uuid::new_v4(), &mut ops).unwrap();
-        task.set_description("a person's own".into(), &mut ops)
-            .unwrap();
-        task.set_status(Status::Pending, &mut ops).unwrap();
-        task.set_value("project", project.map(str::to_string), &mut ops)
-            .unwrap();
-    }
-    raw.commit_operations(ops).unwrap();
+    with_replica(&data, async |raw| {
+        let mut ops = Operations::new();
+        for project in [None, Some("other"), Some("devkitx.r")] {
+            let mut task = raw.create_task(Uuid::new_v4(), &mut ops).await.unwrap();
+            task.set_description("a person's own".into(), &mut ops)
+                .unwrap();
+            task.set_status(Status::Pending, &mut ops).unwrap();
+            task.set_value("project", project.map(str::to_string), &mut ops)
+                .unwrap();
+        }
+        raw.commit_operations(ops).await.unwrap();
+    });
     let listed = store.list(&Filter::all()).unwrap();
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert_eq!(listed[0].description, "make the replica");
