@@ -39,12 +39,12 @@ fn read_u32(stream: &mut TcpStream) -> std::io::Result<u32> {
 /// authentication done and the connection ready, then reads and drops
 /// everything the client sends.
 fn serve(mut stream: TcpStream) -> std::io::Result<()> {
-    let (mut len, mut code) = (read_u32(&mut stream)?, read_u32(&mut stream)?);
-    if code == SSL_REQUEST {
+    let mut len = read_u32(&mut stream)?;
+    if read_u32(&mut stream)? == SSL_REQUEST {
         stream.write_all(b"N")?;
-        (len, code) = (read_u32(&mut stream)?, read_u32(&mut stream)?);
+        len = read_u32(&mut stream)?;
+        read_u32(&mut stream)?;
     }
-    let _ = code;
     let mut rest = vec![0; len as usize - 8];
     stream.read_exact(&mut rest)?;
     stream.write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'Z', 0, 0, 0, 5, b'I'])?;
