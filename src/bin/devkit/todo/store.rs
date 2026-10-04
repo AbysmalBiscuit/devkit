@@ -347,16 +347,18 @@ pub(crate) fn open_database(
     (db, source)
 }
 
-/// [`open_database`], resolved and connected once per config in a process,
-/// so a hook asks Doppler at most once and waits on an unreachable database
-/// once. A URL that does not resolve gives a database every call on fails.
+/// [`open_database`], resolved and connected once per Doppler scope, CA file
+/// and wait in a process, so a hook asks Doppler at most once and waits on an
+/// unreachable database once. A URL that does not resolve gives a database
+/// every call on fails.
 fn database(config: &PostgresConfig, opener: Opener) -> Arc<Database> {
-    type Key = (Option<String>, Option<String>, Duration);
+    type Key = (Option<String>, Option<String>, Option<PathBuf>, Duration);
     static OPEN: Mutex<Option<HashMap<Key, Arc<Database>>>> = Mutex::new(None);
     let wait = opener.database_wait();
     let key = (
         config.doppler_project.clone(),
         config.doppler_config.clone(),
+        global_ca_file(),
         wait,
     );
     let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
