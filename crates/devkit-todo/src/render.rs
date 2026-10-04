@@ -7,6 +7,8 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
 };
 
+use devkit_common::ui::printable;
+
 use crate::{Holder, Status, StatusKind, Todo};
 
 /// The lists for the injected context: each node in `nodes` order, open todos
@@ -49,7 +51,7 @@ fn section(node: &str, todos: &[&Todo], viewer: &Holder, full: bool) -> Option<S
     if shown.is_empty() && !(full && count(StatusKind::Cancelled) > 0) {
         return None;
     }
-    let mut out = format!("## {node}\n");
+    let mut out = format!("## {}\n", printable(node));
     for (todo, depth) in tree(&shown) {
         let _ = writeln!(out, "{}{}", "  ".repeat(depth), line(todo, viewer));
     }
@@ -69,14 +71,14 @@ fn section(node: &str, todos: &[&Todo], viewer: &Holder, full: bool) -> Option<S
 fn line(todo: &Todo, viewer: &Holder) -> String {
     let (mark, note) = match &todo.status {
         Status::InProgress { by } if by == viewer => (' ', ", in progress".to_string()),
-        Status::InProgress { by } => (' ', format!(", in progress: {}", by.name())),
+        Status::InProgress { by } => (' ', format!(", in progress: {}", printable(by.name()))),
         Status::Completed { .. } => ('x', String::new()),
         Status::Pending | Status::Cancelled { .. } => (' ', String::new()),
     };
     format!(
         "- [{mark}] {} ({}{note})",
-        todo.description,
-        crate::short_id(&todo.id)
+        printable(&todo.description),
+        printable(crate::short_id(&todo.id))
     )
 }
 

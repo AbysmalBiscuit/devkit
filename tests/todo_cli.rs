@@ -219,3 +219,29 @@ fn a_broken_config_is_an_error_in_the_cli() {
     assert_eq!(add.status.code(), Some(1));
     assert!(p.todos().is_empty());
 }
+
+#[test]
+fn list_escapes_terminal_control_sequences() {
+    let p = Proj::new();
+    let add = p.devkit(&["todo", "add", "a\u{1b}[2Jb\u{2066}c"], &S1);
+    assert!(add.status.success(), "{}", stderr(&add));
+    let list = stdout(&p.devkit(&["todo", "list"], &S1));
+    assert!(
+        !list.contains('\u{1b}') && !list.contains('\u{2066}'),
+        "{list:?}"
+    );
+    assert!(list.contains("a\\u{1b}[2Jb\\u{2066}c"), "{list}");
+}
+
+#[test]
+fn a_claim_error_escapes_its_holder() {
+    let p = Proj::new();
+    let hostile = [("CLAUDE_CODE_SESSION_ID", "s\u{1b}]52;c;aGk=\u{7}")];
+    assert!(p.devkit(&["todo", "add", "one"], &hostile).status.success());
+    assert!(p.devkit(&["todo", "start", "1"], &hostile).status.success());
+    let refused = p.devkit(&["todo", "start", "1"], &S1);
+    assert!(!refused.status.success());
+    let err = stderr(&refused);
+    assert!(!err.contains('\u{1b}') && !err.contains('\u{7}'), "{err:?}");
+    assert!(err.contains("in progress by s\\u{1b}]52"), "{err}");
+}

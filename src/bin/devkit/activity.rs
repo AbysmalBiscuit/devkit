@@ -1,12 +1,13 @@
 //! `devkit activity`: subagent runs and the time todos were held, over a date
 //! range, from the activity log.
 
-use std::{collections::BTreeMap, time::SystemTime};
+use std::collections::BTreeMap;
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use clap::Args;
-use devkit_todo::activity::{Activity, ActivityLog, ClaimEnd, Interval, Run, RunEnd, stamp};
+use devkit_common::ui::printable;
+use devkit_todo::activity::{Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, stamp};
 use serde::Serialize;
 
 #[derive(Args)]
@@ -32,14 +33,19 @@ fn parse_time(s: &str) -> Result<DateTime<Utc>> {
         .map_err(|_| anyhow!("expected a date like 2026-10-01 or an RFC 3339 time, got {s:?}"))
 }
 
+/// The range defaults and the open runs and claims all measure from the log's
+/// own now, the database's on a shared log, so no reader's clock decides
+/// what the report shows.
 pub fn run(cli: ActivityCli) -> Result<()> {
-    let now: DateTime<Utc> = SystemTime::now().into();
+    let log = crate::todo::store::Store::activity_for_cli(&std::env::current_dir()?)?;
+    let activity = log.read_now()?;
+    let now = activity.as_of;
     let range = Range {
         since: cli.since.unwrap_or(now - TimeDelta::days(7)),
         until: cli.until.unwrap_or(now),
         now,
     };
-    let report = Report::of(ActivityLog::open().read(now)?, &range);
+    let report = Report::of(activity, &range);
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -119,6 +125,7 @@ impl Report {
         let Activity {
             mut runs,
             mut claims,
+            ..
         } = activity;
         runs.sort_by_key(|r| r.start);
         claims.sort_by_key(|c| c.start);
@@ -201,12 +208,12 @@ impl Report {
             return out;
         }
         for session in &self.sessions {
-            out.push_str(&format!("\nsession {}\n", session.session));
+            out.push_str(&format!("\nsession {}\n", printable(&session.session)));
             let mut t = devkit_common::ui::table(&["TYPE", "AGENT", "START", "TIME", "OUTCOME"]);
             for RunRow { run, seconds } in &session.runs {
                 t.add_row([
-                    run.label().to_string(),
-                    run.agent.clone(),
+                    printable(run.label()).into_owned(),
+                    printable(&run.agent).into_owned(),
                     stamp(run.start),
                     duration(*seconds),
                     outcome(run.outcome),
@@ -219,7 +226,7 @@ impl Report {
             let mut t = devkit_common::ui::table(&["TYPE", "RUNS", "TIME"]);
             for total in &self.agent_types {
                 t.add_row([
-                    total.agent_type.clone(),
+                    printable(&total.agent_type).into_owned(),
                     total.runs.to_string(),
                     duration(total.seconds),
                 ]);
@@ -234,10 +241,10 @@ impl Report {
                     held.intervals.iter().map(|i| i.holder.as_str()).collect();
                 holders.dedup();
                 t.add_row([
-                    devkit_todo::short_id(&held.todo).to_string(),
-                    held.node.clone(),
+                    printable(devkit_todo::short_id(&held.todo)).into_owned(),
+                    printable(&held.node).into_owned(),
                     duration(held.seconds),
-                    holders.join(", "),
+                    printable(&holders.join(", ")).into_owned(),
                 ]);
             }
             out.push_str(&format!("{t}\n"));
@@ -285,6 +292,7 @@ mod tests {
         let activity = Activity {
             runs: Vec::new(),
             claims: vec![held("r.later", 10, 15), held("r.first", 0, 5)],
+            ..Activity::default()
         };
         let range = Range {
             since: t(-60),

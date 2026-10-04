@@ -72,10 +72,13 @@ struct PanicContext {
 
 /// Guard a shell command about to run. Never returns an error: a panic allows
 /// the command unless the write stage had started, in which case it denies.
-pub fn guard(payload: &Payload) -> Result<()> {
+///
+/// `hook_checkout` is the checkout of the payload's directory, which the
+/// guard reuses when the command runs there.
+pub fn guard(payload: &Payload, hook_checkout: &Checkout) -> Result<()> {
     let panic_ctx: OnceLock<PanicContext> = OnceLock::new();
     let gate = WriteGate::live();
-    match gate::guarded(|armed| respond(payload, &gate, armed, &panic_ctx)) {
+    match gate::guarded(|armed| respond(payload, &gate, armed, &panic_ctx, hook_checkout)) {
         Ok(out) => {
             if let Response::Envelope(v) = &out.response {
                 print_envelope(v);
@@ -213,6 +216,7 @@ fn respond(
     gate: &WriteGate,
     armed: &Armed,
     panic_ctx: &OnceLock<PanicContext>,
+    hook_checkout: &Checkout,
 ) -> Outcome {
     let Some(Tool::Shell {
         command,
@@ -220,7 +224,7 @@ fn respond(
         shell,
     }) = payload.tool()
     else {
-        let checkout = Checkout::at(&record::payload_cwd(payload));
+        let checkout = hook_checkout.clone();
         let response = deny_unusable_shell(payload, &checkout);
         let settings = harness_log::resolve_in(&checkout, checkout.dir());
         let rec = settings.enabled.then(|| {
@@ -250,8 +254,12 @@ fn respond(
     // two enforcement gates, the rule layers, the config load and the write
     // stage's lock scoping all read this checkout instead of asking git for
     // themselves. Resolution is lazy, so a harness switched off by environment
-    // still spawns nothing.
-    let checkout = Checkout::at(&cwd);
+    // still spawns nothing. A command run in the payload's own directory reuses
+    // the hook's checkout.
+    let checkout = match cwd == hook_checkout.dir() {
+        true => hook_checkout.clone(),
+        false => Checkout::at(&cwd),
+    };
     let settings = harness_log::resolve_in(&checkout, &cwd);
     let _ = panic_ctx.set(PanicContext {
         checkout: checkout.clone(),

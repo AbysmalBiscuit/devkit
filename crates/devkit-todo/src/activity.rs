@@ -1,7 +1,7 @@
 //! Subagent runs and claim intervals. Hooks and store edits append events to
-//! one log, without a lock, and [`ActivityLog::read`] pairs them into records.
-//! A run closes at its stop, else its session's end, else as
-//! [`RunEnd::Lost`] once its agent has been silent past [`BACKSTOP`].
+//! an [`ActivityStore`], without a lock, and [`ActivityStore::read`] pairs
+//! them into records. A run closes at its stop, else its session's end, else
+//! as [`RunEnd::Lost`] once its agent has been silent past [`BACKSTOP`].
 
 use std::{
     collections::HashMap,
@@ -127,6 +127,88 @@ pub struct Interval {
 pub struct Activity {
     pub runs: Vec<Run>,
     pub claims: Vec<Interval>,
+    /// The time the records were judged as of, by the store's clock.
+    #[serde(default)]
+    pub as_of: DateTime<Utc>,
+}
+
+/// This machine's clock. Debug builds shift it by
+/// `DEVKIT_TEST_CLOCK_SKEW_SECS` seconds, so a test can stand in for a
+/// machine whose clock is off.
+pub fn local_now() -> SystemTime {
+    let now = SystemTime::now();
+    #[cfg(debug_assertions)]
+    if let Some(skew) = std::env::var("DEVKIT_TEST_CLOCK_SKEW_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+    {
+        let by = std::time::Duration::from_secs(skew.unsigned_abs());
+        return if skew < 0 { now - by } else { now + by };
+    }
+    now
+}
+
+/// Where activity events are kept.
+///
+/// The `_now` methods and [`ActivityStore::seen`] take the time from the
+/// store's own clock: this machine's for a local log, the database's for one
+/// many machines share, so machines whose clocks disagree still record and
+/// judge runs on one timeline.
+#[ambassador::delegatable_trait]
+pub trait ActivityStore {
+    /// Appends `event`. Concurrent appends never interleave.
+    fn record(&self, event: &::devkit_todo::activity::Event) -> ::anyhow::Result<()>;
+    /// Appends every one of `events`, in order. A store that can write them
+    /// in one go does, so a long batch costs one round trip.
+    fn record_all(&self, events: &[::devkit_todo::activity::Event]) -> ::anyhow::Result<()> {
+        events.iter().try_for_each(|event| self.record(event))
+    }
+    /// Appends `what`, stamped now by the store's clock.
+    fn record_now(&self, what: &::devkit_todo::activity::What) -> ::anyhow::Result<()>;
+    /// Notes that `agent` of `session` fired a hook now, by the store's
+    /// clock.
+    fn seen(&self, session: &str, agent: &str) -> ::anyhow::Result<()>;
+    /// Notes that `agent` of `session` fired a hook at `when`.
+    fn seen_at(
+        &self,
+        session: &str,
+        agent: &str,
+        when: ::std::time::SystemTime,
+    ) -> ::anyhow::Result<()>;
+    /// Drops the last-hook marks of `agent`, or of every agent of `session`
+    /// when `None`, once their runs have closed.
+    fn forget(&self, session: &str, agent: ::std::option::Option<&str>) -> ::anyhow::Result<()>;
+    /// Every run and interval recorded, as of `now`.
+    fn read(
+        &self,
+        now: ::chrono::DateTime<::chrono::Utc>,
+    ) -> ::anyhow::Result<::devkit_todo::activity::Activity>;
+    /// Every run and interval recorded, as of now by the store's clock.
+    fn read_now(&self) -> ::anyhow::Result<::devkit_todo::activity::Activity>;
+}
+
+impl Activity {
+    /// Pairs `events` into records as of `now`. An open run whose agent last
+    /// fired a hook, by `last_seen`, more than [`BACKSTOP`] before `now`
+    /// closes as lost at that hook, or at its start when it was never seen.
+    pub fn of(
+        mut events: Vec<Event>,
+        last_seen: impl Fn(&str, &str) -> Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> Self {
+        events.sort_by_key(|e| e.at);
+        let mut activity = derive(events);
+        for run in activity.runs.iter_mut().filter(|r| r.end.is_none()) {
+            let last =
+                last_seen(&run.session, &run.agent).map_or(run.start, |seen| seen.max(run.start));
+            if now - last > BACKSTOP {
+                run.end = Some(last);
+                run.outcome = Some(RunEnd::Lost);
+            }
+        }
+        activity.as_of = now;
+        activity
+    }
 }
 
 /// The log in one directory: `events.jsonl`, and under `seen/` one empty file
@@ -140,51 +222,9 @@ impl ActivityLog {
         Self { dir }
     }
 
-    /// The log beside the todo state, whichever backend holds the todos.
+    /// The log in devkit's todo state directory.
     pub fn open() -> Self {
         Self::at(crate::state_dir().join("activity"))
-    }
-
-    /// Appends `event` as one line, in a single write so concurrent appends
-    /// never interleave.
-    pub fn record(&self, event: &Event) -> Result<()> {
-        let mut line = serde_json::to_vec(event)?;
-        line.push(b'\n');
-        let path = self.dir.join(EVENTS);
-        open_creating(&path, OpenOptions::new().create(true).append(true))
-            .and_then(|mut file| file.write_all(&line))
-            .with_context(|| format!("appending to {}", path.display()))
-    }
-
-    /// Notes that `agent` of `session` fired a hook now.
-    pub fn seen(&self, session: &str, agent: &str) -> Result<()> {
-        self.seen_at(session, agent, SystemTime::now())
-    }
-
-    pub fn seen_at(&self, session: &str, agent: &str, when: SystemTime) -> Result<()> {
-        let path = self.seen_path(session, Some(agent));
-        open_creating(
-            &path,
-            OpenOptions::new().create(true).write(true).truncate(false),
-        )
-        .and_then(|file| file.set_modified(when))
-        .with_context(|| format!("marking {} seen", path.display()))
-    }
-
-    /// Drops the last-hook marks of `agent`, or of every agent of `session`
-    /// when `None`, once their runs have closed.
-    pub fn forget(&self, session: &str, agent: Option<&str>) -> Result<()> {
-        let path = self.seen_path(session, agent);
-        let removed = match agent {
-            Some(_) => fs::remove_file(&path),
-            None => fs::remove_dir_all(&path),
-        };
-        match removed {
-            Err(e) if e.kind() != ErrorKind::NotFound => {
-                Err(e).with_context(|| format!("removing {}", path.display()))
-            }
-            _ => Ok(()),
-        }
     }
 
     fn seen_path(&self, session: &str, agent: Option<&str>) -> PathBuf {
@@ -201,31 +241,75 @@ impl ActivityLog {
             .ok()?;
         Some(modified.into())
     }
+}
 
-    /// Every run and interval in the log as of `now`. A line that does not
-    /// parse is skipped.
-    pub fn read(&self, now: DateTime<Utc>) -> Result<Activity> {
+impl ActivityStore for ActivityLog {
+    /// Appends `event` as one line, in a single write so concurrent appends
+    /// never interleave.
+    fn record(&self, event: &Event) -> Result<()> {
+        let mut line = serde_json::to_vec(event)?;
+        line.push(b'\n');
+        let path = self.dir.join(EVENTS);
+        open_creating(&path, OpenOptions::new().create(true).append(true))
+            .and_then(|mut file| file.write_all(&line))
+            .with_context(|| format!("appending to {}", path.display()))
+    }
+
+    fn record_now(&self, what: &What) -> Result<()> {
+        self.record(&Event {
+            at: local_now().into(),
+            what: what.clone(),
+        })
+    }
+
+    fn seen(&self, session: &str, agent: &str) -> Result<()> {
+        self.seen_at(session, agent, local_now())
+    }
+
+    fn read_now(&self) -> Result<Activity> {
+        self.read(local_now().into())
+    }
+
+    fn seen_at(&self, session: &str, agent: &str, when: SystemTime) -> Result<()> {
+        let path = self.seen_path(session, Some(agent));
+        open_creating(
+            &path,
+            OpenOptions::new().create(true).write(true).truncate(false),
+        )
+        .and_then(|file| file.set_modified(when))
+        .with_context(|| format!("marking {} seen", path.display()))
+    }
+
+    fn forget(&self, session: &str, agent: Option<&str>) -> Result<()> {
+        let path = self.seen_path(session, agent);
+        let removed = match agent {
+            Some(_) => fs::remove_file(&path),
+            None => fs::remove_dir_all(&path),
+        };
+        match removed {
+            Err(e) if e.kind() != ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("removing {}", path.display()))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// A line that does not parse is skipped.
+    fn read(&self, now: DateTime<Utc>) -> Result<Activity> {
         let path = self.dir.join(EVENTS);
         let text = match fs::read_to_string(&path) {
             Err(e) if e.kind() == ErrorKind::NotFound => String::new(),
             text => text.with_context(|| format!("reading {}", path.display()))?,
         };
-        let mut events: Vec<Event> = text
+        let events = text
             .lines()
             .filter_map(|line| serde_json::from_str(line).ok())
             .collect();
-        events.sort_by_key(|e| e.at);
-        let mut activity = derive(events);
-        for run in activity.runs.iter_mut().filter(|r| r.end.is_none()) {
-            let last = self
-                .last_seen(&run.session, &run.agent)
-                .map_or(run.start, |seen| seen.max(run.start));
-            if now - last > BACKSTOP {
-                run.end = Some(last);
-                run.outcome = Some(RunEnd::Lost);
-            }
-        }
-        Ok(activity)
+        Ok(Activity::of(
+            events,
+            |session, agent| self.last_seen(session, agent),
+            now,
+        ))
     }
 }
 
@@ -244,7 +328,7 @@ fn open_creating(path: &Path, options: &OpenOptions) -> std::io::Result<File> {
 
 /// `id` as one path segment: every byte outside `[A-Za-z0-9_-]` as `%XX`, so
 /// distinct ids never share a file and none escapes the directory.
-fn segment(id: &str) -> String {
+pub fn segment(id: &str) -> String {
     id.bytes()
         .map(|b| match b {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' => (b as char).to_string(),
@@ -333,15 +417,15 @@ pub fn stamp(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// A store whose claim changes are recorded in an [`ActivityLog`]. A failure
-/// to record never fails the edit.
-pub struct Recorded<S> {
+/// A store whose claim changes are recorded in an [`ActivityStore`]. A
+/// failure to record never fails the edit.
+pub struct Recorded<S, L> {
     store: S,
-    log: ActivityLog,
+    log: L,
 }
 
-impl<S> Recorded<S> {
-    pub fn new(store: S, log: ActivityLog) -> Self {
+impl<S, L> Recorded<S, L> {
+    pub fn new(store: S, log: L) -> Self {
         Self { store, log }
     }
 
@@ -349,7 +433,7 @@ impl<S> Recorded<S> {
         &self.store
     }
 
-    pub fn log(&self) -> &ActivityLog {
+    pub fn log(&self) -> &L {
         &self.log
     }
 }
@@ -391,7 +475,7 @@ fn claim_events(change: &StatusChange) -> Vec<What> {
     }
 }
 
-impl<S: TodoStore> TodoStore for Recorded<S> {
+impl<S: TodoStore, L: ActivityStore> TodoStore for Recorded<S, L> {
     fn list(&self, filter: &Filter) -> Result<Vec<Todo>> {
         self.store.list(filter)
     }
@@ -408,13 +492,17 @@ impl<S: TodoStore> TodoStore for Recorded<S> {
     /// processes that append out of order still read in order.
     fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
         let changes = self.store.apply(edit)?;
-        for change in &changes {
-            for what in claim_events(change) {
-                let _ = self.log.record(&Event {
+        let events: Vec<Event> = changes
+            .iter()
+            .flat_map(|change| {
+                claim_events(change).into_iter().map(|what| Event {
                     at: change.at,
                     what,
-                });
-            }
+                })
+            })
+            .collect();
+        if !events.is_empty() {
+            let _ = self.log.record_all(&events);
         }
         Ok(changes)
     }

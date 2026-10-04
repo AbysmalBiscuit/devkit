@@ -627,9 +627,14 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
         source,
         check: Check::Ok(format!("{name}, {origin}")),
     }];
-    let tc = config.unwrap_or_default().taskchampion;
+    let config = config.unwrap_or_default();
+    if backend == devkit_config::TodoBackend::Postgres {
+        rows.push(todo_database_row(&config.postgres));
+    }
+    let tc = config.taskchampion;
     if backend == devkit_config::TodoBackend::Taskchampion && tc.server_dir.is_none() {
-        let resolved = secrets::resolve_many(&SYNC_VARS, doppler_scope(&tc).as_ref());
+        let scope = doppler_scope(tc.doppler_project.as_deref(), tc.doppler_config.as_deref());
+        let resolved = secrets::resolve_many(&SYNC_VARS, scope.as_ref());
         rows.extend(
             TODO_SYNC_KEYS
                 .into_iter()
@@ -646,6 +651,35 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
         );
     }
     rows
+}
+
+/// How long doctor waits for the todo database to answer.
+const TODO_DATABASE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Where the todo database's URL resolves from and whether the database
+/// answers. The URL, which carries the password, is never shown.
+fn todo_database_row(config: &devkit_config::PostgresConfig) -> Row {
+    let (db, source) = crate::todo::store::open_database(
+        config,
+        TODO_DATABASE_WAIT,
+        crate::todo::store::UrlLookup::Doppler,
+    );
+    let check = match db {
+        Err(e) => Check::Invalid(e),
+        Ok(db) => match db.check() {
+            Ok(()) => Check::Ok(format!("reachable at {}", db.target())),
+            Err(e) if devkit_todo_postgres::is_unreachable(&e) => {
+                Check::Warn(format!("unreachable: {e:#}"))
+            }
+            Err(e) => Check::Invalid(format!("{e:#}")),
+        },
+    };
+    Row {
+        key: "todo_database",
+        data: serde_json::Value::Null,
+        source,
+        check,
+    }
 }
 
 /// What harness logging is actually doing, rather than what a config says.

@@ -8,7 +8,7 @@
 //! `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are read once, when
 //! the client is built.
 
-use std::{env, sync::OnceLock, time::Duration};
+use std::{sync::OnceLock, time::Duration};
 
 pub use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder, Response};
@@ -51,19 +51,7 @@ pub fn is_unreachable(e: &anyhow::Error) -> bool {
 }
 
 fn tls_config() -> rustls::ClientConfig {
-    let mut roots = rustls::RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-    };
-    let native = rustls_native_certs::load_native_certs();
-    for e in &native.errors {
-        tracing::debug!("loading {}: {e}", trust_store());
-    }
-    roots.add_parsable_certificates(native.certs);
-    rustls::ClientConfig::builder_with_provider(rustls::crypto::ring::default_provider().into())
-        .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])
-        .expect("ring supports TLS 1.2 and 1.3")
-        .with_root_certificates(roots)
-        .with_no_client_auth()
+    crate::tls::config(crate::tls::roots())
 }
 
 /// A server certificate that no trusted root vouches for, typically an
@@ -94,7 +82,7 @@ pub fn explain(e: reqwest::Error) -> anyhow::Error {
     };
     let context = UntrustedCertificate {
         reason: cert.to_string(),
-        store: trust_store(),
+        store: crate::tls::store(),
     };
     anyhow::Error::new(e).context(context)
 }
@@ -113,20 +101,6 @@ fn certificate_error(e: &reqwest::Error) -> Option<&rustls::CertificateError> {
         };
     }
     None
-}
-
-/// The store `rustls_native_certs::load_native_certs` reads, described the
-/// way a user would go fix it.
-fn trust_store() -> String {
-    let named: Vec<String> = ["SSL_CERT_FILE", "SSL_CERT_DIR"]
-        .into_iter()
-        .filter_map(|k| env::var_os(k).map(|v| format!("{k}={}", v.to_string_lossy())))
-        .collect();
-    if named.is_empty() {
-        "the platform certificate store".to_string()
-    } else {
-        named.join(", ")
-    }
 }
 
 #[cfg(test)]

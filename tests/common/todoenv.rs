@@ -10,7 +10,7 @@ use std::{
 
 use devkit_todo::{
     Filter, Todo, TodoStore,
-    activity::{Activity, ActivityLog},
+    activity::{Activity, ActivityLog, ActivityStore},
 };
 use devkit_todo_builtin::BuiltinStore;
 
@@ -19,8 +19,9 @@ mod testenv;
 
 /// Variables a developer's shell may set that would pick a test's todo
 /// backend, its sync target, or credentials doctor validates over the network.
-const AMBIENT_TODO_VARS: [&str; 6] = [
+const AMBIENT_TODO_VARS: [&str; 7] = [
     "DEVKIT_TODO_BACKEND",
+    "DEVKIT_TODO_DATABASE_URL",
     "DEVKIT_TODO_SYNC_URL",
     "DEVKIT_TODO_SYNC_CLIENT_ID",
     "DEVKIT_TODO_SYNC_SECRET",
@@ -98,6 +99,19 @@ impl Proj {
             .write_all(stdin.as_bytes())
             .unwrap();
         child.wait_with_output().unwrap()
+    }
+
+    /// `devkit` started in the checkout with `env` set and `stdin` written to
+    /// it, left running so a test can bound how long it waits.
+    pub fn devkit_fed(&self, args: &[&str], env: &[(&str, &str)], stdin: &str) -> Child {
+        let mut child = self.start(&self.path, env!("CARGO_BIN_EXE_devkit"), args, env);
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child
     }
 
     /// `devkit` started in the checkout with `env` set, left running.

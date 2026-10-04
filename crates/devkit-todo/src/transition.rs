@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use devkit_common::ui::printable;
 use serde::{Deserialize, Serialize};
 
 use crate::Holder;
@@ -52,7 +53,7 @@ pub struct Claimed {
 
 impl fmt::Display for Claimed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "todo is in progress by {}", self.by)
+        write!(f, "todo is in progress by {}", printable(&self.by))
     }
 }
 

@@ -109,6 +109,11 @@ pub struct Config {
 /// server_dir = "/mnt/shared/todo-sync"
 /// doppler_project = "devkit"
 /// doppler_config = "dev"
+///
+/// [todo.postgres]
+/// doppler_project = "swarm"
+/// doppler_config = "agents"
+/// ca_file = "~/.config/devkit/supabase-ca.crt"
 /// # "#).unwrap();
 /// # assert_eq!(cfg.todo.backend, TodoBackend::Taskwarrior);
 /// # assert_eq!(cfg.todo.taskwarrior.path, "/opt/task");
@@ -120,6 +125,13 @@ pub struct Config {
 /// # assert_eq!(tc.doppler_config.as_deref(), Some("dev"));
 /// # let champion = Config::parse("[todo]\nbackend = \"taskchampion\"\n").unwrap();
 /// # assert_eq!(champion.todo.backend, TodoBackend::Taskchampion);
+/// # let pg = &cfg.todo.postgres;
+/// # assert_eq!(pg.doppler_project.as_deref(), Some("swarm"));
+/// # assert_eq!(pg.doppler_config.as_deref(), Some("agents"));
+/// # assert_eq!(pg.ca_file.as_deref(), Some("~/.config/devkit/supabase-ca.crt"));
+/// # let postgres = Config::parse("[todo]\nbackend = \"postgres\"\n").unwrap();
+/// # assert_eq!(postgres.todo.backend, TodoBackend::Postgres);
+/// # assert!(Config::parse("[todo.postgres]\nurl = \"postgres://x\"\n").is_err());
 /// # assert!(Config::parse("[todo.taskchampion]\nserver = \"x\"\n").is_err());
 /// # let empty = Config::parse("").unwrap();
 /// # assert_eq!(empty.todo.backend, TodoBackend::Builtin);
@@ -142,7 +154,9 @@ pub struct TodoConfig {
     /// through taskwarrior 3's `task` program, under the project `project`
     /// names. `taskchampion` keeps them in a taskchampion replica devkit
     /// embeds, under the same project, and can sync it to a directory or a
-    /// sync server. Set it in
+    /// sync server. `postgres` keeps them in a Postgres database every
+    /// machine shares, under the same project, with the activity log beside
+    /// them. Set it in
     /// `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:
     /// a committed `taskwarrior` breaks every machine without `task`, cloud
     /// sessions included. `DEVKIT_TODO_BACKEND`, when set, overrides it with
@@ -166,6 +180,8 @@ pub struct TodoConfig {
     pub taskwarrior: TaskwarriorConfig,
     /// The `taskchampion` backend's settings.
     pub taskchampion: TaskchampionConfig,
+    /// The `postgres` backend's settings.
+    pub postgres: PostgresConfig,
 }
 
 impl Default for TodoConfig {
@@ -176,6 +192,7 @@ impl Default for TodoConfig {
             hold_stop: true,
             taskwarrior: TaskwarriorConfig::default(),
             taskchampion: TaskchampionConfig::default(),
+            postgres: PostgresConfig::default(),
         }
     }
 }
@@ -188,6 +205,7 @@ pub enum TodoBackend {
     Builtin,
     Taskwarrior,
     Taskchampion,
+    Postgres,
 }
 
 /// How devkit runs taskwarrior for `[todo] backend = "taskwarrior"`.
@@ -236,6 +254,28 @@ pub struct TaskchampionConfig {
     /// The Doppler config to read them from. Doppler's own default when
     /// absent.
     pub doppler_config: Option<String>,
+}
+
+/// Where `[todo] backend = "postgres"` finds its database: the connection
+/// URL `DEVKIT_TODO_DATABASE_URL` resolves to, from the environment, then
+/// this Doppler scope when set, then the secrets file.
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PostgresConfig {
+    /// Read the connection URL, when the environment lacks it, from this
+    /// Doppler project, before the secrets file. Hooks reuse the URL Doppler
+    /// last gave, kept in devkit's state directory, until it ages out or
+    /// fails to connect.
+    pub doppler_project: Option<String>,
+    /// The Doppler config to read it from. Doppler's own default when absent.
+    pub doppler_config: Option<String>,
+    /// A PEM file of CA certificates to trust, besides the bundled and
+    /// platform roots, when verifying the database's certificate. Supabase
+    /// signs its certificates with its own CA, which its dashboard offers
+    /// for download. Read from `~/.config/devkit/config.toml` (or
+    /// `$DEVKIT_CONFIG`) alone and ignored in a project's `devkit.toml`, so
+    /// a checkout cannot add a CA your connection trusts.
+    pub ca_file: Option<String>,
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the
