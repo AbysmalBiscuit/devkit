@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use devkit_todo::{
-    Edit, Filter, Holder, NewTodo, NodeMatch, ORDER_GAP, Status, StatusChange, Todo, TodoStore,
-    activity::stamp, by_prefix, is_uuid_prefix, node::GLOBAL, one_line, transition,
+    Edit, Filter, Holder, NewTodo, NodeMatch, ORDER_GAP, Status, StatusChange, StatusKind, Todo,
+    TodoStore, activity::stamp, by_prefix, is_uuid_prefix, node::GLOBAL, one_line, transition,
 };
 use tokio_postgres::{GenericClient, Row, types::Type};
 
@@ -324,15 +324,35 @@ impl TodoStore for PostgresStore {
                     let held = tx
                         .query_typed(&sql, &[(&root, Type::TEXT), (&holder_text, Type::TEXT)])
                         .await?;
-                    let mut changes = Vec::new();
+                    let mut released = Vec::new();
                     for todo in held.iter().map(todo_of) {
                         let todo = todo?;
-                        if matches!(&todo.status, Status::InProgress { by } if holder.covers(by)) {
-                            let at = write_status(&tx, &todo.id, &Status::Pending).await?;
-                            changes.push(change(&todo, Some(Status::Pending), at));
+                        if let Ok(Some(Status::Pending)) =
+                            transition(&todo.status, StatusKind::Pending, holder)
+                        {
+                            released.push(todo);
                         }
                     }
-                    changes
+                    // One statement for every claim, so a release costs the
+                    // same round trips however many claims its holder had.
+                    let ids: Vec<&str> = released.iter().map(|t| t.id.as_str()).collect();
+                    let written = tx
+                        .query_typed(
+                            "UPDATE devkit.todos
+                             SET status = 'pending', holder = NULL, modified = clock_timestamp()
+                             WHERE id = ANY($1::text[]::uuid[]) RETURNING id::text, modified",
+                            &[(&ids, Type::TEXT_ARRAY)],
+                        )
+                        .await?;
+                    let at: HashMap<String, DateTime<Utc>> =
+                        written.iter().map(|row| (row.get(0), row.get(1))).collect();
+                    released
+                        .iter()
+                        .filter_map(|todo| {
+                            let at = *at.get(&todo.id)?;
+                            Some(change(todo, Some(Status::Pending), at))
+                        })
+                        .collect()
                 }
                 Edit::Purge(id) => {
                     let todo = resolve(&tx, root, id, true).await?;

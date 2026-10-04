@@ -627,3 +627,60 @@ fn another_scopes_url_leaves_this_ones_session_end_working() {
     let todos = store(&url, &root).list(&Filter::all()).unwrap();
     assert_eq!(todos[0].status, Status::Pending, "{todos:?}");
 }
+
+#[test]
+fn a_hook_releases_many_claims_in_one_go() {
+    let Some(direct) = var("DEVKIT_TEST_POSTGRES_URL") else {
+        return;
+    };
+    let name = format!("devkit_{}", fresh_root().replace('-', "_"));
+    admin(&direct, &format!("CREATE DATABASE {name}"));
+    let url = with_dbname(&test_url().unwrap(), &name);
+    let s = store(&url, "devkit");
+    let ids: Vec<String> = (0..20)
+        .map(|i| {
+            let id = s
+                .add(devkit_todo::NewTodo {
+                    project: Some("proj.main.claude-S".into()),
+                    description: format!("held {i}"),
+                    parent: None,
+                    order: None,
+                })
+                .unwrap();
+            s.apply(&devkit_todo::Edit::SetStatus {
+                id: id.clone(),
+                to: devkit_todo::StatusKind::InProgress,
+                actor: devkit_todo::Holder::new("S/a1"),
+            })
+            .unwrap();
+            id
+        })
+        .collect();
+    // Each statement that changes todos now costs a tenth of a second, so
+    // a release that writes one claim at a time runs past a hook's wait.
+    admin(
+        &with_dbname(&direct, &name),
+        "CREATE FUNCTION devkit.slow() RETURNS trigger LANGUAGE plpgsql AS
+             $$ BEGIN PERFORM pg_sleep(0.1); RETURN NULL; END $$;
+         CREATE TRIGGER slow AFTER UPDATE ON devkit.todos
+             FOR EACH STATEMENT EXECUTE FUNCTION devkit.slow();",
+    );
+    // A sub-agent stopping with todos in progress is held to them by
+    // default; this one is meant to stop and release them.
+    let p = Proj::with_home_config(
+        "[todo]\nbackend = \"postgres\"\nproject = \"devkit\"\nhold_stop = false\n",
+    );
+    let env = session("S", &url);
+    let out = p.hook_with(
+        "subagent-stop",
+        "claude-code",
+        &subagent(&p, "SubagentStop", "a1"),
+        &borrowed(&env),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    for todo in store(&url, "devkit").list(&Filter::all()).unwrap() {
+        assert!(ids.contains(&todo.id));
+        assert_eq!(todo.status, Status::Pending, "{todo:?}");
+    }
+    admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
+}
