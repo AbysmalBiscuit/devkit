@@ -9,7 +9,11 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_config::{NoConfig, TaskchampionConfig, TodoBackend, TodoConfig, expand_tilde};
-use devkit_todo::{TodoStore, ambassador_impl_TodoStore};
+use devkit_todo::{
+    TodoStore,
+    activity::{ActivityLog, Recorded},
+    ambassador_impl_TodoStore,
+};
 use devkit_todo_builtin::BuiltinStore;
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
 use devkit_todo_taskwarrior::TaskwarriorStore;
@@ -40,10 +44,15 @@ const HOOK_LOCK_WAIT: Duration = Duration::from_secs(1);
 /// behind something stuck for good.
 pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(75);
 
-/// The store `[todo] backend` names.
+/// The store `[todo] backend` names, its claim changes recorded in the
+/// activity log.
 #[derive(Delegate)]
 #[delegate(TodoStore)]
-pub(crate) enum Store {
+pub(crate) struct Store(Recorded<Backend>);
+
+#[derive(Delegate)]
+#[delegate(TodoStore)]
+pub(crate) enum Backend {
     Builtin(BuiltinStore),
     Taskwarrior(TaskwarriorStore),
     Taskchampion(Replica),
@@ -160,12 +169,50 @@ fn data_dir(config: &TaskchampionConfig) -> std::path::PathBuf {
     }
 }
 
+impl Backend {
+    fn from_config(config: &TodoConfig) -> Self {
+        match config.backend {
+            TodoBackend::Builtin => Self::Builtin(BuiltinStore::open()),
+            TodoBackend::Taskwarrior => Self::Taskwarrior(
+                TaskwarriorStore::new(&config.taskwarrior.path).with_root(&config.project),
+            ),
+            TodoBackend::Taskchampion => Self::Taskchampion(Replica {
+                store: taskchampion(config),
+                syncs: names_a_target(&config.taskchampion),
+            }),
+        }
+    }
+
+    /// This backend with taskchampion's replica lock wait bounded by `wait`.
+    fn waiting(self, wait: Duration) -> Self {
+        match self {
+            Self::Taskchampion(Replica { store, syncs }) => Self::Taskchampion(Replica {
+                store: store.with_lock_wait(wait),
+                syncs,
+            }),
+            backend => backend,
+        }
+    }
+
+    fn recorded(self) -> Store {
+        Store(Recorded::new(self, ActivityLog::open()))
+    }
+}
+
+fn taskchampion(config: &TodoConfig) -> TaskchampionStore {
+    TaskchampionStore::at(data_dir(&config.taskchampion)).with_root(&config.project)
+}
+
 impl Store {
+    fn backend(&self) -> &Backend {
+        self.0.inner()
+    }
+
     /// The taskchampion replica this store syncs: `None` for another backend
     /// or a replica with no sync target.
     fn synced_replica(&self) -> Option<&TaskchampionStore> {
-        match self {
-            Self::Taskchampion(Replica { store, syncs: true }) => Some(store),
+        match self.backend() {
+            Backend::Taskchampion(Replica { store, syncs: true }) => Some(store),
             _ => None,
         }
     }
@@ -185,25 +232,6 @@ impl Store {
         }
     }
 
-    pub(crate) fn from_config(config: &TodoConfig) -> Self {
-        match config.backend {
-            TodoBackend::Builtin => Self::Builtin(BuiltinStore::open()),
-            TodoBackend::Taskwarrior => Self::Taskwarrior(Self::taskwarrior(config)),
-            TodoBackend::Taskchampion => Self::Taskchampion(Replica {
-                store: Self::taskchampion(config),
-                syncs: names_a_target(&config.taskchampion),
-            }),
-        }
-    }
-
-    fn taskwarrior(config: &TodoConfig) -> TaskwarriorStore {
-        TaskwarriorStore::new(&config.taskwarrior.path).with_root(&config.project)
-    }
-
-    fn taskchampion(config: &TodoConfig) -> TaskchampionStore {
-        TaskchampionStore::at(data_dir(&config.taskchampion)).with_root(&config.project)
-    }
-
     /// The config a CLI call in `cwd` reads: `None` when there is none
     /// anywhere, as in a cloud session.
     fn cli_config(cwd: &Path) -> Result<Option<TodoConfig>> {
@@ -221,29 +249,19 @@ impl Store {
         let config = Self::cli_config(cwd)?;
         let env = std::env::var(BACKEND_VAR).ok();
         let (backend, _) = effective_backend(config.as_ref(), env.as_deref())?;
-        Ok(Self::from_config(&TodoConfig {
+        Ok(Backend::from_config(&TodoConfig {
             backend,
             ..config.unwrap_or_default()
         })
-        .waiting(CLI_LOCK_WAIT))
-    }
-
-    /// This store with taskchampion's replica lock wait bounded by `wait`.
-    fn waiting(self, wait: Duration) -> Self {
-        match self {
-            Self::Taskchampion(Replica { store, syncs }) => Self::Taskchampion(Replica {
-                store: store.with_lock_wait(wait),
-                syncs,
-            }),
-            store => store,
-        }
+        .waiting(CLI_LOCK_WAIT)
+        .recorded())
     }
 
     /// Runs `f` with taskchampion's replica lock held throughout, so a busy
     /// lock stops all of `f`'s writes or none. Other backends just run `f`.
     pub(crate) fn while_locked<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        match self {
-            Self::Taskchampion(replica) => replica.store.while_locked(f),
+        match self.backend() {
+            Backend::Taskchampion(replica) => replica.store.while_locked(f),
             _ => f(),
         }
     }
@@ -251,8 +269,8 @@ impl Store {
     /// The taskchampion replica whose hook writes go through its queue:
     /// `None` for a backend whose writes always wait.
     pub(crate) fn queued_replica(&self) -> Option<&TaskchampionStore> {
-        match self {
-            Self::Taskchampion(replica) => Some(&replica.store),
+        match self.backend() {
+            Backend::Taskchampion(replica) => Some(&replica.store),
             _ => None,
         }
     }
@@ -261,12 +279,13 @@ impl Store {
     /// exactly where it was resolved. A hook's lock wait keeps a busy entry
     /// queued.
     pub(crate) fn queued_at(dir: &Path, root: &str) -> Self {
-        Self::Taskchampion(Replica {
+        Backend::Taskchampion(Replica {
             store: TaskchampionStore::at(dir.to_path_buf())
                 .with_root(root)
                 .with_lock_wait(HOOK_LOCK_WAIT),
             syncs: false,
         })
+        .recorded()
     }
 
     /// The replica `devkit todo sync` in `cwd` syncs, its target resolved:
@@ -282,7 +301,7 @@ impl Store {
         }
         let config = config.unwrap_or_default();
         Ok(sync_target(&config.taskchampion)?
-            .map(|target| Self::taskchampion(&config).with_target(target)))
+            .map(|target| taskchampion(&config).with_target(target)))
     }
 
     /// The store a hook in `cwd` uses. A hook never fails on the store's
@@ -292,17 +311,18 @@ impl Store {
         let config = match devkit_common::config::resolve_in(checkout, None, cwd) {
             Ok((config, _)) => Some(config.todo),
             Err(e) if e.downcast_ref::<NoConfig>().is_some() => None,
-            Err(_) => return Self::Builtin(BuiltinStore::open()),
+            Err(_) => return Backend::Builtin(BuiltinStore::open()).recorded(),
         };
         let env = std::env::var(BACKEND_VAR).ok();
         let Ok((backend, _)) = effective_backend(config.as_ref(), env.as_deref()) else {
-            return Self::Builtin(BuiltinStore::open());
+            return Backend::Builtin(BuiltinStore::open()).recorded();
         };
-        Self::from_config(&TodoConfig {
+        Backend::from_config(&TodoConfig {
             backend,
             ..config.unwrap_or_default()
         })
         .waiting(HOOK_LOCK_WAIT)
+        .recorded()
     }
 }
 

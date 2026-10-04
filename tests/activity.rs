@@ -1,0 +1,230 @@
+//! The activity log through the real binary: subagent runs from hook payloads,
+//! claim intervals from `devkit todo`, and `devkit activity` reporting both.
+
+#[path = "common/todoenv.rs"]
+mod todoenv;
+
+use devkit_todo::activity::{ClaimEnd, Run, RunEnd};
+use serde_json::{Value, json};
+use todoenv::{Proj, stderr, stdout};
+
+fn subagent(p: &Proj, event: &str, agent: &str, agent_type: Option<&str>) -> Value {
+    let mut payload = json!({
+        "hook_event_name": event,
+        "session_id": "S",
+        "agent_id": agent,
+        "cwd": p.path,
+    });
+    if let Some(agent_type) = agent_type {
+        payload["agent_type"] = json!(agent_type);
+    }
+    payload
+}
+
+fn hook(p: &Proj, verb: &str, payload: &Value) {
+    let out = p.hook(verb, "claude-code", payload);
+    assert!(out.status.success(), "{verb}: {}", stderr(&out));
+    assert_eq!(stdout(&out), "", "{verb}");
+}
+
+fn start(p: &Proj, agent: &str, agent_type: Option<&str>) {
+    hook(
+        p,
+        "subagent-start",
+        &subagent(p, "SubagentStart", agent, agent_type),
+    );
+}
+
+fn stop(p: &Proj, agent: &str, agent_type: Option<&str>) {
+    hook(
+        p,
+        "subagent-stop",
+        &subagent(p, "SubagentStop", agent, agent_type),
+    );
+}
+
+fn run<'a>(runs: &'a [Run], agent: &str) -> &'a Run {
+    runs.iter()
+        .find(|r| r.agent == agent)
+        .unwrap_or_else(|| panic!("no run for {agent}: {runs:?}"))
+}
+
+#[test]
+fn a_subagent_start_and_stop_make_one_run() {
+    let p = Proj::new();
+    start(&p, "a1", Some("Explore"));
+    stop(&p, "a1", Some("Explore"));
+    let runs = p.activity().runs;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let r = &runs[0];
+    assert_eq!(
+        (
+            r.session.as_str(),
+            r.agent.as_str(),
+            r.agent_type.as_deref()
+        ),
+        ("S", "a1", Some("Explore"))
+    );
+    assert!(r.end.is_some_and(|end| end >= r.start), "{r:?}");
+    assert_eq!(r.outcome, Some(RunEnd::Stopped));
+}
+
+#[test]
+fn parallel_runs_of_one_type_each_get_their_own_record() {
+    let p = Proj::new();
+    start(&p, "a1", Some("reviewer"));
+    start(&p, "a2", Some("reviewer"));
+    stop(&p, "a2", Some("reviewer"));
+    stop(&p, "a1", Some("reviewer"));
+    let runs = p.activity().runs;
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    let (a1, a2) = (run(&runs, "a1"), run(&runs, "a2"));
+    assert!(a1.start <= a2.start, "{runs:?}");
+    assert!(a2.end.unwrap() <= a1.end.unwrap(), "{runs:?}");
+    assert_eq!(a1.outcome, Some(RunEnd::Stopped));
+    assert_eq!(a2.outcome, Some(RunEnd::Stopped));
+}
+
+#[test]
+fn a_run_without_an_agent_type_stores_none() {
+    let p = Proj::new();
+    start(&p, "afork", None);
+    stop(&p, "afork", None);
+    let runs = p.activity().runs;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].agent_type, None);
+    assert_eq!(runs[0].label(), "subagent");
+}
+
+#[test]
+fn a_run_whose_stop_never_arrives_closes_at_its_sessions_end() {
+    let p = Proj::new();
+    start(&p, "a1", Some("Explore"));
+    hook(
+        &p,
+        "session-end",
+        &json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path}),
+    );
+    let runs = p.activity().runs;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(runs[0].end.is_some(), "{runs:?}");
+    assert_eq!(runs[0].outcome, Some(RunEnd::SessionEnded));
+}
+
+#[test]
+fn records_are_written_with_the_harness_log_off() {
+    let p = Proj::with_home_config("[harness.log]\nenabled = false\n");
+    start(&p, "a1", Some("Explore"));
+    stop(&p, "a1", Some("Explore"));
+    let runs = p.activity().runs;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].outcome, Some(RunEnd::Stopped));
+}
+
+const SESSION: (&str, &str) = ("CLAUDE_CODE_SESSION_ID", "S");
+
+fn todo(p: &Proj, args: &[&str], env: &[(&str, &str)]) -> String {
+    let mut all = vec![SESSION];
+    all.extend_from_slice(env);
+    let mut argv = vec!["todo"];
+    argv.extend_from_slice(args);
+    let out = p.devkit(&argv, &all);
+    assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+    stdout(&out).trim().to_string()
+}
+
+const AS_SUB_AGENT: (&str, &str) = ("DEVKIT_TODO_HOLDER", "S/a1");
+
+#[test]
+fn claiming_and_completing_a_todo_gives_one_completed_interval() {
+    let p = Proj::new();
+    let id = todo(&p, &["add", "a"], &[]);
+    todo(&p, &["start", &id], &[]);
+    todo(&p, &["done", &id], &[]);
+    let claims = p.activity().claims;
+    assert_eq!(claims.len(), 1, "{claims:?}");
+    assert_eq!(claims[0].todo, id);
+    assert_eq!(&*claims[0].holder, "S");
+    assert!(claims[0].end.is_some(), "{claims:?}");
+    assert_eq!(claims[0].outcome, Some(ClaimEnd::Completed));
+}
+
+#[test]
+fn session_end_closes_the_sessions_intervals_as_released() {
+    let p = Proj::new();
+    let (own, sub) = (
+        todo(&p, &["add", "own"], &[]),
+        todo(&p, &["add", "sub"], &[]),
+    );
+    todo(&p, &["start", &own], &[]);
+    todo(&p, &["start", &sub], &[AS_SUB_AGENT]);
+    hook(
+        &p,
+        "session-end",
+        &json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path}),
+    );
+    let claims = p.activity().claims;
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    for claim in &claims {
+        assert_eq!(claim.outcome, Some(ClaimEnd::Released), "{claim:?}");
+    }
+}
+
+#[test]
+fn handing_a_claim_closes_one_interval_and_opens_the_next() {
+    let p = Proj::new();
+    let id = todo(&p, &["add", "a"], &[]);
+    todo(&p, &["start", &id], &[]);
+    todo(&p, &["start", &id], &[AS_SUB_AGENT]);
+    let claims = p.activity().claims;
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    assert_eq!(
+        (&*claims[0].holder, claims[0].outcome),
+        ("S", Some(ClaimEnd::Handed))
+    );
+    assert_eq!((&*claims[1].holder, claims[1].outcome), ("S/a1", None));
+    assert_eq!(claims[0].end, Some(claims[1].start));
+}
+
+/// A `PreToolUse` from sub-agent `a1` running `command`.
+fn sub_agent_bash(p: &Proj, command: &str) -> Value {
+    json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "S",
+        "agent_id": "a1",
+        "agent_type": "Explore",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": p.path,
+    })
+}
+
+#[test]
+fn a_record_that_cannot_be_written_changes_no_verdict() {
+    let healthy = Proj::new();
+    let broken = Proj::new();
+    std::fs::create_dir_all(broken.state().join("todo")).unwrap();
+    std::fs::write(broken.state().join("todo/activity"), "not a directory").unwrap();
+
+    let verdict = |p: &Proj| {
+        let id = todo(p, &["add", "a"], &[]);
+        let out = p.hook(
+            "pre-tool-use",
+            "claude-code",
+            &sub_agent_bash(p, &format!("devkit todo start {id}")),
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+        stdout(&out)
+    };
+    let expected = verdict(&healthy);
+    assert!(expected.contains("DEVKIT_TODO_HOLDER"), "{expected}");
+    assert_eq!(verdict(&broken), expected);
+
+    start(&broken, "a1", Some("Explore"));
+    stop(&broken, "a1", Some("Explore"));
+    let id = todo(&broken, &["add", "b"], &[]);
+    todo(&broken, &["start", &id], &[]);
+    assert_eq!(broken.todo(&id).status, devkit_todo::Status::InProgress {
+        by: devkit_todo::Holder::new("S")
+    });
+}

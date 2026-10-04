@@ -126,6 +126,13 @@ impl Payload {
         self.0.agent_id()
     }
 
+    /// The subagent's type, `subagent_type` being Cursor's. `None` for a
+    /// fork, which has an agent id and no type.
+    pub fn agent_type(&self) -> Option<&str> {
+        let raw = self.raw();
+        text(raw, "agent_type").or_else(|| text(raw, "subagent_type"))
+    }
+
     pub fn tool_use_id(&self) -> Option<&str> {
         self.0.tool_use_id()
     }

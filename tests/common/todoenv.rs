@@ -8,7 +8,10 @@ use std::{
     process::{Child, Command, Output, Stdio},
 };
 
-use devkit_todo::{Filter, Todo, TodoStore};
+use devkit_todo::{
+    Filter, Todo, TodoStore,
+    activity::{Activity, ActivityLog},
+};
 use devkit_todo_builtin::BuiltinStore;
 
 #[path = "testenv.rs"]
@@ -171,6 +174,17 @@ impl Proj {
 
     pub fn state(&self) -> PathBuf {
         self.home.path().join("devkit")
+    }
+
+    pub fn activity_log(&self) -> ActivityLog {
+        ActivityLog::at(self.state().join("todo/activity"))
+    }
+
+    /// The activity log's records as of now.
+    pub fn activity(&self) -> Activity {
+        self.activity_log()
+            .read(std::time::SystemTime::now().into())
+            .unwrap()
     }
 
     pub fn store(&self) -> BuiltinStore {
