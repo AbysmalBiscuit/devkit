@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::{
     linear::{parse_id, post_graphql},
-    status::{StatusWriter, find_id, names},
+    status::{StatusWriter, Statuses},
 };
 
 /// One query reading the issue's UUID, its state, and its team's states.
@@ -25,17 +25,17 @@ pub struct LinearStatus {
     /// The issue's UUID, which `issueUpdate` takes.
     pub issue_id: String,
     pub current: String,
-    /// `(state id, name)` for each of the team's workflow states.
-    pub states: Vec<(String, String)>,
+    /// The issue's team's workflow states.
+    pub states: Statuses,
 }
 
 impl LinearStatus {
     /// The id of the team state named `to`, matched case-insensitively.
     pub fn state_id(&self, to: &str) -> Result<&str> {
-        find_id(&self.states, to).with_context(|| {
+        self.states.id(to).with_context(|| {
             format!(
                 "no state `{to}` in the issue's team; states: {}",
-                names(&self.states)
+                self.states.names()
             )
         })
     }
@@ -55,17 +55,7 @@ pub fn parse_status(resp: &Value, id: &str) -> Result<LinearStatus> {
             .as_str()
             .unwrap_or_default()
             .to_string(),
-        states: node["team"]["states"]["nodes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|s| {
-                Some((
-                    s["id"].as_str()?.to_string(),
-                    s["name"].as_str()?.to_string(),
-                ))
-            })
-            .collect(),
+        states: Statuses::from_nodes(&node["team"]["states"]["nodes"]),
     })
 }
 

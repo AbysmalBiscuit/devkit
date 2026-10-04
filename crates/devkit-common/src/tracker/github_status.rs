@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use devkit_config::{EventTransition, IssueEvent, ProjectRef};
 use serde_json::Value;
 
-use super::status::{StatusWriter, find_id, names};
+use super::status::{StatusWriter, Statuses};
 use crate::{
     cmd::gh_json,
     forge::Repo,
@@ -73,8 +73,7 @@ pub fn status_query(slug: &str, issue: u64, project: &ProjectRef, field: &str) -
 pub struct Board {
     pub project_id: String,
     pub field_id: String,
-    /// `(option id, name)` for each option of the field.
-    pub options: Vec<(String, String)>,
+    pub options: Statuses,
 }
 
 /// What [`status_query`] read: everything a status write needs.
@@ -92,10 +91,10 @@ pub struct StatusRead {
 impl Board {
     /// The id of the option named `to`, matched case-insensitively.
     pub fn option_id(&self, to: &str, field: &str) -> Result<&str> {
-        find_id(&self.options, to).with_context(|| {
+        self.options.id(to).with_context(|| {
             format!(
                 "no option `{to}` in `{field}`; options: {}",
-                names(&self.options)
+                self.options.names()
             )
         })
     }
@@ -119,21 +118,10 @@ pub fn parse_board(resp: &Value, field: &str) -> Result<Board> {
     let field_id = str_at(field_value, "/id").with_context(|| {
         format!("`{field}` is not a single-select field ([github] status_field)")
     })?;
-    let options = field_value["options"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|o| {
-            Some((
-                o["id"].as_str()?.to_string(),
-                o["name"].as_str()?.to_string(),
-            ))
-        })
-        .collect();
     Ok(Board {
         project_id: project_id.to_string(),
         field_id: field_id.to_string(),
-        options,
+        options: Statuses::from_nodes(&field_value["options"]),
     })
 }
 
@@ -364,7 +352,7 @@ mod tests {
             ("I_65", "PVT_3")
         );
         assert_eq!(r.board.field_id, "PVTSSF_status");
-        assert_eq!(r.board.options.len(), 3);
+        assert_eq!(r.board.options.names(), "Todo, In progress, Done");
     }
 
     #[test]

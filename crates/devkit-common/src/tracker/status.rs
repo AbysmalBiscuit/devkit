@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result, bail};
 use devkit_config::{EventTransition, GithubConfig, TrackerKind};
+use serde_json::Value;
 
 use super::{github_status::GithubWriter, linear_status::LinearWriter};
 use crate::forge::Repos;
@@ -97,23 +98,50 @@ pub fn target<'a>(t: &'a EventTransition, current: Option<&str>) -> Target<'a> {
     }
 }
 
-/// The id paired with the name `wanted` names in `(id, name)` pairs,
-/// compared like [`target`].
-pub fn find_id<'a>(pairs: &'a [(String, String)], wanted: &str) -> Option<&'a str> {
-    pairs
-        .iter()
-        .find(|(_, n)| same_status(n, wanted))
-        .map(|(id, _)| id.as_str())
+/// The statuses a tracker offers, each an `(id, name)` pair: a GitHub
+/// field's options, or a Linear team's workflow states.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Statuses(Vec<(String, String)>);
+
+impl Statuses {
+    /// The statuses in a GraphQL list of `{ id name }` nodes, the shape both
+    /// trackers report them in. A node missing either field is skipped.
+    pub fn from_nodes(nodes: &Value) -> Self {
+        nodes
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|n| {
+                Some((
+                    n["id"].as_str()?.to_string(),
+                    n["name"].as_str()?.to_string(),
+                ))
+            })
+            .collect()
+    }
+
+    /// The id of the status `wanted` names, compared like [`target`].
+    pub fn id(&self, wanted: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(_, n)| same_status(n, wanted))
+            .map(|(id, _)| id.as_str())
+    }
+
+    /// The names, comma-separated, for an error that lists what a tracker has.
+    pub fn names(&self) -> String {
+        self.0
+            .iter()
+            .map(|(_, n)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
-/// The names in `(id, name)` pairs, comma-separated, for an error that lists
-/// what a tracker has.
-pub fn names(pairs: &[(String, String)]) -> String {
-    pairs
-        .iter()
-        .map(|(_, n)| n.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
+impl FromIterator<(String, String)> for Statuses {
+    fn from_iter<I: IntoIterator<Item = (String, String)>>(pairs: I) -> Self {
+        Statuses(pairs.into_iter().collect())
+    }
 }
 
 #[cfg(test)]
@@ -163,18 +191,34 @@ mod tests {
     }
 
     #[test]
-    fn find_id_is_case_and_space_insensitive() {
-        let pairs = |names: &[&str]| -> Vec<(String, String)> {
+    fn status_ids_resolve_case_and_space_insensitively() {
+        let statuses = |names: &[&str]| -> Statuses {
             names
                 .iter()
                 .map(|n| (format!("id-{n}"), n.to_string()))
                 .collect()
         };
-        let board = pairs(&["Todo", "In Progress"]);
-        assert_eq!(find_id(&board, " in progress"), Some("id-In Progress"));
-        assert_eq!(find_id(&board, "Done"), None);
-        assert_eq!(find_id(&pairs(&["ГОТОВО"]), "готово"), Some("id-ГОТОВО"));
-        assert_eq!(names(&board), "Todo, In Progress");
+        let board = statuses(&["Todo", "In Progress"]);
+        assert_eq!(board.id(" in progress"), Some("id-In Progress"));
+        assert_eq!(board.id("Done"), None);
+        assert_eq!(statuses(&["ГОТОВО"]).id("готово"), Some("id-ГОТОВО"));
+        assert_eq!(board.names(), "Todo, In Progress");
+    }
+
+    #[test]
+    fn statuses_parse_from_id_and_name_nodes() {
+        let nodes = serde_json::json!([
+            { "id": "a", "name": "Todo" },
+            { "id": "b" },
+            { "id": "c", "name": "Done" },
+        ]);
+        let parsed = Statuses::from_nodes(&nodes);
+        assert_eq!(parsed.names(), "Todo, Done");
+        assert_eq!(parsed.id("done"), Some("c"));
+        assert_eq!(
+            Statuses::from_nodes(&serde_json::Value::Null),
+            Statuses::default()
+        );
     }
 
     fn github_with_project() -> GithubConfig {
