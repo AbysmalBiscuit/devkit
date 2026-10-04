@@ -168,7 +168,7 @@ class CloudHooks(unittest.TestCase):
         result = self.commit_patch_over({"selected.txt": "staged change\n"})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("patch overlaps staged changes", result.stderr)
-        self.assertIn("CONFLICT (content): Merge conflict in selected.txt", result.stderr)
+        self.assertRegex(result.stderr, r"(?m)^100644 [0-9a-f]+ 2\tselected\.txt$")
         self.assertEqual(self.git("log", "--format=%s").splitlines(), ["test: initialize fixture"])
         self.assertEqual(self.git("show", ":selected.txt"), "staged change\n")
         self.assertEqual(self.git("diff", "--cached", "--name-only").strip(), "selected.txt")
