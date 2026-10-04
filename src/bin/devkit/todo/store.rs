@@ -268,6 +268,20 @@ fn cache_url(scope: &DopplerScope, url: &str) {
     }
 }
 
+/// `[todo.postgres] ca_file` as the global config sets it. A project layer's
+/// is ignored: a checkout must not add a CA that the database connection
+/// trusts, as it must not move the harness log.
+pub(crate) fn global_ca_file() -> Option<PathBuf> {
+    let body = std::fs::read_to_string(devkit_common::harness::global_config_path()?).ok()?;
+    let table: toml::Table = toml::from_str(&body).ok()?;
+    let ca_file = table
+        .get("todo")?
+        .get("postgres")?
+        .get("ca_file")?
+        .as_str()?;
+    Some(expand_tilde(ca_file))
+}
+
 /// Drops the copy kept for `scope` if it still holds `url`, so a call that
 /// failed with an old URL leaves alone one another call has since refreshed.
 fn forget_url(scope: &DopplerScope, url: &str) {
@@ -319,7 +333,7 @@ pub(crate) fn open_database(
         return (Err(format!("{DATABASE_VAR} is not set")), source);
     };
     let trust = Trust {
-        ca_file: config.ca_file.as_deref().map(expand_tilde),
+        ca_file: global_ca_file(),
     };
     let db = Database::new(&url, wait, &trust).map_err(|e| format!("{DATABASE_VAR}: {e:#}"));
     if let (Ok(db), Source::Doppler, Some(scope)) = (&db, &source, &scope) {

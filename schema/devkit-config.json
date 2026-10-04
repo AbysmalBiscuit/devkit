@@ -1097,7 +1097,7 @@
       "properties": {
         "ca_file": {
           "default": null,
-          "description": "A PEM file of CA certificates to trust, besides the bundled and\nplatform roots, when verifying the database's certificate. Supabase\nsigns its certificates with its own CA, which its dashboard offers\nfor download.",
+          "description": "A PEM file of CA certificates to trust, besides the bundled and\nplatform roots, when verifying the database's certificate. Supabase\nsigns its certificates with its own CA, which its dashboard offers\nfor download. Read from `~/.config/devkit/config.toml` (or\n`$DEVKIT_CONFIG`) alone and ignored in a project's `devkit.toml`, so\na checkout cannot add a CA your connection trusts.",
           "type": [
             "string",
             "null"

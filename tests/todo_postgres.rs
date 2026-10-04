@@ -1007,3 +1007,26 @@ fn session_end_records_every_claim_it_releases() {
     }
     admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
 }
+
+#[test]
+fn a_project_layer_cannot_name_the_ca_file() {
+    let global_ca = "/nonexistent/global-ca.crt";
+    let p = Proj::with_home_config(&format!(
+        "[todo]\nbackend = \"postgres\"\n[todo.postgres]\nca_file = \"{global_ca}\"\n"
+    ));
+    std::fs::write(
+        p.path.join("devkit.toml"),
+        "[todo.postgres]\nca_file = \"/nonexistent/project-ca.crt\"\n",
+    )
+    .unwrap();
+    let rows = doctor_rows(&p, &[(
+        DATABASE_VAR,
+        "postgres://agent@127.0.0.1:1/todos".into(),
+    )]);
+    let detail = row(&rows, "todo_database").to_string();
+    assert!(!detail.contains("project-ca.crt"), "{detail}");
+    assert!(
+        detail.contains(global_ca),
+        "the global CA file is still read: {detail}"
+    );
+}

@@ -272,7 +272,9 @@ pub struct PostgresConfig {
     /// A PEM file of CA certificates to trust, besides the bundled and
     /// platform roots, when verifying the database's certificate. Supabase
     /// signs its certificates with its own CA, which its dashboard offers
-    /// for download.
+    /// for download. Read from `~/.config/devkit/config.toml` (or
+    /// `$DEVKIT_CONFIG`) alone and ignored in a project's `devkit.toml`, so
+    /// a checkout cannot add a CA your connection trusts.
     pub ca_file: Option<String>,
 }
 

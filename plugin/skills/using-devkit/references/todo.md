@@ -150,4 +150,6 @@ Supabase signs its database certificates with its own CA. Download it from the p
 ca_file = "~/.config/devkit/supabase-ca.crt"
 ```
 
+Set `ca_file` in `~/.config/devkit/config.toml`. A project's `devkit.toml` cannot name one: devkit ignores it there, so a repository you clone cannot add a CA your connection trusts.
+
 devkit uses nothing the transaction pooler lacks: no prepared statement outlives its transaction, and no session setting, `LISTEN` or advisory lock is used. The direct connection (`db.<project-ref>.supabase.co:5432`) works too, but each hook then holds one of the database's own connections while it runs. Any other transaction-mode pooler, such as PgBouncer, works the same way.
