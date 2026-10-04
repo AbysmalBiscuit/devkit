@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use devkit_common::store::{LockBusy, open_lock, with_file_lock};
 use devkit_todo::Holder;
 use serde::{Deserialize, Serialize};
@@ -45,23 +45,25 @@ fn drain_lock(dir: &Path) -> PathBuf {
 }
 
 fn lines(dir: &Path) -> Result<Vec<String>> {
-    match fs::read_to_string(queue_path(dir)) {
+    let path = queue_path(dir);
+    match fs::read_to_string(&path) {
         Ok(text) => Ok(text.lines().map(str::to_string).collect()),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
     }
 }
 
 /// Appends `entry` to the queue in `dir`.
 pub(crate) fn push(dir: &Path, entry: &Deferred) -> Result<()> {
-    let line = serde_json::to_string(entry)?;
+    let line = serde_json::to_string(entry).context("serializing a deferred.jsonl entry")?;
+    let path = queue_path(dir);
     with_file_lock(&file_lock(dir), || {
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(queue_path(dir))?;
-        writeln!(file, "{line}")?;
-        Ok(())
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        writeln!(file, "{line}").with_context(|| format!("appending to {}", path.display()))
     })
 }
 
@@ -71,19 +73,23 @@ fn peek(dir: &Path) -> Result<Option<Result<Deferred>>> {
     with_file_lock(&file_lock(dir), || {
         Ok(lines(dir)?
             .first()
-            .map(|line| serde_json::from_str(line).map_err(Into::into)))
+            .map(|line| serde_json::from_str(line).context("parsing a deferred.jsonl entry")))
     })
 }
 
 fn pop(dir: &Path) -> Result<()> {
     with_file_lock(&file_lock(dir), || {
+        let path = queue_path(dir);
         let rest = lines(dir)?.into_iter().skip(1).collect::<Vec<_>>();
         match rest.is_empty() {
-            true => match fs::remove_file(queue_path(dir)) {
-                Err(e) if e.kind() != ErrorKind::NotFound => Err(e.into()),
+            true => match fs::remove_file(&path) {
+                Err(e) if e.kind() != ErrorKind::NotFound => {
+                    Err(e).with_context(|| format!("removing {}", path.display()))
+                }
                 _ => Ok(()),
             },
-            false => Ok(fs::write(queue_path(dir), rest.join("\n") + "\n")?),
+            false => fs::write(&path, rest.join("\n") + "\n")
+                .with_context(|| format!("rewriting {}", path.display())),
         }
     })
 }
