@@ -957,3 +957,53 @@ fn a_connect_failure_leaves_a_url_another_call_refreshed() {
     let held = std::fs::read_to_string(&cache).expect("the refreshed URL is kept");
     assert!(held.contains("rotated"), "{held}");
 }
+
+#[test]
+fn session_end_records_every_claim_it_releases() {
+    let Some(direct) = var("DEVKIT_TEST_POSTGRES_URL") else {
+        return;
+    };
+    let name = format!("devkit_{}", fresh_root().replace('-', "_"));
+    admin(&direct, &format!("CREATE DATABASE {name}"));
+    let url = with_dbname(&test_url().unwrap(), &name);
+    let s = store(&url, "devkit");
+    let recorded = devkit_todo::activity::Recorded::new(&s, s.activity());
+    for i in 0..20 {
+        let id = recorded
+            .add(devkit_todo::NewTodo {
+                project: Some("proj.main.claude-S".into()),
+                description: format!("held {i}"),
+                parent: None,
+                order: None,
+            })
+            .unwrap();
+        recorded
+            .apply(&devkit_todo::Edit::SetStatus {
+                id,
+                to: devkit_todo::StatusKind::InProgress,
+                actor: devkit_todo::Holder::new(format!("S/a{i}")),
+            })
+            .unwrap();
+    }
+    // Every statement that writes activity now costs a tenth of a second,
+    // so a release that records its claims one at a time runs past the
+    // session's end budget.
+    admin(
+        &with_dbname(&direct, &name),
+        "CREATE FUNCTION devkit.slow() RETURNS trigger LANGUAGE plpgsql AS
+             $$ BEGIN PERFORM pg_sleep(0.1); RETURN NULL; END $$;
+         CREATE TRIGGER slow AFTER INSERT ON devkit.activity
+             FOR EACH STATEMENT EXECUTE FUNCTION devkit.slow();",
+    );
+    let p = proj("devkit");
+    let env = session("S", &url);
+    let end = json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path});
+    let out = p.hook_with("session-end", "claude-code", &end, &borrowed(&env));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let claims = s.activity().read_now().unwrap().claims;
+    assert_eq!(claims.len(), 20, "{claims:?}");
+    for claim in &claims {
+        assert_eq!(claim.outcome, Some(ClaimEnd::Released), "{claim:?}");
+    }
+    admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
+}

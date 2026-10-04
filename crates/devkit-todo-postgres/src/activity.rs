@@ -41,6 +41,33 @@ impl ActivityStore for PostgresActivity {
         })
     }
 
+    /// One statement for the whole batch, each event keeping its own time:
+    /// a claim event's is the database's, taken when its change was made.
+    fn record_all(&self, events: &[Event]) -> Result<()> {
+        let at: Vec<DateTime<Utc>> = events.iter().map(|e| e.at).collect();
+        let what = events
+            .iter()
+            .map(|e| serde_json::to_string(&e.what))
+            .collect::<Result<Vec<String>, _>>()?;
+        self.db.run(async |client| {
+            client
+                .execute_typed(
+                    "INSERT INTO devkit.activity (root, at, event)
+                     SELECT $1, e.at, e.event::jsonb
+                     FROM unnest($2::timestamptz[], $3::text[]) WITH ORDINALITY
+                         AS e(at, event, n)
+                     ORDER BY e.n",
+                    &[
+                        (&self.root, Type::TEXT),
+                        (&at, Type::TIMESTAMPTZ_ARRAY),
+                        (&what, Type::TEXT_ARRAY),
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
     fn record_now(&self, what: &What) -> Result<()> {
         let what = serde_json::to_string(what)?;
         self.db.run(async |client| {

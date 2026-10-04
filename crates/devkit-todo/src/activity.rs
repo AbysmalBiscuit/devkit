@@ -158,6 +158,11 @@ pub fn local_now() -> SystemTime {
 pub trait ActivityStore {
     /// Appends `event`. Concurrent appends never interleave.
     fn record(&self, event: &::devkit_todo::activity::Event) -> ::anyhow::Result<()>;
+    /// Appends every one of `events`, in order. A store that can write them
+    /// in one go does, so a long batch costs one round trip.
+    fn record_all(&self, events: &[::devkit_todo::activity::Event]) -> ::anyhow::Result<()> {
+        events.iter().try_for_each(|event| self.record(event))
+    }
     /// Appends `what`, stamped now by the store's clock.
     fn record_now(&self, what: &::devkit_todo::activity::What) -> ::anyhow::Result<()>;
     /// Notes that `agent` of `session` fired a hook now, by the store's
@@ -487,13 +492,17 @@ impl<S: TodoStore, L: ActivityStore> TodoStore for Recorded<S, L> {
     /// processes that append out of order still read in order.
     fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
         let changes = self.store.apply(edit)?;
-        for change in &changes {
-            for what in claim_events(change) {
-                let _ = self.log.record(&Event {
+        let events: Vec<Event> = changes
+            .iter()
+            .flat_map(|change| {
+                claim_events(change).into_iter().map(|what| Event {
                     at: change.at,
                     what,
-                });
-            }
+                })
+            })
+            .collect();
+        if !events.is_empty() {
+            let _ = self.log.record_all(&events);
         }
         Ok(changes)
     }
