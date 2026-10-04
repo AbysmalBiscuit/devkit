@@ -120,6 +120,5 @@ jobs:
         run: uv run --frozen pyrefly check
       # The system interpreter, not uv's virtualenv: that is how Claude runs
       # these hooks on a cloud VM, and the scripts depend on nothing installed.
-      # Verbose output so a skipped test names the capability it wanted.
       - name: Test cloud hooks
         run: python3 -B .agents/skills/cloud/scripts/cloud.test.py -v

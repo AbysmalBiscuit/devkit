@@ -10,22 +10,6 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
-EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
-
-def merge_tree_takes_trees():
-    """Whether this git's merge-tree accepts trees where it wants commits.
-
-    git-commit-patch.py merges the selected and staged trees directly. Git
-    rejected tree arguments until it learned to take them, so on an older git
-    the patch commit cannot run at all and its test has nothing to assert.
-    """
-    probe = subprocess.run(
-        ["git", "-C", str(ROOT), "merge-tree", "--write-tree",
-         f"--merge-base={EMPTY_TREE}", EMPTY_TREE, EMPTY_TREE],
-        capture_output=True,
-    )
-    return probe.returncode == 0
 
 
 class CloudHooks(unittest.TestCase):
@@ -141,42 +125,74 @@ class CloudHooks(unittest.TestCase):
         self.assertLess(len(result.stdout.split()), 150)
         self.assertFalse((self.root / "AGENTS.local.md").exists())
 
-    @unittest.skipUnless(merge_tree_takes_trees(), "git merge-tree does not accept tree arguments")
-    def test_devkit_commits_patch_and_preserves_unrelated_staging(self):
+    def git(self, *args):
+        return subprocess.run(
+            ["git", "-C", str(self.root), *args],
+            env=self.env, check=True, text=True, capture_output=True,
+        ).stdout
+
+    def commit_patch_over(self, staged, **env):
+        """Stage `staged` ({path: content}), then commit a patch changing
+        selected.txt from "before" to "selected change" through devkit's
+        commit-patch task. Both files start committed as "before"."""
         self.assertEqual(self.run_script("cloud_setup.py", "--cloud").returncode, 0)
-        env = dict(self.env, CLOUD_AGENT="true", DEVKIT_SKIP_AUTOLINK="1")
-
-        def git(*args):
-            return subprocess.run(
-                ["git", "-C", str(self.root), *args],
-                env=env, check=True, text=True, capture_output=True,
-            ).stdout
-
-        git("init", "-b", "test-cloud")
-        git("config", "user.name", "Cloud Test")
-        git("config", "user.email", "cloud@example.invalid")
         selected = self.root / "selected.txt"
         unrelated = self.root / "unrelated.txt"
         selected.write_text("before\n")
         unrelated.write_text("before\n")
-        git("add", "--", "selected.txt", "unrelated.txt")
-        git("commit", "-m", "test: initialize fixture\n\nCo-authored-by: Agent <agent@example.invalid>")
+        self.git("add", "--", "selected.txt", "unrelated.txt")
+        self.git("commit", "-m", "test: initialize fixture\n\nCo-authored-by: Agent <agent@example.invalid>")
         selected.write_text("selected change\n")
-        unrelated.write_text("unrelated change\n")
-        git("add", "--", "unrelated.txt")
         patch = self.root / "selected.patch"
-        patch.write_text(git("diff", "--", "selected.txt"))
-        result = subprocess.run(
+        patch.write_text(self.git("diff", "HEAD", "--", "selected.txt"))
+        for path, content in staged.items():
+            (self.root / path).write_text(content)
+            self.git("add", "--", path)
+        return subprocess.run(
             ["devkit", "run", "-C", str(self.root), "--config", str(self.root / "devkit.local.toml"),
              "task", "commit-patch", "--arg", f"patch={patch}", "--arg", "commit_subject=fix: commit selected patch",
              "--arg", "coauthors=Agent <agent@example.invalid>"],
-            env=env, text=True, capture_output=True,
+            env=dict(self.env, CLOUD_AGENT="true", DEVKIT_SKIP_AUTOLINK="1", **env),
+            text=True, capture_output=True,
         )
+
+    def test_devkit_commits_patch_and_preserves_unrelated_staging(self):
+        result = self.commit_patch_over({"unrelated.txt": "unrelated change\n"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(git("show", "HEAD:selected.txt"), "selected change\n")
-        self.assertEqual(git("show", "HEAD:unrelated.txt"), "before\n")
-        self.assertEqual(git("diff", "--cached", "--name-only").strip(), "unrelated.txt")
-        self.assertEqual(git("diff", "--name-only"), "")
+        self.assertEqual(self.git("show", "HEAD:selected.txt"), "selected change\n")
+        self.assertEqual(self.git("show", "HEAD:unrelated.txt"), "before\n")
+        self.assertEqual(self.git("diff", "--cached", "--name-only").strip(), "unrelated.txt")
+        self.assertEqual(self.git("diff", "--name-only"), "")
+
+    def test_devkit_refuses_patch_that_overlaps_staged_lines(self):
+        result = self.commit_patch_over({"selected.txt": "staged change\n"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("patch overlaps staged changes", result.stderr)
+        self.assertRegex(result.stderr, r"(?m)^100644 [0-9a-f]+ 2\tselected\.txt$")
+        self.assertEqual(self.git("log", "--format=%s").splitlines(), ["test: initialize fixture"])
+        self.assertEqual(self.git("show", ":selected.txt"), "staged change\n")
+        self.assertEqual(self.git("diff", "--cached", "--name-only").strip(), "selected.txt")
+
+    def test_devkit_reports_merge_that_cannot_run_as_its_own_failure(self):
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        binaries = self.root / "git without merge-tree"
+        binaries.mkdir()
+        shim = binaries / "git"
+        shim.write_text(
+            "#!/bin/sh\n"
+            'for arg; do [ "$arg" = merge-tree ] && { echo "merge-tree is unavailable" >&2; exit 128; }; done\n'
+            f'exec "{real_git}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        result = self.commit_patch_over(
+            {"unrelated.txt": "unrelated change\n"}, PATH=f"{binaries}{os.pathsep}{self.env['PATH']}",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("merge-tree is unavailable", result.stderr)
+        self.assertNotIn("overlap", result.stderr)
+        self.assertEqual(self.git("log", "--format=%s").splitlines(), ["test: initialize fixture"])
+        self.assertEqual(self.git("diff", "--cached", "--name-only").strip(), "unrelated.txt")
 
     def test_cloud_commit_hook_enforces_author_and_trailer(self):
         self.assertEqual(self.run_script("cloud_setup.py", "--cloud").returncode, 0)
