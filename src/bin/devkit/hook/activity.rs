@@ -19,12 +19,17 @@ use crate::todo::store::Store;
 const OBSERVE_WAIT: Duration = Duration::from_secs(1);
 
 /// [`observe`] on a thread of its own, waited on for at most
-/// [`OBSERVE_WAIT`], so a stuck database or CA file never holds the hook
-/// past its harness timeout. A record still unwritten then is lost when the
-/// hook exits.
+/// [`OBSERVE_WAIT`] or what is left of the hook's overall deadline, so a
+/// stuck database or CA file never holds the hook past its harness timeout.
+/// With no time left nothing is recorded, and a record still unwritten when
+/// the wait ends is lost as the hook exits.
 pub(crate) fn observe_within(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path) {
+    let wait = super::within_deadline(OBSERVE_WAIT);
+    if wait.is_zero() {
+        return;
+    }
     let (payload, checkout, cwd) = (payload.clone(), checkout.clone(), cwd.to_path_buf());
-    let _ = gate::with_deadline(OBSERVE_WAIT, move || {
+    let _ = gate::with_deadline(wait, move || {
         observe(&payload, event, &checkout, &cwd);
     });
 }
@@ -74,12 +79,16 @@ fn observe(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path)
 /// in the log that goes with the checkout's todo store, waited on as
 /// [`observe_within`] waits.
 pub(crate) fn seen_within(payload: &Payload, checkout: &Checkout, cwd: &Path) {
+    let wait = super::within_deadline(OBSERVE_WAIT);
     let (Some(session), Some(agent)) = (payload.session_id(), payload.agent_id()) else {
         return;
     };
+    if wait.is_zero() {
+        return;
+    }
     let (session, agent) = (session.to_string(), agent.to_string());
     let (checkout, cwd) = (checkout.clone(), cwd.to_path_buf());
-    let _ = gate::with_deadline(OBSERVE_WAIT, move || {
+    let _ = gate::with_deadline(wait, move || {
         let log = Store::activity_for_hook(&checkout, &cwd);
         let _ = log.seen_at(&session, &agent, SystemTime::now());
     });

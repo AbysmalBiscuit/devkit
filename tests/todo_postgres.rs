@@ -711,6 +711,27 @@ fn a_claim_check_whose_store_hangs_lets_the_command_through_in_time() {
 /// The hook must answer well inside its harness timeout.
 #[cfg(unix)]
 fn with_a_hanging_ca_file(command: &str) -> String {
+    hanging_hook(command, None)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_slow_gate_and_a_hanging_store_still_answer_inside_the_deadline() {
+    let out = hanging_hook(
+        "echo x > a.txt; devkit todo start abcdef12",
+        Some(Duration::from_millis(1700)),
+    );
+    assert!(!out.contains("\"deny\""), "{out}");
+    assert!(
+        out.contains("DEVKIT_TODO_HOLDER='S/a1' devkit todo start abcdef12"),
+        "{out}"
+    );
+}
+
+/// [`with_a_hanging_ca_file`], and with `slow_gate`, write enforcement on
+/// and the lock registry held that long, so the write gate answers late.
+#[cfg(unix)]
+fn hanging_hook(command: &str, slow_gate: Option<Duration>) -> String {
     let dir = tempfile::tempdir().unwrap();
     let fifo = dir.path().join("ca.crt");
     let made = std::process::Command::new("mkfifo")
@@ -733,6 +754,30 @@ fn with_a_hanging_ca_file(command: &str) -> String {
     });
     let file = dir.path().join("payload.json");
     std::fs::write(&file, payload.to_string()).unwrap();
+    let holder = slow_gate.map(|delay| {
+        std::fs::write(
+            p.path.join("devkit.toml"),
+            "[harness]\nenforce_writes = true\n",
+        )
+        .unwrap();
+        let lock = p.state().join("locks.lock");
+        std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+        let (held, wait) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(lock)
+                .unwrap();
+            let mut lock = fd_lock::RwLock::new(file);
+            let _guard = lock.write().unwrap();
+            held.send(()).unwrap();
+            std::thread::sleep(delay);
+        });
+        wait.recv().unwrap();
+        holder
+    });
     let started = Instant::now();
     let out = p.shell(
         &format!(
@@ -742,7 +787,15 @@ fn with_a_hanging_ca_file(command: &str) -> String {
         &[(DATABASE_VAR, "postgres://agent@127.0.0.1:1/todos")],
     );
     let took = started.elapsed();
+    if let Some(holder) = holder {
+        holder.join().unwrap();
+    }
     assert!(out.status.success(), "{:?}: {}", out.status, stderr(&out));
-    assert!(took < Duration::from_secs(3), "the hook took {took:?}");
+    assert!(took < PRE_TOOL_USE_LIMIT, "the hook took {took:?}");
     stdout(&out)
 }
+
+/// Comfortably inside the 4 s the plugin manifest gives pre-tool-use: the
+/// hook's own deadline plus process start.
+#[cfg(unix)]
+const PRE_TOOL_USE_LIMIT: Duration = Duration::from_millis(3400);

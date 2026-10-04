@@ -233,13 +233,13 @@ pub(crate) fn check_claims(
     // A store that never answers is a store that failed: the check blocks
     // nothing rather than hold the hook until its harness lets the call
     // through anyway.
-    super::gate::with_deadline(CLAIM_CHECK_WAIT, check)
+    super::gate::with_deadline(super::within_deadline(CLAIM_CHECK_WAIT), check)
         .ok()
         .flatten()
 }
 
 /// How long the claim check waits for the store, setup included, before it
-/// blocks nothing.
+/// blocks nothing, when the hook's overall deadline leaves that long.
 const CLAIM_CHECK_WAIT: Duration = Duration::from_secs(1);
 
 /// A sub-agent's command with each `devkit todo` invocation prefixed by the

@@ -35,6 +35,8 @@ mod writes;
 use std::{
     io::{Read, Write},
     path::Path,
+    sync::OnceLock,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -297,6 +299,7 @@ pub(crate) fn legacy_lock_event(event: &str) -> Result<()> {
 /// Dispatch happens before any config load or tree-sitter work, so an edit
 /// or MCP payload pays nothing for the shell path.
 pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
+    let _ = ANSWER_BY.set(Instant::now() + PRE_TOOL_USE_DEADLINE);
     let Some(payload) = read_payload(harness, HookEvent::PreToolUse) else {
         return shell::deny_unreadable_payload(harness);
     };
@@ -310,6 +313,24 @@ pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
     // After the verdict is out, so a slow activity log never delays it.
     activity::observe_within(&payload, HookEvent::PreToolUse, &checkout, &cwd);
     verdict
+}
+
+/// How long pre-tool-use may run in all, from its start: clear of the four
+/// seconds the plugin manifest gives it, since a harness that times a hook
+/// out lets the call through. Every wait after the write gate's is cut to
+/// what is left of it.
+const PRE_TOOL_USE_DEADLINE: Duration = Duration::from_secs(3);
+
+/// When this process's pre-tool-use must have finished, once one started.
+static ANSWER_BY: OnceLock<Instant> = OnceLock::new();
+
+/// `wait` cut to the time left before this hook must have finished, zero
+/// once none is left. A hook with no overall deadline keeps `wait` whole.
+pub(crate) fn within_deadline(wait: Duration) -> Duration {
+    match ANSWER_BY.get() {
+        Some(at) => wait.min(at.saturating_duration_since(Instant::now())),
+        None => wait,
+    }
 }
 
 /// Write a hook's answer to stdout. A closed pipe or a full disk on the other
