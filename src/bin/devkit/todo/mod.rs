@@ -93,9 +93,7 @@ pub enum TodoCommand {
     /// reported on stderr and exits 0: changes stay saved and sync with the
     /// next write.
     Sync {
-        /// Give up at once when another sync is running or one failed in
-        /// the last minute. What a write starts after it commits.
-        #[arg(long, hide = true)]
+        #[arg(long, hide = true, help = sync::background_help())]
         background: bool,
         /// Write this sync's failure reason here. What a caller waiting on
         /// the sync passes, to learn its own result.
@@ -142,8 +140,7 @@ pub struct ListArgs {
     /// Print alacritree's task shape as JSON. Cancelled todos are left out.
     #[arg(long)]
     pub json: bool,
-    /// Sync the todo store before listing; waits up to 20 seconds.
-    #[arg(long)]
+    #[arg(long, help = sync::list_sync_help())]
     pub sync: bool,
 }
 

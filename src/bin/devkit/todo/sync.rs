@@ -127,6 +127,23 @@ pub(crate) fn run(
 /// How long a caller that wants fresh lists waits for a sync.
 pub(crate) const FRESH_WAIT: Duration = Duration::from_secs(20);
 
+/// `list --sync`'s help, so the wait it states is the one it waits.
+pub(crate) fn list_sync_help() -> String {
+    format!(
+        "Sync the todo store before listing; waits up to {} seconds",
+        FRESH_WAIT.as_secs()
+    )
+}
+
+/// `sync --background`'s help, stating the hold after a failure.
+pub(crate) fn background_help() -> String {
+    format!(
+        "Give up at once when another sync is running or one failed in the last {} seconds. \
+         What a write starts after it commits",
+        FAILURE_HOLD.as_secs()
+    )
+}
+
 /// How a sync a caller waited for ended.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SyncOutcome {
