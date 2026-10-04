@@ -143,6 +143,18 @@ const ATTRIBUTED: [Attributed; 2] = [CLAUDE_CODE, Attributed {
     session_var: "CODEX_SESSION_ID",
 }];
 
+/// A checkout whose hooks read commands as bash, with `harness` added to its
+/// `[harness]` table. Codex on Windows otherwise reads as PowerShell.
+fn bash_proj(harness: &str) -> Proj {
+    let p = Proj::new();
+    std::fs::write(
+        p.path.join("devkit.toml"),
+        format!("[harness]\nshell = \"bash\"\n{harness}"),
+    )
+    .unwrap();
+    p
+}
+
 /// `command` from sub-agent `agent` of session `S`, through the hook and then
 /// run the way the harness would run what the hook returned.
 fn run_as_sub_agent(p: &Proj, on: Attributed, agent: &str, command: &str) -> std::process::Output {
@@ -173,12 +185,7 @@ fn attribution_a_sub_agents_start_runs_as_the_sub_agent() {
 #[test]
 fn attribution_a_rewrite_carries_the_guards_note() {
     for on in ATTRIBUTED {
-        let p = Proj::new();
-        std::fs::write(
-            p.path.join("devkit.toml"),
-            "[harness]\nenforce_writes = true\nunresolved_writes = \"warn\"\n",
-        )
-        .unwrap();
+        let p = bash_proj("enforce_writes = true\nunresolved_writes = \"warn\"\n");
         let id = seed(&p, "a");
         let command = format!("echo x > \"$OUT\"; devkit todo start {id}");
         let out = p.hook("pre-tool-use", on.harness, &bash(&p, Some("a1"), &command));
@@ -203,7 +210,7 @@ fn attribution_a_rewrite_carries_the_guards_note() {
 #[test]
 fn attribution_a_command_that_never_reaches_the_todo_changes_nothing() {
     for on in ATTRIBUTED {
-        let p = Proj::new();
+        let p = bash_proj("");
         let id = seed(&p, "a");
         run_as_sub_agent(&p, on, "a1", &format!("false && devkit todo done {id}"));
         assert_eq!(p.todo(&id).status, Status::Pending, "{}", on.harness);
@@ -213,7 +220,7 @@ fn attribution_a_command_that_never_reaches_the_todo_changes_nothing() {
 #[test]
 fn attribution_start_then_done_credits_the_sub_agent() {
     for on in ATTRIBUTED {
-        let p = Proj::new();
+        let p = bash_proj("");
         let id = seed(&p, "a");
         let run = run_as_sub_agent(
             &p,
