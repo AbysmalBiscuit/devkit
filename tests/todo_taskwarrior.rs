@@ -285,17 +285,13 @@ fn the_default_listing_matches_nodes_with_quotes() {
 fn a_root_project_with_a_quote_is_refused() {
     let Some(tw) = Tw::configured(
         "proj",
-        "[todo]\nbackend = \"taskwarrior\"\n[todo.taskwarrior]\nproject = \"dev'kit\"\n",
+        "[todo]\nbackend = \"taskwarrior\"\nproject = \"dev'kit\"\n",
     ) else {
         return;
     };
     let add = tw.p.devkit(&["todo", "add", "one"], &tw.env(&[S1]));
     assert_eq!(add.status.code(), Some(1));
-    assert!(
-        stderr(&add).contains("[todo.taskwarrior] project"),
-        "{}",
-        stderr(&add)
-    );
+    assert!(stderr(&add).contains("[todo] project"), "{}", stderr(&add));
     assert!(tw.export().is_empty());
 }
 
@@ -359,7 +355,7 @@ fn tasks_outside_the_root_project_stay_out_of_the_cli() {
 fn a_root_project_from_config_scopes_the_cli() {
     let Some(tw) = Tw::configured(
         "proj",
-        "[todo]\nbackend = \"taskwarrior\"\n[todo.taskwarrior]\nproject = \"agents\"\n",
+        "[todo]\nbackend = \"taskwarrior\"\nproject = \"agents\"\n",
     ) else {
         return;
     };

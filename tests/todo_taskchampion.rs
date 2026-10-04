@@ -60,8 +60,8 @@ fn the_env_beats_the_home_config() {
 }
 
 #[test]
-fn the_replica_files_todos_under_the_taskwarrior_root() {
-    let p = Proj::with_home_config("[todo.taskwarrior]\nproject = \"agents\"\n");
+fn the_replica_files_todos_under_the_todo_root() {
+    let p = Proj::with_home_config("[todo]\nproject = \"agents\"\n");
     let out = p.devkit(&["todo", "add", "one"], &backend("taskchampion"));
     assert!(out.status.success(), "{}", stderr(&out));
     let under_agents = TaskchampionStore::at(replica_dir(&p)).with_root("agents");

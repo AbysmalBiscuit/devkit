@@ -198,11 +198,11 @@ impl Store {
     }
 
     fn taskwarrior(config: &TodoConfig) -> TaskwarriorStore {
-        TaskwarriorStore::new(&config.taskwarrior.path).with_root(&config.taskwarrior.project)
+        TaskwarriorStore::new(&config.taskwarrior.path).with_root(&config.project)
     }
 
     fn taskchampion(config: &TodoConfig) -> TaskchampionStore {
-        TaskchampionStore::at(data_dir(&config.taskchampion)).with_root(&config.taskwarrior.project)
+        TaskchampionStore::at(data_dir(&config.taskchampion)).with_root(&config.project)
     }
 
     /// The config a CLI call in `cwd` reads: `None` when there is none

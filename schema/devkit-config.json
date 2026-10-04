@@ -1335,11 +1335,6 @@
           "default": "task",
           "description": "The program to run. Its own name is looked up on PATH; any other value\nruns as written.",
           "type": "string"
-        },
-        "project": {
-          "default": "devkit",
-          "description": "The taskwarrior project devkit keeps every todo under. Global todos\nare filed on this project itself and every other node below it, as\n`<project>.<node>`, so devkit never lists, claims or releases a task\nin any other project. alacritree's taskwarrior tab shows these todos\nonly when it reads the same root. It may not hold `'` or `\"`: it is\nmatched inside taskwarrior filters, where no quoting survives both.",
-          "type": "string"
         }
       },
       "type": "object"
@@ -1481,12 +1476,17 @@
     },
     "TodoConfig": {
       "additionalProperties": false,
-      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskwarrior\"\n\n[todo.taskwarrior]\npath = \"/opt/task\"\nproject = \"agents\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n```",
+      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskwarrior\"\nproject = \"agents\"\n\n[todo.taskwarrior]\npath = \"/opt/task\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n```",
       "properties": {
         "backend": {
           "$ref": "#/$defs/TodoBackend",
           "default": "builtin",
-          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskwarrior` keeps them in the local taskwarrior\nthrough taskwarrior 3's `task` program, under the project\n`[todo.taskwarrior] project` names. `taskchampion` keeps them in a\ntaskchampion replica devkit embeds, under the same project, and can\nsync it to a directory or a sync server. Set it in\n`~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:\na committed `taskwarrior` breaks every machine without `task`, cloud\nsessions included. `DEVKIT_TODO_BACKEND`, when set, overrides it with\nthe same spellings."
+          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskwarrior` keeps them in the local taskwarrior\nthrough taskwarrior 3's `task` program, under the project `project`\nnames. `taskchampion` keeps them in a taskchampion replica devkit\nembeds, under the same project, and can sync it to a directory or a\nsync server. Set it in\n`~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:\na committed `taskwarrior` breaks every machine without `task`, cloud\nsessions included. `DEVKIT_TODO_BACKEND`, when set, overrides it with\nthe same spellings."
+        },
+        "project": {
+          "default": "devkit",
+          "description": "The project the `taskwarrior` and `taskchampion` backends keep every\ntodo under. Global todos are filed on this project itself and every\nother node below it, as `<project>.<node>`, so devkit never lists,\nclaims or releases a task in any other project. alacritree's\ntaskwarrior tab shows these todos only when it reads the same root.\nIt may not hold `'` or `\"`: it is matched inside taskwarrior filters,\nwhere no quoting survives both.",
+          "type": "string"
         },
         "taskchampion": {
           "$ref": "#/$defs/TaskchampionConfig",
@@ -1501,10 +1501,9 @@
         "taskwarrior": {
           "$ref": "#/$defs/TaskwarriorConfig",
           "default": {
-            "path": "task",
-            "project": "devkit"
+            "path": "task"
           },
-          "description": "The `taskwarrior` backend's settings. `project` also roots the\n`taskchampion` backend's todos."
+          "description": "The `taskwarrior` backend's settings."
         }
       },
       "type": "object"
@@ -1769,6 +1768,7 @@
       "$ref": "#/$defs/TodoConfig",
       "default": {
         "backend": "builtin",
+        "project": "devkit",
         "taskchampion": {
           "data_dir": null,
           "doppler_config": null,
@@ -1776,8 +1776,7 @@
           "server_dir": null
         },
         "taskwarrior": {
-          "path": "task",
-          "project": "devkit"
+          "path": "task"
         }
       },
       "description": "Where `devkit todo` and the todo hooks keep agent todo lists."

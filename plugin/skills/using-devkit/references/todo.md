@@ -39,7 +39,7 @@ Codex offers `update_plan` only when its config sets `[tools.update_plan] enable
 
 ## Backends
 
-The built-in store is the default: one file in devkit's state directory. `[todo] backend = "taskwarrior"` keeps the todos in the local taskwarrior instead, through taskwarrior 3's `task` program, all under one root project. Set it in `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`: a committed value breaks every machine without `task`, cloud sessions included. `[todo.taskwarrior] path` names another `task` program, and `[todo.taskwarrior] project` another root. Agents use `devkit todo` or their native tool on either backend.
+The built-in store is the default: one file in devkit's state directory. `[todo] backend = "taskwarrior"` keeps the todos in the local taskwarrior instead, through taskwarrior 3's `task` program, all under one root project. Set it in `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`: a committed value breaks every machine without `task`, cloud sessions included. `[todo.taskwarrior] path` names another `task` program, and `[todo] project` another root. Agents use `devkit todo` or their native tool on either backend.
 
 On taskwarrior:
 
@@ -56,7 +56,7 @@ On taskwarrior:
 
 ### Taskchampion
 
-`[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it for a container or cloud session, whose todos would otherwise be deleted with it, or to watch a session's lists from another machine. The replica holds the same tasks as the taskwarrior backend, under the same `[todo.taskwarrior] project` root, with the same ids. It lives in devkit's state directory unless `[todo.taskchampion] data_dir` names another.
+`[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it for a container or cloud session, whose todos would otherwise be deleted with it, or to watch a session's lists from another machine. The replica holds the same tasks as the taskwarrior backend, under the same `[todo] project` root, with the same ids. It lives in devkit's state directory unless `[todo.taskchampion] data_dir` names another.
 
 `DEVKIT_TODO_BACKEND=taskchampion` chooses it without a config change, so a container sets it next to the sync credentials and keeps loading the project's `devkit.toml`. It accepts the same values as `[todo] backend` and wins over it. `devkit doctor` shows the backend in effect and where it came from.
 
