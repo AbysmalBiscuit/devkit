@@ -140,6 +140,10 @@ pub struct TaskchampionStore {
     target: Option<SyncTarget>,
     /// Set while [`TaskchampionStore::while_locked`] holds the replica lock.
     held: Cell<bool>,
+    /// The target's server, built by the first sync and reused by the rest:
+    /// building one loads the certificate store and derives the encryption
+    /// key.
+    server: Cell<Option<Box<dyn Server>>>,
 }
 
 impl TaskchampionStore {
@@ -152,6 +156,7 @@ impl TaskchampionStore {
             lock_wait: None,
             target: None,
             held: Cell::new(false),
+            server: Cell::new(None),
         }
     }
 
@@ -175,6 +180,7 @@ impl TaskchampionStore {
     pub fn with_target(self, target: SyncTarget) -> Self {
         Self {
             target: Some(target),
+            server: Cell::new(None),
             ..self
         }
     }
@@ -201,9 +207,13 @@ impl TaskchampionStore {
             return Ok(());
         };
         self.locked(async |replica| {
-            let mut server = target.server().await?;
-            replica.sync(&mut server, false).await?;
-            Ok(())
+            let mut server = match self.server.take() {
+                Some(server) => server,
+                None => target.server().await?,
+            };
+            let synced = replica.sync(&mut server, false).await;
+            self.server.set(Some(server));
+            Ok(synced?)
         })
         .map_err(|e| match target {
             SyncTarget::Server { url, .. } => anyhow!(redacted(&format!("{e:#}"), url)),

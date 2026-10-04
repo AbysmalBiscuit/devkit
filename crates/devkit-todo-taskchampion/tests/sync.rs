@@ -69,15 +69,16 @@ fn sync_server() -> Stub {
     ])
 }
 
-fn pushed(server: &Stub) -> bool {
+fn pushes(server: &Stub) -> usize {
     server
         .requests()
         .iter()
-        .any(|r| r.method == "POST" && r.path.starts_with("/v1/client/add-version/"))
+        .filter(|r| r.method == "POST" && r.path.starts_with("/v1/client/add-version/"))
+        .count()
 }
 
 #[test]
-fn a_replica_pushes_to_a_sync_server() {
+fn a_replica_pushes_each_sync_to_a_sync_server() {
     let dir = tempfile::tempdir().unwrap();
     let server = sync_server();
     let store = TaskchampionStore::at(dir.path().join("a")).with_target(SyncTarget::Server {
@@ -87,5 +88,7 @@ fn a_replica_pushes_to_a_sync_server() {
     });
     add(&store, "pushed");
     store.sync_once().unwrap();
-    assert!(pushed(&server), "{:?}", server.requests());
+    add(&store, "pushed by a second sync");
+    store.sync_once().unwrap();
+    assert_eq!(pushes(&server), 2, "{:?}", server.requests());
 }
