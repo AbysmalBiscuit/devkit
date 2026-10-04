@@ -104,6 +104,32 @@ pub enum Edit {
     Purge(String),
 }
 
+/// One todo's status as an edit changed it, seen while the store held the
+/// lock it wrote under, so a recorder needs no read of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusChange {
+    pub todo: String,
+    pub node: String,
+    pub from: Status,
+    /// `None` when the edit removed the record.
+    pub to: Option<Status>,
+    /// When the store made the change, taken under that lock.
+    pub at: chrono::DateTime<chrono::Utc>,
+}
+
+impl StatusChange {
+    /// `todo` moving to `to`, now.
+    pub fn of(todo: &Todo, to: Option<Status>) -> Self {
+        Self {
+            todo: todo.id.clone(),
+            node: todo.node().to_string(),
+            from: todo.status.clone(),
+            to,
+            at: std::time::SystemTime::now().into(),
+        }
+    }
+}
+
 /// Where todos are kept. A backend that cannot apply an edit atomically
 /// documents the race.
 #[ambassador::delegatable_trait]

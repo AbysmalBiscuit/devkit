@@ -3,7 +3,8 @@
 //! starts from an empty store and uses only the ids `add` returns.
 
 use crate::{
-    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
+    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusChange, StatusKind, Todo,
+    TodoStore,
     activity::{Activity, ActivityLog, ClaimEnd, Interval, Recorded},
 };
 
@@ -33,6 +34,7 @@ macro_rules! contract_tests {
             get_returns_the_todo,
             move_reorder_and_relocate,
             filters_match_exact_and_subtree,
+            apply_reports_each_status_change_it_made,
             claiming_then_completing_records_one_completed_interval,
             releasing_records_each_released_interval,
             a_handed_claim_closes_one_interval_and_opens_the_next,
@@ -356,6 +358,63 @@ pub fn filters_match_exact_and_subtree(s: &impl TodoStore) {
     assert_eq!(projects(Filter::exact(["r".to_string()])), ["r"]);
     assert_eq!(projects(Filter::all()), ["r", "r-web", "r.main"]);
     assert!(projects(Filter { nodes: Vec::new() }).is_empty());
+}
+
+/// Each change as `(todo, from, to)`, sorted by todo.
+fn changed(changes: Vec<StatusChange>) -> Vec<(String, Status, Option<Status>)> {
+    for change in &changes {
+        assert_eq!(change.node, "r.main", "{change:?}");
+    }
+    let mut out: Vec<_> = changes
+        .into_iter()
+        .map(|c| (c.todo, c.from, c.to))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+fn claim_edit(id: &str, by: &str) -> Edit {
+    Edit::SetStatus {
+        id: id.into(),
+        to: StatusKind::InProgress,
+        actor: Holder::new(by),
+    }
+}
+
+pub fn apply_reports_each_status_change_it_made(s: &impl TodoStore) {
+    let (a, b) = (add(s, "a"), add(s, "b"));
+    assert_eq!(changed(s.apply(&claim_edit(&a, "S")).unwrap()), [(
+        a.clone(),
+        Status::Pending,
+        Some(in_progress("S"))
+    )]);
+    assert!(s.apply(&claim_edit(&a, "S")).unwrap().is_empty());
+    let described = s.apply(&Edit::Describe {
+        id: a.clone(),
+        description: "a2".into(),
+    });
+    assert!(described.unwrap().is_empty());
+    assert_eq!(changed(s.apply(&claim_edit(&a, "S/x")).unwrap()), [(
+        a.clone(),
+        in_progress("S"),
+        Some(in_progress("S/x"))
+    )]);
+    s.apply(&claim_edit(&b, "S")).unwrap();
+    let release = Edit::ReleaseAll {
+        holder: Holder::new("S"),
+    };
+    let mut want = vec![
+        (a.clone(), in_progress("S/x"), Some(Status::Pending)),
+        (b.clone(), in_progress("S"), Some(Status::Pending)),
+    ];
+    want.sort_by(|x, y| x.0.cmp(&y.0));
+    assert_eq!(changed(s.apply(&release).unwrap()), want);
+    s.apply(&claim_edit(&a, "S")).unwrap();
+    assert_eq!(changed(s.apply(&Edit::Purge(a.clone())).unwrap()), [(
+        a,
+        in_progress("S"),
+        None
+    )]);
 }
 
 /// `s` recording into a fresh log, and the guard that keeps the log alive.
