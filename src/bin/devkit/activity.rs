@@ -97,6 +97,7 @@ struct TypeTotal {
 #[derive(Serialize)]
 struct TodoHeld {
     todo: String,
+    /// The node of its latest interval.
     node: String,
     seconds: i64,
     intervals: Vec<IntervalRow>,
@@ -104,6 +105,8 @@ struct TodoHeld {
 
 #[derive(Serialize)]
 struct IntervalRow {
+    /// The node when the claim started.
+    node: String,
     holder: String,
     start: DateTime<Utc>,
     end: Option<DateTime<Utc>>,
@@ -159,6 +162,7 @@ impl Report {
                 continue;
             };
             let row = IntervalRow {
+                node: node.clone(),
                 holder: holder.to_string(),
                 start,
                 end,
@@ -167,6 +171,7 @@ impl Report {
             };
             match todos.iter_mut().find(|t| t.todo == todo) {
                 Some(held) => {
+                    held.node = node;
                     held.seconds += seconds;
                     held.intervals.push(row);
                 }
@@ -259,6 +264,44 @@ fn duration(seconds: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn t(minutes: i64) -> DateTime<Utc> {
+        "2026-10-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap() + TimeDelta::minutes(minutes)
+    }
+
+    fn held(node: &str, start: i64, end: i64) -> Interval {
+        Interval {
+            todo: "1".into(),
+            node: node.into(),
+            holder: devkit_todo::Holder::new("S"),
+            start: t(start),
+            end: Some(t(end)),
+            outcome: Some(ClaimEnd::Released),
+        }
+    }
+
+    #[test]
+    fn each_interval_keeps_its_node_and_the_todo_shows_its_latest() {
+        let activity = Activity {
+            runs: Vec::new(),
+            claims: vec![held("r.later", 10, 15), held("r.first", 0, 5)],
+        };
+        let range = Range {
+            since: t(-60),
+            until: t(60),
+            now: t(60),
+        };
+        let report = Report::of(activity, &range);
+        let todo = &report.todos[0];
+        let nodes: Vec<&str> = todo.intervals.iter().map(|i| i.node.as_str()).collect();
+        assert_eq!(nodes, ["r.first", "r.later"]);
+        assert_eq!(todo.node, "r.later");
+        let text = report.text();
+        assert!(
+            text.contains("r.later") && !text.contains("r.first"),
+            "{text}"
+        );
+    }
 
     #[test]
     fn durations_read_at_a_glance() {
