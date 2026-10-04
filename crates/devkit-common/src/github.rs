@@ -1,4 +1,4 @@
-//! Direct GitHub REST/GraphQL access over [`crate::http::agent`], for
+//! Direct GitHub REST/GraphQL access over [`crate::http::client`], for
 //! github.com and GitHub Enterprise Server alike.
 //!
 //! Auth reuses whatever `gh` already relies on for the host: `GH_TOKEN` or
@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::{
     forge::remote::same_host,
-    http::{agent, explain},
+    http::{self, StatusCode, client},
 };
 
 const UA: &str = "devkit";
@@ -150,13 +150,14 @@ impl Api {
     /// acceptance rule to the same request.
     fn graphql_request(&self, query: &str) -> Result<Value> {
         let _span = devkit_timing::io_span("github graphql", "graphql").entered();
-        Ok(agent()
-            .post(&self.graphql_url())
-            .set("Authorization", &self.bearer()?)
-            .set("User-Agent", UA)
-            .send_json(ureq::json!({ "query": query }))
-            .map_err(explain)?
-            .into_json()?)
+        Ok(http::send(
+            client()
+                .post(self.graphql_url())
+                .header("Authorization", self.bearer()?)
+                .header("User-Agent", UA)
+                .json(&serde_json::json!({ "query": query })),
+        )?
+        .json()?)
     }
 
     /// POST a raw GraphQL query. The response envelope is returned whole
@@ -187,16 +188,17 @@ impl Api {
     /// or transport error.
     pub fn rest_get_opt(&self, path: &str) -> Result<Option<Value>> {
         let _span = devkit_timing::io_span("github REST", path).entered();
-        let resp = agent()
-            .get(&format!("{}{path}", self.rest_base()))
-            .set("Authorization", &self.bearer()?)
-            .set("User-Agent", UA)
-            .set("Accept", "application/vnd.github+json")
-            .call();
+        let resp = http::send(
+            client()
+                .get(format!("{}{path}", self.rest_base()))
+                .header("Authorization", self.bearer()?)
+                .header("User-Agent", UA)
+                .header("Accept", "application/vnd.github+json"),
+        );
         match resp {
-            Ok(r) => Ok(Some(r.into_json()?)),
-            Err(ureq::Error::Status(404, _)) => Ok(None),
-            Err(e) => Err(explain(e)),
+            Ok(r) => Ok(Some(r.json()?)),
+            Err(e) if http::status(&e) == Some(StatusCode::NOT_FOUND) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 

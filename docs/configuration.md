@@ -161,3 +161,5 @@ Env-only tuning knobs with no `config.toml` equivalent. The `[daemon]` keys, `[p
 ### TLS trust
 
 Every devkit HTTPS call (GitHub, Linear, Slack, and the package registries `docm add` queries) trusts the Mozilla roots bundled into the binary plus the machine's certificate store. A CA installed there by an intercepting proxy, a corporate network, or a GitHub Enterprise instance is trusted with no devkit setting. `SSL_CERT_FILE` (a PEM bundle) and `SSL_CERT_DIR` (a colon-separated list of directories), when set, replace the platform store as the second source. Certificate verification cannot be turned off. A rejected certificate reports `TLS certificate not trusted` and names the store devkit checked.
+
+These calls go through the proxy `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` names, except to the hosts `NO_PROXY` lists.

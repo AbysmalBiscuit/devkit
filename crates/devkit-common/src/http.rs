@@ -5,24 +5,46 @@
 //! GitHub Enterprise instance's internal CA gets installed. `SSL_CERT_FILE`
 //! and `SSL_CERT_DIR`, when set, name that store in place of the platform
 //! one. Certificate verification is always on; nothing turns it off.
+//! `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are read once, when
+//! the client is built.
 
-use std::{
-    env,
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::{env, sync::OnceLock, time::Duration};
 
-/// One pooled agent for the whole process so repeated calls reuse the TCP/TLS
-/// connection instead of dialing afresh each time.
-pub fn agent() -> &'static ureq::Agent {
-    static A: OnceLock<ureq::Agent> = OnceLock::new();
-    A.get_or_init(|| {
-        ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout_read(Duration::from_secs(30))
-            .tls_config(Arc::new(tls_config()))
+pub use reqwest::StatusCode;
+use reqwest::blocking::{Client, RequestBuilder, Response};
+
+/// One pooled client for the whole process, so repeated calls reuse the
+/// TCP/TLS connection, and the thread a blocking client runs on starts once.
+pub fn client() -> &'static Client {
+    static C: OnceLock<Client> = OnceLock::new();
+    C.get_or_init(|| {
+        Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .use_preconfigured_tls(tls_config())
             .build()
+            .expect("a client with a preconfigured rustls config builds")
     })
+}
+
+/// Sends `req`. A non-2xx status is an error, as a transport failure is, and
+/// both go through [`explain`]; [`status`] reads the status back.
+pub fn send(req: RequestBuilder) -> anyhow::Result<Response> {
+    req.send()
+        .and_then(Response::error_for_status)
+        .map_err(explain)
+}
+
+/// The HTTP status a [`send`] error carries, `None` when no response came.
+pub fn status(e: &anyhow::Error) -> Option<StatusCode> {
+    e.downcast_ref::<reqwest::Error>()?.status()
+}
+
+/// Whether `e` is a request that never got a response: the host did not
+/// resolve, refused, or timed out.
+pub fn is_unreachable(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<reqwest::Error>()
+        .is_some_and(|e| e.is_connect() || e.is_timeout())
 }
 
 fn tls_config() -> rustls::ClientConfig {
@@ -62,8 +84,8 @@ impl std::fmt::Display for UntrustedCertificate {
 /// Wrap a request error for `?`. A rejected server certificate gains an
 /// [`UntrustedCertificate`] context naming the trust store devkit checked, so
 /// it reads as a trust problem rather than a bad token or a down host. The
-/// `ureq::Error` stays reachable through `downcast_ref`.
-pub fn explain(e: ureq::Error) -> anyhow::Error {
+/// `reqwest::Error` stays reachable through `downcast_ref`.
+pub fn explain(e: reqwest::Error) -> anyhow::Error {
     let Some(cert) = certificate_error(&e) else {
         return e.into();
     };
@@ -74,20 +96,18 @@ pub fn explain(e: ureq::Error) -> anyhow::Error {
     anyhow::Error::new(e).context(context)
 }
 
-/// rustls reports a rejected certificate inside an `io::Error`, whose
-/// `source()` skips the wrapped error, so each link is unwrapped by hand.
-fn certificate_error(e: &ureq::Error) -> Option<&rustls::CertificateError> {
+/// rustls reports a rejected certificate inside nested `io::Error`s, whose
+/// `source()` skips the wrapped error, so each one is unwrapped by hand.
+fn certificate_error(e: &reqwest::Error) -> Option<&rustls::CertificateError> {
     let mut link = std::error::Error::source(e);
     while let Some(err) = link {
-        let tls = err.downcast_ref::<rustls::Error>().or_else(|| {
-            err.downcast_ref::<std::io::Error>()
-                .and_then(|io| io.get_ref())
-                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
-        });
-        if let Some(rustls::Error::InvalidCertificate(cert)) = tls {
+        if let Some(rustls::Error::InvalidCertificate(cert)) = err.downcast_ref() {
             return Some(cert);
         }
-        link = err.source();
+        link = match err.downcast_ref::<std::io::Error>() {
+            Some(io) => io.get_ref().map(|inner| inner as _),
+            None => err.source(),
+        };
     }
     None
 }

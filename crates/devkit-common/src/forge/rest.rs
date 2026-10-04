@@ -2,9 +2,11 @@
 //! (GitLab, Forgejo), plus a loopback stub server their tests drive it with.
 
 use anyhow::{Context, Result};
+pub use reqwest::Method;
+use reqwest::blocking::RequestBuilder;
 use serde_json::Value;
 
-use crate::http::{agent, explain};
+use crate::http::{self, StatusCode, client};
 
 const UA: &str = "devkit";
 
@@ -39,13 +41,13 @@ impl Rest {
         &self.base
     }
 
-    fn request(&self, method: &str, path: &str) -> ureq::Request {
-        let mut req = agent()
-            .request(method, &format!("{}{path}", self.base))
-            .set("User-Agent", UA)
-            .set("Accept", "application/json");
+    fn request(&self, method: Method, path: &str) -> RequestBuilder {
+        let mut req = client()
+            .request(method, format!("{}{path}", self.base))
+            .header("User-Agent", UA)
+            .header("Accept", "application/json");
         if let Some((header, value)) = &self.auth {
-            req = req.set(header, value);
+            req = req.header(*header, value);
         }
         req
     }
@@ -53,10 +55,10 @@ impl Rest {
     /// GET `path`. `Ok(None)` on 404, a clean "absent" the caller can act on.
     pub fn get_opt(&self, path: &str) -> Result<Option<Value>> {
         let _span = devkit_timing::io_span("forge REST", path).entered();
-        match self.request("GET", path).call() {
-            Ok(r) => Ok(Some(r.into_json().context("parsing a forge response")?)),
-            Err(ureq::Error::Status(404, _)) => Ok(None),
-            Err(e) => Err(explain(e)).with_context(|| format!("GET {path}")),
+        match http::send(self.request(Method::GET, path)) {
+            Ok(r) => Ok(Some(r.json().context("parsing a forge response")?)),
+            Err(e) if http::status(&e) == Some(StatusCode::NOT_FOUND) => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("GET {path}")),
         }
     }
 
@@ -69,28 +71,23 @@ impl Rest {
     /// GET one page of a list endpoint, with the number of the next page.
     pub fn get_page(&self, path: &str) -> Result<Page> {
         let _span = devkit_timing::io_span("forge REST", path).entered();
-        let resp = self
-            .request("GET", path)
-            .call()
-            .map_err(explain)
-            .with_context(|| format!("GET {path}"))?;
-        let next = next_page(resp.header("x-next-page"), resp.header("link"));
+        let resp =
+            http::send(self.request(Method::GET, path)).with_context(|| format!("GET {path}"))?;
+        let header = |name| resp.headers().get(name).and_then(|v| v.to_str().ok());
+        let next = next_page(header("x-next-page"), header("link"));
         Ok(Page {
-            body: resp.into_json().context("parsing a forge response")?,
+            body: resp.json().context("parsing a forge response")?,
             next,
         })
     }
 
     /// Send `body` with `method` (`POST`, `PUT`, `PATCH`) and return the
     /// response body, or `Value::Null` when the forge answers with none.
-    pub fn send(&self, method: &str, path: &str, body: &Value) -> Result<Value> {
+    pub fn send(&self, method: Method, path: &str, body: &Value) -> Result<Value> {
         let _span = devkit_timing::io_span("forge REST", path).entered();
-        let resp = self
-            .request(method, path)
-            .send_json(body)
-            .map_err(explain)
+        let resp = http::send(self.request(method.clone(), path).json(body))
             .with_context(|| format!("{method} {path}"))?;
-        let text = resp.into_string().context("reading a forge response")?;
+        let text = resp.text().context("reading a forge response")?;
         if text.trim().is_empty() {
             return Ok(Value::Null);
         }
@@ -316,7 +313,8 @@ mod tests {
         assert_eq!(page.body, json!([1, 2]));
         assert_eq!(page.next, Some(2));
         assert_eq!(
-            rest.send("PUT", "/thing", &json!({"x": true})).unwrap(),
+            rest.send(Method::PUT, "/thing", &json!({"x": true}))
+                .unwrap(),
             Value::Null
         );
 

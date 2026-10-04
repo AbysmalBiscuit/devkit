@@ -25,7 +25,6 @@ clap_complete_nushell.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 schemars.workspace = true
-ureq.workspace = true
 rpassword.workspace = true
 toml.workspace = true
 fd-lock.workspace = true
@@ -112,15 +111,17 @@ supports-hyperlinks = "3"
 strum = { version = "0.27", features = ["derive"] }
 pabal = { version = "0.2", features = ["clap"] }
 ambassador = "0.5.1"
-ureq = { version = "2", features = ["json", "proxy-from-env"] }
+# The 0.12 line taskchampion builds on, so the binary links one HTTP stack.
+# Roots come from `http::tls_config`, handed in as a preconfigured rustls config.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-manual-roots"] }
 # An embedded taskchampion replica. Stays on the 2.0.2 line taskwarrior pins,
 # so its wire format matches the `task` a person reads the lists with.
 taskchampion = { version = "~2.0.2", default-features = false, features = ["server-sync", "bundled"] }
-# ureq's TLS stack. Default features off: they pull aws-lc-rs, ureq uses ring.
+# reqwest's TLS stack. Default features off: they pull aws-lc-rs, reqwest uses ring.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 webpki-roots = "0.26"
 rustls-native-certs = "0.8"
-# Already in the tree under ureq's TLS stack, so taking it directly for
+# Already in the tree under reqwest's TLS stack, so taking it directly for
 # `harness_log`'s digest adds no crate to the lock.
 ring = "0.17"
 rpassword = "7"
