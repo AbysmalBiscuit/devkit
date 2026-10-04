@@ -805,3 +805,39 @@ fn each_waited_sync_reports_its_own_result() {
         stderr(&failing)
     );
 }
+
+#[test]
+fn a_capture_cut_short_by_a_busy_replica_applies_once() {
+    let p = Proj::new();
+    let write = json!({
+        "session_id": SESSION,
+        "cwd": p.path,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "TodoWrite",
+        "tool_input": {"todos": [
+            {"content": "a", "status": "pending"},
+            {"content": "b", "status": "in_progress"},
+        ]},
+        "tool_response": {},
+    });
+    let env = [
+        ("DEVKIT_TODO_BACKEND", "taskchampion"),
+        ("DEVKIT_TODO_TEST_LOCK_BUSY_AFTER", "1"),
+    ];
+    let out = p.hook_with("post-tool-use", "claude-code", &write, &env);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+
+    let next = p.devkit(&["todo", "add", "next"], &backend("taskchampion"));
+    assert!(next.status.success(), "{}", stderr(&next));
+    let mut todos: Vec<(String, StatusKind)> = replica(&p)
+        .into_iter()
+        .map(|t| (t.description, t.status.kind()))
+        .collect();
+    todos.sort_by(|x, y| x.0.cmp(&y.0));
+    assert_eq!(todos, [
+        ("a".to_string(), StatusKind::Pending),
+        ("b".to_string(), StatusKind::InProgress),
+        ("next".to_string(), StatusKind::Pending),
+    ]);
+}

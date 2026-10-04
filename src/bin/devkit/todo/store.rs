@@ -240,6 +240,15 @@ impl Store {
         }
     }
 
+    /// Runs `f` with taskchampion's replica lock held throughout, so a busy
+    /// lock stops all of `f`'s writes or none. Other backends just run `f`.
+    pub(crate) fn while_locked<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        match self {
+            Self::Taskchampion(replica) => replica.store.while_locked(f),
+            _ => f(),
+        }
+    }
+
     /// Where hook writes queue while the replica lock is busy: `None` for a
     /// backend whose writes always wait.
     pub(crate) fn queue_dir(&self) -> Option<&Path> {

@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     fmt,
     path::{Path, PathBuf},
     time::Duration,
@@ -84,6 +85,31 @@ fn redacted(text: &str, url: &str) -> String {
         })
 }
 
+/// Debug builds only: with `DEVKIT_TODO_TEST_LOCK_BUSY_AFTER=<n>`, every
+/// replica lock acquisition after the first `n` in this process reports
+/// [`LockBusy`], so a test can find the lock busy at an exact write.
+fn busy_failpoint(lock: &Path) -> Result<()> {
+    #[cfg(debug_assertions)]
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static TAKEN: AtomicUsize = AtomicUsize::new(0);
+        let allowed = std::env::var("DEVKIT_TODO_TEST_LOCK_BUSY_AFTER")
+            .ok()
+            .and_then(|n| n.parse::<usize>().ok());
+        if let Some(allowed) = allowed
+            && TAKEN.fetch_add(1, Ordering::SeqCst) >= allowed
+        {
+            return Err(anyhow::Error::new(LockBusy {
+                path: lock.to_path_buf(),
+                wait: Duration::ZERO,
+            })
+            .context("todo store busy"));
+        }
+    }
+    let _ = lock;
+    Ok(())
+}
+
 /// Todos kept in the taskchampion replica at `data_dir`, under one root
 /// project. A task outside the root is never a todo.
 pub struct TaskchampionStore {
@@ -91,6 +117,8 @@ pub struct TaskchampionStore {
     root: String,
     lock_wait: Option<Duration>,
     target: Option<SyncTarget>,
+    /// Set while [`TaskchampionStore::while_locked`] holds the replica lock.
+    held: Cell<bool>,
 }
 
 impl TaskchampionStore {
@@ -102,6 +130,7 @@ impl TaskchampionStore {
             root: DEFAULT_ROOT.to_string(),
             lock_wait: None,
             target: None,
+            held: Cell::new(false),
         }
     }
 
@@ -161,10 +190,32 @@ impl TaskchampionStore {
     /// SQLite's busy timeout, so devkit's processes queue on this lock instead
     /// of failing on a busy database.
     fn locked<T>(&self, f: impl FnOnce(&mut Replica) -> Result<T>) -> Result<T> {
+        match self.held.get() {
+            true => f(&mut self.open()?),
+            false => self.hold(|| f(&mut self.open()?)),
+        }
+    }
+
+    /// Runs `f` with the replica lock held throughout, so every write `f`
+    /// makes through this store lands under that one hold. A busy lock fails
+    /// before `f` starts, never between two of its writes.
+    pub fn while_locked<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        if self.held.get() {
+            return f();
+        }
+        self.hold(|| {
+            self.held.set(true);
+            let out = f();
+            self.held.set(false);
+            out
+        })
+    }
+
+    fn hold<T>(&self, run: impl FnOnce() -> Result<T>) -> Result<T> {
         std::fs::create_dir_all(&self.data_dir)
             .with_context(|| format!("creating the todo replica at {}", self.data_dir.display()))?;
         let lock = self.data_dir.join("devkit.lock");
-        let run = || f(&mut self.open()?);
+        busy_failpoint(&lock)?;
         match self.lock_wait {
             Some(wait) => {
                 with_file_lock_for(&lock, wait, run).map_err(|e| match e.is::<LockBusy>() {
