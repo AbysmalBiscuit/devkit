@@ -50,9 +50,7 @@ Run the hook tests from any directory:
 python3 -B /absolute/path/to/repo/.agents/skills/cloud/scripts/cloud.test.py
 ```
 
-The tests require devkit on PATH and Python with tomllib. They exercise local no-op behavior, config generation in a path containing spaces, settings-based hook invocation, startup context, per-harness task tool naming, devkit reported present and absent, read-only recovery, pinned installs and bootstrap stamps against a `file://` stand-in for GitHub set through `CLOUD_SETUP_GITHUB`, and a patch commit through devkit that preserves unrelated staging. They use temporary directories and perform no downloads.
-
-The patch commit test additionally needs a Git whose `merge-tree` accepts tree arguments, because `git-commit-patch.py` merges the selected and staged trees directly. Git 2.43 rejects that. An older Git skips the test and names the reason instead of failing.
+The tests require devkit on PATH and Python with tomllib. They exercise local no-op behavior, config generation in a path containing spaces, settings-based hook invocation, startup context, per-harness task tool naming, devkit reported present and absent, read-only recovery, pinned installs and bootstrap stamps against a `file://` stand-in for GitHub set through `CLOUD_SETUP_GITHUB`, and a patch commit through devkit that preserves unrelated staging, refuses a patch overlapping staged lines, and reports a merge that cannot run as that failure rather than an overlap. They use temporary directories and perform no downloads.
 
 `pyproject.toml` pins the linter and the type checker. Run both from this directory:
 

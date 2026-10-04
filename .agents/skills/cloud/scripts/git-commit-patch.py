@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 REDIRECTING_ENV = {
@@ -31,6 +31,12 @@ OPERATION_PATHS = (
     "rebase-apply",
     "sequencer",
 )
+THROWAWAY_IDENTITY = {
+    "GIT_AUTHOR_NAME": "git-commit-patch",
+    "GIT_AUTHOR_EMAIL": "git-commit-patch@localhost",
+    "GIT_COMMITTER_NAME": "git-commit-patch",
+    "GIT_COMMITTER_EMAIL": "git-commit-patch@localhost",
+}
 
 
 class CommitError(Exception):
@@ -199,6 +205,13 @@ def check_merge_drivers(git: Git, base: str, selected: str, prior: str, empty_in
             )
 
 
+def wrap_tree(git: Git, tree: str) -> str:
+    """An unreferenced commit holding `tree`, for `git merge-tree`, which takes only
+    commits on some Git versions that support `--write-tree`, such as 2.43."""
+    throwaway = replace(git, env={**git.env, **THROWAWAY_IDENTITY})
+    return throwaway.text("commit-tree", "--no-gpg-sign", "-m", "git-commit-patch merge input", tree)
+
+
 def commit_patch(patch: Path, message: str) -> int:
     env = {key: value for key, value in os.environ.items() if key not in REDIRECTING_ENV}
     git = Git(Path.cwd(), env)
@@ -253,6 +266,9 @@ def commit_patch(patch: Path, message: str) -> int:
         if selected_tree == base_tree:
             raise CommitError("patch contains no changes relative to HEAD")
         check_merge_drivers(git, base_tree, selected_tree, prior_tree, scratch / "attributes.index")
+        merge_base, ours, theirs = (
+            wrap_tree(git, tree) for tree in (base_tree, selected_tree, prior_tree)
+        )
         merged = git.run(
             "-c",
             "merge.renames=false",
@@ -260,15 +276,20 @@ def commit_patch(patch: Path, message: str) -> int:
             "merge.renormalize=false",
             "merge-tree",
             "--write-tree",
-            f"--merge-base={base_tree}",
-            selected_tree,
-            prior_tree,
+            f"--merge-base={merge_base}",
+            ours,
+            theirs,
             check=False,
         )
-        if merged.returncode:
+        if merged.returncode == 1:
             raise CommitError(
                 "patch overlaps staged changes; HEAD and the shared index are unchanged\n"
                 + (merged.stderr + merged.stdout).decode(errors="replace"),
+            )
+        if merged.returncode:
+            detail = merged.stderr.decode(errors="replace").strip()
+            raise CommitError(
+                f"git merge-tree could not run; HEAD and the shared index are unchanged\n{detail}",
                 merged.returncode,
             )
         merged_tree = merged.stdout.decode().splitlines()[0]
