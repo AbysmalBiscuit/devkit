@@ -739,6 +739,7 @@ impl Tracker for GithubTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tracker::fixture;
 
     fn repo(slug: &str) -> Repo {
         Repo {
@@ -754,16 +755,6 @@ mod tests {
             url: format!("https://github.com/{repo}/pull/{number}"),
             repo: repo.to_string(),
         }
-    }
-
-    fn fixture(name: &str) -> serde_json::Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/tracker/fixtures")
-            .join(name);
-        let data = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("reading fixture {}: {e}", path.display()));
-        serde_json::from_str(&data)
-            .unwrap_or_else(|e| panic!("parsing fixture {}: {e}", path.display()))
     }
 
     #[test]

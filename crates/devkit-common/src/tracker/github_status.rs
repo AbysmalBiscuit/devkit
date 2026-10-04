@@ -344,13 +344,7 @@ impl StatusWriter for GithubWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn fixture(name: &str) -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/tracker/fixtures")
-            .join(name);
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
-    }
+    use crate::tracker::fixture;
 
     #[test]
     fn reads_the_configured_projects_item_only() {

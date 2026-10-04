@@ -130,13 +130,7 @@ impl StatusWriter for LinearWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn fixture(name: &str) -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/tracker/fixtures")
-            .join(name);
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
-    }
+    use crate::tracker::fixture;
 
     #[test]
     fn reads_the_issue_its_state_and_its_teams_states() {

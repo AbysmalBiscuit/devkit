@@ -272,6 +272,18 @@ fn detect(cwd: &Path, github_host: &str, linear_key: Option<&str>) -> TrackerKin
     TrackerKind::None
 }
 
+/// The recorded response `src/tracker/fixtures/<name>`, parsed.
+#[cfg(test)]
+pub(crate) fn fixture(name: &str) -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/tracker/fixtures")
+        .join(name);
+    let data = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading fixture {}: {e}", path.display()));
+    serde_json::from_str(&data)
+        .unwrap_or_else(|e| panic!("parsing fixture {}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
