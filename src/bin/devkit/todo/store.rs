@@ -18,7 +18,7 @@ use devkit_config::{
 };
 use devkit_todo::{
     TodoStore,
-    activity::{ActivityLog, ActivityStore, Recorded, ambassador_impl_ActivityStore},
+    activity::{ActivityLog, ActivityStore, Recorded, ambassador_impl_ActivityStore, segment},
     ambassador_impl_TodoStore,
 };
 use devkit_todo_builtin::BuiltinStore;
@@ -208,14 +208,24 @@ struct CachedUrl {
     url: String,
 }
 
-fn url_cache_path() -> PathBuf {
-    devkit_todo::state_dir().join("database-url.json")
+/// Where the URL Doppler gave for `scope` is kept: one file per project and
+/// config, so projects on one machine never displace each other's URL. The
+/// file's modification time is the URL's age.
+fn url_cache_path(scope: &DopplerScope) -> PathBuf {
+    let mut name = segment(&scope.project);
+    if let Some(config) = &scope.config {
+        name.push('+');
+        name.push_str(&segment(config));
+    }
+    devkit_todo::state_dir()
+        .join("database-url")
+        .join(name + ".json")
 }
 
 /// The cached URL for `scope`, when one is younger than `max_age` or no
 /// `max_age` applies.
 fn cached_url(scope: &DopplerScope, max_age: Option<Duration>) -> Option<String> {
-    let path = url_cache_path();
+    let path = url_cache_path(scope);
     let age = std::fs::metadata(&path)
         .ok()?
         .modified()
@@ -237,7 +247,7 @@ fn cache_url(scope: &DopplerScope, url: &str) {
         config: scope.config.clone(),
         url: url.to_string(),
     };
-    let path = url_cache_path();
+    let path = url_cache_path(scope);
     let Ok(body) = serde_json::to_vec(&cached) else {
         return;
     };
@@ -299,12 +309,11 @@ pub(crate) fn open_database(
         ca_file: config.ca_file.as_deref().map(expand_tilde),
     };
     let db = Database::new(&url, wait, &trust).map_err(|e| format!("{DATABASE_VAR}: {e:#}"));
-    if let (Ok(db), Source::Doppler) = (&db, &source) {
-        if let Some(scope) = &scope {
-            cache_url(scope, &url);
-        }
-        db.on_connect_failure(|| {
-            let _ = std::fs::remove_file(url_cache_path());
+    if let (Ok(db), Source::Doppler, Some(scope)) = (&db, &source, &scope) {
+        cache_url(scope, &url);
+        let path = url_cache_path(scope);
+        db.on_connect_failure(move || {
+            let _ = std::fs::remove_file(&path);
         });
     }
     (db, source)

@@ -276,7 +276,7 @@ fn open_creating(path: &Path, options: &OpenOptions) -> std::io::Result<File> {
 
 /// `id` as one path segment: every byte outside `[A-Za-z0-9_-]` as `%XX`, so
 /// distinct ids never share a file and none escapes the directory.
-fn segment(id: &str) -> String {
+pub fn segment(id: &str) -> String {
     id.bytes()
         .map(|b| match b {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' => (b as char).to_string(),

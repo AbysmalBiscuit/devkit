@@ -450,10 +450,15 @@ fn doppler_calls(dir: &std::path::Path) -> usize {
 
 #[cfg(unix)]
 fn doppler_proj(root: &str) -> Proj {
-    Proj::with_home_config(&format!(
+    Proj::with_home_config(&doppler_config(root, "swarm"))
+}
+
+#[cfg(unix)]
+fn doppler_config(root: &str, project: &str) -> String {
+    format!(
         "[todo]\nbackend = \"postgres\"\nproject = \"{root}\"\n\
-         [todo.postgres]\ndoppler_project = \"swarm\"\n"
-    ))
+         [todo.postgres]\ndoppler_project = \"{project}\"\n"
+    )
 }
 
 #[cfg(unix)]
@@ -486,12 +491,10 @@ fn hooks_reuse_the_url_doppler_gave() {
     .unwrap()
     .runs;
     assert_eq!(runs.len(), 3, "{runs:?}");
-    let cached = std::fs::read_dir(p.state().join("todo"))
-        .unwrap()
-        .flatten()
-        .find(|e| e.file_name().to_string_lossy().contains("database-url"))
-        .expect("the URL is cached under the state directory");
-    let mode = cached.metadata().unwrap().permissions().mode();
+    let mode = std::fs::metadata(cached_url_file(&p))
+        .expect("the URL is cached under the state directory")
+        .permissions()
+        .mode();
     assert_eq!(mode & 0o777, 0o600, "{mode:o}");
 }
 
@@ -517,9 +520,11 @@ fn a_hook_that_cannot_connect_asks_doppler_again() {
     assert_eq!(doppler_calls(bin.path()), 2);
 }
 
+/// Where the URL Doppler gave for the `swarm` project, with no config, is
+/// kept.
 #[cfg(unix)]
 fn cached_url_file(p: &Proj) -> std::path::PathBuf {
-    p.state().join("todo/database-url.json")
+    p.state().join("todo/database-url/swarm.json")
 }
 
 #[cfg(unix)]
@@ -587,6 +592,37 @@ fn session_end_releases_through_a_stale_cached_url() {
     let out = p.hook_with("session-end", "claude-code", &end, &borrowed(&env));
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(started.elapsed() < HOOK_BUDGET, "{:?}", started.elapsed());
+    assert_eq!(doppler_calls(bin.path()), calls);
+    let todos = store(&url, &root).list(&Filter::all()).unwrap();
+    assert_eq!(todos[0].status, Status::Pending, "{todos:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn another_scopes_url_leaves_this_ones_session_end_working() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    let root = fresh_root();
+    let p = doppler_proj(&root);
+    let bin = tempfile::tempdir().unwrap();
+    let path = fake_doppler(bin.path(), &url);
+    let env = [
+        ("PATH", path.clone()),
+        ("CLAUDE_CODE_SESSION_ID", "S".to_string()),
+    ];
+    let id = added(&p, "held", &env);
+    let out = devkit(&p, &["todo", "start", &id], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    std::fs::write(p.home_config(), doppler_config(&root, "other")).unwrap();
+    let out = devkit(&p, &["todo", "list"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    std::fs::write(p.home_config(), doppler_config(&root, "swarm")).unwrap();
+    let calls = doppler_calls(bin.path());
+
+    let end = json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path});
+    let out = p.hook_with("session-end", "claude-code", &end, &borrowed(&env));
+    assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(doppler_calls(bin.path()), calls);
     let todos = store(&url, &root).list(&Filter::all()).unwrap();
     assert_eq!(todos[0].status, Status::Pending, "{todos:?}");
