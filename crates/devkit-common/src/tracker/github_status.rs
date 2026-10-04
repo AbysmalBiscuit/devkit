@@ -16,10 +16,6 @@ use crate::{
     github::{Api, TokenSource},
 };
 
-fn quoted(s: &str) -> Value {
-    Value::from(s)
-}
-
 /// The project's status field, read through `repositoryOwner`, which resolves
 /// a user or an organization alike. A bare project number belongs to the
 /// owner of `slug`.
@@ -34,9 +30,9 @@ fn board_fields(slug: &str, project: &ProjectRef, field: &str) -> String {
       }}
     }}
   }}"#,
-        po = quoted(project.owner.as_deref().unwrap_or(repo_owner)),
+        po = Value::from(project.owner.as_deref().unwrap_or(repo_owner)),
         p = project.number,
-        f = quoted(field),
+        f = Value::from(field),
     )
 }
 
@@ -65,9 +61,9 @@ pub fn status_query(slug: &str, issue: u64, project: &ProjectRef, field: &str) -
   }}
   {board}
 }}"#,
-        o = quoted(owner),
-        n = quoted(name),
-        f = quoted(field),
+        o = Value::from(owner),
+        n = Value::from(name),
+        f = Value::from(field),
         board = board_fields(slug, project, field),
     )
 }
@@ -217,8 +213,8 @@ pub fn check(resp: &Value, source: TokenSource) -> Result<()> {
 pub fn add_item_mutation(project_id: &str, content_id: &str) -> String {
     format!(
         "mutation {{ addProjectV2ItemById(input: {{projectId: {p}, contentId: {c}}}) {{ item {{ id }} }} }}",
-        p = quoted(project_id),
-        c = quoted(content_id),
+        p = Value::from(project_id),
+        c = Value::from(content_id),
     )
 }
 
@@ -238,10 +234,10 @@ pub fn set_field_mutation(
 ) -> String {
     format!(
         "mutation {{ updateProjectV2ItemFieldValue(input: {{projectId: {p}, itemId: {i}, fieldId: {f}, value: {{singleSelectOptionId: {o}}}}}) {{ projectV2Item {{ id }} }} }}",
-        p = quoted(project_id),
-        i = quoted(item_id),
-        f = quoted(field_id),
-        o = quoted(option_id),
+        p = Value::from(project_id),
+        i = Value::from(item_id),
+        f = Value::from(field_id),
+        o = Value::from(option_id),
     )
 }
 
@@ -457,7 +453,10 @@ mod tests {
             "Status",
         );
         assert!(q.contains("repositoryOwner(login: \"org\")"), "{q}");
-        assert!(q.contains("projectItems(first: 100"), "a full page of items: {q}");
+        assert!(
+            q.contains("projectItems(first: 100"),
+            "a full page of items: {q}"
+        );
         assert!(
             q.contains("projectV2(number: 7)") && q.contains("issue(number: 65)"),
             "{q}"
