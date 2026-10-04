@@ -158,25 +158,17 @@ impl Payload {
         response.map(|r| r.to_string())
     }
 
-    /// A Claude Code `PreToolUse` answer that runs `command` in place of the
-    /// shell command the payload carries, adding `context` when given. It
-    /// sets no permission decision, so the harness still asks about the
-    /// command it runs. `None` on any other harness or event.
+    /// A `PreToolUse` answer that runs `command` in place of the shell
+    /// command the payload carries, adding `context` when given. The harness
+    /// still runs its own permission check on the command it runs. `None` on
+    /// any other event, and where the harness cannot rewrite a call's input.
     pub fn rewrite_answer(&self, command: &str, context: Option<&str>) -> Option<String> {
         let AnyView::PreToolUse(pre) = self.0.view() else {
             return None;
         };
-        if self.harness() != AnyHarness::ClaudeCode {
-            return None;
-        }
         let mut input = self.raw().get("tool_input")?.as_object()?.clone();
         input.insert("command".to_owned(), Value::String(command.to_owned()));
-        let mut answer = match context {
-            Some(text) => pre.add_context(text)?.json()?.clone(),
-            None => serde_json::json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse" } }),
-        };
-        answer["hookSpecificOutput"]["updatedInput"] = Value::Object(input);
-        Some(answer.to_string())
+        pre.rewrite_input(input, context).map(|r| r.to_string())
     }
 
     /// A `PreToolUse` answer that adds `text` to the agent's context and
@@ -306,6 +298,35 @@ mod tests {
             (&ag["decision"], &ag["reason"]),
             (&json!("deny"), &json!("use devrun"))
         );
+    }
+
+    #[test]
+    fn a_rewrite_keeps_the_other_input_fields_and_carries_the_context() {
+        let rewrite = |harness, event, tool| -> Option<Value> {
+            let p = payload(
+                Some(harness),
+                json!({
+                    "hook_event_name": event,
+                    "tool_name": tool,
+                    "tool_input": {"command": "ls", "timeout": 5},
+                }),
+            );
+            let answer = p.rewrite_answer("ls -a", Some("noted"))?;
+            Some(serde_json::from_str(&answer).unwrap())
+        };
+        for harness in [AnyHarness::ClaudeCode, AnyHarness::Codex] {
+            let v = rewrite(harness, "PreToolUse", "Bash").unwrap();
+            let out = &v["hookSpecificOutput"];
+            assert_eq!(
+                out["updatedInput"],
+                json!({"command": "ls -a", "timeout": 5})
+            );
+            assert_eq!(out["additionalContext"], "noted", "{harness}");
+        }
+        let cursor = rewrite(AnyHarness::Cursor, "preToolUse", "Shell").unwrap();
+        assert_eq!(cursor["updated_input"]["command"], "ls -a");
+        assert_eq!(cursor["additional_context"], "noted");
+        assert!(rewrite(AnyHarness::Antigravity, "PreToolUse", "run_command").is_none());
     }
 
     #[test]
