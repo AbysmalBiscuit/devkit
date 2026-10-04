@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::SystemTime};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use devkit_todo::activity::{Activity, ActivityStore, Event, What};
-use tokio_postgres::types::Type;
+use tokio_postgres::{IsolationLevel, types::Type};
 
 use crate::Database;
 
@@ -80,7 +80,14 @@ impl ActivityStore for PostgresActivity {
     /// An event whose payload does not parse is skipped.
     fn read(&self, now: DateTime<Utc>) -> Result<Activity> {
         let (events, seen) = self.db.run(async |client| {
-            let tx = client.transaction().await?;
+            // One snapshot for both queries, so a stop that lands between
+            // them cannot leave a run open with its last-seen mark gone.
+            let tx = client
+                .build_transaction()
+                .isolation_level(IsolationLevel::RepeatableRead)
+                .read_only(true)
+                .start()
+                .await?;
             let events = tx
                 .query_typed(
                     "SELECT at, event::text FROM devkit.activity WHERE root = $1 ORDER BY at, id",
