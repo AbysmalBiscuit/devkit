@@ -166,6 +166,36 @@ fn attribution_a_sub_agents_start_runs_as_the_sub_agent() {
 }
 
 #[test]
+fn attribution_a_rewrite_carries_the_guards_note() {
+    for on in ATTRIBUTED {
+        let p = Proj::new();
+        std::fs::write(
+            p.path.join("devkit.toml"),
+            "[harness]\nenforce_writes = true\nunresolved_writes = \"warn\"\n",
+        )
+        .unwrap();
+        let id = seed(&p, "a");
+        let command = format!("echo x > \"$OUT\"; devkit todo start {id}");
+        let out = p.hook("pre-tool-use", on.harness, &bash(&p, Some("a1"), &command));
+        let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+        let answer = &v["hookSpecificOutput"];
+        assert_eq!(
+            answer["updatedInput"]["command"],
+            format!("echo x > \"$OUT\"; DEVKIT_TODO_HOLDER='S/a1' devkit todo start {id}"),
+            "{}",
+            on.harness
+        );
+        assert!(
+            answer["additionalContext"]
+                .as_str()
+                .is_some_and(|s| s.contains("could not be determined")),
+            "{}: {v}",
+            on.harness
+        );
+    }
+}
+
+#[test]
 fn attribution_a_command_that_never_reaches_the_todo_changes_nothing() {
     for on in ATTRIBUTED {
         let p = Proj::new();
