@@ -10,7 +10,7 @@ use todoenv::{HeldLock, Proj, stderr, stdout};
 
 const MAIN: &str = "proj.main.claude-S";
 
-fn stop(p: &Proj, session: &str) -> serde_json::Value {
+fn stop(p: &Proj, session: &str) -> Value {
     json!({
         "hook_event_name": "Stop",
         "session_id": session,
@@ -74,14 +74,14 @@ fn seed(p: &Proj, node: &str, text: &str) -> String {
 #[test]
 fn config_off_never_holds() {
     let p = Proj::with_home_config("[todo]\nhold_stop = false\n");
-    seed(&p, "proj.main.claude-S", "write the migration");
+    seed(&p, MAIN, "write the migration");
     silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
 }
 
 #[test]
 fn a_broken_config_never_holds() {
     let p = Proj::with_home_config("[todo]\nbackend = 3\n");
-    seed(&p, "proj.main.claude-S", "write the migration");
+    seed(&p, MAIN, "write the migration");
     silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
 }
 
