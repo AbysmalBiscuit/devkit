@@ -104,15 +104,15 @@ taskchampion runs a whole sync as one SQLite transaction, and the server may acc
 - **`devkit todo sync`** opens the replica, takes the lock, runs `Replica::sync(server, avoid_snapshots: false)` to completion, and reports the outcome. `avoid_snapshots: false` lets a devkit replica upload a snapshot when the server asks for one, so a later container's first sync starts from it rather than replaying every version. A directory server never stores snapshots, so a new replica on one replays the whole history.
 - **After every write**, when a sync target exists, the writer spawns `devkit todo sync --background` with null stdio in its own process group, then returns. The write is already committed locally.
 - **Coalescing.** `--background` exits at once when another sync holds `<data_dir>/sync.lock`, or when the last sync failed less than 60 seconds ago. Each write first sets `<data_dir>/sync.pending`. A sync clears that marker before it runs and runs again if the marker is set when it finishes. One running sync therefore carries every write made while it ran, and a server that is down costs one attempt a minute.
-- **Waiting for fresh lists.** Three callers wait for a sync instead of detaching, each for at most a bound. When the bound passes, the sync keeps running on its own and the caller reads the local replica:
+- **Waiting for fresh lists.** Two callers wait for a sync instead of detaching, each for at most a bound. When the bound passes, the sync keeps running on its own and the caller reads the local replica:
 
   | Caller | Bound |
   |---|---|
   | `devkit todo context` for `SessionStart`, so a new container pulls the lists before injecting them | 20 s |
   | `devkit todo list --sync` | 20 s |
-  | release in `session-end`, so a container's final state reaches the server before it is deleted | 20 s |
 
-  `plugin/hooks/hooks.json` and `plugin/hooks/hooks-codex.json` raise the `session-end` timeout from 3 to 25 seconds. Machines with no sync target return at once, as before.
+  Machines with no sync target return at once, as before.
+- **Session end.** The release in `session-end` is local, and its push is a background sync like any write's. Some harnesses cap a `SessionEnd` hook's run, Codex at 3 seconds, so the hook never waits on the network, and both manifests keep its timeout at 3 seconds.
 - **Nowhere else.** `UserPromptSubmit`, `PostCompact` and `SubagentStart` injections and plain `devkit todo list` read the local replica, which holds this machine's own writes.
 - **Failure text.** `devkit todo sync` and `list --sync` print `devkit todo: sync failed: <reason>; changes are saved and sync with the next write` to stderr and exit 0. The reason is taskchampion's error, which carries no credential. Hooks print nothing.
 

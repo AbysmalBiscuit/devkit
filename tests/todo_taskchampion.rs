@@ -518,12 +518,39 @@ fn session_end_pushes_the_release() {
         &json!({"session_id": "s1", "cwd": shared.p.path}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    other.sync_once().unwrap();
-    assert_eq!(other.get(&id).unwrap().unwrap().status, Status::Pending);
+    poll_until(Duration::from_secs(30), "the release on the server", || {
+        other.sync_once().unwrap();
+        other.get(&id).unwrap().unwrap().status == Status::Pending
+    });
 }
 
 #[test]
-fn the_session_end_timeout_allows_the_push() {
+fn session_end_never_waits_on_the_server() {
+    let p = Proj::new();
+    let server = Silent::start();
+    let here = TaskchampionStore::at(replica_dir(&p));
+    let id = add_on(&here, "proj.main.claude-s1", "claimed");
+    here.apply(&Edit::SetStatus {
+        id: id.clone(),
+        to: StatusKind::InProgress,
+        actor: Holder::new("s1"),
+    })
+    .unwrap();
+    let started = Instant::now();
+    let out = p.hook_with(
+        "session-end",
+        "claude-code",
+        &json!({"session_id": "s1", "cwd": p.path}),
+        &server_env(&server.url),
+    );
+    let took = started.elapsed();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(took < Duration::from_secs(3), "{took:?}");
+    assert_eq!(here.get(&id).unwrap().unwrap().status, Status::Pending);
+}
+
+#[test]
+fn the_session_end_timeout_fits_every_harness_cap() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/hooks");
     for manifest in ["hooks.json", "hooks-codex.json"] {
         let text = std::fs::read_to_string(root.join(manifest)).unwrap();
@@ -536,7 +563,7 @@ fn the_session_end_timeout_allows_the_push() {
             .collect();
         assert!(!timeouts.is_empty(), "{manifest}");
         assert!(
-            timeouts.iter().all(|t| **t == 25),
+            timeouts.iter().all(|t| t.as_u64().is_some_and(|t| t <= 3)),
             "{manifest}: {timeouts:?}"
         );
     }

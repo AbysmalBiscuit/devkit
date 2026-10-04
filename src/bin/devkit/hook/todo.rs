@@ -46,26 +46,12 @@ pub(crate) fn to_todo_holder(holder: &payload::Holder) -> Holder {
     Holder::new(&**holder)
 }
 
-/// When a release reaches the sync target.
-#[derive(Clone, Copy)]
-pub(crate) enum Push {
-    /// A background sync, as after any write.
-    Background,
-    /// Waits for the sync up to [`FRESH_WAIT`](crate::todo::sync::FRESH_WAIT),
-    /// for a session whose machine may be deleted once it ends.
-    Wait,
-}
-
 /// Returns every todo `holder` covers from in progress to pending, so a
 /// crashed agent's todos do not show as in progress forever, and forgets the
-/// lists last injected for it. Silent: a store failure leaves the claims for
-/// a person to reset.
-pub(crate) fn release(
-    holder: Option<payload::Holder>,
-    checkout: &Checkout,
-    cwd: &Path,
-    push: Push,
-) {
+/// lists last injected for it. The release is local and the sync that pushes
+/// it runs detached, so no harness's cap on a session-end hook cuts it short.
+/// Silent: a store failure leaves the claims for a person to reset.
+pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout, cwd: &Path) {
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
         let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
@@ -83,14 +69,8 @@ pub(crate) fn release(
             }
             None => store.apply(&Edit::ReleaseAll { holder }).is_ok(),
         };
-        if !released {
-            return;
-        }
-        match push {
-            Push::Background => store.spawn_sync(cwd),
-            Push::Wait => {
-                let _ = store.sync(cwd, crate::todo::sync::FRESH_WAIT);
-            }
+        if released {
+            store.spawn_sync(cwd);
         }
     }
 }
