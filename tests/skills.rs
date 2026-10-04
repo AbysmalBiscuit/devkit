@@ -150,7 +150,7 @@ fn the_generated_cloud_openai_yaml_matches_the_hand_written_one() {
 fn a_stale_openai_yaml_fails_naming_the_regenerate_command() {
     let root = tempfile::tempdir().unwrap();
     let skill = root.path().join("demo");
-    fs::create_dir_all(skill.join("agents")).unwrap();
+    fs::create_dir_all(&skill).unwrap();
     fs::write(
         skill.join("SKILL.md"),
         "---\nname: demo\ndescription: Old words.\n---\nBody.\n",
