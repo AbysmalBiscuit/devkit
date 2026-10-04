@@ -10,7 +10,7 @@ use std::{
 
 use devkit_todo::{
     Filter, Todo, TodoStore,
-    activity::{Activity, ActivityLog},
+    activity::{Activity, ActivityLog, ActivityStore},
 };
 use devkit_todo_builtin::BuiltinStore;
 

@@ -4,7 +4,7 @@
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use devkit_todo::activity::{BACKSTOP, ClaimEnd, Run, RunEnd};
+use devkit_todo::activity::{ActivityStore, BACKSTOP, ClaimEnd, Run, RunEnd};
 use serde_json::{Value, json};
 use todoenv::{Proj, stderr, stdout};
 

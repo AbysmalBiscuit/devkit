@@ -6,7 +6,9 @@ use std::{collections::BTreeMap, time::SystemTime};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use clap::Args;
-use devkit_todo::activity::{Activity, ActivityLog, ClaimEnd, Interval, Run, RunEnd, stamp};
+use devkit_todo::activity::{
+    Activity, ActivityLog, ActivityStore, ClaimEnd, Interval, Run, RunEnd, stamp,
+};
 use serde::Serialize;
 
 #[derive(Args)]

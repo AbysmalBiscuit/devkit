@@ -5,7 +5,7 @@
 
 use std::time::SystemTime;
 
-use devkit_todo::activity::{ActivityLog, Event, What};
+use devkit_todo::activity::{ActivityLog, ActivityStore, Event, What};
 
 use super::{HookEvent, payload::Payload};
 
@@ -34,13 +34,13 @@ pub(crate) fn observe(payload: &Payload, event: HookEvent) {
             agent: agent.clone(),
             agent_type: payload.agent_type().map(str::to_string),
         })
-        .and_then(|()| log.seen(&session, &agent)),
+        .and_then(|()| log.seen_at(&session, &agent, SystemTime::now())),
         (HookEvent::SubagentStop, Some(agent)) => record(What::SubagentStop {
             session: session.clone(),
             agent: agent.clone(),
         })
         .and_then(|()| log.forget(&session, Some(&agent))),
-        (_, Some(agent)) => log.seen(&session, &agent),
+        (_, Some(agent)) => log.seen_at(&session, &agent, SystemTime::now()),
         (_, None) => Ok(()),
     };
 }
@@ -48,6 +48,6 @@ pub(crate) fn observe(payload: &Payload, event: HookEvent) {
 /// Marks the payload's agent seen, for the backstop, without ending its run.
 pub(crate) fn seen(payload: &Payload) {
     if let (Some(session), Some(agent)) = (payload.session_id(), payload.agent_id()) {
-        let _ = ActivityLog::open().seen(session, agent);
+        let _ = ActivityLog::open().seen_at(session, agent, SystemTime::now());
     }
 }

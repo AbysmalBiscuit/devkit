@@ -1,5 +1,5 @@
 use chrono::{DateTime, TimeDelta, Utc};
-use devkit_todo::activity::{ActivityLog, BACKSTOP, Event, RunEnd, What};
+use devkit_todo::activity::{ActivityLog, ActivityStore, BACKSTOP, Event, RunEnd, What};
 
 fn t(minutes: i64) -> DateTime<Utc> {
     "2026-10-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap() + TimeDelta::minutes(minutes)
