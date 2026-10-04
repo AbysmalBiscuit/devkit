@@ -410,11 +410,17 @@ fn session_end_finishes_its_database_work_inside_the_budget() {
 /// database URL, and the `PATH` that finds it first.
 #[cfg(unix)]
 fn fake_doppler(dir: &std::path::Path, url: &str) -> String {
+    slow_doppler(dir, url, 0)
+}
+
+/// [`fake_doppler`], answering after `seconds`.
+#[cfg(unix)]
+fn slow_doppler(dir: &std::path::Path, url: &str, seconds: u32) -> String {
     use std::os::unix::fs::PermissionsExt;
     let doppler = dir.join("doppler");
     let body = json!({DATABASE_VAR: {"computed": url}}).to_string();
     let script = format!(
-        "#!/bin/sh\necho call >> '{}'\necho '{body}'\n",
+        "#!/bin/sh\necho call >> '{}'\nsleep {seconds}\necho '{body}'\n",
         dir.join("calls").display()
     );
     std::fs::write(&doppler, script).unwrap();
@@ -523,4 +529,56 @@ fn a_malformed_doppler_url_is_not_kept() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(doppler_calls(bin.path()), 1);
     assert!(!cached_url_file(&p).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn session_end_never_waits_on_doppler() {
+    let p = doppler_proj("devkit");
+    let bin = tempfile::tempdir().unwrap();
+    let path = slow_doppler(bin.path(), "postgres://agent:pw@127.0.0.1:1/todos", 4);
+    let env = [("PATH", path.as_str())];
+    let end = json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path});
+    let started = Instant::now();
+    let out = p.hook_with("session-end", "claude-code", &end, &env);
+    let took = started.elapsed();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(took < HOOK_BUDGET, "session-end took {took:?}");
+    assert_eq!(doppler_calls(bin.path()), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn session_end_releases_through_a_stale_cached_url() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    let root = fresh_root();
+    let p = doppler_proj(&root);
+    let bin = tempfile::tempdir().unwrap();
+    let path = fake_doppler(bin.path(), &url);
+    let env = [
+        ("PATH", path.clone()),
+        ("CLAUDE_CODE_SESSION_ID", "S".to_string()),
+    ];
+    let id = added(&p, "held", &env);
+    let out = devkit(&p, &["todo", "start", &id], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let cache = std::fs::File::options()
+        .write(true)
+        .open(cached_url_file(&p))
+        .expect("the command kept the URL");
+    let long_ago = SystemTime::now() - Duration::from_secs(24 * 60 * 60);
+    cache.set_modified(long_ago).unwrap();
+    let calls = doppler_calls(bin.path());
+    slow_doppler(bin.path(), &url, 4);
+
+    let end = json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path});
+    let started = Instant::now();
+    let out = p.hook_with("session-end", "claude-code", &end, &borrowed(&env));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(started.elapsed() < HOOK_BUDGET, "{:?}", started.elapsed());
+    assert_eq!(doppler_calls(bin.path()), calls);
+    let todos = store(&url, &root).list(&Filter::all()).unwrap();
+    assert_eq!(todos[0].status, Status::Pending, "{todos:?}");
 }

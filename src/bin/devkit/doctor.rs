@@ -659,7 +659,11 @@ const TODO_DATABASE_WAIT: std::time::Duration = std::time::Duration::from_secs(5
 /// Where the todo database's URL resolves from and whether the database
 /// answers. The URL, which carries the password, is never shown.
 fn todo_database_row(config: &devkit_config::PostgresConfig) -> Row {
-    let (db, source) = crate::todo::store::open_database(config, TODO_DATABASE_WAIT, false);
+    let (db, source) = crate::todo::store::open_database(
+        config,
+        TODO_DATABASE_WAIT,
+        crate::todo::store::UrlLookup::Doppler,
+    );
     let check = match db {
         Err(e) => Check::Invalid(e),
         Ok(db) => match db.check() {

@@ -56,13 +56,26 @@ const HOOK_WAIT: Duration = Duration::from_secs(1);
 /// rest.
 pub(crate) const SESSION_END_DATABASE_BUDGET: Duration = Duration::from_millis(1500);
 
-/// Set once a hook has one budget for all of its database work.
-static DATABASE_DEADLINE: OnceLock<Instant> = OnceLock::new();
+/// Set once a session-end hook has started its budget.
+static SESSION_END: OnceLock<Instant> = OnceLock::new();
 
-/// Makes every todo database this process opens, before or after, give up
-/// by `budget` from now.
-pub(crate) fn finish_database_work_within(budget: Duration) {
-    let _ = DATABASE_DEADLINE.set(Instant::now() + budget);
+/// Readies this process for a session's end: every todo database it opens,
+/// before or after, gives up by `budget` from now, and a hook's URL comes
+/// from the environment, the secrets file or the Doppler cache at any age,
+/// never from Doppler itself.
+pub(crate) fn end_session_within(budget: Duration) {
+    let _ = SESSION_END.set(Instant::now() + budget);
+}
+
+/// How [`open_database`] finds the URL when Doppler holds it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UrlLookup {
+    /// Ask Doppler, as a command does.
+    Doppler,
+    /// Reuse a cached URL younger than [`URL_CACHE_TTL`], else ask Doppler.
+    CachedFirst,
+    /// Reuse a cached URL however old, and never ask Doppler.
+    CachedOnly,
 }
 
 /// How long a CLI call waits for each answer from the todo database,
@@ -199,8 +212,9 @@ fn url_cache_path() -> PathBuf {
     devkit_todo::state_dir().join("database-url.json")
 }
 
-/// The cached URL for `scope`, when one is younger than [`URL_CACHE_TTL`].
-fn cached_url(scope: &DopplerScope) -> Option<String> {
+/// The cached URL for `scope`, when one is younger than `max_age` or no
+/// `max_age` applies.
+fn cached_url(scope: &DopplerScope, max_age: Option<Duration>) -> Option<String> {
     let path = url_cache_path();
     let age = std::fs::metadata(&path)
         .ok()?
@@ -208,7 +222,7 @@ fn cached_url(scope: &DopplerScope) -> Option<String> {
         .ok()?
         .elapsed()
         .ok()?;
-    if age > URL_CACHE_TTL {
+    if max_age.is_some_and(|max_age| age > max_age) {
         return None;
     }
     let cached: CachedUrl = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
@@ -248,29 +262,33 @@ fn cache_url(scope: &DopplerScope, url: &str) {
 /// and not yet connected, and where its URL resolved from. A URL that is
 /// missing or does not parse is an error naming the variable, never the URL.
 ///
-/// A URL Doppler gives is cached under the state directory once it parses.
-/// With `reuse_cached`, as for a hook, a fresh cached URL stands in for
-/// Doppler. Every Doppler answer rewrites the cache, and failing to connect
-/// with a Doppler URL drops it, so a rotated credential or a moved database
-/// is asked for again on the next call.
+/// A URL Doppler gives is cached under the state directory once it parses,
+/// and `lookup` says when the cache stands in for Doppler. Every Doppler
+/// answer rewrites the cache, and failing to connect with a Doppler URL
+/// drops it, so a rotated credential or a moved database is asked for again
+/// on the next call.
 pub(crate) fn open_database(
     config: &PostgresConfig,
     wait: Duration,
-    reuse_cached: bool,
+    lookup: UrlLookup,
 ) -> (Result<Arc<Database>, String>, Source) {
     let scope = doppler_scope(
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
     );
     let from_env = std::env::var(DATABASE_VAR).is_ok_and(|url| !url.trim().is_empty());
-    let cached = scope
-        .as_ref()
-        .filter(|_| reuse_cached && !from_env)
-        .and_then(cached_url);
+    let cached = match (&scope, lookup) {
+        (Some(scope), UrlLookup::CachedFirst) if !from_env => {
+            cached_url(scope, Some(URL_CACHE_TTL))
+        }
+        (Some(scope), UrlLookup::CachedOnly) if !from_env => cached_url(scope, None),
+        _ => None,
+    };
     let (url, source) = match cached {
         Some(url) => (Some(url), Source::Doppler),
         None => {
-            let [(url, source)] = secrets::resolve_many(&[DATABASE_VAR], scope.as_ref());
+            let ask = scope.as_ref().filter(|_| lookup != UrlLookup::CachedOnly);
+            let [(url, source)] = secrets::resolve_many(&[DATABASE_VAR], ask);
             (url, source)
         }
     };
@@ -309,13 +327,17 @@ fn database(config: &PostgresConfig, opener: Opener) -> Arc<Database> {
         .get_or_insert_default()
         .entry(key)
         .or_insert_with(|| {
-            let reuse_cached = matches!(opener, Opener::Hook);
-            open_database(config, wait, reuse_cached)
+            let lookup = match (opener, SESSION_END.get()) {
+                (Opener::Cli, _) => UrlLookup::Doppler,
+                (Opener::Hook, None) => UrlLookup::CachedFirst,
+                (Opener::Hook, Some(_)) => UrlLookup::CachedOnly,
+            };
+            open_database(config, wait, lookup)
                 .0
                 .unwrap_or_else(Database::unusable)
         })
         .clone();
-    if let Some(at) = DATABASE_DEADLINE.get() {
+    if let Some(at) = SESSION_END.get() {
         db.finish_by(*at);
     }
     db

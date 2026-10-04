@@ -242,9 +242,7 @@ fn with_payload(
     f: impl FnOnce(&Payload, &Checkout, &Path) -> Result<()>,
 ) -> Result<()> {
     if event == HookEvent::SessionEnd {
-        crate::todo::store::finish_database_work_within(
-            crate::todo::store::SESSION_END_DATABASE_BUDGET,
-        );
+        crate::todo::store::end_session_within(crate::todo::store::SESSION_END_DATABASE_BUDGET);
     }
     let payload = read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event));
     let cwd = record::payload_cwd(&payload);
