@@ -145,9 +145,13 @@ pub trait TodoStore {
     fn get(&self, id: &str) -> ::anyhow::Result<::std::option::Option<::devkit_todo::Todo>>;
     /// Returns the new todo's id.
     fn add(&self, todo: ::devkit_todo::NewTodo) -> ::anyhow::Result<::std::string::String>;
-    /// A refused status change is an error whose root cause is [`Claimed`];
-    /// an unknown id is the error `no todo <id>`.
-    fn apply(&self, edit: &::devkit_todo::Edit) -> ::anyhow::Result<()>;
+    /// Returns every status change the edit made, seen under the lock it
+    /// wrote under. A refused status change is an error whose root cause is
+    /// [`Claimed`]; an unknown id is the error `no todo <id>`.
+    fn apply(
+        &self,
+        edit: &::devkit_todo::Edit,
+    ) -> ::anyhow::Result<::std::vec::Vec<::devkit_todo::StatusChange>>;
 }
 
 impl<T: TodoStore + ?Sized> TodoStore for &T {
@@ -163,7 +167,7 @@ impl<T: TodoStore + ?Sized> TodoStore for &T {
         (**self).add(todo)
     }
 
-    fn apply(&self, edit: &Edit) -> anyhow::Result<()> {
+    fn apply(&self, edit: &Edit) -> anyhow::Result<Vec<StatusChange>> {
         (**self).apply(edit)
     }
 }

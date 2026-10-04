@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{Edit, Filter, Holder, NewTodo, Status, Todo, TodoStore, transition};
+use crate::{Edit, Filter, Holder, NewTodo, Status, StatusChange, Todo, TodoStore};
 
 /// How long an agent may go without firing a hook before its open run counts
 /// as lost, the lifetime of a hook's file lock.
@@ -354,75 +354,39 @@ impl<S> Recorded<S> {
     }
 }
 
-impl<S: TodoStore> Recorded<S> {
-    /// The claim events `edit` produces if it applies, judged from the store
-    /// before it does. A read that fails records nothing.
-    fn claim_changes(&self, edit: &Edit) -> Vec<What> {
-        match edit {
-            Edit::SetStatus { id, to, actor } => {
-                let Ok(Some(todo)) = self.store.get(id) else {
-                    return Vec::new();
-                };
-                match transition(&todo.status, *to, actor) {
-                    Ok(Some(next)) => moved(&todo, &next),
-                    _ => Vec::new(),
-                }
-            }
-            Edit::ReleaseAll { holder } if !holder.is_human() => self
-                .store
-                .list(&Filter::all())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|todo| match &todo.status {
-                    Status::InProgress { by } if holder.covers(by) => {
-                        Some(unclaim(todo, by, ClaimEnd::Released))
-                    }
-                    _ => None,
-                })
-                .collect(),
-            Edit::Purge(id) => match self.store.get(id) {
-                Ok(Some(todo)) => match &todo.status {
-                    Status::InProgress { by } => vec![unclaim(&todo, by, ClaimEnd::Cancelled)],
-                    _ => Vec::new(),
-                },
-                _ => Vec::new(),
-            },
-            _ => Vec::new(),
-        }
-    }
-}
-
-fn unclaim(todo: &Todo, holder: &Holder, outcome: ClaimEnd) -> What {
+fn unclaim(change: &StatusChange, holder: &Holder, outcome: ClaimEnd) -> What {
     What::Unclaim {
-        todo: todo.id.clone(),
+        todo: change.todo.clone(),
         holder: holder.clone(),
         outcome,
     }
 }
 
-fn claim(todo: &Todo, holder: &Holder) -> What {
+fn claim(change: &StatusChange, holder: &Holder) -> What {
     What::Claim {
-        todo: todo.id.clone(),
-        node: todo.node().to_string(),
+        todo: change.todo.clone(),
+        node: change.node.clone(),
         holder: holder.clone(),
     }
 }
 
-/// The claim events of `todo` moving to `next`.
-fn moved(todo: &Todo, next: &Status) -> Vec<What> {
-    match (&todo.status, next) {
-        (Status::InProgress { by }, Status::InProgress { by: to }) if by != to => {
-            vec![unclaim(todo, by, ClaimEnd::Handed), claim(todo, to)]
+/// The claim events of one status change.
+fn claim_events(change: &StatusChange) -> Vec<What> {
+    match (&change.from, &change.to) {
+        (Status::InProgress { by }, Some(Status::InProgress { by: to })) if by != to => {
+            vec![unclaim(change, by, ClaimEnd::Handed), claim(change, to)]
         }
-        (Status::InProgress { .. }, Status::InProgress { .. }) => Vec::new(),
-        (Status::InProgress { by }, Status::Completed { .. }) => {
-            vec![unclaim(todo, by, ClaimEnd::Completed)]
+        (Status::InProgress { .. }, Some(Status::InProgress { .. })) => Vec::new(),
+        (Status::InProgress { by }, Some(Status::Completed { .. })) => {
+            vec![unclaim(change, by, ClaimEnd::Completed)]
         }
-        (Status::InProgress { by }, Status::Cancelled { .. }) => {
-            vec![unclaim(todo, by, ClaimEnd::Cancelled)]
+        (Status::InProgress { by }, Some(Status::Cancelled { .. }) | None) => {
+            vec![unclaim(change, by, ClaimEnd::Cancelled)]
         }
-        (Status::InProgress { by }, Status::Pending) => vec![unclaim(todo, by, ClaimEnd::Released)],
-        (_, Status::InProgress { by }) => vec![claim(todo, by)],
+        (Status::InProgress { by }, Some(Status::Pending)) => {
+            vec![unclaim(change, by, ClaimEnd::Released)]
+        }
+        (_, Some(Status::InProgress { by })) => vec![claim(change, by)],
         _ => Vec::new(),
     }
 }
@@ -440,13 +404,18 @@ impl<S: TodoStore> TodoStore for Recorded<S> {
         self.store.add(todo)
     }
 
-    fn apply(&self, edit: &Edit) -> Result<()> {
-        let changes = self.claim_changes(edit);
-        self.store.apply(edit)?;
-        let at = DateTime::<Utc>::from(SystemTime::now());
-        for what in changes {
-            let _ = self.log.record(&Event { at, what });
+    /// Logs each claim change at the time the store made it, so events from
+    /// processes that append out of order still read in order.
+    fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
+        let changes = self.store.apply(edit)?;
+        for change in &changes {
+            for what in claim_events(change) {
+                let _ = self.log.record(&Event {
+                    at: change.at,
+                    what,
+                });
+            }
         }
-        Ok(())
+        Ok(changes)
     }
 }

@@ -83,6 +83,7 @@ fn set(s: &impl TodoStore, id: &str, to: StatusKind, actor: &str) -> anyhow::Res
         to,
         actor: Holder::new(actor),
     })
+    .map(drop)
 }
 
 fn in_progress(by: &str) -> Status {

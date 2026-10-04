@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow};
 use devkit_common::store::with_file_lock;
 use devkit_todo::{
-    Edit, Filter, NewTodo, ORDER_GAP, Status, Todo, TodoStore, by_prefix, is_uuid_prefix, one_line,
-    state_dir, transition,
+    Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore, by_prefix,
+    is_uuid_prefix, one_line, state_dir, transition,
 };
 
 use crate::{
@@ -172,18 +172,23 @@ impl TodoStore for TaskwarriorStore {
         }
     }
 
-    fn apply(&self, edit: &Edit) -> Result<()> {
+    fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
+        let none = |done: Result<()>| done.map(|()| Vec::new());
         match edit {
             Edit::SetStatus { id, to, actor } => self.locked(|| {
                 let todo = self.resolve(id)?;
                 match transition(&todo.status, *to, actor)? {
-                    Some(next) => self.set_status(&todo, &next),
-                    None => Ok(()),
+                    Some(next) => {
+                        let change = StatusChange::of(&todo, Some(next.clone()));
+                        self.set_status(&todo, &next)?;
+                        Ok(vec![change])
+                    }
+                    None => Ok(Vec::new()),
                 }
             }),
             Edit::Describe { id, description } => {
                 let todo = self.resolve(id)?;
-                self.modify(&todo.id, &["--".into(), escaped(&one_line(description))])
+                none(self.modify(&todo.id, &["--".into(), escaped(&one_line(description))]))
             }
             Edit::Move { id, parent, order } => {
                 let todo = self.resolve(id)?;
@@ -197,7 +202,7 @@ impl TodoStore for TaskwarriorStore {
                         format!("order:{order}"),
                     ])
                 };
-                match order {
+                none(match order {
                     Some(order) => place(*order),
                     None => self.locked(|| {
                         place(self.after_last(
@@ -206,43 +211,50 @@ impl TodoStore for TaskwarriorStore {
                             Some(&todo.id),
                         )?)
                     }),
-                }
+                })
             }
             Edit::Reorder { id, order } => {
                 let todo = self.resolve(id)?;
-                self.modify(&todo.id, &[format!("order:{order}")])
+                none(self.modify(&todo.id, &[format!("order:{order}")]))
             }
             Edit::Relocate { id, project } => {
                 let todo = self.resolve(id)?;
-                self.modify(&todo.id, &[project_arg(&self.root, project.as_deref())])
+                none(self.modify(&todo.id, &[project_arg(&self.root, project.as_deref())]))
             }
             Edit::ReleaseAll { holder } => {
                 if holder.is_human() {
-                    return Ok(());
+                    return Ok(Vec::new());
                 }
                 self.locked(|| {
                     let active = self.todos(&[in_root(&self.root), "+ACTIVE".into()])?;
-                    let held: Vec<&str> = active
+                    let held: Vec<&Todo> = active
                         .iter()
                         .filter(
                             |t| matches!(&t.status, Status::InProgress { by } if holder.covers(by)),
                         )
-                        .map(|t| t.id.as_str())
                         .collect();
                     if held.is_empty() {
-                        return Ok(());
+                        return Ok(Vec::new());
                     }
+                    let changes = held
+                        .iter()
+                        .map(|t| StatusChange::of(t, Some(Status::Pending)))
+                        .collect();
+                    let ids: Vec<&str> = held.iter().map(|t| t.id.as_str()).collect();
                     let words = ["modify", "start:", "holder:"].map(String::from);
-                    self.cli().write(&held, &words)
+                    self.cli().write(&ids, &words)?;
+                    Ok(changes)
                 })
             }
-            Edit::Purge(id) => {
+            Edit::Purge(id) => self.locked(|| {
                 let todo = self.resolve(id)?;
+                let change = StatusChange::of(&todo, None);
                 if !matches!(todo.status, Status::Cancelled { .. }) {
                     self.cli().write(&[&todo.id], &["delete".into()])?;
                 }
-                self.cli().write(&[&todo.id], &["purge".into()])
-            }
+                self.cli().write(&[&todo.id], &["purge".into()])?;
+                Ok(vec![change])
+            }),
         }
     }
 }
