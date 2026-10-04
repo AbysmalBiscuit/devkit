@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use devkit_todo::{
     Edit, Filter, Holder, NewTodo, NodeMatch, ORDER_GAP, Status, StatusChange, Todo, TodoStore,
-    by_prefix, is_uuid_prefix, node::GLOBAL, one_line, transition,
+    activity::stamp, by_prefix, is_uuid_prefix, node::GLOBAL, one_line, transition,
 };
 use tokio_postgres::{GenericClient, Row, types::Type};
 
@@ -42,10 +42,6 @@ impl PostgresStore {
     pub fn activity(&self) -> PostgresActivity {
         PostgresActivity::new(self.db.clone(), &self.root)
     }
-}
-
-fn stamp(at: DateTime<Utc>) -> String {
-    at.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
 fn todo_of(row: &Row) -> Result<Todo> {
