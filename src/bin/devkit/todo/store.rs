@@ -121,30 +121,28 @@ fn sync_target_with(
         return Ok(Some(SyncTarget::Dir(expand_tilde(dir))));
     }
     let resolved = resolve(&SYNC_VARS, doppler_scope(config).as_ref());
+    let Ok(resolved) = <[(Option<String>, Source); SYNC_VARS.len()]>::try_from(resolved) else {
+        bail!(
+            "resolving {} gave the wrong number of values",
+            SYNC_VARS.join(", ")
+        );
+    };
     let missing: Vec<&str> = SYNC_VARS
         .iter()
         .zip(&resolved)
         .filter(|(_, (value, _))| value.is_none())
         .map(|(name, _)| *name)
         .collect();
-    if missing.len() == SYNC_VARS.len() {
-        return Ok(None);
-    }
-    if !missing.is_empty() {
+    let [(Some(url), _), (Some(client_id), _), (Some(secret), _)] = resolved else {
+        if missing.len() == SYNC_VARS.len() {
+            return Ok(None);
+        }
         bail!(
             "todo sync needs {}; missing: {}",
             SYNC_VARS.join(", "),
             missing.join(", ")
         );
-    }
-    let mut values = resolved
-        .into_iter()
-        .map(|(value, _)| value.unwrap_or_default());
-    let (url, client_id, secret) = (
-        values.next().unwrap_or_default(),
-        values.next().unwrap_or_default(),
-        values.next().unwrap_or_default(),
-    );
+    };
     let Ok(client_id) = Uuid::try_parse(client_id.trim()) else {
         bail!("{} is not a UUID", SYNC_VARS[1]);
     };
@@ -405,6 +403,17 @@ mod tests {
         .to_string();
         assert!(err.contains("DEVKIT_TODO_SYNC_CLIENT_ID"), "{err}");
         assert!(!err.contains("nope"), "{err}");
+    }
+
+    #[test]
+    fn a_resolution_of_the_wrong_length_is_an_error() {
+        let short = |_: &[&str], _: Option<&DopplerScope>| {
+            vec![
+                (Some("https://s".to_string()), Source::Env),
+                (Some(UUID.to_string()), Source::Env),
+            ]
+        };
+        assert!(sync_target_with(&TaskchampionConfig::default(), short).is_err());
     }
 
     #[test]
