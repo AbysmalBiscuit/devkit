@@ -328,3 +328,17 @@ fn an_unreadable_log_is_an_error_naming_its_path() {
     let err = stderr(&out);
     assert!(err.contains("events.jsonl"), "{err}");
 }
+
+#[test]
+fn the_report_escapes_terminal_control_sequences() {
+    let p = Proj::new();
+    let hostile = "Explore\u{1b}]52;c;aGk=\u{7}\u{1b}[2J\u{202e}";
+    start(&p, "a1\u{9b}31m", Some(hostile));
+    let out = p.devkit(&["activity"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report = stdout(&out);
+    for raw in ['\u{1b}', '\u{7}', '\u{9b}', '\u{202e}'] {
+        assert!(!report.contains(raw), "{raw:?} printed raw: {report:?}");
+    }
+    assert!(report.contains("Explore\\u{1b}]52"), "{report}");
+}

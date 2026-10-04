@@ -97,6 +97,32 @@ pub(crate) fn link_styled(supported: bool, label: &str, url: &str) -> String {
 
 pub use devkit_config::DEFAULT_BRANCH_MAX as BRANCH_DISPLAY_MAX;
 
+/// `text` safe to print to a terminal: every control character, C0 and C1
+/// alike, and every bidirectional formatting character written as `\u{..}`,
+/// so text another machine or agent wrote cannot move the cursor, clear the
+/// screen, set the clipboard or reorder what the line shows.
+pub fn printable(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.chars().any(needs_escape) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    text.chars()
+        .map(|c| match needs_escape(c) {
+            true => c.escape_unicode().to_string(),
+            false => c.to_string(),
+        })
+        .collect::<String>()
+        .into()
+}
+
+/// Control characters and the Unicode bidirectional formatting characters.
+fn needs_escape(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
 /// Truncate to at most `max` visible characters, marking elision with `…`.
 ///
 /// Operates on plain text (no escape awareness); apply before adding colour or

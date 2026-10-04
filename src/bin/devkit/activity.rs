@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, time::SystemTime};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use clap::Args;
+use devkit_common::ui::printable;
 use devkit_todo::activity::{Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, stamp};
 use serde::Serialize;
 
@@ -202,12 +203,12 @@ impl Report {
             return out;
         }
         for session in &self.sessions {
-            out.push_str(&format!("\nsession {}\n", session.session));
+            out.push_str(&format!("\nsession {}\n", printable(&session.session)));
             let mut t = devkit_common::ui::table(&["TYPE", "AGENT", "START", "TIME", "OUTCOME"]);
             for RunRow { run, seconds } in &session.runs {
                 t.add_row([
-                    run.label().to_string(),
-                    run.agent.clone(),
+                    printable(run.label()).into_owned(),
+                    printable(&run.agent).into_owned(),
                     stamp(run.start),
                     duration(*seconds),
                     outcome(run.outcome),
@@ -220,7 +221,7 @@ impl Report {
             let mut t = devkit_common::ui::table(&["TYPE", "RUNS", "TIME"]);
             for total in &self.agent_types {
                 t.add_row([
-                    total.agent_type.clone(),
+                    printable(&total.agent_type).into_owned(),
                     total.runs.to_string(),
                     duration(total.seconds),
                 ]);
@@ -235,10 +236,10 @@ impl Report {
                     held.intervals.iter().map(|i| i.holder.as_str()).collect();
                 holders.dedup();
                 t.add_row([
-                    devkit_todo::short_id(&held.todo).to_string(),
-                    held.node.clone(),
+                    printable(devkit_todo::short_id(&held.todo)).into_owned(),
+                    printable(&held.node).into_owned(),
                     duration(held.seconds),
-                    holders.join(", "),
+                    printable(&holders.join(", ")).into_owned(),
                 ]);
             }
             out.push_str(&format!("{t}\n"));
