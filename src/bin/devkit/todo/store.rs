@@ -249,13 +249,25 @@ impl Store {
         }
     }
 
-    /// Where hook writes queue while the replica lock is busy: `None` for a
-    /// backend whose writes always wait.
-    pub(crate) fn queue_dir(&self) -> Option<&Path> {
+    /// The taskchampion replica whose hook writes go through its queue:
+    /// `None` for a backend whose writes always wait.
+    pub(crate) fn queued_replica(&self) -> Option<&TaskchampionStore> {
         match self {
-            Self::Taskchampion(replica) => Some(replica.store.data_dir()),
+            Self::Taskchampion(replica) => Some(&replica.store),
             _ => None,
         }
+    }
+
+    /// The replica at `dir` under `root`, for applying a queued hook write
+    /// exactly where it was resolved. A hook's lock wait keeps a busy entry
+    /// queued.
+    pub(crate) fn queued_at(dir: &Path, root: &str) -> Self {
+        Self::Taskchampion(Replica {
+            store: TaskchampionStore::at(dir.to_path_buf())
+                .with_root(root)
+                .with_lock_wait(HOOK_LOCK_WAIT),
+            syncs: false,
+        })
     }
 
     /// The replica `devkit todo sync` in `cwd` syncs, its target resolved:

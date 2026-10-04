@@ -841,3 +841,44 @@ fn a_capture_cut_short_by_a_busy_replica_applies_once() {
         ("next".to_string(), StatusKind::Pending),
     ]);
 }
+
+#[test]
+fn a_queued_capture_keeps_the_node_it_was_made_on() {
+    let p = Proj::new();
+    let git = |args: &[&str]| {
+        devkit_git::Git::fixture(&p.path)
+            .args(args.iter().copied())
+            .output()
+            .unwrap();
+    };
+    git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+    let held = HeldLock::at(replica_dir(&p).join("devkit.lock"));
+    let create = json!({
+        "session_id": SESSION,
+        "cwd": p.path,
+        "hook_event_name": "PostToolUse",
+        "tool_name": "TaskCreate",
+        "tool_input": {"subject": "alpha", "description": "alpha"},
+        "tool_response": {"task": {"id": "1", "subject": "alpha"}},
+    });
+    let out = p.hook_with(
+        "post-tool-use",
+        "claude-code",
+        &create,
+        &backend("taskchampion"),
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    git(&["switch", "-q", "-c", "feature"]);
+    drop(held);
+
+    let later = p.devkit(&["todo", "add", "later"], &backend("taskchampion"));
+    assert!(later.status.success(), "{}", stderr(&later));
+    let alpha = replica(&p)
+        .into_iter()
+        .find(|t| t.description == "alpha")
+        .expect("the queued capture applied");
+    assert_eq!(
+        alpha.project.as_deref(),
+        Some(format!("proj.main.claude-{SESSION}").as_str())
+    );
+}

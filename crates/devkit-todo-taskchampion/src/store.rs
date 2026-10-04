@@ -166,6 +166,11 @@ impl TaskchampionStore {
         &self.data_dir
     }
 
+    /// The project every todo is filed under.
+    pub fn root(&self) -> &str {
+        &self.root
+    }
+
     /// One full sync with the target under the replica lock, a no-op with no
     /// target. taskchampion runs a sync as one transaction, so a sync that
     /// stops partway leaves the replica as it was; nothing in devkit stops one

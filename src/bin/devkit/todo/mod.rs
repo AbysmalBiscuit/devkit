@@ -223,8 +223,8 @@ pub fn run(cli: TodoCli) -> Result<()> {
         }
     }
     if writes {
-        if let Some(dir) = store.queue_dir() {
-            crate::hook::todo::drain(dir);
+        if let Some(replica) = store.queued_replica() {
+            crate::hook::todo::drain(replica.data_dir());
         }
         store.spawn_sync(&cwd);
     }

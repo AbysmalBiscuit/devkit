@@ -14,17 +14,20 @@ use std::{
 
 use anyhow::Result;
 use devkit_common::store::{LockBusy, open_lock, with_file_lock};
+use devkit_todo::Holder;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+use crate::hook::todo::Mirror;
 
 /// One queued hook write.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Deferred {
-    /// A native tool call to mirror, replayed from its payload.
-    Capture { harness: String, payload: Value },
-    /// A holder whose claims return to pending, in the store `cwd` resolves.
-    Release { holder: String, cwd: PathBuf },
+    /// A native tool call to mirror, resolved when it was queued, filed
+    /// under `root`.
+    Capture { root: String, mirror: Mirror },
+    /// A holder whose claims under `root` return to pending.
+    Release { root: String, holder: Holder },
 }
 
 fn queue_path(dir: &Path) -> PathBuf {
@@ -133,8 +136,8 @@ mod tests {
 
     fn release(holder: &str) -> Deferred {
         Deferred::Release {
-            holder: holder.into(),
-            cwd: PathBuf::from("/"),
+            root: "devkit".into(),
+            holder: Holder::new(holder),
         }
     }
 
