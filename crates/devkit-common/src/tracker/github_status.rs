@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use devkit_config::ProjectRef;
 use serde_json::Value;
 
-use super::status::{StatusWriter, find_name};
+use super::status::{StatusWriter, find_id, names};
 use crate::{
     cmd::gh_json,
     forge::Repo,
@@ -92,20 +92,12 @@ pub struct StatusRead {
 impl Board {
     /// The id of the option named `to`, matched case-insensitively.
     pub fn option_id(&self, to: &str, field: &str) -> Result<&str> {
-        let name =
-            find_name(self.options.iter().map(|(_, n)| n.as_str()), to).with_context(|| {
-                let names: Vec<&str> = self.options.iter().map(|(_, n)| n.as_str()).collect();
-                format!(
-                    "no option `{to}` in `{field}` ([github] status_field); options: {}",
-                    names.join(", ")
-                )
-            })?;
-        Ok(self
-            .options
-            .iter()
-            .find(|(_, n)| n == name)
-            .map(|(id, _)| id.as_str())
-            .expect("find_name returned one of these names"))
+        find_id(&self.options, to).with_context(|| {
+            format!(
+                "no option `{to}` in `{field}` ([github] status_field); options: {}",
+                names(&self.options)
+            )
+        })
     }
 }
 

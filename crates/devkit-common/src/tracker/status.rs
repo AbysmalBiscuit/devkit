@@ -97,9 +97,23 @@ pub fn target<'a>(t: &'a EventTransition, current: Option<&str>) -> Target<'a> {
     }
 }
 
-/// The entry in `names` that `wanted` names, compared like [`target`].
-pub fn find_name<'a>(names: impl IntoIterator<Item = &'a str>, wanted: &str) -> Option<&'a str> {
-    names.into_iter().find(|n| same_status(n, wanted))
+/// The id paired with the name `wanted` names in `(id, name)` pairs,
+/// compared like [`target`].
+pub fn find_id<'a>(pairs: &'a [(String, String)], wanted: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .find(|(_, n)| same_status(n, wanted))
+        .map(|(id, _)| id.as_str())
+}
+
+/// The names in `(id, name)` pairs, comma-separated, for an error that lists
+/// what a tracker has.
+pub fn names(pairs: &[(String, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(_, n)| n.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -149,13 +163,18 @@ mod tests {
     }
 
     #[test]
-    fn find_name_is_case_and_space_insensitive() {
-        assert_eq!(
-            find_name(["Todo", "In Progress"], " in progress"),
-            Some("In Progress")
-        );
-        assert_eq!(find_name(["Todo"], "Done"), None);
-        assert_eq!(find_name(["ГОТОВО"], "готово"), Some("ГОТОВО"));
+    fn find_id_is_case_and_space_insensitive() {
+        let pairs = |names: &[&str]| -> Vec<(String, String)> {
+            names
+                .iter()
+                .map(|n| (format!("id-{n}"), n.to_string()))
+                .collect()
+        };
+        let board = pairs(&["Todo", "In Progress"]);
+        assert_eq!(find_id(&board, " in progress"), Some("id-In Progress"));
+        assert_eq!(find_id(&board, "Done"), None);
+        assert_eq!(find_id(&pairs(&["ГОТОВО"]), "готово"), Some("id-ГОТОВО"));
+        assert_eq!(names(&board), "Todo, In Progress");
     }
 
     fn github_with_project() -> GithubConfig {

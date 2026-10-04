@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::{
     linear::{parse_id, post_graphql},
-    status::{StatusWriter, find_name},
+    status::{StatusWriter, find_id, names},
 };
 
 /// One query reading the issue's UUID, its state, and its team's states.
@@ -32,20 +32,12 @@ pub struct LinearStatus {
 impl LinearStatus {
     /// The id of the team state named `to`, matched case-insensitively.
     pub fn state_id(&self, to: &str) -> Result<&str> {
-        let name =
-            find_name(self.states.iter().map(|(_, n)| n.as_str()), to).with_context(|| {
-                let names: Vec<&str> = self.states.iter().map(|(_, n)| n.as_str()).collect();
-                format!(
-                    "no state `{to}` in the issue's team; states: {}",
-                    names.join(", ")
-                )
-            })?;
-        Ok(self
-            .states
-            .iter()
-            .find(|(_, n)| n == name)
-            .map(|(id, _)| id.as_str())
-            .expect("find_name returned one of these names"))
+        find_id(&self.states, to).with_context(|| {
+            format!(
+                "no state `{to}` in the issue's team; states: {}",
+                names(&self.states)
+            )
+        })
     }
 }
 
