@@ -41,10 +41,10 @@ pub fn status(e: &anyhow::Error) -> Option<StatusCode> {
 }
 
 /// Whether `e` is a request that never got a response: the host did not
-/// resolve, refused, or timed out.
+/// resolve, refused, hung up before answering, or timed out.
 pub fn is_unreachable(e: &anyhow::Error) -> bool {
     e.downcast_ref::<reqwest::Error>()
-        .is_some_and(|e| e.is_connect() || e.is_timeout())
+        .is_some_and(|e| e.is_request() || e.is_timeout())
 }
 
 fn tls_config() -> rustls::ClientConfig {
@@ -123,5 +123,38 @@ fn trust_store() -> String {
         "the platform certificate store".to_string()
     } else {
         named.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::{BufRead, BufReader},
+        net::TcpListener,
+    };
+
+    use super::*;
+
+    /// A loopback server that reads each request and hangs up without
+    /// answering; returns its URL.
+    fn hang_up() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for tcp in listener.incoming().flatten() {
+                let mut reader = BufReader::new(&tcp);
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+            }
+        });
+        format!("http://127.0.0.1:{port}/")
+    }
+
+    #[test]
+    fn a_connection_closed_before_any_answer_is_unreachable() {
+        let err = send(client().get(hang_up())).unwrap_err();
+        assert!(is_unreachable(&err), "{err:#}");
     }
 }
