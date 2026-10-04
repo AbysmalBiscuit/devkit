@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.14.10](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.9...v0.14.10) (2026-10-04)
+
+
+### Features
+
+* **issue:** move tracker status on issue events ([#236](https://github.com/AbysmalBiscuit/devkit/issues/236)) ([83be438](https://github.com/AbysmalBiscuit/devkit/commit/83be438279dddef60273c92b8f772c59687a2b4a))
+* **todo:** attribute Codex sub-agents via pabal ([#228](https://github.com/AbysmalBiscuit/devkit/issues/228)) ([0d9a7d9](https://github.com/AbysmalBiscuit/devkit/commit/0d9a7d9d3732b91b31bcc380fb21ef9bf6356cfb))
+* **todo:** hold agents to their open todos at stop ([#239](https://github.com/AbysmalBiscuit/devkit/issues/239)) ([6aff0a9](https://github.com/AbysmalBiscuit/devkit/commit/6aff0a9d50e46ddd888420ead17be1843b50092f))
+* **todo:** keep todo lists in Postgres ([#238](https://github.com/AbysmalBiscuit/devkit/issues/238)) ([c5d7ffd](https://github.com/AbysmalBiscuit/devkit/commit/c5d7ffdd632cb212eea986e641f2bd315f0d5276))
+* **todo:** keep todo lists in taskchampion, local or synced ([#224](https://github.com/AbysmalBiscuit/devkit/issues/224)) ([f7672f7](https://github.com/AbysmalBiscuit/devkit/commit/f7672f778fd667f2dffb186047b9de21f8d2238e))
+* **todo:** keep todo lists in taskwarrior ([#223](https://github.com/AbysmalBiscuit/devkit/issues/223)) ([dd94c0b](https://github.com/AbysmalBiscuit/devkit/commit/dd94c0b0de418a95d41cf6cc8155ff2626870543))
+* **todo:** move to taskchampion 3.1 and reqwest ([#229](https://github.com/AbysmalBiscuit/devkit/issues/229)) ([227792a](https://github.com/AbysmalBiscuit/devkit/commit/227792a3d12e545b00c4e6879d33f969758a67b6))
+* **todo:** record subagent runs and claim intervals ([#234](https://github.com/AbysmalBiscuit/devkit/issues/234)) ([784b708](https://github.com/AbysmalBiscuit/devkit/commit/784b70887111239c35df9ef63ba5e6ae820af4b4))
+* **todo:** track agent todo lists in devkit ([#219](https://github.com/AbysmalBiscuit/devkit/issues/219)) ([7bda9b4](https://github.com/AbysmalBiscuit/devkit/commit/7bda9b459f25ce2366ac4b48e53faad9b2ee74bd))
+
+
+### Bug Fixes
+
+* **cloud:** merge patch commits on git 2.43 ([#233](https://github.com/AbysmalBiscuit/devkit/issues/233)) ([23a8eb9](https://github.com/AbysmalBiscuit/devkit/commit/23a8eb990115e0500bf833a152739caed857c338))
+
 ## [0.14.9](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.8...v0.14.9) (2026-09-30)
 
 
