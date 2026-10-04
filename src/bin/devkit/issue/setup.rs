@@ -598,6 +598,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         // `issue setup` has no PR to record — there is none yet.
         pr: None,
         baseline: None,
+        ..Default::default()
     })?;
     if !args.no_gitignore
         && let Err(e) = devkit_common::gitignore::ensure_devkit_ignored()

@@ -363,6 +363,7 @@ mod tests {
             summary: None,
             pr: None,
             baseline: None,
+            ..Default::default()
         };
         let target = Target {
             channel: "U_LEV".into(),

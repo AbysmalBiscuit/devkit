@@ -16,7 +16,7 @@ use super::{
     proof::require_proof,
     require_reviewer_for_ready,
     resolve::{
-        Existing, assert_belongs, parse_pr_flag, record_with_pr, resolve_existing, verify_created,
+        Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing, verify_created,
     },
     reviewer_logins,
 };
@@ -235,9 +235,9 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
         }
     };
 
-    if let Some(rec) = record_with_pr(args.existing.record, resolved.locator.clone()) {
+    if args.existing.record.is_some() {
         let toplevel = devkit_common::vcs::checkout_root(Path::new(start))?;
-        devkit_common::record::write(&toplevel, &rec)?;
+        record_pr(&toplevel, resolved.locator.clone())?;
     }
     Ok(resolved)
 }
@@ -439,6 +439,7 @@ mod tests {
             summary: None,
             pr: None,
             baseline: None,
+            ..Default::default()
         };
         let ctx = worktree_context(Some(&record), Some("lev/eng-1-fix"));
         let out = render_review("Closes {{ issue }}", "pr_body", &ctx, &vars, None).unwrap();

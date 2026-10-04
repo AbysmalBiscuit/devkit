@@ -199,6 +199,7 @@ github = "sweeper[bot]"
             summary: None,
             pr: None,
             baseline: None,
+            ..Default::default()
         })
         .expect("write issue record");
     }

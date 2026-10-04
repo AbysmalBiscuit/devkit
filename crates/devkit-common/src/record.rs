@@ -1,12 +1,13 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use devkit_config::IssueEvent;
 use serde::{Deserialize, Serialize};
 
 /// Per-worktree record written by `issue setup`, carrying the setup-time
 /// context that is otherwise unavailable later: the authoritative issue id, and
 /// the slug, apps and summary path that `issue review` and `issue end` need.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IssueRecord {
     pub issue: String,
     pub slug: String,
@@ -32,6 +33,24 @@ pub struct IssueRecord {
     /// orphaning every existing baseline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<BaselinePin>,
+    /// Which command created the worktree. Absent on records written before
+    /// it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<RecordOrigin>,
+    /// The `[issue.events]` already claimed for this worktree, each fired at
+    /// most once. `None` on a record written before events existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<IssueEvent>>,
+}
+
+/// The command that created a worktree and wrote its record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordOrigin {
+    /// `issue setup`: the worktree where the issue's work happens.
+    Setup,
+    /// `issue pr checkout`: a reviewer's worktree on an existing PR.
+    Checkout,
 }
 
 /// One worktree's pin on a baseline: which sha it was built at, and where it
@@ -48,7 +67,7 @@ pub struct BaselinePin {
 /// baseline — `Unusable` means a record exists and cannot be confirmed, which
 /// must not be counted as "references nothing" by a baseline referencer scan.
 pub enum RecordState {
-    Ok(IssueRecord),
+    Ok(Box<IssueRecord>),
     Unusable,
     Absent,
 }
@@ -77,6 +96,57 @@ pub fn write(worktree: &Path, rec: &IssueRecord) -> Result<()> {
     std::fs::rename(&tmp, &p).with_context(|| format!("renaming into {}", p.display()))
 }
 
+/// Read, change and write the record under an exclusive lock on
+/// `<worktree>/.devkit/issue.lock`, so concurrent updaters each see the
+/// others' writes. `f` gets `None` when the record is absent or unreadable,
+/// and the record is written when `f` leaves it `Some` and changed.
+///
+/// A record that exists and cannot be read is never overwritten: replacing it
+/// would discard the issue id, slug, apps, summary path and PR it still holds.
+pub fn update<T>(worktree: &Path, f: impl FnOnce(&mut Option<IssueRecord>) -> T) -> Result<T> {
+    let p = path(worktree);
+    let dir = p.parent().expect("path has a parent");
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    crate::gitignore::write_self_ignore(dir);
+    crate::store::with_file_lock(&dir.join("issue.lock"), || {
+        let (before, unreadable) = match read_state(worktree) {
+            RecordState::Ok(rec) => (Some(*rec), false),
+            RecordState::Unusable => (None, true),
+            RecordState::Absent => (None, false),
+        };
+        let mut rec = before.clone();
+        let out = f(&mut rec);
+        if let Some(after) = rec.filter(|r| Some(r) != before.as_ref()) {
+            if unreadable {
+                bail!(
+                    "{} can be neither read nor ruled out; repair or remove it",
+                    p.display()
+                );
+            }
+            write(worktree, &after)?;
+        }
+        Ok(out)
+    })
+}
+
+/// Claim `event` for the worktree: add it to the record's `events` and return
+/// `true`, or return `false` when it was already claimed or there is no
+/// readable record to hold the claim.
+pub fn claim(worktree: &Path, event: IssueEvent) -> Result<bool> {
+    if !path(worktree).exists() {
+        return Ok(false);
+    }
+    update(worktree, |rec| {
+        let Some(rec) = rec else { return false };
+        let events = rec.events.get_or_insert_with(Vec::new);
+        let fresh = !events.contains(&event);
+        if fresh {
+            events.push(event);
+        }
+        fresh
+    })
+}
+
 /// Read the record from `<worktree>/.devkit/issue.toml`, or `None` if absent or
 /// unparseable.
 pub fn read(worktree: &Path) -> Option<IssueRecord> {
@@ -94,7 +164,7 @@ pub fn read_state(worktree: &Path) -> RecordState {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => RecordState::Absent,
         Err(_) => RecordState::Unusable,
         Ok(body) => match toml::from_str(&body) {
-            Ok(r) => RecordState::Ok(r),
+            Ok(r) => RecordState::Ok(Box::new(r)),
             Err(_) => RecordState::Unusable,
         },
     }
@@ -120,6 +190,7 @@ mod tests {
                 sha: "d13d90b724bf".into(),
                 path: "/b/d13d".into(),
             }),
+            ..Default::default()
         };
         write(dir.path(), &rec).unwrap();
         assert_eq!(read(dir.path()), Some(rec));
@@ -172,6 +243,7 @@ mod tests {
                 sha: "d13d90b724bf".into(),
                 path: "/b/d13d".into(),
             }),
+            ..Default::default()
         };
         write(dir.path(), &rec).unwrap();
         assert_eq!(read(dir.path()), Some(rec));
@@ -204,6 +276,105 @@ mod tests {
         assert!(matches!(read_state(dir.path()), RecordState::Unusable));
     }
 
+    #[test]
+    fn a_record_without_events_reads_as_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
+        std::fs::write(
+            path(dir.path()),
+            "issue = \"65\"\nslug = \"x\"\napps = []\n",
+        )
+        .unwrap();
+        let rec = read(dir.path()).unwrap();
+        assert_eq!((rec.events, rec.origin), (None, None));
+    }
+
+    #[test]
+    fn events_and_origin_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = IssueRecord {
+            issue: "65".into(),
+            origin: Some(RecordOrigin::Checkout),
+            events: Some(vec![IssueEvent::PrOpen]),
+            ..Default::default()
+        };
+        write(dir.path(), &rec).unwrap();
+        let body = std::fs::read_to_string(path(dir.path())).unwrap();
+        assert!(
+            body.contains("origin = \"checkout\"") && body.contains("\"pr_open\""),
+            "{body}"
+        );
+        assert_eq!(read(dir.path()), Some(rec));
+    }
+
+    #[test]
+    fn claim_adds_an_event_once() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), &IssueRecord {
+            issue: "65".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(claim(dir.path(), IssueEvent::Start).unwrap());
+        assert!(!claim(dir.path(), IssueEvent::Start).unwrap());
+        assert_eq!(
+            read(dir.path()).unwrap().events,
+            Some(vec![IssueEvent::Start])
+        );
+    }
+
+    #[test]
+    fn concurrent_claims_have_one_winner_and_keep_a_concurrent_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), &IssueRecord {
+            issue: "65".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let wins: usize = std::thread::scope(|s| {
+            let claims: Vec<_> = (0..8)
+                .map(|_| s.spawn(|| claim(dir.path(), IssueEvent::Start).unwrap()))
+                .collect();
+            let pin = s.spawn(|| {
+                update(dir.path(), |r| {
+                    r.as_mut().unwrap().baseline = Some(BaselinePin {
+                        sha: "abc".into(),
+                        path: "/b".into(),
+                    });
+                })
+                .unwrap()
+            });
+            pin.join().unwrap();
+            claims
+                .into_iter()
+                .map(|h| usize::from(h.join().unwrap()))
+                .sum()
+        });
+        assert_eq!(wins, 1);
+        let rec = read(dir.path()).unwrap();
+        assert_eq!(rec.events, Some(vec![IssueEvent::Start]));
+        assert_eq!(rec.baseline.unwrap().sha, "abc");
+    }
+
+    #[test]
+    fn claiming_without_a_record_claims_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!claim(dir.path(), IssueEvent::Start).unwrap());
+        assert!(read(dir.path()).is_none());
+    }
+
+    #[test]
+    fn claiming_on_a_corrupt_record_claims_nothing_and_leaves_it() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
+        std::fs::write(path(dir.path()), "not toml").unwrap();
+        assert!(!claim(dir.path(), IssueEvent::Start).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(path(dir.path())).unwrap(),
+            "not toml"
+        );
+    }
+
     /// The rename is what makes a write atomic: a reader sees either the whole
     /// previous record or the whole new one, never a truncated file. Asserting
     /// the temp file is gone is what pins the rename — a plain `fs::write`
@@ -218,6 +389,7 @@ mod tests {
             summary: None,
             pr: None,
             baseline: None,
+            ..Default::default()
         };
         write(dir.path(), &rec).unwrap();
         let leftovers: Vec<_> = std::fs::read_dir(dir.path().join(".devkit"))

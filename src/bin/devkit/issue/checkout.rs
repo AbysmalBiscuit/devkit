@@ -418,6 +418,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
                 number: meta.number,
             }),
             baseline: None,
+            ..Default::default()
         })?;
         Ok(issue)
     })?;

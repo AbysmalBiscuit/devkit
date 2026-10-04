@@ -1263,29 +1263,25 @@ pub fn prune_all(
 /// caller propagates rather than starting servers under a baseline no record
 /// names.
 pub fn write_pin(worktree: &Path, sha: &str, path: &Path) -> Result<()> {
-    let mut rec = match devkit_common::record::read_state(worktree) {
-        RecordState::Ok(rec) => rec,
-        RecordState::Unusable => anyhow::bail!(
-            "{} can be neither read nor ruled out; repair or remove it before pinning a baseline",
-            devkit_common::record::path(worktree).display()
-        ),
-        RecordState::Absent => {
-            let branch = Vcs::at(worktree).branch(worktree)?;
-            devkit_common::record::IssueRecord {
-                issue: branch.clone(),
-                slug: branch,
-                apps: vec![],
-                summary: None,
-                pr: None,
-                baseline: None,
+    devkit_common::record::update(worktree, |rec| {
+        let rec = match rec {
+            Some(rec) => rec,
+            None => {
+                let branch = Vcs::at(worktree).branch(worktree)?;
+                rec.insert(devkit_common::record::IssueRecord {
+                    issue: branch.clone(),
+                    slug: branch,
+                    ..Default::default()
+                })
             }
-        }
-    };
-    rec.baseline = Some(devkit_common::record::BaselinePin {
-        sha: sha.to_string(),
-        path: path.to_string_lossy().into_owned(),
-    });
-    devkit_common::record::write(worktree, &rec)
+        };
+        rec.baseline = Some(devkit_common::record::BaselinePin {
+            sha: sha.to_string(),
+            path: path.to_string_lossy().into_owned(),
+        });
+        Ok(())
+    })
+    .context("pinning a baseline")?
 }
 
 #[cfg(test)]
@@ -2205,6 +2201,7 @@ mod tests {
                     sha: sha.clone(),
                     path: baseline.to_string_lossy().into_owned(),
                 }),
+                ..Default::default()
             })
             .unwrap();
             wt
