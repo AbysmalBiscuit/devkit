@@ -180,11 +180,14 @@ fn a_stale_openai_yaml_fails_naming_the_regenerate_command() {
     );
 }
 
-/// The limits the Agent Skills specification sets, which every harness this
-/// plugin installs into enforces.
+/// The limits the Agent Skills specification sets, which every harness that
+/// loads these skills enforces.
 #[test]
 fn every_skill_has_a_valid_name_and_description() {
-    for dir in skill_dirs() {
+    for dir in CODEX_SKILL_ROOTS
+        .iter()
+        .flat_map(|root| skill_dirs_under(Path::new(root)))
+    {
         let meta = frontmatter::<serde_yaml_ng::Value>(&dir);
         let dir_name = dir.file_name().unwrap().to_str().unwrap();
 
