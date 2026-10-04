@@ -199,12 +199,19 @@ fn sub_agent_bash(p: &Proj, command: &str) -> Value {
     })
 }
 
+/// An activity log nothing can be written to or read from: `events.jsonl` a
+/// directory and `seen` a file, which fail alike on Unix and Windows.
+fn break_log(p: &Proj) {
+    let dir = p.state().join("todo/activity");
+    std::fs::create_dir_all(dir.join("events.jsonl")).unwrap();
+    std::fs::write(dir.join("seen"), "not a directory").unwrap();
+}
+
 #[test]
 fn a_record_that_cannot_be_written_changes_no_verdict() {
     let healthy = Proj::new();
     let broken = Proj::new();
-    std::fs::create_dir_all(broken.state().join("todo")).unwrap();
-    std::fs::write(broken.state().join("todo/activity"), "not a directory").unwrap();
+    break_log(&broken);
 
     let verdict = |p: &Proj| {
         let id = todo(p, &["add", "a"], &[]);
@@ -315,8 +322,7 @@ fn a_subagents_hooks_move_where_a_lost_run_ends() {
 #[test]
 fn an_unreadable_log_is_an_error_naming_its_path() {
     let p = Proj::new();
-    std::fs::create_dir_all(p.state().join("todo")).unwrap();
-    std::fs::write(p.state().join("todo/activity"), "not a directory").unwrap();
+    break_log(&p);
     let out = p.devkit(&["activity"], &[]);
     assert!(!out.status.success());
     let err = stderr(&out);
