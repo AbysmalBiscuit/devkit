@@ -248,7 +248,7 @@ fn with_payload(
     let cwd = record::payload_cwd(&payload);
     let checkout = Checkout::at(&cwd);
     let out = f(&payload, &checkout, &cwd);
-    activity::observe(&payload, event, &checkout, &cwd);
+    activity::observe_within(&payload, event, &checkout, &cwd);
     out
 }
 
@@ -263,9 +263,9 @@ fn with_payload_held(
     let cwd = record::payload_cwd(&payload);
     let checkout = Checkout::at(&cwd);
     if f(&payload, &checkout, &cwd) {
-        activity::seen(&payload, &checkout, &cwd);
+        activity::seen_within(&payload, &checkout, &cwd);
     } else {
-        activity::observe(&payload, event, &checkout, &cwd);
+        activity::observe_within(&payload, event, &checkout, &cwd);
     }
     Ok(())
 }
@@ -302,14 +302,14 @@ pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
     };
     let cwd = record::payload_cwd(&payload);
     let checkout = Checkout::at(&cwd);
-    activity::observe(&payload, HookEvent::PreToolUse, &checkout, &cwd);
-    if let Some(write) = edit::write(&payload) {
-        return edit::guard(&payload, write, &checkout, &cwd);
-    }
-    match payload.tool() {
-        Some(pabal::Tool::Mcp { .. }) => mcp::guard(&payload, &checkout, &cwd),
-        _ => shell::guard(&payload, &checkout),
-    }
+    let verdict = match (edit::write(&payload), payload.tool()) {
+        (Some(write), _) => edit::guard(&payload, write, &checkout, &cwd),
+        (None, Some(pabal::Tool::Mcp { .. })) => mcp::guard(&payload, &checkout, &cwd),
+        (None, _) => shell::guard(&payload, &checkout),
+    };
+    // After the verdict is out, so a slow activity log never delays it.
+    activity::observe_within(&payload, HookEvent::PreToolUse, &checkout, &cwd);
+    verdict
 }
 
 /// Write a hook's answer to stdout. A closed pipe or a full disk on the other

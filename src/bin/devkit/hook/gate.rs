@@ -288,7 +288,7 @@ fn conflict_message(conflicts: &[Conflict]) -> String {
 }
 
 #[derive(Debug)]
-enum StageError {
+pub(super) enum StageError {
     TimedOut,
     Panicked,
 }
@@ -296,7 +296,7 @@ enum StageError {
 /// Run `work` on its own thread and wait at most `deadline`. On a timeout the
 /// thread is left running; the hook process exits once its verdict is out,
 /// which ends it.
-fn with_deadline<T: Send + 'static>(
+pub(super) fn with_deadline<T: Send + 'static>(
     deadline: Duration,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, StageError> {

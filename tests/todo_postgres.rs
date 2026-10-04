@@ -684,3 +684,46 @@ fn a_hook_releases_many_claims_in_one_go() {
     }
     admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_hook_whose_activity_setup_hangs_still_answers_in_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("ca.crt");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let p = Proj::with_home_config(&format!(
+        "[todo]\nbackend = \"postgres\"\n[todo.postgres]\nca_file = \"{}\"\n",
+        fifo.display()
+    ));
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "S",
+        "agent_id": "a1",
+        "agent_type": "general-purpose",
+        "tool_name": "Bash",
+        "tool_input": {"command": "devkit todo list"},
+        "cwd": p.path,
+    });
+    let file = dir.path().join("payload.json");
+    std::fs::write(&file, payload.to_string()).unwrap();
+    let started = Instant::now();
+    let out = p.shell(
+        &format!(
+            "timeout 10 devkit hook pre-tool-use --harness claude-code < '{}'",
+            file.display()
+        ),
+        &[(DATABASE_VAR, "postgres://agent@127.0.0.1:1/todos")],
+    );
+    let took = started.elapsed();
+    assert!(out.status.success(), "{:?}: {}", out.status, stderr(&out));
+    assert!(took < Duration::from_secs(3), "the hook took {took:?}");
+    assert!(
+        stdout(&out).contains("DEVKIT_TODO_HOLDER='S/a1' devkit todo list"),
+        "{}",
+        stdout(&out)
+    );
+}
