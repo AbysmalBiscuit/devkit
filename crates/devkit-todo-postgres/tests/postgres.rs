@@ -177,3 +177,18 @@ fn a_server_without_tls_is_refused_unless_the_url_disables_it() {
         .check()
         .unwrap();
 }
+
+#[test]
+fn a_plaintext_url_ignores_the_ca_file() {
+    let Some(direct) = url(DIRECT) else {
+        return;
+    };
+    let plain = format!("{}?sslmode=disable", without_query(&direct));
+    let trust = Trust {
+        ca_file: Some("/nonexistent/ca.crt".into()),
+    };
+    Database::new(&plain, Duration::from_secs(10), &trust)
+        .unwrap()
+        .check()
+        .unwrap();
+}

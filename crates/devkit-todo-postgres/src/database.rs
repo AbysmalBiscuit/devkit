@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use devkit_common::tls::Trust;
 use tokio::runtime::Runtime;
-use tokio_postgres::{Client, Config, config::SslMode, error::SqlState};
+use tokio_postgres::{Client, Config, NoTls, config::SslMode, error::SqlState};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 /// Everything devkit keeps, in a schema of its own so it stays out of the
@@ -81,6 +81,7 @@ enum State {
 /// database may sit behind a transaction-mode pooler.
 pub struct Database {
     config: Option<Config>,
+    /// `None` for `sslmode=disable`, which reads no CA file.
     tls: Option<MakeRustlsConnect>,
     wait: Duration,
     /// When set, every operation gives up by then, whatever its wait.
@@ -114,10 +115,13 @@ impl Database {
         if config.get_ssl_mode() == SslMode::Prefer {
             config.ssl_mode(SslMode::Require);
         }
-        let tls = MakeRustlsConnect::new(trust.client_config()?);
+        let tls = match config.get_ssl_mode() {
+            SslMode::Disable => None,
+            _ => Some(MakeRustlsConnect::new(trust.client_config()?)),
+        };
         Ok(Arc::new(Self {
             config: Some(config),
-            tls: Some(tls),
+            tls,
             wait,
             deadline: Mutex::new(None),
             on_connect_failure: OnceLock::new(),
@@ -260,11 +264,19 @@ impl Database {
             *state = State::Closed;
         }
         if let State::Closed = state {
-            let (Some(config), Some(tls)) = (&self.config, &self.tls) else {
-                return Err(anyhow!("no database"));
+            let config = self.config.as_ref().ok_or_else(|| anyhow!("no database"))?;
+            let client = match &self.tls {
+                Some(tls) => {
+                    let (client, connection) = config.connect(tls.clone()).await?;
+                    tokio::spawn(connection);
+                    client
+                }
+                None => {
+                    let (client, connection) = config.connect(NoTls).await?;
+                    tokio::spawn(connection);
+                    client
+                }
             };
-            let (client, connection) = config.connect(tls.clone()).await?;
-            tokio::spawn(connection);
             *state = State::Open(client);
         }
         match state {
