@@ -81,8 +81,11 @@ enum State {
 /// database may sit behind a transaction-mode pooler.
 pub struct Database {
     config: Option<Config>,
-    /// `None` for `sslmode=disable`, which reads no CA file.
-    tls: Option<MakeRustlsConnect>,
+    /// What the connection trusts, read when it first connects, so a CA
+    /// file that is slow or never ends to read counts against that wait.
+    trust: Trust,
+    /// The TLS setup built from `trust` by the first connect that needed it.
+    tls: OnceLock<MakeRustlsConnect>,
     wait: Duration,
     /// When set, every operation gives up by then, whatever its wait.
     deadline: Mutex<Option<Instant>>,
@@ -115,13 +118,10 @@ impl Database {
         if config.get_ssl_mode() == SslMode::Prefer {
             config.ssl_mode(SslMode::Require);
         }
-        let tls = match config.get_ssl_mode() {
-            SslMode::Disable => None,
-            _ => Some(MakeRustlsConnect::new(trust.client_config()?)),
-        };
         Ok(Arc::new(Self {
             config: Some(config),
-            tls,
+            trust: trust.clone(),
+            tls: OnceLock::new(),
             wait,
             deadline: Mutex::new(None),
             on_connect_failure: OnceLock::new(),
@@ -134,7 +134,8 @@ impl Database {
     pub fn unusable(reason: impl fmt::Display) -> Arc<Self> {
         Arc::new(Self {
             config: None,
-            tls: None,
+            trust: Trust::default(),
+            tls: OnceLock::new(),
             wait: Duration::ZERO,
             deadline: Mutex::new(None),
             on_connect_failure: OnceLock::new(),
@@ -265,7 +266,11 @@ impl Database {
         }
         if let State::Closed = state {
             let config = self.config.as_ref().ok_or_else(|| anyhow!("no database"))?;
-            let client = match &self.tls {
+            let tls = match config.get_ssl_mode() {
+                SslMode::Disable => None,
+                _ => Some(self.tls().await?),
+            };
+            let client = match tls {
                 Some(tls) => {
                     let (client, connection) = config.connect(tls.clone()).await?;
                     tokio::spawn(connection);
@@ -286,14 +291,46 @@ impl Database {
     }
 }
 
+impl Database {
+    /// The TLS setup, built on a blocking thread the first time a connect
+    /// needs it, so the caller's timeout covers reading the CA file.
+    async fn tls(&self) -> Result<MakeRustlsConnect> {
+        if let Some(tls) = self.tls.get() {
+            return Ok(tls.clone());
+        }
+        let trust = self.trust.clone();
+        let config = tokio::task::spawn_blocking(move || trust.client_config())
+            .await
+            .map_err(|e| anyhow!("{e}"))
+            .and_then(|config| config)
+            .context(TlsSetup)?;
+        Ok(self
+            .tls
+            .get_or_init(|| MakeRustlsConnect::new(config))
+            .clone())
+    }
+}
+
+/// Marks an error in setting up TLS, such as a CA file that cannot be read:
+/// a fault on this machine, not an unreachable database.
+#[derive(Debug)]
+struct TlsSetup;
+
+impl fmt::Display for TlsSetup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("setting up TLS for the todo database")
+    }
+}
+
 /// Whether `e` is an operation that got no answer from the server: it could
 /// not connect, timed out, or lost the connection.
 pub fn is_unreachable(e: &anyhow::Error) -> bool {
-    !e.chain().any(|cause| {
-        cause
-            .downcast_ref::<tokio_postgres::Error>()
-            .is_some_and(|e| e.as_db_error().is_some())
-    })
+    e.downcast_ref::<TlsSetup>().is_none()
+        && !e.chain().any(|cause| {
+            cause
+                .downcast_ref::<tokio_postgres::Error>()
+                .is_some_and(|e| e.as_db_error().is_some())
+        })
 }
 
 /// Whether `e` is the server reporting that devkit's schema or one of its

@@ -148,11 +148,13 @@ fn a_ca_file_that_cannot_be_read_is_named() {
     let trust = Trust {
         ca_file: Some("/nonexistent/ca.crt".into()),
     };
-    let err = Database::new("postgres://h/db", Duration::from_secs(1), &trust).unwrap_err();
+    let db = Database::new("postgres://127.0.0.1:1/db", Duration::from_secs(1), &trust).unwrap();
+    let err = db.check().unwrap_err();
     assert!(
         format!("{err:#}").contains("/nonexistent/ca.crt"),
         "{err:#}"
     );
+    assert!(!devkit_todo_postgres::is_unreachable(&err), "{err:#}");
 }
 
 /// `url` without its query, so its `sslmode` falls back to the default.

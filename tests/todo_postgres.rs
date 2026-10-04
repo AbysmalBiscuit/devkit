@@ -1030,3 +1030,36 @@ fn a_project_layer_cannot_name_the_ca_file() {
         "the global CA file is still read: {detail}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn session_end_with_a_hanging_ca_file_finishes_inside_its_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("ca.crt");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let p = Proj::with_home_config(&format!(
+        "[todo]\nbackend = \"postgres\"\n[todo.postgres]\nca_file = \"{}\"\n",
+        fifo.display()
+    ));
+    let end = json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path});
+    let started = Instant::now();
+    let mut child = p.devkit_fed(
+        &["hook", "session-end", "--harness", "claude-code"],
+        &[(DATABASE_VAR, "postgres://agent@127.0.0.1:1/todos")],
+        &end.to_string(),
+    );
+    while child.try_wait().unwrap().is_none() {
+        if started.elapsed() > Duration::from_secs(10) {
+            child.kill().unwrap();
+            panic!("session-end was still running after 10s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let took = started.elapsed();
+    assert!(child.wait().unwrap().success());
+    assert!(took < HOOK_BUDGET, "session-end took {took:?}");
+}
