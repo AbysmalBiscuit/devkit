@@ -40,7 +40,17 @@ pub(crate) fn observe(payload: &Payload, event: HookEvent) {
             agent: agent.clone(),
         })
         .and_then(|()| log.forget(&session, Some(&agent))),
-        (_, Some(agent)) => log.seen(&session, &agent),
+        (_, Some(_)) => {
+            seen(payload);
+            Ok(())
+        }
         (_, None) => Ok(()),
     };
+}
+
+/// Marks the payload's agent seen, for the backstop, without ending its run.
+pub(crate) fn seen(payload: &Payload) {
+    if let (Some(session), Some(agent)) = (payload.session_id(), payload.agent_id()) {
+        let _ = ActivityLog::open().seen(session, agent);
+    }
 }

@@ -330,3 +330,104 @@ fn session_end_forgets_the_sessions_holds() {
     silent(&p.hook("session-end", "claude-code", &end));
     assert!(!holds.exists(), "{}", holds.display());
 }
+
+fn sub_agent(p: &Proj, event: &str, agent_type: Option<&str>) -> Value {
+    let mut payload = json!({
+        "hook_event_name": event,
+        "session_id": "S",
+        "agent_id": "a1",
+        "cwd": p.path,
+    });
+    if let Some(agent_type) = agent_type {
+        payload["agent_type"] = json!(agent_type);
+    }
+    payload
+}
+
+fn sub_agent_stop(p: &Proj) -> std::process::Output {
+    p.hook(
+        "subagent-stop",
+        "claude-code",
+        &sub_agent(p, "SubagentStop", Some("general-purpose")),
+    )
+}
+
+fn locked_by(p: &Proj, holder: &str) -> bool {
+    let out = p.devkit(&["locks", "status", "--json"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    stdout(&out).contains(&format!("\"{holder}\""))
+}
+
+fn run_open(p: &Proj) -> bool {
+    let runs = p.activity().runs;
+    let run = runs
+        .iter()
+        .find(|r| r.agent == "a1")
+        .unwrap_or_else(|| panic!("no run for a1: {runs:?}"));
+    run.end.is_none()
+}
+
+/// A sub-agent `a1` of session `S` that started, claimed a todo and holds a
+/// file lock.
+fn claiming_sub_agent(p: &Proj) -> String {
+    silent(&p.hook(
+        "subagent-start",
+        "claude-code",
+        &sub_agent(p, "SubagentStart", Some("general-purpose")),
+    ));
+    let id = seed(p, MAIN, "write the migration");
+    set(p, &id, StatusKind::InProgress, "S/a1");
+    let lock = p.devkit(&["locks", "acquire", "--as", "S/a1", "f"], &[]);
+    assert!(lock.status.success(), "{}", stderr(&lock));
+    assert!(locked_by(p, "S/a1"));
+    id
+}
+
+#[test]
+fn a_sub_agent_with_a_claim_is_held_and_keeps_everything() {
+    let p = Proj::new();
+    let id = claiming_sub_agent(&p);
+    let reason = blocked(&sub_agent_stop(&p));
+    assert!(reason.contains("write the migration"), "{reason}");
+    assert_eq!(p.todo(&id).status, devkit_todo::Status::InProgress {
+        by: Holder::new("S/a1")
+    });
+    assert!(locked_by(&p, "S/a1"));
+    assert!(run_open(&p));
+}
+
+#[test]
+fn an_allowed_sub_agent_releases_everything() {
+    let p = Proj::new();
+    let id = claiming_sub_agent(&p);
+    blocked(&sub_agent_stop(&p));
+    silent(&sub_agent_stop(&p));
+    assert_eq!(p.todo(&id).status, devkit_todo::Status::Pending);
+    assert!(!locked_by(&p, "S/a1"));
+    assert!(!run_open(&p));
+    let fingerprint = p
+        .state()
+        .join("todo/holds")
+        .join(devkit_todo::render::digest("S"))
+        .join(devkit_todo::render::digest("S/a1"));
+    assert!(!fingerprint.exists(), "{}", fingerprint.display());
+}
+
+#[test]
+fn a_fork_never_holds() {
+    let p = Proj::new();
+    let id = seed(&p, MAIN, "write the migration");
+    set(&p, &id, StatusKind::InProgress, "S");
+    silent(&p.hook(
+        "subagent-stop",
+        "claude-code",
+        &sub_agent(&p, "SubagentStop", None),
+    ));
+}
+
+#[test]
+fn a_sub_agent_that_never_claimed_goes_through() {
+    let p = Proj::new();
+    seed(&p, MAIN, "write the migration");
+    silent(&sub_agent_stop(&p));
+}

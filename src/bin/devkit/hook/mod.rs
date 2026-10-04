@@ -86,14 +86,29 @@ pub fn run(cli: HookCli) -> Result<()> {
     match cli.event {
         HookEvent::PreToolUse => pre_tool_use(harness),
         // The two verbs that release, which is the half with a correctness
-        // consequence, so it runs before the record.
-        HookEvent::SubagentStop => with_payload(harness, cli.event, |p| {
+        // consequence, so it runs before the record. A sub-agent held to its
+        // open todos is not stopping, so it keeps its claims, its locks and
+        // its run.
+        HookEvent::SubagentStop => with_payload_held(harness, cli.event, |p| {
             let cwd = record::payload_cwd(p);
             let checkout = devkit_common::vcs::Checkout::at(&cwd);
-            todo::release(p.subagent_holder(), &checkout, &cwd);
-            edit::release_subagent(p);
+            let holder = p.subagent_holder();
+            let answer = holder
+                .as_ref()
+                .and_then(|h| todo::hold(p, h, &checkout, &cwd));
+            let held = answer.is_some();
+            match answer {
+                Some(answer) => print_envelope(&answer),
+                None => {
+                    if let Some(h) = &holder {
+                        todo::rearm(h);
+                    }
+                    todo::release(holder, &checkout, &cwd);
+                    edit::release_subagent(p);
+                }
+            }
             record_in(p, cli.event, &checkout, &cwd);
-            Ok(())
+            held
         }),
         // Release, then record, then sweep. Release first because it is the
         // one step with a correctness consequence; the sweep last because it is
@@ -239,6 +254,22 @@ fn with_payload(
     let out = f(&payload);
     activity::observe(&payload, event);
     out
+}
+
+/// [`with_payload`] for a stop that can be refused: `f` returns whether it
+/// held the agent, whose run then stays open instead of ending.
+fn with_payload_held(
+    harness: Option<AnyHarness>,
+    event: HookEvent,
+    f: impl FnOnce(&Payload) -> bool,
+) -> Result<()> {
+    let payload = read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event));
+    if f(&payload) {
+        activity::seen(&payload);
+    } else {
+        activity::observe(&payload, event);
+    }
+    Ok(())
 }
 
 /// The retired `lockm hook <event>` spelling. Kept because an installed plugin
