@@ -53,13 +53,14 @@ Everything a harness sends enters one verb family, `devkit hook <event>`, and th
 | `post-tool-use`, `post-tool-use-failure` | Records the outcome. |
 | `session-end` | Releases the session's claims, records, sweeps the log. |
 | `subagent-stop` | Releases the subagent's claims, records. |
-| `session-start`, `subagent-start` | Records the frame. |
+| `session-start` | In a worktree `issue setup` created, with `[issue.events.start]` configured, claims `start` once and spawns a background `issue event start`. Records the frame. |
+| `subagent-start` | Records the frame. |
 | `permission-request`, `permission-denied` | Records what the harness asked about, or what its own classifier blocked. |
 | `stop`, `stop-failure`, `pre-compact`, `post-compact`, `cwd-changed` | Records the turn or context boundary. |
 | `worktree-create`, `worktree-remove` | Records the change. |
 | `user-prompt-submit` | Records, behind its own fidelity key. |
 
-Every verb except `pre-tool-use`, `session-end` and `subagent-stop` is record-only: with logging off each is a process spawn that reads the global config, learns logging is off, and exits. `devkit brief` still runs alongside `session-start`, `post-compact` and `cwd-changed` rather than being replaced by them. `devkit rules context` runs alongside `session-start` too, and again alongside `post-compact` on hosts that resume with a fresh SessionStart: it carries the repository's own must-severity rules when a rule index exists, and stays silent otherwise, so a session opens already knowing what governs the checkout as a whole.
+Every verb except `pre-tool-use`, `session-start`, `session-end` and `subagent-stop` is record-only: with logging off each is a process spawn that reads the global config, learns logging is off, and exits. `devkit brief` still runs alongside `session-start`, `post-compact` and `cwd-changed` rather than being replaced by them. `devkit rules context` runs alongside `session-start` too, and again alongside `post-compact` on hosts that resume with a fresh SessionStart: it carries the repository's own must-severity rules when a rule index exists, and stays silent otherwise, so a session opens already knowing what governs the checkout as a whole.
 
 Each manifest is a translation table with no logic in it. Every command carries `--harness <name>`, so identity never depends on guessing which fields a vendor sends this release; without it, devkit infers the harness from the payload's shape.
 
