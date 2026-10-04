@@ -261,6 +261,29 @@ fn attribution_leaves_the_sessions_own_command_alone() {
     assert_eq!(stdout(&out), "");
 }
 
+/// Cursor's shell carries no session id the todo CLI reads, so a holder
+/// prefix there would change nothing.
+#[test]
+fn attribution_leaves_cursor_commands_alone() {
+    let p = Proj::new();
+    let id = seed(&p, "a");
+    let out = p.hook(
+        "pre-tool-use",
+        "cursor",
+        &json!({
+            "hook_event_name": "preToolUse",
+            "conversation_id": "S",
+            "subagent_id": "a1",
+            "subagent_type": "explore",
+            "tool_name": "Shell",
+            "tool_input": {"command": format!("devkit todo start {id}")},
+            "cwd": p.path,
+        }),
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", todoenv::stderr(&out));
+    assert_eq!(stdout(&out), "");
+}
+
 /// The recorded payloads in `tests/fixtures/todo/<name>`, pointed at `p`.
 fn fixture(p: &Proj, name: &str) -> Vec<serde_json::Value> {
     let body = std::fs::read_to_string(format!("tests/fixtures/todo/{name}")).unwrap();

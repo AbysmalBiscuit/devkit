@@ -3,8 +3,8 @@
 //! - Release: when a sub-agent or session ends, the todos it still has in
 //!   progress return to pending.
 //! - Shell-guard attribution: a sub-agent's `devkit todo` status changes are
-//!   checked against other holders' claims, and on a harness that takes an
-//!   input rewrite its command is rewritten so the CLI acts as the sub-agent
+//!   checked against other holders' claims, and on a harness whose sessions
+//!   name a todo node its command is rewritten so the CLI acts as the sub-agent
 //!   when the invocation runs.
 //! - Native capture: the harness's own task and plan tools are mirrored into
 //!   the store after they run.
@@ -152,15 +152,17 @@ pub(crate) fn check_claims(
 /// invocation runs. A sub-agent's shell carries its session's id, so only the
 /// hook can tell the two apart.
 ///
-/// `None` outside Bash leaves the command alone, and the CLI acts as the
-/// session.
+/// `None` leaves the command alone, and the CLI acts as the session. That is
+/// the answer outside Bash, for a payload with no sub-agent holder, on a
+/// harness whose sessions name no todo node, and for a command with no
+/// `devkit todo` invocation.
 pub(crate) fn rewrite(
     payload: &Payload,
     analysis: &Analysis,
     command: &str,
     dialect: Dialect,
 ) -> Option<String> {
-    if dialect != Dialect::Bash {
+    if dialect != Dialect::Bash || harness_of(payload.harness()).is_none() {
         return None;
     }
     let holder = payload.subagent_holder()?;
