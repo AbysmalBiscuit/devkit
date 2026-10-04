@@ -51,7 +51,7 @@ Codex offers `update_plan` only when its config sets `[tools.update_plan] enable
 
 ## Activity
 
-devkit records each subagent run and each stretch a todo spends in progress, beside the todo state on every backend, whether or not the harness log is on. `devkit activity` reports them over a date range, grouped by session, agent type and todo, and `--json` gives the same report as JSON. `devkit activity -h` gives the range's defaults.
+devkit records each subagent run and each stretch a todo spends in progress, whether or not the harness log is on: in the todo database on the postgres backend, and beside the todo state on every other. `devkit activity` reports them over a date range, grouped by session, agent type and todo, and `--json` gives the same report as JSON. `devkit activity -h` gives the range's defaults.
 
 - A run starts at the subagent's start hook and ends at its stop. Without a stop it ends at its session's end. Without either, it ends as `lost` at the agent's last hook once the agent has been silent past a backstop, so no run stays open for good. Parallel runs, two of one type included, are told apart by agent id.
 - A run whose payload names no agent type, such as a Claude Code fork, stores none and reports as `subagent`.
@@ -118,3 +118,27 @@ sync.encryption_secret=<secret>
 ```
 
 Then `task project:devkit.<repo>` shows the agents' lists. Pointing your everyday taskwarrior at the same server also works, but hands every container that holds the credentials read and write access to all of your tasks.
+
+### Postgres
+
+`[todo] backend = "postgres"` keeps the todos in a Postgres database that every machine's agents share. Choose it over taskchampion when many agents on many machines claim from the same lists: the database is the one authority, so a claim holds across machines, and of any number of agents claiming one todo at once exactly one gets it and the rest are refused naming the holder. Choose taskchampion when agents work alone or on one machine, when they must keep writing offline, or when you want to read the lists with taskwarrior.
+
+Every hook and command talks to the database, so a machine without it reaches no lists: a hook that cannot reach it gives up after a short wait, once per hook, and injects, attributes and releases nothing; a command fails naming the database. The activity log lives in the same database, so `devkit activity` on any machine reports the whole swarm.
+
+The connection URL comes from `DEVKIT_TODO_DATABASE_URL`, resolved like the sync credentials: the environment first, then Doppler when `[todo.postgres] doppler_project` (and optionally `doppler_config`) is set, then `~/.config/devkit/secrets.toml`:
+
+```toml
+devkit_todo_database_url = "postgres://..."
+```
+
+Every hook resolves it, so a machine running many agents does better with the URL in its environment or the secrets file than in Doppler. `DEVKIT_TODO_BACKEND=postgres` chooses the backend without a config change. `devkit doctor` shows the backend, where the URL resolved from, and whether the database answers, never the URL itself.
+
+devkit creates its tables in a `devkit` schema on first use, so the role in the URL needs to create a schema once; afterwards it only reads and writes those tables. Todos live under the `[todo] project` root, so several roots share one database without seeing each other's lists. Ids are uuids, shown and accepted as 8-character prefixes, as on taskchampion. The connection is encrypted whenever the server offers TLS, without verifying its certificate, as libpq does by default; `sslmode=disable` in the URL turns it off.
+
+On Supabase, use the transaction pooler, which suits short-lived clients such as hooks. Copy its URL from the project's Connect panel, under Transaction pooler:
+
+```text
+postgres://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres
+```
+
+devkit uses nothing the transaction pooler lacks: no prepared statement outlives its transaction, and no session setting, `LISTEN` or advisory lock is used. The direct connection (`db.<project-ref>.supabase.co:5432`) works too, but each hook then holds one of the database's own connections while it runs. Any other transaction-mode pooler, such as PgBouncer, works the same way.
