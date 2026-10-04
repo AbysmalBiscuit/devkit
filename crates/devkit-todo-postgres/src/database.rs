@@ -166,8 +166,14 @@ impl Database {
                 Err(e) if missing_schema(&e) => {
                     // Another process creating the schema at the same moment
                     // can make this fail; the retry then finds it.
-                    let _ = client.batch_execute(SCHEMA).await;
-                    op(client).await
+                    let created = client.batch_execute(SCHEMA).await;
+                    match (op(client).await, created) {
+                        (Err(e), Err(schema)) if missing_schema(&e) => Err(e.context(format!(
+                            "creating devkit's schema failed: {:#}",
+                            anyhow::Error::from(schema)
+                        ))),
+                        (out, _) => out,
+                    }
                 }
                 out => out,
             }

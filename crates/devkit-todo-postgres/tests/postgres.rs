@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use devkit_todo::TodoStore;
 use devkit_todo_postgres::{Database, PostgresStore};
 
 const DIRECT: &str = "DEVKIT_TEST_POSTGRES_URL";
@@ -74,4 +75,40 @@ fn the_pooler_keeps_no_prepared_statement() {
             "{err:?}"
         );
     });
+}
+
+/// Runs `sql` on the database `url` names, outside any transaction.
+fn admin(url: &str, sql: &str) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(connection);
+        client.batch_execute(sql).await.unwrap();
+    });
+}
+
+#[test]
+fn a_role_that_cannot_create_the_schema_is_told_why() {
+    let Some(direct) = url(DIRECT) else {
+        return;
+    };
+    let name = fresh_root().replace('-', "_");
+    admin(&direct, &format!("CREATE DATABASE {name}"));
+    admin(&direct, &format!("CREATE ROLE {name} LOGIN PASSWORD 'pw'"));
+    let (_, host_and_db) = direct.rsplit_once('@').unwrap();
+    let (host, _) = host_and_db.rsplit_once('/').unwrap();
+    let limited = format!("postgres://{name}:pw@{host}/{name}");
+    let db = Database::new(&limited, Duration::from_secs(10)).unwrap();
+    let err = PostgresStore::new(db, "r")
+        .list(&devkit_todo::Filter::all())
+        .unwrap_err();
+    let shown = format!("{err:#}");
+    assert!(shown.contains("permission denied"), "{shown}");
+    admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
+    admin(&direct, &format!("DROP ROLE {name}"));
 }
