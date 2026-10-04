@@ -739,7 +739,7 @@ impl Forge for GitlabForge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::forge::rest::stub::{self, Route};
+    use crate::http::stub::{self, Route};
 
     fn repo() -> Repo {
         Repo {

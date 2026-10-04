@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use devkit_common::forge::rest::stub::{self, Route, Stub};
+use devkit_common::http::stub::{self, Route, Stub};
 use devkit_todo::{Edit, Filter, Holder, NewTodo, Status, StatusKind, TodoStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
 

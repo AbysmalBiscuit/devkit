@@ -13,6 +13,9 @@ use std::{env, sync::OnceLock, time::Duration};
 pub use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod stub;
+
 /// One pooled client for the whole process, so repeated calls reuse the
 /// TCP/TLS connection, and the thread a blocking client runs on starts once.
 pub fn client() -> &'static Client {

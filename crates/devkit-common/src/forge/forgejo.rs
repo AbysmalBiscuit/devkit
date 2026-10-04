@@ -650,10 +650,8 @@ impl Forge for ForgejoForge {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        super::rest::stub::{self, Route, Stub},
-        *,
-    };
+    use super::*;
+    use crate::http::stub::{self, Route, Stub};
 
     fn repo() -> Repo {
         Repo {
