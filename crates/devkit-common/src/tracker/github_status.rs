@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 
 use anyhow::{Context, Result, anyhow, bail};
-use devkit_config::ProjectRef;
+use devkit_config::{EventTransition, IssueEvent, ProjectRef};
 use serde_json::Value;
 
 use super::status::{StatusWriter, find_id, names};
@@ -278,14 +278,20 @@ impl GithubWriter {
     }
 
     /// Read the project and its status field, and confirm it holds every
-    /// status in `names`; `*` and the empty string name no option.
-    pub fn check_board<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    /// status the transitions name. In `from`, `*` and the empty string are
+    /// patterns rather than options; `to` must always be an option.
+    pub fn check_board(&self, transitions: &[(IssueEvent, &EventTransition)]) -> Result<()> {
         let resp = self.send(&board_query(&self.repo.slug, &self.project, &self.field))?;
         let board = parse_board(&resp, &self.field)?;
-        for name in names {
-            if !matches!(name.trim(), "" | "*") {
-                board.option_id(name, &self.field)?;
+        for (event, t) in transitions {
+            for from in t.from.iter().filter(|f| !matches!(f.trim(), "" | "*")) {
+                board
+                    .option_id(from, &self.field)
+                    .with_context(|| format!("[issue.events.{event}] from"))?;
             }
+            board
+                .option_id(&t.to, &self.field)
+                .with_context(|| format!("[issue.events.{event}] to"))?;
         }
         Ok(())
     }

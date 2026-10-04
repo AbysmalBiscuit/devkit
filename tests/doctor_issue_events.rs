@@ -84,3 +84,25 @@ fn a_missing_writer_names_the_key() {
     assert_eq!(row["status"], "invalid", "{row}");
     assert!(detail(&row).contains("[github] project"), "{row}");
 }
+
+#[test]
+fn a_sentinel_target_fails_naming_its_key() {
+    let gh = board(&EVENTS.replace("to = \"In review\"", "to = \"*\""));
+    gh.serve_graphql(BOARD);
+    let row = row(&gh).expect("an issue_events row");
+    assert_eq!(row["status"], "invalid", "{row}");
+    assert!(detail(&row).contains("[issue.events.pr_open] to"), "{row}");
+}
+
+#[test]
+fn a_missing_from_name_fails_naming_its_key() {
+    let gh = board(&EVENTS.replace("\"Todo\"]", "\"Backlog\"]"));
+    gh.serve_graphql(BOARD);
+    let row = row(&gh).expect("an issue_events row");
+    assert_eq!(row["status"], "invalid", "{row}");
+    assert!(
+        detail(&row).contains("[issue.events.start] from")
+            && detail(&row).contains("no option `Backlog`"),
+        "{row}"
+    );
+}

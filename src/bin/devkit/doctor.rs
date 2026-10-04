@@ -288,14 +288,13 @@ fn issue_events_row(
         })
         .collect::<Vec<_>>()
         .join("; ");
-    let names = configured
-        .iter()
-        .flat_map(|(_, t)| t.from.iter().chain([&t.to]).map(String::as_str));
     let check = match writer_for(selection.0.tracker.kind(), &cfg.github, &selection.1.repos) {
         Err(e) => Check::Invalid(format!("{e:#}")),
         Ok(Writer::Linear(_)) => Check::Ok(summary),
         Ok(Writer::Github(w)) => {
-            match steps.during("Checking the project board...", || w.check_board(names)) {
+            match steps.during("Checking the project board...", || {
+                w.check_board(&configured)
+            }) {
                 Ok(()) => Check::Ok(summary),
                 Err(e) => Check::Invalid(format!("{e:#}")),
             }
