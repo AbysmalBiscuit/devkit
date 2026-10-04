@@ -4,7 +4,7 @@
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use devkit_todo::activity::{ClaimEnd, Run, RunEnd};
+use devkit_todo::activity::{BACKSTOP, ClaimEnd, Run, RunEnd};
 use serde_json::{Value, json};
 use todoenv::{Proj, stderr, stdout};
 
@@ -290,4 +290,24 @@ fn the_report_keeps_to_its_range() {
     assert!(out.status.success(), "{}", stderr(&out));
     let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(report["sessions"], json!([]), "{report:#}");
+}
+
+#[test]
+fn a_subagents_hooks_move_where_a_lost_run_ends() {
+    let p = Proj::new();
+    start(&p, "a1", Some("Explore"));
+    let before_hook: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+    let out = p.hook("pre-tool-use", "claude-code", &sub_agent_bash(&p, "ls"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let after_hook: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+
+    let past = after_hook + BACKSTOP + chrono::TimeDelta::seconds(1);
+    let runs = p.activity_log().read(past).unwrap().runs;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].outcome, Some(RunEnd::Lost), "{runs:?}");
+    let end = runs[0].end.unwrap();
+    assert!(
+        before_hook <= end && end <= after_hook,
+        "{end} outside the pre-tool-use hook's {before_hook}..{after_hook}"
+    );
 }
