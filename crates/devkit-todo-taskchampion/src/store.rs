@@ -12,11 +12,12 @@ use devkit_todo::{
     Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore, by_prefix,
     is_uuid_prefix, one_line, transition,
 };
-use devkit_todo_taskwarrior::schema::{DEFAULT_ROOT, Exported, project_of};
 use taskchampion::{
     Operations, Server, ServerConfig, SqliteStorage, Task, Uuid, chrono::Utc, storage::AccessMode,
 };
 use tokio::runtime::Runtime;
+
+use crate::schema::{DEFAULT_ROOT, Exported, project_of};
 
 type Replica = taskchampion::Replica<SqliteStorage>;
 

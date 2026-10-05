@@ -60,9 +60,11 @@ devkit records each subagent run and each stretch a todo spends in progress, whe
 
 ## Backends
 
-The built-in store is the default: one file in devkit's state directory. `[todo] backend = "taskwarrior"` keeps the todos in the local taskwarrior instead, through taskwarrior 3's `task` program, all under one root project. Set it in `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`: a committed value breaks every machine without `task`, cloud sessions included. `[todo.taskwarrior] path` names another `task` program, and `[todo] project` another root. Agents use `devkit todo` or their native tool on either backend.
+The built-in store is the default: one file in devkit's state directory. Agents use `devkit todo` or their native tool on every backend.
 
-On taskwarrior:
+### Taskchampion
+
+`[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it to share a replica with Taskwarrior, to keep a container's todos after it stops, or to watch a session's lists from another machine. Taskwarrior 3.5 or later can read and edit the same tasks:
 
 - A todo's id is its task's uuid, shown as the first 8 characters. Any prefix of 8 or more that names one task works wherever an id does.
 - Todos live under the root project, `devkit` unless configured: a global todo on `devkit` itself, any other node on `devkit.<node>`, such as `devkit.repo.main`. A task outside the root is never a todo: no list shows it, `--all` included, and no claim or release touches it, so your own projects and unfiled tasks stay out.
@@ -75,13 +77,13 @@ On taskwarrior:
   uda.holder.label=Holder
   ```
 
-### Taskchampion
-
-`[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it for a container or cloud session, whose todos would otherwise be deleted with it, or to watch a session's lists from another machine. The replica holds the same tasks as the taskwarrior backend, under the same `[todo] project` root, with the same ids. It lives in devkit's state directory unless `[todo.taskchampion] data_dir` names another. taskwarrior 3.5 or later reads a synced replica's lists.
+The replica directory resolves from `[todo.taskchampion] data_dir`, then `TASKDATA`, then the taskrc's `data.location`, then `taskchampion` under devkit's todo state directory. The taskrc resolves from `TASKRC`, then `~/.taskrc`, then `$XDG_CONFIG_HOME/task/taskrc`, with `~/.config/task/taskrc` used when `XDG_CONFIG_HOME` is unset or empty. Includes are followed in order, later assignments win, and a leading `~` or `$NAME` in taskrc paths and values expands. A malformed taskrc or missing include warns and falls back to devkit's state directory. Explicit `data_dir` and `TASKDATA` bypass taskrc reading. `devkit doctor` shows the replica directory and its source.
 
 `DEVKIT_TODO_BACKEND=taskchampion` chooses it without a config change, so a container sets it next to the sync credentials and keeps loading the project's `devkit.toml`. It accepts the same values as `[todo] backend` and wins over it. `devkit doctor` shows the backend in effect and where it came from.
 
-The replica syncs to the first of these that applies, or stays local:
+Replicas discovered through `TASKDATA` or taskrc stay local, even when a devkit sync target is configured. Set `[todo.taskchampion] data_dir` explicitly to allow devkit to sync that replica, including all tasks it holds. Local writes and lists still work without that opt-in; `list --sync` reports the refusal and lists local todos. The default replica under devkit's state directory can sync without `data_dir`.
+
+An eligible replica syncs to the first of these that applies, or stays local:
 
 1. `[todo.taskchampion] server_dir`, a directory shared with other replicas.
 2. A taskchampion sync server, when `DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` (a UUID) and `DEVKIT_TODO_SYNC_SECRET` all resolve. Some of them without the rest makes `devkit todo sync` fail, naming the missing ones.

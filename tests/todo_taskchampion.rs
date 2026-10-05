@@ -51,9 +51,7 @@ fn the_env_selects_taskchampion_with_no_config() {
 
 #[test]
 fn the_env_beats_the_home_config() {
-    let p = Proj::with_home_config(
-        "[todo]\nbackend = \"taskwarrior\"\n[todo.taskwarrior]\npath = \"/nonexistent/task\"\n",
-    );
+    let p = Proj::with_home_config("[todo]\nbackend = \"builtin\"\n");
     let out = p.devkit(&["todo", "add", "one"], &backend("taskchampion"));
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(replica(&p).len(), 1);
@@ -411,6 +409,182 @@ fn context(p: &Proj, event: &str, env: &[(&str, &str)]) -> std::process::Output 
         env,
         &payload.to_string(),
     )
+}
+
+fn discovered_replica_refuses_sync(source: &str, command: &[&str], server_target: bool) {
+    let shared = Shared::new();
+    let personal = shared.sync.path().join("personal");
+    let taskrc = shared.sync.path().join("taskrc");
+    std::fs::write(&taskrc, format!("data.location={}\n", personal.display())).unwrap();
+    let path = if source == "TASKDATA" {
+        &personal
+    } else {
+        &taskrc
+    };
+    let mut env = vec![(source, path.to_str().unwrap())];
+    if server_target {
+        std::fs::write(
+            shared.p.home_config(),
+            "[todo]\nbackend = \"taskchampion\"\n",
+        )
+        .unwrap();
+        env.extend(server_env("not-a-url"));
+        env.push(("DEVKIT_TODO_SYNC_CLIENT_ID", "not-a-uuid"));
+    }
+    add_on(
+        &TaskchampionStore::at(personal.clone()).with_root("personal"),
+        "personal.inbox",
+        "unrelated personal task",
+    );
+
+    let out = shared.p.devkit(command, &env);
+    let err = stderr(&out);
+    let server = shared.sync.path().join("server");
+    if !server_target && command[1] == "add" && !err.contains("sync refused") {
+        poll_until(Duration::from_secs(30), "the automatic export", || {
+            server.exists()
+        });
+    }
+    let other = shared.other().with_root("personal");
+    if server.exists() {
+        other.sync_once().unwrap();
+    }
+    let exported = other.list(&Filter::all()).unwrap();
+    assert!(
+        exported.is_empty(),
+        "{source} exported personal tasks: {exported:?}"
+    );
+    assert!(
+        err.contains("sync refused") && err.contains("data_dir"),
+        "{err}"
+    );
+    if command[1] == "add" {
+        assert!(out.status.success(), "{err}");
+        let listed = shared.p.devkit(&["todo", "list", "--all"], &env);
+        assert!(
+            stdout(&listed).contains("saved locally"),
+            "{}",
+            stdout(&listed)
+        );
+        let synced = shared.p.devkit(&["todo", "list", "--all", "--sync"], &env);
+        assert!(synced.status.success(), "{}", stderr(&synced));
+        assert!(
+            stdout(&synced).contains("saved locally"),
+            "{}",
+            stdout(&synced)
+        );
+        assert!(
+            stderr(&synced).contains("sync refused"),
+            "{}",
+            stderr(&synced)
+        );
+        let injected = context(&shared.p, "SessionStart", &env);
+        assert!(injected.status.success(), "{}", stderr(&injected));
+        assert!(
+            stdout(&injected).contains("saved locally"),
+            "{}",
+            stdout(&injected)
+        );
+        assert!(
+            stderr(&injected).contains("sync refused"),
+            "{}",
+            stderr(&injected)
+        );
+    } else {
+        assert!(!out.status.success(), "{err}");
+    }
+    assert!(!personal.join("sync.pending").exists());
+    assert!(!personal.join("sync.lock").exists());
+    assert!(!server.exists());
+}
+
+#[test]
+fn taskdata_replica_refuses_direct_sync() {
+    for command in [&["todo", "sync"][..], &["todo", "sync", "--background"][..]] {
+        discovered_replica_refuses_sync("TASKDATA", command, false);
+    }
+}
+
+#[test]
+fn taskrc_replica_refuses_direct_sync() {
+    for command in [&["todo", "sync"][..], &["todo", "sync", "--background"][..]] {
+        discovered_replica_refuses_sync("TASKRC", command, false);
+    }
+}
+
+#[test]
+fn taskdata_replica_keeps_writes_local() {
+    discovered_replica_refuses_sync("TASKDATA", &["todo", "add", "saved locally"], false);
+}
+
+#[test]
+fn taskrc_replica_keeps_writes_local() {
+    discovered_replica_refuses_sync("TASKRC", &["todo", "add", "saved locally"], false);
+}
+
+#[test]
+fn server_sync_refuses_discovered_replicas_before_resolving_credentials() {
+    for source in ["TASKDATA", "TASKRC"] {
+        for command in [
+            &["todo", "sync"][..],
+            &["todo", "sync", "--background"][..],
+            &["todo", "add", "saved locally"][..],
+        ] {
+            discovered_replica_refuses_sync(source, command, true);
+        }
+    }
+    let p = Proj::with_home_config("[todo]\nbackend = \"taskchampion\"\n");
+    let dir = tempfile::tempdir().unwrap();
+    let env = [
+        ("TASKDATA", dir.path().to_str().unwrap()),
+        ("DEVKIT_TODO_SYNC_URL", "not-a-url"),
+    ];
+    let out = p.devkit(&["todo", "sync"], &env);
+    let err = stderr(&out);
+    assert!(
+        err.contains("sync refused") && err.contains("data_dir"),
+        "{err}"
+    );
+    assert!(!err.contains("missing:"), "{err}");
+}
+
+#[test]
+fn explicit_data_dir_allows_sync_of_a_shared_personal_replica() {
+    let shared = Shared::new();
+    let personal = shared.sync.path().join("personal");
+    let store = TaskchampionStore::at(personal.clone()).with_root("personal");
+    add_on(
+        &store,
+        "personal.inbox",
+        "intentionally shared personal task",
+    );
+    let mut config = std::fs::read_to_string(shared.p.home_config()).unwrap();
+    config.push_str(&format!(
+        "data_dir = {}\n",
+        toml::Value::String(personal.display().to_string())
+    ));
+    std::fs::write(shared.p.home_config(), config).unwrap();
+    let env = [("TASKDATA", "~/ignored")];
+    let out = shared
+        .p
+        .devkit(&["todo", "add", "shared devkit todo"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!stderr(&out).contains("sync refused"), "{}", stderr(&out));
+    let out = shared.p.devkit(&["todo", "sync"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    let other = shared.other().with_root("personal");
+    other.sync_once().unwrap();
+    assert_eq!(
+        other.list(&Filter::all()).unwrap()[0].description,
+        "intentionally shared personal task"
+    );
+    let other = shared.other();
+    other.sync_once().unwrap();
+    assert_eq!(
+        other.list(&Filter::all()).unwrap()[0].description,
+        "shared devkit todo"
+    );
 }
 
 #[test]

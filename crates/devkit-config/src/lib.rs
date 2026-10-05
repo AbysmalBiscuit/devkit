@@ -97,12 +97,9 @@ pub struct Config {
 /// # use devkit_config::{Config, TodoBackend};
 /// # let cfg = Config::parse(r#"
 /// [todo]
-/// backend = "taskwarrior"
+/// backend = "taskchampion"
 /// project = "agents"
 /// hold_stop = true
-///
-/// [todo.taskwarrior]
-/// path = "/opt/task"
 ///
 /// [todo.taskchampion]
 /// data_dir = "/var/devkit/todo"
@@ -115,8 +112,7 @@ pub struct Config {
 /// doppler_config = "agents"
 /// ca_file = "~/.config/devkit/supabase-ca.crt"
 /// # "#).unwrap();
-/// # assert_eq!(cfg.todo.backend, TodoBackend::Taskwarrior);
-/// # assert_eq!(cfg.todo.taskwarrior.path, "/opt/task");
+/// # assert_eq!(cfg.todo.backend, TodoBackend::Taskchampion);
 /// # assert_eq!(cfg.todo.project, "agents");
 /// # let tc = &cfg.todo.taskchampion;
 /// # assert_eq!(tc.data_dir.as_deref(), Some("/var/devkit/todo"));
@@ -135,49 +131,37 @@ pub struct Config {
 /// # assert!(Config::parse("[todo.taskchampion]\nserver = \"x\"\n").is_err());
 /// # let empty = Config::parse("").unwrap();
 /// # assert_eq!(empty.todo.backend, TodoBackend::Builtin);
-/// # assert_eq!(empty.todo.taskwarrior.path, "task");
 /// # assert_eq!(empty.todo.project, "devkit");
 /// # assert!(empty.todo.hold_stop);
 /// # let off = Config::parse("[todo]\nhold_stop = false\n").unwrap();
 /// # assert!(!off.todo.hold_stop);
-/// # assert!(Config::parse("[todo.taskwarrior]\nproject = \"agents\"\n").is_err());
 /// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
 /// # assert!(Config::parse("[todo]\nbackends = \"builtin\"\n").is_err());
-/// # let quoted = Config::parse("[todo]\nproject = \"dev'kit\"\n").unwrap_err();
-/// # assert!(format!("{quoted:#}").contains("[todo] project"), "{quoted:#}");
+/// # let quoted = Config::parse("[todo]\nproject = \"dev'kit\"\n").unwrap();
+/// # assert_eq!(quoted.todo.project, "dev'kit");
 /// ```
 #[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TodoConfig {
     /// Which store keeps the todos. `builtin` is a JSON file in devkit's
-    /// state directory. `taskwarrior` keeps them in the local taskwarrior
-    /// through taskwarrior 3's `task` program, under the project `project`
-    /// names. `taskchampion` keeps them in a taskchampion replica devkit
-    /// embeds, under the same project, and can sync it to a directory or a
-    /// sync server. `postgres` keeps them in a Postgres database every
+    /// state directory. `taskchampion` keeps them in a replica devkit embeds,
+    /// under the project `project` names, and can sync it to a directory or
+    /// a sync server. `postgres` keeps them in a Postgres database every
     /// machine shares, under the same project, with the activity log beside
-    /// them. Set it in
-    /// `~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:
-    /// a committed `taskwarrior` breaks every machine without `task`, cloud
-    /// sessions included. `DEVKIT_TODO_BACKEND`, when set, overrides it with
-    /// the same spellings.
+    /// them. `DEVKIT_TODO_BACKEND`, when set, overrides it with the same
+    /// spellings.
     pub backend: TodoBackend,
-    /// The project the `taskwarrior` and `taskchampion` backends keep every
+    /// The project the `taskchampion` and `postgres` backends keep every
     /// todo under. Global todos are filed on this project itself and every
     /// other node below it, as `<project>.<node>`, so devkit never lists,
     /// claims or releases a task in any other project. alacritree's
     /// taskwarrior tab shows these todos only when it reads the same root.
-    /// It may not hold `'` or `"`: it is matched inside taskwarrior filters,
-    /// where no quoting survives both.
-    #[serde(deserialize_with = "todo_root")]
     pub project: String,
     /// Whether a stop hook sends an agent back to its open todos: its
     /// session's pending todos in a workspace and the todos it has in
     /// progress. One reminder per unchanged list; stopping again goes
     /// through.
     pub hold_stop: bool,
-    /// The `taskwarrior` backend's settings.
-    pub taskwarrior: TaskwarriorConfig,
     /// The `taskchampion` backend's settings.
     pub taskchampion: TaskchampionConfig,
     /// The `postgres` backend's settings.
@@ -190,7 +174,6 @@ impl Default for TodoConfig {
             backend: TodoBackend::default(),
             project: "devkit".to_string(),
             hold_stop: true,
-            taskwarrior: TaskwarriorConfig::default(),
             taskchampion: TaskchampionConfig::default(),
             postgres: PostgresConfig::default(),
         }
@@ -203,47 +186,28 @@ impl Default for TodoConfig {
 pub enum TodoBackend {
     #[default]
     Builtin,
-    Taskwarrior,
     Taskchampion,
     Postgres,
-}
-
-/// How devkit runs taskwarrior for `[todo] backend = "taskwarrior"`.
-#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct TaskwarriorConfig {
-    /// The program to run. Its own name is looked up on PATH; any other value
-    /// runs as written.
-    pub path: String,
-}
-
-fn todo_root<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    let root = String::deserialize(d)?;
-    if root.contains(['\'', '"']) {
-        return Err(serde::de::Error::custom(format!(
-            "[todo] project {root:?} may not contain ' or \""
-        )));
-    }
-    Ok(root)
-}
-
-impl Default for TaskwarriorConfig {
-    fn default() -> Self {
-        Self {
-            path: "task".to_string(),
-        }
-    }
 }
 
 /// Where `[todo] backend = "taskchampion"` keeps its replica and syncs it.
 /// With no `server_dir`, the replica syncs to a server when
 /// `DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` and
 /// `DEVKIT_TODO_SYNC_SECRET` all resolve, and otherwise stays local.
+/// Replicas discovered through `TASKDATA` or taskrc stay local unless
+/// `data_dir` explicitly selects the replica for devkit sync.
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TaskchampionConfig {
-    /// The replica's directory. Defaults to `taskchampion` under devkit's
-    /// todo state directory.
+    /// The replica's directory. When absent, use `TASKDATA`, then the taskrc's
+    /// `data.location`, then `taskchampion` under devkit's todo state
+    /// directory. Find taskrc through `TASKRC`, then `~/.taskrc`, then
+    /// `$XDG_CONFIG_HOME/task/taskrc` (`~/.config/task/taskrc` when unset or
+    /// empty), following includes. A malformed taskrc or missing include warns
+    /// and falls back to devkit's state directory. Sync settings in taskrc are
+    /// ignored. Set this explicitly to allow devkit sync for a replica
+    /// discovered through `TASKDATA` or taskrc; otherwise devkit only reads
+    /// and writes it locally, even when a sync target is configured.
     pub data_dir: Option<String>,
     /// Sync to this directory instead of a server. The server credentials
     /// are not read when it is set.

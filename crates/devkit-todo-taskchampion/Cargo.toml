@@ -11,7 +11,7 @@ taskchampion.workspace = true
 tokio.workspace = true
 devkit-common.workspace = true
 devkit-todo.workspace = true
-devkit-todo-taskwarrior.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

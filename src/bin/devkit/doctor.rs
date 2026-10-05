@@ -594,6 +594,8 @@ const TODO_SYNC_KEYS: [&str; 3] = [
 /// taskchampion replica that would sync to a server, where each credential
 /// resolves from. A credential's value is never shown.
 fn todo_rows(start: &std::path::Path) -> Vec<Row> {
+    use devkit_todo_taskchampion::{ReplicaSource, replica_location};
+
     use crate::todo::store::{
         BACKEND_VAR, BackendSource, SYNC_VARS, doppler_scope, effective_backend,
     };
@@ -632,6 +634,29 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
         rows.push(todo_database_row(&config.postgres));
     }
     let tc = config.taskchampion;
+    if backend == devkit_config::TodoBackend::Taskchampion {
+        let location = replica_location(tc.data_dir.as_deref());
+        let (source, origin, detail) = match location.source {
+            ReplicaSource::Config => (
+                Source::File,
+                "config",
+                "from config [todo.taskchampion] data_dir".to_string(),
+            ),
+            ReplicaSource::Taskdata => (Source::Env, "TASKDATA", "from TASKDATA".to_string()),
+            ReplicaSource::Taskrc(path) => (
+                Source::File,
+                "taskrc",
+                format!("from taskrc {}", path.display()),
+            ),
+            ReplicaSource::Default => (Source::Unset, "default", "the default".to_string()),
+        };
+        rows.push(Row {
+            key: "todo_replica",
+            data: serde_json::json!({ "dir": location.path, "origin": origin }),
+            source,
+            check: Check::Ok(format!("{}, {detail}", location.path.display())),
+        });
+    }
     if backend == devkit_config::TodoBackend::Taskchampion && tc.server_dir.is_none() {
         let scope = doppler_scope(tc.doppler_project.as_deref(), tc.doppler_config.as_deref());
         let resolved = secrets::resolve_many(&SYNC_VARS, scope.as_ref());

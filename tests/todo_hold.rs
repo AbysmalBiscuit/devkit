@@ -86,15 +86,6 @@ fn a_broken_config_never_holds() {
 }
 
 #[test]
-fn a_missing_task_binary_never_holds() {
-    let p = Proj::with_home_config(
-        "[todo]\nbackend = \"taskwarrior\"\n[todo.taskwarrior]\npath = \"/nonexistent/task\"\n",
-    );
-    seed(&p, MAIN, "write the migration");
-    silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
-}
-
-#[test]
 fn open_todos_block_and_list_their_ids() {
     let p = Proj::new();
     let id = seed(&p, MAIN, "write the migration");

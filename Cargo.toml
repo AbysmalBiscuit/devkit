@@ -45,7 +45,6 @@ devkit-rules.workspace = true
 devkit-timing.workspace = true
 devkit-todo.workspace = true
 devkit-todo-builtin.workspace = true
-devkit-todo-taskwarrior.workspace = true
 devkit-todo-taskchampion.workspace = true
 devkit-todo-postgres.workspace = true
 ambassador.workspace = true
@@ -70,7 +69,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskwarrior", "crates/devkit-todo-taskchampion", "crates/devkit-todo-postgres"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskchampion", "crates/devkit-todo-postgres"]
 
 [workspace.package]
 edition = "2024"
@@ -155,7 +154,6 @@ devkit-timing = { path = "crates/devkit-timing" }
 devkit-todo = { path = "crates/devkit-todo" }
 devkit-todo-builtin = { path = "crates/devkit-todo-builtin" }
 devkit-todo-taskchampion = { path = "crates/devkit-todo-taskchampion" }
-devkit-todo-taskwarrior = { path = "crates/devkit-todo-taskwarrior" }
 devkit-todo-postgres = { path = "crates/devkit-todo-postgres" }
 tree-sitter = "0.27"
 tree-sitter-bash = "0.25"
