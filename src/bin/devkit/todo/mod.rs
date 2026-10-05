@@ -458,11 +458,17 @@ fn context(args: &ContextArgs) -> Option<String> {
     if at_start && let SyncOutcome::Refused(reason) = store.sync(&cwd, sync::FRESH_WAIT) {
         eprintln!("devkit todo: {reason}; listing local todos");
     }
-    let (todos, siblings): (Vec<Todo>, Vec<Todo>) = store
-        .list(&filter)
-        .ok()?
-        .into_iter()
-        .partition(|t| visible.matches(t.project.as_deref()));
+    let all = store.list(&Filter::all()).ok()?;
+    let todos: Vec<Todo> = all
+        .iter()
+        .filter(|t| visible.matches(t.project.as_deref()))
+        .cloned()
+        .collect();
+    let siblings = layout.fence(all).into_iter().filter(|t| {
+        filter.matches(t.project.as_deref())
+            && !visible.matches(t.project.as_deref())
+            && layout.is_other_session(t.node(), &facts)
+    });
     let nodes = list_nodes(&visible, &todos);
     let mut lists = render::render_lists(&nodes, &todos, &viewer);
     let own_open = todos.iter().any(|t| {
@@ -473,7 +479,6 @@ fn context(args: &ContextArgs) -> Option<String> {
             )
     });
     let pending = siblings
-        .iter()
         .filter(|t| t.status.kind() == StatusKind::Pending)
         .count();
     if let Some(line) = workspace

@@ -120,6 +120,113 @@ fn manager_listing_includes_only_its_session_descendants() {
 }
 
 #[test]
+fn worker_reminders_count_only_fenced_other_sessions() {
+    for (scopes, own_peer, other, cross_harness, anchor) in [
+        (
+            "",
+            "proj.main.claude-S-1.a2",
+            "proj.main.claude-T.a1",
+            Some("proj.main.codex-S-1.a1"),
+            "proj.other.claude-S-1",
+        ),
+        (
+            r#"
+[todo.scopes.session]
+node = "{repo}.{branch}.{session}"
+parent = "workspace"
+[todo.scopes.agent]
+node = "{repo}.{branch}.{session}.{agent}"
+parent = "session"
+[todo.scopes.anchor]
+node = "anchor-{repo}"
+parent = "global"
+"#,
+            "proj.main.S-1.a2",
+            "proj.main.T.a1",
+            None,
+            "anchor-proj",
+        ),
+    ] {
+        let p = Proj::with_home_config(&format!("{WORKFLOW}\n{scopes}"));
+        let main = [MAIN[0], ("CLAUDE_CODE_SESSION_ID", "S.1")];
+        let worker = [main[0], main[1], ("DEVKIT_TODO_HOLDER", "S.1/a1")];
+        let selected = p.devkit(&["todo", "role", "implementer"], &worker);
+        assert!(selected.status.success(), "{}", stderr(&selected));
+        let rows = [
+            (own_peer, "same-session peer"),
+            (other, "other-session worker"),
+            (
+                "proj.main.personal.extra.extra",
+                "malformed personal descendant",
+            ),
+            ("proj.main.claude-S/a3", "unsanitized descendant"),
+            (anchor, "anchor outside workspace"),
+        ];
+        for (node, text) in rows
+            .into_iter()
+            .chain(cross_harness.map(|node| (node, "other harness with same ID")))
+        {
+            p.store()
+                .add(NewTodo {
+                    project: Some(node.into()),
+                    description: text.into(),
+                    parent: None,
+                    order: None,
+                })
+                .unwrap();
+        }
+        let mut payload = serde_json::json!({"session_id": "S.1", "agent_id": "a1", "agent_type": "implementer", "cwd": p.path, "hook_event_name": "SessionStart"});
+        let args = [
+            "todo",
+            "context",
+            "--harness",
+            "claude-code",
+            "--if-changed",
+        ];
+        let out = p.devkit_in(&p.path, &args, &[], &payload.to_string());
+        assert!(out.status.success(), "{}", stderr(&out));
+        let answer: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let text = answer["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        let expected = if cross_harness.is_some() {
+            "left 2 pending todos"
+        } else {
+            "left 1 pending todo"
+        };
+        assert!(text.contains(expected), "{scopes}: {text}");
+        for hidden in [
+            "same-session peer",
+            "other-session worker",
+            "malformed personal",
+            "unsanitized descendant",
+        ] {
+            assert!(!text.contains(hidden), "{text}");
+        }
+        payload["hook_event_name"] = serde_json::json!("UserPromptSubmit");
+        assert!(
+            p.devkit_in(&p.path, &args, &[], &payload.to_string())
+                .stdout
+                .is_empty()
+        );
+        assert!(
+            p.devkit(&["todo", "role", "manager"], &main)
+                .status
+                .success()
+        );
+        payload.as_object_mut().unwrap().remove("agent_id");
+        payload.as_object_mut().unwrap().remove("agent_type");
+        let out = p.devkit_in(&p.path, &args, &[], &payload.to_string());
+        let answer: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let text = answer["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("same-session peer"), "{text}");
+        assert!(!text.contains("other-session worker"), "{text}");
+    }
+}
+
+#[test]
 fn scans_use_anchors_outside_the_requested_subtree() {
     let p = Proj::new();
     for (node, text) in [

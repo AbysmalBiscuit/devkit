@@ -153,6 +153,32 @@ impl Layout {
         })
     }
 
+    /// Whether a configured template identifies a session other than the
+    /// caller's.
+    pub fn is_other_session(&self, project: &str, facts: &Facts) -> bool {
+        let Some(session) = facts.values.get("session") else {
+            return false;
+        };
+        let mut other = false;
+        for template in self.templates.values() {
+            let Some(values) = template.read(project) else {
+                continue;
+            };
+            let Some(found) = values.get("session") else {
+                continue;
+            };
+            if found == session
+                && values
+                    .get("harness")
+                    .is_none_or(|harness| facts.values.get("harness") == Some(harness))
+            {
+                return false;
+            }
+            other = true;
+        }
+        other
+    }
+
     pub fn fence(&self, todos: Vec<Todo>) -> Vec<Todo> {
         let mut anchored_repos = BTreeSet::new();
         for todo in &todos {
