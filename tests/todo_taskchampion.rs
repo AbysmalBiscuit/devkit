@@ -51,9 +51,7 @@ fn the_env_selects_taskchampion_with_no_config() {
 
 #[test]
 fn the_env_beats_the_home_config() {
-    let p = Proj::with_home_config(
-        "[todo]\nbackend = \"taskwarrior\"\n[todo.taskwarrior]\npath = \"/nonexistent/task\"\n",
-    );
+    let p = Proj::with_home_config("[todo]\nbackend = \"builtin\"\n");
     let out = p.devkit(&["todo", "add", "one"], &backend("taskchampion"));
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(replica(&p).len(), 1);

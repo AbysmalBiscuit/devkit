@@ -9,7 +9,6 @@ use std::{
 
 use devkit_todo::{Edit, Holder, NewTodo, Status, StatusKind, TodoStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore};
-use devkit_todo_taskwarrior::schema;
 
 /// Whether `task` is installed. Any failure other than a missing program
 /// panics, so a broken taskwarrior never passes as a skip.
@@ -37,7 +36,14 @@ fn task(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("task")
         .env("TASKRC", &rc)
         .env("TASKDATA", dir.join("tw"))
-        .args(schema::UDAS.map(|(k, v)| format!("rc.{k}={v}")))
+        .args([
+            "rc.uda.subof.type=uuid",
+            "rc.uda.subof.label=Sub of",
+            "rc.uda.order.type=numeric",
+            "rc.uda.order.label=Order",
+            "rc.uda.holder.type=string",
+            "rc.uda.holder.label=Holder",
+        ])
         .args(["rc.confirmation=off", "rc.bulk=0", "rc.json.array=on"])
         .args(args)
         .stdin(Stdio::null())

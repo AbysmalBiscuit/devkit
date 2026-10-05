@@ -1,22 +1,7 @@
-//! How a todo is written as a taskwarrior task and read back. Public because
-//! any backend that keeps todos in a taskwarrior database writes the same
-//! tasks.
+//! How todos map to taskchampion tasks shared with Taskwarrior.
 
 use devkit_todo::{Status, Todo};
 use serde::Deserialize;
-
-/// Passed as `rc.` overrides on every call, so a taskrc that declares none of
-/// them never folds `holder:` into a description. `subof` and `order` are
-/// alacritree's, so its tab nests and orders devkit's todos; `holder` is
-/// devkit's.
-pub const UDAS: [(&str, &str); 6] = [
-    ("uda.subof.type", "uuid"),
-    ("uda.subof.label", "Sub of"),
-    ("uda.order.type", "numeric"),
-    ("uda.order.label", "Order"),
-    ("uda.holder.type", "string"),
-    ("uda.holder.label", "Holder"),
-];
 
 /// The root project devkit keeps its todos under unless configured
 /// otherwise.
@@ -97,41 +82,6 @@ impl Exported {
             modified: self.modified.as_deref().and_then(rfc3339),
         })
     }
-}
-
-/// The words after `<uuid>` that store `status`. `started` keeps an existing
-/// start time, so a claim handed down to a sub-agent keeps its start.
-pub fn status_args(status: &Status, started: bool) -> Vec<String> {
-    let holder = |by: &devkit_todo::Holder| format!("holder:{by}");
-    match status {
-        Status::Pending => ["modify", "status:pending", "start:", "end:", "holder:"]
-            .map(String::from)
-            .to_vec(),
-        Status::InProgress { by } => ["modify", "status:pending"]
-            .map(String::from)
-            .into_iter()
-            .chain((!started).then(|| "start:now".to_string()))
-            .chain([holder(by)])
-            .collect(),
-        Status::Completed { by } => std::iter::once("done".to_string())
-            .chain(by.as_ref().map(holder))
-            .collect(),
-        Status::Cancelled { by } => std::iter::once("delete".to_string())
-            .chain(by.as_ref().map(holder))
-            .collect(),
-    }
-}
-
-/// The `project:` word for a todo's node under `root`, `None` being the
-/// global list.
-pub fn project_arg(root: &str, node: Option<&str>) -> String {
-    format!("project:{}", project_of(root, node))
-}
-
-/// A description as a `task` argument. Taskwarrior reads a backslash as an
-/// escape and drops it, even after `--`, so each one is doubled.
-pub fn escaped(description: &str) -> String {
-    description.replace('\\', r"\\")
 }
 
 /// Taskwarrior's `20261003T120000Z` as RFC 3339, `2026-10-03T12:00:00Z`.
@@ -238,54 +188,6 @@ mod tests {
     }
 
     #[test]
-    fn status_args_cover_every_status() {
-        let s = || Some(Holder::new("S"));
-        assert_eq!(status_args(&Status::Pending, true), [
-            "modify",
-            "status:pending",
-            "start:",
-            "end:",
-            "holder:"
-        ]);
-        let claimed = Status::InProgress {
-            by: Holder::new("S"),
-        };
-        assert_eq!(status_args(&claimed, false), [
-            "modify",
-            "status:pending",
-            "start:now",
-            "holder:S"
-        ]);
-        assert_eq!(status_args(&claimed, true), [
-            "modify",
-            "status:pending",
-            "holder:S"
-        ]);
-        assert_eq!(status_args(&Status::Completed { by: s() }, false), [
-            "done", "holder:S"
-        ]);
-        assert_eq!(status_args(&Status::Cancelled { by: s() }, false), [
-            "delete", "holder:S"
-        ]);
-        assert_eq!(status_args(&Status::Completed { by: None }, false), [
-            "done"
-        ]);
-        assert_eq!(status_args(&Status::Cancelled { by: None }, false), [
-            "delete"
-        ]);
-    }
-
-    #[test]
-    fn project_words_file_the_node_under_the_root() {
-        assert_eq!(project_arg("devkit", None), "project:devkit");
-        assert_eq!(project_arg("devkit", Some("global")), "project:devkit");
-        assert_eq!(
-            project_arg("devkit", Some("r.main")),
-            "project:devkit.r.main"
-        );
-    }
-
-    #[test]
     fn only_projects_under_the_root_name_a_node() {
         assert_eq!(node_of("devkit", "devkit"), Some(None));
         assert_eq!(
@@ -297,11 +199,5 @@ mod tests {
         assert_eq!(node_of("devkit", "devkitx"), None);
         let home = exported(serde_json::json!({"project": "home"}));
         assert_eq!(home.into_todo(DEFAULT_ROOT), None);
-    }
-
-    #[test]
-    fn backslashes_double() {
-        assert_eq!(escaped(r"a\b"), r"a\\b");
-        assert_eq!(escaped("plain"), "plain");
     }
 }

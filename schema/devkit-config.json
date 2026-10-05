@@ -1443,7 +1443,7 @@
       "properties": {
         "data_dir": {
           "default": null,
-          "description": "The replica's directory. Defaults to `taskchampion` under devkit's\ntodo state directory.",
+          "description": "The replica's directory. When absent, use `TASKDATA`, then the taskrc's\n`data.location`, then `taskchampion` under devkit's todo state\ndirectory. Find taskrc through `TASKRC`, then `~/.taskrc`, then\n`$XDG_CONFIG_HOME/task/taskrc` (`~/.config/task/taskrc` when unset or\nempty), following includes. A malformed taskrc or missing include warns\nand falls back to devkit's state directory. Sync settings in taskrc are\nignored.",
           "type": [
             "string",
             "null"
@@ -1472,18 +1472,6 @@
             "string",
             "null"
           ]
-        }
-      },
-      "type": "object"
-    },
-    "TaskwarriorConfig": {
-      "additionalProperties": false,
-      "description": "How devkit runs taskwarrior for `[todo] backend = \"taskwarrior\"`.",
-      "properties": {
-        "path": {
-          "default": "task",
-          "description": "The program to run. Its own name is looked up on PATH; any other value\nruns as written.",
-          "type": "string"
         }
       },
       "type": "object"
@@ -1618,7 +1606,6 @@
       "description": "The store `[todo] backend` names.",
       "enum": [
         "builtin",
-        "taskwarrior",
         "taskchampion",
         "postgres"
       ],
@@ -1626,12 +1613,12 @@
     },
     "TodoConfig": {
       "additionalProperties": false,
-      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskwarrior\"\nproject = \"agents\"\nhold_stop = true\n\n[todo.taskwarrior]\npath = \"/opt/task\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n```",
+      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskchampion\"\nproject = \"agents\"\nhold_stop = true\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n```",
       "properties": {
         "backend": {
           "$ref": "#/$defs/TodoBackend",
           "default": "builtin",
-          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskwarrior` keeps them in the local taskwarrior\nthrough taskwarrior 3's `task` program, under the project `project`\nnames. `taskchampion` keeps them in a taskchampion replica devkit\nembeds, under the same project, and can sync it to a directory or a\nsync server. `postgres` keeps them in a Postgres database every\nmachine shares, under the same project, with the activity log beside\nthem. Set it in\n`~/.config/devkit/config.toml`, not in a repository's `devkit.toml`:\na committed `taskwarrior` breaks every machine without `task`, cloud\nsessions included. `DEVKIT_TODO_BACKEND`, when set, overrides it with\nthe same spellings."
+          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskchampion` keeps them in a replica devkit embeds,\nunder the project `project` names, and can sync it to a directory or\na sync server. `postgres` keeps them in a Postgres database every\nmachine shares, under the same project, with the activity log beside\nthem. `DEVKIT_TODO_BACKEND`, when set, overrides it with the same\nspellings."
         },
         "hold_stop": {
           "default": true,
@@ -1649,7 +1636,7 @@
         },
         "project": {
           "default": "devkit",
-          "description": "The project the `taskwarrior` and `taskchampion` backends keep every\ntodo under. Global todos are filed on this project itself and every\nother node below it, as `<project>.<node>`, so devkit never lists,\nclaims or releases a task in any other project. alacritree's\ntaskwarrior tab shows these todos only when it reads the same root.\nIt may not hold `'` or `\"`: it is matched inside taskwarrior filters,\nwhere no quoting survives both.",
+          "description": "The project the `taskchampion` and `postgres` backends keep every\ntodo under. Global todos are filed on this project itself and every\nother node below it, as `<project>.<node>`, so devkit never lists,\nclaims or releases a task in any other project. alacritree's\ntaskwarrior tab shows these todos only when it reads the same root.",
           "type": "string"
         },
         "taskchampion": {
@@ -1661,13 +1648,6 @@
             "server_dir": null
           },
           "description": "The `taskchampion` backend's settings."
-        },
-        "taskwarrior": {
-          "$ref": "#/$defs/TaskwarriorConfig",
-          "default": {
-            "path": "task"
-          },
-          "description": "The `taskwarrior` backend's settings."
         }
       },
       "type": "object"
@@ -1957,9 +1937,6 @@
           "doppler_config": null,
           "doppler_project": null,
           "server_dir": null
-        },
-        "taskwarrior": {
-          "path": "task"
         }
       },
       "description": "Where `devkit todo` and the todo hooks keep agent todo lists."

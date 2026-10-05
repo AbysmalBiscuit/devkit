@@ -19,7 +19,7 @@ mod testenv;
 
 /// Variables a developer's shell may set that would pick a test's todo
 /// backend, its sync target, or credentials doctor validates over the network.
-const AMBIENT_TODO_VARS: [&str; 7] = [
+const AMBIENT_TODO_VARS: [&str; 10] = [
     "DEVKIT_TODO_BACKEND",
     "DEVKIT_TODO_DATABASE_URL",
     "DEVKIT_TODO_SYNC_URL",
@@ -27,6 +27,9 @@ const AMBIENT_TODO_VARS: [&str; 7] = [
     "DEVKIT_TODO_SYNC_SECRET",
     "LINEAR_API_KEY",
     "SLACK_TOKEN",
+    "TASKDATA",
+    "TASKRC",
+    "XDG_CONFIG_HOME",
 ];
 
 pub struct Proj {

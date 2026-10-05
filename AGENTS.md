@@ -53,7 +53,6 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | `devkit-timing` | `--timing` spans for subprocess and network IO, and their summary |
 | `devkit-todo` | agent todo lists: the `TodoStore` trait and its contract suite, the claim rule, node naming, the native-tool map, rendering, list diffing, and the activity log of subagent runs and claim intervals |
 | `devkit-todo-builtin` | `BuiltinStore`, the todo store devkit ships: one JSON document under the state directory |
-| `devkit-todo-taskwarrior` | `TaskwarriorStore`, todo lists kept in the local taskwarrior through `task`, and `schema`, the mapping between a todo and a task |
 | `devkit-todo-taskchampion` | `TaskchampionStore`, todo lists kept in an embedded taskchampion replica, local or synced to a directory or a sync server |
 | `devkit-todo-postgres` | `PostgresStore`, todo lists kept in a Postgres database that every machine claims against, and `PostgresActivity`, the activity log beside them |
 

@@ -23,8 +23,7 @@ use devkit_todo::{
 };
 use devkit_todo_builtin::BuiltinStore;
 use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore, Trust};
-use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid};
-use devkit_todo_taskwarrior::TaskwarriorStore;
+use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid, replica_location};
 use serde::{Deserialize, Serialize, de::IntoDeserializer};
 
 use super::sync::SyncOutcome;
@@ -98,7 +97,6 @@ pub(crate) struct Store(Recorded<Backend, Activity>);
 #[delegate(TodoStore)]
 pub(crate) enum Backend {
     Builtin(BuiltinStore),
-    Taskwarrior(TaskwarriorStore),
     Taskchampion(Replica),
     Postgres(PostgresStore),
 }
@@ -432,10 +430,7 @@ fn sync_target_with(
 
 /// Where the taskchampion replica lives.
 fn data_dir(config: &TaskchampionConfig) -> PathBuf {
-    match &config.data_dir {
-        Some(dir) => expand_tilde(dir),
-        None => devkit_todo::state_dir().join("taskchampion"),
-    }
+    replica_location(config.data_dir.as_deref()).path
 }
 
 impl Backend {
@@ -452,9 +447,7 @@ impl Activity {
                 database(&config.postgres, opener),
                 &config.project,
             )),
-            TodoBackend::Builtin | TodoBackend::Taskwarrior | TodoBackend::Taskchampion => {
-                Self::Local(ActivityLog::open())
-            }
+            TodoBackend::Builtin | TodoBackend::Taskchampion => Self::Local(ActivityLog::open()),
         }
     }
 }
@@ -469,9 +462,6 @@ impl Store {
     fn open(config: &TodoConfig, opener: Opener) -> Self {
         let backend = match config.backend {
             TodoBackend::Builtin => Backend::Builtin(BuiltinStore::open()),
-            TodoBackend::Taskwarrior => Backend::Taskwarrior(
-                TaskwarriorStore::new(&config.taskwarrior.path).with_root(&config.project),
-            ),
             TodoBackend::Taskchampion => Backend::Taskchampion(Replica {
                 store: taskchampion(config).with_lock_wait(opener.lock_wait()),
                 syncs: names_a_target(&config.taskchampion),
@@ -665,22 +655,22 @@ mod tests {
 
     #[test]
     fn the_env_wins_over_the_config() {
-        let tw = config(TodoBackend::Taskwarrior);
+        let postgres = config(TodoBackend::Postgres);
         assert_eq!(
-            effective_backend(Some(&tw), Some("taskchampion")).unwrap(),
+            effective_backend(Some(&postgres), Some("taskchampion")).unwrap(),
             (TodoBackend::Taskchampion, BackendSource::Env)
         );
         assert_eq!(
-            effective_backend(Some(&tw), Some("")).unwrap(),
-            (TodoBackend::Taskwarrior, BackendSource::Config)
+            effective_backend(Some(&postgres), Some("")).unwrap(),
+            (TodoBackend::Postgres, BackendSource::Config)
         );
     }
 
     #[test]
     fn the_config_wins_over_the_default() {
         assert_eq!(
-            effective_backend(Some(&config(TodoBackend::Taskwarrior)), None).unwrap(),
-            (TodoBackend::Taskwarrior, BackendSource::Config)
+            effective_backend(Some(&config(TodoBackend::Taskchampion)), None).unwrap(),
+            (TodoBackend::Taskchampion, BackendSource::Config)
         );
         assert_eq!(
             effective_backend(None, None).unwrap(),
