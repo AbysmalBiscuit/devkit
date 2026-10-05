@@ -96,7 +96,7 @@ fn taskwarrior_reads_a_synced_replica() {
     task(dir.path(), &["sync"]);
     let task = exported(dir.path(), &child);
     assert_eq!(task["description"], "spec", "{task}");
-    assert_eq!(task["project"], "devkit.proj.main", "{task}");
+    assert_eq!(task["project"], "proj.main", "{task}");
     assert_eq!(task["status"], "pending", "{task}");
     assert!(task["start"].is_string(), "{task}");
     assert_eq!(task["holder"], "S/a", "{task}");

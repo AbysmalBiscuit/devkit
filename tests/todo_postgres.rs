@@ -52,7 +52,7 @@ fn fresh_root() -> String {
 /// A checkout whose todos go to `root` on the Postgres backend.
 fn proj(root: &str) -> Proj {
     Proj::with_home_config(&format!(
-        "[todo]\nbackend = \"postgres\"\nproject = \"{root}\"\n"
+        "[todo]\nbackend = \"postgres\"\n[todo.postgres]\nroot = \"{root}\"\n"
     ))
 }
 
@@ -248,7 +248,7 @@ fn hooks_do_nothing_in_time(url: &str) {
     let verdict = stdout(&timed(&hook("pre-tool-use"), bash));
     assert!(!verdict.contains("\"deny\""), "{verdict}");
     assert!(
-        verdict.contains("DEVKIT_TODO_HOLDER='S/a1' devkit todo start abcdef12"),
+        verdict.contains("export DEVKIT_TODO_HOLDER='S/a1'\\ndevkit todo start abcdef12"),
         "the verdict is the attribution a reachable database gets: {verdict}"
     );
 
@@ -456,8 +456,8 @@ fn doppler_proj(root: &str) -> Proj {
 #[cfg(unix)]
 fn doppler_config(root: &str, project: &str) -> String {
     format!(
-        "[todo]\nbackend = \"postgres\"\nproject = \"{root}\"\n\
-         [todo.postgres]\ndoppler_project = \"{project}\"\n"
+        "[todo]\nbackend = \"postgres\"\n\
+         [todo.postgres]\nroot = \"{root}\"\ndoppler_project = \"{project}\"\n"
     )
 }
 
@@ -668,7 +668,7 @@ fn a_hook_releases_many_claims_in_one_go() {
     // A sub-agent stopping with todos in progress is held to them by
     // default; this one is meant to stop and release them.
     let p = Proj::with_home_config(
-        "[todo]\nbackend = \"postgres\"\nproject = \"devkit\"\nhold_stop = false\n",
+        "[todo]\nbackend = \"postgres\"\nhold_stop = false\n[todo.postgres]\nroot = \"devkit\"\n",
     );
     let env = session("S", &url);
     let out = p.hook_with(
@@ -690,7 +690,7 @@ fn a_hook_releases_many_claims_in_one_go() {
 fn a_hook_whose_activity_setup_hangs_still_answers_in_time() {
     let out = with_a_hanging_ca_file("devkit todo list");
     assert!(
-        out.contains("DEVKIT_TODO_HOLDER='S/a1' devkit todo list"),
+        out.contains("export DEVKIT_TODO_HOLDER='S/a1'\\ndevkit todo list"),
         "{out}"
     );
 }
@@ -701,7 +701,7 @@ fn a_claim_check_whose_store_hangs_lets_the_command_through_in_time() {
     let out = with_a_hanging_ca_file("devkit todo start abcdef12");
     assert!(!out.contains("\"deny\""), "{out}");
     assert!(
-        out.contains("DEVKIT_TODO_HOLDER='S/a1' devkit todo start abcdef12"),
+        out.contains("export DEVKIT_TODO_HOLDER='S/a1'\\ndevkit todo start abcdef12"),
         "the verdict an unreachable store gets: {out}"
     );
 }
@@ -723,7 +723,9 @@ fn a_slow_gate_and_a_hanging_store_still_answer_inside_the_deadline() {
     );
     assert!(!out.contains("\"deny\""), "{out}");
     assert!(
-        out.contains("DEVKIT_TODO_HOLDER='S/a1' devkit todo start abcdef12"),
+        out.contains(
+            "export DEVKIT_TODO_HOLDER='S/a1'\\necho x > a.txt; devkit todo start abcdef12"
+        ),
         "{out}"
     );
 }

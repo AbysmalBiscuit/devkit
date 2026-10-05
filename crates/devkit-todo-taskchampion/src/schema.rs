@@ -3,28 +3,16 @@
 use devkit_todo::{Status, Todo};
 use serde::Deserialize;
 
-/// The root project devkit keeps its todos under unless configured
-/// otherwise.
-pub const DEFAULT_ROOT: &str = "devkit";
-
-/// The taskwarrior project a node's todos are filed under: `root` itself for
-/// the global list, `<root>.<node>` for any other node.
-pub fn project_of(root: &str, node: Option<&str>) -> String {
-    match node.filter(|n| *n != devkit_todo::node::GLOBAL) {
-        Some(node) => format!("{root}.{node}"),
-        None => root.to_string(),
-    }
+/// The bare project a node's todos are filed under.
+pub fn project_of(node: Option<&str>) -> String {
+    node.unwrap_or(devkit_todo::node::GLOBAL).to_string()
 }
 
-/// The node `project` files a todo on under `root`: `Some(None)` for the
-/// global list, and `None` for a project outside `root`, whose tasks are not
-/// todos.
-pub fn node_of(root: &str, project: &str) -> Option<Option<String>> {
-    if project == root {
-        return Some(None);
-    }
-    let node = project.strip_prefix(root)?.strip_prefix('.')?;
-    (!node.is_empty()).then(|| Some(node.to_string()))
+/// The bare node, with `global` represented by `Some(None)` and an empty
+/// project rejected.
+pub fn node_of(project: &str) -> Option<Option<String>> {
+    (!project.is_empty())
+        .then(|| (project != devkit_todo::node::GLOBAL).then(|| project.to_string()))
 }
 
 /// A task as `task export` prints it.
@@ -49,15 +37,14 @@ fn integer_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, 
 }
 
 impl Exported {
-    /// The todo this task is under `root`, or `None` for a task that is not
-    /// one: a project outside `root`, no project at all, or a status other
-    /// than pending, completed or deleted.
+    /// The todo this task represents, or `None` for no project, an empty
+    /// project, or a status other than pending, completed or deleted.
     ///
     /// A pending task started with no `holder` was started outside devkit,
     /// by `task start` or alacritree, so it reads as held by a person and no
     /// agent takes it over.
-    pub fn into_todo(self, root: &str) -> Option<Todo> {
-        let project = node_of(root, self.project.as_deref()?)?;
+    pub fn into_todo(self) -> Option<Todo> {
+        let project = node_of(self.project.as_deref()?)?;
         let holder = self
             .holder
             .filter(|h| !h.is_empty())
@@ -102,7 +89,7 @@ mod tests {
             "uuid": "96432cd6-082a-4d8c-a9cb-adef8823ff92",
             "description": "d",
             "status": "pending",
-            "project": "devkit.r.main",
+            "project": "r.main",
         });
         task.as_object_mut()
             .unwrap()
@@ -111,7 +98,7 @@ mod tests {
     }
 
     fn status_of(json: serde_json::Value) -> Option<Status> {
-        exported(json).into_todo(DEFAULT_ROOT).map(|t| t.status)
+        exported(json).into_todo().map(|t| t.status)
     }
 
     #[test]
@@ -159,18 +146,18 @@ mod tests {
     }
 
     #[test]
-    fn the_root_reads_as_global_and_no_project_is_not_a_todo() {
-        let global = exported(serde_json::json!({"project": "devkit"}));
-        assert_eq!(global.into_todo(DEFAULT_ROOT).unwrap().project, None);
+    fn global_reads_as_global_and_no_project_is_not_a_todo() {
+        let global = exported(serde_json::json!({"project": "global"}));
+        assert_eq!(global.into_todo().unwrap().project, None);
         let mut unfiled = exported(serde_json::json!({}));
         unfiled.project = None;
-        assert_eq!(unfiled.into_todo(DEFAULT_ROOT), None);
+        assert_eq!(unfiled.into_todo(), None);
     }
 
     #[test]
     fn fractional_order_rounds() {
         let task = exported(serde_json::json!({"order": 1024.4}));
-        assert_eq!(task.into_todo(DEFAULT_ROOT).unwrap().order, Some(1024));
+        assert_eq!(task.into_todo().unwrap().order, Some(1024));
     }
 
     #[test]
@@ -182,22 +169,24 @@ mod tests {
         assert_eq!(rfc3339("yesterday"), None);
         let task = exported(serde_json::json!({"entry": "20261003T120000Z"}));
         assert_eq!(
-            task.into_todo(DEFAULT_ROOT).unwrap().entry.as_deref(),
+            task.into_todo().unwrap().entry.as_deref(),
             Some("2026-10-03T12:00:00Z")
         );
     }
 
     #[test]
-    fn only_projects_under_the_root_name_a_node() {
-        assert_eq!(node_of("devkit", "devkit"), Some(None));
+    fn bare_projects_roundtrip_and_empty_projects_are_not_todos() {
+        for node in [None, Some("global"), Some("r.main"), Some("home")] {
+            let project = project_of(node);
+            let todo = exported(serde_json::json!({"project": project}))
+                .into_todo()
+                .unwrap();
+            assert_eq!(todo.node(), node.unwrap_or("global"));
+        }
+        assert_eq!(node_of(""), None);
         assert_eq!(
-            node_of("devkit", "devkit.r.main"),
-            Some(Some("r.main".into()))
+            exported(serde_json::json!({"project": ""})).into_todo(),
+            None
         );
-        assert_eq!(node_of("devkit", "r.main"), None);
-        assert_eq!(node_of("devkit", "devkit-web.r"), None);
-        assert_eq!(node_of("devkit", "devkitx"), None);
-        let home = exported(serde_json::json!({"project": "home"}));
-        assert_eq!(home.into_todo(DEFAULT_ROOT), None);
     }
 }

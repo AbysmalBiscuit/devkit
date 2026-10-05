@@ -753,6 +753,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "devkit-common",
+ "devkit-config",
  "devkit-todo",
  "devkit-vcs",
  "serde",

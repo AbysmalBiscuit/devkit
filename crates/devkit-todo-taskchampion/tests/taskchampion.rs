@@ -68,7 +68,7 @@ impl Drop for HeldLock {
 }
 
 #[test]
-fn global_todos_are_filed_on_the_root() {
+fn todos_are_filed_on_bare_nodes() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("tc");
     let store = TaskchampionStore::at(data.clone());
@@ -84,12 +84,14 @@ fn global_todos_are_filed_on_the_root() {
                 .map(str::to_string)
         })
     };
-    assert_eq!(project(&global).as_deref(), Some("devkit"));
-    assert_eq!(project(&filed).as_deref(), Some("devkit.r.main"));
+    assert_eq!(project(&global).as_deref(), Some("global"));
+    assert_eq!(project(&filed).as_deref(), Some("r.main"));
+    assert_eq!(store.get(&global).unwrap().unwrap().project, None);
+    assert_eq!(store.get(&filed).unwrap().unwrap().node(), "r.main");
 }
 
 #[test]
-fn a_task_outside_the_root_never_lists() {
+fn unfiled_tasks_stay_outside_the_store() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("tc");
     let store = TaskchampionStore::at(data.clone());
@@ -107,8 +109,8 @@ fn a_task_outside_the_root_never_lists() {
         raw.commit_operations(ops).await.unwrap();
     });
     let listed = store.list(&Filter::all()).unwrap();
-    assert_eq!(listed.len(), 1, "{listed:?}");
-    assert_eq!(listed[0].description, "make the replica");
+    assert_eq!(listed.len(), 3, "{listed:?}");
+    assert!(listed.iter().all(|todo| !todo.node().is_empty()));
 }
 
 #[test]

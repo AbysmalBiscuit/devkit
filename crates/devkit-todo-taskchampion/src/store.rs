@@ -17,7 +17,7 @@ use taskchampion::{
 };
 use tokio::runtime::Runtime;
 
-use crate::schema::{DEFAULT_ROOT, Exported, project_of};
+use crate::schema::{Exported, project_of};
 
 type Replica = taskchampion::Replica<SqliteStorage>;
 
@@ -132,11 +132,9 @@ fn busy_failpoint(lock: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Todos kept in the taskchampion replica at `data_dir`, under one root
-/// project. A task outside the root is never a todo.
+/// Todos kept at bare project nodes in the taskchampion replica at `data_dir`.
 pub struct TaskchampionStore {
     data_dir: PathBuf,
-    root: String,
     lock_wait: Option<Duration>,
     target: Option<SyncTarget>,
     /// Set while [`TaskchampionStore::while_locked`] holds the replica lock.
@@ -153,19 +151,10 @@ impl TaskchampionStore {
     pub fn at(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
-            root: DEFAULT_ROOT.to_string(),
             lock_wait: None,
             target: None,
             held: Cell::new(false),
             server: Cell::new(None),
-        }
-    }
-
-    /// The project every todo is filed under.
-    pub fn with_root(self, root: impl Into<String>) -> Self {
-        Self {
-            root: root.into(),
-            ..self
         }
     }
 
@@ -192,11 +181,6 @@ impl TaskchampionStore {
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
-    }
-
-    /// The project every todo is filed under.
-    pub fn root(&self) -> &str {
-        &self.root
     }
 
     /// One full sync with the target under the replica lock, a no-op with no
@@ -311,7 +295,7 @@ impl TaskchampionStore {
             entry: stamp(task.get_entry()),
             modified: stamp(task.get_modified()),
         }
-        .into_todo(&self.root)
+        .into_todo()
     }
 
     async fn todos(&self, replica: &mut Replica) -> Result<Vec<Todo>> {
@@ -361,12 +345,12 @@ impl TaskchampionStore {
         parent: Option<&str>,
         skip: Option<&str>,
     ) -> Result<i64> {
-        let node = project_of(&self.root, project);
+        let node = project.unwrap_or(devkit_todo::node::GLOBAL);
         Ok(self
             .todos(replica)
             .await?
             .iter()
-            .filter(|t| project_of(&self.root, t.project.as_deref()) == node)
+            .filter(|t| t.node() == node)
             .filter(|t| t.parent.as_deref() == parent && Some(t.id.as_str()) != skip)
             .filter_map(|t| t.order)
             .max()
@@ -470,7 +454,7 @@ impl TodoStore for TaskchampionStore {
             task.set_description(one_line(&todo.description), &mut ops)?;
             task.set_status(taskchampion::Status::Pending, &mut ops)?;
             task.set_entry(Some(Utc::now()), &mut ops)?;
-            let project = project_of(&self.root, todo.project.as_deref());
+            let project = project_of(todo.project.as_deref());
             task.set_value("project", Some(project), &mut ops)?;
             task.set_value("order", Some(order.to_string()), &mut ops)?;
             task.set_value("subof", parent, &mut ops)?;
@@ -533,7 +517,7 @@ impl TodoStore for TaskchampionStore {
             }
             Edit::Relocate { id, project } => {
                 let todo = self.resolve(replica, id).await?;
-                let project = project_of(&self.root, project.as_deref());
+                let project = project_of(project.as_deref());
                 Self::change(replica, &todo, |task, ops| {
                     task.set_value("project", Some(project), ops)
                 })

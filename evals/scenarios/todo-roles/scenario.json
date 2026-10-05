@@ -1,0 +1,10 @@
+{
+  "max_turns": 24,
+  "checks": [
+    {"id": "delegates-roleless-worker", "call": "Agent", "match": "general-purpose"},
+    {"id": "selects-suggested-role", "file": "WORKER_ROLE.txt", "match": "Role `(implementer|reviewer)`, writing to `repo\\.main\\.claude-[^.`\\r\\n]+\\.[^.`\\r\\n]+`"},
+    {"id": "writes-agent-node-todos", "file": "WORKER_TODOS.json", "match": "\"project\"\\s*:\\s*\"repo\\.main\\.claude-[^.\"\\r\\n]+\\.[^.\"\\r\\n]+\""},
+    {"id": "preserves-manager-role", "file": "MANAGER_ROLE.txt", "match": "^Role `manager`, writing to `repo\\.main`\\.\\n$"},
+    {"id": "finishes-the-change", "file": "CHANGELOG.md", "match": "(?s)## Unreleased\\n(?:(?!\\n## ).)*name argument"}
+  ]
+}

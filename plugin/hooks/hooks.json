@@ -40,7 +40,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|PowerShell|mcp__.*",
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|PowerShell|TaskCreate|TodoWrite|mcp__.*",
         "hooks": [
           {
             "type": "command",
