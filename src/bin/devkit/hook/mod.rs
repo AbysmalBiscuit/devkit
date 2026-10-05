@@ -146,6 +146,11 @@ pub fn run(cli: HookCli) -> Result<()> {
             record_in(p, cli.event, checkout, cwd);
             Ok(())
         }),
+        HookEvent::SubagentStart => with_payload(harness, cli.event, |p, checkout, cwd| {
+            todo::spawn(p, checkout, cwd);
+            record_in(p, cli.event, checkout, cwd);
+            Ok(())
+        }),
         // The verdict comes first and recording after, so a record can never
         // change it.
         HookEvent::Stop => with_payload(harness, cli.event, |p, checkout, cwd| {
@@ -308,6 +313,14 @@ pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
     let verdict = match (edit::write(&payload), payload.tool()) {
         (Some(write), _) => edit::guard(&payload, write, &checkout, &cwd),
         (None, Some(pabal::Tool::Mcp { .. })) => mcp::guard(&payload, &checkout, &cwd),
+        (None, _) if todo::writes_native_todo(&payload) => {
+            if let Some(text) = todo::nudge(&payload, &checkout, &cwd)
+                && let Some(answer) = payload.pre_tool_use_context(&text)
+            {
+                print_envelope(&answer);
+            }
+            shell::guard(&payload, &checkout)
+        }
         (None, _) => shell::guard(&payload, &checkout),
     };
     // After the verdict is out, so a slow activity log never delays it.

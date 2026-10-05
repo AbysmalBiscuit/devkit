@@ -9,7 +9,9 @@ pub mod activity;
 #[cfg(feature = "test-support")]
 pub mod contract;
 pub mod holder;
+pub mod layout;
 pub mod node;
+pub mod roles;
 pub mod transition;
 
 use std::path::PathBuf;

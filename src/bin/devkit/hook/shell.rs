@@ -274,7 +274,12 @@ fn respond(
     // enablable only from the global config.
     // A sub-agent's `devkit todo` claims are attributed whatever the gates
     // say, so the analysis runs for it even with nothing else to decide.
-    if !commands_on && !writes_on && !settings.enabled && payload.subagent_holder().is_none() {
+    if !commands_on
+        && !writes_on
+        && !settings.enabled
+        && payload.subagent_holder().is_none()
+        && !command.contains("todo")
+    {
         return Outcome::silent();
     }
     if writes_on {
@@ -341,9 +346,14 @@ fn respond(
         let rec = shell_record(Decision::Deny, &blocks, &notes);
         return deny(which, &blocks).with(rec);
     }
+    if super::todo::writes_todo(&analysis)
+        && let Some(text) = super::todo::nudge(payload, &checkout, &cwd)
+    {
+        notes.push(text);
+    }
     let rec = shell_record(Decision::Allow, &[], &notes);
     let context = (!notes.is_empty()).then(|| notes.join("\n"));
-    if let Some(rewritten) = super::todo::rewrite(payload, &analysis, command, dialect)
+    if let Some(rewritten) = super::todo::rewrite(payload, command, dialect)
         && let Some(envelope) = payload.rewrite_answer(&rewritten, context.as_deref())
     {
         return Outcome {

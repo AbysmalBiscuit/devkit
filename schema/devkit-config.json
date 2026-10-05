@@ -1093,7 +1093,7 @@
     },
     "PostgresConfig": {
       "additionalProperties": false,
-      "description": "Where `[todo] backend = \"postgres\"` finds its database: the connection\nURL `DEVKIT_TODO_DATABASE_URL` resolves to, from the environment, then\nthis Doppler scope when set, then the secrets file.",
+      "description": "Where `[todo] backend = \"postgres\"` finds its database: the connection\nURL `DEVKIT_TODO_DATABASE_URL` resolves to, from the environment, then\nthis Doppler scope when set, then the secrets file.\n\n```toml\n[todo.postgres]\nroot = \"factory\"\n```",
       "properties": {
         "ca_file": {
           "default": null,
@@ -1118,6 +1118,11 @@
             "string",
             "null"
           ]
+        },
+        "root": {
+          "default": "devkit",
+          "description": "The database tenant containing this workflow's todos and activity.\nDefaults to `devkit`. This is independent of node templates.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -1230,6 +1235,44 @@
       ],
       "type": "string"
     },
+    "RoleConfig": {
+      "additionalProperties": false,
+      "description": "A caller's workflow role, independent of its authority over claims.\n\n```toml\n[todo.roles.manager]\nscope = \"workspace\"\n[todo.roles.implementer]\nscope = \"agent\"\nparent = \"manager\"\nagent_types = [\"implementer\"]\nhold_pending = true\n```",
+      "properties": {
+        "agent_types": {
+          "default": [],
+          "description": "Subagent types assigned this role by the subagent-start hook.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hold_pending": {
+          "default": null,
+          "description": "Hold a stop on pending todos at the role's node. When absent, true\nonly when the template includes the caller's deepest identity:\n`agent` for a subagent and `session` for a main agent.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "parent": {
+          "default": null,
+          "description": "The role it works under. Selects suggested roles, never claim authority.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "description": "The scope this role writes to, walking up when caller facts are missing.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "type": "object"
+    },
     "RuleAction": {
       "description": "What a matching command rule does. A rule that should not act is disabled\nwith `enabled = false`, so there is no `allow`.",
       "enum": [
@@ -1317,6 +1360,28 @@
         }
       ],
       "description": "One entry of a task's `run`, each rendering exactly one minijinja template\nand differing only in what it does with the result.\n\n```toml\n[tasks.stage]\nrun = [\"git\", \"add\", \"--\", { split = \"{{ files }}\", on = \";\" }]\n```\n\n`devrun task stage --arg 'files=new file.txt;other.txt'` reaches `git` as\nfour arguments, the space in the first filename included, because devkit\nexecs the argv rather than handing it to a shell."
+    },
+    "ScopeConfig": {
+      "additionalProperties": false,
+      "description": "A named todo node template in the scope tree.\n\n```toml\n[todo.scopes.review]\nnode = \"{repo}.{branch}.review-{session}\"\nparent = \"workspace\"\n```",
+      "properties": {
+        "node": {
+          "description": "Segments joined by dots. Placeholders are `repo`, `branch`,\n`harness`, `session` and `agent`.",
+          "type": "string"
+        },
+        "parent": {
+          "default": null,
+          "description": "The scope to use when a caller lacks a template value. The one root\nhas no parent and its node contains no placeholders.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "node"
+      ],
+      "type": "object"
     },
     "Severity": {
       "description": "How a diagnostic is classified for the agent.",
@@ -1613,16 +1678,16 @@
     },
     "TodoConfig": {
       "additionalProperties": false,
-      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskchampion\"\nproject = \"agents\"\nhold_stop = true\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n```",
+      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskchampion\"\nhold_stop = true\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\nroot = \"agents\"\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n```",
       "properties": {
         "backend": {
           "$ref": "#/$defs/TodoBackend",
           "default": "builtin",
-          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskchampion` keeps them in a replica devkit embeds,\nunder the project `project` names, and can sync it to a directory or\na sync server. `postgres` keeps them in a Postgres database every\nmachine shares, under the same project, with the activity log beside\nthem. `DEVKIT_TODO_BACKEND`, when set, overrides it with the same\nspellings."
+          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskchampion` keeps bare project nodes in an embedded\nreplica and can sync it to a directory or server. `postgres` keeps\nthem in a shared database under `todo.postgres.root`, with its activity\nlog. `DEVKIT_TODO_BACKEND` overrides it with the same spellings."
         },
         "hold_stop": {
           "default": true,
-          "description": "Whether a stop hook sends an agent back to its open todos: its\nsession's pending todos in a workspace and the todos it has in\nprogress. One reminder per unchanged list; stopping again goes\nthrough.",
+          "description": "Whether a stop hook sends an agent back to its open todos: its\nown claims on any node and pending todos when its role holds them.\nOne reminder per unchanged list; stopping again goes\nthrough.",
           "type": "boolean"
         },
         "postgres": {
@@ -1630,14 +1695,60 @@
           "default": {
             "ca_file": null,
             "doppler_config": null,
-            "doppler_project": null
+            "doppler_project": null,
+            "root": "devkit"
           },
           "description": "The `postgres` backend's settings."
         },
-        "project": {
-          "default": "devkit",
-          "description": "The project the `taskchampion` and `postgres` backends keep every\ntodo under. Global todos are filed on this project itself and every\nother node below it, as `<project>.<node>`, so devkit never lists,\nclaims or releases a task in any other project. alacritree's\ntaskwarrior tab shows these todos only when it reads the same root.",
-          "type": "string"
+        "roles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RoleConfig"
+          },
+          "default": {
+            "main": {
+              "agent_types": [],
+              "hold_pending": null,
+              "parent": null,
+              "scope": "session"
+            },
+            "subagent": {
+              "agent_types": [],
+              "hold_pending": null,
+              "parent": null,
+              "scope": "session"
+            }
+          },
+          "description": "Workflow roles. `main` and `subagent` always exist; a layer may\nredefine them or add roles for its own workflow.",
+          "type": "object"
+        },
+        "scopes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ScopeConfig"
+          },
+          "default": {
+            "agent": {
+              "node": "{repo}.{branch}.{harness}-{session}.{agent}",
+              "parent": "session"
+            },
+            "global": {
+              "node": "global",
+              "parent": null
+            },
+            "repo": {
+              "node": "{repo}",
+              "parent": "global"
+            },
+            "session": {
+              "node": "{repo}.{branch}.{harness}-{session}",
+              "parent": "workspace"
+            },
+            "workspace": {
+              "node": "{repo}.{branch}",
+              "parent": "repo"
+            }
+          },
+          "description": "Named node templates and their parents. Defaults are extended or\noverridden key by key by each config layer.",
+          "type": "object"
         },
         "taskchampion": {
           "$ref": "#/$defs/TaskchampionConfig",
@@ -1929,9 +2040,45 @@
         "postgres": {
           "ca_file": null,
           "doppler_config": null,
-          "doppler_project": null
+          "doppler_project": null,
+          "root": "devkit"
         },
-        "project": "devkit",
+        "roles": {
+          "main": {
+            "agent_types": [],
+            "hold_pending": null,
+            "parent": null,
+            "scope": "session"
+          },
+          "subagent": {
+            "agent_types": [],
+            "hold_pending": null,
+            "parent": null,
+            "scope": "session"
+          }
+        },
+        "scopes": {
+          "agent": {
+            "node": "{repo}.{branch}.{harness}-{session}.{agent}",
+            "parent": "session"
+          },
+          "global": {
+            "node": "global",
+            "parent": null
+          },
+          "repo": {
+            "node": "{repo}",
+            "parent": "global"
+          },
+          "session": {
+            "node": "{repo}.{branch}.{harness}-{session}",
+            "parent": "workspace"
+          },
+          "workspace": {
+            "node": "{repo}.{branch}",
+            "parent": "repo"
+          }
+        },
         "taskchampion": {
           "data_dir": null,
           "doppler_config": null,

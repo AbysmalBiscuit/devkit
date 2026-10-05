@@ -200,7 +200,7 @@ fn attribution_a_rewrite_carries_the_guards_note() {
         let answer = &v["hookSpecificOutput"];
         assert_eq!(
             answer["updatedInput"]["command"],
-            format!("echo x > \"$OUT\"; DEVKIT_TODO_HOLDER='S/a1' devkit todo start {id}"),
+            format!("export DEVKIT_TODO_HOLDER='S/a1'\necho x > \"$OUT\"; devkit todo start {id}"),
             "{}",
             on.harness
         );

@@ -8,9 +8,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 mod layers;
+pub mod todo;
 pub use layers::{
     BrokenLayer, CONFIG_FILE, Layer, LayerKind, ReadLayers, project_layers, read_project_layers,
 };
+pub use todo::{RoleConfig, ScopeConfig};
 pub mod harness;
 pub use harness::{
     AppMatch, CommandRule, Fidelity, HarnessSection, IssueToolRule, LogSection, PolicyAction,
@@ -98,7 +100,6 @@ pub struct Config {
 /// # let cfg = Config::parse(r#"
 /// [todo]
 /// backend = "taskchampion"
-/// project = "agents"
 /// hold_stop = true
 ///
 /// [todo.taskchampion]
@@ -108,12 +109,13 @@ pub struct Config {
 /// doppler_config = "dev"
 ///
 /// [todo.postgres]
+/// root = "agents"
 /// doppler_project = "swarm"
 /// doppler_config = "agents"
 /// ca_file = "~/.config/devkit/supabase-ca.crt"
 /// # "#).unwrap();
 /// # assert_eq!(cfg.todo.backend, TodoBackend::Taskchampion);
-/// # assert_eq!(cfg.todo.project, "agents");
+/// # assert_eq!(cfg.todo.postgres.root, "agents");
 /// # let tc = &cfg.todo.taskchampion;
 /// # assert_eq!(tc.data_dir.as_deref(), Some("/var/devkit/todo"));
 /// # assert_eq!(tc.server_dir.as_deref(), Some("/mnt/shared/todo-sync"));
@@ -131,35 +133,35 @@ pub struct Config {
 /// # assert!(Config::parse("[todo.taskchampion]\nserver = \"x\"\n").is_err());
 /// # let empty = Config::parse("").unwrap();
 /// # assert_eq!(empty.todo.backend, TodoBackend::Builtin);
-/// # assert_eq!(empty.todo.project, "devkit");
+/// # assert_eq!(empty.todo.postgres.root, "devkit");
 /// # assert!(empty.todo.hold_stop);
 /// # let off = Config::parse("[todo]\nhold_stop = false\n").unwrap();
 /// # assert!(!off.todo.hold_stop);
 /// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
 /// # assert!(Config::parse("[todo]\nbackends = \"builtin\"\n").is_err());
-/// # let quoted = Config::parse("[todo]\nproject = \"dev'kit\"\n").unwrap();
-/// # assert_eq!(quoted.todo.project, "dev'kit");
+/// # let quoted = Config::parse("[todo]\nproject = \"dev'kit\"\n").unwrap_err();
+/// # assert!(format!("{quoted:#}").contains("[todo] project"), "{quoted:#}");
+/// # assert!(format!("{quoted:#}").contains("[todo.scopes]"), "{quoted:#}");
 /// ```
 #[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(try_from = "todo::Input")]
+#[schemars(!try_from, default, deny_unknown_fields)]
 pub struct TodoConfig {
+    /// Named node templates and their parents. Defaults are extended or
+    /// overridden key by key by each config layer.
+    pub scopes: std::collections::BTreeMap<String, ScopeConfig>,
+    /// Workflow roles. `main` and `subagent` always exist; a layer may
+    /// redefine them or add roles for its own workflow.
+    pub roles: std::collections::BTreeMap<String, RoleConfig>,
     /// Which store keeps the todos. `builtin` is a JSON file in devkit's
-    /// state directory. `taskchampion` keeps them in a replica devkit embeds,
-    /// under the project `project` names, and can sync it to a directory or
-    /// a sync server. `postgres` keeps them in a Postgres database every
-    /// machine shares, under the same project, with the activity log beside
-    /// them. `DEVKIT_TODO_BACKEND`, when set, overrides it with the same
-    /// spellings.
+    /// state directory. `taskchampion` keeps bare project nodes in an embedded
+    /// replica and can sync it to a directory or server. `postgres` keeps
+    /// them in a shared database under `todo.postgres.root`, with its activity
+    /// log. `DEVKIT_TODO_BACKEND` overrides it with the same spellings.
     pub backend: TodoBackend,
-    /// The project the `taskchampion` and `postgres` backends keep every
-    /// todo under. Global todos are filed on this project itself and every
-    /// other node below it, as `<project>.<node>`, so devkit never lists,
-    /// claims or releases a task in any other project. alacritree's
-    /// taskwarrior tab shows these todos only when it reads the same root.
-    pub project: String,
     /// Whether a stop hook sends an agent back to its open todos: its
-    /// session's pending todos in a workspace and the todos it has in
-    /// progress. One reminder per unchanged list; stopping again goes
+    /// own claims on any node and pending todos when its role holds them.
+    /// One reminder per unchanged list; stopping again goes
     /// through.
     pub hold_stop: bool,
     /// The `taskchampion` backend's settings.
@@ -171,12 +173,19 @@ pub struct TodoConfig {
 impl Default for TodoConfig {
     fn default() -> Self {
         Self {
+            scopes: todo::default_scopes(),
+            roles: todo::default_roles(),
             backend: TodoBackend::default(),
-            project: "devkit".to_string(),
             hold_stop: true,
             taskchampion: TaskchampionConfig::default(),
             postgres: PostgresConfig::default(),
         }
+    }
+}
+
+impl TodoConfig {
+    pub fn validate(&self) -> Result<()> {
+        todo::validate(self)
     }
 }
 
@@ -223,9 +232,22 @@ pub struct TaskchampionConfig {
 /// Where `[todo] backend = "postgres"` finds its database: the connection
 /// URL `DEVKIT_TODO_DATABASE_URL` resolves to, from the environment, then
 /// this Doppler scope when set, then the secrets file.
-#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [todo.postgres]
+/// root = "factory"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.todo.postgres.root, "factory");
+/// # assert_eq!(Config::parse("").unwrap().todo.postgres.root, "devkit");
+/// ```
+#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PostgresConfig {
+    /// The database tenant containing this workflow's todos and activity.
+    /// Defaults to `devkit`. This is independent of node templates.
+    pub root: String,
     /// Read the connection URL, when the environment lacks it, from this
     /// Doppler project, before the secrets file. Hooks reuse the URL Doppler
     /// last gave, kept in devkit's state directory, until it ages out or
@@ -240,6 +262,17 @@ pub struct PostgresConfig {
     /// `$DEVKIT_CONFIG`) alone and ignored in a project's `devkit.toml`, so
     /// a checkout cannot add a CA your connection trusts.
     pub ca_file: Option<String>,
+}
+
+impl Default for PostgresConfig {
+    fn default() -> Self {
+        Self {
+            root: "devkit".into(),
+            doppler_project: None,
+            doppler_config: None,
+            ca_file: None,
+        }
+    }
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the

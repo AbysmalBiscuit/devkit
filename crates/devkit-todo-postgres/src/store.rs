@@ -13,7 +13,7 @@ use crate::{Database, PostgresActivity};
 const COLUMNS: &str =
     "id::text, node, description, status, holder, parent::text, ord, entry, modified";
 
-/// Todos kept in a Postgres database under one root, the `[todo] project`.
+/// Todos kept in a Postgres database under one `[todo.postgres] root`.
 /// A todo under any other root is never listed, claimed or released.
 ///
 /// A status change locks the todo's row, applies [`transition`] to what it
@@ -184,6 +184,7 @@ impl TodoStore for PostgresStore {
             match m {
                 NodeMatch::Exact(node) => exact.push(node.as_str()),
                 NodeMatch::Subtree(node) => subtrees.push(node.as_str()),
+                NodeMatch::SessionDescendants { node, .. } => subtrees.push(node.as_str()),
             }
         }
         let sql = format!(
@@ -194,19 +195,26 @@ impl TodoStore for PostgresStore {
                  WHERE s.node = '' OR n.name = s.node OR starts_with(n.name, s.node || '.')))
              ORDER BY node, ord"
         );
-        self.db.run(async |client| {
-            client
-                .query_typed(&sql, &[
-                    (&self.root, Type::TEXT),
-                    (&exact, Type::TEXT_ARRAY),
-                    (&subtrees, Type::TEXT_ARRAY),
-                    (&GLOBAL, Type::TEXT),
-                ])
-                .await?
-                .iter()
-                .map(todo_of)
-                .collect()
-        })
+        self.db
+            .run(async |client| {
+                client
+                    .query_typed(&sql, &[
+                        (&self.root, Type::TEXT),
+                        (&exact, Type::TEXT_ARRAY),
+                        (&subtrees, Type::TEXT_ARRAY),
+                        (&GLOBAL, Type::TEXT),
+                    ])
+                    .await?
+                    .iter()
+                    .map(todo_of)
+                    .collect()
+            })
+            .map(|todos: Vec<Todo>| {
+                todos
+                    .into_iter()
+                    .filter(|todo| filter.matches(todo.project.as_deref()))
+                    .collect()
+            })
     }
 
     fn get(&self, id: &str) -> Result<Option<Todo>> {

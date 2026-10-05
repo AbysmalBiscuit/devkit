@@ -1,7 +1,6 @@
 //! Agent todo lists kept in a taskchampion replica that devkit embeds, local
 //! or synced to a directory or a taskchampion sync server. The tasks have the
-//! shape and root project [`schema`] gives them, so
-//! taskwarrior reads a synced replica's lists.
+//! shape [`schema`] gives them, with bare project nodes shared with alacritree.
 
 mod location;
 pub mod schema;

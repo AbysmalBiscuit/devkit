@@ -21,9 +21,12 @@ use devkit_todo::{
     diff::{Change, Mirrored, Step, diff, pair},
     hold,
     holder::HOLDER_VAR,
+    layout::{Facts, Layout},
     native::{MirroredStep, NativeMap},
-    node::{self, Harness, Place, SessionRef},
-    render, transition,
+    node::{self, Harness, SessionRef},
+    render,
+    roles::{ResolvedRole, Roles},
+    transition,
 };
 use pabal::AnyHarness;
 use serde::{Deserialize, Serialize};
@@ -51,6 +54,61 @@ pub(crate) fn to_todo_holder(holder: &payload::Holder) -> Holder {
     Holder::new(&**holder)
 }
 
+pub(crate) fn spawn(payload: &Payload, checkout: &Checkout, cwd: &Path) {
+    let Some(holder) = payload.subagent_holder() else {
+        return;
+    };
+    let store = Store::for_hook(checkout, cwd);
+    report(Layout::new(store.config()).and_then(|layout| {
+        Roles::at(devkit_todo::state_dir()).spawn(
+            &layout,
+            &to_todo_holder(&holder),
+            payload.agent_type(),
+        )
+    }));
+}
+
+pub(crate) fn resolve_role(
+    payload: &Payload,
+    checkout: &Checkout,
+    store: &Store,
+    holder: &Holder,
+) -> Option<(Layout, Facts, ResolvedRole)> {
+    let session = SessionRef {
+        harness: harness_of(payload.harness())?,
+        id: payload.session_id()?.to_string(),
+    };
+    let layout = Layout::new(store.config()).ok()?;
+    let facts = Facts::new(&node::place_of(checkout).ok()?, Some(&session), holder);
+    let role = Roles::at(devkit_todo::state_dir())
+        .resolve(&layout, &facts, holder, payload.agent_type())
+        .ok()?;
+    if let Some(warning) = &role.warning {
+        eprintln!("devkit todo: {warning}");
+    }
+    Some((layout, facts, role))
+}
+
+pub(crate) fn nudge(payload: &Payload, checkout: &Checkout, cwd: &Path) -> Option<String> {
+    let holder = to_todo_holder(&payload.holder().ok()?);
+    let store = Store::for_hook(checkout, cwd);
+    let (layout, facts, _) = resolve_role(payload, checkout, &store, &holder)?;
+    if facts.subagent
+        && payload.agent_type().is_some_and(|agent_type| {
+            layout
+                .roles()
+                .values()
+                .any(|role| role.agent_types.iter().any(|name| name == agent_type))
+        })
+    {
+        return None;
+    }
+    Roles::at(devkit_todo::state_dir())
+        .nudge(&layout, &facts, &holder)
+        .ok()
+        .flatten()
+}
+
 /// Returns every todo `holder` covers from in progress to pending, so a
 /// crashed agent's todos do not show as in progress forever, and forgets the
 /// lists last injected for it. The release is local and the sync that pushes
@@ -61,8 +119,7 @@ pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout, cwd:
         let holder = to_todo_holder(&holder);
         let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
         let store = Store::for_hook(checkout, cwd);
-        let entry = |root: &str| Deferred::Release {
-            root: root.to_string(),
+        let entry = || Deferred::Release {
             holder: holder.clone(),
         };
         let direct = || {
@@ -90,8 +147,8 @@ end your turn again: this reminder comes once per unchanged list.";
 
 /// The answer that refuses `holder`'s stop, or `None` to let it stop. A
 /// stop is refused while `holder` has open todos (see [`hold::open_for`])
-/// and was not already refused over the same list; a session's pending
-/// todos count only on its own workspace node. Fails open: a harness whose
+/// and was not already refused over the same list; pending todos count
+/// when the caller's role holds its own node. Fails open: a harness whose
 /// sessions name no node, a payload that cannot block, an unreadable config
 /// or store, and a fingerprint that cannot be written all let it stop.
 pub(crate) fn hold(
@@ -100,25 +157,15 @@ pub(crate) fn hold(
     checkout: &Checkout,
     cwd: &Path,
 ) -> Option<String> {
-    let harness = harness_of(payload.harness())?;
+    harness_of(payload.harness())?;
     let backend_var = std::env::var(BACKEND_VAR).ok();
     let store = Store::for_hold(checkout, cwd, backend_var.as_deref())?;
     if let Some(replica) = store.queued_replica() {
         drain(replica.data_dir());
     }
     let holder = to_todo_holder(holder);
-    let session = holder.session();
-    let place = node::place_of(checkout).ok()?;
-    let pending_node = match place {
-        Place::Workspace { .. } if holder == session => Some(node::node(
-            &place,
-            Some(&SessionRef {
-                harness,
-                id: session.to_string(),
-            }),
-        )),
-        _ => None,
-    };
+    let (_, _, role) = resolve_role(payload, checkout, &store, &holder)?;
+    let pending_node = role.hold_pending.then_some(role.node);
     let todos = store.list(&Filter::all()).ok()?;
     let open = hold::open_for(&todos, &holder, pending_node.as_deref());
     if open.is_empty() {
@@ -155,18 +202,18 @@ pub(crate) fn forget_holds(session: &payload::Holder) {
 }
 
 /// Records one hook write: on a replica with a queue, appends `entry` (given
-/// the replica's root) and applies the queue; on any other store, makes the
+/// no additional routing) and applies the queue; on any other store, makes the
 /// write with `direct`. `Ok` once the write is applied or safely queued.
 fn record_write(
     store: &Store,
-    entry: impl FnOnce(&str) -> Deferred,
+    entry: impl FnOnce() -> Deferred,
     direct: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let Some(replica) = store.queued_replica() else {
         return direct();
     };
     let dir = replica.data_dir();
-    let queued = queue::push(dir, &entry(replica.root()));
+    let queued = queue::push(dir, &entry());
     drain(dir);
     queued
 }
@@ -180,6 +227,14 @@ fn todo_args(inv: &Invocation) -> Option<impl Iterator<Item = Option<&str>>> {
     }
     let mut args = inv.args.iter().map(|a| a.known());
     (args.next().flatten() == Some("todo")).then_some(args)
+}
+
+pub(crate) fn writes_todo(analysis: &Analysis) -> bool {
+    analysis
+        .invocations
+        .iter()
+        .filter_map(todo_args)
+        .any(|mut args| args.next().flatten() == Some("add"))
 }
 
 /// Every `devkit todo start|stop|done|undone|cancel <id>...` in a command,
@@ -244,47 +299,22 @@ pub(crate) fn check_claims(
 /// blocks nothing, when the hook's overall deadline leaves that long.
 const CLAIM_CHECK_WAIT: Duration = Duration::from_secs(1);
 
-/// A sub-agent's command with each `devkit todo` invocation prefixed by the
-/// sub-agent's holder, so the CLI acts as the sub-agent when, and only if, the
-/// invocation runs. A sub-agent's shell carries its session's id, so only the
-/// hook can tell the two apart.
-///
-/// `None` leaves the command alone, and the CLI acts as the session. That is
-/// the answer outside Bash, for a payload with no sub-agent holder, on a
-/// harness whose shell carries no session id the todo CLI reads, and for a
-/// command with no `devkit todo` invocation.
-pub(crate) fn rewrite(
-    payload: &Payload,
-    analysis: &Analysis,
-    command: &str,
-    dialect: Dialect,
-) -> Option<String> {
+/// A subagent's shell inherits its parent's session id. Carry the exact
+/// actor within this invocation, including scripts that call devkit.
+pub(crate) fn rewrite(payload: &Payload, command: &str, dialect: Dialect) -> Option<String> {
     if dialect != Dialect::Bash || harness_of(payload.harness()).is_none() {
         return None;
     }
     let holder = payload.subagent_holder()?;
-    with_holder(command, analysis, &holder)
+    Some(with_holder(command, &holder))
 }
 
-fn with_holder(command: &str, analysis: &Analysis, holder: &str) -> Option<String> {
-    let mut starts: Vec<usize> = analysis
-        .invocations
-        .iter()
-        .filter(|inv| todo_args(inv).is_some())
-        .map(|inv| inv.location.outer.start)
-        .filter(|&at| command.is_char_boundary(at))
-        .collect();
-    if starts.is_empty() {
-        return None;
-    }
-    starts.sort_unstable();
-    starts.dedup();
-    let prefix = format!("{}='{}' ", HOLDER_VAR, holder.replace('\'', "'\\''"));
-    let mut out = command.to_string();
-    for at in starts.into_iter().rev() {
-        out.insert_str(at, &prefix);
-    }
-    Some(out)
+fn with_holder(command: &str, holder: &str) -> String {
+    format!(
+        "export {}='{}'\n{command}",
+        HOLDER_VAR,
+        holder.replace('\'', "'\\''")
+    )
 }
 
 /// Mirrors the harness's own task and plan tools into the store. The native
@@ -292,13 +322,15 @@ fn with_holder(command: &str, analysis: &Analysis, holder: &str) -> Option<Strin
 /// on stderr and skipped. A store whose lock stays busy past a hook's wait
 /// keeps the write queued, and the next write or sync applies it.
 pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
-    let Some(mirror) = Mirror::of(payload, checkout) else {
+    if payload.tool_name().and_then(NativeTool::parse).is_none() {
         return;
-    };
+    }
     let cwd = record::payload_cwd(payload);
     let store = Store::for_hook(checkout, &cwd);
-    let entry = |root: &str| Deferred::Capture {
-        root: root.to_string(),
+    let Some(mirror) = Mirror::of(payload, checkout, &store) else {
+        return;
+    };
+    let entry = || Deferred::Capture {
         mirror: mirror.clone(),
     };
     report(record_write(&store, entry, || mirror.apply(&store)));
@@ -321,12 +353,12 @@ pub(crate) fn drain(dir: &Path) -> usize {
     queue::drain(dir, |entry| apply_deferred(dir, entry), |e| report(Err(e)))
 }
 
-/// Applies a queued write to the replica at `dir`, under the root and node it
+/// Applies a queued write to the replica at `dir`, under the node it
 /// was resolved with: the checkout may have changed branch or gone since.
 fn apply_deferred(dir: &Path, entry: &Deferred) -> Result<()> {
     match entry {
-        Deferred::Capture { root, mirror } => mirror.apply(&Store::queued_at(dir, root)),
-        Deferred::Release { root, holder } => Store::queued_at(dir, root)
+        Deferred::Capture { mirror } => mirror.apply(&Store::queued_at(dir)),
+        Deferred::Release { holder } => Store::queued_at(dir)
             .apply(&Edit::ReleaseAll {
                 holder: holder.clone(),
             })
@@ -351,7 +383,7 @@ pub(crate) struct Mirror {
 impl Mirror {
     /// `None` for a call capture does not mirror: another tool, a harness
     /// without session nodes, no session, or a checkout git cannot read.
-    fn of(payload: &Payload, checkout: &Checkout) -> Option<Self> {
+    fn of(payload: &Payload, checkout: &Checkout, store: &Store) -> Option<Self> {
         let tool = payload
             .tool_name()
             .filter(|t| NativeTool::parse(t).is_some())?;
@@ -359,14 +391,8 @@ impl Mirror {
         let (Some(session), Ok(actor)) = (payload.session_holder(), payload.holder()) else {
             return None;
         };
-        let place = node::place_of(checkout).ok()?;
-        let node = node::node(
-            &place,
-            Some(&SessionRef {
-                harness,
-                id: session.to_string(),
-            }),
-        );
+        let (_, _, role) = resolve_role(payload, checkout, store, &to_todo_holder(&actor))?;
+        let node = role.node;
         let raw = payload.raw();
         Some(Self {
             tool: tool.to_string(),
@@ -443,6 +469,16 @@ impl NativeTool {
             _ => None,
         }
     }
+}
+
+pub(crate) fn writes_native_todo(payload: &Payload) -> bool {
+    payload
+        .tool_name()
+        .and_then(NativeTool::parse)
+        .is_some_and(|tool| match tool {
+            NativeTool::TaskCreate | NativeTool::TodoWrite | NativeTool::UpdatePlan => true,
+            NativeTool::TaskUpdate => false,
+        })
 }
 
 /// Claude Code's task list is shared by a session and its sub-agents, so the
@@ -644,33 +680,6 @@ mod tests {
             StatusKind::Cancelled,
             "7".to_string()
         )]);
-    }
-
-    fn prefixed(command: &str) -> Option<String> {
-        let ctx = Context {
-            dialect: Dialect::Bash,
-            cwd: Some("/repo".into()),
-            home: None,
-            path_style: PathStyle::Unix,
-            limits: Limits::default(),
-        };
-        with_holder(command, &devkit_command::analyze(command, &ctx), "S/a1")
-    }
-
-    #[test]
-    fn each_todo_invocation_carries_the_holder() {
-        assert_eq!(
-            prefixed("false && devkit todo done 1; devkit todo list | cat").as_deref(),
-            Some(
-                "false && DEVKIT_TODO_HOLDER='S/a1' devkit todo done 1; \
-                 DEVKIT_TODO_HOLDER='S/a1' devkit todo list | cat"
-            )
-        );
-        assert_eq!(
-            prefixed("bash -c 'devkit todo start 2'").as_deref(),
-            Some("DEVKIT_TODO_HOLDER='S/a1' bash -c 'devkit todo start 2'")
-        );
-        assert_eq!(prefixed("devkit locks list"), None);
     }
 
     #[test]

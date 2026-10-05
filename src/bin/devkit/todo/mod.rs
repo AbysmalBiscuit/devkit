@@ -16,9 +16,12 @@ use devkit_common::{
 use devkit_todo::{
     Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
     holder::HOLDER_VAR,
+    layout::{Facts, Layout},
     native::NativeMap,
-    node::{self, GLOBAL, Place, SessionRef},
-    render, transition,
+    node::{self, GLOBAL, Place},
+    render,
+    roles::Roles,
+    transition,
 };
 use pabal::AnyHarness;
 use serde_json::{Value, json};
@@ -26,7 +29,7 @@ use serde_json::{Value, json};
 use self::{store::Store, sync::SyncOutcome};
 use crate::hook::{
     self, HookEvent,
-    todo::{harness_of, to_todo_holder},
+    todo::{resolve_role, to_todo_holder},
 };
 
 #[derive(Args)]
@@ -39,6 +42,8 @@ pub struct TodoCli {
 pub enum TodoCommand {
     /// Print the node this caller writes its todos to.
     Scope,
+    /// Print the caller's role and write node, or select its role.
+    Role { name: Option<String> },
     /// List todos. Defaults to the caller's own node and every node above it.
     List(ListArgs),
     /// Add a todo and print its id.
@@ -53,8 +58,12 @@ pub enum TodoCommand {
         #[arg(long)]
         order: Option<i64>,
         /// The node to add to. Defaults to the one `scope` prints.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "scope")]
         node: Option<String>,
+        /// Fill this named scope with the caller's identity, walking up if
+        /// needed.
+        #[arg(long)]
+        scope: Option<String>,
     },
     /// Mark todos in progress, claiming them for this caller.
     Start { ids: Vec<String> },
@@ -129,6 +138,9 @@ pub enum Guide {
 
 #[derive(Args)]
 pub struct ListArgs {
+    /// Only todos on this named scope, filled with the caller's identity.
+    #[arg(long, conflicts_with_all = ["node", "subtree", "all"])]
+    pub scope: Option<String>,
     /// Only todos on exactly this node.
     #[arg(long, conflicts_with_all = ["subtree", "all"])]
     pub node: Option<String>,
@@ -157,24 +169,44 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let actor = actor_from_env(caller, get);
     let session = node::session_from_env(get);
     let cwd = std::env::current_dir()?;
-    let own_node = || Ok::<_, anyhow::Error>(node::node(&place_at(&cwd)?, session.as_ref()));
     let store = Store::for_cli(&cwd)?;
+    let layout = Layout::new(store.config())?;
+    let facts = Facts::new(&place_at(&cwd)?, session.as_ref(), &actor);
+    let roles = Roles::at(devkit_todo::state_dir());
+    if let TodoCommand::Role { name: Some(name) } = &cli.command {
+        if caller == Caller::Human || session.is_none() {
+            bail!("devkit todo role needs an agent session; terminal callers have no role record");
+        }
+        roles.record(&layout, &actor, name)?;
+    }
+    let role = roles.resolve(&layout, &facts, &actor, None)?;
+    if let Some(warning) = &role.warning {
+        eprintln!("devkit todo: {warning}");
+    }
     let writes = !matches!(
         cli.command,
-        TodoCommand::Scope | TodoCommand::List(_) | TodoCommand::Sync { .. }
+        TodoCommand::Scope
+            | TodoCommand::Role { .. }
+            | TodoCommand::List(_)
+            | TodoCommand::Sync { .. }
     );
     match cli.command {
-        TodoCommand::Scope => println!("{}", own_node()?),
-        TodoCommand::List(args) => list(&store, &args, &cwd, session.as_ref(), &actor)?,
+        TodoCommand::Scope => println!("{}", role.node),
+        TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
+        TodoCommand::List(args) => list(&store, &args, &cwd, &layout, &facts, &role.name, &actor)?,
         TodoCommand::Add {
             text,
             parent,
             order,
             node,
+            scope,
         } => {
             let node = match node {
                 Some(node) => node,
-                None => own_node()?,
+                None => match scope {
+                    Some(scope) => layout.fill(&scope, &facts)?,
+                    None => role.node,
+                },
             };
             let id = store.add(NewTodo {
                 project: project_of(node),
@@ -309,20 +341,19 @@ fn list(
     store: &Store,
     args: &ListArgs,
     cwd: &Path,
-    session: Option<&SessionRef>,
+    layout: &Layout,
+    facts: &Facts,
+    role: &str,
     viewer: &Holder,
 ) -> Result<()> {
-    let visible = match (&args.node, &args.subtree, args.all) {
-        (None, None, false) => Some(node::visible_nodes(&place_at(cwd)?, session)),
-        _ => None,
-    };
-    let filter = match (&args.node, &args.subtree, &visible) {
-        (Some(n), ..) => Filter::exact([n.clone()]),
-        (_, Some(n), _) => Filter {
+    let filter = match (&args.scope, &args.node, &args.subtree, args.all) {
+        (Some(scope), ..) => Filter::exact([layout.fill(scope, facts)?]),
+        (_, Some(n), ..) => Filter::exact([n.clone()]),
+        (_, _, Some(n), _) => Filter {
             nodes: vec![NodeMatch::Subtree(n.clone())],
         },
-        (_, _, Some(visible)) => Filter::exact(visible.clone()),
-        _ => Filter::all(),
+        (_, _, _, true) => Filter::all(),
+        _ => layout.visible(facts, role)?,
     };
     if args.sync {
         match store.sync(cwd, sync::FRESH_WAIT) {
@@ -335,18 +366,47 @@ fn list(
             SyncOutcome::Done | SyncOutcome::NoTarget => {}
         }
     }
-    let todos = store.list(&filter)?;
+    let todos = if args.all || args.subtree.is_some() {
+        layout
+            .fence(store.list(&Filter::all())?)
+            .into_iter()
+            .filter(|todo| filter.matches(todo.project.as_deref()))
+            .collect()
+    } else {
+        store.list(&filter)?
+    };
     if args.json {
         let rows: Vec<Value> = todos.iter().filter_map(alacritree_json).collect();
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
-    let nodes = visible.unwrap_or_else(|| {
-        let present: BTreeSet<&str> = todos.iter().map(Todo::node).collect();
-        present.into_iter().map(str::to_string).collect()
-    });
+    let nodes = list_nodes(&filter, &todos);
     print!("{}", render::render_full(&nodes, &todos, viewer));
     Ok(())
+}
+
+fn list_nodes(filter: &Filter, todos: &[Todo]) -> Vec<String> {
+    let mut nodes: Vec<String> = filter
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            NodeMatch::Exact(node) => Some(node.clone()),
+            NodeMatch::Subtree(_) | NodeMatch::SessionDescendants { .. } => None,
+        })
+        .collect();
+    let present: BTreeSet<&str> = todos.iter().map(Todo::node).collect();
+    nodes.extend(
+        present
+            .into_iter()
+            .filter(|node| {
+                !filter
+                    .nodes
+                    .iter()
+                    .any(|exact| matches!(exact, NodeMatch::Exact(n) if n == node))
+            })
+            .map(str::to_string),
+    );
+    nodes
 }
 
 /// A todo as alacritree's command backend reads a task. A cancelled todo has
@@ -376,23 +436,24 @@ pub(crate) fn alacritree_json(todo: &Todo) -> Option<Value> {
 /// store failure.
 fn context(args: &ContextArgs) -> Option<String> {
     let payload = hook::read_payload(Some(args.harness), HookEvent::SessionStart)?;
-    let session = SessionRef {
-        harness: harness_of(payload.harness())?,
-        id: payload.session_id()?.to_string(),
-    };
+    payload.session_id()?;
     let viewer = to_todo_holder(&payload.holder().ok()?);
     let cwd = hook::record::payload_cwd(&payload);
     let checkout = Checkout::at(&cwd);
-    let place = node::place_of(&checkout).ok()?;
-    let visible = node::visible_nodes(&place, Some(&session));
-    let own = node::node(&place, Some(&session));
-    let workspace = matches!(place, Place::Workspace { .. }).then(|| node::node(&place, None));
-    let mut filter = Filter::exact(visible.clone());
+    let store = Store::for_hook(&checkout, &cwd);
+    let (layout, facts, role) = resolve_role(&payload, &checkout, &store, &viewer)?;
+    let visible = layout.visible(&facts, &role.name).ok()?;
+    let own = &role.node;
+    let workspace = facts
+        .values
+        .contains_key("branch")
+        .then(|| layout.fill("workspace", &facts).ok())
+        .flatten();
+    let mut filter = visible.clone();
     filter
         .nodes
         .extend(workspace.iter().map(|w| NodeMatch::Subtree(w.clone())));
     let at_start = payload.event_name().as_deref() == Some("SessionStart");
-    let store = Store::for_hook(&checkout, &cwd);
     // A new container's replica is empty until it pulls the lists.
     if at_start && let SyncOutcome::Refused(reason) = store.sync(&cwd, sync::FRESH_WAIT) {
         eprintln!("devkit todo: {reason}; listing local todos");
@@ -401,8 +462,9 @@ fn context(args: &ContextArgs) -> Option<String> {
         .list(&filter)
         .ok()?
         .into_iter()
-        .partition(|t| visible.iter().any(|n| n == t.node()));
-    let mut lists = render::render_lists(&visible, &todos, &viewer);
+        .partition(|t| visible.matches(t.project.as_deref()));
+    let nodes = list_nodes(&visible, &todos);
+    let mut lists = render::render_lists(&nodes, &todos, &viewer);
     let own_open = todos.iter().any(|t| {
         t.node() == own
             && matches!(
@@ -424,14 +486,15 @@ fn context(args: &ContextArgs) -> Option<String> {
         lists.push_str(&line);
         lists.push('\n');
     }
-    let digest = render::digest(&lists);
+    let role_line = format!("Role `{}`, writing to `{}`.", role.name, role.node);
+    let digest = render::digest(&format!("{role_line}\n{lists}"));
     let digest_path = devkit_todo::digest_path(&viewer);
     if args.if_changed && std::fs::read_to_string(&digest_path).is_ok_and(|seen| seen == digest) {
         return None;
     }
     let text = match args.guide {
         Guide::Full => {
-            let guide = render::guide(&node::node(&place, Some(&session)));
+            let guide = format!("{}\n{role_line}", render::guide(&role.node));
             if lists.is_empty() {
                 guide
             } else {
@@ -439,7 +502,7 @@ fn context(args: &ContextArgs) -> Option<String> {
             }
         }
         Guide::None if lists.is_empty() => return None,
-        Guide::None => lists,
+        Guide::None => format!("{role_line}\n{lists}"),
     };
     if let Some(dir) = digest_path.parent() {
         let _ = std::fs::create_dir_all(dir);

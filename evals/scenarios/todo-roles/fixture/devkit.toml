@@ -1,0 +1,16 @@
+[config]
+root = true
+
+[todo]
+backend = "builtin"
+
+[todo.roles.manager]
+scope = "workspace"
+
+[todo.roles.implementer]
+scope = "agent"
+parent = "manager"
+
+[todo.roles.reviewer]
+scope = "agent"
+parent = "manager"

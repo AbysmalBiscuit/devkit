@@ -92,8 +92,11 @@ pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(75);
 /// The store `[todo] backend` names, its claim changes recorded in the
 /// activity log.
 #[derive(Delegate)]
-#[delegate(TodoStore)]
-pub(crate) struct Store(Recorded<Backend, Activity>);
+#[delegate(TodoStore, target = "store")]
+pub(crate) struct Store {
+    store: Recorded<Backend, Activity>,
+    config: TodoConfig,
+}
 
 #[derive(Delegate)]
 #[delegate(TodoStore)]
@@ -450,7 +453,10 @@ fn sync_target_with(
 
 impl Backend {
     fn recorded(self) -> Store {
-        Store(Recorded::new(self, Activity::Local(ActivityLog::open())))
+        Store {
+            store: Recorded::new(self, Activity::Local(ActivityLog::open())),
+            config: TodoConfig::default(),
+        }
     }
 }
 
@@ -460,7 +466,7 @@ impl Activity {
         match config.backend {
             TodoBackend::Postgres => Self::Postgres(PostgresActivity::new(
                 database(&config.postgres, opener),
-                &config.project,
+                &config.postgres.root,
             )),
             TodoBackend::Builtin | TodoBackend::Taskchampion => Self::Local(ActivityLog::open()),
         }
@@ -470,7 +476,7 @@ impl Activity {
 fn taskchampion(config: &TodoConfig) -> Replica {
     let location = replica_location(config.taskchampion.data_dir.as_deref());
     Replica {
-        store: TaskchampionStore::at(location.path).with_root(&config.project),
+        store: TaskchampionStore::at(location.path),
         syncs: names_a_target(&config.taskchampion),
         source: location.source,
     }
@@ -489,14 +495,21 @@ impl Store {
             }
             TodoBackend::Postgres => Backend::Postgres(PostgresStore::new(
                 database(&config.postgres, opener),
-                &config.project,
+                &config.postgres.root,
             )),
         };
-        Self(Recorded::new(backend, Activity::of(config, opener)))
+        Self {
+            store: Recorded::new(backend, Activity::of(config, opener)),
+            config: config.clone(),
+        }
     }
 
     fn backend(&self) -> &Backend {
-        self.0.inner()
+        self.store.inner()
+    }
+
+    pub(crate) fn config(&self) -> &TodoConfig {
+        &self.config
     }
 
     /// The taskchampion replica this store syncs: `None` for another backend
@@ -580,14 +593,12 @@ impl Store {
         }
     }
 
-    /// The replica at `dir` under `root`, for applying a queued hook write
+    /// The replica at `dir`, for applying a queued hook write
     /// exactly where it was resolved. A hook's lock wait keeps a busy entry
     /// queued.
-    pub(crate) fn queued_at(dir: &Path, root: &str) -> Self {
+    pub(crate) fn queued_at(dir: &Path) -> Self {
         Backend::Taskchampion(Replica {
-            store: TaskchampionStore::at(dir.to_path_buf())
-                .with_root(root)
-                .with_lock_wait(HOOK_WAIT),
+            store: TaskchampionStore::at(dir.to_path_buf()).with_lock_wait(HOOK_WAIT),
             syncs: false,
             source: ReplicaSource::Config,
         })

@@ -4,7 +4,7 @@ devkit keeps agent todo lists in a store outside any checkout, so a resumed sess
 
 ## Where your todos live
 
-A list belongs to a node. Nodes nest on `.`:
+A list belongs to a node. Named scopes fill node templates with your identity. The default scopes are:
 
 | Node | Holds |
 |---|---|
@@ -12,10 +12,15 @@ A list belongs to a node. Nodes nest on `.`:
 | `<repo>` | the project's todos, shared by every worktree |
 | `<repo>.<branch>` | the workspace's todos |
 | `<repo>.<branch>.<harness>-<session>` | one agent session's todos |
+| `<repo>.<branch>.<harness>-<session>.<agent>` | one sub-agent's todos |
 
 `<repo>` is the main checkout's directory name, so every linked worktree shares it. `<branch>` is the checkout's branch, or its directory name on a detached head. A `.`, `/` or `\` inside a name becomes `-`. `devkit todo scope` prints your own node, and `devkit todo add` writes there unless told otherwise.
 
-You see your own node and every node above it, never another session's. A sub-agent shares its session's node, so it sees and writes the same list as the agent that started it.
+Your role picks the scope you write to. The built-in `main` and `subagent` roles share the session scope. A workflow can configure a manager at workspace scope and workers at agent scope. `devkit todo role` prints your role and node; `devkit todo role <name>` selects a configured role for your own holder. The selection survives resume. A sub-agent type listed by a role takes it at spawn. With no selection or matching type, the first todo write suggests available roles once. Choose with the command it names, or keep the built-in role.
+
+Scopes and roles come from `[todo.scopes]` and `[todo.roles]`, merged by name across config layers. `devkit schema` describes their templates and validation. When a scope needs an identity you lack, it walks up its configured parent until a node fills. Use `devkit todo add --scope workspace` to file a worker's finding for its manager; `devkit todo list --scope workspace` reads that scope alone. Raw `--node` paths still address the exact node you name.
+
+Your default listing shows your own node, its configured ancestors and descendant nodes belonging to your session. A manager sees its workers; a sibling session's lists stay out. Store-wide `--all` and `--subtree` scans only show nodes that read back through a scope template. Open repo/workspace templates also need an anchor: a task with that repository identity at a template containing literal text or the harness. A repository's session task anchors its repo and workspace lists; a personal project such as `ideas` without an anchor stays out. Exact-node reads have no scan fence.
 
 When other sessions on your workspace left pending todos, the injected context says how many and names the `devkit todo list --subtree` command that shows them. It does so at session start, and on each later prompt while your own list has nothing open. To continue one of them, claim it with `devkit todo start <id>`. It stays on its own node.
 
@@ -27,7 +32,7 @@ Ids are in parentheses in the injected lists and in `devkit todo list`. `devkit 
 
 ## Stopping with open todos
 
-In Claude Code and Codex, ending your turn while you have open todos is refused once: the stop hook sends you back with the list. Open todos are the pending todos on your own session's node and the todos you have in progress on any node. A sub-agent's are only the todos it has in progress. Finish each one, or cancel one that no longer applies (`devkit todo cancel <id>`, or delete it in your task tool).
+In Claude Code and Codex, ending your turn while you have open todos is refused once: the stop hook sends you back with the list. Your own claims on any node count. Pending todos on your role's node count when `hold_pending` is true. By default they count when the effective scope names your deepest identity: session for a main agent, agent for a sub-agent. Built-in main agents count session pending todos; built-in sub-agents count only claims. A worker at agent scope counts its pending list; a manager at workspace scope counts only claims unless its role overrides the flag. Role parents affect suggestions, never claim authority. Finish each open todo, or cancel one that no longer applies (`devkit todo cancel <id>`, or delete it in your task tool).
 
 Before you stop to ask the user something:
 
@@ -39,7 +44,7 @@ Ending your turn again with the list unchanged goes through, so that is how you 
 
 ## Native task and plan tools
 
-When your harness gives you a task or plan tool (Claude Code's `TaskCreate` and `TaskUpdate`, Codex's `update_plan`), use it: devkit mirrors each call into your session's node, attributed to you. Without one, use `devkit todo add`, `start`, `done` and `cancel`. Edit a mirrored todo through the native tool that made it, so the two stay in step.
+When your harness gives you a task or plan tool (Claude Code's `TaskCreate` and `TaskUpdate`, Codex's `update_plan`), use it: devkit mirrors each call into your role's node, attributed to you. Without one, use `devkit todo add`, `start`, `done` and `cancel`. Edit a mirrored todo through the native tool that made it, so the two stay in step.
 
 Codex offers `update_plan` only when its config sets `[tools.update_plan] enabled = true`. Codex also runs the plugin's hooks only after they are trusted, so approve them when it asks. Until then, nothing mirrors and no lists are injected.
 
@@ -67,8 +72,7 @@ The built-in store is the default: one file in devkit's state directory. Agents 
 `[todo] backend = "taskchampion"` keeps the todos in a taskchampion replica that devkit embeds, so it needs no program beyond devkit. Choose it to share a replica with Taskwarrior, to keep a container's todos after it stops, or to watch a session's lists from another machine. Taskwarrior 3.5 or later can read and edit the same tasks:
 
 - A todo's id is its task's uuid, shown as the first 8 characters. Any prefix of 8 or more that names one task works wherever an id does.
-- Todos live under the root project, `devkit` unless configured: a global todo on `devkit` itself, any other node on `devkit.<node>`, such as `devkit.repo.main`. A task outside the root is never a todo: no list shows it, `--all` included, and no claim or release touches it, so your own projects and unfiled tasks stay out.
-- alacritree's taskwarrior tab reads its nodes as top-level projects, so it does not show todos under the root.
+- Todos use bare project nodes that alacritree's task tab reads: a global todo on `global`, and a session todo on `<repo>.<branch>.<harness>-<session>`. Store-wide scans apply the configured template fence described above. Existing prefixed todos are not moved; `task project:devkit` still reads them.
 - A task started outside devkit, with `task start` or in alacritree, counts as held by a person when it has no `holder`, so no agent takes it over. A task that still carries an agent's `holder` stays that agent's claim, even after someone stops and restarts it with `task`.
 - devkit records who holds a todo in a `holder` attribute. To see it in your own `task` reports, add these lines to your taskrc:
 
@@ -119,7 +123,7 @@ sync.server.client_id=<uuid>
 sync.encryption_secret=<secret>
 ```
 
-Then `task project:devkit.<repo>` shows the agents' lists. Pointing your everyday taskwarrior at the same server also works, but hands every container that holds the credentials read and write access to all of your tasks.
+Then `task project:<repo>` shows the agents' lists. Pointing your everyday taskwarrior at the same server also works, but hands every container that holds the credentials read and write access to all of your tasks.
 
 ### Postgres
 
@@ -135,7 +139,7 @@ devkit_todo_database_url = "postgres://..."
 
 A URL Doppler gives is kept in devkit's state directory, readable only by you, and hooks reuse it for a while instead of asking Doppler each time. Every `devkit todo` command and `devkit doctor` ask Doppler afresh and refresh the kept copy, and a hook that fails to connect with it, refused or rejected, drops it, so the next hook picks up a rotated credential or a moved database. A session's end never asks Doppler: it uses the kept URL however old, and with none kept and no URL in the environment or the secrets file it releases nothing. `DEVKIT_TODO_BACKEND=postgres` chooses the backend without a config change. `devkit doctor` shows the backend, where the URL resolved from, and whether the database answers, never the URL itself.
 
-devkit creates its tables in a `devkit` schema on first use, so the role in the URL needs to create a schema once; afterwards it only reads and writes those tables. Todos live under the `[todo] project` root, so several roots share one database without seeing each other's lists. Ids are uuids, shown and accepted as 8-character prefixes, as on taskchampion.
+devkit creates its tables in a `devkit` schema on first use, so the role in the URL needs to create a schema once; afterwards it only reads and writes those tables. `[todo.postgres] root` separates tenants sharing one database. It defaults to `devkit` and does not prefix node names. Ids are uuids, shown and accepted as 8-character prefixes, as on taskchampion.
 
 The connection always uses TLS and verifies the server's certificate: against the Mozilla roots bundled into devkit, the platform's certificate store, and the PEM file `[todo.postgres] ca_file` names, if any. A server that offers no TLS, or a certificate none of them vouches for, fails the connection rather than falling back to plaintext, whatever `sslmode` the URL gives, `prefer` included. Only `sslmode=disable` in the URL connects in plaintext, for a database on the same machine or network.
 

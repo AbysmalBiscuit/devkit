@@ -1,7 +1,4 @@
-//! Where a todo list lives. Nodes nest on `.`: `global`, `<repo>`,
-//! `<repo>.<branch>` and `<repo>.<branch>.<harness>-<session>`. The format
-//! matches alacritree's `alacritree_tasks::scope::node` byte for byte, so both
-//! tools address the same lists.
+//! Repository and caller identity, sanitation and node filters.
 
 use std::path::Path;
 
@@ -54,22 +51,6 @@ pub fn sanitize(segment: &str) -> String {
         .collect()
 }
 
-/// A session only means something inside a workspace; above one there is no
-/// conversation to key.
-pub fn node(place: &Place, session: Option<&SessionRef>) -> String {
-    match place {
-        Place::Global => GLOBAL.to_string(),
-        Place::Project { repo } => sanitize(repo),
-        Place::Workspace { repo, branch } => {
-            let workspace = format!("{}.{}", sanitize(repo), sanitize(branch));
-            match session {
-                Some(s) => format!("{workspace}.{}-{}", s.harness.prefix(), sanitize(&s.id)),
-                None => workspace,
-            }
-        }
-    }
-}
-
 /// The session a CLI call runs in. Codex wins when both variables are set, as
 /// alacritree's `scope::session_from_env` decides, so both tools name the same
 /// node.
@@ -83,23 +64,6 @@ pub fn session_from_env(get: impl Fn(&str) -> Option<String>) -> Option<SessionR
         let id = get(key)?.trim().to_string();
         (!id.is_empty()).then_some(SessionRef { harness, id })
     })
-}
-
-/// The nodes an agent at `place` sees, deepest first: its own and every node
-/// above it, never a sibling session's.
-pub fn visible_nodes(place: &Place, session: Option<&SessionRef>) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Place::Workspace { .. } = place {
-        if session.is_some() {
-            out.push(node(place, session));
-        }
-        out.push(node(place, None));
-    }
-    if let Place::Workspace { repo, .. } | Place::Project { repo } = place {
-        out.push(node(&Place::Project { repo: repo.clone() }, None));
-    }
-    out.push(GLOBAL.to_string());
-    out
 }
 
 fn basename(path: &Path) -> String {
@@ -154,6 +118,12 @@ pub enum NodeMatch {
     /// Todos on this node or any node below it. `r` covers `r.main` and
     /// `r.main.codex-1`, never a sibling repository named `r-web`.
     Subtree(String),
+    /// Descendant nodes read through a scope template with this session.
+    SessionDescendants {
+        node: String,
+        session: String,
+        templates: Vec<devkit_config::todo::Template>,
+    },
 }
 
 impl Filter {
@@ -179,6 +149,19 @@ impl Filter {
             NodeMatch::Subtree(n) => node
                 .strip_prefix(n.as_str())
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with('.')),
+            NodeMatch::SessionDescendants {
+                node: own,
+                session,
+                templates,
+            } => {
+                node.strip_prefix(own.as_str())
+                    .is_some_and(|rest| rest.starts_with('.'))
+                    && templates.iter().any(|template| {
+                        template
+                            .read(node)
+                            .is_some_and(|values| values.get("session") == Some(session))
+                    })
+            }
         })
     }
 }
@@ -222,41 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn each_place_names_its_node() {
-        assert_eq!(node(&Place::Global, None), "global");
-        assert_eq!(
-            node(
-                &Place::Project {
-                    repo: "devkit".into()
-                },
-                None
-            ),
-            "devkit"
-        );
-        assert_eq!(node(&ws("devkit", "master"), None), "devkit.master");
-        assert_eq!(
-            node(&ws("alacritree", "master"), Some(&codex("0199a"))),
-            "alacritree.master.codex-0199a"
-        );
-    }
-
-    #[test]
-    fn a_session_below_anything_but_a_workspace_is_dropped() {
-        assert_eq!(node(&Place::Global, Some(&codex("x"))), "global");
-        assert_eq!(
-            node(&Place::Project { repo: "r".into() }, Some(&codex("x"))),
-            "r"
-        );
-    }
-
-    #[test]
-    fn dots_and_slashes_never_add_levels() {
-        let name = node(&ws("my.repo", "feat/v1.2"), Some(&claude("a.b/c")));
-        assert_eq!(name, "my-repo.feat-v1-2.claude-a-b-c");
-        assert_eq!(name.matches('.').count(), 2);
-    }
-
-    #[test]
     fn codex_session_id_wins_over_claude() {
         let env = |key: &str| match key {
             "CODEX_SESSION_ID" => Some("c1".to_string()),
@@ -296,19 +244,6 @@ mod tests {
         };
         assert!(filter.matches(None));
         assert!(!filter.matches(Some("r")));
-    }
-
-    #[test]
-    fn a_session_sees_its_own_node_and_every_node_above_it() {
-        assert_eq!(visible_nodes(&ws("r", "main"), Some(&claude("s"))), [
-            "r.main.claude-s",
-            "r.main",
-            "r",
-            "global"
-        ]);
-        assert_eq!(visible_nodes(&Place::Global, Some(&claude("s"))), [
-            "global"
-        ]);
     }
 
     #[test]

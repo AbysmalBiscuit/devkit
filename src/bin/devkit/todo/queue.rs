@@ -23,11 +23,10 @@ use crate::hook::todo::Mirror;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Deferred {
-    /// A native tool call to mirror, resolved when it was queued, filed
-    /// under `root`.
-    Capture { root: String, mirror: Mirror },
-    /// A holder whose claims under `root` return to pending.
-    Release { root: String, holder: Holder },
+    /// A native tool call to mirror, resolved when it was queued.
+    Capture { mirror: Mirror },
+    /// A holder whose claims return to pending.
+    Release { holder: Holder },
 }
 
 fn queue_path(dir: &Path) -> PathBuf {
@@ -142,7 +141,6 @@ mod tests {
 
     fn release(holder: &str) -> Deferred {
         Deferred::Release {
-            root: "devkit".into(),
             holder: Holder::new(holder),
         }
     }
