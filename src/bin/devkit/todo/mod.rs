@@ -327,6 +327,7 @@ fn list(
     if args.sync {
         match store.sync(cwd, sync::FRESH_WAIT) {
             SyncOutcome::Failed(reason) => eprintln!("{}", sync::failure_text(&reason)),
+            SyncOutcome::Refused(reason) => eprintln!("devkit todo: {reason}; listing local todos"),
             SyncOutcome::StillRunning => eprintln!(
                 "devkit todo: sync still running after {} seconds; listing what this machine has",
                 sync::FRESH_WAIT.as_secs()
@@ -393,8 +394,8 @@ fn context(args: &ContextArgs) -> Option<String> {
     let at_start = payload.event_name().as_deref() == Some("SessionStart");
     let store = Store::for_hook(&checkout, &cwd);
     // A new container's replica is empty until it pulls the lists.
-    if at_start {
-        let _ = store.sync(&cwd, sync::FRESH_WAIT);
+    if at_start && let SyncOutcome::Refused(reason) = store.sync(&cwd, sync::FRESH_WAIT) {
+        eprintln!("devkit todo: {reason}; listing local todos");
     }
     let (todos, siblings): (Vec<Todo>, Vec<Todo>) = store
         .list(&filter)

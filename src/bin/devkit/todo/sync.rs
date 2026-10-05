@@ -159,6 +159,7 @@ pub(crate) fn hold_help() -> String {
 pub(crate) enum SyncOutcome {
     Done,
     Failed(String),
+    Refused(String),
     StillRunning,
     NoTarget,
 }

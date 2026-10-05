@@ -1439,11 +1439,11 @@
     },
     "TaskchampionConfig": {
       "additionalProperties": false,
-      "description": "Where `[todo] backend = \"taskchampion\"` keeps its replica and syncs it.\nWith no `server_dir`, the replica syncs to a server when\n`DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` and\n`DEVKIT_TODO_SYNC_SECRET` all resolve, and otherwise stays local.",
+      "description": "Where `[todo] backend = \"taskchampion\"` keeps its replica and syncs it.\nWith no `server_dir`, the replica syncs to a server when\n`DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` and\n`DEVKIT_TODO_SYNC_SECRET` all resolve, and otherwise stays local.\nReplicas discovered through `TASKDATA` or taskrc stay local unless\n`data_dir` explicitly selects the replica for devkit sync.",
       "properties": {
         "data_dir": {
           "default": null,
-          "description": "The replica's directory. When absent, use `TASKDATA`, then the taskrc's\n`data.location`, then `taskchampion` under devkit's todo state\ndirectory. Find taskrc through `TASKRC`, then `~/.taskrc`, then\n`$XDG_CONFIG_HOME/task/taskrc` (`~/.config/task/taskrc` when unset or\nempty), following includes. A malformed taskrc or missing include warns\nand falls back to devkit's state directory. Sync settings in taskrc are\nignored.",
+          "description": "The replica's directory. When absent, use `TASKDATA`, then the taskrc's\n`data.location`, then `taskchampion` under devkit's todo state\ndirectory. Find taskrc through `TASKRC`, then `~/.taskrc`, then\n`$XDG_CONFIG_HOME/task/taskrc` (`~/.config/task/taskrc` when unset or\nempty), following includes. A malformed taskrc or missing include warns\nand falls back to devkit's state directory. Sync settings in taskrc are\nignored. Set this explicitly to allow devkit sync for a replica\ndiscovered through `TASKDATA` or taskrc; otherwise devkit only reads\nand writes it locally, even when a sync target is configured.",
           "type": [
             "string",
             "null"

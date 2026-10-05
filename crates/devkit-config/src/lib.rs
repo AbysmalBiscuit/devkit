@@ -194,6 +194,8 @@ pub enum TodoBackend {
 /// With no `server_dir`, the replica syncs to a server when
 /// `DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` and
 /// `DEVKIT_TODO_SYNC_SECRET` all resolve, and otherwise stays local.
+/// Replicas discovered through `TASKDATA` or taskrc stay local unless
+/// `data_dir` explicitly selects the replica for devkit sync.
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TaskchampionConfig {
@@ -203,7 +205,9 @@ pub struct TaskchampionConfig {
     /// `$XDG_CONFIG_HOME/task/taskrc` (`~/.config/task/taskrc` when unset or
     /// empty), following includes. A malformed taskrc or missing include warns
     /// and falls back to devkit's state directory. Sync settings in taskrc are
-    /// ignored.
+    /// ignored. Set this explicitly to allow devkit sync for a replica
+    /// discovered through `TASKDATA` or taskrc; otherwise devkit only reads
+    /// and writes it locally, even when a sync target is configured.
     pub data_dir: Option<String>,
     /// Sync to this directory instead of a server. The server credentials
     /// are not read when it is set.

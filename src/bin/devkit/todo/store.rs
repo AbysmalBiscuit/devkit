@@ -23,7 +23,9 @@ use devkit_todo::{
 };
 use devkit_todo_builtin::BuiltinStore;
 use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore, Trust};
-use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore, Uuid, replica_location};
+use devkit_todo_taskchampion::{
+    ReplicaSource, SyncTarget, TaskchampionStore, Uuid, replica_location,
+};
 use serde::{Deserialize, Serialize, de::IntoDeserializer};
 
 use super::sync::SyncOutcome;
@@ -143,6 +145,24 @@ impl Opener {
 pub(crate) struct Replica {
     store: TaskchampionStore,
     syncs: bool,
+    source: ReplicaSource,
+}
+
+impl Replica {
+    fn check_sync(&self) -> Result<()> {
+        if self.syncs {
+            let source = match &self.source {
+                ReplicaSource::Taskdata => "TASKDATA",
+                ReplicaSource::Taskrc(_) => "taskrc",
+                ReplicaSource::Config | ReplicaSource::Default => return Ok(()),
+            };
+            bail!(
+                "sync refused for replica discovered through {source}; set \
+                 [todo.taskchampion] data_dir explicitly to allow syncing this replica"
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Whether `config` and the environment name any sync target, judged without
@@ -428,11 +448,6 @@ fn sync_target_with(
     }))
 }
 
-/// Where the taskchampion replica lives.
-fn data_dir(config: &TaskchampionConfig) -> PathBuf {
-    replica_location(config.data_dir.as_deref()).path
-}
-
 impl Backend {
     fn recorded(self) -> Store {
         Store(Recorded::new(self, Activity::Local(ActivityLog::open())))
@@ -452,8 +467,13 @@ impl Activity {
     }
 }
 
-fn taskchampion(config: &TodoConfig) -> TaskchampionStore {
-    TaskchampionStore::at(data_dir(&config.taskchampion)).with_root(&config.project)
+fn taskchampion(config: &TodoConfig) -> Replica {
+    let location = replica_location(config.taskchampion.data_dir.as_deref());
+    Replica {
+        store: TaskchampionStore::at(location.path).with_root(&config.project),
+        syncs: names_a_target(&config.taskchampion),
+        source: location.source,
+    }
 }
 
 impl Store {
@@ -462,10 +482,11 @@ impl Store {
     fn open(config: &TodoConfig, opener: Opener) -> Self {
         let backend = match config.backend {
             TodoBackend::Builtin => Backend::Builtin(BuiltinStore::open()),
-            TodoBackend::Taskchampion => Backend::Taskchampion(Replica {
-                store: taskchampion(config).with_lock_wait(opener.lock_wait()),
-                syncs: names_a_target(&config.taskchampion),
-            }),
+            TodoBackend::Taskchampion => {
+                let mut replica = taskchampion(config);
+                replica.store = replica.store.with_lock_wait(opener.lock_wait());
+                Backend::Taskchampion(replica)
+            }
             TodoBackend::Postgres => Backend::Postgres(PostgresStore::new(
                 database(&config.postgres, opener),
                 &config.project,
@@ -480,25 +501,31 @@ impl Store {
 
     /// The taskchampion replica this store syncs: `None` for another backend
     /// or a replica with no sync target.
-    fn synced_replica(&self) -> Option<&TaskchampionStore> {
+    fn synced_replica(&self) -> Result<Option<&TaskchampionStore>> {
         match self.backend() {
-            Backend::Taskchampion(Replica { store, syncs: true }) => Some(store),
-            _ => None,
+            Backend::Taskchampion(replica) if replica.syncs => {
+                replica.check_sync()?;
+                Ok(Some(&replica.store))
+            }
+            _ => Ok(None),
         }
     }
 
     /// After a write: starts a background sync from `cwd` and returns at once.
     pub(crate) fn spawn_sync(&self, cwd: &Path) {
-        if let Some(replica) = self.synced_replica() {
-            super::sync::spawn(replica, cwd);
+        match self.synced_replica() {
+            Ok(Some(replica)) => super::sync::spawn(replica, cwd),
+            Ok(None) => {}
+            Err(reason) => eprintln!("devkit todo: {reason}"),
         }
     }
 
     /// Syncs from `cwd`, waiting up to `wait` for it to finish.
     pub(crate) fn sync(&self, cwd: &Path, wait: Duration) -> SyncOutcome {
         match self.synced_replica() {
-            Some(replica) => super::sync::wait_for(replica, cwd, wait),
-            None => SyncOutcome::NoTarget,
+            Ok(Some(replica)) => super::sync::wait_for(replica, cwd, wait),
+            Ok(None) => SyncOutcome::NoTarget,
+            Err(reason) => SyncOutcome::Refused(reason.to_string()),
         }
     }
 
@@ -562,6 +589,7 @@ impl Store {
                 .with_root(root)
                 .with_lock_wait(HOOK_WAIT),
             syncs: false,
+            source: ReplicaSource::Config,
         })
         .recorded()
     }
@@ -578,8 +606,9 @@ impl Store {
             return Ok(None);
         }
         let config = config.unwrap_or_default();
-        Ok(sync_target(&config.taskchampion)?
-            .map(|target| taskchampion(&config).with_target(target)))
+        let replica = taskchampion(&config);
+        replica.check_sync()?;
+        Ok(sync_target(&config.taskchampion)?.map(|target| replica.store.with_target(target)))
     }
 
     /// The `[todo]` config a hook in `cwd` reads, with `backend_var`, the

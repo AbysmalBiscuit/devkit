@@ -81,7 +81,9 @@ The replica directory resolves from `[todo.taskchampion] data_dir`, then `TASKDA
 
 `DEVKIT_TODO_BACKEND=taskchampion` chooses it without a config change, so a container sets it next to the sync credentials and keeps loading the project's `devkit.toml`. It accepts the same values as `[todo] backend` and wins over it. `devkit doctor` shows the backend in effect and where it came from.
 
-The replica syncs to the first of these that applies, or stays local:
+Replicas discovered through `TASKDATA` or taskrc stay local, even when a devkit sync target is configured. Set `[todo.taskchampion] data_dir` explicitly to allow devkit to sync that replica, including all tasks it holds. Local writes and lists still work without that opt-in; `list --sync` reports the refusal and lists local todos. The default replica under devkit's state directory can sync without `data_dir`.
+
+An eligible replica syncs to the first of these that applies, or stays local:
 
 1. `[todo.taskchampion] server_dir`, a directory shared with other replicas.
 2. A taskchampion sync server, when `DEVKIT_TODO_SYNC_URL`, `DEVKIT_TODO_SYNC_CLIENT_ID` (a UUID) and `DEVKIT_TODO_SYNC_SECRET` all resolve. Some of them without the rest makes `devkit todo sync` fail, naming the missing ones.
