@@ -235,6 +235,75 @@ fn a_payload_that_is_not_a_shell_command_is_recorded_as_undecided() {
     assert_eq!(rec["verdict"]["decision"], "undecided");
 }
 
+#[test]
+fn native_todo_writes_nudge_and_refresh_activity_without_shell_failures() {
+    use devkit_todo::activity::{ActivityLog, ActivityStore};
+
+    for (harness, tool, input) in [
+        (
+            "claude-code",
+            "TaskCreate",
+            serde_json::json!({"subject": "work"}),
+        ),
+        (
+            "claude-code",
+            "TodoWrite",
+            serde_json::json!({"todos": [{"content": "work", "status": "pending"}]}),
+        ),
+        (
+            "codex",
+            "update_plan",
+            serde_json::json!({"plan": [{"step": "work", "status": "pending"}]}),
+        ),
+    ] {
+        let e = env_with(
+            "[harness]\nenforce_commands = true\n",
+            "[todo.roles.worker]\nscope = \"agent\"\nparent = \"main\"\n",
+        );
+        let mut payload = serde_json::json!({
+            "hook_event_name": "SubagentStart", "session_id": "s1", "agent_id": "a1",
+            "agent_type": "general-purpose", "cwd": e.project.path()
+        });
+        let out = run_argv(
+            &e,
+            &["hook", "subagent-start", "--harness", harness],
+            &payload.to_string(),
+        );
+        assert!(out.status.success());
+        let activity = ActivityLog::at(e.home.path().join("devkit/todo/activity"));
+        activity
+            .seen_at(
+                "s1",
+                "a1",
+                std::time::SystemTime::now() - std::time::Duration::from_secs(7200),
+            )
+            .unwrap();
+        payload["hook_event_name"] = serde_json::json!("PreToolUse");
+        payload["tool_name"] = serde_json::json!(tool);
+        payload["tool_input"] = input;
+        let args = ["hook", "pre-tool-use", "--harness", harness];
+        let out = run_argv(&e, &args, &payload.to_string());
+        assert!(out.status.success(), "{tool}: {out:?}");
+        assert!(
+            records(&e.log_dir())
+                .iter()
+                .all(|record| record["kind"] != "shell_pre"),
+            "{tool}: {:?}",
+            records(&e.log_dir())
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("worker (writing to"),
+            "{tool}: {out:?}"
+        );
+        let runs = activity.read_now().unwrap().runs;
+        assert_eq!(runs.len(), 1, "{tool}: {runs:?}");
+        assert_eq!(runs[0].outcome, None, "{tool}: {runs:?}");
+        let next = run_argv(&e, &args, &payload.to_string());
+        assert!(next.status.success());
+        assert!(next.stdout.is_empty(), "{tool}: {next:?}");
+    }
+}
+
 /// With logging on and enforcement off, the analysis runs anyway: a record with
 /// an empty verdict is half a record.
 #[test]

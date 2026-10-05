@@ -319,7 +319,7 @@ pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
             {
                 print_envelope(&answer);
             }
-            shell::guard(&payload, &checkout)
+            Ok(())
         }
         (None, _) => shell::guard(&payload, &checkout),
     };
