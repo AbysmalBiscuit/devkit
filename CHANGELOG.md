@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.11](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.10...v0.14.11) (2026-10-05)
+
+
+### Features
+
+* **todo:** add workflow roles and scopes ([#244](https://github.com/AbysmalBiscuit/devkit/issues/244)) ([863ca35](https://github.com/AbysmalBiscuit/devkit/commit/863ca35328bef8da9dc5a2bd0b6d8a682e26791a))
+* **todo:** drop the taskwarrior backend ([#242](https://github.com/AbysmalBiscuit/devkit/issues/242)) ([dd0ac79](https://github.com/AbysmalBiscuit/devkit/commit/dd0ac790d6c385171cda1cdc87ad230c0015c645))
+
 ## [0.14.10](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.9...v0.14.10) (2026-10-04)
 
 
