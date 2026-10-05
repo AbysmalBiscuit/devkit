@@ -2,7 +2,7 @@
 name = "devkit-todo"
 description = "Agent todo lists: the model, the claim rule, node naming and the store trait"
 edition.workspace = true
-version = "0.14.10" # x-release-please-version
+version = "0.14.11" # x-release-please-version
 
 [dependencies]
 anyhow.workspace = true
