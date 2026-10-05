@@ -150,7 +150,7 @@ Existing todos under `devkit.*` are not moved. They stop appearing in devkit's l
 
 Taskchampion stores the filled node as the task's project with no root. The builtin and Postgres stores keep nodes as they do now; Postgres scopes its rows by `[todo.postgres] root`. The taskchampion hook queue's `Capture` and `Release` lose their `root`.
 
-This design assumes the taskwarrior CLI backend is gone and taskchampion defaults its `data_dir` to `TASKDATA`, then the taskrc's `data.location`, so the bare default lands in the replica taskwarrior and alacritree read. That change is its own issue and lands first.
+This design assumes the taskwarrior CLI backend is gone and taskchampion defaults its `data_dir` to `TASKDATA`, then the taskrc's `data.location`, so the bare default lands in the replica taskwarrior and alacritree read. That change is #241 and lands first.
 
 ### CLI and hooks
 
