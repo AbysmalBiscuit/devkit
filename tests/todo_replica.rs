@@ -98,7 +98,8 @@ fn invalid_taskrc_warns_and_discards_partial_data_location() {
             stderr(&out)
         );
         assert!(
-            stderr(&out).contains(taskrc.to_str().unwrap()),
+            stderr(&out).contains(taskrc.to_str().unwrap())
+                || stderr(&out).contains(std::fs::canonicalize(&taskrc).unwrap().to_str().unwrap()),
             "{}",
             stderr(&out)
         );
@@ -149,7 +150,7 @@ fn doctor_names_the_replica_and_all_provenance_sources() {
         assert!(detail.contains(expected.to_str().unwrap()), "{detail}");
         assert!(detail.contains(origin), "{detail}");
     };
-    check(&p.state().join("todo/taskchampion"), "default", &[]);
+    check(&p.state().join("todo").join("taskchampion"), "default", &[]);
     std::fs::write(home.join(".taskrc"), "data.location=~/taskrc-tasks\n").unwrap();
     check(&home.join("taskrc-tasks"), "taskrc", &[]);
     check(&home.join("env-tasks"), "TASKDATA", &[(
