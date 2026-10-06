@@ -210,7 +210,6 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
                 title: &pr_title,
                 body: &pr_body,
                 draft: args.state == PrCreateState::Draft,
-                reviewers: &args.reviewers,
                 attachments: args.attachments,
             };
             let url = steps.during_result("Creating PR...", || {
@@ -220,9 +219,11 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
                 .locate(&url)
                 .with_context(|| format!("could not read a PR number from {url}"))?;
             let created_repo = locator.resolve(&args.existing.forge.repos)?;
-            // The gate runs before the record is written and before any
-            // notification goes out.
+            // The gate runs before anyone is asked to review, before the
+            // record is written and before any notification goes out.
             verify_created(forge, &created_repo, locator.number, args.head)
+                .with_context(|| format!("{url} is open with nothing recorded"))?;
+            add_reviewers(forge, &created_repo, locator.number, &args.reviewers, steps)
                 .with_context(|| format!("{url} is open with nothing recorded"))?;
             Resolved {
                 url,

@@ -131,6 +131,12 @@ github = "sweeper[bot]"
             format!("[{}]", listed.join(",")),
         )
         .expect("write pr list payload");
+        let listed: Vec<String> = prs.iter().map(|pr| rest_pr_json(pr, &head)).collect();
+        std::fs::write(
+            bin.path().join("rest_pulls.json"),
+            format!("[{}]", listed.join(",")),
+        )
+        .expect("write REST pr list payload");
         install_fake_gh(bin.path());
 
         let state = tempfile::tempdir().expect("state dir");
@@ -142,36 +148,68 @@ github = "sweeper[bot]"
         }
     }
 
-    /// Answer `gh pr view <n>` with `pr`, at this project's head. Without one
-    /// the fake reports that the PR does not exist.
+    /// Answer the REST read of PR `pr.number` with `pr`, at this project's
+    /// head. Without one the fake reports that the PR does not exist.
     pub fn serve_pr(&self, pr: &Pr) {
         std::fs::write(
-            self.bin.path().join("pr_view.json"),
-            pr_json(pr, &self.head),
+            self.bin
+                .path()
+                .join(format!("rest_pull_{}.json", pr.number)),
+            rest_pr_json(pr, &self.head),
         )
-        .expect("write pr view");
+        .expect("write REST pr");
     }
 
-    /// Have `gh pr create` open `pr`, which `gh pr view` then serves.
+    /// Answer the REST read of PR `pr.number` with `pr` at commit `head`
+    /// rather than this project's, as a PR carrying other work would read.
+    pub fn serve_pr_at(&self, pr: &Pr, head: &str) {
+        std::fs::write(
+            self.bin
+                .path()
+                .join(format!("rest_pull_{}.json", pr.number)),
+            rest_pr_json(pr, head),
+        )
+        .expect("write REST pr");
+    }
+
+    /// Have `gh pr create`, and the REST create, open `pr`, which the REST
+    /// read then serves.
     pub fn create_opens(&self, pr: &Pr) {
         std::fs::write(
             self.bin.path().join("pr_create.txt"),
             format!("https://github.com/o/r/pull/{}\n", pr.number),
         )
         .expect("write pr create answer");
+        std::fs::write(
+            self.bin.path().join("rest_pull_create.json"),
+            rest_pr_json(pr, &self.head),
+        )
+        .expect("write REST pr create answer");
         self.serve_pr(pr);
     }
 
-    /// Answer `gh pr view --json reviews` with `payload` for the rest of this
-    /// fake's life. Without one the fake reports no reviews at all.
-    pub fn set_reviews(&self, payload: &str) {
-        std::fs::write(self.bin.path().join("reviews.json"), payload).expect("write reviews");
+    /// Make `gh pr create` and the REST create fail with `stderr`.
+    pub fn create_fails(&self, stderr: &str) {
+        std::fs::write(self.bin.path().join("create_error.txt"), stderr)
+            .expect("write create error");
     }
 
-    /// Answer `gh pr view --json reviewRequests` with `payload`.
-    pub fn set_review_requests(&self, payload: &str) {
-        std::fs::write(self.bin.path().join("review_requests.json"), payload)
-            .expect("write review requests");
+    /// Make `gh pr list` fail with `stderr`.
+    pub fn list_fails(&self, stderr: &str) {
+        std::fs::write(self.bin.path().join("list_error.txt"), stderr).expect("write list error");
+    }
+
+    /// Make every GraphQL-backed `gh` verb fail with HTTP 403, as the Claude
+    /// Code cloud proxy does. `gh api` REST calls keep answering.
+    pub fn refuse_graphql(&self) {
+        std::fs::write(self.bin.path().join("refuse_graphql"), "").expect("write marker");
+    }
+
+    /// Answer the REST read of a PR's reviews with `payload`, a JSON array of
+    /// `{"user":{"login":...},"state":...}`. Without one the fake reports no
+    /// reviews at all.
+    pub fn set_reviews(&self, payload: &str) {
+        std::fs::write(self.bin.path().join("rest_reviews.json"), payload).expect("write reviews");
     }
 
     /// Answer `gh api graphql` with issue `body`, the way the tracker's issue
@@ -253,6 +291,14 @@ github = "sweeper[bot]"
     /// takes its `gh` fallback for each lookup.
     pub fn issue(&self, args: &[&str]) -> std::process::Output {
         self.issue_cmd(args).output().expect("spawn devkit issue")
+    }
+
+    /// [`Fake::issue`] with each of `env` set, such as a token the run then
+    /// resolves.
+    pub fn issue_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+        let mut cmd = self.issue_cmd(args);
+        cmd.envs(env.iter().copied());
+        cmd.output().expect("spawn devkit issue")
     }
 
     /// [`Fake::issue`] with `DEVKIT_CALLER` set to `caller`.
@@ -364,6 +410,24 @@ fn pr_json(pr: &Pr, head: &str) -> String {
              "author":{{"login":"{author}"}}}}"#,
         n = pr.number,
         state = pr.state,
+        draft = pr.is_draft,
+        author = pr.author,
+    )
+}
+
+/// `pr` as GitHub's REST API reports it, on this project's branch at `head`.
+fn rest_pr_json(pr: &Pr, head: &str) -> String {
+    let (state, merged_at) = match pr.state {
+        "OPEN" => ("open", "null"),
+        "MERGED" => ("closed", r#""2026-01-01T00:00:00Z""#),
+        _ => ("closed", "null"),
+    };
+    format!(
+        r#"{{"number":{n},"state":"{state}","merged_at":{merged_at},
+             "html_url":"https://github.com/o/r/pull/{n}","title":"t",
+             "head":{{"ref":"lev/eng-1-fix","sha":"{head}","repo":{{"owner":{{"login":"o"}}}}}},
+             "draft":{draft},"user":{{"login":"{author}"}}}}"#,
+        n = pr.number,
         draft = pr.is_draft,
         author = pr.author,
     )

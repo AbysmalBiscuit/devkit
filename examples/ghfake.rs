@@ -8,6 +8,12 @@
 //! `GHFAKE_DIR` names a directory of canned answers. Each verb reads one file
 //! from it, falling back to an empty answer when the file is absent, and every
 //! argument vector is appended to `gh.log` there.
+//!
+//! A `refuse_graphql` file there makes every GraphQL-backed verb fail with
+//! HTTP 403, as the Claude Code cloud proxy does, while `gh api` REST calls
+//! still answer. A `create_error.txt` there makes `gh pr create` and the REST
+//! create fail with its contents on stderr, and a `list_error.txt` makes
+//! `gh pr list` fail the same way.
 
 use std::{
     io::Write,
@@ -19,12 +25,6 @@ use std::{
 fn canned(args: &str) -> Option<(&'static str, &'static str)> {
     if args.starts_with("pr list") {
         return Some(("pr_list.json", "[]"));
-    }
-    if args.starts_with("pr view") && args.contains("reviewRequests") {
-        return Some(("review_requests.json", r#"{"reviewRequests":[]}"#));
-    }
-    if args.starts_with("pr view") && args.contains("reviews") {
-        return Some(("reviews.json", r#"{"reviews":[]}"#));
     }
     if args.starts_with("issue create") {
         return Some(("issue_create.txt", "https://github.com/o/r/issues/42\n"));
@@ -43,6 +43,70 @@ fn succeeds_silently(args: &str) -> bool {
 
 fn read_or(dir: &Path, file: &str, fallback: &str) -> String {
     std::fs::read_to_string(dir.join(file)).unwrap_or_else(|_| fallback.to_string())
+}
+
+fn uses_graphql(args: &str) -> bool {
+    args.starts_with("api graphql") || args.starts_with("pr ")
+}
+
+/// Exit 1 with `create_error.txt` on stderr, when the test wrote one.
+fn fail_create(dir: &Path) {
+    if let Ok(stderr) = std::fs::read_to_string(dir.join("create_error.txt")) {
+        eprintln!("{stderr}");
+        std::process::exit(1);
+    }
+}
+
+/// Print `file`, or fail the way `gh api` reports a 404.
+fn serve_or_404(dir: &Path, file: &str) {
+    match std::fs::read_to_string(dir.join(file)) {
+        Ok(body) => print!("{body}"),
+        Err(_) => {
+            print!(r#"{{"message":"Not Found","status":"404"}}"#);
+            eprintln!("gh: Not Found (HTTP 404)");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Answer `gh api [--hostname H] [--method M] PATH [-f k=v]...` from the
+/// REST fixtures.
+fn rest(dir: &Path, args: &[String]) {
+    let method = args
+        .iter()
+        .position(|a| a == "--method" || a == "-X")
+        .and_then(|i| args.get(i + 1))
+        .map_or("GET", String::as_str);
+    let Some(path) = args
+        .iter()
+        .find(|a| a.starts_with("repos/") || a.as_str() == "user")
+    else {
+        std::process::exit(1);
+    };
+    let path = path.split('?').next().unwrap_or_default();
+    let segments: Vec<&str> = path.split('/').collect();
+    match (method, segments.as_slice()) {
+        ("GET", ["user"]) => print!(r#"{{"login":"LevValle"}}"#),
+        ("GET", ["repos", _, _, "pulls"]) => print!("{}", read_or(dir, "rest_pulls.json", "[]")),
+        ("POST", ["repos", _, _, "pulls"]) => {
+            fail_create(dir);
+            serve_or_404(dir, "rest_pull_create.json")
+        }
+        ("GET", ["repos", _, _, "pulls", n]) => serve_or_404(dir, &format!("rest_pull_{n}.json")),
+        ("GET", ["repos", _, _, "pulls", _, "requested_reviewers"]) => print!(
+            "{}",
+            read_or(
+                dir,
+                "rest_requested_reviewers.json",
+                r#"{"users":[],"teams":[]}"#
+            )
+        ),
+        ("POST", ["repos", _, _, "pulls", _, "requested_reviewers"]) => print!("{{}}"),
+        ("GET", ["repos", _, _, "pulls", _, "reviews"]) => {
+            print!("{}", read_or(dir, "rest_reviews.json", "[]"))
+        }
+        _ => std::process::exit(1),
+    }
 }
 
 fn main() {
@@ -64,6 +128,22 @@ fn main() {
         let _ = std::fs::write(dir.join("pr_create.args"), args.join("\0"));
     }
 
+    if uses_graphql(&joined) && dir.join("refuse_graphql").exists() {
+        eprintln!(
+            "HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the \
+             REST API (https://api.github.com/graphql)"
+        );
+        std::process::exit(1);
+    }
+    if joined.starts_with("pr create") {
+        fail_create(&dir);
+    }
+    if joined.starts_with("pr list")
+        && let Ok(stderr) = std::fs::read_to_string(dir.join("list_error.txt"))
+    {
+        eprintln!("{stderr}");
+        std::process::exit(1);
+    }
     if let Some((file, fallback)) = canned(&joined) {
         print!("{}", read_or(&dir, file, fallback));
         return;
@@ -80,15 +160,8 @@ fn main() {
         }
         return;
     }
-    if joined.starts_with("pr view") {
-        match std::fs::read_to_string(dir.join("pr_view.json")) {
-            Ok(pr) => print!("{pr}"),
-            // What `gh` says for a PR that does not exist.
-            Err(_) => {
-                eprintln!("no pull requests found");
-                std::process::exit(1);
-            }
-        }
+    if joined.starts_with("api ") {
+        rest(&dir, &args);
         return;
     }
     if succeeds_silently(&joined) {

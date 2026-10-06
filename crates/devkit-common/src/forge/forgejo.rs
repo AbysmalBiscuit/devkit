@@ -498,7 +498,6 @@ impl Forge for ForgejoForge {
         }
     }
 
-    /// Forgejo takes no reviewers at creation, so they are requested after.
     fn create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String> {
         self.authed()?;
         let title = if pr.draft && wip_prefix(pr.title).is_none() {
@@ -517,18 +516,10 @@ impl Forge for ForgejoForge {
             .rest
             .send(Method::POST, &format!("/repos/{}/pulls", repo.slug), &body)
             .with_context(|| format!("opening a pull request from {}", pr.head))?;
-        let url = created["html_url"]
+        created["html_url"]
             .as_str()
-            .context("no html_url in the created pull request")?
-            .to_string();
-        if !pr.reviewers.is_empty() {
-            let n = created["number"]
-                .as_u64()
-                .context("no number in the created pull request")?;
-            self.add_reviewers(repo, n, pr.reviewers)
-                .with_context(|| format!("opened {url}, but requesting reviewers failed"))?;
-        }
-        Ok(url)
+            .map(str::to_string)
+            .context("no html_url in the created pull request")
     }
 
     fn mark_ready(&self, repo: &Repo, n: u64) -> Result<()> {
@@ -1001,23 +992,14 @@ mod tests {
     }
 
     #[test]
-    fn create_opens_a_wip_titled_pr_then_requests_reviewers() {
-        let s = stub::serve(vec![
-            Route::new(
-                "POST",
-                "/api/v1/repos/o/r/pulls/12/requested_reviewers",
-                201,
-                "[]",
-            ),
-            Route::new(
-                "POST",
-                "/api/v1/repos/o/r/pulls",
-                201,
-                r#"{"number":12,"html_url":"https://codeberg.org/o/r/pulls/12"}"#,
-            ),
-        ]);
+    fn create_opens_a_wip_titled_pr() {
+        let s = stub::serve(vec![Route::new(
+            "POST",
+            "/api/v1/repos/o/r/pulls",
+            201,
+            r#"{"number":12,"html_url":"https://codeberg.org/o/r/pulls/12"}"#,
+        )]);
         let dir = tempfile::tempdir().unwrap();
-        let reviewers = vec!["alice".to_string()];
         let url = forge(&s)
             .create(
                 &repo(),
@@ -1027,7 +1009,6 @@ mod tests {
                     title: "Fix it",
                     body: "why",
                     draft: true,
-                    reviewers: &reviewers,
                     attachments: &[],
                 },
                 dir.path(),
@@ -1039,11 +1020,7 @@ mod tests {
             body(&reqs[0]),
             json!({"head": "feat/x", "base": "main", "title": "WIP: Fix it", "body": "why"})
         );
-        assert_eq!(
-            reqs[1].path,
-            "/api/v1/repos/o/r/pulls/12/requested_reviewers"
-        );
-        assert_eq!(body(&reqs[1]), json!({"reviewers": ["alice"]}));
+        assert_eq!(reqs.len(), 1, "{reqs:#?}");
     }
 
     #[test]

@@ -171,13 +171,15 @@ fn forge_check(r: &devkit_common::forge::Resolved) -> Check {
         ForgeKind::Github | ForgeKind::Gitlab | ForgeKind::Forgejo => {
             let detail = format!("{kind} on {}: {}", r.forge.host(), r.reason);
             if r.forge.ready() {
-                Check::Ok(detail)
-            } else {
-                let why = r.forge.check().err().map(|e| format!("{e:#}"));
-                Check::Warn(format!(
-                    "{detail}; {}",
-                    why.unwrap_or_else(|| "no token".into())
-                ))
+                return Check::Ok(detail);
+            }
+            // With no token of devkit's own, `gh` may still reach the host for
+            // the single-PR commands; the batched status lookups still fail.
+            match r.forge.check() {
+                Ok(identity) => Check::Warn(format!(
+                    "{detail}; reached as {identity} through gh; batch status needs a token"
+                )),
+                Err(e) => Check::Warn(format!("{detail}; {e:#}")),
             }
         }
     }

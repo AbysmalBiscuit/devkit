@@ -1,16 +1,49 @@
 use std::{
+    fmt,
     io::Read,
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+
+/// A command that ran and exited non-zero. Callers that branch on why it
+/// failed read [`CommandFailed::stderr`], never the formatted error, whose
+/// argument vector may carry any text a title or body holds.
+#[derive(Debug)]
+pub struct CommandFailed {
+    pub program: String,
+    pub args: Vec<String>,
+    pub status: ExitStatus,
+    pub stderr: String,
+}
+
+impl fmt::Display for CommandFailed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "`{} {}` failed ({}):\n{}",
+            self.program,
+            self.args.join(" "),
+            self.status,
+            self.stderr
+        )
+    }
+}
+
+impl std::error::Error for CommandFailed {}
+
+/// The stderr of the [`CommandFailed`] behind `e`, when a command's exit is
+/// what failed.
+pub fn failed_stderr(e: &anyhow::Error) -> Option<&str> {
+    e.downcast_ref::<CommandFailed>().map(|f| f.stderr.as_str())
+}
 
 /// Run a command with extra environment variables, capture stdout; the error
-/// includes stderr on non-zero exit. The variables reach the child only:
-/// `std::env::set_var` mutates a process other threads are reading, which is
-/// why edition 2024 made it `unsafe`.
+/// is a [`CommandFailed`] carrying stderr on non-zero exit. The variables reach
+/// the child only: `std::env::set_var` mutates a process other threads are
+/// reading, which is why edition 2024 made it `unsafe`.
 pub fn capture_env(
     program: &str,
     args: &[&str],
@@ -30,12 +63,13 @@ pub fn capture_env(
         .output()
         .with_context(|| format!("failed to spawn `{program}`"))?;
     if !out.status.success() {
-        bail!(
-            "`{program} {}` failed ({}):\n{}",
-            args.join(" "),
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        return Err(CommandFailed {
+            program: program.to_string(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            status: out.status,
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        }
+        .into());
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }

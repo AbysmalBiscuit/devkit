@@ -19,13 +19,14 @@ fn a_www_origin_supplies_the_pr_repository() {
     assert!(
         calls
             .lines()
-            .any(|c| c.starts_with("pr view 17") && c.ends_with("--repo github.com/acme/widget")),
+            .any(|c| c == "api --hostname github.com --method GET repos/acme/widget/pulls/17"),
         "PR #17 was not looked up in the origin's repository.\ngh calls:\n{calls}\nstderr: {stderr}"
     );
 }
 
 /// A GitHub Enterprise project names its host, and every `gh` call is pinned
-/// to that host: `--repo o/r` alone would let `GH_HOST` pick another.
+/// to that host: without `--repo` or `--hostname`, `GH_HOST` would pick
+/// another.
 #[test]
 fn an_enterprise_host_scopes_every_gh_call() {
     let fake = ghfake::Fake::with_origin_and(
@@ -38,7 +39,7 @@ fn an_enterprise_host_scopes_every_gh_call() {
     assert!(
         calls
             .lines()
-            .any(|c| c.starts_with("pr view 17") && c.ends_with("--repo ghe.acme.test/acme/widget")),
+            .any(|c| c == "api --hostname ghe.acme.test --method GET repos/acme/widget/pulls/17"),
         "PR #17 was not looked up on the enterprise host.\ngh calls:\n{calls}\nstderr: {stderr}"
     );
     assert!(

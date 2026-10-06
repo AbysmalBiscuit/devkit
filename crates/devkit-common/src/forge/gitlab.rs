@@ -488,10 +488,6 @@ impl GitlabForge {
             "title": draft_title(pr.title, pr.draft),
             "description": pr.body,
         });
-        let ids = self.user_ids(pr.reviewers)?;
-        if !ids.is_empty() {
-            body["reviewer_ids"] = json!(ids);
-        }
         let source = match origin {
             Some(fork) if !fork.eq_ignore_ascii_case(&repo.slug) => {
                 let upstream = self
@@ -1045,36 +1041,27 @@ mod tests {
         ));
     }
 
-    fn new_pr<'a>(reviewers: &'a [String], draft: bool) -> NewPr<'a> {
+    fn new_pr(draft: bool) -> NewPr<'static> {
         NewPr {
             base: "main",
             head: "feat/x",
             title: "Fix",
             body: "Body",
             draft,
-            reviewers,
             attachments: &[],
         }
     }
 
     #[test]
-    fn create_posts_a_draft_titled_mr_with_reviewer_ids() {
-        let s = stub::serve(vec![
-            Route::new(
-                "GET",
-                "/api/v4/users?username=Alice",
-                200,
-                r#"[{"id":5,"username":"alice"}]"#,
-            ),
-            Route::new(
-                "POST",
-                &format!("{P}/merge_requests"),
-                201,
-                r#"{"iid":3,"web_url":"https://gitlab.test/g/sub/app/-/merge_requests/3"}"#,
-            ),
-        ]);
+    fn create_posts_a_draft_titled_mr() {
+        let s = stub::serve(vec![Route::new(
+            "POST",
+            &format!("{P}/merge_requests"),
+            201,
+            r#"{"iid":3,"web_url":"https://gitlab.test/g/sub/app/-/merge_requests/3"}"#,
+        )]);
         let url = forge(&s)
-            .create_from(&repo(), &new_pr(&["Alice".into()], true), Some("g/sub/app"))
+            .create_from(&repo(), &new_pr(true), Some("g/sub/app"))
             .unwrap();
         assert_eq!(url, "https://gitlab.test/g/sub/app/-/merge_requests/3");
         let post = s
@@ -1087,7 +1074,7 @@ mod tests {
             body_of(&post),
             json!({
                 "source_branch": "feat/x", "target_branch": "main",
-                "title": "Draft: Fix", "description": "Body", "reviewer_ids": [5]
+                "title": "Draft: Fix", "description": "Body"
             })
         );
     }
@@ -1104,7 +1091,7 @@ mod tests {
             ),
         ]);
         forge(&s)
-            .create_from(&repo(), &new_pr(&[], false), Some("me/app"))
+            .create_from(&repo(), &new_pr(false), Some("me/app"))
             .unwrap();
         let post = s
             .requests()
@@ -1114,21 +1101,6 @@ mod tests {
         let body = body_of(&post);
         assert_eq!(body["target_project_id"], 77);
         assert_eq!(body["title"], "Fix");
-        assert!(body.get("reviewer_ids").is_none());
-    }
-
-    #[test]
-    fn create_refuses_an_unknown_reviewer_by_name() {
-        let s = stub::serve(vec![Route::new("GET", "/api/v4/users?", 200, "[]")]);
-        let err = forge(&s)
-            .create_from(&repo(), &new_pr(&["ghost".into()], false), None)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("ghost"), "{err}");
-        assert!(
-            s.requests().iter().all(|r| r.method == "GET"),
-            "nothing posted"
-        );
     }
 
     #[test]

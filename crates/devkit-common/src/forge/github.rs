@@ -1,8 +1,11 @@
 //! GitHub as a forge: github.com, or GitHub Enterprise Server through its host.
 //!
-//! Reads go over the API when a token resolves and fall back to `gh` when it
-//! does not. Writes and checkout go through `gh`, which owns the git-level
-//! work (pushing, fork remotes) that the API does not do.
+//! Single-PR reads and writes go over REST, directly when a token resolves and
+//! through `gh api` when it does not, so they work where GitHub refuses
+//! GraphQL. Finding a PR by branch and opening one go through GraphQL or `gh`
+//! first, which find and push to forks, and fall back to REST only when
+//! GitHub refuses GraphQL itself. Checkout goes
+//! through `gh`, which owns the git-level work the API does not do.
 
 use std::{collections::HashMap, path::Path};
 
@@ -17,7 +20,8 @@ use super::{
 };
 use crate::{
     cmd::{gh_capture, gh_json_in},
-    github::Api,
+    forge::rest::encode,
+    github::{Api, Method},
 };
 
 pub struct GithubForge {
@@ -83,8 +87,8 @@ fn parse_brief(v: &Value) -> Option<PrBrief> {
 }
 
 /// A single-PR REST response mapped to the triage shape. `None` is reserved
-/// for a PR that does not exist (a 404, which `rest_get_opt` reports as no
-/// body): a body that came back and could not be parsed is an error, since
+/// for a PR that does not exist (a 404, which [`Api::rest`] reports as
+/// `None`): a body that came back and could not be parsed is an error, since
 /// "there is no such PR" is what closes a worktree's finished verdict.
 fn brief_of_response(body: Option<Value>, n: u64, slug: &str) -> Result<Option<PrBrief>> {
     match body {
@@ -627,6 +631,20 @@ fn parse_open_prs_page(v: &Value) -> Result<OpenPrPage> {
 
 // --- gh fallbacks ------------------------------------------------------------
 
+/// A GraphQL call failed because GitHub refused GraphQL outright (HTTP 403),
+/// as the Claude Code cloud proxy does, rather than over anything in the
+/// request: the GraphQL endpoint's own status for a direct call, `gh`'s
+/// stderr for one through `gh`.
+fn graphql_refused(e: &anyhow::Error) -> bool {
+    if crate::http::status(e) == Some(crate::http::StatusCode::FORBIDDEN) {
+        return true;
+    }
+    crate::cmd::failed_stderr(e).is_some_and(|stderr| {
+        let stderr = stderr.to_lowercase();
+        stderr.contains("graphql") && stderr.contains("403")
+    })
+}
+
 /// The `--json` fields a `gh` PR read selects, matching [`GhPr`].
 const GH_PR_FIELDS: &str = "number,state,url,title,headRefName,headRefOid,isDraft,author";
 
@@ -671,59 +689,7 @@ impl From<GhPr> for PrBrief {
     }
 }
 
-/// `gh pr view` failed because the PR does not exist, as opposed to gh being
-/// missing, unauthenticated or offline. `gh_capture` embeds the command's
-/// stderr in its error, so the not-found signal is recoverable from it.
-fn is_not_found(e: &anyhow::Error) -> bool {
-    let msg = format!("{e:#}").to_lowercase();
-    msg.contains("no pull requests found") || msg.contains("could not resolve to a pullrequest")
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReviewRequestsView {
-    review_requests: Vec<GhLogin>,
-}
-
-#[derive(Deserialize)]
-struct ReviewsView {
-    reviews: Vec<SubmittedReview>,
-}
-
-/// One entry of `gh pr view --json reviews`. The REST API names the reviewer
-/// `user`; `gh` names it `author`, and leaves it null for an account that no
-/// longer exists.
-#[derive(Deserialize)]
-struct SubmittedReview {
-    #[serde(default)]
-    author: Option<GhLogin>,
-}
-
-/// The distinct logins behind a `gh pr view --json reviews` payload; one
-/// person submitting several reviews is one reviewer.
-fn gh_review_logins(view: ReviewsView) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for login in view.reviews.into_iter().filter_map(|r| r.author?.login) {
-        if !out.contains(&login) {
-            out.push(login);
-        }
-    }
-    out
-}
-
 impl GithubForge {
-    fn gh_pr(&self, repo: &Repo, n: u64) -> Result<Option<PrBrief>> {
-        match gh_json_in::<GhPr>(
-            &["pr", "view", &n.to_string(), "--json", GH_PR_FIELDS],
-            repo,
-            ".",
-        ) {
-            Ok(p) => Ok(Some(p.into())),
-            Err(e) if is_not_found(&e) => Ok(None),
-            Err(e) => Err(e).with_context(|| format!("reading PR #{n} in {}", repo.slug)),
-        }
-    }
-
     fn gh_prs_by_head(&self, repo: &Repo, branch: &str) -> Result<HeadLookup> {
         let found: Vec<GhPr> = gh_json_in(
             &[
@@ -742,43 +708,61 @@ impl GithubForge {
         Ok(HeadLookup::of(found.into_iter().map(Into::into).collect()))
     }
 
-    fn requested_reviewers(&self, repo: &Repo, n: u64) -> Result<Vec<String>> {
-        if self.api.token().is_some()
-            && let Ok(v) = self.api.rest_get(&format!(
-                "/repos/{}/pulls/{n}/requested_reviewers",
-                repo.slug
-            ))
-        {
-            return Ok(parse_requested_reviewers(&v));
-        }
-        let view: ReviewRequestsView = gh_json_in(
-            &["pr", "view", &n.to_string(), "--json", "reviewRequests"],
-            repo,
-            ".",
-        )?;
-        Ok(view
-            .review_requests
-            .into_iter()
-            .filter_map(|r| r.login)
-            .collect())
+    fn rest_found(&self, path: &str) -> Result<Value> {
+        self.api
+            .rest(Method::GET, path, None)?
+            .with_context(|| format!("GitHub returned 404 for {path}"))
     }
 
-    /// A machine authenticated only through `gh auth login` for another host
-    /// resolves no bearer token, and the direct call errors without one.
-    fn submitted_reviewers(&self, repo: &Repo, n: u64) -> Result<Vec<String>> {
-        if self.api.token().is_some()
-            && let Ok(v) = self
-                .api
-                .rest_get(&format!("/repos/{}/pulls/{n}/reviews", repo.slug))
+    /// Every PR whose head is `branch` in `repo` itself. REST qualifies a head
+    /// by its owner, so a fork's branch is not found here.
+    fn rest_prs_by_head(&self, repo: &Repo, branch: &str) -> Result<HeadLookup> {
+        let (owner, _) = repo.slug.split_once('/').unwrap_or((&repo.slug, ""));
+        let v = self.rest_found(&format!(
+            "/repos/{}/pulls?head={}&state=all&per_page=100",
+            repo.slug,
+            encode(&format!("{owner}:{branch}"))
+        ))?;
+        let found = v
+            .as_array()
+            .context("a PR list that is not an array")?
+            .iter()
+            .map(|p| parse_brief(p).context("unexpected PR shape in the PR list"))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(HeadLookup::of(found))
+    }
+
+    /// `POST /pulls`. A ready PR is opened ready, so no GraphQL-only draft
+    /// flip follows. REST takes the head by name in `repo` and finds no fork's
+    /// head afterwards, so a branch `origin` pushes to another repository is
+    /// refused before anything is opened.
+    fn rest_create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String> {
+        if let Ok(pushed) = super::remote::origin_slug(&cwd.to_string_lossy(), &repo.host)
+            && !pushed.eq_ignore_ascii_case(&repo.slug)
         {
-            return Ok(parse_submitted_reviewers(&v));
+            anyhow::bail!(
+                "`origin` is {pushed}, not {}: GitHub refused GraphQL, and its REST API \
+                 cannot open a PR from a fork's branch",
+                repo.slug
+            );
         }
-        let view: ReviewsView = gh_json_in(
-            &["pr", "view", &n.to_string(), "--json", "reviews"],
-            repo,
-            ".",
-        )?;
-        Ok(gh_review_logins(view))
+        let created = self
+            .api
+            .rest(
+                Method::POST,
+                &format!("/repos/{}/pulls", repo.slug),
+                Some(&serde_json::json!({
+                    "title": pr.title,
+                    "head": pr.head,
+                    "base": pr.base,
+                    "body": pr.body,
+                    "draft": pr.draft,
+                })),
+            )?
+            .context("GitHub returned 404 creating the PR")?;
+        Ok(parse_brief(&created)
+            .context("unexpected PR shape from the create")?
+            .url)
     }
 
     fn graphql_or_gh(&self, query: &str) -> Result<Value> {
@@ -801,14 +785,12 @@ impl Forge for GithubForge {
         self.api.token().is_some()
     }
 
+    /// The viewer over REST, through `gh` when no token resolves.
     fn check(&self) -> Result<String> {
-        self.api
-            .token()
-            .with_context(|| format!("no GitHub token ({})", self.api.token_hint()))?;
-        let resp = self.api.graphql("query { viewer { login } }")?;
-        let login = resp["data"]["viewer"]["login"]
-            .as_str()
-            .context("no viewer login in GitHub response")?;
+        let user = self
+            .rest_found("/user")
+            .with_context(|| format!("no GitHub access ({})", self.api.token_hint()))?;
+        let login = login(&user).context("no viewer login in GitHub response")?;
         Ok(format!("github: {login} ({})", self.api.host()))
     }
 
@@ -816,17 +798,16 @@ impl Forge for GithubForge {
         locate_on(url, self.api.host(), "/pull/")
     }
 
-    /// Over the API when a token resolves; `gh pr view` otherwise, or when the
-    /// API call fails for any reason but a clean 404.
     fn pr(&self, repo: &Repo, n: u64) -> Result<Option<PrBrief>> {
-        if self.api.token().is_some()
-            && let Ok(body) = self
-                .api
-                .rest_get_opt(&format!("/repos/{}/pulls/{n}", repo.slug))
-        {
-            return brief_of_response(body, n, &repo.slug);
-        }
-        self.gh_pr(repo, n)
+        let body = self
+            .api
+            .rest(
+                Method::GET,
+                &format!("/repos/{}/pulls/{n}", repo.slug),
+                None,
+            )
+            .with_context(|| format!("reading PR #{n} in {}", repo.slug))?;
+        brief_of_response(body, n, &repo.slug)
     }
 
     fn prs(&self, targets: &[(Repo, u64)]) -> Result<Vec<PrLookup>> {
@@ -838,27 +819,32 @@ impl Forge for GithubForge {
         Ok(parse_prs_by_number(&v, targets))
     }
 
-    /// GraphQL when a token resolves, else `gh pr list --head`. Only a
-    /// transport that could not answer reaches `gh`: a definite "no PR" is an
-    /// answer and is trusted, or the fallback re-asks a resolved question and
-    /// can return a different PR.
+    /// GraphQL once: directly when a token resolves, else through
+    /// `gh pr list --head`. Both find a fork's branch. REST, which finds none,
+    /// answers only when GitHub refused GraphQL; any other failure is
+    /// reported as it is, since a definite "no PR" from REST would be read as
+    /// an answer to the question GraphQL could not answer.
     fn pr_by_head(&self, repo: &Repo, branch: &str) -> HeadLookup {
-        let api = match self.api.token() {
-            None => "no GitHub token resolved".to_string(),
+        let attempt = match self.api.token() {
             Some(_) => {
                 let (owner, name) = owner_name(&repo.slug);
                 let query = format!(
                     "query {{ repository(owner: {owner}, name: {name}) {{ {} }} }}",
                     head_connection(branch)
                 );
-                match self.api.graphql(&query) {
-                    Ok(v) => return parse_connection(&v["data"]["repository"]["pullRequests"]),
-                    Err(e) => format!("{e:#}"),
-                }
+                self.api
+                    .graphql(&query)
+                    .map(|v| parse_connection(&v["data"]["repository"]["pullRequests"]))
             }
+            None => self.gh_prs_by_head(repo, branch),
         };
-        self.gh_prs_by_head(repo, branch)
-            .unwrap_or_else(|e| HeadLookup::Unavailable(format!("{api}; gh: {e:#}")))
+        let refused = match attempt {
+            Ok(found) => return found,
+            Err(e) if graphql_refused(&e) => format!("{e:#}"),
+            Err(e) => return HeadLookup::Unavailable(format!("{e:#}")),
+        };
+        self.rest_prs_by_head(repo, branch)
+            .unwrap_or_else(|e| HeadLookup::Unavailable(format!("{refused}; REST: {e:#}")))
     }
 
     /// One GraphQL round trip for every branch. No `gh` fallback: a status
@@ -889,22 +875,25 @@ impl Forge for GithubForge {
 
     /// `gh pr create` picks the head from the checkout it runs in, which is
     /// how it finds a branch pushed to a fork. It also resolves each
-    /// attachment's path against `cwd`.
+    /// attachment's path against `cwd`. Where GitHub refuses the GraphQL it
+    /// runs on, the PR is opened over REST instead, which uploads nothing.
     fn create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String> {
-        let joined = pr.reviewers.join(",");
         let mut args = vec![
             "pr", "create", "--base", pr.base, "--title", pr.title, "--body", pr.body,
         ];
-        if !pr.reviewers.is_empty() {
-            args.extend(["--reviewer", &joined]);
-        }
         if pr.draft {
             args.push("--draft");
         }
         for file in pr.attachments {
             args.extend(["--attach", file]);
         }
-        let out = gh_capture(&args, repo, &cwd.to_string_lossy()).context("gh pr create failed")?;
+        let out = match gh_capture(&args, repo, &cwd.to_string_lossy()) {
+            Ok(out) => out,
+            Err(e) if graphql_refused(&e) && pr.attachments.is_empty() => {
+                return self.rest_create(repo, pr, cwd);
+            }
+            Err(e) => return Err(e).context("gh pr create failed"),
+        };
         out.lines()
             .rev()
             .find(|l| l.contains("://"))
@@ -918,25 +907,26 @@ impl Forge for GithubForge {
     }
 
     fn add_reviewers(&self, repo: &Repo, n: u64, logins: &[String]) -> Result<()> {
-        gh_capture(
-            &[
-                "pr",
-                "edit",
-                &n.to_string(),
-                "--add-reviewer",
-                &logins.join(","),
-            ],
-            repo,
-            ".",
-        )
-        .context("gh pr edit --add-reviewer failed")?;
+        self.api
+            .rest(
+                Method::POST,
+                &format!("/repos/{}/pulls/{n}/requested_reviewers", repo.slug),
+                Some(&serde_json::json!({ "reviewers": logins })),
+            )
+            .and_then(|found| found.with_context(|| format!("PR #{n} not found in {}", repo.slug)))
+            .context("requesting reviewers failed")?;
         Ok(())
     }
 
     fn reviewers(&self, repo: &Repo, n: u64) -> Result<Reviewers> {
+        let pulls = format!("/repos/{}/pulls/{n}", repo.slug);
         Ok(Reviewers {
-            requested: self.requested_reviewers(repo, n)?,
-            submitted: self.submitted_reviewers(repo, n)?,
+            requested: parse_requested_reviewers(
+                &self.rest_found(&format!("{pulls}/requested_reviewers"))?,
+            ),
+            submitted: parse_submitted_reviewers(
+                &self.rest_found(&format!("{pulls}/reviews?per_page=100"))?,
+            ),
         })
     }
 
@@ -1085,21 +1075,6 @@ mod tests {
             { "user": null, "state": "APPROVED" }
         ]);
         assert_eq!(parse_submitted_reviewers(&v), vec!["igoracc".to_string()]);
-    }
-
-    /// `gh` reports the reviewer under `author`, not the REST API's `user`, and
-    /// nulls it for an account that no longer exists.
-    #[test]
-    fn the_gh_fallback_reads_authors_and_dedupes() {
-        let view: ReviewsView = serde_json::from_value(json!({
-            "reviews": [
-                { "author": { "login": "igoracc" }, "state": "COMMENTED" },
-                { "author": { "login": "igoracc" }, "state": "APPROVED" },
-                { "author": null, "state": "APPROVED" }
-            ]
-        }))
-        .expect("gh reviews payload");
-        assert_eq!(gh_review_logins(view), vec!["igoracc".to_string()]);
     }
 
     fn targets() -> Vec<(Repo, u64)> {
