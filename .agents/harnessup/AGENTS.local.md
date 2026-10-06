@@ -18,6 +18,8 @@ Keep `.superpowers/cloud-progress.md` current for multi-step work: the objective
 
 Before using devkit's task runner or coordination tools, read `/devkit:using-devkit`. Before using mcpls for code intelligence, read `/mcpls:mcpls`.
 
+Keep changes focused. Comments explain non-obvious reasons and invariants, and stay standalone and timeless; so does living documentation, which carries a changing count only with a way to regenerate it.
+
 For a bug fix, reproduce the failure through the entry point where it occurs, and watch the test fail for the actual bug before fixing it. Completion requires the requested behaviour, the checks `AGENTS.md` names passing, and blocking review findings resolved. Report anything you could not verify.
 
 ## Communication
@@ -26,6 +28,8 @@ Lead with the result or recommendation, followed by the evidence it needs. Disag
 
 ## Delivery
 
-Commit through `devrun task commit`, staging only your own changes, and pass your model's name and email in its `coauthors` argument.
+Commit through `devrun task commit`, staging only your own changes, and inspect the staged diff first. Use Conventional Commits with an imperative, lowercase description. Keep the files harnessup places at the repository root out of commits.
+
+Keep the author identity the environment configures. Pass your model's name and email in the commit task's `coauthors` argument, then confirm the commit carries its `Co-authored-by` trailer.
 
 When the work is done, push and open the PR with `issue pr create`. It opens ready for review, not as a draft, because review bots skip drafts. Link the issue, explain the problem and the fix briefly, name the model and harness, and leave the `## TL;DR (human written)` section empty.
