@@ -212,20 +212,30 @@ github = "sweeper[bot]"
         std::fs::write(self.bin.path().join("rest_reviews.json"), payload).expect("write reviews");
     }
 
-    /// Answer `gh api graphql` with issue `body`, the way the tracker's issue
-    /// query reads it. Without one the fake fails the call.
+    /// Answer the REST read of issue 7 with an open issue whose body is
+    /// `body`. Without one the fake reports that the issue does not exist.
     pub fn serve_issue(&self, body: &str) {
-        let payload = serde_json::json!({ "data": { "repository": { "issue": {
+        self.serve_rest_issue(7, "open", None, body);
+    }
+
+    /// Answer the REST read of issue `n` with `state` (`open` or `closed`),
+    /// `reason` as its `state_reason`, and `body`.
+    pub fn serve_rest_issue(&self, n: u64, state: &str, reason: Option<&str>, body: &str) {
+        let payload = serde_json::json!({
+            "number": n,
             "title": "An issue",
-            "url": "https://github.com/o/r/issues/7",
+            "html_url": format!("https://github.com/o/r/issues/{n}"),
             "body": body,
-            "state": "OPEN",
-            "stateReason": null,
-            "assignees": { "pageInfo": { "hasNextPage": false }, "nodes": [] },
-            "labels": { "pageInfo": { "hasNextPage": false }, "nodes": [] },
-        } } } });
-        std::fs::write(self.bin.path().join("graphql.json"), payload.to_string())
-            .expect("write graphql answer");
+            "state": state,
+            "state_reason": reason,
+            "assignees": [],
+            "labels": [],
+        });
+        std::fs::write(
+            self.bin.path().join(format!("rest_issue_{n}.json")),
+            payload.to_string(),
+        )
+        .expect("write REST issue");
     }
 
     /// Answer every `gh api graphql` query with `body`. Without one the fake

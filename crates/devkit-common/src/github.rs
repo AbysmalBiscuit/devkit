@@ -289,6 +289,27 @@ impl Api {
     }
 }
 
+/// A GraphQL call failed because GitHub refused GraphQL outright (HTTP 403),
+/// as the Claude Code cloud proxy does, rather than over anything in the
+/// request: the GraphQL endpoint's own status for a direct call, `gh`'s
+/// stderr for one through `gh`.
+pub fn graphql_refused(e: &anyhow::Error) -> bool {
+    if http::status(e) == Some(StatusCode::FORBIDDEN) {
+        return true;
+    }
+    crate::cmd::failed_stderr(e).is_some_and(|stderr| {
+        let stderr = stderr.to_lowercase();
+        stderr.contains("graphql") && stderr.contains("403")
+    })
+}
+
+/// `read` applied to every item on devkit's worker pool, in item order: the
+/// per-item REST reads a batched GraphQL read falls back to.
+pub fn each<T: Sync, R: Send>(items: &[T], read: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    use rayon::prelude::*;
+    crate::pool::install(|| items.par_iter().map(&read).collect())
+}
+
 /// Debug builds only: `DEVKIT_TEST_GITHUB_API` replaces every host's API root,
 /// REST and GraphQL alike, so a test can serve the direct calls from loopback.
 fn test_api_base() -> Option<String> {

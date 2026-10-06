@@ -93,6 +93,7 @@ fn rest(dir: &Path, args: &[String]) {
             serve_or_404(dir, "rest_pull_create.json")
         }
         ("GET", ["repos", _, _, "pulls", n]) => serve_or_404(dir, &format!("rest_pull_{n}.json")),
+        ("GET", ["repos", _, _, "issues", n]) => serve_or_404(dir, &format!("rest_issue_{n}.json")),
         ("GET", ["repos", _, _, "pulls", _, "requested_reviewers"]) => print!(
             "{}",
             read_or(
