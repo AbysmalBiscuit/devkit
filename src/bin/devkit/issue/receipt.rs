@@ -120,19 +120,36 @@ fn receipt_path(checkout: &Path, kind: Kind, session: &str, field: Field, text: 
     session_dir(checkout, kind, session).join(format!("{}{}", field.prefix(), hex(text)))
 }
 
-/// Refuse an invalid session id, and a `.devkit` that is a file: Windows
-/// reports a path through a file as not found, which would read as "no
-/// receipt" rather than as the broken store it is.
-fn check_store(checkout: &Path, session: &str) -> Result<()> {
+/// Refuse an invalid session id, and a store that is not a plain directory.
+/// A `.devkit` that is a file would read as "no receipt" on Windows, which
+/// reports a path through a file as not found. A symlinked `.devkit` or
+/// receipts directory, as a commit can carry, would point the stale sweep's
+/// deletes and the receipt writes outside the checkout.
+fn check_store(checkout: &Path, kind: Kind, session: &str) -> Result<()> {
     if !valid_session(session) {
         bail!("session id `{session}` is not usable as a directory name");
     }
+    check_dirs(checkout, kind)
+}
+
+fn check_dirs(checkout: &Path, kind: Kind) -> Result<()> {
     let devkit = checkout.join(".devkit");
-    if devkit.is_file() {
-        bail!(
-            "{} is a file, not the directory devkit keeps its render receipts in",
-            devkit.display()
-        );
+    for dir in [devkit.clone(), receipts_root(checkout, kind)] {
+        let Ok(meta) = std::fs::symlink_metadata(&dir) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            bail!(
+                "{} is a symlink: devkit keeps render receipts only in a real directory inside the checkout",
+                dir.display()
+            );
+        }
+        if dir == devkit && meta.is_file() {
+            bail!(
+                "{} is a file, not the directory devkit keeps its render receipts in",
+                devkit.display()
+            );
+        }
     }
     Ok(())
 }
@@ -144,7 +161,7 @@ pub(crate) fn write(
     title: &str,
     body: &str,
 ) -> Result<()> {
-    check_store(checkout, session)?;
+    check_store(checkout, kind, session)?;
     let dir = session_dir(checkout, kind, session);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     gitignore::write_self_ignore(&checkout.join(".devkit"));
@@ -162,7 +179,7 @@ pub(crate) fn has(
     field: Field,
     text: &str,
 ) -> Result<bool> {
-    check_store(checkout, session)?;
+    check_store(checkout, kind, session)?;
     let path = receipt_path(checkout, kind, session, field, text);
     path.try_exists()
         .with_context(|| format!("reading {}", path.display()))
@@ -182,6 +199,7 @@ pub(crate) fn record(start: &Path, kind: Kind, title: &str, body: &str) -> Resul
     }
     let checkout = store_root(&Checkout::at(start))
         .with_context(|| format!("not inside a git checkout: {}", start.display()))?;
+    check_dirs(&checkout, kind)?;
     let _ = sweep_stale(&checkout, kind, STALE_AFTER);
     for session in &sessions {
         write(&checkout, kind, session, title, body)?;

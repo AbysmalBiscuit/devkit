@@ -170,3 +170,29 @@ fn a_missing_required_arg_is_refused_by_name_before_rendering() {
     assert!(err.contains("one line per Done when item"), "{err}");
     assert!(receipts(fake.project(), "S1").is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_receipt_store_is_refused_and_its_target_survives() {
+    let fake = project();
+    let outside = tempfile::tempdir().unwrap();
+    let old = outside.path().join("old-session");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 60 * 60),
+        )
+        .unwrap();
+    std::fs::create_dir_all(fake.project().join(".devkit")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), fake.project().join(".devkit/pr-receipts")).unwrap();
+
+    let out = render(&fake, Some("S1"), ARGS);
+
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("symlink"), "{err}");
+    assert!(err.contains("pr-receipts"), "{err}");
+    assert!(old.exists(), "the symlink's target was swept");
+    assert!(!outside.path().join("S1").exists());
+}
