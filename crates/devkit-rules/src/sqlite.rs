@@ -191,14 +191,6 @@ impl RuleSource for SqliteSource {
             let params = [&repo.id, &rule.key];
             if added {
                 tx.execute(
-                    "DELETE FROM rule_tasks WHERE repo_id = ?1 AND rule_key = ?2",
-                    params,
-                )?;
-                tx.execute(
-                    "DELETE FROM rule_languages WHERE repo_id = ?1 AND rule_key = ?2",
-                    params,
-                )?;
-                tx.execute(
                     "DELETE FROM rules WHERE repo_id = ?1 AND rule_key = ?2",
                     params,
                 )?;

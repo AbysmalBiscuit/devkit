@@ -468,9 +468,27 @@ fn remove_tombstones_an_extracted_rule_and_deletes_an_added_one() {
             .success()
     );
 
-    let id = rules_ok(main.path(), home.path(), &["add", "--title", "Short-lived"]);
+    let id = rules_ok(main.path(), home.path(), &[
+        "add",
+        "--title",
+        "Short-lived",
+        "--task",
+        "code-review",
+        "--lang",
+        "rs",
+    ]);
     rules_ok(main.path(), home.path(), &["rm", id.trim()]);
     assert_eq!(row(&store, id.trim()), None);
+    let orphans: i64 = rusqlite::Connection::open(&store)
+        .unwrap()
+        .query_row(
+            "SELECT (SELECT count(*) FROM rule_tasks WHERE rule_key NOT IN (SELECT rule_key FROM rules))
+                  + (SELECT count(*) FROM rule_languages WHERE rule_key NOT IN (SELECT rule_key FROM rules))",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(orphans, 0);
     assert_eq!(repository(&store), (revision + 3, generation));
 }
 
