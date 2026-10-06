@@ -86,8 +86,8 @@ fn parse_brief(v: &Value) -> Option<PrBrief> {
 }
 
 /// A single-PR REST response mapped to the triage shape. `None` is reserved
-/// for a PR that does not exist (a 404, which `rest_get_opt` reports as no
-/// body): a body that came back and could not be parsed is an error, since
+/// for a PR that does not exist (a 404, which [`Api::rest`] reports as
+/// `None`): a body that came back and could not be parsed is an error, since
 /// "there is no such PR" is what closes a worktree's finished verdict.
 fn brief_of_response(body: Option<Value>, n: u64, slug: &str) -> Result<Option<PrBrief>> {
     match body {
@@ -700,12 +700,9 @@ impl GithubForge {
         Ok(HeadLookup::of(found.into_iter().map(Into::into).collect()))
     }
 
-    fn rest(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Option<Value>> {
-        self.api.rest(method, path, body)
-    }
-
-    fn rest_get(&self, path: &str) -> Result<Value> {
-        self.rest(Method::GET, path, None)?
+    fn rest_found(&self, path: &str) -> Result<Value> {
+        self.api
+            .rest(Method::GET, path, None)?
             .with_context(|| format!("GitHub returned 404 for {path}"))
     }
 
@@ -713,7 +710,7 @@ impl GithubForge {
     /// by its owner, so a fork's branch is not found here.
     fn rest_prs_by_head(&self, repo: &Repo, branch: &str) -> Result<HeadLookup> {
         let (owner, _) = repo.slug.split_once('/').unwrap_or((&repo.slug, ""));
-        let v = self.rest_get(&format!(
+        let v = self.rest_found(&format!(
             "/repos/{}/pulls?head={}&state=all&per_page=100",
             repo.slug,
             encode(&format!("{owner}:{branch}"))
@@ -731,6 +728,7 @@ impl GithubForge {
     /// so no GraphQL-only draft flip follows.
     fn rest_create(&self, repo: &Repo, pr: &NewPr<'_>) -> Result<String> {
         let created = self
+            .api
             .rest(
                 Method::POST,
                 &format!("/repos/{}/pulls", repo.slug),
@@ -774,7 +772,7 @@ impl Forge for GithubForge {
     /// The viewer over REST, through `gh` when no token resolves.
     fn check(&self) -> Result<String> {
         let user = self
-            .rest_get("/user")
+            .rest_found("/user")
             .with_context(|| format!("no GitHub access ({})", self.api.token_hint()))?;
         let login = login(&user).context("no viewer login in GitHub response")?;
         Ok(format!("github: {login} ({})", self.api.host()))
@@ -786,6 +784,7 @@ impl Forge for GithubForge {
 
     fn pr(&self, repo: &Repo, n: u64) -> Result<Option<PrBrief>> {
         let body = self
+            .api
             .rest(
                 Method::GET,
                 &format!("/repos/{}/pulls/{n}", repo.slug),
@@ -895,13 +894,14 @@ impl Forge for GithubForge {
     }
 
     fn add_reviewers(&self, repo: &Repo, n: u64, logins: &[String]) -> Result<()> {
-        self.rest(
-            Method::POST,
-            &format!("/repos/{}/pulls/{n}/requested_reviewers", repo.slug),
-            Some(&serde_json::json!({ "reviewers": logins })),
-        )
-        .and_then(|found| found.with_context(|| format!("PR #{n} not found in {}", repo.slug)))
-        .context("requesting reviewers failed")?;
+        self.api
+            .rest(
+                Method::POST,
+                &format!("/repos/{}/pulls/{n}/requested_reviewers", repo.slug),
+                Some(&serde_json::json!({ "reviewers": logins })),
+            )
+            .and_then(|found| found.with_context(|| format!("PR #{n} not found in {}", repo.slug)))
+            .context("requesting reviewers failed")?;
         Ok(())
     }
 
@@ -909,9 +909,9 @@ impl Forge for GithubForge {
         let pulls = format!("/repos/{}/pulls/{n}", repo.slug);
         Ok(Reviewers {
             requested: parse_requested_reviewers(
-                &self.rest_get(&format!("{pulls}/requested_reviewers"))?,
+                &self.rest_found(&format!("{pulls}/requested_reviewers"))?,
             ),
-            submitted: parse_submitted_reviewers(&self.rest_get(&format!("{pulls}/reviews"))?),
+            submitted: parse_submitted_reviewers(&self.rest_found(&format!("{pulls}/reviews"))?),
         })
     }
 
