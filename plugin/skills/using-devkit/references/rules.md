@@ -23,7 +23,7 @@ A SQLite read opens only the store, not the `index.extraction.sqlite` archive be
 
 `add`, `edit` and `remove` write to the same file the reads come from. The rule they touch is pinned: a rebuild of the index keeps it as written instead of extracting it again.
 
-- **`add`** creates a pinned rule and prints its id. In a SQLite store the rule belongs to the extractor's `<manual>` source, and its id is the extractor's hash of that source and the title. A title an existing rule already has is refused.
+- **`add`** creates a pinned rule and prints its id. In a SQLite store the rule belongs to the extractor's `<manual>` source, and its id is the extractor's hash of that source and the title. A title a rule made with `add` already has is refused.
 - **`edit <id>`** changes the fields you pass and keeps the id, even when the title changes. A list flag (`--task`, `--lang`, `--topic`) replaces that whole list. Fields devkit has no flag for are kept.
 - **`remove <id>`** leaves an extracted rule behind as a pinned tombstone, which every reader skips and a rebuild does not extract again. A rule made with `add` is deleted outright.
 
