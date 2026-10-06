@@ -15,5 +15,6 @@
     "dev-servers",
     "worktrees"
   ],
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.json",
+  "icon": "./assets/icon.png"
 }
