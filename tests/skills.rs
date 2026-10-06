@@ -16,8 +16,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const SKILLS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/plugin/skills");
 
-/// The skills this repository's own agents use, which the plugin does not ship.
-const REPO_SKILLS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/.agents/skills");
+/// The skills this repository's own cloud sessions use, which the plugin does
+/// not ship. harnessup links them into `.agents/skills/` for Codex.
+const REPO_SKILLS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/.agents/harnessup/skills");
 
 /// Every directory whose skills Codex can load.
 const CODEX_SKILL_ROOTS: [&str; 2] = [SKILLS, REPO_SKILLS];
@@ -139,9 +140,9 @@ fn the_cloud_openai_yaml_maps_name_description_and_policy() {
         openai_yaml(&cloud),
         "interface:\n  \
            display_name: cloud\n  \
-           short_description: Find existing issue work and select a cloud execution workflow.\n\
+           short_description: Use in a cloud session before starting an issue or feature, to find work already done on it and choose how to carry it out.\n\
          policy:\n  \
-           allow_implicit_invocation: false\n"
+           allow_implicit_invocation: true\n"
     );
 }
 

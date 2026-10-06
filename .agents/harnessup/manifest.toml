@@ -1,0 +1,56 @@
+# Format: https://github.com/AbysmalBiscuit/harnessup
+# Only Claude Code cloud sessions are prepared: the cloud image ships no Codex,
+# so Codex entries could only ever report skipped.
+schema = 1
+
+[[marketplace]]
+name = "devkit"
+source = "AbysmalBiscuit/devkit"
+harnesses = ["claude"]
+
+[[marketplace]]
+name = "mcpls"
+source = "AbysmalBiscuit/mcpls"
+harnesses = ["claude"]
+
+[[marketplace]]
+name = "agent-guard"
+source = "AbysmalBiscuit/agent-guard"
+harnesses = ["claude"]
+
+[[marketplace]]
+name = "superpowers-marketplace"
+source = "obra/superpowers-marketplace"
+harnesses = ["claude"]
+
+[[plugin]]
+id = "devkit@devkit"
+bootstrap = ["hooks/bootstrap-binaries"]
+check = "devkit --version"
+
+[[plugin]]
+id = "mcpls@mcpls"
+bootstrap = ["hooks/bootstrap-binaries", "claude-code"]
+check = "mcpls --version"
+
+[[plugin]]
+id = "agent-guard@agent-guard"
+
+[[plugin]]
+id = "superpowers@superpowers-marketplace"
+
+[[file]]
+source = "AGENTS.local.md"
+target = "AGENTS.local.md"
+
+[[file]]
+source = "CLAUDE.local.md"
+target = "CLAUDE.local.md"
+
+[[file]]
+source = "devkit.local.toml"
+target = "devkit.local.toml"
+
+[context]
+startup = "startup.md"
+recovery = "recovery.md"

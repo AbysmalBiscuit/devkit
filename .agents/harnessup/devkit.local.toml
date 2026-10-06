@@ -1,0 +1,166 @@
+#:schema https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json
+#:toml-version 1.1
+
+# Cloud-session layer over devkit.toml, placed at the repository root by
+# harnessup. Cloud sessions have no user config to supply these tasks and
+# templates.
+
+[defaults]
+pr_proof_variable = "proof"
+
+[harness.commands.git-commit]
+programs = ["git"]
+args = ["commit"]
+reason = """Commit with the devkit task, which stages exactly the paths it names:
+  devrun task commit --arg files='src/a.rs,src/b.rs' --arg commit_subject='fix(scope): imperative subject' --arg coauthors='...'
+Part of a file: write those hunks to a patch against HEAD and run `devrun task commit-patch --arg patch=<file>` with the same message args.
+The last commit's message: `devrun task commit-amend` with the message args.
+`devkit config tasks <task>` describes every arg."""
+
+[harness.commands.git-add]
+programs = ["git"]
+args = ["add"]
+reason = """Stage and commit in one step: `devrun task commit` stages the paths it commits, and `devrun task commit-patch` commits part of a file.
+Rebase conflicts: `devrun task rebase-add --arg files='src/a.rs,src/b.rs'`, then `git rebase --continue`.
+`devkit config tasks <task>` describes every arg."""
+
+[harness.commands.pr-create]
+programs = ["gh"]
+args = ["pr", "create"]
+reason = """Open the PR with devkit, which renders the body from the `pr_body` template:
+  issue pr create --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...'
+`--pr-body` is the agent summary and `proof` the evidence for each `Done when` item; the template adds the TL;DR heading and this worktree's closing line.
+`devkit template show pr_body` describes every `--arg`."""
+
+# Git needs new paths in the index before a path-limited commit can name them.
+[tasks.commit]
+description = "Stage the given paths and commit them with a Conventional Commits message"
+steps = [{ task = "commit-stage" }, { task = "commit-write" }]
+
+[tasks.commit-stage]
+description = "Stage exactly the given paths, new files included"
+guard = false
+run = ["git", "--literal-pathspecs", "add", "--", { split = "{{ files }}", on = "," }]
+
+# The same pathspec at commit time excludes other sessions' staged changes.
+[tasks.commit-write]
+description = "Commit the selected paths while preserving unrelated staging"
+guard = false
+run = ["git", "--literal-pathspecs", "commit", "--only", "-m", '''
+{{- commit_subject | trim }}
+{%- if commit_body | trim %}
+
+{{ commit_body | trim }}
+{%- endif %}
+{%- if coauthors | trim(" ;") %}
+{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
+Co-authored-by: {{ c }}
+{%- endfor %}
+{%- endif %}
+''', "--", { split = "{{ files }}", on = "," }]
+
+[tasks.commit-patch]
+description = "Commit a patch against HEAD while preserving unrelated staging"
+guard = false
+run = ["harnessup", "commit-patch", "--patch", "{{ patch }}", "--message", '''
+{{- commit_subject | trim }}
+{%- if commit_body | trim %}
+
+{{ commit_body | trim }}
+{%- endif %}
+{%- if coauthors | trim(" ;") %}
+{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
+Co-authored-by: {{ c }}
+{%- endfor %}
+{%- endif %}
+''']
+
+[tasks.commit-amend]
+description = "Rewrite the last commit message while preserving staged changes"
+guard = false
+run = ["git", "commit", "--amend", "--only", "-m", '''
+{{- commit_subject | trim }}
+{%- if commit_body | trim %}
+
+{{ commit_body | trim }}
+{%- endif %}
+{%- if coauthors | trim(" ;") %}
+{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
+Co-authored-by: {{ c }}
+{%- endfor %}
+{%- endif %}
+''']
+
+[tasks.rebase-add]
+description = "Mark resolved rebase conflicts by staging the given paths"
+guard = false
+run = ["git", "--literal-pathspecs", "add", "--", { split = "{{ files }}", on = "," }]
+
+[templates]
+branch = '''
+{%- set id = (issue | lower ~ "-") if issue else "" -%}
+{{ id }}{{ (slug | trim | lower | replace(" ", "-"))[:46 - (id | length)] | trim("-") }}
+'''
+worktree_dir = '''
+{%- set id = (issue | lower ~ "-") if issue else "" -%}
+{{ id }}{{ (slug | trim | lower | replace(" ", "-"))[:46 - (id | length)] | trim("-") }}
+'''
+
+# PR body for `issue pr create`; `input` comes from `--pr-body`.
+pr_body = '''
+{%- set own = (issue_magic_word ~ " " ~ ("#" if issue and issue[0] in "0123456789" else "") ~ issue) if issue else "" -%}
+{%- set ref_lines = ((own ~ ";" ~ refs) if own else refs) | split(";") | map("trim") | reject("eq", "") | list -%}
+{%- set agent = agent_model or agent_harness -%}
+## TL;DR (human written)
+{{ human_tldr }}
+{%- if ref_lines %}
+
+---
+
+{{ ref_lines | join("\n") }}
+{%- endif %}
+{%- if agent %}
+
+---
+
+## Agent summary
+{%- endif %}
+
+{{ input | trim }}
+{%- if proof | trim %}
+
+## Proof
+
+{{ proof | trim }}
+{%- endif %}
+{%- if agent %}
+
+---
+{%- if implemented_by | trim %}
+
+Implemented by {{ implemented_by | trim }}
+{%- endif %}
+
+🤖 Generated with {{ agent_model }}{% if agent_model and agent_harness %} via {% endif %}{{ agent_harness }}
+{%- endif %}
+'''
+
+[templates.variables]
+files = { required = "always", description = "Comma-separated paths to stage and commit, whitespace kept in each; paths other sessions staged stay staged" }
+patch = { required = "always", description = "Patch file against HEAD holding only the hunks to commit; other hunks and staged changes stay as they are" }
+commit_subject = { required = "always", description = "Conventional Commits subject: `type(scope): imperative summary`" }
+commit_body = { default = "", description = "Why the change is needed, when the subject does not say" }
+coauthors = { default = "", required = "agents", description = "`;`-separated `Name <email>` trailers. Claude Code: `<full model name, e.g. Claude Opus 5> <noreply@anthropic.com>`" }
+
+human_tldr = { default = "", description = "A human's summary, written after the PR opens; agents leave it unset" }
+proof = { default = "", required = "agents", description = "One unindented line per `Done when` item, starting with its number in the order the issue lists them (`1. test foo_refuses_gap`, `2. command X and its output`), or with no issue one line per claim the summary makes. Each numbered line gives the evidence that its item holds: the test that covers it, or a command and its output" }
+
+# Supplied by the render context in a worktree `issue setup` created; declared
+# so the template also renders outside one.
+issue = { default = "", description = "The worktree's own issue id, filled in an issue worktree; pass it only outside one" }
+issue_magic_word = { default = "Closes", description = "Keyword on the worktree's own issue line: `Refs` when this branch does not finish the issue" }
+refs = { default = "", description = "Every other issue line, `;`-separated, each with its own keyword: `Closes #12; Refs #90`" }
+
+agent_model = { default = "", required = "agents", description = "Full name of the model that did the work, e.g. `Claude Opus 5`" }
+agent_harness = { default = "", required = "agents", description = "Markdown link to the harness, e.g. `[Claude Code](https://claude.com/claude-code)`" }
+implemented_by = { default = "", description = "One prose line naming who did which part, when several agents or people did the work" }
