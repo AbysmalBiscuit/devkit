@@ -79,10 +79,11 @@ fn reuse_note(number: u64, pr_is_draft: bool, asked: Option<PrCreateState>) -> O
     ))
 }
 
-/// Reject an empty rendered PR title. Only a run that opens a PR needs one.
+/// Reject an empty rendered PR title. Opening or rendering a PR needs one;
+/// reusing an open PR does not.
 pub(super) fn require_pr_title(title: &str) -> Result<()> {
     if title.trim().is_empty() {
-        bail!("--pr-title is required to create a PR");
+        bail!("--pr-title is required: the pr_title template rendered empty");
     }
     Ok(())
 }
