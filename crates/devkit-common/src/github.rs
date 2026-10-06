@@ -104,6 +104,9 @@ impl Api {
     /// The REST root. GitHub Enterprise Server serves it under `/api/v3` on
     /// its own host rather than on an `api.` subdomain.
     fn rest_base(&self) -> String {
+        if let Some(base) = test_api_base() {
+            return base;
+        }
         if same_host(&self.host, GITHUB_COM) {
             "https://api.github.com".to_string()
         } else {
@@ -112,6 +115,9 @@ impl Api {
     }
 
     fn graphql_url(&self) -> String {
+        if let Some(base) = test_api_base() {
+            return format!("{base}/graphql");
+        }
         if same_host(&self.host, GITHUB_COM) {
             "https://api.github.com/graphql".to_string()
         } else {
@@ -281,6 +287,18 @@ impl Api {
         self.rest_direct(Method::GET, path, None)?
             .context("GitHub returned 404")
     }
+}
+
+/// Debug builds only: `DEVKIT_TEST_GITHUB_API` replaces every host's API root,
+/// REST and GraphQL alike, so a test can serve the direct calls from loopback.
+fn test_api_base() -> Option<String> {
+    #[cfg(debug_assertions)]
+    if let Ok(base) = std::env::var("DEVKIT_TEST_GITHUB_API")
+        && !base.trim().is_empty()
+    {
+        return Some(base.trim().trim_end_matches('/').to_string());
+    }
+    None
 }
 
 /// A response body as JSON, an empty one (a 204) as `null`.

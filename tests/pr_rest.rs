@@ -268,3 +268,74 @@ fn a_created_pr_that_fails_verification_gets_no_reviewers() {
     assert!(!calls.contains("--reviewer"), "{calls}");
     assert!(!calls.contains("requested_reviewers"), "{calls}");
 }
+
+/// A PR as GitHub's REST API returns it, at `head` on this project's branch.
+fn rest_pr(number: u64, head: &str) -> String {
+    serde_json::json!({
+        "number": number, "state": "open", "merged_at": null,
+        "html_url": format!("https://github.com/o/r/pull/{number}"), "title": "fix it",
+        "head": { "ref": "lev/eng-1-fix", "sha": head, "repo": { "owner": { "login": "o" } } },
+        "draft": false, "user": { "login": "LevValle" }
+    })
+    .to_string()
+}
+
+/// With a token of its own, devkit calls GitHub's REST API directly rather
+/// than through `gh`.
+#[test]
+fn pr_create_opens_a_pr_over_direct_rest_with_a_token() {
+    use devkit_common::http::stub::{self, Route};
+
+    let fake = ghfake::Fake::without_pr("[templates]\npr_body = \"Closes {{ issue }}\"");
+    fake.record_issue("ENG-1");
+    fake.refuse_graphql();
+    let pr = rest_pr(7, fake.head());
+    let api = stub::serve(vec![
+        Route::new("POST", "/repos/o/r/pulls/7/requested_reviewers", 201, "{}"),
+        Route::new("POST", "/repos/o/r/pulls", 201, &pr),
+        Route::new("GET", "/repos/o/r/pulls?", 200, "[]"),
+        Route::new("GET", "/repos/o/r/pulls/7", 200, &pr),
+    ]);
+
+    let out = fake.issue_with_env(
+        &[
+            "pr",
+            "create",
+            "--no-push",
+            "--ready",
+            "--to",
+            "lev",
+            "--pr-title",
+            "fix it",
+        ],
+        &[("GH_TOKEN", "t0k"), ("DEVKIT_TEST_GITHUB_API", &api.url())],
+    );
+
+    let reqs = api.requests();
+    assert!(out.status.success(), "{out:?}\n{reqs:#?}\n{}", fake.calls());
+    assert_eq!(stdout(&out), "https://github.com/o/r/pull/7\n");
+    let create = reqs
+        .iter()
+        .find(|r| r.method == "POST" && r.path == "/repos/o/r/pulls")
+        .unwrap_or_else(|| panic!("no direct REST create: {reqs:#?}"));
+    assert_eq!(create.header("Authorization"), Some("Bearer t0k"));
+    let body: serde_json::Value = serde_json::from_str(&create.body).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "title": "fix it", "head": "lev/eng-1-fix", "base": "main",
+            "body": "Closes ENG-1", "draft": false
+        })
+    );
+    let request = reqs
+        .iter()
+        .find(|r| r.method == "POST" && r.path == "/repos/o/r/pulls/7/requested_reviewers")
+        .unwrap_or_else(|| panic!("no direct reviewer request: {reqs:#?}"));
+    let body: serde_json::Value = serde_json::from_str(&request.body).unwrap();
+    assert_eq!(body, serde_json::json!({ "reviewers": ["LevValle"] }));
+    assert!(
+        !fake.calls().contains("api "),
+        "a REST call went through gh: {}",
+        fake.calls()
+    );
+}

@@ -288,6 +288,14 @@ github = "sweeper[bot]"
         self.issue_cmd(args).output().expect("spawn devkit issue")
     }
 
+    /// [`Fake::issue`] with each of `env` set, such as a token the run then
+    /// resolves.
+    pub fn issue_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+        let mut cmd = self.issue_cmd(args);
+        cmd.envs(env.iter().copied());
+        cmd.output().expect("spawn devkit issue")
+    }
+
     /// [`Fake::issue`] with `DEVKIT_CALLER` set to `caller`.
     pub fn issue_as(&self, caller: &str, args: &[&str]) -> std::process::Output {
         self.issue_cmd(args)
