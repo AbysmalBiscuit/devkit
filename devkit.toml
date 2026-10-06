@@ -3,6 +3,7 @@
 [defaults]
 baseline_ref = "origin/main"
 pr_create_state = "ready"
+pr_proof_variable = "proof"
 
 # The `origin` remote is an SSH alias, so nothing about it names github.com and
 # the repository cannot be derived from it. Both are spelled out instead.
@@ -107,9 +108,165 @@ run = ["bash", "evals/run.sh", "{{ eval_case }}"]
 description = "Grade isolated Claude agents on what they do with the plugin loaded (billed)"
 run = ["bash", "evals/scenario.sh", "{{ scenario }}"]
 
+# Git needs new paths in the index before a path-limited commit can name them.
+[tasks.commit]
+description = "Stage the given paths and commit them with a Conventional Commits message"
+steps = [{ task = "commit-stage" }, { task = "commit-write" }]
+
+[tasks.commit-stage]
+description = "Stage exactly the given paths, new files included"
+guard = false
+run = ["git", "--literal-pathspecs", "add", "--", { split = "{{ files }}", on = "," }]
+
+# The same pathspec at commit time excludes other sessions' staged changes.
+[tasks.commit-write]
+description = "Commit the selected paths while preserving unrelated staging"
+guard = false
+run = ["git", "--literal-pathspecs", "commit", "--only", "-m", '''
+{{- commit_subject | trim }}
+{%- if commit_body | trim %}
+
+{{ commit_body | trim }}
+{%- endif %}
+{%- if coauthors | trim(" ;") %}
+{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
+Co-authored-by: {{ c }}
+{%- endfor %}
+{%- endif %}
+''', "--", { split = "{{ files }}", on = "," }]
+
+[tasks.commit-amend]
+description = "Rewrite the last commit message while preserving staged changes"
+guard = false
+run = ["git", "commit", "--amend", "--only", "-m", '''
+{{- commit_subject | trim }}
+{%- if commit_body | trim %}
+
+{{ commit_body | trim }}
+{%- endif %}
+{%- if coauthors | trim(" ;") %}
+{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
+Co-authored-by: {{ c }}
+{%- endfor %}
+{%- endif %}
+''']
+
+[tasks.rebase-add]
+description = "Mark resolved rebase conflicts by staging the given paths"
+guard = false
+run = ["git", "--literal-pathspecs", "add", "--", { split = "{{ files }}", on = "," }]
+
+# `name` exists because minijinja's variable analysis skips an expression that
+# is sliced, and `--arg slug=...` is refused for a name it does not see.
+[templates]
+branch = '''
+{%- set id = (issue | lower ~ "-") if issue else "" -%}
+{%- set name = slug | trim | lower | replace(" ", "-") -%}
+{{ id }}{{ name[:46 - (id | length)] | trim("-") }}
+'''
+worktree_dir = '''
+{%- set id = (issue | lower ~ "-") if issue else "" -%}
+{%- set name = slug | trim | lower | replace(" ", "-") -%}
+{{ id }}{{ name[:46 - (id | length)] | trim("-") }}
+'''
+
+# PR body for `issue pr create`; `input` comes from `--pr-body`.
+# Only a human supplies `human_tldr`.
+pr_body = '''
+{%- set own = (issue_magic_word ~ " " ~ ("#" if issue and issue[0] in "0123456789" else "") ~ issue) if issue else "" -%}
+{%- set ref_lines = ((own ~ ";" ~ refs) if own else refs) | split(";") | map("trim") | reject("eq", "") | list -%}
+{%- set agent = agent_model or agent_harness -%}
+## TL;DR (human written)
+{{ human_tldr }}
+{%- if ref_lines %}
+
+---
+
+{{ ref_lines | join("\n") }}
+{%- endif %}
+{%- if agent %}
+
+---
+
+## Agent summary
+{%- endif %}
+
+{{ input | trim }}
+{%- if proof | trim %}
+
+## Proof
+
+{{ proof | trim }}
+{%- endif %}
+{%- if agent %}
+
+---
+{%- if implemented_by | trim %}
+
+Implemented by {{ implemented_by | trim }}
+{%- endif %}
+
+🤖 Generated with {{ agent_model }}{% if agent_model and agent_harness %} via {% endif %}{{ agent_harness }}
+{%- endif %}
+'''
+
+# Issue body for `devkit issue render` and `issue create`; `input` comes from
+# `--body`. Laid out as a prompt to the agent that works the issue: the task,
+# its finish line, when to stop, then what it may not touch.
+issue_body = '''
+{{- input | trim }}
+{%- if done_when | trim %}
+
+## Done when
+
+{{ done_when | trim }}
+{%- endif %}
+{%- if stop_and_ask | trim %}
+
+## Stop and ask if
+
+{{ stop_and_ask | trim }}
+{%- endif %}
+{%- if out_of_scope | trim %}
+
+## Out of scope
+
+{{ out_of_scope | trim }}
+{%- endif %}
+{%- if context | trim %}
+
+## Context
+
+{{ context | trim }}
+{%- endif %}
+'''
+
 [templates.variables]
 eval_case = "brief"
 scenario = "all"
+
+files = { required = "always", description = "Comma-separated paths to stage and commit, whitespace kept in each; paths other sessions staged stay staged" }
+commit_subject = { required = "always", description = "Conventional Commits subject: `type(scope): imperative summary`" }
+commit_body = { default = "", description = "Why the change is needed, when the subject does not say" }
+coauthors = { default = "", required = "agents", description = "`;`-separated `Name <email>` trailers. Claude Code: `<full model name, e.g. Claude Opus 5> <noreply@anthropic.com>`. Codex: `Codex <noreply@openai.com>`" }
+
+human_tldr = { default = "", description = "A human's summary, written after the PR opens; agents leave it unset" }
+proof = { default = "", required = "agents", description = "One unindented line per `Done when` item, starting with its number in the order the issue lists them (`1. test foo_refuses_gap`, `2. command X and its output`), or with no issue one line per claim the summary makes; a numbered line indented two columns or more answers nothing. Each numbered line gives the evidence that its item holds: the test that covers it, a command and its output, or a screenshot or video under `.devkit/proof/` referenced by that local path (`![after](./.devkit/proof/after.png)`, a video path alone on its line) and passed to `issue pr create --attach`" }
+
+done_when = { default = "", required = "agents", description = "Checkbox list (`- [ ] ...`) of checks that prove the issue is done: a command that passes, behaviour anyone can see. For an investigation, the deliverable and where it goes. End each item with the proof its PR must show: `(proof: test <name>)`, `(proof: command and its output)`, `(proof: screenshot)` or `(proof: video)`. `--body` holds only the task: what to change and why, as behaviour rather than steps" }
+stop_and_ask = { default = "", description = "Situations particular to this issue where the agent working it must stop and ask; being blocked and destructive actions are already covered. Leave unset when there are none" }
+out_of_scope = { default = "", description = "Adjacent work that must not happen under this issue, even when it looks related" }
+context = { default = "", description = "Links, error output, the parent and blocking issues. Attach screenshots rather than retyping them" }
+
+# Supplied by the render context in a worktree `issue setup` created; declared
+# so the templates also render outside one.
+issue = { default = "", description = "The worktree's own issue id, filled in an issue worktree; pass it only outside one" }
+issue_magic_word = { default = "Closes", description = "Keyword on the worktree's own issue line: `Refs` when this branch does not finish the issue" }
+refs = { default = "", description = "Every other issue line, `;`-separated, each with its own keyword: `Closes #12; Refs #90`" }
+
+agent_model = { default = "", required = "agents", description = "Full name of the model that did the work, e.g. `Claude Opus 5`" }
+agent_harness = { default = "", required = "agents", description = "Markdown link to the harness, e.g. `[Claude Code](https://claude.com/claude-code)`" }
+implemented_by = { default = "", description = "One prose line naming who did which part, when several agents or people did the work" }
 
 [tasks.fmt]
 description = "Format the workspace with nightly rustfmt"
