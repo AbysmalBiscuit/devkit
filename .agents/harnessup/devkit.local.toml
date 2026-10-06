@@ -57,6 +57,44 @@ reason = """Pass only a body rendered from the `issue_body` template:
   gh issue edit <number> --body-file body.md
 `devkit template show issue_body` describes every `--arg`."""
 
+# devkit has no PR edit verb to redirect to either, so these warn too.
+[harness.commands.pr-edit-body]
+programs = ["gh"]
+args = ["pr", "edit", "**", "--body*"]
+action = "warn"
+reason = """Pass only a body rendered from the `pr_body` template:
+  issue pr render --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...' | jq -r .body > body.md
+  gh pr edit <number> --body-file body.md
+`devkit template show pr_body` describes every `--arg`."""
+
+# The short spellings of `--body` and `--body-file`.
+[harness.commands.pr-edit-body-b]
+programs = ["gh"]
+args = ["pr", "edit", "**", "-b*"]
+action = "warn"
+reason = """Pass only a body rendered from the `pr_body` template:
+  issue pr render --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...' | jq -r .body > body.md
+  gh pr edit <number> --body-file body.md
+`devkit template show pr_body` describes every `--arg`."""
+
+[harness.commands.pr-edit-body-f]
+programs = ["gh"]
+args = ["pr", "edit", "**", "-F*"]
+action = "warn"
+reason = """Pass only a body rendered from the `pr_body` template:
+  issue pr render --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...' | jq -r .body > body.md
+  gh pr edit <number> --body-file body.md
+`devkit template show pr_body` describes every `--arg`."""
+
+# The GitHub MCP server a cloud session carries opens and edits PRs; their text
+# must come from `issue pr render` in the same session.
+[harness.pr_tools.github]
+servers = ["*github*"]
+tools = ["create_pull_request", "update_pull_request"]
+absent = ["pullNumber"]
+title = "title"
+body = "body"
+
 [harness.commands.sudo]
 programs = ["sudo"]
 reason = "Never run sudo. devkit has no privileged path: name the command that needs root in your final report for the user to run."
