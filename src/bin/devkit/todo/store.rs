@@ -18,7 +18,7 @@ use devkit_config::{
 };
 use devkit_todo::{
     TodoStore,
-    activity::{ActivityLog, ActivityStore, Recorded, ambassador_impl_ActivityStore, segment},
+    activity::{ActivityLog, ActivityStore, Recorded, ambassador_impl_ActivityStore},
     ambassador_impl_TodoStore,
 };
 use devkit_todo_builtin::BuiltinStore;
@@ -26,9 +26,11 @@ use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore, Trust};
 use devkit_todo_taskchampion::{
     ReplicaSource, SyncTarget, TaskchampionStore, Uuid, replica_location,
 };
-use serde::{Deserialize, Serialize, de::IntoDeserializer};
+use serde::{Deserialize, de::IntoDeserializer};
 
 use super::sync::SyncOutcome;
+use crate::database_url::{DatabaseUrl, global_ca_file};
+pub(crate) use crate::database_url::{UrlLookup, doppler_scope};
 
 /// Overrides `[todo] backend`, so a container can pick its store while the
 /// project's own config still loads.
@@ -66,17 +68,6 @@ static SESSION_END: OnceLock<Instant> = OnceLock::new();
 /// never from Doppler itself.
 pub(crate) fn end_session_within(budget: Duration) {
     let _ = SESSION_END.set(Instant::now() + budget);
-}
-
-/// How [`open_database`] finds the URL when Doppler holds it.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UrlLookup {
-    /// Ask Doppler, as a command does.
-    Doppler,
-    /// Reuse a cached URL younger than [`URL_CACHE_TTL`], else ask Doppler.
-    CachedFirst,
-    /// Reuse a cached URL however old, and never ask Doppler.
-    CachedOnly,
 }
 
 /// How long a CLI call waits for each answer from the todo database,
@@ -208,112 +199,6 @@ pub(crate) fn effective_backend(
     })
 }
 
-/// The Doppler scope a backend's `doppler_project` and `doppler_config`
-/// name, `None` without a project.
-pub(crate) fn doppler_scope(project: Option<&str>, config: Option<&str>) -> Option<DopplerScope> {
-    project.map(|project| DopplerScope {
-        project: project.to_string(),
-        config: config.map(str::to_string),
-    })
-}
-
-/// How long a hook reuses the URL Doppler last gave before asking again.
-const URL_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
-
-/// The database URL Doppler last gave for one scope, kept so hooks skip
-/// Doppler.
-#[derive(Serialize, Deserialize)]
-struct CachedUrl {
-    project: String,
-    config: Option<String>,
-    url: String,
-}
-
-/// Where the URL Doppler gave for `scope` is kept: one file per project and
-/// config, so projects on one machine never displace each other's URL. The
-/// file's modification time is the URL's age.
-fn url_cache_path(scope: &DopplerScope) -> PathBuf {
-    let mut name = segment(&scope.project);
-    if let Some(config) = &scope.config {
-        name.push('+');
-        name.push_str(&segment(config));
-    }
-    devkit_todo::state_dir()
-        .join("database-url")
-        .join(name + ".json")
-}
-
-/// The cached URL for `scope`, when one is younger than `max_age` or no
-/// `max_age` applies. A copy dated ahead of now, as after the clock was set
-/// back, counts as just written.
-fn cached_url(scope: &DopplerScope, max_age: Option<Duration>) -> Option<String> {
-    let path = url_cache_path(scope);
-    if let Some(max_age) = max_age {
-        let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
-        let age = modified.elapsed().unwrap_or(Duration::ZERO);
-        if age > max_age {
-            return None;
-        }
-    }
-    let cached: CachedUrl = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
-    (cached.project == scope.project && cached.config == scope.config).then_some(cached.url)
-}
-
-/// Keeps `url` for `scope`, readable by its owner alone. Best-effort: a
-/// cache that cannot be written leaves hooks asking Doppler.
-fn cache_url(scope: &DopplerScope, url: &str) {
-    let cached = CachedUrl {
-        project: scope.project.clone(),
-        config: scope.config.clone(),
-        url: url.to_string(),
-    };
-    let path = url_cache_path(scope);
-    let Ok(body) = serde_json::to_vec(&cached) else {
-        return;
-    };
-    let tmp = path.with_extension(format!("json.{}", std::process::id()));
-    let written = path
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| {
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-            std::io::Write::write_all(&mut options.open(&tmp)?, &body)
-        })
-        .and_then(|()| std::fs::rename(&tmp, &path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-}
-
-/// `[todo.postgres] ca_file` as the global config sets it. A project layer's
-/// is ignored: a checkout must not add a CA that the database connection
-/// trusts, as it must not move the harness log.
-pub(crate) fn global_ca_file() -> Option<PathBuf> {
-    let body = std::fs::read_to_string(devkit_common::harness::global_config_path()?).ok()?;
-    let table: toml::Table = toml::from_str(&body).ok()?;
-    let ca_file = table
-        .get("todo")?
-        .get("postgres")?
-        .get("ca_file")?
-        .as_str()?;
-    Some(expand_tilde(ca_file))
-}
-
-/// Drops the copy kept for `scope` if it still holds `url`, so a call that
-/// failed with an old URL leaves alone one another call has since refreshed.
-fn forget_url(scope: &DopplerScope, url: &str) {
-    let path = url_cache_path(scope);
-    let held = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<CachedUrl>(&text).ok());
-    if held.is_some_and(|held| held.url == url) {
-        let _ = std::fs::remove_file(&path);
-    }
-}
-
 /// The todo database `config` and [`DATABASE_VAR`] name, opened with `wait`
 /// and not yet connected, and where its URL resolved from. A URL that is
 /// missing or does not parse is an error naming the variable, never the URL.
@@ -332,39 +217,32 @@ pub(crate) fn open_database(
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
     );
-    let from_env = std::env::var(DATABASE_VAR).is_ok_and(|url| !url.trim().is_empty());
-    let cached = match (&scope, lookup) {
-        (Some(scope), UrlLookup::CachedFirst) if !from_env => {
-            cached_url(scope, Some(URL_CACHE_TTL))
-        }
-        (Some(scope), UrlLookup::CachedOnly) if !from_env => cached_url(scope, None),
-        _ => None,
-    };
-    let from_cache = cached.is_some();
-    let (url, source) = match cached {
-        Some(url) => (Some(url), Source::Doppler),
-        None => {
-            let ask = scope.as_ref().filter(|_| lookup != UrlLookup::CachedOnly);
-            let [(url, source)] = secrets::resolve_many(&[DATABASE_VAR], ask);
-            (url, source)
-        }
-    };
-    let Some(url) = url else {
-        return (Err(format!("{DATABASE_VAR} is not set")), source);
+    let cache = database_url();
+    let resolved = cache.resolve(scope.as_ref(), lookup);
+    let Some(url) = resolved.url else {
+        return (Err(format!("{DATABASE_VAR} is not set")), resolved.source);
     };
     let trust = Trust {
-        ca_file: global_ca_file(),
+        ca_file: global_ca_file("todo"),
     };
     let db = Database::new(&url, wait, &trust).map_err(|e| format!("{DATABASE_VAR}: {e:#}"));
-    if let (Ok(db), Source::Doppler, Some(scope)) = (&db, &source, &scope) {
+    if let (Ok(db), Source::Doppler, Some(scope)) = (&db, &resolved.source, &scope) {
         // Only a fresh answer resets the copy's age; reusing it must not.
-        if !from_cache {
-            cache_url(scope, &url);
+        if !resolved.from_cache {
+            cache.remember(scope, &url);
         }
         let scope = scope.clone();
-        db.on_connect_failure(move || forget_url(&scope, &url));
+        db.on_connect_failure(move || cache.forget(&scope, &url));
     }
-    (db, source)
+    (db, resolved.source)
+}
+
+/// The todo database's URL and where Doppler's answers for it are kept.
+fn database_url() -> DatabaseUrl {
+    DatabaseUrl {
+        var: DATABASE_VAR,
+        cache_dir: devkit_todo::state_dir().join("database-url"),
+    }
 }
 
 /// [`open_database`], resolved and connected once per Doppler scope, CA file
@@ -378,7 +256,7 @@ fn database(config: &PostgresConfig, opener: Opener) -> Arc<Database> {
     let key = (
         config.doppler_project.clone(),
         config.doppler_config.clone(),
-        global_ca_file(),
+        global_ca_file("todo"),
         wait,
     );
     let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());

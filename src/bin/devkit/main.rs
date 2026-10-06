@@ -10,6 +10,7 @@ mod auth;
 mod baseline;
 mod brief;
 mod config;
+mod database_url;
 mod docs;
 mod doctor;
 mod harness;
