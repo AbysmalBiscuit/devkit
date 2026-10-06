@@ -1,11 +1,11 @@
-//! The JSON index `repo-rules-agent` writes: where it lives, reading it, and
-//! the rule source over it.
+//! The JSON index `repo-rules-agent` writes, the rule source over it, and the
+//! cache directory where the extractor keeps a repository's index.
 //!
-//! The path is the one `repo-rules-agent` writes, so an index built by the
-//! extractor is found with no configuration. The hashed repository path is the
-//! main worktree rather than the current checkout: every devkit branch lives in
-//! its own worktree, and an index built once in the main checkout would
-//! otherwise be invisible from every worktree where the work happens.
+//! The cache directory is the one `repo-rules-agent` writes, so an index built
+//! by the extractor is found with no configuration. The hashed repository path
+//! is the main worktree rather than the current checkout: every devkit branch
+//! lives in its own worktree, and an index built once in the main checkout
+//! would otherwise be invisible from every worktree where the work happens.
 
 use std::path::{Path, PathBuf};
 
@@ -26,12 +26,6 @@ impl FileSource {
     /// The index at `path`.
     pub fn at(path: PathBuf) -> FileSource {
         FileSource { path }
-    }
-
-    /// The index `[rules] index` names, else the one the extractor writes for
-    /// `repo`.
-    pub fn configured(index: Option<&str>, repo: &Path) -> FileSource {
-        FileSource::at(index.map_or_else(|| default_index_path(repo), PathBuf::from))
     }
 }
 
@@ -55,16 +49,15 @@ impl RuleSource for FileSource {
     fn location(&self) -> String {
         self.path.display().to_string()
     }
+
+    fn kind(&self) -> &'static str {
+        "json"
+    }
 }
 
 /// The cache directory name for a repository, as `rules/paths.py` builds it.
 pub fn cache_dir_name(repo: &Path) -> String {
-    // Python hashes `str(Path.resolve())`. `canonicalize` agrees on Unix and
-    // does not on Windows, where it returns a `\\?\C:\...` verbatim path that
-    // `Path.resolve()` never produces, so the digest would differ for every
-    // repository. Strip the prefix before hashing.
-    let resolved = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
-    let resolved = strip_verbatim(&resolved);
+    let resolved = resolved(repo);
     let digest = ring::digest::digest(&ring::digest::SHA256, resolved.to_string_lossy().as_bytes());
     let hex: String = digest.as_ref()[..4]
         .iter()
@@ -96,6 +89,16 @@ pub fn cache_dir_name(repo: &Path) -> String {
         &basename
     };
     format!("{basename}-{hex}")
+}
+
+/// `path` as Python's `Path.resolve()` spells it, which is how the extractor
+/// names a repository.
+///
+/// `canonicalize` agrees on Unix and does not on Windows, where it returns a
+/// `\\?\C:\...` verbatim path that `Path.resolve()` never produces, so the
+/// prefix is stripped.
+pub(crate) fn resolved(path: &Path) -> PathBuf {
+    strip_verbatim(&path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
 }
 
 /// A Windows `\\?\C:\...` path as `C:\...`. A no-op everywhere else.
@@ -134,9 +137,9 @@ fn cache_root() -> PathBuf {
     }
 }
 
-/// Where the extractor would have written this repository's index.
-pub fn default_index_path(repo: &Path) -> PathBuf {
-    cache_root().join(cache_dir_name(repo)).join("index.json")
+/// The directory where the extractor keeps this repository's index.
+pub fn cache_dir(repo: &Path) -> PathBuf {
+    cache_root().join(cache_dir_name(repo))
 }
 
 /// The index at `path` without its removed rules, or `None` when it cannot be

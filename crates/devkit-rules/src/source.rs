@@ -1,7 +1,7 @@
 //! Where rules are read from and edited. `[rules] source` picks the member of
 //! [`Source`], and every read and edit goes through [`RuleSource`].
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ambassador::Delegate;
 use anyhow::Result;
@@ -10,9 +10,10 @@ use devkit_config::{RulesConfig, RulesPostgresConfig, RulesSource};
 
 use crate::{
     edit::Fields,
-    index::FileSource,
+    index::{FileSource, cache_dir},
     model::RuleIndex,
     postgres::{Database, PostgresSource},
+    sqlite::{self, SqliteSource},
 };
 
 /// A store of rules.
@@ -39,13 +40,19 @@ pub trait RuleSource {
     /// Where the rules live, for messages and `devkit doctor`. Never carries
     /// a credential.
     fn location(&self) -> String;
+    /// What kind of store this is, for `devkit doctor`.
+    fn kind(&self) -> &'static str;
 }
 
-/// Every rule source devkit can read.
+/// Every rule store devkit can read.
 #[derive(Delegate)]
 #[delegate(RuleSource)]
 pub enum Source {
-    File(FileSource),
+    /// The legacy JSON index.
+    Json(FileSource),
+    /// The SQLite store the extractor writes by default.
+    Sqlite(SqliteSource),
+    /// The shared Postgres store.
     Postgres(PostgresSource),
 }
 
@@ -58,26 +65,49 @@ impl Source {
         checkout: &Checkout,
         database: impl FnOnce(&RulesPostgresConfig) -> Database,
     ) -> Source {
+        let repo = repo_of(checkout);
         match settings.source {
-            RulesSource::File => Source::File(FileSource::configured(
-                settings.index.as_deref(),
-                repo_of(checkout),
-            )),
+            RulesSource::File => match settings.index.as_deref() {
+                Some(path) => Source::at(PathBuf::from(path), repo),
+                None => Source::cached(repo),
+            },
             RulesSource::Postgres => Source::Postgres(PostgresSource::new(
                 database(&settings.postgres),
                 settings.postgres.repository.as_deref(),
-                repo_of(checkout),
+                repo,
             )),
         }
     }
 
+    /// The store in the file at `path`, whichever kind it is.
+    pub fn at(path: PathBuf, repo: &Path) -> Source {
+        if sqlite::is_store(&path) {
+            Source::Sqlite(SqliteSource::at(path, repo))
+        } else {
+            Source::Json(FileSource::at(path))
+        }
+    }
+
+    /// The store the extractor keeps for `repo`: its SQLite store when there
+    /// is one, as the extractor's own `cache list` prefers it, else the JSON
+    /// index.
+    fn cached(repo: &Path) -> Source {
+        let dir = cache_dir(repo);
+        let store = dir.join("index.sqlite");
+        if store.is_file() {
+            Source::Sqlite(SqliteSource::at(store, repo))
+        } else {
+            Source::Json(FileSource::at(dir.join("index.json")))
+        }
+    }
+
     /// Whether there are rules to read, found as cheaply as this source
-    /// allows: the file source loads its index, the Postgres source only
+    /// allows: a file source loads its rules, the Postgres source only
     /// checks that the store answers and holds the repository. A failure is
     /// one line on stderr and reads as no rules, as with [`RuleSource::load`].
     pub fn present(&self) -> bool {
         match self {
-            Source::File(_) => self.load().is_some(),
+            Source::Json(_) | Source::Sqlite(_) => self.load().is_some(),
             Source::Postgres(source) => source.check().map_err(|e| report(&e)).is_ok(),
         }
     }

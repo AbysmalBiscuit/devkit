@@ -36,7 +36,7 @@ fn sources(dir: &Path) -> Option<(TestStore, Vec<(&'static str, Source)>)> {
     let db = Database::new(&store.url, Trust::default(), Duration::from_secs(10)).unwrap();
     let postgres = PostgresSource::new(db, Some(&repo), Path::new("/srv/acme"));
     Some((store, vec![
-        ("file", Source::File(FileSource::at(index))),
+        ("file", Source::Json(FileSource::at(index))),
         ("postgres", Source::Postgres(postgres)),
     ]))
 }
