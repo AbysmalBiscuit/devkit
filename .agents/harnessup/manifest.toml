@@ -39,6 +39,13 @@ id = "agent-guard@agent-guard"
 [[plugin]]
 id = "superpowers@superpowers-marketplace"
 
+# devkit-mcp and the other command names are links devkit makes when it runs,
+# and Claude starts the plugin's MCP server before any session hook runs it.
+[[tool]]
+name = "devkit command links"
+install = "devkit install-links"
+check = "command -v devkit-mcp"
+
 [[file]]
 source = "AGENTS.local.md"
 target = "AGENTS.local.md"
