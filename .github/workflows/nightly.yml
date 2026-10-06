@@ -6,10 +6,7 @@ name: nightly
 on:
   push:
     branches: [main]
-  pull_request:
-    paths:
-      - .github/workflows/nightly.yml
-      - .github/nightly/**
+  # On any other branch, builds every target and publishes nothing.
   workflow_dispatch:
 
 permissions:
@@ -20,15 +17,9 @@ concurrency:
   group: nightly-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-  GH_TOKEN: ${{ github.token }}
-  GH_REPO: ${{ github.repository }}
-  PUBLISH: ${{ github.ref == 'refs/heads/main' }}
-
 jobs:
   release:
-    name: point nightly at this commit
+    name: release
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -37,14 +28,18 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - id: version
         run: |
           base=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "devkit") | .version')
           echo "version=${base}-nightly+${GITHUB_SHA::7}" >>"$GITHUB_OUTPUT"
       - name: Move the nightly release
-        if: env.PUBLISH == 'true'
+        if: github.ref == 'refs/heads/main'
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           # A re-run of an older commit's workflow must not move nightly back.
           if [ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" != "$GITHUB_SHA" ]; then
@@ -68,13 +63,11 @@ jobs:
           else
             gh release create nightly --target "$GITHUB_SHA" --prerelease --latest=false --title "nightly ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
           fi
-          gh release upload nightly .github/nightly/devkit-nightly-installer.sh --clobber
+          .github/nightly/publish.sh .github/nightly/devkit-nightly-installer.sh
 
-  build:
-    name: build (${{ matrix.target }})
+  target:
+    name: ${{ matrix.target }}
     needs: release
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
     permissions:
       contents: write
     strategy:
@@ -87,60 +80,9 @@ jobs:
           - { target: aarch64-apple-darwin, runner: macos-latest }
           - { target: x86_64-apple-darwin, runner: macos-latest, cross: true }
           - { target: x86_64-pc-windows-msvc, runner: windows-latest }
-    env:
-      DEVKIT_BUILD_VERSION: ${{ needs.release.outputs.version }}
-      # sccache keys each crate on the env vars rustc reports reading, so a new
-      # DEVKIT_BUILD_VERSION rebuilds the crate that reads it and nothing else.
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: sccache
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: mozilla-actions/sccache-action@v0.0.11
-      - name: Install musl tools
-        if: endsWith(matrix.target, '-musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo build --locked --profile dist --target ${{ matrix.target }}
-      - name: Check the reported version
-        if: ${{ !matrix.cross }}
-        run: |
-          out=$("target/${{ matrix.target }}/dist/devkit" --version)
-          echo "$out"
-          [ "$out" = "devkit ${DEVKIT_BUILD_VERSION}" ]
-      - name: Package
-        id: package
-        run: |
-          target=${{ matrix.target }}
-          name="devkit-${target}"
-          mkdir "$name"
-          case "$target" in
-            *windows*) exe=.exe archive="${name}.zip" ;;
-            *) exe='' archive="${name}.tar.xz" ;;
-          esac
-          cp "target/${target}/dist/devkit${exe}" "target/${target}/dist/devkitd${exe}" README.md LICENSE CHANGELOG.md "$name/"
-          case "$archive" in
-            *.zip) 7z a -bd "$archive" "$name" >/dev/null ;;
-            *) tar -cJf "$archive" "$name" ;;
-          esac
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$archive" >"${archive}.sha256"
-          else
-            shasum -a 256 "$archive" >"${archive}.sha256"
-          fi
-          cat "${archive}.sha256"
-          echo "archive=${archive}" >>"$GITHUB_OUTPUT"
-      - name: Upload to the nightly release
-        if: env.PUBLISH == 'true'
-        env:
-          ARCHIVE: ${{ steps.package.outputs.archive }}
-        run: |
-          if [ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" != "$GITHUB_SHA" ]; then
-            echo "::notice::main has moved past ${GITHUB_SHA}; leaving nightly alone"
-            exit 0
-          fi
-          gh release upload nightly "$ARCHIVE" "${ARCHIVE}.sha256" --clobber
+    uses: ./.github/workflows/nightly-target.yml
+    with:
+      target: ${{ matrix.target }}
+      runner: ${{ matrix.runner }}
+      cross: ${{ matrix.cross || false }}
+      version: ${{ needs.release.outputs.version }}
