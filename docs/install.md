@@ -18,6 +18,17 @@ Pin a specific release by swapping `latest/download` for `download/v0.8.0`. Preb
 
 The installer places only the binaries. To use devkit inside a coding agent, register the plugin afterward. See [agents.md](agents.md).
 
+## Nightly
+
+Every merge to `main` rebuilds the `nightly` prerelease, so an unreleased change is one command away. It installs into the same directory as the release installer, replacing whichever build is there:
+
+```sh
+# Linux / macOS / WSL
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/AbysmalBiscuit/devkit/releases/download/nightly/devkit-nightly-installer.sh | sh
+```
+
+`devkit --version` then reports the version with a `-nightly+<commit>` suffix naming the commit it was built from. The plugin's binary bootstrap treats a nightly as a build it did not install and leaves it alone. Running the release installer goes back to the stable release; delete `~/.local/state/devkit/bootstrap-version` as well to let the bootstrap manage the binaries again. Windows archives are on the [nightly release](https://github.com/AbysmalBiscuit/devkit/releases/tag/nightly) for manual download.
+
 ## From source
 
 A source build needs a C compiler alongside the Rust toolchain. The shell-command analyzer links tree-sitter grammars, and those grammars are C.
