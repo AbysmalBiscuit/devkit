@@ -126,7 +126,7 @@ pub fn run(cli: HookCli) -> Result<()> {
             }
             todo::release(p.session_holder(), checkout, cwd);
             edit::release_session(p);
-            clear_issue_receipts(p, checkout);
+            clear_receipts(p, checkout);
             let settings = record_in(p, cli.event, checkout, cwd);
             if settings.auto_prune && settings.enabled {
                 // A retention cap nothing enforces is not a promise. Fail-open:
@@ -194,8 +194,8 @@ pub fn run(cli: HookCli) -> Result<()> {
 
 /// Delete the ending session's `issue render` and `issue pr render` receipts
 /// in the payload's checkout. Best-effort: a receipt left behind is swept by a
-/// later render.
-fn clear_issue_receipts(payload: &Payload, checkout: &Checkout) {
+/// later render of the same kind.
+fn clear_receipts(payload: &Payload, checkout: &Checkout) {
     if let (Some(session), Some(root)) = (
         payload.session_id(),
         crate::issue::receipt::store_root(checkout),
