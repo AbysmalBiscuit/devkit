@@ -638,7 +638,7 @@
         },
         "issue_tools": {
           "additionalProperties": {
-            "$ref": "#/$defs/IssueToolRule"
+            "$ref": "#/$defs/RenderedToolRule"
           },
           "description": "MCP tools that create or edit issues, whose title and body must come\nfrom `devkit issue render`. Merged across config layers by name.\nEnforces on its own presence, independent of `enforce_commands`.",
           "type": "object"
@@ -655,6 +655,13 @@
             "prompt": null
           },
           "description": "What devkit records about the events a harness sends it."
+        },
+        "pr_tools": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RenderedToolRule"
+          },
+          "description": "MCP tools that open or edit PRs, whose title and body must come from\n`devkit issue pr render`. Merged across config layers by name.\nEnforces on its own presence, independent of `enforce_commands`.",
+          "type": "object"
         },
         "script_files": {
           "$ref": "#/$defs/PolicyAction",
@@ -786,69 +793,6 @@
           "description": "Fired by the first agent session in a worktree `issue setup` created,\nonce per worktree, in the background. `issue pr checkout` worktrees\nnever fire it. List the states work starts from in `from`: `[\"*\"]` lets\na second worktree pull an issue back from review."
         }
       },
-      "type": "object"
-    },
-    "IssueToolRule": {
-      "description": "One `[harness.issue_tools.<name>]` entry: an MCP tool that creates or edits\nissues, whose title and body the pre-tool-use hook allows only when\n`devkit issue render` produced them in the same agent session.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\n```",
-      "properties": {
-        "absent": {
-          "default": [],
-          "description": "Input keys that must be missing or null for the call to count as a\ncreate. Any other call is an update.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "body": {
-          "description": "The input key holding the issue's body.",
-          "type": "string"
-        },
-        "body_patch": {
-          "default": [],
-          "description": "Input keys that edit the body without carrying it whole. A call\ncarrying one is denied, since no render can vouch for the result.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "enabled": {
-          "default": true,
-          "description": "`false` turns off an entry a parent layer declared.",
-          "type": "boolean"
-        },
-        "equals": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "description": "Input keys that must equal the given string for the call to count as a\ncreate.",
-          "type": "object"
-        },
-        "servers": {
-          "default": [],
-          "description": "MCP server names this entry covers, matched case-insensitively; `*`\nmatches any run of characters. Empty matches any server.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "title": {
-          "description": "The input key holding the issue's title.",
-          "type": "string"
-        },
-        "tools": {
-          "default": [],
-          "description": "MCP tool names this entry covers, matched exactly. Empty matches\nnothing.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "title",
-        "body"
-      ],
       "type": "object"
     },
     "LayerMarker": {
@@ -1224,6 +1168,69 @@
           "type": "string"
         }
       ]
+    },
+    "RenderedToolRule": {
+      "description": "One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits issues or PRs, whose title and body the\npre-tool-use hook allows only when `devkit issue render` (an issue) or\n`devkit issue pr render` (a PR) produced them in the same agent session.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\", \"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
+      "properties": {
+        "absent": {
+          "default": [],
+          "description": "Input keys that must be missing or null for the call to count as a\ncreate. Any other call is an update.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "body": {
+          "description": "The input key holding the body.",
+          "type": "string"
+        },
+        "body_patch": {
+          "default": [],
+          "description": "Input keys that edit the body without carrying it whole. A call\ncarrying one is denied, since no render can vouch for the result.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "`false` turns off an entry a parent layer declared.",
+          "type": "boolean"
+        },
+        "equals": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Input keys that must equal the given string for the call to count as a\ncreate.",
+          "type": "object"
+        },
+        "servers": {
+          "default": [],
+          "description": "MCP server names this entry covers, matched case-insensitively; `*`\nmatches any run of characters. Empty matches any server.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "The input key holding the title.",
+          "type": "string"
+        },
+        "tools": {
+          "default": [],
+          "description": "MCP tool names this entry covers, matched exactly. Empty matches\nnothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ],
+      "type": "object"
     },
     "Required": {
       "description": "Who must supply an `--arg` even though a default exists. `Never` is the\nabsence of a marking, not a licence to omit: the derived rule (an arg with\nno default is required) is a floor this enum sits on top of and cannot\nlower. `Never` is therefore meaningful only as a task-level override of a\nvariable-level marking. Who counts as an agent is `DEVKIT_CALLER`, then a\nharness session variable, then a non-terminal stdin.",

@@ -1,12 +1,13 @@
 //! The MCP path of `pre-tool-use`: an issue write through a tracker's MCP tool
 //! is allowed only when its title and body are text `devkit issue render`
-//! produced in the same agent session.
+//! produced in the same agent session, and a PR write through a forge's MCP
+//! tool only when they are text `devkit issue pr render` produced.
 
 use std::{collections::BTreeMap, io::Write, path::Path, sync::OnceLock};
 
 use anyhow::Result;
 use devkit_common::{caller::Caller, harness, required, vcs::Checkout};
-use devkit_config::IssueToolRule;
+use devkit_config::RenderedToolRule;
 use pabal::Tool;
 use serde_json::Value;
 
@@ -15,12 +16,40 @@ use super::{
     print_envelope,
 };
 use crate::issue::{
+    pr,
     receipt::{self, Field, Kind},
     render,
 };
 
 const PANIC_REASON: &str =
-    "devkit issue guard: internal failure while checking an issue write (fail-closed)";
+    "devkit issue guard: internal failure while checking an issue or PR write (fail-closed)";
+
+/// What a matched rule writes, and the render whose receipts vouch for it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Gate {
+    kind: Kind,
+    /// The thing written, with its article: "an issue".
+    written: &'static str,
+    noun: &'static str,
+    render: &'static str,
+    flags: &'static str,
+}
+
+pub(super) const ISSUE: Gate = Gate {
+    kind: Kind::Issue,
+    written: "an issue",
+    noun: "issue",
+    render: "devkit issue render",
+    flags: "--title ... [--body ...]",
+};
+
+pub(super) const PR: Gate = Gate {
+    kind: Kind::Pr,
+    written: "a PR",
+    noun: "PR",
+    render: "devkit issue pr render",
+    flags: "--pr-title ... [--pr-body ...]",
+};
 
 #[derive(Debug, PartialEq)]
 pub(super) enum Verdict {
@@ -31,7 +60,9 @@ pub(super) enum Verdict {
 /// What the decision needs beyond the call itself, resolved by the caller so
 /// `decide` stays free of IO.
 pub(super) struct Context<'a> {
-    /// The required `--arg`s the issue templates ask of an agent, appended to
+    /// What the matched rule writes.
+    pub gate: Gate,
+    /// The required `--arg`s the gate's templates ask of an agent, appended to
     /// a missing-receipt denial. Called only for that denial, since building
     /// it loads the config a second time.
     pub hint: &'a dyn Fn() -> String,
@@ -72,53 +103,64 @@ fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: 
         return Verdict::Allow;
     };
     let (rules, _) = harness::resolve_rules_in(checkout, cwd);
-    let Some(rule) = rules
-        .issue_tools
-        .values()
-        .find(|r| r.enabled && r.matches(server, tool))
+    let Some((rule, gate)) = [(&rules.issue_tools, ISSUE), (&rules.pr_tools, PR)]
+        .into_iter()
+        .find_map(|(table, gate)| {
+            table
+                .values()
+                .find(|r| r.enabled && r.matches(server, tool))
+                .map(|r| (r, gate))
+        })
     else {
         return Verdict::Allow;
     };
     let _ = matched.set(());
+    let render = gate.render;
 
     let Some(session) = payload.session_id() else {
         return Verdict::Deny(format!(
-            "devkit issue guard: this `{tool}` call writes an issue, and the payload carries \
-             no session id to check its `devkit issue render` receipts against."
+            "devkit issue guard: this `{tool}` call writes {}, and the payload carries no \
+             session id to check its `{render}` receipts against.",
+            gate.written
         ));
     };
     if !receipt::valid_session(session) {
         return Verdict::Deny(format!(
             "devkit issue guard: session id `{session}` is not usable as a directory name, so \
-             no `devkit issue render` receipt can match it."
+             no `{render}` receipt can match it."
         ));
     }
     let Some(root) = receipt::store_root(checkout) else {
         return Verdict::Deny(format!(
-            "devkit issue guard: {} is not inside a git checkout, where `devkit issue render` \
-             keeps its receipts.",
+            "devkit issue guard: {} is not inside a git checkout, where `{render}` keeps its \
+             receipts.",
             cwd.display()
         ));
     };
     let ctx = Context {
-        hint: &|| required_hint(checkout, cwd),
-        session_seen: receipt::session_dir(&root, Kind::Issue, session).is_dir(),
+        gate,
+        hint: &|| required_hint(checkout, cwd, gate.kind),
+        session_seen: receipt::session_dir(&root, gate.kind, session).is_dir(),
     };
     let server = server.unwrap_or(tool);
     decide(rule, server, tool, input, &ctx, &|field, text| {
-        receipt::has(&root, Kind::Issue, session, field, text)
+        receipt::has(&root, gate.kind, session, field, text)
     })
     .unwrap_or_else(|e| Verdict::Deny(format!("devkit issue guard: {e:#}")))
 }
 
-/// The `--arg`s the issue templates require of an agent, as a sentence to
+/// The `--arg`s the templates of `kind` require of an agent, as a sentence to
 /// append to a denial, or empty when none are required or the config cannot
 /// say.
-fn required_hint(checkout: &Checkout, cwd: &Path) -> String {
+fn required_hint(checkout: &Checkout, cwd: &Path, kind: Kind) -> String {
     let Ok((cfg, _)) = devkit_common::config::resolve_in(checkout, None, cwd) else {
         return String::new();
     };
-    let missing = match render::missing(&cfg, &BTreeMap::new(), Caller::Agent) {
+    let missing = match kind {
+        Kind::Issue => render::missing(&cfg, &BTreeMap::new(), Caller::Agent),
+        Kind::Pr => pr::render::missing(&cfg, &BTreeMap::new(), Caller::Agent),
+    };
+    let missing = match missing {
         Ok(m) if !m.is_empty() => m,
         _ => return String::new(),
     };
@@ -143,17 +185,24 @@ fn required_hint(checkout: &Checkout, cwd: &Path) -> String {
 /// and the body, a missing one as empty text; an update checks only the ones
 /// it carries, and refuses a `body_patch` edit outright.
 pub(super) fn decide(
-    rule: &IssueToolRule,
+    rule: &RenderedToolRule,
     server: &str,
     tool: &str,
     input: &Value,
     ctx: &Context<'_>,
     receipt: &dyn Fn(Field, &str) -> Result<bool>,
 ) -> Result<Verdict> {
+    let Gate {
+        written,
+        noun,
+        render,
+        flags,
+        ..
+    } = ctx.gate;
     if !input.is_object() {
         return Ok(Verdict::Deny(format!(
             "This `{server}` `{tool}` call's input is not a JSON object, so its `{}` and `{}` \
-             cannot be checked against `devkit issue render`.",
+             cannot be checked against `{render}`.",
             rule.title, rule.body
         )));
     }
@@ -165,8 +214,8 @@ pub(super) fn decide(
             .find(|k| input.get(k.as_str()).is_some_and(|v| !v.is_null()))
     {
         return Ok(Verdict::Deny(format!(
-            "This call edits the issue body in place with `{patch}`. Render the whole new body \
-             with `devkit issue render` and pass it as `{}`.",
+            "This call edits the {noun} body in place with `{patch}`. Render the whole new body \
+             with `{render}` and pass it as `{}`.",
             rule.body
         )));
     }
@@ -177,7 +226,7 @@ pub(super) fn decide(
             Some(Value::String(s)) => (s.as_str(), false),
             Some(_) => {
                 return Ok(Verdict::Deny(format!(
-                    "`{key}` is not a string, so `devkit issue render` cannot have produced it."
+                    "`{key}` is not a string, so `{render}` cannot have produced it."
                 )));
             }
         };
@@ -188,23 +237,22 @@ pub(super) fn decide(
             };
             let opening = if absent {
                 format!(
-                    "This call creates an issue with no `{key}`. Pass the `{output}` output of \
-                     `devkit issue render` as `{key}`."
+                    "This call creates {written} with no `{key}`. Pass the `{output}` output \
+                     of `{render}` as `{key}`."
                 )
             } else if ctx.session_seen {
                 format!(
-                    "This call's `{key}` differs from what `devkit issue render` produced in \
-                     this session."
+                    "This call's `{key}` differs from what `{render}` produced in this session."
                 )
             } else {
                 format!(
-                    "This `{server}` `{tool}` call writes an issue `{key}` that `devkit issue \
-                     render` did not produce in this session."
+                    "This `{server}` `{tool}` call writes {written} `{key}` that `{render}` did \
+                     not produce in this session."
                 )
             };
             return Ok(Verdict::Deny(format!(
-                "{opening} Run `devkit issue render --title ... [--body ...]` and pass its \
-                 `title` output unchanged as `{}` and its `body` output as `{}`.{}",
+                "{opening} Run `{render} {flags}` and pass its `title` output unchanged as `{}` \
+                 and its `body` output as `{}`.{}",
                 rule.title,
                 rule.body,
                 (ctx.hint)()
@@ -222,7 +270,7 @@ mod tests {
 
     use super::*;
 
-    fn linear() -> IssueToolRule {
+    fn linear() -> RenderedToolRule {
         toml::from_str(
             "servers = [\"*linear*\"]\ntools = [\"save_issue\"]\nabsent = [\"id\"]\n\
              title = \"title\"\nbody = \"description\"\nbody_patch = [\"patch\"]\n",
@@ -230,7 +278,7 @@ mod tests {
         .unwrap()
     }
 
-    fn github() -> IssueToolRule {
+    fn github() -> RenderedToolRule {
         toml::from_str(
             "servers = [\"*github*\"]\ntools = [\"issue_write\"]\n\
              equals = { method = \"create\" }\ntitle = \"title\"\nbody = \"body\"\n",
@@ -238,10 +286,11 @@ mod tests {
         .unwrap()
     }
 
-    fn run(rule: &IssueToolRule, input: Value, receipted: &[(Field, &str)]) -> Verdict {
+    fn run(rule: &RenderedToolRule, input: Value, receipted: &[(Field, &str)]) -> Verdict {
         let set: HashSet<(Field, String)> =
             receipted.iter().map(|(f, t)| (*f, t.to_string())).collect();
         let ctx = Context {
+            gate: ISSUE,
             hint: &String::new,
             session_seen: false,
         };
@@ -322,6 +371,7 @@ mod tests {
     #[test]
     fn a_rendered_session_reports_the_field_as_differing() {
         let ctx = Context {
+            gate: ISSUE,
             hint: &String::new,
             session_seen: true,
         };

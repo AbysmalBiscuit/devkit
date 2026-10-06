@@ -15,8 +15,8 @@ pub use layers::{
 pub use todo::{RoleConfig, ScopeConfig};
 pub mod harness;
 pub use harness::{
-    AppMatch, CommandRule, Fidelity, HarnessSection, IssueToolRule, LogSection, PolicyAction,
-    PromptFidelity, RuleAction, Severity, ShellSetting, wildcard_matches,
+    AppMatch, CommandRule, Fidelity, HarnessSection, LogSection, PolicyAction, PromptFidelity,
+    RenderedToolRule, RuleAction, Severity, ShellSetting, wildcard_matches,
 };
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]

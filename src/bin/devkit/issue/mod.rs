@@ -14,7 +14,7 @@ mod event;
 mod hooks;
 mod info;
 mod info_cache;
-mod pr;
+pub(crate) mod pr;
 mod preserve;
 mod prs;
 pub(crate) mod receipt;

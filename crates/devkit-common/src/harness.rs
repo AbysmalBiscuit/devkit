@@ -7,7 +7,7 @@ use std::{
 };
 
 use devkit_config::{
-    AppMatch, CommandRule, HarnessSection, IssueToolRule, PolicyAction, ShellSetting,
+    AppMatch, CommandRule, HarnessSection, PolicyAction, RenderedToolRule, ShellSetting,
 };
 use serde::de::DeserializeOwned;
 
@@ -131,7 +131,8 @@ impl Default for HarnessPolicy {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct HarnessRules {
     pub commands: BTreeMap<String, CommandRule>,
-    pub issue_tools: BTreeMap<String, IssueToolRule>,
+    pub issue_tools: BTreeMap<String, RenderedToolRule>,
+    pub pr_tools: BTreeMap<String, RenderedToolRule>,
     pub app_match: AppMatch,
     pub policy: HarnessPolicy,
 }
@@ -237,37 +238,47 @@ pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<Stri
         },
     }
 
-    let mut issue_tools = BTreeMap::new();
-    match merged.get("issue_tools") {
-        None => {}
-        Some(v) => match v.as_table() {
-            Some(table) => {
-                for (name, value) in table {
-                    match value.clone().try_into::<IssueToolRule>() {
-                        Ok(rule) => {
-                            issue_tools.insert(name.clone(), rule);
-                        }
-                        Err(e) => {
-                            warnings.push(format!("skipping `[harness.issue_tools.{name}]`: {e}"))
-                        }
-                    }
-                }
-            }
-            None => warnings.push(format!(
-                "ignoring `[harness.issue_tools]`: expected a table, found {}",
-                v.type_str()
-            )),
-        },
-    }
+    let issue_tools = rendered_tools(&merged, "issue_tools", &mut warnings);
+    let pr_tools = rendered_tools(&merged, "pr_tools", &mut warnings);
     (
         HarnessRules {
             commands,
             issue_tools,
+            pr_tools,
             app_match,
             policy,
         },
         warnings,
     )
+}
+
+/// The entries of the merged `[harness.<table>]`, skipping each one that does
+/// not parse with a warning.
+fn rendered_tools(
+    merged: &toml::Table,
+    table: &str,
+    warnings: &mut Vec<String>,
+) -> BTreeMap<String, RenderedToolRule> {
+    let mut rules = BTreeMap::new();
+    let Some(v) = merged.get(table) else {
+        return rules;
+    };
+    let Some(entries) = v.as_table() else {
+        warnings.push(format!(
+            "ignoring `[harness.{table}]`: expected a table, found {}",
+            v.type_str()
+        ));
+        return rules;
+    };
+    for (name, value) in entries {
+        match value.clone().try_into::<RenderedToolRule>() {
+            Ok(rule) => {
+                rules.insert(name.clone(), rule);
+            }
+            Err(e) => warnings.push(format!("skipping `[harness.{table}.{name}]`: {e}")),
+        }
+    }
+    rules
 }
 
 /// Whether a merged rule table set `programs` at all. An explicit empty list is

@@ -7,6 +7,7 @@ use anyhow::{Result, bail};
 use devkit_common::{
     caller::Caller,
     record::IssueRecord,
+    required::Missing,
     vcs::{Vcs, VersionControl},
 };
 use devkit_config::{Config, Templates};
@@ -16,7 +17,10 @@ use crate::{
     issue::{
         receipt,
         render::Rendered,
-        review::{PR_CONTEXT_KEYS, check_required, parse_args, render_review, with_fields},
+        review::{
+            PR_CONTEXT_KEYS, check_required, missing_required, parse_args, render_review,
+            with_fields,
+        },
     },
     template::VarArgs,
 };
@@ -28,6 +32,23 @@ pub(super) fn require_pr_title(title: &str) -> Result<()> {
         bail!("--pr-title is required: the pr_title template rendered empty");
     }
     Ok(())
+}
+
+/// The required args the `pr_title` and `pr_body` templates read that `given`
+/// does not supply.
+pub(crate) fn missing(
+    cfg: &Config,
+    given: &BTreeMap<String, String>,
+    caller: Caller,
+) -> Result<Vec<Missing>> {
+    let tmpls = &cfg.templates;
+    missing_required(
+        cfg,
+        &[tmpls.pr_title(), tmpls.pr_body()],
+        PR_CONTEXT_KEYS,
+        given,
+        caller,
+    )
 }
 
 /// The values a PR's templates render with: the declared defaults under
