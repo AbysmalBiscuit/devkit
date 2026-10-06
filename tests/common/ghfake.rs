@@ -226,6 +226,15 @@ github = "sweeper[bot]"
         .expect("write issue record");
     }
 
+    /// The value that followed `flag` in the last `gh pr create`, byte for
+    /// byte.
+    pub fn created_pr_arg(&self, flag: &str) -> Option<String> {
+        let args = std::fs::read_to_string(self.bin.path().join("pr_create.args")).ok()?;
+        let args: Vec<&str> = args.split('\0').collect();
+        let at = args.iter().position(|a| *a == flag)?;
+        args.get(at + 1).map(|v| v.to_string())
+    }
+
     pub fn head(&self) -> &str {
         &self.head
     }
@@ -252,6 +261,25 @@ github = "sweeper[bot]"
             .env("DEVKIT_CALLER", caller)
             .output()
             .expect("spawn devkit issue")
+    }
+
+    /// [`Fake::issue_as`] inside the harness session `session`, or outside
+    /// any session when it is `None`.
+    pub fn issue_in_session(
+        &self,
+        caller: &str,
+        session: Option<&str>,
+        args: &[&str],
+    ) -> std::process::Output {
+        let mut cmd = self.issue_cmd(args);
+        cmd.env("DEVKIT_CALLER", caller);
+        for var in devkit_common::caller::HARNESS_SESSION_VARS {
+            cmd.env_remove(var);
+        }
+        if let Some(session) = session {
+            cmd.env("CLAUDE_CODE_SESSION_ID", session);
+        }
+        cmd.output().expect("spawn devkit issue")
     }
 
     /// [`Fake::issue`] with `stdin` piped in.

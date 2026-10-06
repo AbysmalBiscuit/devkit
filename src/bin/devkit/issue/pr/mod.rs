@@ -9,6 +9,7 @@ use crate::issue::review::{PrAction, Target, action_for, is_human_login};
 pub(crate) mod create;
 pub(crate) mod proof;
 pub(crate) mod ready;
+pub(crate) mod render;
 pub(crate) mod resolve;
 
 /// GitHub logins among targets that can be requested as reviewers, plus

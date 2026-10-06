@@ -83,12 +83,12 @@ const BUILT_INS: [BuiltIn; 11] = [
     },
     BuiltIn {
         name: "pr_title",
-        description: "Title of a PR opened by `issue pr create`",
+        description: "Title of a PR rendered by `issue pr render` or opened by `issue pr create`",
         source: Templates::pr_title,
     },
     BuiltIn {
         name: "pr_body",
-        description: "Body of a PR opened by `issue pr create`",
+        description: "Body of a PR rendered by `issue pr render` or opened by `issue pr create`",
         source: Templates::pr_body,
     },
     BuiltIn {

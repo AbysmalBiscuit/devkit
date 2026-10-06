@@ -197,3 +197,33 @@ fn an_empty_title_is_refused() {
     );
     assert!(receipts(p.path(), "S1").is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_devkit_dir_is_refused_and_its_target_survives() {
+    let p = project();
+    let outside = tempfile::tempdir().unwrap();
+    let old = outside.path().join("issue-receipts").join("old-session");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 60 * 60),
+        )
+        .unwrap();
+    std::os::unix::fs::symlink(outside.path(), p.path().join(".devkit")).unwrap();
+
+    let out = render(p.path(), &[("CLAUDE_CODE_SESSION_ID", "S1")], &[
+        "--title",
+        "T",
+        "--arg",
+        "acceptance=A",
+    ]);
+
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("symlink"), "{err}");
+    assert!(err.contains(".devkit"), "{err}");
+    assert!(old.exists(), "the symlink's target was swept");
+    assert!(!outside.path().join("issue-receipts").join("S1").exists());
+}
