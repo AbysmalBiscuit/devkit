@@ -613,14 +613,18 @@ pub struct RulesConfig {
     /// The rendered total for one event is truncated to this.
     pub max_event_bytes: usize,
     /// Where rules are read from and where `devkit rules add|edit|remove`
-    /// write: `file`, the JSON index at `index`, or `postgres`, the
+    /// write: `file`, the index file at `index`, or `postgres`, the
     /// repository `rules.postgres.repository` names in `repo-rules-agent`'s
     /// shared Postgres store.
     pub source: RulesSource,
-    /// Where the `file` source's index lives. Absent means the path
-    /// `repo-rules-agent` writes for this checkout's main worktree, so a
-    /// built index needs no config. `devkit rules add|edit|remove` change
-    /// the same file. When `devkit rules stats` reports no index, build one
+    /// The `file` source's index: a `repo-rules-agent` SQLite store or a
+    /// legacy JSON index, told apart by the file's contents whatever it is
+    /// called. Absent means the extractor's cache directory for this
+    /// checkout's main worktree, preferring its `index.sqlite` over its
+    /// `index.json` as the extractor does, so a built index needs no config.
+    /// `devkit rules add|edit|remove` change the same file; a SQLite store is
+    /// edited under the extractor's pinning rules, so `repo-rules index`
+    /// keeps the edits. When `devkit rules stats` reports no index, build one
     /// or point this at it.
     pub index: Option<String>,
     /// The `postgres` source's settings.
@@ -646,7 +650,8 @@ impl Default for RulesConfig {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RulesSource {
-    /// The JSON index `repo-rules-agent` writes, at `[rules] index`.
+    /// The index file `repo-rules-agent` writes, SQLite or JSON, at
+    /// `[rules] index`.
     #[default]
     File,
     /// `repo-rules-agent`'s Postgres store, at `[rules.postgres]`.

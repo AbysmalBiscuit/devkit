@@ -1291,7 +1291,7 @@
         },
         "index": {
           "default": null,
-          "description": "Where the `file` source's index lives. Absent means the path\n`repo-rules-agent` writes for this checkout's main worktree, so a\nbuilt index needs no config. `devkit rules add|edit|remove` change\nthe same file. When `devkit rules stats` reports no index, build one\nor point this at it.",
+          "description": "The `file` source's index: a `repo-rules-agent` SQLite store or a\nlegacy JSON index, told apart by the file's contents whatever it is\ncalled. Absent means the extractor's cache directory for this\ncheckout's main worktree, preferring its `index.sqlite` over its\n`index.json` as the extractor does, so a built index needs no config.\n`devkit rules add|edit|remove` change the same file; a SQLite store is\nedited under the extractor's pinning rules, so `repo-rules index`\nkeeps the edits. When `devkit rules stats` reports no index, build one\nor point this at it.",
           "type": [
             "string",
             "null"
@@ -1336,7 +1336,7 @@
         "source": {
           "$ref": "#/$defs/RulesSource",
           "default": "file",
-          "description": "Where rules are read from and where `devkit rules add|edit|remove`\nwrite: `file`, the JSON index at `index`, or `postgres`, the\nrepository `rules.postgres.repository` names in `repo-rules-agent`'s\nshared Postgres store."
+          "description": "Where rules are read from and where `devkit rules add|edit|remove`\nwrite: `file`, the index file at `index`, or `postgres`, the\nrepository `rules.postgres.repository` names in `repo-rules-agent`'s\nshared Postgres store."
         }
       },
       "type": "object"
@@ -1385,7 +1385,7 @@
       "oneOf": [
         {
           "const": "file",
-          "description": "The JSON index `repo-rules-agent` writes, at `[rules] index`.",
+          "description": "The index file `repo-rules-agent` writes, SQLite or JSON, at\n`[rules] index`.",
           "type": "string"
         },
         {
