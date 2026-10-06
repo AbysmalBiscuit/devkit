@@ -721,6 +721,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "devkit-postgres"
+version = "0.14.11"
+dependencies = [
+ "anyhow",
+ "devkit-common",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+]
+
+[[package]]
 name = "devkit-rules"
 version = "0.14.11"
 dependencies = [
@@ -728,12 +739,15 @@ dependencies = [
  "anyhow",
  "devkit-common",
  "devkit-config",
+ "devkit-postgres",
  "glob",
  "ring",
  "serde",
  "serde_json",
  "strum 0.27.2",
  "tempfile",
+ "tokio",
+ "tokio-postgres",
  "toml",
 ]
 
@@ -781,6 +795,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "devkit-common",
+ "devkit-postgres",
  "devkit-todo",
  "serde_json",
  "tokio",

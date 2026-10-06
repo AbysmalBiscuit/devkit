@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow};
 use devkit_common::tls::Trust;
 use devkit_todo::{ORDER_GAP, SHORT_ID};
 use tokio::runtime::Runtime;
-use tokio_postgres::{Client, Config, NoTls, config::SslMode, error::SqlState};
+use tokio_postgres::{Client, Config, config::SslMode, error::SqlState};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 /// The SQLSTATE a todo function raises when another holder has the todo in
@@ -364,14 +364,8 @@ impl Database {
     /// server that offers no TLS is refused. `sslmode=disable` is the one way
     /// to connect in plaintext.
     pub fn new(url: &str, wait: Duration, trust: &Trust) -> Result<Arc<Self>> {
-        let mut config = url
-            .parse::<Config>()
-            .context("the todo database URL does not parse")?;
-        // tokio-postgres's default, `prefer`, falls back to plaintext when
-        // the server, or anyone between, declines TLS.
-        if config.get_ssl_mode() == SslMode::Prefer {
-            config.ssl_mode(SslMode::Require);
-        }
+        let config =
+            devkit_postgres::config(url).context("the todo database URL does not parse")?;
         Ok(Arc::new(Self {
             config: Some(config),
             trust: trust.clone(),
@@ -423,21 +417,10 @@ impl Database {
 
     /// `host:port/dbname`, without the user or password.
     pub fn target(&self) -> String {
-        let Some(config) = &self.config else {
-            return "no database".to_string();
-        };
-        let host = match config.get_hosts().first() {
-            Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
-            #[cfg(unix)]
-            Some(tokio_postgres::config::Host::Unix(path)) => path.display().to_string(),
-            None => "localhost".to_string(),
-        };
-        let port = config.get_ports().first().copied().unwrap_or(5432);
-        let db = config
-            .get_dbname()
-            .or(config.get_user())
-            .unwrap_or("postgres");
-        format!("{host}:{port}/{db}")
+        match &self.config {
+            Some(config) => devkit_postgres::target(config),
+            None => "no database".to_string(),
+        }
     }
 
     /// Connects, when not connected yet, and asks the server for one row.
@@ -524,19 +507,7 @@ impl Database {
                 SslMode::Disable => None,
                 _ => Some(self.tls().await?),
             };
-            let client = match tls {
-                Some(tls) => {
-                    let (client, connection) = config.connect(tls.clone()).await?;
-                    tokio::spawn(connection);
-                    client
-                }
-                None => {
-                    let (client, connection) = config.connect(NoTls).await?;
-                    tokio::spawn(connection);
-                    client
-                }
-            };
-            *state = State::Open(client);
+            *state = State::Open(devkit_postgres::connect(config, tls).await?);
         }
         match state {
             State::Open(client) => Ok(client),
@@ -552,16 +523,8 @@ impl Database {
         if let Some(tls) = self.tls.get() {
             return Ok(tls.clone());
         }
-        let trust = self.trust.clone();
-        let config = tokio::task::spawn_blocking(move || trust.client_config())
-            .await
-            .map_err(|e| anyhow!("{e}"))
-            .and_then(|config| config)
-            .context(TlsSetup)?;
-        Ok(self
-            .tls
-            .get_or_init(|| MakeRustlsConnect::new(config))
-            .clone())
+        let tls = devkit_postgres::tls(&self.trust).await.context(TlsSetup)?;
+        Ok(self.tls.get_or_init(|| tls).clone())
     }
 }
 

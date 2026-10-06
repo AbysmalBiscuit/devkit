@@ -92,7 +92,7 @@ jobs:
         run: cargo build --workspace --no-default-features
 
   postgres:
-    name: postgres todo backend
+    name: postgres todo backend and rules source
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -106,5 +106,5 @@ jobs:
       # Supabase's pooler does.
       - name: Start Postgres and the pooler
         run: crates/devkit-todo-postgres/testdb/up.sh | sed 's/^export //' >> "$GITHUB_ENV"
-      - name: Test the postgres backend
-        run: cargo nextest run --workspace --no-fail-fast -E 'package(devkit-todo-postgres) | binary(todo_postgres)'
+      - name: Test the postgres todo backend and rules source
+        run: cargo nextest run --workspace --no-fail-fast -E 'package(devkit-todo-postgres) | binary(todo_postgres) | binary(source_parity) | binary(rules_postgres)'

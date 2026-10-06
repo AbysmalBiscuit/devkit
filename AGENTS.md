@@ -13,7 +13,7 @@ devrun task fmt                                         # nightly rustfmt; stabl
 
 Run all of them before committing. CI runs them on ubuntu, macos and windows.
 
-The Postgres todo tests return early unless `DEVKIT_TEST_POSTGRES_URL` and `DEVKIT_TEST_POOLER_URL` name a database, directly and through a transaction-mode pooler, and the certificate tests unless `DEVKIT_TEST_POSTGRES_TLS_URL` and `DEVKIT_TEST_POSTGRES_CA` name a server offering TLS and its CA. `crates/devkit-todo-postgres/testdb/up.sh` starts them in docker and prints the variables; CI's `postgres` job runs them that way.
+The Postgres todo tests return early unless `DEVKIT_TEST_POSTGRES_URL` and `DEVKIT_TEST_POOLER_URL` name a database, directly and through a transaction-mode pooler, and the certificate tests unless `DEVKIT_TEST_POSTGRES_TLS_URL` and `DEVKIT_TEST_POSTGRES_CA` name a server offering TLS and its CA. The Postgres rules tests need `DEVKIT_TEST_POSTGRES_URL` alone. `crates/devkit-todo-postgres/testdb/up.sh` starts them in docker and prints the variables; CI's `postgres` job runs them that way.
 
 Text written for agents (the brief, hook injections, help an agent reads) also has an opt-in eval, since CI cannot judge whether an agent understands it. It needs a logged-in `claude`, and every run is billed:
 
@@ -43,7 +43,7 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | `devkit-common` | shared IO: `vcs`, `config`, `args`, `pool`, `cmd`/`github`, `forge`, `tracker`, `worktree`, `harness`, `caller`, `required`, `harness_log`, `store`, `sys` |
 | `devkit-ports` | port registry, app catalog, server lifecycle, tasks, named templates, command guard |
 | `devkit-locks` | file-lock registry |
-| `devkit-rules` | rule-index matching and context rendering |
+| `devkit-rules` | rule matching and context rendering, and the rule sources: the JSON index and `repo-rules-agent`'s Postgres store |
 | `devkit-command` | IO-free shell-command analyzer (tree-sitter; needs a C compiler) |
 | `devkit-issue` | read-only issue and PR triage |
 | `devkit-mcp` | stdio MCP server over the facades above |
@@ -51,6 +51,7 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | `devkit-vcs` | the `VersionControl` trait: what devkit asks of a project's repository |
 | `devkit-git` | the `Git` builder (timeouts, env scrubbing, batch-mode ssh) and `GitBackend` |
 | `devkit-timing` | `--timing` spans for subprocess and network IO, and their summary |
+| `devkit-postgres` | the Postgres connection the database-backed stores share: URL parsing with TLS required, the credential-free database name, and the TLS or plaintext connect |
 | `devkit-todo` | agent todo lists: the `TodoStore` trait and its contract suite, the claim rule, node naming, the native-tool map, rendering, list diffing, and the activity log of subagent runs and claim intervals |
 | `devkit-todo-builtin` | `BuiltinStore`, the todo store devkit ships: one JSON document under the state directory |
 | `devkit-todo-taskchampion` | `TaskchampionStore`, todo lists kept in an embedded taskchampion replica, local or synced to a directory or a sync server |

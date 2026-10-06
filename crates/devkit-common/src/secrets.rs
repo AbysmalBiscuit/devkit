@@ -26,6 +26,8 @@ pub struct Secrets {
     pub devkit_todo_sync_secret: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub devkit_todo_database_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub devkit_rules_database_url: Option<String>,
 }
 
 impl Secrets {
@@ -38,6 +40,7 @@ impl Secrets {
             "devkit_todo_sync_client_id" => self.devkit_todo_sync_client_id.as_deref(),
             "devkit_todo_sync_secret" => self.devkit_todo_sync_secret.as_deref(),
             "devkit_todo_database_url" => self.devkit_todo_database_url.as_deref(),
+            "devkit_rules_database_url" => self.devkit_rules_database_url.as_deref(),
             _ => None,
         }
     }
@@ -51,6 +54,7 @@ impl Secrets {
             "devkit_todo_sync_client_id" => &mut self.devkit_todo_sync_client_id,
             "devkit_todo_sync_secret" => &mut self.devkit_todo_sync_secret,
             "devkit_todo_database_url" => &mut self.devkit_todo_database_url,
+            "devkit_rules_database_url" => &mut self.devkit_rules_database_url,
             other => anyhow::bail!("unknown secret key: {other}"),
         };
         *slot = Some(value);

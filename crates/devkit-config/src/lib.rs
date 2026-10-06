@@ -402,7 +402,7 @@ pub struct BriefConfig {
     pub tasks: bool,
     /// The rules section: which of a file's rules reach the session on their
     /// own and how to list the rest. It appears only while `[rules]` is
-    /// enabled and its index loads.
+    /// enabled and its source has rules to read.
     pub rules: bool,
 }
 
@@ -613,7 +613,9 @@ pub struct RulesConfig {
     /// The rendered total for one event is truncated to this.
     pub max_event_bytes: usize,
     /// Where rules are read from and where `devkit rules add|edit|remove`
-    /// write: `file`, the JSON index at `index`.
+    /// write: `file`, the JSON index at `index`, or `postgres`, the
+    /// repository `rules.postgres.repository` names in `repo-rules-agent`'s
+    /// shared Postgres store.
     pub source: RulesSource,
     /// Where the `file` source's index lives. Absent means the path
     /// `repo-rules-agent` writes for this checkout's main worktree, so a
@@ -621,6 +623,8 @@ pub struct RulesConfig {
     /// the same file. When `devkit rules stats` reports no index, build one
     /// or point this at it.
     pub index: Option<String>,
+    /// The `postgres` source's settings.
+    pub postgres: RulesPostgresConfig,
 }
 
 impl Default for RulesConfig {
@@ -633,6 +637,7 @@ impl Default for RulesConfig {
             max_event_bytes: 65536,
             source: RulesSource::default(),
             index: None,
+            postgres: RulesPostgresConfig::default(),
         }
     }
 }
@@ -644,6 +649,50 @@ pub enum RulesSource {
     /// The JSON index `repo-rules-agent` writes, at `[rules] index`.
     #[default]
     File,
+    /// `repo-rules-agent`'s Postgres store, at `[rules.postgres]`.
+    Postgres,
+}
+
+/// Where `[rules] source = "postgres"` finds its rules: the repository
+/// `repository` names in the database whose connection URL
+/// `DEVKIT_RULES_DATABASE_URL` resolves to, from the environment, then this
+/// Doppler scope when set, then the secrets file. The database carries
+/// `repo-rules-agent`'s query schema, `repo_rules`, and the connection's role
+/// reads and edits it directly.
+///
+/// ```
+/// # use devkit_config::{Config, RulesSource};
+/// # let cfg = Config::parse(r#"
+/// [rules]
+/// source = "postgres"
+///
+/// [rules.postgres]
+/// repository = "0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10"
+/// doppler_project = "repo-rules"
+/// doppler_config = "dev"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.rules.source, RulesSource::Postgres);
+/// # assert_eq!(cfg.rules.postgres.doppler_config.as_deref(), Some("dev"));
+/// ```
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RulesPostgresConfig {
+    /// The repository's UUID in the store, its `repo_id`. The source reads
+    /// and edits that repository's rules alone.
+    pub repository: Option<String>,
+    /// Read the connection URL, when the environment lacks it, from this
+    /// Doppler project, before the secrets file. Hooks reuse the URL Doppler
+    /// last gave, kept in devkit's state directory, until it ages out or
+    /// fails to connect.
+    pub doppler_project: Option<String>,
+    /// The Doppler config to read it from. Doppler's own default when absent.
+    pub doppler_config: Option<String>,
+    /// A PEM file of CA certificates to trust, besides the bundled and
+    /// platform roots, when verifying the database's certificate. Read from
+    /// `~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`) alone and ignored
+    /// in a project's `devkit.toml`, so a checkout cannot add a CA your
+    /// connection trusts.
+    pub ca_file: Option<String>,
 }
 
 /// Files injected into an agent's context when the condition on them holds.
@@ -2801,6 +2850,24 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         let err = format!("{err:#}");
         assert!(err.contains("sqlite3"), "{err}");
         assert!(err.contains("`file`"), "{err}");
+    }
+    #[test]
+    fn the_postgres_rules_source_names_its_repository() {
+        let cfg = Config::parse(
+            "[rules]\nsource = \"postgres\"\n[rules.postgres]\n\
+             repository = \"0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10\"\n\
+             doppler_project = \"rules\"\ndoppler_config = \"prd\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.rules.source, RulesSource::Postgres);
+        let pg = &cfg.rules.postgres;
+        assert_eq!(
+            pg.repository.as_deref(),
+            Some("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10")
+        );
+        assert_eq!(pg.doppler_project.as_deref(), Some("rules"));
+        assert_eq!(pg.doppler_config.as_deref(), Some("prd"));
+        assert!(Config::parse("[rules.postgres]\nurl = \"postgres://x\"\n").is_err());
     }
     #[test]
     fn a_defaults_table_with_one_key_deserializes() {

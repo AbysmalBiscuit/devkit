@@ -12,6 +12,7 @@ tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-postgres-rustls.workspace = true
 devkit-common.workspace = true
+devkit-postgres.workspace = true
 devkit-todo.workspace = true
 
 [dev-dependencies]

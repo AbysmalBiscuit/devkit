@@ -132,7 +132,7 @@
         },
         "rules": {
           "default": true,
-          "description": "The rules section: which of a file's rules reach the session on their\nown and how to list the rest. It appears only while `[rules]` is\nenabled and its index loads.",
+          "description": "The rules section: which of a file's rules reach the session on their\nown and how to list the rest. It appears only while `[rules]` is\nenabled and its source has rules to read.",
           "type": "boolean"
         },
         "tasks": {
@@ -1323,10 +1323,59 @@
           "minimum": 0,
           "type": "integer"
         },
+        "postgres": {
+          "$ref": "#/$defs/RulesPostgresConfig",
+          "default": {
+            "ca_file": null,
+            "doppler_config": null,
+            "doppler_project": null,
+            "repository": null
+          },
+          "description": "The `postgres` source's settings."
+        },
         "source": {
           "$ref": "#/$defs/RulesSource",
           "default": "file",
-          "description": "Where rules are read from and where `devkit rules add|edit|remove`\nwrite: `file`, the JSON index at `index`."
+          "description": "Where rules are read from and where `devkit rules add|edit|remove`\nwrite: `file`, the JSON index at `index`, or `postgres`, the\nrepository `rules.postgres.repository` names in `repo-rules-agent`'s\nshared Postgres store."
+        }
+      },
+      "type": "object"
+    },
+    "RulesPostgresConfig": {
+      "additionalProperties": false,
+      "description": "Where `[rules] source = \"postgres\"` finds its rules: the repository\n`repository` names in the database whose connection URL\n`DEVKIT_RULES_DATABASE_URL` resolves to, from the environment, then this\nDoppler scope when set, then the secrets file. The database carries\n`repo-rules-agent`'s query schema, `repo_rules`, and the connection's role\nreads and edits it directly.\n\n```toml\n[rules]\nsource = \"postgres\"\n\n[rules.postgres]\nrepository = \"0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10\"\ndoppler_project = \"repo-rules\"\ndoppler_config = \"dev\"\n```",
+      "properties": {
+        "ca_file": {
+          "default": null,
+          "description": "A PEM file of CA certificates to trust, besides the bundled and\nplatform roots, when verifying the database's certificate. Read from\n`~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`) alone and ignored\nin a project's `devkit.toml`, so a checkout cannot add a CA your\nconnection trusts.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "doppler_config": {
+          "default": null,
+          "description": "The Doppler config to read it from. Doppler's own default when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "doppler_project": {
+          "default": null,
+          "description": "Read the connection URL, when the environment lacks it, from this\nDoppler project, before the secrets file. Hooks reuse the URL Doppler\nlast gave, kept in devkit's state directory, until it ages out or\nfails to connect.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repository": {
+          "default": null,
+          "description": "The repository's UUID in the store, its `repo_id`. The source reads\nand edits that repository's rules alone.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -1337,6 +1386,11 @@
         {
           "const": "file",
           "description": "The JSON index `repo-rules-agent` writes, at `[rules] index`.",
+          "type": "string"
+        },
+        {
+          "const": "postgres",
+          "description": "`repo-rules-agent`'s Postgres store, at `[rules.postgres]`.",
           "type": "string"
         }
       ]
@@ -2014,6 +2068,12 @@
         "max_file_bytes": 16384,
         "min_severity": "should",
         "per_event_limit": 5,
+        "postgres": {
+          "ca_file": null,
+          "doppler_config": null,
+          "doppler_project": null,
+          "repository": null
+        },
         "source": "file"
       },
       "description": "Rule injection settings: enablement, severity floor, and the per-event\nsize budget."
