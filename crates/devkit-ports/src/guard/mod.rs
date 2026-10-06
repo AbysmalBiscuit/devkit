@@ -78,17 +78,16 @@ enum Match {
 
 /// The analysis strips wrappers such as `sudo -u root` or `nohup` to reach the
 /// program they run, so a rule naming a wrapper is matched against each one
-/// it removed, with the wrapper's own options as its args.
-fn rule_match(inv: &Invocation, rule: &CommandRule) -> Match {
+/// it removed, with the wrapper's own options as its args. devkit's own
+/// binaries always run, but the wrappers around one are still checked.
+fn rule_match(inv: &Invocation, rule: &CommandRule, own_binary: bool) -> Match {
     let wrapped = inv
         .wrappers
         .iter()
         .filter_map(|w| w.split_first())
         .map(|(program, args)| program_match(program, args, rule));
-    wrapped
-        .chain([program_match(&inv.program, &inv.semantic_args, rule)])
-        .max()
-        .unwrap_or(Match::No)
+    let inner = (!own_binary).then(|| program_match(&inv.program, &inv.semantic_args, rule));
+    wrapped.chain(inner).max().unwrap_or(Match::No)
 }
 
 fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
@@ -135,21 +134,18 @@ pub fn decide(
 ) -> Verdict {
     let mut verdict = Verdict::default();
     for inv in &analysis.invocations {
-        if inv
+        let own_binary = inv
             .program
             .known()
             .map(basename)
-            .is_some_and(devkit_common::shim::is_devkit_command)
-        {
-            continue;
-        }
+            .is_some_and(devkit_common::shim::is_devkit_command);
         let typed = inv.typed.join(" ");
         let mut undetermined = false;
         for (name, rule) in rules
             .iter()
             .filter(|(_, rule)| rule.enabled && !rule.programs.is_empty())
         {
-            match rule_match(inv, rule) {
+            match rule_match(inv, rule, own_binary) {
                 Match::Yes => {
                     let finding = Finding {
                         rule: Some(name.clone()),
@@ -174,7 +170,9 @@ pub fn decide(
                 ),
             });
         }
-        let Some(project) = project else { continue };
+        let Some(project) = project.filter(|_| !own_binary) else {
+            continue;
+        };
         match known(inv) {
             Some(known) => {
                 let program = basename(&known.argv[0]).to_string();

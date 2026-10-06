@@ -185,6 +185,8 @@ reason = "Not as root"
         "sudo ls",
         "sudo -u root ls",
         "nohup sudo apt-get install jq",
+        "sudo devkit todo list",
+        "sudo devrun task build",
     ] {
         let out = run_hook(proj.path(), home.path(), &claude_payload(command));
         assert!(denied(&out), "{command}");
