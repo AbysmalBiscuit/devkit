@@ -173,10 +173,12 @@ fn forge_check(r: &devkit_common::forge::Resolved) -> Check {
             if r.forge.ready() {
                 return Check::Ok(detail);
             }
-            // With no token of devkit's own, a forge CLI may still reach the
-            // host, which is all the PR commands need.
+            // With no token of devkit's own, `gh` may still reach the host for
+            // the single-PR commands; the batched status lookups still fail.
             match r.forge.check() {
-                Ok(identity) => Check::Ok(format!("{detail}; {identity}")),
+                Ok(identity) => Check::Warn(format!(
+                    "{detail}; reached as {identity} through gh; batch status needs a token"
+                )),
                 Err(e) => Check::Warn(format!("{detail}; {e:#}")),
             }
         }
