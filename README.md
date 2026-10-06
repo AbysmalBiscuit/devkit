@@ -1,6 +1,12 @@
-# devkit
+<p align="center">
+    <img width="160" alt="devkit logo" src="plugin/assets/icon.svg">
+</p>
 
-Coordination for running many local dev sessions at once, human and agent, as one `devkit` binary plus an optional `devkitd` daemon.
+<h1 align="center">devkit</h1>
+
+<p align="center">
+    Coordination for running many local dev sessions at once, human and agent, as one <code>devkit</code> binary plus an optional <code>devkitd</code> daemon.
+</p>
 
 Three things that lean on each other:
 
