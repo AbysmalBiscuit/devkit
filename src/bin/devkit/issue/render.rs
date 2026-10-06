@@ -4,7 +4,7 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use devkit_common::{caller::Caller, required::Missing};
 use devkit_config::Config;
 use serde::Serialize;
@@ -114,20 +114,12 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
         devkit_common::caller::caller(),
     )?;
 
-    let sessions = receipt::sessions_from_env();
-    if let Some(bad) = sessions.iter().find(|s| !receipt::valid_session(s)) {
-        bail!("session id `{bad}` is not usable as a directory name: no receipt written");
-    }
-    if sessions.is_empty() {
-        eprintln!("no agent session: no receipt written");
-    } else {
-        let checkout = receipt::store_root(&devkit_common::vcs::Checkout::at(Path::new(&start)))
-            .with_context(|| format!("not inside a git checkout: {start}"))?;
-        let _ = receipt::sweep_stale(&checkout, receipt::STALE_AFTER);
-        for session in &sessions {
-            receipt::write(&checkout, session, &rendered.title, &rendered.body)?;
-        }
-    }
+    receipt::record(
+        Path::new(&start),
+        receipt::Kind::Issue,
+        &rendered.title,
+        &rendered.body,
+    )?;
     println!("{}", serde_json::to_string(&rendered)?);
     Ok(())
 }

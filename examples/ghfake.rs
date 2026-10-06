@@ -58,6 +58,12 @@ fn main() {
         let _ = writeln!(log, "{joined}");
     }
 
+    // `gh.log` joins with spaces and newlines, which a multi-line body also
+    // contains, so the argument vector `pr create` was handed is kept whole.
+    if joined.starts_with("pr create") {
+        let _ = std::fs::write(dir.join("pr_create.args"), args.join("\0"));
+    }
+
     if let Some((file, fallback)) = canned(&joined) {
         print!("{}", read_or(&dir, file, fallback));
         return;

@@ -192,8 +192,9 @@ pub fn run(cli: HookCli) -> Result<()> {
     }
 }
 
-/// Delete the ending session's `issue render` receipts in the payload's
-/// checkout. Best-effort: a receipt left behind is swept by a later render.
+/// Delete the ending session's `issue render` and `issue pr render` receipts
+/// in the payload's checkout. Best-effort: a receipt left behind is swept by a
+/// later render.
 fn clear_issue_receipts(payload: &Payload, checkout: &Checkout) {
     if let (Some(session), Some(root)) = (
         payload.session_id(),

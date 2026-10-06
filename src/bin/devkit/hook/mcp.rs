@@ -15,7 +15,7 @@ use super::{
     print_envelope,
 };
 use crate::issue::{
-    receipt::{self, Field},
+    receipt::{self, Field, Kind},
     render,
 };
 
@@ -102,11 +102,11 @@ fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: 
     };
     let ctx = Context {
         hint: &|| required_hint(checkout, cwd),
-        session_seen: receipt::session_dir(&root, session).is_dir(),
+        session_seen: receipt::session_dir(&root, Kind::Issue, session).is_dir(),
     };
     let server = server.unwrap_or(tool);
     decide(rule, server, tool, input, &ctx, &|field, text| {
-        receipt::has(&root, session, field, text)
+        receipt::has(&root, Kind::Issue, session, field, text)
     })
     .unwrap_or_else(|e| Verdict::Deny(format!("devkit issue guard: {e:#}")))
 }

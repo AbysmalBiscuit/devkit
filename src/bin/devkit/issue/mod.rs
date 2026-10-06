@@ -374,6 +374,23 @@ pub(crate) enum PrCmd {
         #[command(flatten)]
         vars: VarArgs,
     },
+    /// Print the PR title and body `issue pr create` would send.
+    ///
+    /// Takes the same title, body and template arguments, renders the
+    /// `pr_title` and `pr_body` templates in this worktree, and prints
+    /// {"title": ..., "body": ...} without touching the forge. Pass both
+    /// unchanged to whatever opens the PR: inside an agent session this
+    /// records a receipt of each.
+    Render {
+        /// PR title, the `input` of the `pr_title` template.
+        #[arg(short = 't', long = "pr-title")]
+        pr_title: Option<String>,
+        /// PR body, the `input` of the `pr_body` template.
+        #[arg(short = 'b', long = "pr-body")]
+        pr_body: Option<String>,
+        #[command(flatten)]
+        vars: VarArgs,
+    },
     /// Mark this branch's PR ready for review.
     ///
     /// Pushes the branch first unless `--no-push`. A PR that is already ready
@@ -570,6 +587,17 @@ pub fn run(cli: IssueCli) -> Result<()> {
                     attach,
                     no_push,
                     pr,
+                    vars,
+                    dir: cli.dir,
+                    config: cli.config,
+                }),
+                PrCmd::Render {
+                    pr_title,
+                    pr_body,
+                    vars,
+                } => pr::render::run(pr::render::Args {
+                    pr_title,
+                    pr_body,
                     vars,
                     dir: cli.dir,
                     config: cli.config,

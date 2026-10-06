@@ -8,20 +8,17 @@ use devkit_common::{
     vcs::{Vcs, VersionControl},
 };
 use devkit_config::{IssueEvent, PrCreateState};
-use devkit_ports::templates::worktree_context;
 
 use super::{
     add_reviewers,
     proof::require_proof,
+    render::{Texts, values},
     require_reviewer_for_ready,
     resolve::{Existing, assert_belongs, parse_pr_flag, resolve_existing, verify_created},
     reviewer_logins,
 };
 use crate::{
-    issue::review::{
-        PR_CONTEXT_KEYS, PrAction, Target, action_for, check_required, guard_branch, parse_args,
-        render_review, resolve_target, with_fields,
-    },
+    issue::review::{PrAction, Target, action_for, guard_branch, resolve_target},
     template::VarArgs,
 };
 
@@ -83,7 +80,7 @@ fn reuse_note(number: u64, pr_is_draft: bool, asked: Option<PrCreateState>) -> O
 }
 
 /// Reject an empty rendered PR title. Only a run that opens a PR needs one.
-fn require_pr_title(title: &str) -> Result<()> {
+pub(super) fn require_pr_title(title: &str) -> Result<()> {
     if title.trim().is_empty() {
         bail!("--pr-title is required to create a PR");
     }
@@ -259,22 +256,11 @@ pub fn run(args: Args) -> Result<()> {
     let loaded =
         devkit_ports::load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
     let people = &loaded.config.people;
-    let tmpls = &loaded.config.templates;
     let forge = forge::resolve(&loaded.config.forge, &loaded.config.github, &start, None);
     check_attachments(forge.forge.as_ref(), Path::new(&start), &args.attach)?;
 
     let caller = devkit_common::caller::caller();
-    let mut vars = tmpls.defaults();
-    let given = parse_args(&args.vars, &tmpls.declared())?;
-    check_required(
-        "issue pr",
-        &loaded.config,
-        &[tmpls.pr_title(), tmpls.pr_body()],
-        PR_CONTEXT_KEYS,
-        &given,
-        caller,
-    )?;
-    vars.extend(given);
+    let vars = values("issue pr", &loaded.config, &args.vars, caller)?;
 
     let here = Path::new(&start);
     let vcs = Vcs::at(here);
@@ -291,15 +277,8 @@ pub fn run(args: Args) -> Result<()> {
         eprintln!("warning: {w}");
     }
 
-    let toplevel = devkit_common::vcs::checkout_root(Path::new(&start))?
-        .to_string_lossy()
-        .into_owned();
-    let record = devkit_common::record::read(Path::new(&toplevel));
-    let missing_at = if record.is_none() {
-        Some(toplevel.as_str())
-    } else {
-        None
-    };
+    let toplevel = devkit_common::vcs::checkout_root(Path::new(&start))?;
+    let record = devkit_common::record::read(&toplevel);
 
     let tracker_issue = record.as_ref().and_then(|r| r.tracker_issue());
     if let (Some(variable), Some(issue), Caller::Agent) = (
@@ -313,9 +292,15 @@ pub fn run(args: Args) -> Result<()> {
         require_proof(tracker.tracker.as_ref(), issue, proof, variable)?;
     }
 
-    let ctx = worktree_context(record.as_ref(), Some(&branch));
-    let title_input = serde_json::json!(args.pr_title.clone().unwrap_or_default());
-    let body_input = serde_json::json!(args.pr_body.clone().unwrap_or_default());
+    let texts = Texts::new(
+        &loaded.config.templates,
+        record.as_ref(),
+        &branch,
+        &toplevel,
+        vars,
+        args.pr_title,
+        args.pr_body,
+    );
 
     let head = vcs.revision(here)?;
 
@@ -355,17 +340,8 @@ pub fn run(args: Args) -> Result<()> {
             .base
             .clone()
             .unwrap_or_else(|| loaded.config.defaults.pr_base.clone()),
-        pr_title: Box::new(|| {
-            let ctx = with_fields(&ctx, &[("input", title_input)]);
-            render_review(tmpls.pr_title(), "pr_title", &ctx, &vars, missing_at)
-        }),
-        pr_body: Box::new(|title| {
-            let ctx = with_fields(&ctx, &[
-                ("input", body_input),
-                ("pr_title", serde_json::json!(title)),
-            ]);
-            render_review(tmpls.pr_body(), "pr_body", &ctx, &vars, missing_at)
-        }),
+        pr_title: Box::new(|| texts.title()),
+        pr_body: Box::new(|title| texts.body(title)),
         reviewers,
         attachments: &args.attach,
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
@@ -387,7 +363,10 @@ pub fn run(args: Args) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use devkit_ports::templates::worktree_context;
+
     use super::*;
+    use crate::issue::review::render_review;
 
     #[test]
     fn an_absent_flag_takes_the_configured_state() {

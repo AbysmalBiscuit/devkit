@@ -12,6 +12,7 @@ issue create --title T [--body B] [--arg k=v] [--arg-file k=path]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue pr [status] [selector] [--json] [--cache-only]  # also the bare `issue pr`
 issue pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title T] [--pr-body B] [--attach <file>[#alt]] [--no-push] [--pr <URL|number>] [--arg k=v] [--arg-file k=path]
+issue pr render [--pr-title T] [--pr-body B] [--arg k=v] [--arg-file k=path]
 issue pr ready [--to <alias>] [--no-push] [--pr <URL|number>]
 issue pr checkout <target> [<worktree-path>] [--setup] [--apps a,b]
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree] [--no-preserve]
@@ -76,6 +77,10 @@ The optional second positional overrides the worktree path (default: `templates.
 - `--pr <URL|number>` acts on that PR and records it, which is how a worktree bound to the wrong PR is rebound. `--no-push` skips the push.
 - Whichever PR the run ends on, its head commit must be this worktree's `HEAD`. A reused PR is checked before it is touched, a new one straight after it opens; a failure there leaves the new PR open and says so.
 - `pr ready` on a branch with no PR is an error naming `issue pr create`; a merged or closed PR is refused.
+
+### `pr render`: the PR text without opening it
+
+`pr render` takes `pr create`'s `--pr-title`, `--pr-body` and template arguments and prints `{"title": ..., "body": ...}`, byte for byte what `pr create` would send from this worktree, issue line included. It touches no forge and runs no proof check. Use it when the PR is opened some other way, and pass both strings unchanged. A required argument missing is refused by name before anything renders. Inside an agent session it records a receipt of each string under `.devkit/pr-receipts/` in the repository's main worktree, kept apart from issue receipts; outside one it says no receipt was written. Session end deletes that session's receipts.
 
 ### `--attach`: images and video in the PR body
 
