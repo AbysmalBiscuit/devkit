@@ -43,7 +43,7 @@ Run `devkit install-links` if any of them are missing.";
 #[derive(Parser)]
 #[command(
     name = "devkit",
-    version,
+    version = devkit::VERSION,
     about = "Configure and diagnose the devkit toolkit",
     propagate_version = true,
     after_help = SHIM_HELP
@@ -211,7 +211,7 @@ pub(crate) fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::C
         // own version line: under this name it *is* the root command.
         .display_name(shim_name)
         .bin_name(shim_name)
-        .version(env!("CARGO_PKG_VERSION"))
+        .version(devkit::VERSION)
 }
 
 /// Emit a completion script registered under the tool's shim name (e.g.

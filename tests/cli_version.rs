@@ -26,7 +26,7 @@ fn assert_reports_version(name: &str, exe: &str) {
     assert!(ok, "`{name} --version` should exit 0, got: {text}");
     assert_eq!(
         text.trim(),
-        format!("{name} {}", env!("CARGO_PKG_VERSION")),
+        format!("{name} {}", devkit::VERSION),
         "`{name} --version` should name itself and this version"
     );
 }
@@ -52,7 +52,7 @@ fn assert_subcommand_reports_version(sub: &str) {
     );
     assert_eq!(
         text.trim(),
-        format!("devkit {sub} {}", env!("CARGO_PKG_VERSION")),
+        format!("devkit {sub} {}", devkit::VERSION),
         "`devkit {sub} --version` should name the command the user typed"
     );
 }
