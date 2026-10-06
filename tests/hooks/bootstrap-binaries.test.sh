@@ -35,8 +35,11 @@ cat >"${STUB}/curl" <<'EOF'
 #!/usr/bin/env bash
 echo "curl $*" >>"$CURL_LOG"
 [ "${CURL_FAIL:-0}" = "1" ] && exit 1
-# Emit the "installer" the hook pipes into sh.
+# Emit the "installer" the hook pipes into sh. Like the release installer, it
+# places `devkit` alone, into INSTALL_BIN when a case names one.
 echo "echo installer-ran >>\"$CURL_LOG\""
+[ -n "${INSTALL_BIN:-}" ] && echo "cp \"$DEVKIT_STUB\" \"$INSTALL_BIN/devkit\""
+exit 0
 EOF
 
 cat >"${STUB}/powershell.exe" <<'EOF'
@@ -62,6 +65,10 @@ echo "devkit $*" >>"$CURL_LOG"
 EOF
 chmod +x "${BIN}/devkit"
 cp "${BIN}/devkit" "${PARTIAL}/devkit"
+
+# An empty install directory on PATH, which a fresh install fills.
+FRESH="${WORK}/fresh"
+mkdir -p "$FRESH"
 
 # A devkit predating the `hook` verb family: every other subcommand works, and
 # `hook` is an unrecognised subcommand. This is what an externally managed
@@ -118,10 +125,11 @@ run_hook() {
         with-binaries) path="${BIN}:${STUB}" ;;
         devkit-only) path="${PARTIAL}:${STUB}" ;;
         stale-devkit) path="${STALE}:${STUB}" ;;
+        fresh-install) path="${FRESH}:${STUB}" ;;
     esac
     rm -f "$CALLS"
     env -i HOME="$WORK" PATH="${path}:/usr/bin:/bin" XDG_STATE_HOME="$state" \
-        CURL_LOG="$CALLS" "$@" bash "$HOOK" >"${WORK}/out" 2>&1
+        CURL_LOG="$CALLS" DEVKIT_STUB="${BIN}/devkit" "$@" bash "$HOOK" >"${WORK}/out" 2>&1
     last_exit=$?
 }
 
@@ -164,6 +172,14 @@ check "missing binaries installs" 0 "$last_exit"
 check "install records the version" "$VERSION" "$(stamp)"
 check "install pins the release" "$EXPECTED_CURL" "$(calls)"
 
+# The other command names are links devkit makes, and a harness can start the
+# MCP server (`devkit-mcp`) before any session hook runs. A bootstrap run during
+# cloud setup must leave them in place.
+new_state
+run_hook fresh-install INSTALL_BIN="$FRESH"
+check "a fresh install links the old names" yes "$(called "devkit install-links")"
+check "a fresh install records the version" "$VERSION" "$(stamp)"
+
 # A pre-existing install the hook did not perform must survive untouched.
 new_state
 run_hook with-binaries
@@ -181,7 +197,8 @@ new_state
 set_stamp 0.0.1
 run_hook with-binaries
 check "stale stamp reinstalls" "$VERSION" "$(stamp)"
-check "reinstall pins the new release" "$EXPECTED_CURL" "$(calls)"
+check "reinstall pins the new release" "$EXPECTED_CURL" "$(network)"
+check "reinstall relinks the old names" yes "$(called "devkit install-links")"
 
 # devkit itself is on PATH but the old names it links are gone: relink, never
 # download. This is the hole an automatic pass can leave — a truncated or
