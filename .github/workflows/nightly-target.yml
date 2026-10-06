@@ -1,0 +1,117 @@
+name: nightly target
+
+# Called once per target, so each target publishes when its own build finishes.
+# Build scripts run with a read-only token; only `publish` writes the release.
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      cross:
+        description: The runner cannot execute the target's binaries.
+        type: boolean
+        default: false
+      version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      archive: ${{ steps.package.outputs.archive }}
+    env:
+      CARGO_TERM_COLOR: always
+      DEVKIT_BUILD_VERSION: ${{ inputs.version }}
+      # sccache keys each crate on the env vars rustc reports reading, so a new
+      # DEVKIT_BUILD_VERSION rebuilds the crate that reads it and nothing else.
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
+          targets: ${{ inputs.target }}
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Install musl tools
+        if: endsWith(inputs.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --locked --profile dist --target "${{ inputs.target }}"
+      - name: Check the reported version
+        if: ${{ !inputs.cross }}
+        run: |
+          out=$("target/${{ inputs.target }}/dist/devkit" --version)
+          echo "$out"
+          [ "$out" = "devkit ${DEVKIT_BUILD_VERSION}" ]
+      - name: Package
+        id: package
+        run: |
+          target=${{ inputs.target }}
+          name="devkit-${target}"
+          mkdir "$name"
+          case "$target" in
+            *windows*) exe=.exe archive="${name}.zip" ;;
+            *) exe='' archive="${name}.tar.xz" ;;
+          esac
+          cp "target/${target}/dist/devkit${exe}" "target/${target}/dist/devkitd${exe}" README.md LICENSE CHANGELOG.md "$name/"
+          case "$archive" in
+            *.zip) 7z a -bd "$archive" "$name" >/dev/null ;;
+            *) tar -cJf "$archive" "$name" ;;
+          esac
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$archive" >"${archive}.sha256"
+          else
+            shasum -a 256 "$archive" >"${archive}.sha256"
+          fi
+          cat "${archive}.sha256"
+          echo "archive=${archive}" >>"$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nightly-${{ inputs.target }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: publish
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: nightly-${{ inputs.target }}
+          path: dist
+      # The checksum goes up after its archive, so an install racing this step
+      # fails its checksum check rather than installing a mismatched pair.
+      - run: .github/nightly/publish.sh "dist/${ARCHIVE}" "dist/${ARCHIVE}.sha256"
+        env:
+          ARCHIVE: ${{ needs.build.outputs.archive }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

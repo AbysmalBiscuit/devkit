@@ -1,0 +1,88 @@
+name: nightly
+
+# The `nightly` tag matches neither release-please's tag pattern nor the dist
+# `Release` workflow's filter, so stable releases never see it.
+
+on:
+  push:
+    branches: [main]
+  # On any other branch, builds every target and publishes nothing.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to main cancels the build of an older one.
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: version
+        run: |
+          base=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "devkit") | .version')
+          echo "version=${base}-nightly+${GITHUB_SHA::7}" >>"$GITHUB_OUTPUT"
+      - name: Move the nightly release
+        if: github.ref == 'refs/heads/main'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # A re-run of an older commit's workflow must not move nightly back.
+          if [ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" != "$GITHUB_SHA" ]; then
+            echo "::notice::main has moved past ${GITHUB_SHA}; leaving nightly alone"
+            exit 0
+          fi
+          cat >"$RUNNER_TEMP/notes.md" <<EOF
+          devkit \`${VERSION}\`, built from ${GITHUB_SHA} on \`main\`.
+
+          Each archive is replaced as its build finishes, so for a few minutes after a merge some may still hold the previous commit, and a target whose build failed keeps its previous archive until a later build succeeds. \`devkit --version\` names the commit a binary was built from.
+
+          Install on Linux or macOS:
+
+          \`\`\`sh
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/${GH_REPO}/releases/download/nightly/devkit-nightly-installer.sh | sh
+          \`\`\`
+          EOF
+          if gh release view nightly >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release edit nightly --target "$GITHUB_SHA" --prerelease --latest=false --title "nightly ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create nightly --target "$GITHUB_SHA" --prerelease --latest=false --title "nightly ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          .github/nightly/publish.sh .github/nightly/devkit-nightly-installer.sh
+
+  target:
+    name: ${{ matrix.target }}
+    needs: release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04 }
+          - { target: x86_64-unknown-linux-musl, runner: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
+          - { target: aarch64-apple-darwin, runner: macos-latest }
+          - { target: x86_64-apple-darwin, runner: macos-latest, cross: true }
+          - { target: x86_64-pc-windows-msvc, runner: windows-latest }
+    uses: ./.github/workflows/nightly-target.yml
+    with:
+      target: ${{ matrix.target }}
+      runner: ${{ matrix.runner }}
+      cross: ${{ matrix.cross || false }}
+      version: ${{ needs.release.outputs.version }}

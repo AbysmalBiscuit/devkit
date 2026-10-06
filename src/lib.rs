@@ -5,3 +5,11 @@
 
 pub mod completions;
 pub mod help;
+
+/// The version every binary reports. A build that sets
+/// `DEVKIT_BUILD_VERSION` reports that instead, which is how a nightly names
+/// the commit it was built from.
+pub const VERSION: &str = match option_env!("DEVKIT_BUILD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};

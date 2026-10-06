@@ -159,7 +159,7 @@ fn main() -> Result<()> {
         Some("install-service") => return service::install(),
         Some("uninstall-service") => return service::uninstall(),
         Some("--version" | "-V") => {
-            println!("devkitd {}", env!("CARGO_PKG_VERSION"));
+            println!("devkitd {}", devkit::VERSION);
             return Ok(());
         }
         _ => {}
