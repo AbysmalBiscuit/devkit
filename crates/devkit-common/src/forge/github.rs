@@ -913,7 +913,9 @@ impl Forge for GithubForge {
             requested: parse_requested_reviewers(
                 &self.rest_found(&format!("{pulls}/requested_reviewers"))?,
             ),
-            submitted: parse_submitted_reviewers(&self.rest_found(&format!("{pulls}/reviews"))?),
+            submitted: parse_submitted_reviewers(
+                &self.rest_found(&format!("{pulls}/reviews?per_page=100"))?,
+            ),
         })
     }
 
