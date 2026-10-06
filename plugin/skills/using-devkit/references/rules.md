@@ -29,11 +29,11 @@ A SQLite read opens only the store, not the `index.extraction.sqlite` archive be
 
 In a SQLite store, each edit is one transaction: it pins the rule, replaces its lists, and increments the repository's revision, and a failure anywhere rolls back all of it. The store's extraction generation and the rule's extraction fingerprint stay as they were, which is how `repo-rules index` matches the pin to its extracted original and keeps the edit.
 
-A SQLite store allows several rules to share an id. `edit` and `remove` refuse such an id and list each rule it names, since changing any one of them would be a guess. They also refuse a store whose journal mode is not rollback journaling (`delete`, `truncate` or `persist`), and leave that setting alone.
+A SQLite store allows several rules to share an id. `edit` and `remove` refuse such an id and list each rule it names, since changing any one of them would be a guess. They also refuse a store whose journal mode is not rollback journaling (`delete`, `truncate` or `persist`), and leave that setting alone. A store in WAL journal mode is neither edited nor read.
 
 ### Failures
 
-A SQLite store that holds a row devkit cannot read or carries a storage version devkit does not support injects nothing; the hook prints one stderr line naming the file and the write goes ahead. So does a configured store that is missing, when its name ends in `.sqlite`, `.sqlite3` or `.db`. `devkit rules query` and `stats` exit non-zero naming the file. A missing JSON index is the common case of a repository nobody has indexed, and is silent.
+A SQLite store that holds a row devkit cannot read, carries a storage version devkit does not support, or is in WAL journal mode injects nothing; the hook prints one stderr line naming the file and the write goes ahead. So does a configured store that is missing, when its name ends in `.sqlite`, `.sqlite3` or `.db`. `devkit rules query` and `stats` exit non-zero naming the file. devkit never opens a WAL store, since opening one creates its `-shm` and `-wal` files, and never changes its journal mode. A missing JSON index is the common case of a repository nobody has indexed, and is silent.
 
 ## The Postgres source
 

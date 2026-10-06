@@ -83,6 +83,14 @@ pub fn is_store(path: &Path) -> bool {
     }
 }
 
+/// Whether the database header's file format versions (offsets 18 and 19)
+/// say WAL.
+fn is_wal(path: &Path) -> Result<bool> {
+    let mut header = [0u8; 20];
+    std::fs::File::open(path)?.read_exact(&mut header)?;
+    Ok(header[18] == 2 || header[19] == 2)
+}
+
 /// The rule source over one SQLite store.
 pub struct SqliteSource {
     path: PathBuf,
@@ -105,10 +113,14 @@ impl SqliteSource {
         }
     }
 
-    /// A connection that never creates the file.
+    /// A connection that never creates the file. A WAL store is refused
+    /// before opening, since opening one creates its `-shm` and `-wal` files.
     fn open(&self, flags: OpenFlags) -> Result<Connection> {
         if !self.path.is_file() {
             bail!("no such file");
+        }
+        if is_wal(&self.path)? {
+            bail!("the store is in WAL journal mode, which devkit does not read or change");
         }
         let db = Connection::open_with_flags(&self.path, flags | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
         db.busy_timeout(BUSY_TIMEOUT)?;

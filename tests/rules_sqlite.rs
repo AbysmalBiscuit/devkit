@@ -268,13 +268,14 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
 
 #[test]
 fn a_store_that_cannot_be_read_injects_nothing_and_says_so_once() {
-    let breakages: [(&str, Option<&str>); 3] = [
+    let breakages: [(&str, Option<&str>); 4] = [
         ("missing", None),
         (
             "malformed",
             Some("UPDATE rules SET extra = 'not json' WHERE external_id = 'r-root-must';"),
         ),
         ("future", Some("UPDATE storage_version SET version = 2;")),
+        ("WAL", Some("PRAGMA journal_mode = WAL;")),
     ];
     for (name, breakage) in breakages {
         let home = tempfile::tempdir().unwrap();
@@ -296,6 +297,9 @@ fn a_store_that_cannot_be_read_injects_nothing_and_says_so_once() {
             stderr.contains(&store.display().to_string()),
             "{name}: {stderr}"
         );
+        if name == "WAL" {
+            assert!(stderr.contains("WAL journal mode"), "{stderr}");
+        }
 
         let out = rules(main.path(), home.path(), &["query"]);
         assert!(!out.status.success(), "{name}");
@@ -631,7 +635,7 @@ fn an_edit_refuses_a_store_outside_rollback_journaling() {
     let out = rules(main.path(), home.path(), &["remove", "r-root-must"]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("wal"), "{stderr}");
+    assert!(stderr.contains("WAL journal mode"), "{stderr}");
     let mode: String = rusqlite::Connection::open(&store)
         .unwrap()
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
