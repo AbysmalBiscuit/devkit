@@ -3,7 +3,8 @@
 //! Single-PR reads and writes go over REST, directly when a token resolves and
 //! through `gh api` when it does not, so they work where GitHub refuses
 //! GraphQL. Finding a PR by branch and opening one go through GraphQL or `gh`
-//! first, which find and push to forks, and fall back to REST. Checkout goes
+//! first, which find and push to forks, and fall back to REST only when
+//! GitHub refuses GraphQL itself. Checkout goes
 //! through `gh`, which owns the git-level work the API does not do.
 
 use std::{collections::HashMap, path::Path};
@@ -630,9 +631,14 @@ fn parse_open_prs_page(v: &Value) -> Result<OpenPrPage> {
 
 // --- gh fallbacks ------------------------------------------------------------
 
-/// `gh` failed because GitHub refused GraphQL outright (HTTP 403), as the
-/// Claude Code cloud proxy does, rather than over anything in the request.
+/// A GraphQL call failed because GitHub refused GraphQL outright (HTTP 403),
+/// as the Claude Code cloud proxy does, rather than over anything in the
+/// request: the GraphQL endpoint's own status for a direct call, `gh`'s
+/// stderr for one through `gh`.
 fn graphql_refused(e: &anyhow::Error) -> bool {
+    if crate::http::status(e) == Some(crate::http::StatusCode::FORBIDDEN) {
+        return true;
+    }
     crate::cmd::failed_stderr(e).is_some_and(|stderr| {
         let stderr = stderr.to_lowercase();
         stderr.contains("graphql") && stderr.contains("403")
@@ -813,31 +819,32 @@ impl Forge for GithubForge {
         Ok(parse_prs_by_number(&v, targets))
     }
 
-    /// GraphQL when a token resolves, else `gh pr list --head`, else REST,
-    /// which finds no fork's branch. Only a transport that could not answer
-    /// moves on: a definite "no PR" is an answer and is trusted, or the
-    /// fallback re-asks a resolved question and can return a different PR.
+    /// GraphQL once: directly when a token resolves, else through
+    /// `gh pr list --head`. Both find a fork's branch. REST, which finds none,
+    /// answers only when GitHub refused GraphQL; any other failure is
+    /// reported as it is, since a definite "no PR" from REST would be read as
+    /// an answer to the question GraphQL could not answer.
     fn pr_by_head(&self, repo: &Repo, branch: &str) -> HeadLookup {
-        let api = match self.api.token() {
-            None => "no GitHub token resolved".to_string(),
+        let attempt = match self.api.token() {
             Some(_) => {
                 let (owner, name) = owner_name(&repo.slug);
                 let query = format!(
                     "query {{ repository(owner: {owner}, name: {name}) {{ {} }} }}",
                     head_connection(branch)
                 );
-                match self.api.graphql(&query) {
-                    Ok(v) => return parse_connection(&v["data"]["repository"]["pullRequests"]),
-                    Err(e) => format!("{e:#}"),
-                }
+                self.api
+                    .graphql(&query)
+                    .map(|v| parse_connection(&v["data"]["repository"]["pullRequests"]))
             }
+            None => self.gh_prs_by_head(repo, branch),
         };
-        let gh = match self.gh_prs_by_head(repo, branch) {
+        let refused = match attempt {
             Ok(found) => return found,
-            Err(e) => format!("{e:#}"),
+            Err(e) if graphql_refused(&e) => format!("{e:#}"),
+            Err(e) => return HeadLookup::Unavailable(format!("{e:#}")),
         };
         self.rest_prs_by_head(repo, branch)
-            .unwrap_or_else(|e| HeadLookup::Unavailable(format!("{api}; gh: {gh}; REST: {e:#}")))
+            .unwrap_or_else(|e| HeadLookup::Unavailable(format!("{refused}; REST: {e:#}")))
     }
 
     /// One GraphQL round trip for every branch. No `gh` fallback: a status

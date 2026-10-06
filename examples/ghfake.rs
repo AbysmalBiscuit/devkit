@@ -12,7 +12,8 @@
 //! A `refuse_graphql` file there makes every GraphQL-backed verb fail with
 //! HTTP 403, as the Claude Code cloud proxy does, while `gh api` REST calls
 //! still answer. A `create_error.txt` there makes `gh pr create` and the REST
-//! create fail with its contents on stderr.
+//! create fail with its contents on stderr, and a `list_error.txt` makes
+//! `gh pr list` fail the same way.
 
 use std::{
     io::Write,
@@ -136,6 +137,12 @@ fn main() {
     }
     if joined.starts_with("pr create") {
         fail_create(&dir);
+    }
+    if joined.starts_with("pr list")
+        && let Ok(stderr) = std::fs::read_to_string(dir.join("list_error.txt"))
+    {
+        eprintln!("{stderr}");
+        std::process::exit(1);
     }
     if let Some((file, fallback)) = canned(&joined) {
         print!("{}", read_or(&dir, file, fallback));

@@ -194,6 +194,11 @@ github = "sweeper[bot]"
             .expect("write create error");
     }
 
+    /// Make `gh pr list` fail with `stderr`.
+    pub fn list_fails(&self, stderr: &str) {
+        std::fs::write(self.bin.path().join("list_error.txt"), stderr).expect("write list error");
+    }
+
     /// Make every GraphQL-backed `gh` verb fail with HTTP 403, as the Claude
     /// Code cloud proxy does. `gh api` REST calls keep answering.
     pub fn refuse_graphql(&self) {

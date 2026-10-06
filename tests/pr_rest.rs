@@ -78,14 +78,39 @@ fn pr_create_reports_the_existing_pr_when_graphql_is_refused() {
     let calls = fake.calls();
     assert!(out.status.success(), "{out:?}\n{calls}");
     assert_eq!(stdout(&out), "https://github.com/o/r/pull/7\n");
-    assert!(
-        calls.contains("pulls?head=o%3Alev%2Feng-1-fix&state=all"),
-        "no REST lookup by owner-qualified head: {calls}"
+    assert_eq!(
+        calls
+            .matches("pulls?head=o%3Alev%2Feng-1-fix&state=all")
+            .count(),
+        1,
+        "not one REST lookup by owner-qualified head: {calls}"
     );
+    assert_eq!(calls.matches("pr list").count(), 1, "{calls}");
+    assert!(!calls.contains("api graphql"), "{calls}");
     assert!(
         !calls.contains(REST_CREATE),
         "a second PR was opened: {calls}"
     );
+}
+
+/// Only GitHub refusing GraphQL sends a lookup to REST: any other failure is
+/// reported as it is, since REST would answer a different question.
+#[test]
+fn a_lookup_failure_other_than_a_refusal_is_not_retried_over_rest() {
+    let fake = ghfake::Fake::without_pr("");
+    fake.list_fails("error connecting to api.github.com");
+    fake.create_opens(&ready_pr(7));
+
+    let out = fake.issue(&["pr", "create", "--no-push", "--pr-title", "t"]);
+
+    let calls = fake.calls();
+    assert!(!out.status.success(), "{out:?}\n{calls}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("error connecting to api.github.com"),
+        "{out:?}"
+    );
+    assert!(!calls.contains("pulls?head="), "{calls}");
+    assert!(!calls.contains("pr create"), "{calls}");
 }
 
 #[test]
@@ -291,6 +316,12 @@ fn pr_create_opens_a_pr_over_direct_rest_with_a_token() {
     fake.refuse_graphql();
     let pr = rest_pr(7, fake.head());
     let api = stub::serve(vec![
+        Route::new(
+            "POST",
+            "/graphql",
+            403,
+            r#"{"message":"GitHub GraphQL is not available from Claude Code sessions"}"#,
+        ),
         Route::new("POST", "/repos/o/r/pulls/7/requested_reviewers", 201, "{}"),
         Route::new("POST", "/repos/o/r/pulls", 201, &pr),
         Route::new("GET", "/repos/o/r/pulls?", 200, "[]"),
@@ -333,9 +364,20 @@ fn pr_create_opens_a_pr_over_direct_rest_with_a_token() {
         .unwrap_or_else(|| panic!("no direct reviewer request: {reqs:#?}"));
     let body: serde_json::Value = serde_json::from_str(&request.body).unwrap();
     assert_eq!(body, serde_json::json!({ "reviewers": ["LevValle"] }));
+    let count = |method: &str, prefix: &str| {
+        reqs.iter()
+            .filter(|r| r.method == method && r.path.starts_with(prefix))
+            .count()
+    };
+    assert_eq!(count("POST", "/graphql"), 1, "{reqs:#?}");
+    assert_eq!(count("GET", "/repos/o/r/pulls?head="), 1, "{reqs:#?}");
+    let calls = fake.calls();
     assert!(
-        !fake.calls().contains("api "),
-        "a REST call went through gh: {}",
-        fake.calls()
+        !calls.contains("api "),
+        "a REST call went through gh: {calls}"
+    );
+    assert!(
+        !calls.contains("pr list"),
+        "a second GraphQL lookup: {calls}"
     );
 }
