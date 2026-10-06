@@ -724,6 +724,7 @@ dependencies = [
 name = "devkit-rules"
 version = "0.14.11"
 dependencies = [
+ "ambassador",
  "anyhow",
  "devkit-common",
  "devkit-config",

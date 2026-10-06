@@ -12,4 +12,5 @@ pub mod model;
 pub mod query;
 pub mod render;
 pub mod repo_config;
+pub mod source;
 pub mod vocab;

@@ -33,9 +33,9 @@ use std::{
 use devkit_common::{paths, vcs::Checkout};
 use devkit_rules::{
     context::{self, Subject},
-    index,
     query::{self, Filter},
     render,
+    source::{RuleSource, Source},
     vocab::{Severity, Task, canonical_language},
 };
 
@@ -165,16 +165,11 @@ fn run(payload: &Payload, checkout: &Checkout, cwd: &Path, targets: &[String], h
     let floor: Severity = settings.min_severity.parse().unwrap_or(Severity::Should);
     let fired = already_fired(holder);
 
-    let index_path = match &settings.index {
-        Some(p) => PathBuf::from(p),
-        None => index::default_index_path(checkout.main_worktree().unwrap_or(root)),
-    };
-
     // One matched set across every target, so a call touching two directories
     // gets both directories' rules.
     let mut chosen = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let loaded = index::load(&index_path);
+    let loaded = Source::for_checkout(settings, checkout).load();
     if let Some(loaded) = &loaded {
         for target in &relative {
             let filter = Filter {
