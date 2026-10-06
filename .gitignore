@@ -9,8 +9,6 @@
 devkit.local.toml
 /AGENTS.local.md
 /CLAUDE.local.md
-/.agents/**/__pycache__/
-/.agents/**/.venv/
 
 # The sources harnessup copies into cloud sessions are checked in.
 !/.agents/harnessup/*.local.*
