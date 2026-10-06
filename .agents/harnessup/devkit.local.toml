@@ -38,6 +38,25 @@ reason = """Pass only a body rendered from the `issue_body` template:
   gh issue edit <number> --body-file body.md
 `devkit template show issue_body` describes every `--arg`."""
 
+# The short spellings of `--body` and `--body-file`.
+[harness.commands.issue-edit-body-b]
+programs = ["gh"]
+args = ["issue", "edit", "**", "-b*"]
+action = "warn"
+reason = """Pass only a body rendered from the `issue_body` template:
+  devkit issue render --title '<title>' --body '<the task>' --arg done_when='- [ ] ...' | jq -r .body > body.md
+  gh issue edit <number> --body-file body.md
+`devkit template show issue_body` describes every `--arg`."""
+
+[harness.commands.issue-edit-body-f]
+programs = ["gh"]
+args = ["issue", "edit", "**", "-F*"]
+action = "warn"
+reason = """Pass only a body rendered from the `issue_body` template:
+  devkit issue render --title '<title>' --body '<the task>' --arg done_when='- [ ] ...' | jq -r .body > body.md
+  gh issue edit <number> --body-file body.md
+`devkit template show issue_body` describes every `--arg`."""
+
 [harness.commands.sudo]
 programs = ["sudo"]
 reason = "Never run sudo. devkit has no privileged path: name the command that needs root in your final report for the user to run."
