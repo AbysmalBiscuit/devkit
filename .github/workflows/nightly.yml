@@ -1,0 +1,146 @@
+name: nightly
+
+# The `nightly` tag matches neither release-please's tag pattern nor the dist
+# `Release` workflow's filter, so stable releases never see it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/nightly.yml
+      - .github/nightly/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to main cancels the build of an older one.
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+  PUBLISH: ${{ github.ref == 'refs/heads/main' }}
+
+jobs:
+  release:
+    name: point nightly at this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: |
+          base=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "devkit") | .version')
+          echo "version=${base}-nightly+${GITHUB_SHA::7}" >>"$GITHUB_OUTPUT"
+      - name: Move the nightly release
+        if: env.PUBLISH == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # A re-run of an older commit's workflow must not move nightly back.
+          if [ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" != "$GITHUB_SHA" ]; then
+            echo "::notice::main has moved past ${GITHUB_SHA}; leaving nightly alone"
+            exit 0
+          fi
+          cat >"$RUNNER_TEMP/notes.md" <<EOF
+          devkit \`${VERSION}\`, built from ${GITHUB_SHA} on \`main\`.
+
+          Each archive is replaced as its build finishes, so for a few minutes after a merge some may still hold the previous commit. \`devkit --version\` names the commit a binary was built from.
+
+          Install on Linux or macOS:
+
+          \`\`\`sh
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/${GH_REPO}/releases/download/nightly/devkit-nightly-installer.sh | sh
+          \`\`\`
+          EOF
+          if gh release view nightly >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release edit nightly --prerelease --latest=false --title "nightly ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create nightly --target "$GITHUB_SHA" --prerelease --latest=false --title "nightly ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload nightly .github/nightly/devkit-nightly-installer.sh --clobber
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: release
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04 }
+          - { target: x86_64-unknown-linux-musl, runner: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
+          - { target: aarch64-apple-darwin, runner: macos-latest }
+          - { target: x86_64-apple-darwin, runner: macos-latest, cross: true }
+          - { target: x86_64-pc-windows-msvc, runner: windows-latest }
+    env:
+      DEVKIT_BUILD_VERSION: ${{ needs.release.outputs.version }}
+      # sccache keys each crate on the env vars rustc reports reading, so a new
+      # DEVKIT_BUILD_VERSION rebuilds the crate that reads it and nothing else.
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - name: Install musl tools
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --locked --profile dist --target ${{ matrix.target }}
+      - name: Check the reported version
+        if: ${{ !matrix.cross }}
+        run: |
+          out=$("target/${{ matrix.target }}/dist/devkit" --version)
+          echo "$out"
+          [ "$out" = "devkit ${DEVKIT_BUILD_VERSION}" ]
+      - name: Package
+        id: package
+        run: |
+          target=${{ matrix.target }}
+          name="devkit-${target}"
+          mkdir "$name"
+          case "$target" in
+            *windows*) exe=.exe archive="${name}.zip" ;;
+            *) exe='' archive="${name}.tar.xz" ;;
+          esac
+          cp "target/${target}/dist/devkit${exe}" "target/${target}/dist/devkitd${exe}" README.md LICENSE CHANGELOG.md "$name/"
+          case "$archive" in
+            *.zip) 7z a -bd "$archive" "$name" >/dev/null ;;
+            *) tar -cJf "$archive" "$name" ;;
+          esac
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$archive" >"${archive}.sha256"
+          else
+            shasum -a 256 "$archive" >"${archive}.sha256"
+          fi
+          cat "${archive}.sha256"
+          echo "archive=${archive}" >>"$GITHUB_OUTPUT"
+      - name: Upload to the nightly release
+        if: env.PUBLISH == 'true'
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          if [ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" != "$GITHUB_SHA" ]; then
+            echo "::notice::main has moved past ${GITHUB_SHA}; leaving nightly alone"
+            exit 0
+          fi
+          gh release upload nightly "$ARCHIVE" "${ARCHIVE}.sha256" --clobber
