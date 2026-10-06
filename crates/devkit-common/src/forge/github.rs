@@ -633,8 +633,10 @@ fn parse_open_prs_page(v: &Value) -> Result<OpenPrPage> {
 /// `gh` failed because GitHub refused GraphQL outright (HTTP 403), as the
 /// Claude Code cloud proxy does, rather than over anything in the request.
 fn graphql_refused(e: &anyhow::Error) -> bool {
-    let msg = format!("{e:#}").to_lowercase();
-    msg.contains("graphql") && msg.contains("403")
+    crate::cmd::failed_stderr(e).is_some_and(|stderr| {
+        let stderr = stderr.to_lowercase();
+        stderr.contains("graphql") && stderr.contains("403")
+    })
 }
 
 /// The `--json` fields a `gh` PR read selects, matching [`GhPr`].

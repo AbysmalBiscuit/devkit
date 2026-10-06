@@ -103,6 +103,41 @@ fn pr_create_still_opens_through_gh_when_graphql_answers() {
 }
 
 #[test]
+fn a_create_failure_naming_graphql_in_the_title_is_not_sent_to_rest() {
+    let fake = ghfake::Fake::without_pr("");
+    fake.create_fails("pull request create failed: base branch not found");
+
+    let out = fake.issue(&["pr", "create", "--no-push", "--pr-title", "GraphQL 403"]);
+
+    let calls = fake.calls();
+    assert!(!out.status.success(), "{out:?}\n{calls}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("base branch not found"),
+        "{out:?}"
+    );
+    assert!(!calls.contains(REST_CREATE), "{calls}");
+}
+
+#[test]
+fn a_rest_create_failure_naming_a_404_in_the_body_is_reported() {
+    let fake =
+        ghfake::Fake::without_pr("[templates]\npr_body = \"Fails with (HTTP 404) in {{ issue }}\"");
+    fake.record_issue("ENG-1");
+    fake.refuse_graphql();
+    fake.create_fails("gh: Validation Failed (HTTP 422)");
+
+    let out = fake.issue(&["pr", "create", "--no-push", "--ready", "--pr-title", "t"]);
+
+    let calls = fake.calls();
+    assert!(calls.contains(REST_CREATE), "{calls}");
+    assert!(!out.status.success(), "{out:?}\n{calls}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("Validation Failed (HTTP 422)"),
+        "{out:?}"
+    );
+}
+
+#[test]
 fn review_request_adds_reviewers_over_rest_when_graphql_is_refused() {
     let fake = ghfake::Fake::new("", &ghfake::Pr {
         author: "someone-else",

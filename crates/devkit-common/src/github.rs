@@ -276,7 +276,9 @@ impl Api {
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         match crate::cmd::capture("gh", &refs, None) {
             Ok(out) => Ok(Some(json_or_null(&out)?)),
-            Err(e) if format!("{e:#}").contains("(HTTP 404)") => Ok(None),
+            Err(e) if crate::cmd::failed_stderr(&e).is_some_and(|s| s.contains("(HTTP 404)")) => {
+                Ok(None)
+            }
             Err(e) => Err(e),
         }
     }

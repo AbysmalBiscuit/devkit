@@ -11,7 +11,8 @@
 //!
 //! A `refuse_graphql` file there makes every GraphQL-backed verb fail with
 //! HTTP 403, as the Claude Code cloud proxy does, while `gh api` REST calls
-//! still answer.
+//! still answer. A `create_error.txt` there makes `gh pr create` and the REST
+//! create fail with its contents on stderr.
 
 use std::{
     io::Write,
@@ -47,6 +48,14 @@ fn uses_graphql(args: &str) -> bool {
     args.starts_with("api graphql") || args.starts_with("pr ")
 }
 
+/// Exit 1 with `create_error.txt` on stderr, when the test wrote one.
+fn fail_create(dir: &Path) {
+    if let Ok(stderr) = std::fs::read_to_string(dir.join("create_error.txt")) {
+        eprintln!("{stderr}");
+        std::process::exit(1);
+    }
+}
+
 /// Print `file`, or fail the way `gh api` reports a 404.
 fn serve_or_404(dir: &Path, file: &str) {
     match std::fs::read_to_string(dir.join(file)) {
@@ -78,7 +87,10 @@ fn rest(dir: &Path, args: &[String]) {
     match (method, segments.as_slice()) {
         ("GET", ["user"]) => print!(r#"{{"login":"LevValle"}}"#),
         ("GET", ["repos", _, _, "pulls"]) => print!("{}", read_or(dir, "rest_pulls.json", "[]")),
-        ("POST", ["repos", _, _, "pulls"]) => serve_or_404(dir, "rest_pull_create.json"),
+        ("POST", ["repos", _, _, "pulls"]) => {
+            fail_create(dir);
+            serve_or_404(dir, "rest_pull_create.json")
+        }
         ("GET", ["repos", _, _, "pulls", n]) => serve_or_404(dir, &format!("rest_pull_{n}.json")),
         ("GET", ["repos", _, _, "pulls", _, "requested_reviewers"]) => print!(
             "{}",
@@ -121,6 +133,9 @@ fn main() {
              REST API (https://api.github.com/graphql)"
         );
         std::process::exit(1);
+    }
+    if joined.starts_with("pr create") {
+        fail_create(&dir);
     }
     if let Some((file, fallback)) = canned(&joined) {
         print!("{}", read_or(&dir, file, fallback));
