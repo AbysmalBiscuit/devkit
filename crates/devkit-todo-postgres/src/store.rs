@@ -1,26 +1,35 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Utc};
 use devkit_todo::{
-    Edit, Filter, Holder, NewTodo, NodeMatch, ORDER_GAP, Status, StatusChange, StatusKind, Todo,
-    TodoStore, activity::stamp, by_prefix, is_uuid_prefix, node::GLOBAL, one_line, transition,
+    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusChange, StatusKind, Todo,
+    TodoStore, activity::stamp, by_prefix, is_uuid_prefix, node::GLOBAL, one_line,
 };
-use tokio_postgres::{GenericClient, Row, types::Type};
+use tokio_postgres::{
+    Client, Row,
+    types::{ToSql, Type},
+};
 
-use crate::{Database, PostgresActivity};
+use crate::{
+    Database, PostgresActivity,
+    database::{CLAIMED, UNKNOWN_TODO},
+};
 
 const COLUMNS: &str =
     "id::text, node, description, status, holder, parent::text, ord, entry, modified";
 
+/// The columns of a row a todo function returns for each status change.
+const CHANGE: &str = "todo::text, node, from_status, from_holder, to_status, to_holder, at";
+
 /// Todos kept in a Postgres database under one `[todo.postgres] root`.
 /// A todo under any other root is never listed, claimed or released.
 ///
-/// A status change locks the todo's row, applies [`transition`] to what it
-/// reads there, and writes the result in the same transaction, so the claim
-/// rule holds for any number of processes on any number of machines. Two
-/// todos added at once under the same parent without an order may share
-/// one.
+/// Every write is one call to a function in the `devkit` schema. A status
+/// change there locks the todo's row, applies the claim rule
+/// [`devkit_todo::transition`] states, and writes the result, so the rule
+/// holds for any number of processes on any number of machines, and for any
+/// client that can call a function. Two todos added at once under the same
+/// parent without an order may share one.
 pub struct PostgresStore {
     db: Arc<Database>,
     root: String,
@@ -40,23 +49,23 @@ impl PostgresStore {
     }
 }
 
-fn todo_of(row: &Row) -> Result<Todo> {
-    let holder = row.get::<_, Option<String>>(4).map(Holder::new);
-    let status = match (row.get::<_, &str>(3), holder) {
+/// The status a todo's `status` and `holder` columns store.
+fn status_of(id: &str, status: &str, holder: Option<String>) -> Result<Status> {
+    Ok(match (status, holder.map(Holder::new)) {
         ("pending", _) => Status::Pending,
         ("in_progress", Some(by)) => Status::InProgress { by },
         ("completed", by) => Status::Completed { by },
         ("cancelled", by) => Status::Cancelled { by },
-        (other, _) => anyhow::bail!(
-            "todo {} has an unknown status {other:?}",
-            row.get::<_, &str>(0)
-        ),
-    };
+        (other, _) => anyhow::bail!("todo {id} has an unknown status {other:?}"),
+    })
+}
+
+fn todo_of(row: &Row) -> Result<Todo> {
     Ok(Todo {
         id: row.get(0),
         project: row.get(1),
         description: row.get(2),
-        status,
+        status: status_of(row.get(0), row.get(3), row.get(4))?,
         parent: row.get(5),
         order: Some(row.get(6)),
         entry: Some(stamp(row.get(7))),
@@ -64,117 +73,72 @@ fn todo_of(row: &Row) -> Result<Todo> {
     })
 }
 
-/// The status column and holder `status` is stored as.
-fn columns_of(status: &Status) -> (&'static str, Option<&str>) {
-    match status {
-        Status::Pending => ("pending", None),
-        Status::InProgress { by } => ("in_progress", Some(by)),
-        Status::Completed { by } => ("completed", by.as_deref()),
-        Status::Cancelled { by } => ("cancelled", by.as_deref()),
+fn change_of(row: &Row) -> Result<StatusChange> {
+    let todo: String = row.get(0);
+    let to = match row.get::<_, Option<&str>>(4) {
+        Some(status) => Some(status_of(&todo, status, row.get(5))?),
+        None => None,
+    };
+    Ok(StatusChange {
+        from: status_of(&todo, row.get(2), row.get(3))?,
+        node: row
+            .get::<_, Option<String>>(1)
+            .unwrap_or_else(|| GLOBAL.to_string()),
+        todo,
+        to,
+        at: row.get(6),
+    })
+}
+
+fn kind_name(kind: StatusKind) -> &'static str {
+    match kind {
+        StatusKind::Pending => "pending",
+        StatusKind::InProgress => "in_progress",
+        StatusKind::Completed => "completed",
+        StatusKind::Cancelled => "cancelled",
     }
 }
 
-/// The todos under `root` whose id starts with `id`, locked for the rest of
-/// the transaction when `lock` is set.
-async fn find(db: &impl GenericClient, root: &str, id: &str, lock: bool) -> Result<Option<Todo>> {
-    if !is_uuid_prefix(id) {
-        return Ok(None);
-    }
+/// The todo under `root` whose id starts with `id`.
+async fn lookup(db: &Client, root: &str, id: &str) -> Result<Option<Todo>> {
     let id = id.to_ascii_lowercase();
-    let lock = if lock { " FOR UPDATE" } else { "" };
-    let sql = format!(
-        "SELECT {COLUMNS} FROM devkit.todos WHERE root = $1 AND starts_with(id::text, $2){lock}"
-    );
+    let sql =
+        format!("SELECT {COLUMNS} FROM devkit.todos WHERE root = $1 AND starts_with(id::text, $2)");
     let rows = db
         .query_typed(&sql, &[(&root, Type::TEXT), (&id, Type::TEXT)])
         .await?;
     by_prefix(&id, rows.iter().map(todo_of).collect::<Result<Vec<_>>>()?)
 }
 
-async fn resolve(db: &impl GenericClient, root: &str, id: &str, lock: bool) -> Result<Todo> {
-    find(db, root, id, lock)
+type Params<'a> = [(&'a (dyn ToSql + Sync), Type)];
+
+/// Runs one call to a todo function, its refusals read as the errors every
+/// store returns.
+async fn call(db: &Client, sql: &str, params: &Params<'_>) -> Result<Vec<Row>> {
+    db.query_typed(sql, params).await.map_err(|e| {
+        match e.as_db_error().map(|db| (db.code().code(), db)) {
+            Some((CLAIMED, db)) => Claimed {
+                by: Holder::new(db.detail().unwrap_or_default()),
+            }
+            .into(),
+            Some((UNKNOWN_TODO, db)) => anyhow!("{}", db.message()),
+            _ => e.into(),
+        }
+    })
+}
+
+/// The status changes the todo function `function` reports making.
+async fn changes(db: &Client, function: &str, params: &Params<'_>) -> Result<Vec<StatusChange>> {
+    let args = (1..=params.len())
+        .map(|n| format!("${n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("SELECT {CHANGE} FROM devkit.{function}({args})");
+    call(db, &sql, params)
         .await?
-        .ok_or_else(|| anyhow!("no todo {id}"))
-}
-
-/// The full id of the parent `id` names, `None` for the top level.
-async fn resolve_parent(
-    db: &impl GenericClient,
-    root: &str,
-    id: Option<&str>,
-) -> Result<Option<String>> {
-    match id {
-        Some(id) => Ok(Some(resolve(db, root, id, false).await?.id)),
-        None => Ok(None),
-    }
-}
-
-/// The order that places a todo after the last of its siblings: the todos
-/// on `node` under `parent`, other than `skip`.
-async fn after_last(
-    db: &impl GenericClient,
-    root: &str,
-    node: Option<&str>,
-    parent: Option<&str>,
-    skip: Option<&str>,
-) -> Result<i64> {
-    let row = db
-        .query_typed_one(
-            "SELECT coalesce(max(ord), 0) + $5 FROM devkit.todos
-             WHERE root = $1 AND node IS NOT DISTINCT FROM $2
-               AND parent IS NOT DISTINCT FROM $3::uuid AND id::text IS DISTINCT FROM $4",
-            &[
-                (&root, Type::TEXT),
-                (&node, Type::TEXT),
-                (&parent, Type::TEXT),
-                (&skip, Type::TEXT),
-                (&ORDER_GAP, Type::INT8),
-            ],
-        )
-        .await?;
-    Ok(row.get(0))
-}
-
-/// Writes one todo's column and stamps it modified.
-async fn update(
-    db: &impl GenericClient,
-    id: &str,
-    set: &str,
-    value: &(dyn tokio_postgres::types::ToSql + Sync),
-    kind: Type,
-) -> Result<()> {
-    let sql = format!(
-        "UPDATE devkit.todos SET {set} = $2, modified = clock_timestamp() WHERE id = $1::uuid"
-    );
-    db.execute_typed(&sql, &[(&id, Type::TEXT), (value, kind)])
-        .await?;
-    Ok(())
-}
-
-async fn write_status(db: &impl GenericClient, id: &str, status: &Status) -> Result<DateTime<Utc>> {
-    let (status, holder) = columns_of(status);
-    let row = db
-        .query_typed_one(
-            "UPDATE devkit.todos SET status = $2, holder = $3, modified = clock_timestamp()
-             WHERE id = $1::uuid RETURNING modified",
-            &[
-                (&id, Type::TEXT),
-                (&status, Type::TEXT),
-                (&holder, Type::TEXT),
-            ],
-        )
-        .await?;
-    Ok(row.get(0))
-}
-
-fn change(todo: &Todo, to: Option<Status>, at: DateTime<Utc>) -> StatusChange {
-    StatusChange {
-        todo: todo.id.clone(),
-        node: todo.node().to_string(),
-        from: todo.status.clone(),
-        to,
-        at,
-    }
+        .iter()
+        .map(change_of)
+        .collect()
 }
 
 impl TodoStore for PostgresStore {
@@ -222,160 +186,94 @@ impl TodoStore for PostgresStore {
             return Ok(None);
         }
         self.db
-            .run(async |client| find(client, &self.root, id, false).await)
+            .run(async |client| lookup(client, &self.root, id).await)
     }
 
     fn add(&self, todo: NewTodo) -> Result<String> {
         let description = one_line(&todo.description);
         self.db.run(async |client| {
-            let tx = client.transaction().await?;
-            let parent = resolve_parent(&tx, &self.root, todo.parent.as_deref()).await?;
-            let order = match todo.order {
-                Some(order) => order,
-                None => {
-                    after_last(
-                        &tx,
-                        &self.root,
-                        todo.project.as_deref(),
-                        parent.as_deref(),
-                        None,
-                    )
-                    .await?
-                }
-            };
-            let row = tx
-                .query_typed_one(
-                    "INSERT INTO devkit.todos (root, node, description, status, parent, ord)
-                     VALUES ($1, $2, $3, 'pending', $4::uuid, $5) RETURNING id::text",
-                    &[
-                        (&self.root, Type::TEXT),
-                        (&todo.project, Type::TEXT),
-                        (&description, Type::TEXT),
-                        (&parent, Type::TEXT),
-                        (&order, Type::INT8),
-                    ],
-                )
-                .await?;
-            tx.commit().await?;
-            Ok(row.get(0))
+            let rows = call(
+                client,
+                "SELECT devkit.todo_add($1, $2, $3, $4, $5)::text",
+                &[
+                    (&self.root, Type::TEXT),
+                    (&todo.project, Type::TEXT),
+                    (&description, Type::TEXT),
+                    (&todo.parent, Type::TEXT),
+                    (&todo.order, Type::INT8),
+                ],
+            )
+            .await?;
+            Ok(rows[0].get(0))
         })
     }
 
     fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
         let root = self.root.as_str();
-        self.db.run(async |client| {
-            let tx = client.transaction().await?;
-            let changes = match edit {
-                Edit::SetStatus { id, to, actor } => {
-                    let todo = resolve(&tx, root, id, true).await?;
-                    match transition(&todo.status, *to, actor)? {
-                        Some(next) => {
-                            let at = write_status(&tx, &todo.id, &next).await?;
-                            vec![change(&todo, Some(next), at)]
-                        }
-                        None => Vec::new(),
-                    }
-                }
-                Edit::Describe { id, description } => {
-                    let todo = resolve(&tx, root, id, true).await?;
-                    let description = one_line(description);
-                    update(&tx, &todo.id, "description", &description, Type::TEXT).await?;
-                    Vec::new()
-                }
-                Edit::Move { id, parent, order } => {
-                    let todo = resolve(&tx, root, id, true).await?;
-                    let parent = resolve_parent(&tx, root, parent.as_deref()).await?;
-                    let order = match order {
-                        Some(order) => *order,
-                        None => {
-                            after_last(
-                                &tx,
-                                root,
-                                todo.project.as_deref(),
-                                parent.as_deref(),
-                                Some(&todo.id),
-                            )
-                            .await?
-                        }
-                    };
-                    tx.query_typed(
-                        "UPDATE devkit.todos SET parent = $2::uuid, ord = $3,
-                         modified = clock_timestamp() WHERE id = $1::uuid",
-                        &[
-                            (&todo.id, Type::TEXT),
-                            (&parent, Type::TEXT),
-                            (&order, Type::INT8),
-                        ],
-                    )
-                    .await?;
-                    Vec::new()
-                }
-                Edit::Reorder { id, order } => {
-                    let todo = resolve(&tx, root, id, true).await?;
-                    update(&tx, &todo.id, "ord", order, Type::INT8).await?;
-                    Vec::new()
-                }
-                Edit::Relocate { id, project } => {
-                    let todo = resolve(&tx, root, id, true).await?;
-                    update(&tx, &todo.id, "node", project, Type::TEXT).await?;
-                    Vec::new()
-                }
-                Edit::ReleaseAll { holder } if holder.is_human() => Vec::new(),
-                Edit::ReleaseAll { holder } => {
-                    let sql = format!(
-                        "SELECT {COLUMNS} FROM devkit.todos
-                         WHERE root = $1 AND status = 'in_progress'
-                           AND (holder = $2 OR starts_with(holder, $2 || '/'))
-                         FOR UPDATE"
-                    );
-                    let holder_text: &str = holder;
-                    let held = tx
-                        .query_typed(&sql, &[(&root, Type::TEXT), (&holder_text, Type::TEXT)])
-                        .await?;
-                    let mut released = Vec::new();
-                    for todo in held.iter().map(todo_of) {
-                        let todo = todo?;
-                        if let Ok(Some(Status::Pending)) =
-                            transition(&todo.status, StatusKind::Pending, holder)
-                        {
-                            released.push(todo);
-                        }
-                    }
-                    // One statement for every claim, so a release costs the
-                    // same round trips however many claims its holder had.
-                    let ids: Vec<&str> = released.iter().map(|t| t.id.as_str()).collect();
-                    let written = tx
-                        .query_typed(
-                            "UPDATE devkit.todos
-                             SET status = 'pending', holder = NULL, modified = clock_timestamp()
-                             WHERE id = ANY($1::text[]::uuid[]) RETURNING id::text, modified",
-                            &[(&ids, Type::TEXT_ARRAY)],
-                        )
-                        .await?;
-                    let at: HashMap<String, DateTime<Utc>> =
-                        written.iter().map(|row| (row.get(0), row.get(1))).collect();
-                    released
-                        .iter()
-                        .filter_map(|todo| {
-                            let at = *at.get(&todo.id)?;
-                            Some(change(todo, Some(Status::Pending), at))
-                        })
-                        .collect()
-                }
-                Edit::Purge(id) => {
-                    let todo = resolve(&tx, root, id, true).await?;
-                    let row = tx
-                        .query_typed_one(
-                            "DELETE FROM devkit.todos WHERE id = $1::uuid
-                             RETURNING clock_timestamp()",
-                            &[(&todo.id, Type::TEXT)],
-                        )
-                        .await?;
-                    vec![change(&todo, None, row.get(0))]
-                }
-            };
-            tx.commit().await?;
-            Ok(changes)
+        self.db.run(async |client| match edit {
+            Edit::SetStatus { id, to, actor } => {
+                let actor: &str = actor;
+                changes(client, "todo_set_status", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                    (&kind_name(*to), Type::TEXT),
+                    (&actor, Type::TEXT),
+                ])
+                .await
+            }
+            Edit::Describe { id, description } => {
+                let description = one_line(description);
+                call(client, "SELECT devkit.todo_describe($1, $2, $3)", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                    (&description, Type::TEXT),
+                ])
+                .await?;
+                Ok(Vec::new())
+            }
+            Edit::Move { id, parent, order } => {
+                call(client, "SELECT devkit.todo_move($1, $2, $3, $4)", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                    (parent, Type::TEXT),
+                    (order, Type::INT8),
+                ])
+                .await?;
+                Ok(Vec::new())
+            }
+            Edit::Reorder { id, order } => {
+                call(client, "SELECT devkit.todo_reorder($1, $2, $3)", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                    (order, Type::INT8),
+                ])
+                .await?;
+                Ok(Vec::new())
+            }
+            Edit::Relocate { id, project } => {
+                call(client, "SELECT devkit.todo_relocate($1, $2, $3)", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                    (project, Type::TEXT),
+                ])
+                .await?;
+                Ok(Vec::new())
+            }
+            Edit::ReleaseAll { holder } => {
+                let holder: &str = holder;
+                changes(client, "todo_release_all", &[
+                    (&root, Type::TEXT),
+                    (&holder, Type::TEXT),
+                ])
+                .await
+            }
+            Edit::Purge(id) => {
+                changes(client, "todo_purge", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                ])
+                .await
+            }
         })
     }
 }

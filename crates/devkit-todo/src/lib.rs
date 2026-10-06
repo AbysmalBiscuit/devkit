@@ -198,7 +198,7 @@ pub fn short_id(id: &str) -> &str {
 }
 
 /// The shortest uuid prefix an id may be, taskwarrior's `uuid.short`.
-const SHORT_ID: usize = 8;
+pub const SHORT_ID: usize = 8;
 
 /// Whether `id` can name a uuid by prefix: at least [`short_id`]'s 8
 /// characters, and only hex digits and dashes. Anything else would reach a
