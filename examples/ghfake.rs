@@ -1,12 +1,17 @@
 //! A `gh` stand-in for the integration tests, copied into place as `gh` (or
 //! `gh.exe`) on a test's `PATH`.
 //!
-//! A binary because a Windows spawn of `gh` finds only `gh.exe`.
+//! A binary rather than a shell script because `Command::new("gh")` resolves
+//! `.exe` and nothing else on Windows, so a `.cmd` or `.bat` on `PATH` is never
+//! found and every test driving `gh` would be Unix-only.
 //!
-//! `GHFAKE_DIR` names a directory of canned answers, one file per verb, and
-//! collects every argument vector in `gh.log`. A `refuse_graphql` file there
-//! makes every GraphQL-backed verb fail with HTTP 403, as the Claude Code
-//! cloud proxy does, while `gh api` REST calls still answer.
+//! `GHFAKE_DIR` names a directory of canned answers. Each verb reads one file
+//! from it, falling back to an empty answer when the file is absent, and every
+//! argument vector is appended to `gh.log` there.
+//!
+//! A `refuse_graphql` file there makes every GraphQL-backed verb fail with
+//! HTTP 403, as the Claude Code cloud proxy does, while `gh api` REST calls
+//! still answer.
 
 use std::{
     io::Write,
