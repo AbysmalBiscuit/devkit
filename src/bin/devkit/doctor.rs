@@ -582,10 +582,15 @@ fn gather(steps: &Steps) -> Vec<Row> {
     rows.push({
         let cwd = std::path::Path::new(".");
         let checkout = devkit_common::vcs::Checkout::at(cwd);
-        let settings = devkit_common::config::resolve_in(&checkout, None, cwd)
-            .map(|(project, _)| project.rules)
+        let (settings, configured) = devkit_common::config::resolve_in(&checkout, None, cwd)
+            .map(|(project, provenance)| {
+                let configured = ["rules.source", "rules.index"]
+                    .iter()
+                    .any(|key| provenance.origin.contains_key(*key));
+                (project.rules, configured)
+            })
             .unwrap_or_default();
-        rules_row(&settings, &checkout)
+        rules_row(&settings, configured, &checkout)
     });
     rows.extend(steps.during("Checking shim links...", shim_rows));
     rows
@@ -687,8 +692,10 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
 }
 
 /// The rules source `[rules] source` names and where it reads from.
+/// `configured` is whether a config file sets `source` or `index`.
 fn rules_row(
     settings: &devkit_config::RulesConfig,
+    configured: bool,
     checkout: &devkit_common::vcs::Checkout,
 ) -> Row {
     use devkit_rules::source::RuleSource;
@@ -700,8 +707,12 @@ fn rules_row(
     let location = devkit_rules::source::Source::for_checkout(settings, checkout).location();
     Row {
         key: "rules_source",
-        data: serde_json::json!({ "source": name, "location": location }),
-        source: Source::Unset,
+        data: serde_json::json!({ "kind": name, "location": location }),
+        source: if configured {
+            Source::File
+        } else {
+            Source::Unset
+        },
         check: Check::Ok(format!("{name}, {location}")),
     }
 }
@@ -927,13 +938,20 @@ mod tests {
             index: Some(index.clone()),
             ..Default::default()
         };
-        let row = rules_row(&settings, &devkit_common::vcs::Checkout::at(dir.path()));
+        let checkout = devkit_common::vcs::Checkout::at(dir.path());
+        let row = rules_row(&settings, true, &checkout);
         assert_eq!(row.key, "rules_source");
+        assert_eq!(row.source, Source::File);
         assert_eq!(row.check, Check::Ok(format!("file, {index}")));
+        // `print_json` merges `data` over the row's own keys, so `source`
+        // there would replace the provenance label.
         assert_eq!(
             row.data,
-            serde_json::json!({ "source": "file", "location": index })
+            serde_json::json!({ "kind": "file", "location": index })
         );
+
+        let row = rules_row(&devkit_config::RulesConfig::default(), false, &checkout);
+        assert_eq!(row.source, Source::Unset);
     }
 
     /// A forge devkit could not find is a warning naming the reason, and one
