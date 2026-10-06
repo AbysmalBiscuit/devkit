@@ -392,6 +392,10 @@ impl RuleSource for PostgresSource {
             Err(_) => format!("{}, no repository", self.db.target()),
         }
     }
+
+    fn kind(&self) -> &'static str {
+        "postgres"
+    }
 }
 
 /// A rule's columns, its source file's path and its lists in their stored

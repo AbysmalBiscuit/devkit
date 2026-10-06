@@ -541,6 +541,7 @@ dependencies = [
  "pabal",
  "rgb",
  "rpassword",
+ "rusqlite",
  "same-file",
  "schemars",
  "serde",
@@ -742,6 +743,7 @@ dependencies = [
  "devkit-postgres",
  "glob",
  "ring",
+ "rusqlite",
  "serde",
  "serde_json",
  "strum 0.27.2",
@@ -749,6 +751,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "toml",
+ "uuid",
 ]
 
 [[package]]

@@ -718,8 +718,8 @@ fn rules_rows(
     rows
 }
 
-/// The rules source `[rules] source` names and where it reads from.
-/// `configured` is whether a config file sets `source` or `index`.
+/// The rules source `[rules] source` names, the kind of store it found and
+/// where. `configured` is whether a config file sets `source` or `index`.
 fn rules_row(
     settings: &devkit_config::RulesConfig,
     configured: bool,
@@ -731,16 +731,16 @@ fn rules_row(
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
-    let location = source.location();
+    let (kind, location) = (source.kind(), source.location());
     Row {
         key: "rules_source",
-        data: serde_json::json!({ "kind": name, "location": location }),
+        data: serde_json::json!({ "name": name, "kind": kind, "location": location }),
         source: if configured {
             Source::File
         } else {
             Source::Unset
         },
-        check: Check::Ok(format!("{name}, {location}")),
+        check: Check::Ok(format!("{name}, {kind}, {location}")),
     }
 }
 
@@ -993,12 +993,12 @@ mod tests {
             .unwrap();
         assert_eq!(row.key, "rules_source");
         assert_eq!(row.source, Source::File);
-        assert_eq!(row.check, Check::Ok(format!("file, {index}")));
+        assert_eq!(row.check, Check::Ok(format!("file, json, {index}")));
         // `print_json` merges `data` over the row's own keys, so `source`
         // there would replace the provenance label.
         assert_eq!(
             row.data,
-            serde_json::json!({ "kind": "file", "location": index })
+            serde_json::json!({ "name": "file", "kind": "json", "location": index })
         );
 
         let [row] = <[Row; 1]>::try_from(rules_rows(
@@ -1009,6 +1009,22 @@ mod tests {
         .ok()
         .unwrap();
         assert_eq!(row.source, Source::Unset);
+    }
+
+    #[test]
+    fn the_rules_row_names_a_sqlite_store_by_its_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("rules.db").display().to_string();
+        let settings = devkit_config::RulesConfig {
+            index: Some(store.clone()),
+            ..Default::default()
+        };
+        let checkout = devkit_common::vcs::Checkout::at(dir.path());
+        let [row] = <[Row; 1]>::try_from(rules_rows(&settings, true, &checkout))
+            .ok()
+            .unwrap();
+        assert_eq!(row.check, Check::Ok(format!("file, sqlite, {store}")));
+        assert_eq!(row.data["kind"], "sqlite");
     }
 
     /// A forge devkit could not find is a warning naming the reason, and one

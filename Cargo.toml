@@ -62,6 +62,7 @@ same-file.workspace = true
 serde_yaml_ng.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
+rusqlite.workspace = true
 
 # Used only by the Unix-only supervision integration test (POSIX signals).
 [target.'cfg(unix)'.dev-dependencies]
@@ -164,6 +165,11 @@ tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-fish = "3.6"
 tempfile = "3"
+# The SQLite rule store `repo-rules-agent` writes. The 0.39 line taskchampion
+# already links, bundled the same way, so the binary carries one SQLite.
+rusqlite = { version = "0.39", features = ["bundled"] }
+# Storage keys for rules and sources added to a SQLite rule store.
+uuid = { version = "1", features = ["v4"] }
 frizbee = "0.13"
 
 [profile.dev]

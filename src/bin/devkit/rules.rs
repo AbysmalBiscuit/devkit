@@ -16,7 +16,6 @@ use devkit_common::{secrets, tls::Trust, vcs::Checkout};
 use devkit_config::{RulesConfig, RulesPostgresConfig};
 use devkit_rules::{
     edit,
-    index::FileSource,
     model::RuleIndex,
     postgres::Database,
     query, repo_config,
@@ -152,7 +151,8 @@ pub enum RulesCommand {
 
 #[derive(Args)]
 pub struct QueryArgs {
-    /// The index file. Defaults to the one built for this checkout.
+    /// The index file, a SQLite store or a JSON index. Defaults to the one
+    /// built for this checkout.
     pub index_path: Option<PathBuf>,
     #[arg(long, short = 't', value_parser = parse_vocab::<Task>)]
     pub task: Option<Task>,
@@ -306,7 +306,7 @@ impl Here {
         let cwd = std::env::current_dir().context("getting current dir")?;
         let checkout = Checkout::at(&cwd);
         let source = match explicit {
-            Some(path) => Source::File(FileSource::at(path)),
+            Some(path) => Source::at(path, repo_of(&checkout)),
             None => {
                 let settings = devkit_common::config::resolve_in(&checkout, None, &cwd)
                     .map(|(project, _)| project.rules)

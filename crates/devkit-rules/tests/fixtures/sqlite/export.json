@@ -1,0 +1,261 @@
+{
+  "source_sha": "fixture",
+  "repo": "/repo",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "tier": 1,
+      "applies_to": "",
+      "rules": [
+        {
+          "title": "Root must",
+          "description": "Applies everywhere.",
+          "category": "security",
+          "tasks": [
+            "code-generation"
+          ],
+          "languages": [
+            "all"
+          ],
+          "scope": "repo",
+          "severity": "must",
+          "source_file": "AGENTS.md",
+          "directory": ""
+        },
+        {
+          "title": "Untagged",
+          "description": "No tasks listed.",
+          "category": "best_practice",
+          "languages": [
+            "typescript"
+          ],
+          "scope": "repo",
+          "severity": "should",
+          "source_file": "AGENTS.md",
+          "directory": ""
+        },
+        {
+          "title": "Review only",
+          "description": "Code review task only.",
+          "category": "best_practice",
+          "tasks": [
+            "code-review"
+          ],
+          "languages": [
+            "all"
+          ],
+          "scope": "repo",
+          "severity": "must",
+          "source_file": "AGENTS.md",
+          "directory": ""
+        },
+        {
+          "title": "Gone",
+          "description": "Removed by a person.",
+          "category": "best_practice",
+          "tasks": [
+            "code-generation"
+          ],
+          "languages": [
+            "all"
+          ],
+          "scope": "repo",
+          "severity": "must",
+          "source_file": "AGENTS.md",
+          "directory": ""
+        }
+      ]
+    },
+    {
+      "path": "crates/foo/AGENTS.md",
+      "tier": 2,
+      "applies_to": "crates/foo",
+      "errors": [
+        "chunk 3: timed out"
+      ],
+      "rules": [
+        {
+          "title": "Foo should",
+          "description": "Rust only, under crates/foo.",
+          "category": "code_style",
+          "tasks": [
+            "code-review",
+            "code-generation"
+          ],
+          "languages": [
+            "rust",
+            "toml"
+          ],
+          "topics": [
+            "errors"
+          ],
+          "scope": "directory",
+          "severity": "should",
+          "source_file": "crates/foo/AGENTS.md",
+          "directory": "crates/foo"
+        },
+        {
+          "title": "Foo can",
+          "description": "Optional, under crates/foo.",
+          "category": "readability",
+          "topics": [
+            "readability"
+          ],
+          "tasks": [
+            "code-generation"
+          ],
+          "languages": [
+            "all"
+          ],
+          "scope": "directory",
+          "severity": "can",
+          "source_file": "crates/foo/AGENTS.md",
+          "directory": "crates/foo"
+        }
+      ]
+    }
+  ],
+  "conflicts": [],
+  "rules": [
+    {
+      "title": "Root must",
+      "description": "Applies everywhere.",
+      "category": "security",
+      "tasks": [
+        "code-generation"
+      ],
+      "languages": [
+        "all"
+      ],
+      "topics": [],
+      "scope": "repo",
+      "severity": "must",
+      "source_file": "AGENTS.md",
+      "directory": "",
+      "id": "r-root-must",
+      "pinned": false,
+      "removed": false
+    },
+    {
+      "title": "Foo should",
+      "description": "Rust only, under crates/foo.",
+      "category": "code_style",
+      "tasks": [
+        "code-review",
+        "code-generation"
+      ],
+      "languages": [
+        "rust",
+        "toml"
+      ],
+      "topics": [
+        "errors"
+      ],
+      "scope": "directory",
+      "severity": "should",
+      "source_file": "crates/foo/AGENTS.md",
+      "directory": "crates/foo",
+      "id": "r-foo-should",
+      "future_field": 7,
+      "pinned": false,
+      "removed": false
+    },
+    {
+      "title": "Gone",
+      "description": "Removed by a person.",
+      "category": "best_practice",
+      "tasks": [
+        "code-generation"
+      ],
+      "languages": [
+        "all"
+      ],
+      "topics": [],
+      "scope": "repo",
+      "severity": "must",
+      "source_file": "AGENTS.md",
+      "directory": "",
+      "id": "r-gone",
+      "pinned": true,
+      "removed": true,
+      "extraction_fingerprint": null
+    },
+    {
+      "title": "Foo can",
+      "description": "Optional, under crates/foo.",
+      "category": "readability",
+      "tasks": [
+        "code-generation"
+      ],
+      "languages": [
+        "all"
+      ],
+      "topics": [
+        "readability"
+      ],
+      "scope": "directory",
+      "severity": "can",
+      "source_file": "crates/foo/AGENTS.md",
+      "directory": "crates/foo",
+      "id": "r-foo-can",
+      "pinned": false,
+      "removed": false
+    },
+    {
+      "title": "Untagged",
+      "description": "No tasks listed.",
+      "category": "best_practice",
+      "tasks": [],
+      "languages": [
+        "typescript"
+      ],
+      "topics": [],
+      "scope": "repo",
+      "severity": "should",
+      "source_file": "AGENTS.md",
+      "directory": "",
+      "id": "r-untagged",
+      "pinned": false,
+      "removed": false
+    },
+    {
+      "title": "Review only",
+      "description": "Code review task only.",
+      "category": "best_practice",
+      "tasks": [
+        "code-review"
+      ],
+      "languages": [
+        "all"
+      ],
+      "topics": [],
+      "scope": "repo",
+      "severity": "must",
+      "source_file": "AGENTS.md",
+      "directory": "",
+      "id": "r-review-only",
+      "pinned": false,
+      "removed": false
+    },
+    {
+      "title": "Pinned manual",
+      "description": "Added by a person.",
+      "category": "best_practice",
+      "tasks": [
+        "code-generation"
+      ],
+      "languages": [
+        "all"
+      ],
+      "topics": [],
+      "scope": "repo",
+      "severity": "should",
+      "source_file": "",
+      "directory": "",
+      "id": "r-pinned-manual",
+      "pinned": true,
+      "removed": false,
+      "extraction_fingerprint": null
+    }
+  ]
+}
