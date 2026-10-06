@@ -67,8 +67,18 @@ fn every_path_a_manifest_names_stays_inside_the_plugin() {
     for (marketplace, manifest) in HARNESSES {
         let root = plugin_root(marketplace);
         let v = read_json(&root.join(manifest));
-        for key in ["skills", "hooks", "mcpServers"] {
-            let Some(rel) = v[key].as_str() else { continue };
+        for key in [
+            "/skills",
+            "/hooks",
+            "/mcpServers",
+            "/icon",
+            "/logo",
+            "/interface/logo",
+            "/interface/composerIcon",
+        ] {
+            let Some(rel) = v.pointer(key).and_then(|p| p.as_str()) else {
+                continue;
+            };
             let rel = Path::new(rel);
             assert!(
                 rel.components()
