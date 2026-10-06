@@ -517,7 +517,10 @@ fn the_brief_asks_a_stalled_database_once_per_run() {
     for args in [&[][..], &["--if-changed"][..]] {
         let stalled = pgstall::Stalled::start();
         let p = Proj::reading("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
-        let url = format!("postgres://agent@{}/rules?sslmode=disable", stalled.addr);
+        let url = format!(
+            "postgres://agent@{}/{}?sslmode=disable",
+            stalled.addr, stalled.database
+        );
         let started = Instant::now();
         let out = brief(&p, args, &[(DATABASE_VAR, &url)]);
         let elapsed = started.elapsed();
