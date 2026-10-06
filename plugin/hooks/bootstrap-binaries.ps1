@@ -116,5 +116,14 @@ if ($status -ne 0) {
 
 Set-Content -Path $stamp -Value $version -ErrorAction SilentlyContinue
 Remove-Item -Path $failed -Force -ErrorAction SilentlyContinue
+# The installer places devkit alone, and a harness can start the MCP server
+# before any session hook would make the other names.
+if (Get-Command devkit -ErrorAction SilentlyContinue) {
+    $global:LASTEXITCODE = 0
+    try { & devkit install-links *> $null } catch { $global:LASTEXITCODE = 1 }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Note 'devkit install-links could not claim every name; run it yourself to see why'
+    }
+}
 Write-Note "devkit $version installed; binaries land on PATH via CARGO_HOME (restart the session if they are not found yet)"
 exit 0

@@ -111,5 +111,11 @@ fi
 
 printf '%s\n' "$version" >"$stamp" 2>/dev/null
 rm -f "$failed" 2>/dev/null
+# The installer places devkit alone, and a harness can start the MCP server
+# before any session hook would make the other names.
+if command -v devkit >/dev/null 2>&1; then
+    devkit install-links >/dev/null 2>&1 ||
+        warn "devkit install-links could not claim every name; run it yourself to see why"
+fi
 warn "devkit ${version} installed; binaries land on PATH via CARGO_HOME (restart the session if they are not found yet)"
 exit 0

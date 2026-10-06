@@ -9,13 +9,9 @@
 devkit.local.toml
 /AGENTS.local.md
 /CLAUDE.local.md
-/.agents/**/__pycache__/
-/.agents/**/.venv/
 
-# Cloud setup templates are source files.
-!/.agents/skills/cloud/assets/devkit.local.toml
-!/.agents/skills/cloud/assets/AGENTS.local.md
-!/.agents/skills/cloud/assets/CLAUDE.local.md
+# The sources harnessup copies into cloud sessions are checked in.
+!/.agents/harnessup/*.local.*
 
 # Subagent-driven-development progress ledger (local scratch)
 /.superpowers/
