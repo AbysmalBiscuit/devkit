@@ -24,9 +24,43 @@ Rebase conflicts: `devrun task rebase-add --arg files='src/a.rs,src/b.rs'`, then
 programs = ["gh"]
 args = ["pr", "create"]
 reason = """Open the PR with devkit, which renders the body from the `pr_body` template:
-  issue pr create --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...'
-`--pr-body` is the agent summary and `proof` the evidence for each `Done when` item; the template adds the TL;DR heading and this worktree's closing line.
-`devkit template show pr_body` describes every `--arg`."""
+  issue pr create --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --attach <media path> --arg agent_model='...' --arg agent_harness='...'
+`--pr-body` is the agent summary and `proof` the evidence for each `Done when` item, one unindented line per item starting with its number (`1. test foo_refuses_gap`); the template adds the TL;DR heading and this worktree's closing line. Pass `--draft` when a draft was asked for.
+`devkit template show pr_body` describes every `--arg`; `devkit template render pr_body --arg input='<markdown>' ...` previews the body."""
+
+# devkit has no issue edit verb to redirect to, so this warns rather than blocks.
+[harness.commands.issue-edit-body]
+programs = ["gh"]
+args = ["issue", "edit", "**", "--body*"]
+action = "warn"
+reason = """Pass only a body rendered from the `issue_body` template:
+  devkit issue render --title '<title>' --body '<the task>' --arg done_when='- [ ] ...' | jq -r .body > body.md
+  gh issue edit <number> --body-file body.md
+`devkit template show issue_body` describes every `--arg`."""
+
+[harness.commands.sudo]
+programs = ["sudo"]
+reason = "Never run sudo"
+
+[todo]
+hold_stop = true
+
+# Roles for the issue-manage workflow. Workers select their role with
+# `devkit todo role <name>` because they spawn as generic subagents.
+[todo.roles.manager]
+scope = "workspace"
+
+[todo.roles.implementer]
+scope = "agent"
+parent = "manager"
+
+[todo.roles.verifier]
+scope = "agent"
+parent = "manager"
+
+[todo.roles.receiver]
+scope = "agent"
+parent = "manager"
 
 [tasks.commit-patch]
 description = "Commit a patch against HEAD while preserving unrelated staging"
