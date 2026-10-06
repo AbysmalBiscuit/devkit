@@ -1,14 +1,16 @@
 //! Every rule source, fed the same records, gives the same rules and the same
 //! answers to the same queries. The records are one index in the form
 //! `repo-rules-agent export-json` writes: the file source reads it as is, and
-//! the Postgres source reads it imported into a disposable database. A new
-//! source joins [`sources`] fed from the same export.
+//! the SQLite and Postgres sources read it imported into a store of their own.
+//! A new source joins [`sources`] fed from the same export.
 //!
 //! The Postgres member needs `DEVKIT_TEST_POSTGRES_URL`; without it the test
-//! returns early.
+//! compares the others.
 
 #[path = "common/pgstore.rs"]
 mod pgstore;
+#[path = "common/sqlitestore.rs"]
+mod sqlitestore;
 
 use std::{path::Path, time::Duration};
 
@@ -19,6 +21,7 @@ use devkit_rules::{
     postgres::{Database, PostgresSource},
     query::{self, Filter},
     source::{RuleSource, Source},
+    sqlite::SqliteSource,
     vocab::{Scope, Severity, Task},
 };
 use pgstore::TestStore;
@@ -27,18 +30,27 @@ use serde_json::Value;
 const EXPORT: &str = include_str!("fixtures/export.json");
 
 /// Each source over the export, named, with what keeps it alive.
-fn sources(dir: &Path) -> Option<(TestStore, Vec<(&'static str, Source)>)> {
-    let store = TestStore::create()?;
+fn sources(dir: &Path) -> (Option<TestStore>, Vec<(&'static str, Source)>) {
     let export: Value = serde_json::from_str(EXPORT).unwrap();
     let index = dir.join("index.json");
     std::fs::write(&index, EXPORT).unwrap();
+    let store = dir.join("index.sqlite");
+    sqlitestore::import(&store, &export);
+    let mut sources = vec![
+        ("file", Source::Json(FileSource::at(index))),
+        (
+            "sqlite",
+            Source::Sqlite(SqliteSource::at(store, Path::new("/srv/acme"))),
+        ),
+    ];
+    let Some(store) = TestStore::create() else {
+        return (None, sources);
+    };
     let repo = store.import(&export);
     let db = Database::new(&store.url, Trust::default(), Duration::from_secs(10)).unwrap();
     let postgres = PostgresSource::new(db, Some(&repo), Path::new("/srv/acme"));
-    Some((store, vec![
-        ("file", Source::Json(FileSource::at(index))),
-        ("postgres", Source::Postgres(postgres)),
-    ]))
+    sources.push(("postgres", Source::Postgres(postgres)));
+    (Some(store), sources)
 }
 
 /// What a reader sees of an index: every live rule in order, and each
@@ -110,9 +122,7 @@ fn filters() -> Vec<(Filter, Vec<String>)> {
 #[test]
 fn every_source_reads_the_same_records_the_same_way() {
     let dir = tempfile::tempdir().unwrap();
-    let Some((_store, sources)) = sources(dir.path()) else {
-        return;
-    };
+    let (_store, sources) = sources(dir.path());
     let read: Vec<(&str, RuleIndex)> = sources
         .iter()
         .map(|(name, source)| (*name, source.read().unwrap().unwrap()))
