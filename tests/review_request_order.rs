@@ -29,7 +29,7 @@ fn a_refused_request_leaves_the_draft_alone() {
 
     let calls = fake.calls();
     assert!(
-        calls.contains("pr view"),
+        calls.contains("repos/o/r/pulls/1"),
         "the run must have reached target resolution: {calls}"
     );
     assert!(

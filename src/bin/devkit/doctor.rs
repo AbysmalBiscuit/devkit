@@ -171,13 +171,13 @@ fn forge_check(r: &devkit_common::forge::Resolved) -> Check {
         ForgeKind::Github | ForgeKind::Gitlab | ForgeKind::Forgejo => {
             let detail = format!("{kind} on {}: {}", r.forge.host(), r.reason);
             if r.forge.ready() {
-                Check::Ok(detail)
-            } else {
-                let why = r.forge.check().err().map(|e| format!("{e:#}"));
-                Check::Warn(format!(
-                    "{detail}; {}",
-                    why.unwrap_or_else(|| "no token".into())
-                ))
+                return Check::Ok(detail);
+            }
+            // With no token of devkit's own, a forge CLI may still reach the
+            // host, which is all the PR commands need.
+            match r.forge.check() {
+                Ok(identity) => Check::Ok(format!("{detail}; {identity}")),
+                Err(e) => Check::Warn(format!("{detail}; {e:#}")),
             }
         }
     }

@@ -14,6 +14,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+pub use reqwest::Method;
 use serde_json::Value;
 
 use crate::{
@@ -216,17 +217,66 @@ impl Api {
     /// 404 (a clean "absent" the caller can act on), `Err` on any other status
     /// or transport error.
     pub fn rest_get_opt(&self, path: &str) -> Result<Option<Value>> {
+        self.rest_direct(Method::GET, path, None)
+    }
+
+    fn rest_direct(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Option<Value>> {
         let _span = devkit_timing::io_span("github REST", path).entered();
-        let resp = http::send(
-            client()
-                .get(format!("{}{path}", self.rest_base()))
-                .header("Authorization", self.bearer()?)
-                .header("User-Agent", UA)
-                .header("Accept", "application/vnd.github+json"),
-        );
-        match resp {
-            Ok(r) => Ok(Some(r.json()?)),
+        let mut req = client()
+            .request(method, format!("{}{path}", self.rest_base()))
+            .header("Authorization", self.bearer()?)
+            .header("User-Agent", UA)
+            .header("Accept", "application/vnd.github+json");
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        match http::send(req) {
+            Ok(r) => Ok(Some(json_or_null(&r.text()?)?)),
             Err(e) if http::status(&e) == Some(StatusCode::NOT_FOUND) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// A REST call to `path` (rooted, such as `/repos/o/r/pulls`), with `body`
+    /// as its JSON payload. `Ok(None)` is a 404.
+    ///
+    /// Direct when this host has a token, else through `gh api`, which may be
+    /// authenticated where devkit is not. A GET the direct call cannot make is
+    /// retried through `gh`; a write is not, since it may have landed.
+    pub fn rest(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Option<Value>> {
+        if self.token().is_none() {
+            return self.gh_rest(&method, path, body);
+        }
+        match self.rest_direct(method.clone(), path, body) {
+            Err(e) if method == Method::GET => self
+                .gh_rest(&method, path, body)
+                .map_err(|gh| anyhow::anyhow!("{e:#}; gh: {gh:#}")),
+            other => other,
+        }
+    }
+
+    /// [`Api::rest`] through `gh api --hostname <host>`.
+    fn gh_rest(&self, method: &Method, path: &str, body: Option<&Value>) -> Result<Option<Value>> {
+        let mut args: Vec<String> = [
+            "api",
+            "--hostname",
+            self.host(),
+            "--method",
+            method.as_str(),
+            path.trim_start_matches('/'),
+        ]
+        .map(String::from)
+        .into();
+        args.extend(gh_fields(body));
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        match crate::cmd::capture("gh", &refs, None) {
+            Ok(out) => Ok(Some(json_or_null(&out)?)),
+            Err(e) if format!("{e:#}").contains("(HTTP 404)") => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -235,6 +285,35 @@ impl Api {
     pub fn rest_get(&self, path: &str) -> Result<Value> {
         self.rest_get_opt(path)?.context("GitHub returned 404")
     }
+}
+
+/// A response body as JSON, an empty one (a 204) as `null`.
+fn json_or_null(text: &str) -> Result<Value> {
+    if text.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(text).context("parsing a GitHub response")
+}
+
+/// A JSON object payload as `gh api` field flags: `-f` sends a string as
+/// given, `-F` a boolean or number as typed, and `key[]` one array element.
+fn gh_fields(body: Option<&Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (key, value) in body.and_then(Value::as_object).into_iter().flatten() {
+        match value {
+            Value::String(s) => out.extend(["-f".to_string(), format!("{key}={s}")]),
+            Value::Bool(_) | Value::Number(_) => {
+                out.extend(["-F".to_string(), format!("{key}={value}")])
+            }
+            Value::Array(items) => {
+                for item in items.iter().filter_map(Value::as_str) {
+                    out.extend(["-f".to_string(), format!("{key}[]={item}")]);
+                }
+            }
+            Value::Null | Value::Object(_) => {}
+        }
+    }
+    out
 }
 
 fn graphql_error_message(v: &Value) -> &str {
@@ -307,6 +386,22 @@ mod tests {
             "data": null,
             "errors": [{ "type": "NOT_FOUND", "path": ["repository"] }]
         })));
+    }
+
+    #[test]
+    fn gh_fields_type_each_value_the_way_gh_api_reads_it() {
+        let body = json!({
+            "title": "fix: a=b", "draft": false, "reviewers": ["al", "bo"], "gone": null
+        });
+        let got = gh_fields(Some(&body)).join(" ");
+        for want in [
+            "-f title=fix: a=b",
+            "-F draft=false",
+            "-f reviewers[]=al -f reviewers[]=bo",
+        ] {
+            assert!(got.contains(want), "{want} missing: {got}");
+        }
+        assert!(!got.contains("gone"), "{got}");
     }
 
     /// GitHub Enterprise Server serves both APIs from its own host, and its

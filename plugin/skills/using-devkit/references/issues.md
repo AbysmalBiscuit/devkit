@@ -77,6 +77,7 @@ The optional second positional overrides the worktree path (default: `templates.
 - `--pr <URL|number>` acts on that PR and records it, which is how a worktree bound to the wrong PR is rebound. `--no-push` skips the push.
 - Whichever PR the run ends on, its head commit must be this worktree's `HEAD`. A reused PR is checked before it is touched, a new one straight after it opens; a failure there leaves the new PR open and says so.
 - `pr ready` on a branch with no PR is an error naming `issue pr create`; a merged or closed PR is refused.
+- Where GitHub refuses GraphQL, as in a Claude Code cloud session, `pr create` still finds the branch's PR and opens one over REST, ready or draft as asked, but finds no PR on a fork's branch and cannot `--attach`. `pr ready` and `review request`'s draft flip need GraphQL, so open the PR ready there.
 
 ### `pr render`: the PR text without opening it
 

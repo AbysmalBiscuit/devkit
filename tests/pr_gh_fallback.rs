@@ -1,6 +1,5 @@
 //! A PR fetched by number, one a command just opened, recorded, or was handed,
-//! is read through `gh` when no GitHub token resolves, the same as a PR found
-//! by branch.
+//! is read through `gh api` when no GitHub token resolves.
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
@@ -20,7 +19,11 @@ fn pr_create_verifies_the_pr_it_opened() {
     let out = fake.issue(&["pr", "create", "--no-push", "--pr-title", "t"]);
 
     assert!(out.status.success(), "{out:?}\n{}", fake.calls());
-    assert!(fake.calls().contains("pr view 7"), "{}", fake.calls());
+    assert!(
+        fake.calls().contains("--method GET repos/o/r/pulls/7"),
+        "{}",
+        fake.calls()
+    );
 }
 
 #[test]

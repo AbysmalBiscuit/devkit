@@ -34,7 +34,7 @@ fn an_already_ready_pr_is_not_judged_by_the_gate() {
 
     let calls = fake.calls();
     assert!(
-        calls.contains("pr edit"),
+        calls.contains("repos/o/r/pulls/1/requested_reviewers -f reviewers[]="),
         "the requested reviewer is still added: {calls}"
     );
     assert!(
@@ -102,7 +102,7 @@ fn a_self_review_does_not_satisfy_the_gate() {
         is_draft: true,
         author: "LevValle",
     });
-    fake.set_reviews(r#"{"reviews":[{"author":{"login":"LevValle"},"state":"COMMENTED"}]}"#);
+    fake.set_reviews(r#"[{"user":{"login":"LevValle"},"state":"COMMENTED"}]"#);
     let out = fake.issue(&["pr", "ready", "--no-push"]);
 
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -132,7 +132,7 @@ fn another_persons_review_satisfies_the_gate() {
         is_draft: true,
         author: "LevValle",
     });
-    fake.set_reviews(r#"{"reviews":[{"author":{"login":"igoracc"},"state":"COMMENTED"}]}"#);
+    fake.set_reviews(r#"[{"user":{"login":"igoracc"},"state":"COMMENTED"}]"#);
     let out = fake.issue(&["pr", "ready", "--no-push"]);
 
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
