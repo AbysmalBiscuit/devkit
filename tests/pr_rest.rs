@@ -176,3 +176,95 @@ fn doctor_reaches_github_through_gh_when_graphql_is_refused() {
         fake.calls()
     );
 }
+
+/// REST cannot open a PR from a fork's branch by name alone, nor find one
+/// afterwards, so a push to another repository is refused before anything is
+/// opened or anyone is asked to review.
+#[test]
+fn a_fork_push_is_refused_before_the_rest_create() {
+    let fake = ghfake::Fake::with_origin_and(
+        "[forge]\nkind = \"github\"\nrepo = \"o/r\"",
+        "https://github.com/fork/r.git",
+    );
+    fake.refuse_graphql();
+    fake.create_opens(&ready_pr(7));
+
+    let out = fake.issue(&[
+        "pr",
+        "create",
+        "--no-push",
+        "--to",
+        "lev",
+        "--pr-title",
+        "t",
+    ]);
+
+    let calls = fake.calls();
+    assert!(!out.status.success(), "{out:?}\n{calls}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("fork/r"), "{stderr}");
+    assert!(!calls.contains(REST_CREATE), "{calls}");
+    assert!(!calls.contains("requested_reviewers"), "{calls}");
+}
+
+#[test]
+fn reviewers_are_requested_once_the_created_pr_is_verified() {
+    let fake = ghfake::Fake::without_pr("");
+    fake.create_opens(&ready_pr(7));
+
+    let out = fake.issue(&[
+        "pr",
+        "create",
+        "--no-push",
+        "--to",
+        "lev",
+        "--pr-title",
+        "t",
+    ]);
+
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{calls}");
+    assert_eq!(stdout(&out), "https://github.com/o/r/pull/7\n");
+    let order: Vec<&str> = calls
+        .lines()
+        .filter(|l| {
+            l.starts_with("pr create")
+                || l.contains("GET repos/o/r/pulls/7")
+                || l.contains("requested_reviewers")
+        })
+        .collect();
+    assert_eq!(order.len(), 3, "{calls}");
+    assert!(order[0].starts_with("pr create"), "{calls}");
+    assert!(!order[0].contains("--reviewer"), "{calls}");
+    assert!(order[1].contains("GET repos/o/r/pulls/7"), "{calls}");
+    assert!(
+        order[2].contains("POST repos/o/r/pulls/7/requested_reviewers -f reviewers[]=LevValle"),
+        "{calls}"
+    );
+}
+
+#[test]
+fn a_created_pr_that_fails_verification_gets_no_reviewers() {
+    let fake = ghfake::Fake::without_pr("");
+    fake.create_opens(&ready_pr(7));
+    fake.serve_pr_at(&ready_pr(7), "0000000000000000000000000000000000000000");
+
+    let out = fake.issue(&[
+        "pr",
+        "create",
+        "--no-push",
+        "--to",
+        "lev",
+        "--pr-title",
+        "t",
+    ]);
+
+    let calls = fake.calls();
+    assert!(!out.status.success(), "{out:?}\n{calls}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("is open with nothing recorded"),
+        "{out:?}"
+    );
+    assert!(!calls.contains("--reviewer"), "{calls}");
+    assert!(!calls.contains("requested_reviewers"), "{calls}");
+}

@@ -726,9 +726,20 @@ impl GithubForge {
         Ok(HeadLookup::of(found))
     }
 
-    /// `POST /pulls`, then the reviewer request. A ready PR is opened ready,
-    /// so no GraphQL-only draft flip follows.
-    fn rest_create(&self, repo: &Repo, pr: &NewPr<'_>) -> Result<String> {
+    /// `POST /pulls`. A ready PR is opened ready, so no GraphQL-only draft
+    /// flip follows. REST takes the head by name in `repo` and finds no fork's
+    /// head afterwards, so a branch `origin` pushes to another repository is
+    /// refused before anything is opened.
+    fn rest_create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String> {
+        if let Ok(pushed) = super::remote::origin_slug(&cwd.to_string_lossy(), &repo.host)
+            && !pushed.eq_ignore_ascii_case(&repo.slug)
+        {
+            anyhow::bail!(
+                "`origin` is {pushed}, not {}: GitHub refused GraphQL, and its REST API \
+                 cannot open a PR from a fork's branch",
+                repo.slug
+            );
+        }
         let created = self
             .api
             .rest(
@@ -743,12 +754,9 @@ impl GithubForge {
                 })),
             )?
             .context("GitHub returned 404 creating the PR")?;
-        let brief = parse_brief(&created).context("unexpected PR shape from the create")?;
-        if !pr.reviewers.is_empty() {
-            self.add_reviewers(repo, brief.number, pr.reviewers)
-                .with_context(|| format!("{} is open", brief.url))?;
-        }
-        Ok(brief.url)
+        Ok(parse_brief(&created)
+            .context("unexpected PR shape from the create")?
+            .url)
     }
 
     fn graphql_or_gh(&self, query: &str) -> Result<Value> {
@@ -863,13 +871,9 @@ impl Forge for GithubForge {
     /// attachment's path against `cwd`. Where GitHub refuses the GraphQL it
     /// runs on, the PR is opened over REST instead, which uploads nothing.
     fn create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String> {
-        let joined = pr.reviewers.join(",");
         let mut args = vec![
             "pr", "create", "--base", pr.base, "--title", pr.title, "--body", pr.body,
         ];
-        if !pr.reviewers.is_empty() {
-            args.extend(["--reviewer", &joined]);
-        }
         if pr.draft {
             args.push("--draft");
         }
@@ -879,7 +883,7 @@ impl Forge for GithubForge {
         let out = match gh_capture(&args, repo, &cwd.to_string_lossy()) {
             Ok(out) => out,
             Err(e) if graphql_refused(&e) && pr.attachments.is_empty() => {
-                return self.rest_create(repo, pr);
+                return self.rest_create(repo, pr, cwd);
             }
             Err(e) => return Err(e).context("gh pr create failed"),
         };

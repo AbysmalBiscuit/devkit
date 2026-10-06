@@ -160,6 +160,18 @@ github = "sweeper[bot]"
         .expect("write REST pr");
     }
 
+    /// Answer the REST read of PR `pr.number` with `pr` at commit `head`
+    /// rather than this project's, as a PR carrying other work would read.
+    pub fn serve_pr_at(&self, pr: &Pr, head: &str) {
+        std::fs::write(
+            self.bin
+                .path()
+                .join(format!("rest_pull_{}.json", pr.number)),
+            rest_pr_json(pr, head),
+        )
+        .expect("write REST pr");
+    }
+
     /// Have `gh pr create`, and the REST create, open `pr`, which the REST
     /// read then serves.
     pub fn create_opens(&self, pr: &Pr) {

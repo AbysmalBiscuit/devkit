@@ -289,7 +289,9 @@ impl HeadLookup {
     }
 }
 
-/// A pull request to open.
+/// A pull request to open. It carries no reviewers: the caller requests them
+/// through [`Forge::add_reviewers`] once the opened PR is shown to carry its
+/// commits, so a wrong PR never asks anyone to review it.
 #[derive(Debug, Clone)]
 pub struct NewPr<'a> {
     pub base: &'a str,
@@ -298,8 +300,6 @@ pub struct NewPr<'a> {
     pub title: &'a str,
     pub body: &'a str,
     pub draft: bool,
-    /// Logins to request as reviewers.
-    pub reviewers: &'a [String],
     /// Images and videos to upload into the body, each as `gh --attach` takes
     /// it: a path, optionally followed by `#` and alt text. Empty unless
     /// [`Forge::attaches_media`].
