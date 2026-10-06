@@ -208,14 +208,18 @@ pub(crate) fn record(start: &Path, kind: Kind, title: &str, body: &str) -> Resul
 }
 
 /// Delete one session's receipts of every kind. An invalid id or a session
-/// with none is a no-op. Every kind is attempted; the first failure is
-/// returned.
+/// with none is a no-op. Every kind is attempted, except one whose store is a
+/// symlink, which is skipped; the first failure is returned.
 pub(crate) fn clear_session(checkout: &Path, session: &str) -> Result<()> {
     if !valid_session(session) {
         return Ok(());
     }
     let mut first_err = None;
     for kind in Kind::ALL {
+        if let Err(e) = check_dirs(checkout, kind) {
+            first_err.get_or_insert(e);
+            continue;
+        }
         let dir = session_dir(checkout, kind, session);
         match std::fs::remove_dir_all(&dir) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -331,6 +335,21 @@ mod tests {
         assert!(session_dir(d, Kind::Issue, "S2").exists());
         clear_session(d, "..").unwrap();
         assert!(session_dir(d, Kind::Issue, "S2").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clear_session_reports_a_symlinked_kind_and_clears_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, Kind::Issue, "S1", "T", "B").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("S1")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), receipts_root(d, Kind::Pr)).unwrap();
+        let err = clear_session(d, "S1").unwrap_err();
+        assert!(format!("{err:#}").contains("symlink"), "{err:#}");
+        assert!(outside.path().join("S1").exists());
+        assert!(!session_dir(d, Kind::Issue, "S1").exists());
     }
 
     #[test]

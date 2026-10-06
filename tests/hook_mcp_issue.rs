@@ -328,6 +328,25 @@ fn session_end_ignores_a_traversal_id() {
     assert!(p.path().join("devkit.toml").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn session_end_skips_a_symlinked_receipt_store_and_clears_the_rest() {
+    let p = project();
+    render(p.path(), "S1", "T", "B");
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir(outside.path().join("S1")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), p.path().join(".devkit/pr-receipts")).unwrap();
+
+    let out = session_end(p.path(), "S1");
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        outside.path().join("S1").exists(),
+        "removed through the symlink"
+    );
+    assert!(!receipts_dir(p.path(), "S1").exists());
+}
+
 /// Claude Code's payload `cwd` is where the session started, which need not be
 /// the worktree the agent `cd`ed into to render, so every worktree of one
 /// repository shares one receipt store.
