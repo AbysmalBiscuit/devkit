@@ -579,6 +579,14 @@ fn gather(steps: &Steps) -> Vec<Row> {
         steps,
     ));
     rows.extend(todo_rows(std::path::Path::new(".")));
+    rows.push({
+        let cwd = std::path::Path::new(".");
+        let checkout = devkit_common::vcs::Checkout::at(cwd);
+        let settings = devkit_common::config::resolve_in(&checkout, None, cwd)
+            .map(|(project, _)| project.rules)
+            .unwrap_or_default();
+        rules_row(&settings, &checkout)
+    });
     rows.extend(steps.during("Checking shim links...", shim_rows));
     rows
 }
@@ -676,6 +684,26 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
         );
     }
     rows
+}
+
+/// The rules source `[rules] source` names and where it reads from.
+fn rules_row(
+    settings: &devkit_config::RulesConfig,
+    checkout: &devkit_common::vcs::Checkout,
+) -> Row {
+    use devkit_rules::source::RuleSource;
+
+    let name = serde_json::to_value(settings.source)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let location = devkit_rules::source::Source::for_checkout(settings, checkout).location();
+    Row {
+        key: "rules_source",
+        data: serde_json::json!({ "source": name, "location": location }),
+        source: Source::Unset,
+        check: Check::Ok(format!("{name}, {location}")),
+    }
 }
 
 /// How long doctor waits for the todo database to answer.
@@ -889,6 +917,23 @@ mod tests {
         let check = config_check(&broken);
         assert!(matches!(check, Check::Invalid(_)), "{check:?}");
         assert_eq!(worst_exit(&[row(check)]), 1);
+    }
+
+    #[test]
+    fn the_rules_row_names_the_source_and_the_index_it_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.json").display().to_string();
+        let settings = devkit_config::RulesConfig {
+            index: Some(index.clone()),
+            ..Default::default()
+        };
+        let row = rules_row(&settings, &devkit_common::vcs::Checkout::at(dir.path()));
+        assert_eq!(row.key, "rules_source");
+        assert_eq!(row.check, Check::Ok(format!("file, {index}")));
+        assert_eq!(
+            row.data,
+            serde_json::json!({ "source": "file", "location": index })
+        );
     }
 
     /// A forge devkit could not find is a warning naming the reason, and one
