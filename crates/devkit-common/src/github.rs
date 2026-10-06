@@ -213,13 +213,6 @@ impl Api {
         )
     }
 
-    /// GET `path` under the REST root. `Ok(Some(json))` on 2xx, `Ok(None)` on
-    /// 404 (a clean "absent" the caller can act on), `Err` on any other status
-    /// or transport error.
-    pub fn rest_get_opt(&self, path: &str) -> Result<Option<Value>> {
-        self.rest_direct(Method::GET, path, None)
-    }
-
     fn rest_direct(
         &self,
         method: Method,
@@ -285,7 +278,8 @@ impl Api {
 
     /// GET `path` under the REST root, erroring on 404.
     pub fn rest_get(&self, path: &str) -> Result<Value> {
-        self.rest_get_opt(path)?.context("GitHub returned 404")
+        self.rest_direct(Method::GET, path, None)?
+            .context("GitHub returned 404")
     }
 }
 
