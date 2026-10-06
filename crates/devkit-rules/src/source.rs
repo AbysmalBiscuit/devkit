@@ -2,7 +2,8 @@
 //! [`Source`], and every read and edit goes through [`RuleSource`].
 #![expect(
     dead_code,
-    reason = "ambassador's Delegate derive emits a private helper trait that `Source` never uses"
+    reason = "ambassador's Delegate derive emits a private helper trait that only an enum of two or \
+              more members uses; delete this once `Source` has a second"
 )]
 
 use std::path::Path;
