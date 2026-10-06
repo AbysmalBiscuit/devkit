@@ -11,9 +11,11 @@ mod pgstore;
 #[path = "common/testenv.rs"]
 mod testenv;
 
+#[cfg(unix)]
+use std::path::Path;
 use std::{
     io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Child, Command, Output, Stdio},
     time::{Duration, Instant},
 };
@@ -571,6 +573,7 @@ fn doctor_reports_the_source_repository_and_connection_without_the_url() {
 }
 
 /// A port nothing listens on, as `127.0.0.1:<port>`.
+#[cfg(unix)]
 fn refused_addr() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().to_string()
@@ -606,6 +609,7 @@ fn doppler_calls(dir: &Path) -> usize {
 }
 
 /// A checkout reading `repo` with its URL in the `rules` Doppler project.
+#[cfg(unix)]
 fn doppler_proj(repo: &str) -> Proj {
     Proj::new(&format!(
         "{}doppler_project = \"rules\"\n",
