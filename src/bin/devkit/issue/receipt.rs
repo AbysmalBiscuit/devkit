@@ -190,21 +190,25 @@ pub(crate) fn record(start: &Path, kind: Kind, title: &str, body: &str) -> Resul
 }
 
 /// Delete one session's receipts of every kind. An invalid id or a session
-/// with none is a no-op.
+/// with none is a no-op. Every kind is attempted; the first failure is
+/// returned.
 pub(crate) fn clear_session(checkout: &Path, session: &str) -> Result<()> {
     if !valid_session(session) {
         return Ok(());
     }
+    let mut first_err = None;
     for kind in Kind::ALL {
         let dir = session_dir(checkout, kind, session);
         match std::fs::remove_dir_all(&dir) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                return Err(e).with_context(|| format!("removing {}", dir.display()));
+                first_err.get_or_insert_with(|| {
+                    anyhow::Error::new(e).context(format!("removing {}", dir.display()))
+                });
             }
             _ => {}
         }
     }
-    Ok(())
+    first_err.map_or(Ok(()), Err)
 }
 
 /// Delete every session directory last written to more than `older_than` ago.
