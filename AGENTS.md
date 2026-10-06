@@ -35,7 +35,7 @@ A scenario under `evals/scenarios/` is a `prompt.md`, an optional `fixture/` cop
 
 ## Layout
 
-The root package is the `devkit` binary (`src/bin/devkit/`, one module per subcommand). `devkitd` (`src/bin/devkitd/`) is the supervisor daemon. `plugin/` is the directory each harness copies on install: its manifests, hooks, skills and `.mcp.json`. Every path a plugin manifest names stays inside it; the marketplace files stay at the repo root.
+The root package is the `devkit` binary (`src/bin/devkit/`, one module per subcommand). `devkitd` (`src/bin/devkitd/`) is the supervisor daemon. `plugin/` is the directory each harness copies on install: its manifests, hooks, skills and `.mcp.json`. Every path a plugin manifest names stays inside it; the marketplace files stay at the repo root. `.agents/harnessup/` is what [harnessup](https://github.com/AbysmalBiscuit/harnessup) places into Claude Code cloud sessions: its manifest, the cloud-only rules, config and context, and cloud-only skills. Local sessions never read it, and its `README.md` records the cloud environment's setup script.
 
 | Crate | Role |
 |---|---|
