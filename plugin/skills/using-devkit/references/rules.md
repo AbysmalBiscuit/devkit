@@ -34,7 +34,7 @@ The role in the URL reads and writes the `repo_rules` tables directly, so it mus
 
 ### Failures
 
-A hook that cannot read the rules injects none and prints one line on stderr naming why: the database is unreachable, gives no answer within a second, refuses the login, holds no such repository, or is at an unsupported storage version. The write itself goes ahead. `devkit rules query`, `stats`, `add`, `edit` and `remove` exit non-zero with the same cause. `devkit doctor` shows the source, the repository, where the URL resolved from and whether the database answers, never the URL itself.
+A hook that cannot read the rules injects none and prints one line on stderr naming why: the database is unreachable, gives no answer within the hook's short wait, refuses the login, holds no such repository, or is at an unsupported storage version. The write itself goes ahead. A hook asks Doppler for the URL when its kept copy is missing or stale, and that lookup adds its own wait before the hook connects. `devkit rules query`, `stats`, `add`, `edit` and `remove` exit non-zero with the same cause. `devkit doctor` shows the source, the repository, where the URL resolved from and whether the database answers, never the URL itself.
 
 ### Edits
 
