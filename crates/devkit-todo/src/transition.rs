@@ -1,5 +1,6 @@
 //! The one rule every status change goes through, so each backend derives the
-//! stored holder the same way.
+//! stored holder the same way. The Postgres store applies it in SQL, as
+//! `devkit.todo_transition`, and a test there holds that copy to this one.
 
 use std::fmt;
 
