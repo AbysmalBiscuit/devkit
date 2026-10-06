@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 
 use crate::{
     edit::{self, Fields},
@@ -20,12 +20,39 @@ use crate::{
 /// The rule source over one JSON index file.
 pub struct FileSource {
     path: PathBuf,
+    /// Whether an edit may create the file. One in the extractor's cache
+    /// directory may not: the extractor writes a SQLite store there, which
+    /// then wins over a JSON index devkit created and hides what was added.
+    creates: bool,
 }
 
 impl FileSource {
-    /// The index at `path`.
+    /// The index at `path`, which an edit creates when it is missing.
     pub fn at(path: PathBuf) -> FileSource {
-        FileSource { path }
+        FileSource {
+            path,
+            creates: true,
+        }
+    }
+
+    /// The index at `path` in the extractor's cache directory, which only the
+    /// extractor creates.
+    pub fn cached(path: PathBuf) -> FileSource {
+        FileSource {
+            path,
+            creates: false,
+        }
+    }
+
+    fn update<T>(&self, f: impl FnOnce(&mut edit::IndexDocument) -> Result<T>) -> Result<T> {
+        if !self.creates && !self.path.exists() {
+            let dir = self.path.parent().unwrap_or(&self.path);
+            bail!(
+                "no rules index in {}; build it with `repo-rules index` first",
+                dir.display()
+            );
+        }
+        edit::update(&self.path, f)
     }
 }
 
@@ -35,15 +62,15 @@ impl RuleSource for FileSource {
     }
 
     fn add(&self, repo: &str, fields: Fields) -> Result<String> {
-        edit::update(&self.path, |doc| doc.add(repo, fields))
+        self.update(|doc| doc.add(repo, fields))
     }
 
     fn edit(&self, id: &str, fields: Fields) -> Result<()> {
-        edit::update(&self.path, |doc| doc.edit(id, fields))
+        self.update(|doc| doc.edit(id, fields))
     }
 
     fn remove(&self, id: &str) -> Result<()> {
-        edit::update(&self.path, |doc| doc.remove(id))
+        self.update(|doc| doc.remove(id))
     }
 
     fn location(&self) -> String {

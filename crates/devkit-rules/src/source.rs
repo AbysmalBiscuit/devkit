@@ -90,14 +90,14 @@ impl Source {
 
     /// The store the extractor keeps for `repo`: its SQLite store when there
     /// is one, as the extractor's own `cache list` prefers it, else the JSON
-    /// index.
+    /// index, which devkit leaves to the extractor to create.
     fn cached(repo: &Path) -> Source {
         let dir = cache_dir(repo);
         let store = dir.join("index.sqlite");
         if store.is_file() {
             Source::Sqlite(SqliteSource::at(store, repo))
         } else {
-            Source::Json(FileSource::at(dir.join("index.json")))
+            Source::Json(FileSource::cached(dir.join("index.json")))
         }
     }
 

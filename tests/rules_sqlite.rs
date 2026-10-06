@@ -237,6 +237,41 @@ fn a_cached_store_wins_over_a_json_index_beside_it() {
 }
 
 #[test]
+fn an_empty_cache_refuses_edits_and_reads_as_no_index() {
+    let home = tempfile::tempdir().unwrap();
+    let main = repo();
+    configure(main.path(), "");
+    let cache = cache_dir(home.path(), main.path());
+    std::fs::create_dir_all(&cache).unwrap();
+
+    for args in [
+        &["add", "--title", "Added"][..],
+        &["edit", "r-root-must", "--title", "T"][..],
+        &["remove", "r-root-must"][..],
+    ] {
+        let out = rules(main.path(), home.path(), args);
+        assert!(!out.status.success(), "{args:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(&cache.display().to_string()), "{err}");
+        assert!(err.contains("repo-rules index"), "{err}");
+    }
+    assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 0);
+
+    let query = rules(main.path(), home.path(), &["query"]);
+    assert!(!query.status.success());
+    let err = String::from_utf8_lossy(&query.stderr);
+    assert!(err.contains("no rules index at"), "{err}");
+    assert!(err.contains("index.json"), "{err}");
+    let out = hook(main.path(), home.path(), "src/a.rs");
+    assert_eq!(injected(&out), None);
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn a_configured_store_is_read_whatever_it_is_called() {
     let home = tempfile::tempdir().unwrap();
     let main = repo();
