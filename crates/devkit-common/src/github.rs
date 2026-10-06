@@ -272,7 +272,7 @@ impl Api {
         ]
         .map(String::from)
         .into();
-        args.extend(gh_fields(body));
+        args.extend(gh_fields(body)?);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         match crate::cmd::capture("gh", &refs, None) {
             Ok(out) => Ok(Some(json_or_null(&out)?)),
@@ -297,7 +297,9 @@ fn json_or_null(text: &str) -> Result<Value> {
 
 /// A JSON object payload as `gh api` field flags: `-f` sends a string as
 /// given, `-F` a boolean or number as typed, and `key[]` one array element.
-fn gh_fields(body: Option<&Value>) -> Vec<String> {
+/// A value those flags cannot carry (a null, an object, a non-string array
+/// item) is an error rather than a field silently left out.
+fn gh_fields(body: Option<&Value>) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for (key, value) in body.and_then(Value::as_object).into_iter().flatten() {
         match value {
@@ -306,14 +308,19 @@ fn gh_fields(body: Option<&Value>) -> Vec<String> {
                 out.extend(["-F".to_string(), format!("{key}={value}")])
             }
             Value::Array(items) => {
-                for item in items.iter().filter_map(Value::as_str) {
+                for item in items {
+                    let Some(item) = item.as_str() else {
+                        anyhow::bail!("`gh api` cannot send {key}[] item {item}");
+                    };
                     out.extend(["-f".to_string(), format!("{key}[]={item}")]);
                 }
             }
-            Value::Null | Value::Object(_) => {}
+            Value::Null | Value::Object(_) => {
+                anyhow::bail!("`gh api` cannot send {key} = {value}")
+            }
         }
     }
-    out
+    Ok(out)
 }
 
 fn graphql_error_message(v: &Value) -> &str {
@@ -391,9 +398,9 @@ mod tests {
     #[test]
     fn gh_fields_type_each_value_the_way_gh_api_reads_it() {
         let body = json!({
-            "title": "fix: a=b", "draft": false, "reviewers": ["al", "bo"], "gone": null
+            "title": "fix: a=b", "draft": false, "reviewers": ["al", "bo"]
         });
-        let got = gh_fields(Some(&body)).join(" ");
+        let got = gh_fields(Some(&body)).unwrap().join(" ");
         for want in [
             "-f title=fix: a=b",
             "-F draft=false",
@@ -401,7 +408,17 @@ mod tests {
         ] {
             assert!(got.contains(want), "{want} missing: {got}");
         }
-        assert!(!got.contains("gone"), "{got}");
+    }
+
+    #[test]
+    fn gh_fields_refuse_a_value_gh_api_cannot_carry() {
+        for body in [
+            json!({ "gone": null }),
+            json!({ "nested": { "a": 1 } }),
+            json!({ "reviewers": ["al", 7] }),
+        ] {
+            assert!(gh_fields(Some(&body)).is_err(), "{body}");
+        }
     }
 
     /// GitHub Enterprise Server serves both APIs from its own host, and its
