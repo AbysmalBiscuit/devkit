@@ -12,7 +12,7 @@ use devkit_config::{IssueEvent, PrCreateState};
 use super::{
     add_reviewers,
     proof::require_proof,
-    render::{Texts, values},
+    render::{Texts, require_pr_title, values},
     require_reviewer_for_ready,
     resolve::{Existing, assert_belongs, parse_pr_flag, resolve_existing, verify_created},
     reviewer_logins,
@@ -77,15 +77,6 @@ fn reuse_note(number: u64, pr_is_draft: bool, asked: Option<PrCreateState>) -> O
         "PR #{number} already exists and is {is}.\n\
          {flag} was ignored. To move it: {way_back}"
     ))
-}
-
-/// Reject an empty rendered PR title. Opening or rendering a PR needs one;
-/// reusing an open PR does not.
-pub(super) fn require_pr_title(title: &str) -> Result<()> {
-    if title.trim().is_empty() {
-        bail!("--pr-title is required: the pr_title template rendered empty");
-    }
-    Ok(())
 }
 
 /// Refuse `--attach` values gh could not upload, before anything is pushed.
@@ -391,12 +382,6 @@ mod tests {
             wanted_state(false, true, PrCreateState::Draft),
             PrCreateState::Ready
         );
-    }
-
-    #[test]
-    fn require_pr_title_rejects_empty() {
-        assert!(require_pr_title("  ").is_err());
-        assert!(require_pr_title("Fix login").is_ok());
     }
 
     #[test]

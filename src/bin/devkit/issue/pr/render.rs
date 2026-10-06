@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use devkit_common::{
     caller::Caller,
     record::IssueRecord,
@@ -12,7 +12,6 @@ use devkit_common::{
 use devkit_config::{Config, Templates};
 use devkit_ports::templates::worktree_context;
 
-use super::create::require_pr_title;
 use crate::{
     issue::{
         receipt,
@@ -21,6 +20,15 @@ use crate::{
     },
     template::VarArgs,
 };
+
+/// Reject an empty rendered PR title. Opening or rendering a PR needs one;
+/// reusing an open PR does not.
+pub(super) fn require_pr_title(title: &str) -> Result<()> {
+    if title.trim().is_empty() {
+        bail!("--pr-title is required: the pr_title template rendered empty");
+    }
+    Ok(())
+}
 
 /// The values a PR's templates render with: the declared defaults under
 /// `vars`. A required one the caller did not pass is refused, naming
@@ -145,4 +153,15 @@ pub(crate) fn run(args: Args) -> Result<()> {
     receipt::record(here, receipt::Kind::Pr, &title, &body)?;
     println!("{}", serde_json::to_string(&Rendered { title, body })?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn require_pr_title_rejects_empty() {
+        assert!(require_pr_title("  ").is_err());
+        assert!(require_pr_title("Fix login").is_ok());
+    }
 }
