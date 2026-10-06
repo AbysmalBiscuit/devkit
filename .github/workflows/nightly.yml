@@ -54,7 +54,7 @@ jobs:
           cat >"$RUNNER_TEMP/notes.md" <<EOF
           devkit \`${VERSION}\`, built from ${GITHUB_SHA} on \`main\`.
 
-          Each archive is replaced as its build finishes, so for a few minutes after a merge some may still hold the previous commit. \`devkit --version\` names the commit a binary was built from.
+          Each archive is replaced as its build finishes, so for a few minutes after a merge some may still hold the previous commit, and a target whose build failed keeps its previous archive until a later build succeeds. \`devkit --version\` names the commit a binary was built from.
 
           Install on Linux or macOS:
 
@@ -64,7 +64,7 @@ jobs:
           EOF
           if gh release view nightly >/dev/null 2>&1; then
             gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true >/dev/null
-            gh release edit nightly --prerelease --latest=false --title "nightly ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release edit nightly --target "$GITHUB_SHA" --prerelease --latest=false --title "nightly ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
           else
             gh release create nightly --target "$GITHUB_SHA" --prerelease --latest=false --title "nightly ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
           fi
