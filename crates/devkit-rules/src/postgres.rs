@@ -12,10 +12,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use devkit_common::tls::Trust;
 use serde_json::{Map, Value};
 use tokio_postgres::{
-    Client, Config, GenericClient, IsolationLevel, NoTls, Row, config::SslMode, error::SqlState,
+    Client, Config, GenericClient, IsolationLevel, Row, config::SslMode, error::SqlState,
     types::Type,
 };
-use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::{
     edit::{Fields, rule_id},
@@ -57,14 +56,8 @@ impl Database {
     /// `sslmode=disable`. An error never repeats the URL, which carries the
     /// password.
     pub fn new(url: &str, trust: Trust, wait: Duration) -> Result<Database> {
-        let mut config = url
-            .parse::<Config>()
+        let config = devkit_postgres::config(url)
             .map_err(|_| anyhow!("the rules database URL does not parse"))?;
-        // tokio-postgres's default, `prefer`, falls back to plaintext when the
-        // server, or anyone between, declines TLS.
-        if config.get_ssl_mode() == SslMode::Prefer {
-            config.ssl_mode(SslMode::Require);
-        }
         Ok(Database {
             config: Ok(Box::new(config)),
             trust,
@@ -95,21 +88,10 @@ impl Database {
 
     /// `host:port/dbname`, without the user or password.
     pub fn target(&self) -> String {
-        let Ok(config) = &self.config else {
-            return "no database".to_string();
-        };
-        let host = match config.get_hosts().first() {
-            Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
-            #[cfg(unix)]
-            Some(tokio_postgres::config::Host::Unix(path)) => path.display().to_string(),
-            None => "localhost".to_string(),
-        };
-        let port = config.get_ports().first().copied().unwrap_or(5432);
-        let db = config
-            .get_dbname()
-            .or(config.get_user())
-            .unwrap_or("postgres");
-        format!("{host}:{port}/{db}")
+        match &self.config {
+            Ok(config) => devkit_postgres::target(config),
+            Err(_) => "no database".to_string(),
+        }
     }
 
     /// Connects and runs `op` within the wait. An error from the database or
@@ -145,22 +127,15 @@ impl Database {
 }
 
 async fn connect(config: &Config, trust: &Trust) -> Result<Client> {
-    if config.get_ssl_mode() == SslMode::Disable {
-        let (client, connection) = config.connect(NoTls).await?;
-        tokio::spawn(connection);
-        return Ok(client);
-    }
-    let trust = trust.clone();
-    // Built on a blocking thread so the wait covers reading the CA file and
-    // the machine's roots.
-    let tls = tokio::task::spawn_blocking(move || trust.client_config())
-        .await
-        .map_err(|e| anyhow!("{e}"))
-        .and_then(|config| config)
-        .context("setting up TLS for the rules database")?;
-    let (client, connection) = config.connect(MakeRustlsConnect::new(tls)).await?;
-    tokio::spawn(connection);
-    Ok(client)
+    let tls = match config.get_ssl_mode() {
+        SslMode::Disable => None,
+        _ => Some(
+            devkit_postgres::tls(trust)
+                .await
+                .context("setting up TLS for the rules database")?,
+        ),
+    };
+    Ok(devkit_postgres::connect(config, tls).await?)
 }
 
 /// An operation that ran out of its wait.

@@ -14,9 +14,9 @@ glob.workspace = true
 ring.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
-tokio-postgres-rustls.workspace = true
 devkit-config.workspace = true
 devkit-common.workspace = true
+devkit-postgres.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
