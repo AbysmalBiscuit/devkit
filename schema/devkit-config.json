@@ -1682,14 +1682,14 @@
           ]
         },
         "pr_body": {
-          "description": "Body of a PR opened by `issue pr create`. `{{ input }}` is the\n`--pr-body` argument. Rendered only when a PR is actually opened, not\nwhen an existing one is reused.",
+          "description": "Body of a PR rendered by `issue pr render` or opened by `issue pr\ncreate`. `{{ input }}` is the `--pr-body` argument. `issue pr create`\nrenders it only when it opens a PR, not when it reuses an open one.",
           "type": [
             "string",
             "null"
           ]
         },
         "pr_title": {
-          "description": "Title of a PR opened by `issue pr create`. `{{ input }}` is the\n`--pr-title` argument; the rendered title must not be empty.",
+          "description": "Title of a PR rendered by `issue pr render` or opened by `issue pr\ncreate`. `{{ input }}` is the `--pr-title` argument; the rendered title\nmust not be empty.",
           "type": [
             "string",
             "null"

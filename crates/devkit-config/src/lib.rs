@@ -1812,12 +1812,13 @@ pub struct Templates {
     /// when a template renders both. A template whose fixed text already fills
     /// this is an error. Defaults to 46.
     pub checkout_worktree_dir_max: Option<usize>,
-    /// Title of a PR opened by `issue pr create`. `{{ input }}` is the
-    /// `--pr-title` argument; the rendered title must not be empty.
+    /// Title of a PR rendered by `issue pr render` or opened by `issue pr
+    /// create`. `{{ input }}` is the `--pr-title` argument; the rendered title
+    /// must not be empty.
     pub pr_title: Option<String>,
-    /// Body of a PR opened by `issue pr create`. `{{ input }}` is the
-    /// `--pr-body` argument. Rendered only when a PR is actually opened, not
-    /// when an existing one is reused.
+    /// Body of a PR rendered by `issue pr render` or opened by `issue pr
+    /// create`. `{{ input }}` is the `--pr-body` argument. `issue pr create`
+    /// renders it only when it opens a PR, not when it reuses an open one.
     pub pr_body: Option<String>,
     /// Title of an issue rendered by `issue render` or created by `issue
     /// create`. `{{ input }}` is the `--title` argument; the rendered title
