@@ -66,6 +66,12 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl Rule {
+    /// A rule carrying every default the extractor gives an omitted field.
+    pub fn default_extracted() -> Rule {
+        serde_json::from_value(serde_json::Value::Object(serde_json::Map::new()))
+            .expect("every field of a rule has a default")
+    }
+
     /// `None` when the index carries a severity outside the vocabulary, which
     /// drops the rule. The extractor's own validation already refuses these.
     pub fn severity(&self) -> Option<Severity> {

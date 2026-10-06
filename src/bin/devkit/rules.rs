@@ -5,21 +5,121 @@
 //! query means, with `--min-severity` added: the hook asks for a floor, and a
 //! flag the hook uses is a flag a person can reproduce by hand.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use devkit_common::vcs::Checkout;
-use devkit_config::RulesConfig;
+use devkit_common::{secrets, tls::Trust, vcs::Checkout};
+use devkit_config::{RulesConfig, RulesPostgresConfig};
 use devkit_rules::{
     edit,
     index::FileSource,
     model::RuleIndex,
+    postgres::Database,
     query, repo_config,
     source::{RuleSource, Source, repo_of},
     vocab::{self, Scope, Severity, Task},
 };
 use strum::VariantNames;
+
+use crate::database_url::{DatabaseUrl, UrlLookup, doppler_scope, global_ca_file};
+
+/// The `postgres` source's connection URL.
+pub(crate) const DATABASE_VAR: &str = "DEVKIT_RULES_DATABASE_URL";
+
+/// Who reads the rules, which sets how long the database may take and
+/// whether Doppler is asked for its URL.
+#[derive(Clone, Copy)]
+pub(crate) enum Reader {
+    /// A person at a command: Doppler is asked, and the database gets
+    /// [`CLI_DATABASE_WAIT`], long enough to wait out another edit's lock.
+    Cli,
+    /// A hook, or a session-start block a hook prints: a cached Doppler URL
+    /// stands in for Doppler, and the database gets [`HOOK_DATABASE_WAIT`].
+    Hook,
+}
+
+/// How long a command waits on the rules database, connecting included.
+const CLI_DATABASE_WAIT: Duration = Duration::from_secs(15);
+
+/// How long a hook waits on the rules database, connecting included, before
+/// it injects nothing.
+const HOOK_DATABASE_WAIT: Duration = Duration::from_secs(1);
+
+impl Reader {
+    fn wait(self) -> Duration {
+        match self {
+            Reader::Cli => CLI_DATABASE_WAIT,
+            Reader::Hook => HOOK_DATABASE_WAIT,
+        }
+    }
+
+    fn lookup(self) -> UrlLookup {
+        match self {
+            Reader::Cli => UrlLookup::Doppler,
+            Reader::Hook => UrlLookup::CachedFirst,
+        }
+    }
+}
+
+/// The rule source `settings` names for `checkout`, for `reader`.
+pub(crate) fn source(settings: &RulesConfig, checkout: &Checkout, reader: Reader) -> Source {
+    Source::for_checkout(settings, checkout, |config| {
+        open_database(config, reader.wait(), reader.lookup()).0
+    })
+}
+
+/// The rules database `config` and [`DATABASE_VAR`] name, opened with `wait`,
+/// and where its URL resolved from. A URL that is missing or does not parse
+/// gives a database every operation on fails, naming the variable and never
+/// the URL. The CA file comes from the global config alone.
+pub(crate) fn open_database(
+    config: &RulesPostgresConfig,
+    wait: Duration,
+    lookup: UrlLookup,
+) -> (Database, secrets::Source) {
+    let scope = doppler_scope(
+        config.doppler_project.as_deref(),
+        config.doppler_config.as_deref(),
+    );
+    let cache = DatabaseUrl {
+        var: DATABASE_VAR,
+        cache_dir: devkit_common::paths::state_dir().join("rules-database-url"),
+    };
+    let resolved = cache.resolve(scope.as_ref(), lookup);
+    let Some(url) = resolved.url else {
+        return (
+            Database::unusable(format!("{DATABASE_VAR} is not set")),
+            resolved.source,
+        );
+    };
+    let trust = Trust {
+        ca_file: global_ca_file("rules"),
+    };
+    let db = match Database::new(&url, trust, wait) {
+        Ok(db) => db,
+        Err(e) => {
+            return (
+                Database::unusable(format!("{DATABASE_VAR}: {e:#}")),
+                resolved.source,
+            );
+        }
+    };
+    let db = match (&resolved.source, scope) {
+        (secrets::Source::Doppler, Some(scope)) => {
+            // Only a fresh answer resets the copy's age; reusing it must not.
+            if !resolved.from_cache {
+                cache.remember(&scope, &url);
+            }
+            db.on_connect_failure(move || cache.forget(&scope, &url))
+        }
+        _ => db,
+    };
+    (db, resolved.source)
+}
 
 #[derive(Args)]
 pub struct RulesCli {
@@ -211,7 +311,7 @@ impl Here {
                 let settings = devkit_common::config::resolve_in(&checkout, None, &cwd)
                     .map(|(project, _)| project.rules)
                     .unwrap_or_default();
-                Source::for_checkout(&settings, &checkout)
+                source(&settings, &checkout, Reader::Cli)
             }
         };
         Ok(Here {
@@ -234,7 +334,7 @@ fn load_or_default(explicit: Option<PathBuf>) -> Result<(String, RuleIndex)> {
     let source = Here::resolve(explicit)?.source;
     let location = source.location();
     let loaded = source
-        .load()
+        .read()?
         .with_context(|| format!("no rules index at {location}"))?;
     Ok((location, loaded))
 }
@@ -248,7 +348,7 @@ pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesCon
     if !project.rules.enabled {
         return None;
     }
-    let loaded = Source::for_checkout(&project.rules, checkout).load()?;
+    let loaded = source(&project.rules, checkout, Reader::Hook).load()?;
     Some((project.rules, loaded))
 }
 

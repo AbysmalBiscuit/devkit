@@ -579,7 +579,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
         steps,
     ));
     rows.extend(todo_rows(std::path::Path::new(".")));
-    rows.push({
+    rows.extend({
         let cwd = std::path::Path::new(".");
         let checkout = devkit_common::vcs::Checkout::at(cwd);
         let (settings, configured) = devkit_common::config::resolve_in(&checkout, None, cwd)
@@ -590,7 +590,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
                 (project.rules, configured)
             })
             .unwrap_or_default();
-        rules_row(&settings, configured, &checkout)
+        rules_rows(&settings, configured, &checkout)
     });
     rows.extend(steps.during("Checking shim links...", shim_rows));
     rows
@@ -691,12 +691,39 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
     rows
 }
 
+/// How long doctor waits for the rules database to answer.
+const RULES_DATABASE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The rules source row and, for the `postgres` source, whether its
+/// database answers.
+fn rules_rows(
+    settings: &devkit_config::RulesConfig,
+    configured: bool,
+    checkout: &devkit_common::vcs::Checkout,
+) -> Vec<Row> {
+    let mut url_source = None;
+    let source = devkit_rules::source::Source::for_checkout(settings, checkout, |config| {
+        let (db, from) = crate::rules::open_database(
+            config,
+            RULES_DATABASE_WAIT,
+            crate::database_url::UrlLookup::Doppler,
+        );
+        url_source = Some(from);
+        db
+    });
+    let mut rows = vec![rules_row(settings, configured, &source)];
+    if let (devkit_rules::source::Source::Postgres(pg), Some(from)) = (&source, url_source) {
+        rows.push(rules_database_row(pg, from));
+    }
+    rows
+}
+
 /// The rules source `[rules] source` names and where it reads from.
 /// `configured` is whether a config file sets `source` or `index`.
 fn rules_row(
     settings: &devkit_config::RulesConfig,
     configured: bool,
-    checkout: &devkit_common::vcs::Checkout,
+    source: &devkit_rules::source::Source,
 ) -> Row {
     use devkit_rules::source::RuleSource;
 
@@ -704,7 +731,7 @@ fn rules_row(
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
-    let location = devkit_rules::source::Source::for_checkout(settings, checkout).location();
+    let location = source.location();
     Row {
         key: "rules_source",
         data: serde_json::json!({ "kind": name, "location": location }),
@@ -714,6 +741,28 @@ fn rules_row(
             Source::Unset
         },
         check: Check::Ok(format!("{name}, {location}")),
+    }
+}
+
+/// Where the rules database's URL resolves from, and whether the database
+/// answers with the configured repository in a store devkit reads. The URL,
+/// which carries the password, is never shown.
+fn rules_database_row(source: &devkit_rules::postgres::PostgresSource, from: Source) -> Row {
+    use devkit_rules::source::RuleSource;
+
+    let location = source.location();
+    let check = match source.check() {
+        Ok(count) => Check::Ok(format!("connected: {location}, {count} rules")),
+        Err(e) if devkit_rules::postgres::is_unreachable(&e) => {
+            Check::Warn(format!("unreachable: {e:#}"))
+        }
+        Err(e) => Check::Invalid(format!("{e:#}")),
+    };
+    Row {
+        key: "rules_database",
+        data: serde_json::Value::Null,
+        source: from,
+        check,
     }
 }
 
@@ -939,7 +988,9 @@ mod tests {
             ..Default::default()
         };
         let checkout = devkit_common::vcs::Checkout::at(dir.path());
-        let row = rules_row(&settings, true, &checkout);
+        let [row] = <[Row; 1]>::try_from(rules_rows(&settings, true, &checkout))
+            .ok()
+            .unwrap();
         assert_eq!(row.key, "rules_source");
         assert_eq!(row.source, Source::File);
         assert_eq!(row.check, Check::Ok(format!("file, {index}")));
@@ -950,7 +1001,13 @@ mod tests {
             serde_json::json!({ "kind": "file", "location": index })
         );
 
-        let row = rules_row(&devkit_config::RulesConfig::default(), false, &checkout);
+        let [row] = <[Row; 1]>::try_from(rules_rows(
+            &devkit_config::RulesConfig::default(),
+            false,
+            &checkout,
+        ))
+        .ok()
+        .unwrap();
         assert_eq!(row.source, Source::Unset);
     }
 

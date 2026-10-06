@@ -57,7 +57,7 @@ pub struct Fields {
 }
 
 impl Fields {
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         let Fields {
             title,
             description,
@@ -78,7 +78,7 @@ impl Fields {
             && directory.is_none()
     }
 
-    fn apply(self, rule: &mut Map<String, Value>) {
+    pub(crate) fn apply(self, rule: &mut Map<String, Value>) {
         let mut set = |key: &str, value: Value| {
             rule.insert(key.to_string(), value);
         };
@@ -134,7 +134,7 @@ pub(crate) fn update<T>(path: &Path, f: impl FnOnce(&mut IndexDocument) -> Resul
 
 /// The id the extractor gives a rule: a prefix of the SHA-256 of
 /// `source_file:title`, as `repo-rules-agent` `models.py` computes it.
-fn rule_id(source_file: &str, title: &str) -> String {
+pub(crate) fn rule_id(source_file: &str, title: &str) -> String {
     let digest = ring::digest::digest(
         &ring::digest::SHA256,
         format!("{source_file}:{title}").as_bytes(),
@@ -158,8 +158,7 @@ impl IndexDocument {
         if self.rules.iter().any(|rule| has_id(rule, &id)) {
             bail!("rule {id} already exists; change it with `devkit rules edit {id}`");
         }
-        let defaults: Rule = serde_json::from_value(Value::Object(Map::new()))?;
-        let Value::Object(mut rule) = serde_json::to_value(defaults)? else {
+        let Value::Object(mut rule) = serde_json::to_value(Rule::default_extracted())? else {
             unreachable!("a struct serializes to an object");
         };
         fields.apply(&mut rule);

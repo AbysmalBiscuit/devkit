@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use crate::{
     edit::{self, Fields},
@@ -36,8 +36,8 @@ impl FileSource {
 }
 
 impl RuleSource for FileSource {
-    fn load(&self) -> Option<RuleIndex> {
-        load(&self.path)
+    fn read(&self) -> Result<Option<RuleIndex>> {
+        read(&self.path)
     }
 
     fn add(&self, repo: &str, fields: Fields) -> Result<String> {
@@ -139,27 +139,17 @@ pub fn default_index_path(repo: &Path) -> PathBuf {
     cache_root().join(cache_dir_name(repo)).join("index.json")
 }
 
-/// The index at `path` without its removed rules, or `None`. A file that exists
-/// and does not parse earns one stderr line: that is a breakage rather than an
-/// absence, and every other failure is silence.
-pub(crate) fn load(path: &Path) -> Option<RuleIndex> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str::<RuleIndex>(&raw) {
-        Ok(mut index) => {
-            index.rules.retain(|rule| !rule.removed);
-            Some(index)
-        }
-        Err(e) => {
-            let _ = std::io::Write::write_fmt(
-                &mut std::io::stderr(),
-                format_args!(
-                    "devkit: rules index at {} did not parse: {e}\n",
-                    path.display()
-                ),
-            );
-            None
-        }
-    }
+/// The index at `path` without its removed rules, or `None` when it cannot be
+/// read. A file that exists and does not parse is an error: that is a
+/// breakage rather than an absence.
+pub(crate) fn read(path: &Path) -> Result<Option<RuleIndex>> {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Ok(None);
+    };
+    let mut index = serde_json::from_str::<RuleIndex>(&raw)
+        .map_err(|e| anyhow!("rules index at {} did not parse: {e}", path.display()))?;
+    index.rules.retain(|rule| !rule.removed);
+    Ok(Some(index))
 }
 
 #[cfg(test)]
@@ -184,20 +174,19 @@ mod tests {
         assert!(cache_dir_name(Path::new("/tmp/--weird--")).starts_with("weird-"));
     }
 
-    /// An index whose top-level shape drifted injects nothing and does not
-    /// panic.
+    /// An index whose top-level shape drifted is an error, not a panic.
     #[test]
-    fn a_drifted_index_loads_as_none() {
+    fn a_drifted_index_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("index.json");
         std::fs::write(&path, r#"{"rules": "not an array"}"#).unwrap();
-        assert!(load(&path).is_none());
+        assert!(read(&path).is_err());
     }
 
     #[test]
-    fn a_missing_index_loads_as_none() {
+    fn a_missing_index_reads_as_none() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(load(&dir.path().join("absent.json")).is_none());
+        assert!(read(&dir.path().join("absent.json")).unwrap().is_none());
     }
 
     /// A repository path that cannot be canonicalized still yields a name
