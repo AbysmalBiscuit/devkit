@@ -268,23 +268,47 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
 
 #[test]
 fn a_store_that_cannot_be_read_injects_nothing_and_says_so_once() {
-    let breakages: [(&str, Option<&str>); 4] = [
-        ("missing", None),
+    enum Breakage {
+        Missing,
+        Sql(&'static str),
+        Directory,
+    }
+    let breakages = [
+        ("missing", "index.sqlite", Breakage::Missing),
         (
             "malformed",
-            Some("UPDATE rules SET extra = 'not json' WHERE external_id = 'r-root-must';"),
+            "index.sqlite",
+            Breakage::Sql("UPDATE rules SET extra = 'not json' WHERE external_id = 'r-root-must';"),
         ),
-        ("future", Some("UPDATE storage_version SET version = 2;")),
-        ("WAL", Some("PRAGMA journal_mode = WAL;")),
+        (
+            "future",
+            "index.sqlite",
+            Breakage::Sql("UPDATE storage_version SET version = 2;"),
+        ),
+        (
+            "WAL",
+            "index.sqlite",
+            Breakage::Sql("PRAGMA journal_mode = WAL;"),
+        ),
+        ("directory", "index.sqlite", Breakage::Directory),
+        (
+            "directory without extension",
+            "rules.data",
+            Breakage::Directory,
+        ),
     ];
-    for (name, breakage) in breakages {
+    for (name, file, breakage) in breakages {
         let home = tempfile::tempdir().unwrap();
         let main = repo();
         let dir = tempfile::tempdir().unwrap();
-        let store = dir.path().join("index.sqlite");
-        if let Some(breakage) = breakage {
-            store_at(&store);
-            sql(&store, breakage);
+        let store = dir.path().join(file);
+        match breakage {
+            Breakage::Missing => {}
+            Breakage::Sql(statements) => {
+                store_at(&store);
+                sql(&store, statements);
+            }
+            Breakage::Directory => std::fs::create_dir(&store).unwrap(),
         }
         configure(main.path(), &format!("index = '{}'\n", store.display()));
         let before = snapshot(dir.path());

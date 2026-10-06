@@ -142,12 +142,19 @@ pub fn cache_dir(repo: &Path) -> PathBuf {
     cache_root().join(cache_dir_name(repo))
 }
 
-/// The index at `path` without its removed rules, or `None` when it cannot be
-/// read. A file that exists and does not parse is an error: that is a
-/// breakage rather than an absence.
+/// The index at `path` without its removed rules, or `None` when there is no
+/// file. A path that exists and cannot be read or parsed is an error: that is
+/// a breakage rather than an absence.
 pub(crate) fn read(path: &Path) -> Result<Option<RuleIndex>> {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return Ok(None);
+    let raw = match std::fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(anyhow!(
+                "rules index at {} could not be read: {e}",
+                path.display()
+            ));
+        }
+        Ok(raw) => raw,
     };
     let mut index = serde_json::from_str::<RuleIndex>(&raw)
         .map_err(|e| anyhow!("rules index at {} did not parse: {e}", path.display()))?;
