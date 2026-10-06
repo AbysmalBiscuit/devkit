@@ -597,6 +597,7 @@ fn doctor_reports_the_source_repository_and_connection_without_the_url() {
     let p = Proj::reading(&repo);
     let env = [(DATABASE_VAR, store.url.as_str())];
     let source = p.doctor_row("rules_source", &env);
+    assert_eq!(source["name"], "postgres", "{source}");
     assert_eq!(source["kind"], "postgres", "{source}");
     assert!(
         source["location"].as_str().unwrap().contains(&repo),
