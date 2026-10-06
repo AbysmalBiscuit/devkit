@@ -44,6 +44,29 @@ const COLUMNS: [&str; 12] = [
     "removed",
 ];
 
+/// A rule list kept in its own table, one row per value in stored order.
+struct Membership {
+    table: &'static str,
+    column: &'static str,
+    field: &'static str,
+    list: fn(&mut Rule) -> &mut Vec<String>,
+}
+
+const MEMBERSHIPS: [Membership; 2] = [
+    Membership {
+        table: "rule_tasks",
+        column: "task",
+        field: "tasks",
+        list: |rule| &mut rule.tasks,
+    },
+    Membership {
+        table: "rule_languages",
+        column: "language",
+        field: "languages",
+        list: |rule| &mut rule.languages,
+    },
+];
+
 /// Whether `path` holds a SQLite database, by its header. A missing file
 /// counts when its extension is one SQLite files carry, so a configured store
 /// that has gone missing is reported as one.
@@ -299,8 +322,10 @@ fn files(tx: &Transaction, repo: &Repository) -> Result<Vec<RuleFile>> {
 /// The rules that are not tombstones, ordered by position, each with its
 /// lists in stored order.
 fn live_rules(tx: &Transaction, repo: &Repository) -> Result<Vec<Rule>> {
-    let tasks = lists(tx, repo, "rule_tasks", "task")?;
-    let languages = lists(tx, repo, "rule_languages", "language")?;
+    let memberships = MEMBERSHIPS
+        .iter()
+        .map(|m| Ok((m, lists(tx, repo, m.table, m.column)?)))
+        .collect::<Result<Vec<_>>>()?;
     let mut stmt = tx.prepare(
         "SELECT r.rule_key, r.external_id, r.title, r.description, r.category, r.scope,
              r.severity, r.directory, r.pinned, r.extra, s.path
@@ -336,8 +361,9 @@ fn live_rules(tx: &Transaction, repo: &Repository) -> Result<Vec<Rule>> {
             rule.topics = serde_json::from_value(topics.clone())
                 .with_context(|| format!("rule {}: topics", rule.id))?;
         }
-        rule.tasks = tasks.get(&key).cloned().unwrap_or_default();
-        rule.languages = languages.get(&key).cloned().unwrap_or_default();
+        for (membership, lists) in &memberships {
+            *(membership.list)(&mut rule) = lists.get(&key).cloned().unwrap_or_default();
+        }
         Ok(rule)
     })
     .collect()
@@ -442,10 +468,13 @@ fn stored_fields(tx: &Transaction, repo: &Repository, key: &str) -> Result<Map<S
     )?;
     let mut rule = object(&extra)?;
     rule.extend(scalars);
-    for (table, column, field) in [
-        ("rule_tasks", "task", "tasks"),
-        ("rule_languages", "language", "languages"),
-    ] {
+    for Membership {
+        table,
+        column,
+        field,
+        ..
+    } in &MEMBERSHIPS
+    {
         let mut stmt = tx.prepare(&format!(
             "SELECT {column} FROM {table} WHERE repo_id = ?1 AND rule_key = ?2 ORDER BY position"
         ))?;
@@ -487,15 +516,18 @@ fn store_rule(
             Value::Object(extra).to_string(),
         ],
     )?;
-    for (table, column, field) in [
-        ("rule_tasks", "task", "tasks"),
-        ("rule_languages", "language", "languages"),
-    ] {
+    for Membership {
+        table,
+        column,
+        field,
+        ..
+    } in &MEMBERSHIPS
+    {
         tx.execute(
             &format!("DELETE FROM {table} WHERE repo_id = ?1 AND rule_key = ?2"),
             [&repo.id, key],
         )?;
-        let values = rule.get(field).and_then(Value::as_array);
+        let values = rule.get(*field).and_then(Value::as_array);
         for (position, value) in values.into_iter().flatten().enumerate() {
             tx.execute(
                 &format!(
