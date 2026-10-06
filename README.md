@@ -5,14 +5,15 @@
 <h1 align="center">devkit</h1>
 
 <p align="center">
-    Coordination for running many local dev sessions at once, human and agent, as one <code>devkit</code> binary plus an optional <code>devkitd</code> daemon.
+    Run a fleet of coding agents on one machine without collisions.
 </p>
 
-Three things that lean on each other:
+devkit is one `devkit` binary, plus an optional `devkitd` daemon, that gives every session on a machine, human or agent, the same view of what they share:
 
-- Registries for what parallel sessions contend for. Allocated ports, advisory file locks over a shared checkout, running dev servers, and version-correct library checkouts, each one visible to every other session on the machine.
+- Registries for what parallel sessions contend for. Allocated ports, advisory file locks over a shared checkout, supervised dev servers, and version-correct library checkouts, each one visible to every other session.
 - `issue`, an issue-to-PR workflow over git worktrees. Tracker-agnostic, from setup through review request to cleanup.
-- Agent wiring: an MCP server, a session-brief hook, and a skill, so coding agents drive the same registries you do.
+- Todo lists that agents and their subagents share and claim, kept locally or in a Postgres database that several machines claim against.
+- Agent wiring for Claude Code, Codex and Cursor: an MCP server and a plugin whose hooks can claim a lock on every write, guard shell commands, and inject the project's rules as files are edited.
 
 The engine is project-agnostic. Every project-specific detail lives in `devkit.toml`.
 
