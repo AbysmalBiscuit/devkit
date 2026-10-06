@@ -43,6 +43,7 @@ use std::{
     hash::{Hash, Hasher},
     io::{IsTerminal, Read},
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use anyhow::Result;
@@ -580,14 +581,21 @@ fn devrun_intro(root: &str, facilities: Facilities) -> String {
 }
 
 /// The least severe rule the write hook injects, or `None` when the brief has
-/// no rules section: switched off, `[rules]` disabled, or no index loads. An
+/// no rules section: switched off, `[rules]` disabled, or no rules to read. An
 /// unparseable floor reads as `should`, the same fallback the hook takes.
+///
+/// Decided once per process: a brief renders and hashes its sections in one
+/// run, and a rule source on a database must be asked only once within the
+/// hook's timeout.
 fn rules_floor(checkout: &Checkout, cwd: &Path, settings: &BriefConfig) -> Option<Severity> {
+    static FLOOR: OnceLock<Option<Severity>> = OnceLock::new();
     if !settings.rules {
         return None;
     }
-    let (rules, _) = crate::rules::enabled_index(checkout, cwd)?;
-    Some(rules.min_severity.parse().unwrap_or(Severity::Should))
+    *FLOOR.get_or_init(|| {
+        let rules = crate::rules::enabled_rules(checkout, cwd)?;
+        Some(rules.min_severity.parse().unwrap_or(Severity::Should))
+    })
 }
 
 /// What the write hook does with the index, as the reading host sees it. The

@@ -5,11 +5,16 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 /// The server, listening until the test process ends.
 pub struct Stalled {
     pub addr: String,
+    accepted: Arc<AtomicUsize>,
 }
 
 const SSL_REQUEST: u32 = 80_877_103;
@@ -18,14 +23,23 @@ impl Stalled {
     pub fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&accepted);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
+                counter.fetch_add(1, Ordering::SeqCst);
                 std::thread::spawn(move || {
                     let _ = serve(stream);
                 });
             }
         });
-        Self { addr }
+        Self { addr, accepted }
+    }
+
+    /// How many connections the server has accepted.
+    #[allow(dead_code)]
+    pub fn connections(&self) -> usize {
+        self.accepted.load(Ordering::SeqCst)
     }
 }
 

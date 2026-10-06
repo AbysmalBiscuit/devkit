@@ -132,7 +132,7 @@
         },
         "rules": {
           "default": true,
-          "description": "The rules section: which of a file's rules reach the session on their\nown and how to list the rest. It appears only while `[rules]` is\nenabled and its index loads.",
+          "description": "The rules section: which of a file's rules reach the session on their\nown and how to list the rest. It appears only while `[rules]` is\nenabled and its source has rules to read.",
           "type": "boolean"
         },
         "tasks": {

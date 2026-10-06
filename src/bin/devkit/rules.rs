@@ -344,12 +344,24 @@ fn load_or_default(explicit: Option<PathBuf>) -> Result<(String, RuleIndex)> {
 /// the brief's rules section both decide through this, so neither describes
 /// rules the other would not deliver.
 pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesConfig, RuleIndex)> {
+    let rules = enabled_settings(checkout, cwd)?;
+    let loaded = source(&rules, checkout, Reader::Hook).load()?;
+    Some((rules, loaded))
+}
+
+/// The `[rules]` settings when the session hooks have rules to inject from,
+/// found without reading them: the brief's rules section decides through
+/// this, and needs only to know the rules are there.
+pub(crate) fn enabled_rules(checkout: &Checkout, cwd: &Path) -> Option<RulesConfig> {
+    let rules = enabled_settings(checkout, cwd)?;
+    source(&rules, checkout, Reader::Hook)
+        .present()
+        .then_some(rules)
+}
+
+fn enabled_settings(checkout: &Checkout, cwd: &Path) -> Option<RulesConfig> {
     let (project, _) = devkit_common::config::resolve_in(checkout, None, cwd).ok()?;
-    if !project.rules.enabled {
-        return None;
-    }
-    let loaded = source(&project.rules, checkout, Reader::Hook).load()?;
-    Some((project.rules, loaded))
+    project.rules.enabled.then_some(project.rules)
 }
 
 pub fn run(cli: RulesCli) -> Result<()> {

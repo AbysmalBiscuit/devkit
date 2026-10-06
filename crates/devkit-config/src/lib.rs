@@ -402,7 +402,7 @@ pub struct BriefConfig {
     pub tasks: bool,
     /// The rules section: which of a file's rules reach the session on their
     /// own and how to list the rest. It appears only while `[rules]` is
-    /// enabled and its index loads.
+    /// enabled and its source has rules to read.
     pub rules: bool,
 }
 

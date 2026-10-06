@@ -503,6 +503,44 @@ fn a_stalled_database_injects_nothing_within_the_hooks_wait() {
     assert!(err.contains("no answer within 1s"), "{err}");
 }
 
+/// `devkit brief` with `args`, as session `S`'s hook runs it.
+fn brief(p: &Proj, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut all = vec!["brief"];
+    all.extend_from_slice(args);
+    p.start(&all, env, r#"{"session_id":"S"}"#)
+        .wait_with_output()
+        .unwrap()
+}
+
+#[test]
+fn the_brief_asks_a_stalled_database_once_per_run() {
+    for args in [&[][..], &["--if-changed"][..]] {
+        let stalled = pgstall::Stalled::start();
+        let p = Proj::reading("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
+        let url = format!("postgres://agent@{}/rules?sslmode=disable", stalled.addr);
+        let started = Instant::now();
+        let out = brief(&p, args, &[(DATABASE_VAR, &url)]);
+        let elapsed = started.elapsed();
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        assert_eq!(stalled.connections(), 1, "{args:?}");
+        assert!(elapsed < Duration::from_secs(2), "{args:?}: {elapsed:?}");
+        assert!(!stdout(&out).contains("### Rules"), "{args:?}");
+        let err = stderr(&out);
+        assert_eq!(err.lines().count(), 1, "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn the_brief_names_the_rules_a_reachable_database_holds() {
+    let Some((store, repo)) = imported() else {
+        return;
+    };
+    let p = Proj::reading(&repo);
+    let out = brief(&p, &[], &[(DATABASE_VAR, store.url.as_str())]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("### Rules"), "{}", stdout(&out));
+}
+
 #[test]
 fn a_refused_login_injects_nothing_and_fails_the_query() {
     let Some((store, repo)) = imported() else {

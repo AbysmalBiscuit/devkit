@@ -25,9 +25,7 @@ pub trait RuleSource {
     /// line on stderr and reads as no rules.
     fn load(&self) -> Option<RuleIndex> {
         self.read().unwrap_or_else(|e| {
-            let line = format!("{e:#}").replace(['\r', '\n'], " ");
-            let _ =
-                std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("devkit: {line}\n"));
+            report(&e);
             None
         })
     }
@@ -72,6 +70,23 @@ impl Source {
             )),
         }
     }
+
+    /// Whether there are rules to read, found as cheaply as this source
+    /// allows: the file source loads its index, the Postgres source only
+    /// checks that the store answers and holds the repository. A failure is
+    /// one line on stderr and reads as no rules, as with [`RuleSource::load`].
+    pub fn present(&self) -> bool {
+        match self {
+            Source::File(_) => self.load().is_some(),
+            Source::Postgres(source) => source.check().map_err(|e| report(&e)).is_ok(),
+        }
+    }
+}
+
+/// An error as the one line a caller that must not fail prints.
+fn report(e: &anyhow::Error) {
+    let line = format!("{e:#}").replace(['\r', '\n'], " ");
+    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("devkit: {line}\n"));
 }
 
 /// The repository rules describe: the main worktree, so every worktree shares
