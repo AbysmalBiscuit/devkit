@@ -43,7 +43,7 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | `devkit-common` | shared IO: `vcs`, `config`, `args`, `pool`, `cmd`/`github`, `forge`, `tracker`, `worktree`, `harness`, `caller`, `required`, `harness_log`, `store`, `sys` |
 | `devkit-ports` | port registry, app catalog, server lifecycle, tasks, named templates, command guard |
 | `devkit-locks` | file-lock registry |
-| `devkit-rules` | rule matching and context rendering, and the rule sources: the JSON index and `repo-rules-agent`'s Postgres store |
+| `devkit-rules` | rule matching and context rendering, and the rule sources: `repo-rules-agent`'s SQLite and Postgres stores and the legacy JSON index |
 | `devkit-command` | IO-free shell-command analyzer (tree-sitter; needs a C compiler) |
 | `devkit-issue` | read-only issue and PR triage |
 | `devkit-mcp` | stdio MCP server over the facades above |
