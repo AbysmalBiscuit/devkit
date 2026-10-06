@@ -1282,7 +1282,7 @@
       "type": "string"
     },
     "RulesConfig": {
-      "description": "Rule injection settings. When an agent is about to write a file, devkit\ninjects the rules governing it from a prebuilt JSON index.\n\nInjection fires on the structured edits the write stage allows (`Edit`,\n`Write`, `MultiEdit`, `NotebookEdit`, `apply_patch`), whether or not\n`[harness] enforce_writes` is on; shell writes inject nothing. Each rule\nfires once per session, and compaction resets that record. Only targets\ninside the repository inject. Separately, the session-start and\npost-compact hooks print the repository's `must` rules through\n`devkit rules context`.\n\n```toml\n[rules]\nenabled = true\nmin_severity = \"should\"\nper_event_limit = 5\n```",
+      "description": "Rule injection settings. When an agent is about to write a file, devkit\ninjects the rules governing it from a prebuilt JSON index.\n\nInjection fires on the structured edits the write stage allows (`Edit`,\n`Write`, `MultiEdit`, `NotebookEdit`, `apply_patch`), whether or not\n`[harness] enforce_writes` is on; shell writes inject nothing. Each rule\nfires once per session, and compaction resets that record. Only targets\ninside the repository inject. Separately, the session-start and\npost-compact hooks print the repository's `must` rules through\n`devkit rules context`.\n\n```toml\n[rules]\nenabled = true\nmin_severity = \"should\"\nper_event_limit = 5\nsource = \"file\"\n```",
       "properties": {
         "enabled": {
           "default": true,
@@ -1291,7 +1291,7 @@
         },
         "index": {
           "default": null,
-          "description": "Where the rule index lives. Absent means the path `repo-rules-agent`\nwrites for this checkout's main worktree, so a built index needs no\nconfig. `devkit rules add|edit|remove` change the same file. When\n`devkit rules stats` reports no index, build one or point this at it.",
+          "description": "Where the `file` source's index lives. Absent means the path\n`repo-rules-agent` writes for this checkout's main worktree, so a\nbuilt index needs no config. `devkit rules add|edit|remove` change\nthe same file. When `devkit rules stats` reports no index, build one\nor point this at it.",
           "type": [
             "string",
             "null"
@@ -1322,9 +1322,24 @@
           "format": "uint",
           "minimum": 0,
           "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/RulesSource",
+          "default": "file",
+          "description": "Where rules are read from and where `devkit rules add|edit|remove`\nwrite: `file`, the JSON index at `index`."
         }
       },
       "type": "object"
+    },
+    "RulesSource": {
+      "description": "The store `[rules] source` names.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "The JSON index `repo-rules-agent` writes, at `[rules] index`.",
+          "type": "string"
+        }
+      ]
     },
     "RunAction": {
       "anyOf": [
@@ -1998,7 +2013,8 @@
         "max_event_bytes": 65536,
         "max_file_bytes": 16384,
         "min_severity": "should",
-        "per_event_limit": 5
+        "per_event_limit": 5,
+        "source": "file"
       },
       "description": "Rule injection settings: enablement, severity floor, and the per-event\nsize budget."
     },

@@ -1,4 +1,5 @@
-//! Where the index lives, and reading it.
+//! The JSON index `repo-rules-agent` writes: where it lives, reading it, and
+//! the rule source over it.
 //!
 //! The path is the one `repo-rules-agent` writes, so an index built by the
 //! extractor is found with no configuration. The hashed repository path is the
@@ -8,7 +9,53 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::model::RuleIndex;
+use anyhow::Result;
+
+use crate::{
+    edit::{self, Fields},
+    model::RuleIndex,
+    source::RuleSource,
+};
+
+/// The rule source over one JSON index file.
+pub struct FileSource {
+    path: PathBuf,
+}
+
+impl FileSource {
+    /// The index at `path`.
+    pub fn at(path: PathBuf) -> FileSource {
+        FileSource { path }
+    }
+
+    /// The index `[rules] index` names, else the one the extractor writes for
+    /// `repo`.
+    pub fn configured(index: Option<&str>, repo: &Path) -> FileSource {
+        FileSource::at(index.map_or_else(|| default_index_path(repo), PathBuf::from))
+    }
+}
+
+impl RuleSource for FileSource {
+    fn load(&self) -> Option<RuleIndex> {
+        load(&self.path)
+    }
+
+    fn add(&self, repo: &str, fields: Fields) -> Result<String> {
+        edit::update(&self.path, |doc| doc.add(repo, fields))
+    }
+
+    fn edit(&self, id: &str, fields: Fields) -> Result<()> {
+        edit::update(&self.path, |doc| doc.edit(id, fields))
+    }
+
+    fn remove(&self, id: &str) -> Result<()> {
+        edit::update(&self.path, |doc| doc.remove(id))
+    }
+
+    fn location(&self) -> String {
+        self.path.display().to_string()
+    }
+}
 
 /// The cache directory name for a repository, as `rules/paths.py` builds it.
 pub fn cache_dir_name(repo: &Path) -> String {
@@ -95,7 +142,7 @@ pub fn default_index_path(repo: &Path) -> PathBuf {
 /// The index at `path` without its removed rules, or `None`. A file that exists
 /// and does not parse earns one stderr line: that is a breakage rather than an
 /// absence, and every other failure is silence.
-pub fn load(path: &Path) -> Option<RuleIndex> {
+pub(crate) fn load(path: &Path) -> Option<RuleIndex> {
     let raw = std::fs::read_to_string(path).ok()?;
     match serde_json::from_str::<RuleIndex>(&raw) {
         Ok(mut index) => {

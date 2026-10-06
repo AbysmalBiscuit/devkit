@@ -593,6 +593,7 @@ pub struct PreserveConfig {
 /// enabled = true
 /// min_severity = "should"
 /// per_event_limit = 5
+/// source = "file"
 /// # "#).unwrap();
 /// # assert!(cfg.rules.enabled);
 /// # assert_eq!(cfg.rules.min_severity, "should");
@@ -611,10 +612,14 @@ pub struct RulesConfig {
     pub max_file_bytes: usize,
     /// The rendered total for one event is truncated to this.
     pub max_event_bytes: usize,
-    /// Where the rule index lives. Absent means the path `repo-rules-agent`
-    /// writes for this checkout's main worktree, so a built index needs no
-    /// config. `devkit rules add|edit|remove` change the same file. When
-    /// `devkit rules stats` reports no index, build one or point this at it.
+    /// Where rules are read from and where `devkit rules add|edit|remove`
+    /// write: `file`, the JSON index at `index`.
+    pub source: RulesSource,
+    /// Where the `file` source's index lives. Absent means the path
+    /// `repo-rules-agent` writes for this checkout's main worktree, so a
+    /// built index needs no config. `devkit rules add|edit|remove` change
+    /// the same file. When `devkit rules stats` reports no index, build one
+    /// or point this at it.
     pub index: Option<String>,
 }
 
@@ -626,9 +631,19 @@ impl Default for RulesConfig {
             per_event_limit: 5,
             max_file_bytes: 16384,
             max_event_bytes: 65536,
+            source: RulesSource::default(),
             index: None,
         }
     }
+}
+
+/// The store `[rules] source` names.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RulesSource {
+    /// The JSON index `repo-rules-agent` writes, at `[rules] index`.
+    #[default]
+    File,
 }
 
 /// Files injected into an agent's context when the condition on them holds.
@@ -2774,6 +2789,18 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         )
         .unwrap();
         assert!(bare.defaults.worktree_include.is_empty());
+    }
+    #[test]
+    fn the_rules_source_defaults_to_file_and_rejects_an_unknown_one() {
+        let set = Config::parse("[rules]\nsource = \"file\"\n").unwrap();
+        assert_eq!(set.rules.source, RulesSource::File);
+        let unset = Config::parse("[rules]\nenabled = true\n").unwrap();
+        assert_eq!(unset.rules.source, RulesSource::File);
+
+        let err = Config::parse("[rules]\nsource = \"sqlite3\"\n").unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("sqlite3"), "{err}");
+        assert!(err.contains("`file`"), "{err}");
     }
     #[test]
     fn a_defaults_table_with_one_key_deserializes() {

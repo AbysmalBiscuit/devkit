@@ -126,7 +126,7 @@ impl Fields {
 /// Run `f` against the index at `path` under an advisory lock beside it, and
 /// write the result back when `f` succeeds. A missing index starts empty; one
 /// that does not parse is an error and stays as it was.
-pub fn update<T>(path: &Path, f: impl FnOnce(&mut IndexDocument) -> Result<T>) -> Result<T> {
+pub(crate) fn update<T>(path: &Path, f: impl FnOnce(&mut IndexDocument) -> Result<T>) -> Result<T> {
     let mut lock = OsString::from(path.as_os_str());
     lock.push(".lock");
     store::with_lock_strict(Path::new(&lock), path, f)

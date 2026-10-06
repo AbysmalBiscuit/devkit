@@ -12,9 +12,11 @@ use clap::{Args, Subcommand, ValueEnum};
 use devkit_common::vcs::Checkout;
 use devkit_config::RulesConfig;
 use devkit_rules::{
-    edit, index,
+    edit,
+    index::FileSource,
     model::RuleIndex,
     query, repo_config,
+    source::{RuleSource, Source, repo_of},
     vocab::{self, Scope, Severity, Task},
 };
 use strum::VariantNames;
@@ -188,54 +190,34 @@ pub enum Format {
     Prompt,
 }
 
-/// The index path for this checkout: an explicit path (`--index`, or the
-/// positional argument `query` and `stats` take) wins outright; otherwise the
-/// project's own `[rules] index`; otherwise the path `repo-rules-agent` would
-/// have written for the checkout's main worktree. Every `devkit rules`
-/// subcommand resolves it this way, so a project that sets `[rules] index`
-/// reads and edits the same file everywhere.
-fn resolve_index_path(
-    explicit: Option<PathBuf>,
-    index: Option<&str>,
-    checkout: &Checkout,
-) -> PathBuf {
-    if let Some(path) = explicit {
-        return path;
-    }
-    if let Some(index) = index {
-        return PathBuf::from(index);
-    }
-    index::default_index_path(repo_of(checkout))
-}
-
-/// The repository an index describes: the main worktree, so every worktree
-/// shares one index.
-fn repo_of(checkout: &Checkout) -> &Path {
-    checkout
-        .main_worktree()
-        .or_else(|| checkout.root())
-        .unwrap_or_else(|| checkout.dir())
-}
-
-/// Where a `devkit rules` run stands: its directory, checkout and index path.
+/// Where a `devkit rules` run stands: its directory, checkout and rule source.
 struct Here {
     cwd: PathBuf,
     checkout: Checkout,
-    index: PathBuf,
+    source: Source,
 }
 
 impl Here {
+    /// An explicit index file (the positional argument `query` and `stats`
+    /// take) wins outright; otherwise the source `[rules]` names. Every
+    /// `devkit rules` subcommand resolves it this way, so a project reads and
+    /// edits the same rules everywhere.
     fn resolve(explicit: Option<PathBuf>) -> Result<Here> {
         let cwd = std::env::current_dir().context("getting current dir")?;
         let checkout = Checkout::at(&cwd);
-        let configured = devkit_common::config::resolve_in(&checkout, None, &cwd)
-            .ok()
-            .and_then(|(project, _)| project.rules.index);
-        let index = resolve_index_path(explicit, configured.as_deref(), &checkout);
+        let source = match explicit {
+            Some(path) => Source::File(FileSource::at(path)),
+            None => {
+                let settings = devkit_common::config::resolve_in(&checkout, None, &cwd)
+                    .map(|(project, _)| project.rules)
+                    .unwrap_or_default();
+                Source::for_checkout(&settings, &checkout)
+            }
+        };
         Ok(Here {
             cwd,
             checkout,
-            index,
+            source,
         })
     }
 
@@ -244,14 +226,17 @@ impl Here {
     }
 }
 
-/// The index for this checkout, or the one named. Errors name the path tried,
-/// because a `devkit rules` run is a person asking a question and silence would
-/// read as "no rules" rather than "no index".
-fn load_or_default(explicit: Option<PathBuf>) -> Result<(PathBuf, RuleIndex)> {
-    let path = Here::resolve(explicit)?.index;
-    let loaded =
-        index::load(&path).with_context(|| format!("no rules index at {}", path.display()))?;
-    Ok((path, loaded))
+/// The rules for this checkout, or those in the index named, and where they
+/// came from. Errors name the location tried, because a `devkit rules` run is
+/// a person asking a question and silence would read as "no rules" rather than
+/// "no index".
+fn load_or_default(explicit: Option<PathBuf>) -> Result<(String, RuleIndex)> {
+    let source = Here::resolve(explicit)?.source;
+    let location = source.location();
+    let loaded = source
+        .load()
+        .with_context(|| format!("no rules index at {location}"))?;
+    Ok((location, loaded))
 }
 
 /// The `[rules]` settings and the index the session hooks inject from, or
@@ -263,8 +248,7 @@ pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesCon
     if !project.rules.enabled {
         return None;
     }
-    let path = resolve_index_path(None, project.rules.index.as_deref(), checkout);
-    let loaded = index::load(&path)?;
+    let loaded = Source::for_checkout(&project.rules, checkout).load()?;
     Some((project.rules, loaded))
 }
 
@@ -277,20 +261,20 @@ pub fn run(cli: RulesCli) -> Result<()> {
             let here = Here::resolve(None)?;
             let fields = args.fields.into_fields(Some(args.title), &here)?;
             let repo = repo_of(&here.checkout).display().to_string();
-            let id = edit::update(&here.index, |doc| doc.add(&repo, fields))?;
+            let id = here.source.add(&repo, fields)?;
             println!("{id}");
             Ok(())
         }
         RulesCommand::Edit(args) => {
             let here = Here::resolve(None)?;
             let fields = args.fields.into_fields(args.title, &here)?;
-            edit::update(&here.index, |doc| doc.edit(&args.id, fields))?;
+            here.source.edit(&args.id, fields)?;
             println!("edited {}", args.id);
             Ok(())
         }
         RulesCommand::Remove(args) => {
             let here = Here::resolve(None)?;
-            edit::update(&here.index, |doc| doc.remove(&args.id))?;
+            here.source.remove(&args.id)?;
             println!("removed {}", args.id);
             Ok(())
         }
@@ -387,8 +371,8 @@ fn warn_unknown_topics(requested: &[String], known: &[String]) {
 fn stats_cmd(args: StatsArgs) -> Result<()> {
     use std::collections::BTreeMap;
 
-    let (path, index) = load_or_default(args.index_path)?;
-    println!("index  {}", path.display());
+    let (location, index) = load_or_default(args.index_path)?;
+    println!("index  {location}");
     println!("repo   {}", index.repo);
     println!(
         "\n{} rules across {} files\n",
