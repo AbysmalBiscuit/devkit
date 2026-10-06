@@ -214,8 +214,10 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
 pub struct CommandRule {
     /// Program names this rule refuses, matched against the segment's command
-    /// word by basename. An empty list matches nothing, which is how a child
-    /// layer exempts a subtree from a rule its parent declared.
+    /// word by basename, and against each wrapper unwrapped to reach it
+    /// (`sudo`, `nohup`, `env`), whose own options are then its arguments. An
+    /// empty list matches nothing, which is how a child layer exempts a
+    /// subtree from a rule its parent declared.
     #[serde(default)]
     pub programs: Vec<String>,
     /// Arguments that must appear, in order, at the head of the typed

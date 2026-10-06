@@ -164,6 +164,49 @@ reason = "Start the api with devrun up api."
 }
 
 #[test]
+fn a_rule_naming_a_wrapper_denies_through_the_binary() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.sudo]
+programs = ["sudo"]
+reason = "Never run sudo"
+
+[harness.commands.as-root]
+programs = ["sudo"]
+args = ["-u", "root"]
+reason = "Not as root"
+"#,
+    );
+    for command in [
+        "sudo ls",
+        "sudo -u root ls",
+        "nohup sudo apt-get install jq",
+        "sudo devkit todo list",
+        "sudo devrun task build",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("Never run sudo"),
+            "{command}"
+        );
+    }
+    let out = run_hook(proj.path(), home.path(), &claude_payload("sudo -u root ls"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Not as root"));
+    let out = run_hook(proj.path(), home.path(), &claude_payload("sudo -u lev ls"));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("Not as root"));
+    assert!(!denied(&run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("ls")
+    )));
+}
+
+#[test]
 fn a_user_rule_denies_through_the_binary() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(GUARDED);
