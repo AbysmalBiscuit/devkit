@@ -79,6 +79,10 @@ fn pr_create_reports_the_existing_pr_when_graphql_is_refused() {
     assert!(out.status.success(), "{out:?}\n{calls}");
     assert_eq!(stdout(&out), "https://github.com/o/r/pull/7\n");
     assert!(
+        calls.contains("pulls?head=o%3Alev%2Feng-1-fix&state=all"),
+        "no REST lookup by owner-qualified head: {calls}"
+    );
+    assert!(
         !calls.contains(REST_CREATE),
         "a second PR was opened: {calls}"
     );
