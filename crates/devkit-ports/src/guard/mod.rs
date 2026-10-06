@@ -76,15 +76,30 @@ enum Match {
     Yes,
 }
 
+/// The analysis strips wrappers such as `sudo -u root` or `nohup` to reach the
+/// program they run, so a rule naming a wrapper is matched against each one
+/// it removed, with the wrapper's own options as its args.
 fn rule_match(inv: &Invocation, rule: &CommandRule) -> Match {
-    let program = match inv.program.known() {
+    let wrapped = inv
+        .wrappers
+        .iter()
+        .filter_map(|w| w.split_first())
+        .map(|(program, args)| program_match(program, args, rule));
+    wrapped
+        .chain([program_match(&inv.program, &inv.semantic_args, rule)])
+        .max()
+        .unwrap_or(Match::No)
+}
+
+fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
+    let program = match program.known() {
         Some(program) => basename(program),
         None => return Match::Possible,
     };
     if !rule.programs.iter().any(|p| basename(p) == program) {
         return Match::No;
     }
-    args_match(&rule.args, &inv.semantic_args)
+    args_match(&rule.args, args)
 }
 
 /// Whether `args` starts with `patterns`. A `"**"` entry stands for zero or

@@ -166,7 +166,7 @@
         },
         "programs": {
           "default": [],
-          "description": "Program names this rule refuses, matched against the segment's command\nword by basename. An empty list matches nothing, which is how a child\nlayer exempts a subtree from a rule its parent declared.",
+          "description": "Program names this rule refuses, matched against the segment's command\nword by basename, and against each wrapper unwrapped to reach it\n(`sudo`, `nohup`, `env`), whose own options are then its arguments. An\nempty list matches nothing, which is how a child layer exempts a\nsubtree from a rule its parent declared.",
           "items": {
             "type": "string"
           },
