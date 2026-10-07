@@ -88,9 +88,15 @@ reason = """Pass only a body rendered from the `pr_body` template:
 
 # The GitHub MCP server a cloud session carries opens and edits PRs; their text
 # must come from `issue pr render` in the same session.
-[harness.pr_tools.github]
+[harness.pr_tools.github-create]
 servers = ["*github*"]
-tools = ["create_pull_request", "update_pull_request"]
+tools = ["create_pull_request"]
+title = "title"
+body = "body"
+
+[harness.pr_tools.github-update]
+servers = ["*github*"]
+tools = ["update_pull_request"]
 absent = ["pullNumber"]
 title = "title"
 body = "body"

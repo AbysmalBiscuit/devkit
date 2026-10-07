@@ -11,9 +11,15 @@ use serde_json::{Value, json};
 /// The GitHub MCP server's PR tools, as a Claude Code cloud session exposes
 /// them, plus a forge whose update edits the body in place.
 const CONFIG: &str = r#"
-[harness.pr_tools.github]
+[harness.pr_tools.github-create]
 servers = ["*github*"]
-tools   = ["create_pull_request", "update_pull_request"]
+tools   = ["create_pull_request"]
+title   = "title"
+body    = "body"
+
+[harness.pr_tools.github-update]
+servers = ["*github*"]
+tools   = ["update_pull_request"]
 absent  = ["pullNumber"]
 title   = "title"
 body    = "body"
@@ -159,4 +165,16 @@ fn a_body_patch_is_denied() {
     let reason = pre_tool_use(&fake, "S1", "mcp__forge__edit_pr", input).expect("denied");
     assert!(reason.contains("`patch`"), "{reason}");
     assert!(reason.contains("devkit issue pr render"), "{reason}");
+}
+
+#[test]
+fn a_create_carrying_a_stray_pull_number_is_still_a_create() {
+    let fake = project();
+    let input = json!({"owner": "o", "repo": "r", "head": "h", "base": "main", "pullNumber": 1});
+    let reason = pre_tool_use(&fake, "S1", CREATE, input).expect("denied");
+    assert!(reason.contains("no `title`"), "{reason}");
+
+    let mut input = create("T", "B");
+    input["pullNumber"] = json!(1);
+    assert!(pre_tool_use(&fake, "S1", CREATE, input).is_some());
 }

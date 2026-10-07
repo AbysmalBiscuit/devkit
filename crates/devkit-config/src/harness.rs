@@ -270,9 +270,15 @@ pub struct CommandRule {
 /// title   = "title"
 /// body    = "body"
 ///
-/// [harness.pr_tools.github]
+/// [harness.pr_tools.github-create]
 /// servers = ["*github*"]
-/// tools   = ["create_pull_request", "update_pull_request"]
+/// tools   = ["create_pull_request"]
+/// title   = "title"
+/// body    = "body"
+///
+/// [harness.pr_tools.github-update]
+/// servers = ["*github*"]
+/// tools   = ["update_pull_request"]
 /// absent  = ["pullNumber"]
 /// title   = "title"
 /// body    = "body"
@@ -282,9 +288,12 @@ pub struct CommandRule {
 /// # };
 /// # assert!(rule("issue_tools", "linear").matches(Some("claude.ai Linear"), "save_issue"));
 /// # assert!(rule("issue_tools", "github").is_create(&json!({"method": "create"})));
-/// # let pr = rule("pr_tools", "github");
-/// # assert!(pr.matches(Some("github"), "update_pull_request"));
-/// # assert!(!pr.is_create(&json!({"pullNumber": 5})));
+/// # let create = rule("pr_tools", "github-create");
+/// # assert!(!create.matches(Some("github"), "update_pull_request"));
+/// # assert!(create.is_create(&json!({"pullNumber": 5})));
+/// # let update = rule("pr_tools", "github-update");
+/// # assert!(update.matches(Some("github"), "update_pull_request"));
+/// # assert!(!update.is_create(&json!({"pullNumber": 5})));
 /// ```
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
 pub struct RenderedToolRule {
