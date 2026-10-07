@@ -19,8 +19,9 @@ use devkit_todo_supabase::{Api, SupabaseStore};
 const API: &str = "DEVKIT_TEST_SUPABASE_URL";
 const DIRECT: &str = "DEVKIT_TEST_POSTGRES_URL";
 
-/// The role and grants the todo reference has a Supabase project set up,
-/// for the role PostgREST serves a request that carries no key as.
+/// The role and grants the todo reference sets up, for the role PostgREST
+/// serves a request that carries no key as. PostgREST here logs in as a
+/// superuser, so the grant to Supabase's `authenticator` is left out.
 const GRANTS: &str = "
 DO $$ BEGIN
     CREATE ROLE devkit_agent NOLOGIN;
@@ -29,6 +30,7 @@ END $$;
 GRANT USAGE ON SCHEMA devkit TO devkit_agent;
 GRANT SELECT, INSERT, UPDATE, DELETE ON devkit.todos TO devkit_agent;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA devkit TO devkit_agent;
+ALTER DEFAULT PRIVILEGES IN SCHEMA devkit GRANT EXECUTE ON FUNCTIONS TO devkit_agent;
 NOTIFY pgrst, 'reload schema';
 ";
 
