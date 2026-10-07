@@ -226,14 +226,6 @@ const ctx = makeAnonContext(event);
 
 - Never touch production, live databases, or daily-driver build/preview channels unless explicitly told to. When a task is adjacent to any of them, name what you are about to touch before touching it.
 
-## Providing shell commands
-
-I use `bash` as my main shell on this system.
-I use `fish` as my interactive shell.
-When providing cli/shell commands for me to run, write them for: `fish`
-Leave an empty line before and after each command block.
-In bullet points and numbered lists, leave two empty lines around each command block.
-
 ## Questions are read-only
 
 - A question is a request for an answer, not for changes. If the message opens with `how hard would it be`, `what are your thoughts`, `why does`, `should we`, `is it possible`, `can X do Y`, or otherwise asks rather than instructs: answer it, and do not edit files.

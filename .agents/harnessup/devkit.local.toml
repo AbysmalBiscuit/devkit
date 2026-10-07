@@ -101,10 +101,6 @@ absent = ["pullNumber"]
 title = "title"
 body = "body"
 
-[harness.commands.sudo]
-programs = ["sudo"]
-reason = "Never run sudo. devkit has no privileged path: name the command that needs root in your final report for the user to run."
-
 # No one watches a cloud session, so its stop hook holds the main agent to
 # its open todos too, not only sub-agents.
 [todo]
