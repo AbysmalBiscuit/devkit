@@ -58,7 +58,7 @@ Codex offers `update_plan` only when its config sets `[tools.update_plan] enable
 
 ## Activity
 
-devkit records each subagent run and each stretch a todo spends in progress, whether or not the harness log is on: in the todo database on the postgres backend, nowhere on the supabase backend, and beside the todo state on every other. `devkit activity` reports them over a date range, grouped by session, agent type and todo, and `--json` gives the same report as JSON. `devkit activity -h` gives the range's defaults.
+devkit records each subagent run and each stretch a todo spends in progress, whether or not the harness log is on: in the todo database on the postgres and supabase backends, and beside the todo state on every other. `devkit activity` reports them over a date range, grouped by session, agent type and todo, and `--json` gives the same report as JSON. `devkit activity -h` gives the range's defaults.
 
 - A run starts at the subagent's start hook and ends at its stop. Without a stop it ends at its session's end. Without either, it ends as `lost` at the agent's last hook once the agent has been silent past a backstop, so no run stays open for good. Parallel runs, two of one type included, are told apart by agent id.
 - A run whose payload names no agent type, such as a Claude Code fork, stores none and reports as `subagent`.
@@ -164,9 +164,7 @@ devkit uses nothing the transaction pooler lacks: no prepared statement or advis
 
 ### Supabase
 
-`[todo] backend = "supabase"` reaches the postgres backend's todos over a Supabase project's HTTPS Data API, for a machine that can make HTTP requests but cannot open a Postgres connection, such as a Claude Code cloud session, whose sandbox lets only HTTP(S) out through a proxy. Each write calls the database function the postgres backend calls, so a claim is atomic across machines on either backend, and a todo another agent holds is refused naming the holder. Reads select from the tables. Hooks bound each request as they bound each database call, and an API that gets no answer costs a hook one wait.
-
-The backend records no activity: hooks skip it without failing, and `devkit activity` refuses. Machines on the postgres backend keep recording theirs.
+`[todo] backend = "supabase"` reaches the postgres backend's todos over a Supabase project's HTTPS Data API, for a machine that can make HTTP requests but cannot open a Postgres connection, such as a Claude Code cloud session, whose sandbox lets only HTTP(S) out through a proxy. Each write calls the database function the postgres backend calls, so a claim is atomic across machines on either backend, and a todo another agent holds is refused naming the holder. Reads select from the tables. Hooks bound each request as they bound each database call, and an API that gets no answer costs a hook one wait. Activity records go to the same database through its functions, so `devkit activity` on either backend reports machines on both, and a session's end fits its release and records into the one budget the postgres backend gives it.
 
 The API URL is the project's, `https://<project-ref>.supabase.co`. It comes from `DEVKIT_TODO_SUPABASE_URL`, else `[todo.supabase] url` in `~/.config/devkit/config.toml`. A project's `devkit.toml` cannot name it: devkit ignores it there, so a repository you clone cannot send your key elsewhere. `[todo.supabase] root` names the tenant, as `[todo.postgres] root` does; set the same root on every machine that shares the lists. `DEVKIT_TODO_BACKEND=supabase` chooses the backend without a config change.
 
@@ -178,14 +176,15 @@ Requests go through `HTTPS_PROXY` when it is set, and honour `NO_PROXY`. They tr
 
 Set up the project once:
 
-1. Create devkit's schema by running any `devkit todo` command on the postgres backend from a machine that can connect, for example `DEVKIT_TODO_BACKEND=postgres devkit todo list`. Do the same after upgrading devkit, which creates any function the newer version adds.
-2. In the SQL editor, create a role that reaches devkit's schema and nothing else. The functions run with the caller's rights, so the role writes the todos table itself; it needs nothing on the activity tables. Run it as the role that created the schema, so the default privilege covers the functions a later devkit adds:
+1. Create devkit's schema by running `devkit activity` on the postgres backend from a machine that can connect, for example `DEVKIT_TODO_BACKEND=postgres devkit activity`. Do the same after upgrading devkit, which creates any function the newer version adds.
+2. In the SQL editor, create a role that reaches devkit's schema and nothing else. The functions run with the caller's rights, so the role writes the todo and activity tables itself. Run it as the role that created the schema, so the default privilege covers the functions a later devkit adds:
 
    ```sql
    CREATE ROLE devkit_agent NOLOGIN;
    GRANT devkit_agent TO authenticator;
    GRANT USAGE ON SCHEMA devkit TO devkit_agent;
-   GRANT SELECT, INSERT, UPDATE, DELETE ON devkit.todos TO devkit_agent;
+   GRANT SELECT, INSERT, UPDATE, DELETE ON devkit.todos, devkit.seen TO devkit_agent;
+   GRANT SELECT, INSERT ON devkit.activity TO devkit_agent;
    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA devkit TO devkit_agent;
    ALTER DEFAULT PRIVILEGES IN SCHEMA devkit GRANT EXECUTE ON FUNCTIONS TO devkit_agent;
    ```

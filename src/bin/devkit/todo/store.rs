@@ -24,7 +24,7 @@ use devkit_todo::{
 };
 use devkit_todo_builtin::BuiltinStore;
 use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore, Trust};
-use devkit_todo_supabase::{Api, SupabaseStore};
+use devkit_todo_supabase::{Api, SupabaseActivity, SupabaseStore};
 use devkit_todo_taskchampion::{
     ReplicaSource, SyncTarget, TaskchampionStore, Uuid, replica_location,
 };
@@ -108,54 +108,14 @@ pub(crate) enum Backend {
 }
 
 /// Where the activity log is kept: in the todo database on the Postgres
-/// backend, so a swarm reports from one place, nowhere on the Supabase
-/// backend, and under devkit's state directory on every other.
+/// and Supabase backends, so a swarm reports from one place, and under
+/// devkit's state directory on every other.
 #[derive(Delegate)]
 #[delegate(ActivityStore)]
 pub(crate) enum Activity {
     Local(ActivityLog),
     Postgres(PostgresActivity),
-    Unrecorded(Unrecorded),
-}
-
-/// The log of a backend that records no activity: every write does nothing
-/// and a read is refused.
-pub(crate) struct Unrecorded;
-
-impl Unrecorded {
-    fn refuse<T>() -> Result<T> {
-        bail!("the supabase todo backend records no activity")
-    }
-}
-
-impl ActivityStore for Unrecorded {
-    fn record(&self, _: &devkit_todo::activity::Event) -> Result<()> {
-        Ok(())
-    }
-
-    fn record_now(&self, _: &devkit_todo::activity::What) -> Result<()> {
-        Ok(())
-    }
-
-    fn seen(&self, _: &str, _: &str) -> Result<()> {
-        Ok(())
-    }
-
-    fn seen_at(&self, _: &str, _: &str, _: std::time::SystemTime) -> Result<()> {
-        Ok(())
-    }
-
-    fn forget(&self, _: &str, _: Option<&str>) -> Result<()> {
-        Ok(())
-    }
-
-    fn read(&self, _: chrono::DateTime<chrono::Utc>) -> Result<devkit_todo::activity::Activity> {
-        Self::refuse()
-    }
-
-    fn read_now(&self) -> Result<devkit_todo::activity::Activity> {
-        Self::refuse()
-    }
+    Supabase(SupabaseActivity),
 }
 
 /// Who opens a store, which sets how long it waits on a busy replica lock
@@ -491,7 +451,10 @@ impl Activity {
                 database(&config.postgres, opener),
                 &config.postgres.root,
             )),
-            TodoBackend::Supabase => Self::Unrecorded(Unrecorded),
+            TodoBackend::Supabase => Self::Supabase(SupabaseActivity::new(
+                api(&config.supabase, opener),
+                &config.supabase.root,
+            )),
             TodoBackend::Builtin | TodoBackend::Taskchampion => Self::Local(ActivityLog::open()),
         }
     }

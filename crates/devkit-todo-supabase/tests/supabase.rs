@@ -43,7 +43,10 @@ fn store() -> Option<((), SupabaseStore)> {
 }
 
 mod contract {
-    devkit_todo::contract_tests!(skip_unless super::store);
+    devkit_todo::contract_tests!(
+        skip_unless super::store,
+        activity = |s: &devkit_todo_supabase::SupabaseStore| s.activity()
+    );
 }
 
 fn claim(id: &str, actor: &str) -> Edit {
