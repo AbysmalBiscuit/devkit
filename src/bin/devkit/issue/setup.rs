@@ -58,17 +58,26 @@ impl Prepared {
             println!("{}", serde_json::to_string_pretty(self)?);
             return Ok(());
         }
+        println!("{}", self.terminal_report());
+        Ok(())
+    }
+
+    /// The terminal form. The summary text is the tracker's issue body, so each
+    /// line is made printable; its line breaks stay real.
+    fn terminal_report(&self) -> String {
         let mut rows: Vec<_> = self.issue.iter().map(|i| ("issue", i.clone())).collect();
         rows.push(("worktree", self.worktree.clone()));
         rows.push(("branch", self.branch.clone()));
         if let Some(s) = &self.summary {
             rows.push(("summary", s.clone()));
         }
-        println!("{}", devkit_common::ui::kv_table(&rows));
+        let mut out = devkit_common::ui::kv_table(&rows).to_string();
         if let Some(text) = &self.summary_text {
-            println!("\n{text}");
+            let lines: Vec<_> = text.lines().map(devkit_common::ui::printable).collect();
+            out.push_str("\n\n");
+            out.push_str(&lines.join("\n"));
         }
-        Ok(())
+        out
     }
 }
 
@@ -1235,6 +1244,29 @@ mod tests {
 
     /// A tracker that keeps its own summary has it written verbatim, so the
     /// dry run reports that text rather than the rendered template.
+    /// The summary text carries the issue body verbatim, so on a terminal its
+    /// escape sequences are shown, not obeyed, while its lines stay lines.
+    #[test]
+    fn a_dry_run_summary_on_a_terminal_shows_escapes_as_text() {
+        let p = Project::new();
+        let tracker = fake::FakeTracker::new()
+            .with_title("ENG-7", "Fix the export crash")
+            .with_details(IssueDetails {
+                description: "first \u{1b}]8;;https://evil\u{7}line\nsecond line".into(),
+                ..eng_7()
+            });
+
+        let report = p
+            .setup(&p.args("ENG-7", true, true), tracker)
+            .terminal_report();
+
+        assert!(!report.contains(['\u{1b}', '\u{7}']), "{report:?}");
+        assert!(
+            report.contains("first \\u{1b}]8;;https://evil\\u{7}line\nsecond line"),
+            "{report:?}"
+        );
+    }
+
     #[test]
     fn a_dry_run_summary_carries_the_trackers_own_summary() {
         let p = Project::new();
