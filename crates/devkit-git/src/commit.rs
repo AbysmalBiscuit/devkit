@@ -504,10 +504,7 @@ fn check_merge_drivers(
         .args(overlap.iter().map(String::as_str))
         .output()?;
     let fields: Vec<&str> = attributes.split('\0').collect();
-    for entry in fields.chunks_exact(3) {
-        let [path, _, value] = entry else {
-            unreachable!("chunks of three")
-        };
+    for [path, _, value] in fields.as_chunks::<3>().0 {
         if matches!(*value, "set" | "unset") {
             continue;
         }
