@@ -454,3 +454,33 @@ fn dashboard_makes_one_graphql_request_per_batched_read() {
         assert!(!calls.contains(rest), "{rest}: {calls}");
     }
 }
+
+/// `issue review request` finds this branch's PR and asks for its reviewer
+/// the same way whether GitHub answers GraphQL or refuses it.
+#[test]
+fn review_request_finds_the_branch_pr_when_graphql_is_refused() {
+    let args = ["review", "request", "--no-push", "--no-notify", "--to", "lev"];
+    let graphql = ghfake::Fake::new("", &pr(7, "OPEN"));
+    graphql.serve_pr(&pr(7, "OPEN"));
+    let refused = ghfake::Fake::new("", &pr(7, "OPEN"));
+    refused.serve_pr(&pr(7, "OPEN"));
+    refused.refuse_graphql();
+
+    let want = graphql.issue(&args);
+    let got = refused.issue(&args);
+
+    let calls = refused.calls();
+    assert!(want.status.success(), "{want:?}\n{}", graphql.calls());
+    assert!(got.status.success(), "{got:?}\n{calls}");
+    assert_eq!(
+        String::from_utf8_lossy(&want.stdout),
+        "https://github.com/o/r/pull/7\n"
+    );
+    assert_eq!(got.stdout, want.stdout);
+    for rest in [
+        "--method GET repos/o/r/pulls?head=o%3Alev%2Feng-1-fix&state=all",
+        "--method POST repos/o/r/pulls/7/requested_reviewers",
+    ] {
+        assert!(calls.contains(rest), "{rest} missing: {calls}");
+    }
+}
