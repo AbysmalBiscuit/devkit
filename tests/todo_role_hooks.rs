@@ -230,7 +230,7 @@ fn a_worker_at_agent_scope_is_held_on_pending_todos_once() {
 fn manager_pending_holds_only_with_an_explicit_override() {
     for hold_pending in [false, true] {
         let p = Proj::with_home_config(&format!(
-            "[todo.roles.manager]\nscope = \"workspace\"\n{}",
+            "[todo]\nhold_stop = \"always\"\n[todo.roles.manager]\nscope = \"workspace\"\n{}",
             if hold_pending {
                 "hold_pending = true\n"
             } else {
@@ -262,8 +262,9 @@ fn manager_pending_holds_only_with_an_explicit_override() {
 
 #[test]
 fn explicit_false_disables_the_builtin_main_pending_hold() {
-    let p =
-        Proj::with_home_config("[todo.roles.main]\nscope = \"session\"\nhold_pending = false\n");
+    let p = Proj::with_home_config(
+        "[todo]\nhold_stop = \"always\"\n[todo.roles.main]\nscope = \"session\"\nhold_pending = false\n",
+    );
     assert!(
         p.devkit(&["todo", "add", "pending"], &MAIN)
             .status

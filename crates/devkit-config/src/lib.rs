@@ -96,11 +96,11 @@ pub struct Config {
 /// Where agent todo lists are kept.
 ///
 /// ```
-/// # use devkit_config::{Config, TodoBackend};
+/// # use devkit_config::{Config, HoldStop, TodoBackend};
 /// # let cfg = Config::parse(r#"
 /// [todo]
 /// backend = "taskchampion"
-/// hold_stop = true
+/// hold_stop = "always"
 ///
 /// [todo.taskchampion]
 /// data_dir = "/var/devkit/todo"
@@ -134,9 +134,17 @@ pub struct Config {
 /// # let empty = Config::parse("").unwrap();
 /// # assert_eq!(empty.todo.backend, TodoBackend::Builtin);
 /// # assert_eq!(empty.todo.postgres.root, "devkit");
-/// # assert!(empty.todo.hold_stop);
-/// # let off = Config::parse("[todo]\nhold_stop = false\n").unwrap();
-/// # assert!(!off.todo.hold_stop);
+/// # assert_eq!(cfg.todo.hold_stop, HoldStop::Always);
+/// # assert_eq!(empty.todo.hold_stop, HoldStop::Subagents);
+/// # let hold = |v: &str| Config::parse(&format!("[todo]\nhold_stop = {v}\n")).map(|c| c.todo.hold_stop);
+/// # assert_eq!(hold("\"never\"").unwrap(), HoldStop::Never);
+/// # assert_eq!(hold("\"subagents\"").unwrap(), HoldStop::Subagents);
+/// # assert_eq!(hold("true").unwrap(), HoldStop::Always);
+/// # assert_eq!(hold("false").unwrap(), HoldStop::Never);
+/// # let bad = hold("\"sometimes\"").unwrap_err();
+/// # assert!(format!("{bad:#}").contains("subagents"), "{bad:#}");
+/// # assert!(!HoldStop::Subagents.holds(false) && HoldStop::Subagents.holds(true));
+/// # assert!(HoldStop::Always.holds(false) && !HoldStop::Never.holds(true));
 /// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
 /// # assert!(Config::parse("[todo]\nbackends = \"builtin\"\n").is_err());
 /// # let quoted = Config::parse("[todo]\nproject = \"dev'kit\"\n").unwrap_err();
@@ -159,11 +167,15 @@ pub struct TodoConfig {
     /// them in a shared database under `todo.postgres.root`, with its activity
     /// log. `DEVKIT_TODO_BACKEND` overrides it with the same spellings.
     pub backend: TodoBackend,
-    /// Whether a stop hook sends an agent back to its open todos: its
+    /// Whose stop a stop hook refuses while the agent has open todos: its
     /// own claims on any node and pending todos when its role holds them.
-    /// One reminder per unchanged list; stopping again goes
-    /// through.
-    pub hold_stop: bool,
+    /// `always` holds every agent, `subagents` only sub-agents, and `never`
+    /// none; `true` and `false` mean `always` and `never`. One reminder per
+    /// unchanged list; stopping again goes through.
+    /// `DEVKIT_TODO_HOLD_STOP` overrides it with the same spellings, and
+    /// `devkit todo hold` overrides both for one session.
+    #[schemars(with = "todo::HoldStopSpelling")]
+    pub hold_stop: HoldStop,
     /// The `taskchampion` backend's settings.
     pub taskchampion: TaskchampionConfig,
     /// The `postgres` backend's settings.
@@ -176,7 +188,7 @@ impl Default for TodoConfig {
             scopes: todo::default_scopes(),
             roles: todo::default_roles(),
             backend: TodoBackend::default(),
-            hold_stop: true,
+            hold_stop: HoldStop::default(),
             taskchampion: TaskchampionConfig::default(),
             postgres: PostgresConfig::default(),
         }
@@ -197,6 +209,72 @@ pub enum TodoBackend {
     Builtin,
     Taskchampion,
     Postgres,
+}
+
+/// Whose stop `[todo] hold_stop` refuses while the agent has open todos.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    JsonSchema,
+    Serialize,
+    strum::Display,
+    strum::EnumString,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+pub enum HoldStop {
+    /// Every agent's stop, a main agent's included.
+    #[strum(to_string = "always", serialize = "true")]
+    Always,
+    /// Only a sub-agent's stop.
+    #[default]
+    Subagents,
+    /// No stop.
+    #[strum(to_string = "never", serialize = "false")]
+    Never,
+}
+
+impl HoldStop {
+    /// Whether this mode refuses a stop, a sub-agent's when `subagent`.
+    pub fn holds(self, subagent: bool) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Subagents => subagent,
+            Self::Never => false,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for HoldStop {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = HoldStop;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("one of `always`, `subagents`, `never`, or a boolean")
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, on: bool) -> Result<HoldStop, E> {
+                Ok(if on {
+                    HoldStop::Always
+                } else {
+                    HoldStop::Never
+                })
+            }
+
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<HoldStop, E> {
+                name.parse()
+                    .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(name), &self))
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 /// Where `[todo] backend = "taskchampion"` keeps its replica and syncs it.

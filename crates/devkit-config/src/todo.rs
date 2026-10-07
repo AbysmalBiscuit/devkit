@@ -312,6 +312,16 @@ pub(crate) fn validate(config: &crate::TodoConfig) -> Result<()> {
     Ok(())
 }
 
+/// What `[todo] hold_stop` accepts: a mode, or a boolean.
+#[derive(JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+pub(crate) enum HoldStopSpelling {
+    Mode(crate::HoldStop),
+    /// `true` is `always` and `false` is `never`.
+    Legacy(bool),
+}
+
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Input {
@@ -321,7 +331,7 @@ pub(crate) struct Input {
     roles: BTreeMap<String, RoleConfig>,
     backend: crate::TodoBackend,
     project: Option<serde::de::IgnoredAny>,
-    hold_stop: bool,
+    hold_stop: crate::HoldStop,
     taskchampion: crate::TaskchampionConfig,
     postgres: crate::PostgresConfig,
 }

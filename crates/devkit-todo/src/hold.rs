@@ -51,6 +51,12 @@ pub fn hold_dir(session: &Holder) -> PathBuf {
     state_dir().join("holds").join(render::digest(session))
 }
 
+/// The hold mode `devkit todo hold` set for `holder`'s session, forgotten
+/// with the rest of [`hold_dir`] when the session ends.
+pub fn mode_path(holder: &Holder) -> PathBuf {
+    hold_dir(&holder.session()).join("mode")
+}
+
 /// The fingerprint of the open todos `holder` was last reminded of.
 pub fn hold_path(holder: &Holder) -> PathBuf {
     hold_dir(&holder.session()).join(render::digest(holder))

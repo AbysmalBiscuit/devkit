@@ -691,6 +691,38 @@
       },
       "type": "object"
     },
+    "HoldStop": {
+      "description": "Whose stop `[todo] hold_stop` refuses while the agent has open todos.",
+      "oneOf": [
+        {
+          "const": "always",
+          "description": "Every agent's stop, a main agent's included.",
+          "type": "string"
+        },
+        {
+          "const": "subagents",
+          "description": "Only a sub-agent's stop.",
+          "type": "string"
+        },
+        {
+          "const": "never",
+          "description": "No stop.",
+          "type": "string"
+        }
+      ]
+    },
+    "HoldStopSpelling": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HoldStop"
+        },
+        {
+          "description": "`true` is `always` and `false` is `never`.",
+          "type": "boolean"
+        }
+      ],
+      "description": "What `[todo] hold_stop` accepts: a mode, or a boolean."
+    },
     "HooksConfig": {
       "description": "Commands run on a devkit lifecycle event. Most keys are named\n`{before,after}_<event>` after the state change rather than the command\nthat reached it; `after_end` is the exception and names its run, because a\nrun-level event has exactly one caller and no worktree state to be named\nfor. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and\nglobs are not available. A hook that fails to render, spawn, or exit zero\nwarns on stderr and the remaining hooks still run. Output is captured and\ndiscarded. A `devkit.toml` that fails to load leaves `issue end` with no\nhooks, so none of its keys run.\n\n```toml\n[hooks]\nafter_worktree_create = [[\"zoxide\", \"add\", \"{{ worktree }}\"]]\nafter_worktree_remove = [[\"zoxide\", \"remove\", \"{{ worktree }}\"]]\nafter_end             = [[\"alacritree\", \"project\", \"refresh\"]]\n```\n\nEach key is an array, so a deeper `devkit.toml` replaces the whole list\nrather than appending to it. A project defining a key drops the\nmachine-wide list from `~/.config/devkit/config.toml` entirely.",
       "properties": {
@@ -1759,7 +1791,7 @@
     },
     "TodoConfig": {
       "additionalProperties": false,
-      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskchampion\"\nhold_stop = true\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\nroot = \"agents\"\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n```",
+      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskchampion\"\nhold_stop = \"always\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\nroot = \"agents\"\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n```",
       "properties": {
         "backend": {
           "$ref": "#/$defs/TodoBackend",
@@ -1767,9 +1799,9 @@
           "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskchampion` keeps bare project nodes in an embedded\nreplica and can sync it to a directory or server. `postgres` keeps\nthem in a shared database under `todo.postgres.root`, with its activity\nlog. `DEVKIT_TODO_BACKEND` overrides it with the same spellings."
         },
         "hold_stop": {
-          "default": true,
-          "description": "Whether a stop hook sends an agent back to its open todos: its\nown claims on any node and pending todos when its role holds them.\nOne reminder per unchanged list; stopping again goes\nthrough.",
-          "type": "boolean"
+          "$ref": "#/$defs/HoldStopSpelling",
+          "default": "subagents",
+          "description": "Whose stop a stop hook refuses while the agent has open todos: its\nown claims on any node and pending todos when its role holds them.\n`always` holds every agent, `subagents` only sub-agents, and `never`\nnone; `true` and `false` mean `always` and `never`. One reminder per\nunchanged list; stopping again goes through.\n`DEVKIT_TODO_HOLD_STOP` overrides it with the same spellings, and\n`devkit todo hold` overrides both for one session."
         },
         "postgres": {
           "$ref": "#/$defs/PostgresConfig",
@@ -2125,7 +2157,7 @@
       "$ref": "#/$defs/TodoConfig",
       "default": {
         "backend": "builtin",
-        "hold_stop": true,
+        "hold_stop": "subagents",
         "postgres": {
           "ca_file": null,
           "doppler_config": null,

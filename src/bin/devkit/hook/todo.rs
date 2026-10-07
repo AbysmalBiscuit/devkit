@@ -37,6 +37,7 @@ use super::{
     record,
 };
 use crate::todo::{
+    hold::{self as hold_mode, HOLD_VAR},
     queue::{self, Deferred},
     store::{BACKEND_VAR, Store},
 };
@@ -143,14 +144,18 @@ Before you stop to ask the user something:
 - Without one, ask a sub-agent on a bigger model and take its answer.
 - Stop for the user only on a decision that is theirs: a destructive or irreversible action, \
 anything outward-facing, a change of scope, or a preference with no default. To stop for one, \
-end your turn again: this reminder comes once per unchanged list.";
+end your turn again: this reminder comes once per unchanged list.
+If the user finds these reminders disruptive, `devkit todo hold never` turns them off for this \
+session.";
 
 /// The answer that refuses `holder`'s stop, or `None` to let it stop. A
-/// stop is refused while `holder` has open todos (see [`hold::open_for`])
-/// and was not already refused over the same list; pending todos count
-/// when the caller's role holds its own node. Fails open: a harness whose
-/// sessions name no node, a payload that cannot block, an unreadable config
-/// or store, and a fingerprint that cannot be written all let it stop.
+/// stop is refused when the hold mode in effect holds `holder` (see
+/// [`hold_mode::effective`]), `holder` has open todos (see
+/// [`hold::open_for`]), and it was not already refused over the same list;
+/// pending todos count when the caller's role holds its own node. Fails open:
+/// a harness whose sessions name no node, a payload that cannot block, an
+/// unreadable config or store, an unknown mode in [`HOLD_VAR`], and a
+/// fingerprint that cannot be written all let it stop.
 pub(crate) fn hold(
     payload: &Payload,
     holder: &payload::Holder,
@@ -158,12 +163,18 @@ pub(crate) fn hold(
     cwd: &Path,
 ) -> Option<String> {
     harness_of(payload.harness())?;
+    let holder = to_todo_holder(holder);
+    let session = holder.session();
     let backend_var = std::env::var(BACKEND_VAR).ok();
-    let store = Store::for_hold(checkout, cwd, backend_var.as_deref())?;
+    let hold_var = std::env::var(HOLD_VAR).ok();
+    let holds = |config: &devkit_config::TodoConfig| {
+        hold_mode::effective(Some(&session), hold_var.as_deref(), Some(config))
+            .is_ok_and(|(mode, _)| mode.holds(holder != session))
+    };
+    let store = Store::for_hold(checkout, cwd, backend_var.as_deref(), holds)?;
     if let Some(replica) = store.queued_replica() {
         drain(replica.data_dir());
     }
-    let holder = to_todo_holder(holder);
     let (_, _, role) = resolve_role(payload, checkout, &store, &holder)?;
     let pending_node = role.hold_pending.then_some(role.node);
     let todos = store.list(&Filter::all()).ok()?;

@@ -32,7 +32,7 @@ Ids are in parentheses in the injected lists and in `devkit todo list`. `devkit 
 
 ## Stopping with open todos
 
-In Claude Code and Codex, ending your turn while you have open todos is refused once: the stop hook sends you back with the list. Your own claims on any node count. Pending todos on your role's node count when `hold_pending` is true. By default they count when the effective scope names your deepest identity: session for a main agent, agent for a sub-agent. Built-in main agents count session pending todos; built-in sub-agents count only claims. A worker at agent scope counts its pending list; a manager at workspace scope counts only claims unless its role overrides the flag. Role parents affect suggestions, never claim authority. Finish each open todo, or cancel one that no longer applies (`devkit todo cancel <id>`, or delete it in your task tool).
+In Claude Code and Codex, a sub-agent ending its turn while it has open todos is refused once: the stop hook sends it back with the list. A main agent's stop is refused the same way only when the hold mode is `always`. Your own claims on any node count. Pending todos on your role's node count when `hold_pending` is true. By default they count when the effective scope names your deepest identity: session for a main agent, agent for a sub-agent. Built-in main agents count session pending todos; built-in sub-agents count only claims. A worker at agent scope counts its pending list; a manager at workspace scope counts only claims unless its role overrides the flag. Role parents affect suggestions, never claim authority. Finish each open todo, or cancel one that no longer applies (`devkit todo cancel <id>`, or delete it in your task tool).
 
 Before you stop to ask the user something:
 
@@ -40,7 +40,9 @@ Before you stop to ask the user something:
 - Without one, ask a sub-agent on a bigger model and take its answer.
 - Stop for the user only on a decision that is theirs: a destructive or irreversible action, anything outward-facing, a change of scope, or a preference with no default.
 
-Ending your turn again with the list unchanged goes through, so that is how you stop for such a decision. A change to the list, a new prompt or a compaction re-arms the reminder. `[todo] hold_stop = false` turns it off.
+Ending your turn again with the list unchanged goes through, so that is how you stop for such a decision. A change to the list, a new prompt or a compaction re-arms the reminder.
+
+The hold mode decides whose stop is held: `always` holds every agent, `subagents` (the default) only sub-agents, and `never` none. `devkit todo hold <always|subagents|never>` sets it for your session and its sub-agents until the session ends, and `devkit todo hold --clear` drops that setting; with no argument it prints the mode in effect and where it came from. Run it when your user asks to silence the reminders (`never`), or to be held to your todos while they step away (`always`). Without a session's setting, `DEVKIT_TODO_HOLD_STOP` decides, then `[todo] hold_stop`; both take the same spellings, and both read `true` as `always` and `false` as `never`. Unattended launchers, such as cloud sessions, set `always`.
 
 ## Native task and plan tools
 

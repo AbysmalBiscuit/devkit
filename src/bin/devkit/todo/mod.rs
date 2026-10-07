@@ -1,6 +1,7 @@
 //! `devkit todo`: the todo lists agents and people share, kept in the store
 //! `[todo] backend` names.
 
+pub(crate) mod hold;
 pub(crate) mod queue;
 pub(crate) mod store;
 pub(crate) mod sync;
@@ -8,11 +9,12 @@ pub(crate) mod sync;
 use std::{collections::BTreeSet, path::Path};
 
 use anyhow::{Result, bail};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum, builder::TypedValueParser as _};
 use devkit_common::{
     caller::{self, Caller},
     vcs::Checkout,
 };
+use devkit_config::HoldStop;
 use devkit_todo::{
     Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
     holder::HOLDER_VAR,
@@ -25,6 +27,7 @@ use devkit_todo::{
 };
 use pabal::AnyHarness;
 use serde_json::{Value, json};
+use strum::VariantNames as _;
 
 use self::{store::Store, sync::SyncOutcome};
 use crate::hook::{
@@ -110,6 +113,20 @@ pub enum TodoCommand {
         #[arg(long, hide = true)]
         result_file: Option<std::path::PathBuf>,
     },
+    /// Set whose stop this session's open todos hold, or print the mode.
+    ///
+    /// `always` holds every stop, the main agent's included, `subagents`
+    /// only a sub-agent's, and `never` none. The mode applies to the calling
+    /// session and its sub-agents until the session ends, over
+    /// DEVKIT_TODO_HOLD_STOP and `[todo] hold_stop`. With no argument, prints
+    /// the mode in effect and where it came from.
+    Hold {
+        #[arg(value_parser = hold_modes())]
+        mode: Option<HoldStop>,
+        /// Drop this session's mode, so the variable or the config decides.
+        #[arg(long, conflicts_with = "mode")]
+        clear: bool,
+    },
     /// Print the todo block a hook injects.
     ///
     /// Reads the hook payload on stdin, and prints nothing on any failure.
@@ -163,6 +180,10 @@ pub fn run(cli: TodoCli) -> Result<()> {
             print!("{text}");
         }
         return Ok(());
+    }
+    if let TodoCommand::Hold { mode, clear } = cli.command {
+        let config = Store::cli_config(&std::env::current_dir()?)?;
+        return hold::run(mode, clear, config.as_ref());
     }
     let caller = caller::caller();
     let get = |key: &str| std::env::var(key).ok();
@@ -242,7 +263,9 @@ pub fn run(cli: TodoCli) -> Result<()> {
             None if !background => eprintln!("devkit todo: this todo store has no sync target"),
             None => {}
         },
-        TodoCommand::Context(_) => unreachable!("answered before the store is opened"),
+        TodoCommand::Context(_) | TodoCommand::Hold { .. } => {
+            unreachable!("answered before the store is opened")
+        }
         TodoCommand::Purge { id } => {
             if caller == Caller::Agent {
                 bail!(
@@ -264,6 +287,12 @@ pub fn run(cli: TodoCli) -> Result<()> {
         store.spawn_sync(&cwd);
     }
     Ok(())
+}
+
+/// The hold modes by name, `true` and `false` left to the config.
+fn hold_modes() -> impl clap::builder::TypedValueParser<Value = HoldStop> {
+    clap::builder::PossibleValuesParser::new(HoldStop::VARIANTS)
+        .map(|name| name.parse::<HoldStop>().expect("a listed mode parses"))
 }
 
 /// Where `dir` sits: global outside any repository.
