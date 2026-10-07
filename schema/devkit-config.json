@@ -1689,6 +1689,13 @@
             "null"
           ]
         },
+        "commit_message": {
+          "description": "Message `devkit commit` records. `subject` is the `--subject`\nargument, `body` the `--body` argument, and `coauthors` every\n`--coauthor`, `;`-separated. Defaults to the subject, then the body\nafter a blank line, then a `Co-authored-by` trailer per co-author.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "custom": {
           "additionalProperties": {
             "$ref": "#/$defs/CustomTemplate"
@@ -2138,6 +2145,7 @@
         "branch_max": null,
         "checkout_worktree_dir": null,
         "checkout_worktree_dir_max": null,
+        "commit_message": null,
         "custom": {},
         "issue_body": null,
         "issue_summary": null,

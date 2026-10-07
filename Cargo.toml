@@ -36,6 +36,7 @@ indicatif.workspace = true
 devkit-config.workspace = true
 devkit-common.workspace = true
 devkit-command.workspace = true
+devkit-git.workspace = true
 devkit-ports.workspace = true
 devkit-locks.workspace = true
 devkit-issue.workspace = true

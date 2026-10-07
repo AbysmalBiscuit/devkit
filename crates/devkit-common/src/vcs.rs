@@ -11,7 +11,7 @@ use ambassador::Delegate;
 use anyhow::{Context, Result};
 use devkit_git::GitBackend;
 pub use devkit_vcs::{
-    Changes, DETACHED, NewWorktree, Ownership, VersionControl, Worktree,
+    Changes, DETACHED, NewWorktree, Ownership, Selection, VersionControl, Worktree,
     ambassador_impl_VersionControl,
 };
 use strum::{EnumIter, IntoEnumIterator};

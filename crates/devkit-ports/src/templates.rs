@@ -55,7 +55,7 @@ struct BuiltIn {
     source: fn(&Templates) -> &str,
 }
 
-const BUILT_INS: [BuiltIn; 11] = [
+const BUILT_INS: [BuiltIn; 12] = [
     BuiltIn {
         name: "branch",
         description: "Branch name `issue setup` creates",
@@ -111,7 +111,88 @@ const BUILT_INS: [BuiltIn; 11] = [
         description: "Slack message sent by `issue review finish`",
         source: Templates::review_finish,
     },
+    BuiltIn {
+        name: "commit_message",
+        description: "Message `devkit commit` records",
+        source: Templates::commit_message,
+    },
 ];
+
+/// What `devkit commit` fills the `commit_message` template with.
+#[derive(Debug, Clone, Copy)]
+pub struct CommitMessage<'a> {
+    pub subject: &'a str,
+    pub body: Option<&'a str>,
+    pub coauthors: &'a [String],
+}
+
+/// The parts of a commit message `devkit commit` takes as flags.
+const COMMIT_PARTS: [&str; 3] = ["subject", "body", "coauthors"];
+
+/// The message `devkit commit` records: template `commit_message` over
+/// [`checkout_context`], `given`, then the message's parts. A part the caller
+/// left out falls back to `[templates.variables]`, which can require it, as a
+/// project requires `coauthors` of agents; with no entry there it renders
+/// empty.
+pub fn commit_message(
+    cfg: &Config,
+    start: &Path,
+    message: &CommitMessage<'_>,
+    given: &BTreeMap<String, String>,
+    caller: Caller,
+) -> Result<String> {
+    let name = "commit_message";
+    let (_, _, source) = lookup(cfg, name)?;
+    let reads = template::undeclared(&[source])?;
+    for k in given.keys() {
+        ensure!(
+            reads.contains(k),
+            "template `{name}` reads no variable `{k}`"
+        );
+    }
+    let mut ctx = checkout_context(cfg, start);
+    for (k, v) in given {
+        ctx.insert(k.clone(), serde_json::json!(v));
+    }
+    let coauthors = message.coauthors.join("; ");
+    let parts = [
+        ("subject", Some(message.subject)),
+        ("body", message.body),
+        (
+            "coauthors",
+            (!coauthors.is_empty()).then_some(coauthors.as_str()),
+        ),
+    ];
+    for (k, v) in parts {
+        if let Some(v) = v {
+            ensure!(
+                reads.contains(k),
+                "template `{name}` reads no `{k}`, so it would drop --{}",
+                k.trim_end_matches('s')
+            );
+            ctx.insert(k.to_string(), serde_json::json!(v));
+        }
+    }
+    let mut defaults = cfg.templates.defaults();
+    let mut needed = args(source, &ctx)?;
+    for part in COMMIT_PARTS {
+        if !cfg.templates.variables.contains_key(part) {
+            needed.remove(part);
+            defaults.insert(part.to_string(), String::new());
+        }
+    }
+    ensure_supplied(
+        "devkit commit",
+        &missing_args(cfg, None, &needed, given, caller),
+    )?;
+    let text = template::render(source, &ctx, &defaults)
+        .with_context(|| format!("rendering template `{name}`"))?;
+    ensure!(
+        !text.trim().is_empty(),
+        "template `{name}` rendered an empty message"
+    );
+    Ok(text)
+}
 
 /// The context every template renders over: `branch`, and `issue`, `slug`,
 /// `apps` from the worktree's record when it has one. A field with no source
