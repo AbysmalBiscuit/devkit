@@ -645,8 +645,7 @@ fn quote(s: &str) -> String {
 /// commit's reference transaction is prepared, confirm it moves the expected
 /// ref from the expected commit to one recording the selected tree. Returns
 /// the exit status for the hook.
-pub fn run_hook(state: &Path, hook: &str, args: &[String]) -> Result<i32> {
-    let state_path = state;
+pub fn run_hook(state_path: &Path, hook: &str, args: &[String]) -> Result<i32> {
     let state = HookState::read(state_path)?;
     let payload = if hook == "reference-transaction" {
         let mut buf = Vec::new();
