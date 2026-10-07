@@ -1545,6 +1545,42 @@
         }
       ]
     },
+    "SupabaseConfig": {
+      "additionalProperties": false,
+      "description": "Where `[todo] backend = \"supabase\"` reaches the todo database: a\nSupabase project's Data API, with the optional key\n`DEVKIT_TODO_SUPABASE_KEY` resolves to.\n\n```toml\n[todo.supabase]\nurl = \"https://abcdefghijklmnop.supabase.co\"\ndoppler_project = \"swarm\"\n```",
+      "properties": {
+        "doppler_config": {
+          "default": null,
+          "description": "The Doppler config to read it from. Doppler's own default when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "doppler_project": {
+          "default": null,
+          "description": "Read the key, when the environment lacks it, from this Doppler\nproject, before the secrets file. Hooks reuse the key Doppler last\ngave, kept in devkit's state directory, until it ages out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "default": "devkit",
+          "description": "The database tenant containing this workflow's todos, the one\n`[todo.postgres] root` names on machines that connect directly.\nDefaults to `devkit`.",
+          "type": "string"
+        },
+        "url": {
+          "default": null,
+          "description": "The project's API URL, `https://<project-ref>.supabase.co`. Read\nfrom `~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`) alone and\nignored in a project's `devkit.toml`, so a checkout cannot send your\nkey elsewhere. `DEVKIT_TODO_SUPABASE_URL` overrides it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "TaskConfig": {
       "description": "A canned oneshot invoked by name via `devrun task`: either a command\n(`run`, optionally scoped to an `app` for cwd + static_env) or a sequence\n(`steps`). Exactly one of `run`/`steps` must be set; a sequence task\ncarries no `app`/`env`. Validated at resolution, not at parse.\n\n```toml\n[tasks.api-prod-build]\ndescription = \"prod nitro build (node-server preset)\"\napp = \"api-prod\"        # run in this app's dir, inherit its static_env\nrun = [\"doppler\", \"run\", \"-c\", \"dev_local\",\n       \"--preserve-env=NITRO_PRESET\", \"--\", \"bun\", \"nitro\", \"build\"]\nenv = { NITRO_PRESET = \"node-server\" }\n\n[tasks.commit]\nrun = [\"git\", \"commit\", \"-m\", \"{% if issue is defined %}{{ issue }}: {% endif %}{{ msg }}\"]\nguard = true            # redirect an agent's own `git commit` here\n\n[tasks.profile-lab-os]\ndescription = \"prod api + profiled lab-os, wired together\"\nsteps = [\n  { task = \"api-prod-build\" },\n  { up = \"api-prod\" },\n]\n```\n\n`msg` is an arg of the `commit` task: no `[templates.variables]` entry\nsupplies it, so `devrun task commit --arg msg=...` is required.",
       "properties": {
@@ -1785,18 +1821,19 @@
       "enum": [
         "builtin",
         "taskchampion",
-        "postgres"
+        "postgres",
+        "supabase"
       ],
       "type": "string"
     },
     "TodoConfig": {
       "additionalProperties": false,
-      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskchampion\"\nhold_stop = \"always\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\nroot = \"agents\"\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n```",
+      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskchampion\"\nhold_stop = \"always\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\nroot = \"agents\"\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n\n[todo.supabase]\nurl = \"https://abcdefghijklmnop.supabase.co\"\nroot = \"agents\"\n```",
       "properties": {
         "backend": {
           "$ref": "#/$defs/TodoBackend",
           "default": "builtin",
-          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskchampion` keeps bare project nodes in an embedded\nreplica and can sync it to a directory or server. `postgres` keeps\nthem in a shared database under `todo.postgres.root`, with its activity\nlog. `DEVKIT_TODO_BACKEND` overrides it with the same spellings."
+          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskchampion` keeps bare project nodes in an embedded\nreplica and can sync it to a directory or server. `postgres` keeps\nthem in a shared database under `todo.postgres.root`, with its activity\nlog. `supabase` reaches that database's todos over a Supabase\nproject's HTTPS Data API, for a machine that can make HTTP requests\nbut not open a Postgres connection, and records no activity.\n`DEVKIT_TODO_BACKEND` overrides it with the same spellings."
         },
         "hold_stop": {
           "$ref": "#/$defs/HoldStopSpelling",
@@ -1862,6 +1899,16 @@
           },
           "description": "Named node templates and their parents. Defaults are extended or\noverridden key by key by each config layer.",
           "type": "object"
+        },
+        "supabase": {
+          "$ref": "#/$defs/SupabaseConfig",
+          "default": {
+            "doppler_config": null,
+            "doppler_project": null,
+            "root": "devkit",
+            "url": null
+          },
+          "description": "The `supabase` backend's settings."
         },
         "taskchampion": {
           "$ref": "#/$defs/TaskchampionConfig",
@@ -2199,6 +2246,12 @@
             "node": "{repo}.{branch}",
             "parent": "repo"
           }
+        },
+        "supabase": {
+          "doppler_config": null,
+          "doppler_project": null,
+          "root": "devkit",
+          "url": null
         },
         "taskchampion": {
           "data_dir": null,

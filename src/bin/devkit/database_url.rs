@@ -159,12 +159,14 @@ impl DatabaseUrl {
 /// layer's is ignored: a checkout must not add a CA that a database
 /// connection trusts, as it must not move the harness log.
 pub(crate) fn global_ca_file(table: &str) -> Option<PathBuf> {
+    global_setting(&[table, "postgres", "ca_file"]).map(|ca_file| expand_tilde(&ca_file))
+}
+
+/// The string at `path` in the global config, whatever a project layer sets
+/// there.
+pub(crate) fn global_setting(path: &[&str]) -> Option<String> {
     let body = std::fs::read_to_string(devkit_common::harness::global_config_path()?).ok()?;
-    let config: toml::Table = toml::from_str(&body).ok()?;
-    let ca_file = config
-        .get(table)?
-        .get("postgres")?
-        .get("ca_file")?
-        .as_str()?;
-    Some(expand_tilde(ca_file))
+    let config: toml::Value = toml::from_str(&body).ok()?;
+    let value = path.iter().try_fold(&config, |value, key| value.get(key))?;
+    value.as_str().map(str::to_string)
 }

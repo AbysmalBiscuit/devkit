@@ -113,6 +113,10 @@ pub struct Config {
 /// doppler_project = "swarm"
 /// doppler_config = "agents"
 /// ca_file = "~/.config/devkit/supabase-ca.crt"
+///
+/// [todo.supabase]
+/// url = "https://abcdefghijklmnop.supabase.co"
+/// root = "agents"
 /// # "#).unwrap();
 /// # assert_eq!(cfg.todo.backend, TodoBackend::Taskchampion);
 /// # assert_eq!(cfg.todo.postgres.root, "agents");
@@ -127,6 +131,11 @@ pub struct Config {
 /// # assert_eq!(pg.doppler_project.as_deref(), Some("swarm"));
 /// # assert_eq!(pg.doppler_config.as_deref(), Some("agents"));
 /// # assert_eq!(pg.ca_file.as_deref(), Some("~/.config/devkit/supabase-ca.crt"));
+/// # let sb = &cfg.todo.supabase;
+/// # assert_eq!(sb.url.as_deref(), Some("https://abcdefghijklmnop.supabase.co"));
+/// # assert_eq!(sb.root, "agents");
+/// # let supabase = Config::parse("[todo]\nbackend = \"supabase\"\n").unwrap();
+/// # assert_eq!(supabase.todo.backend, TodoBackend::Supabase);
 /// # let postgres = Config::parse("[todo]\nbackend = \"postgres\"\n").unwrap();
 /// # assert_eq!(postgres.todo.backend, TodoBackend::Postgres);
 /// # assert!(Config::parse("[todo.postgres]\nurl = \"postgres://x\"\n").is_err());
@@ -165,7 +174,10 @@ pub struct TodoConfig {
     /// state directory. `taskchampion` keeps bare project nodes in an embedded
     /// replica and can sync it to a directory or server. `postgres` keeps
     /// them in a shared database under `todo.postgres.root`, with its activity
-    /// log. `DEVKIT_TODO_BACKEND` overrides it with the same spellings.
+    /// log. `supabase` reaches that database's todos over a Supabase
+    /// project's HTTPS Data API, for a machine that can make HTTP requests
+    /// but not open a Postgres connection, and records no activity.
+    /// `DEVKIT_TODO_BACKEND` overrides it with the same spellings.
     pub backend: TodoBackend,
     /// Whose stop a stop hook refuses while the agent has open todos: its
     /// own claims on any node and pending todos when its role holds them.
@@ -180,6 +192,8 @@ pub struct TodoConfig {
     pub taskchampion: TaskchampionConfig,
     /// The `postgres` backend's settings.
     pub postgres: PostgresConfig,
+    /// The `supabase` backend's settings.
+    pub supabase: SupabaseConfig,
 }
 
 impl Default for TodoConfig {
@@ -191,6 +205,7 @@ impl Default for TodoConfig {
             hold_stop: HoldStop::default(),
             taskchampion: TaskchampionConfig::default(),
             postgres: PostgresConfig::default(),
+            supabase: SupabaseConfig::default(),
         }
     }
 }
@@ -209,6 +224,7 @@ pub enum TodoBackend {
     Builtin,
     Taskchampion,
     Postgres,
+    Supabase,
 }
 
 /// Whose stop `[todo] hold_stop` refuses while the agent has open todos.
@@ -359,6 +375,53 @@ impl Default for PostgresConfig {
             doppler_project: None,
             doppler_config: None,
             ca_file: None,
+        }
+    }
+}
+
+/// Where `[todo] backend = "supabase"` reaches the todo database: a
+/// Supabase project's Data API, with the optional key
+/// `DEVKIT_TODO_SUPABASE_KEY` resolves to.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [todo.supabase]
+/// url = "https://abcdefghijklmnop.supabase.co"
+/// doppler_project = "swarm"
+/// # "#).unwrap();
+/// # let sb = &cfg.todo.supabase;
+/// # assert_eq!(sb.doppler_project.as_deref(), Some("swarm"));
+/// # assert_eq!(sb.root, "devkit");
+/// # assert!(Config::parse("[todo.supabase]\nkey = \"x\"\n").is_err());
+/// ```
+#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SupabaseConfig {
+    /// The project's API URL, `https://<project-ref>.supabase.co`. Read
+    /// from `~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`) alone and
+    /// ignored in a project's `devkit.toml`, so a checkout cannot send your
+    /// key elsewhere. `DEVKIT_TODO_SUPABASE_URL` overrides it.
+    pub url: Option<String>,
+    /// The database tenant containing this workflow's todos, the one
+    /// `[todo.postgres] root` names on machines that connect directly.
+    /// Defaults to `devkit`.
+    pub root: String,
+    /// Read the key, when the environment lacks it, from this Doppler
+    /// project, before the secrets file. Hooks reuse the key Doppler last
+    /// gave, kept in devkit's state directory, until it ages out.
+    pub doppler_project: Option<String>,
+    /// The Doppler config to read it from. Doppler's own default when absent.
+    pub doppler_config: Option<String>,
+}
+
+impl Default for SupabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: None,
+            root: "devkit".into(),
+            doppler_project: None,
+            doppler_config: None,
         }
     }
 }

@@ -33,6 +33,7 @@ const HINT_WORKSPACE: &str = "optional — falls back to the Linear API for issu
 const HINT_GITHUB: &str = "run: gh auth login   (or set GH_TOKEN/GITHUB_TOKEN)";
 const HINT_TODO_SYNC: &str =
     "optional, the taskchampion replica stays local without every sync credential";
+const HINT_TODO_API_KEY: &str = "optional, requests carry no key, for a proxy that attaches one";
 const HINT_HARNESS_LOG: &str =
     "off — set [harness.log] enabled = true in ~/.config/devkit/config.toml";
 
@@ -648,6 +649,9 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
     if backend == devkit_config::TodoBackend::Postgres {
         rows.push(todo_database_row(&config.postgres));
     }
+    if backend == devkit_config::TodoBackend::Supabase {
+        rows.extend(todo_api_rows(&config.supabase));
+    }
     let tc = config.taskchampion;
     if backend == devkit_config::TodoBackend::Taskchampion {
         let location = replica_location(tc.data_dir.as_deref());
@@ -795,6 +799,53 @@ fn todo_database_row(config: &devkit_config::PostgresConfig) -> Row {
         source,
         check,
     }
+}
+
+/// Where the Supabase API's URL and key resolve from, and whether the API
+/// answers. The URL is shown; the key never is.
+fn todo_api_rows(config: &devkit_config::SupabaseConfig) -> Vec<Row> {
+    let opened = crate::todo::store::open_api(
+        config,
+        TODO_DATABASE_WAIT,
+        crate::todo::store::UrlLookup::Doppler,
+    );
+    let url = Row {
+        key: "todo_api_url",
+        data: serde_json::Value::Null,
+        source: opened.url_source,
+        check: match &opened.api {
+            Ok(api) => Check::Ok(api.url().to_string()),
+            Err(e) => Check::Invalid(e.clone()),
+        },
+    };
+    let set = opened.key_source != Source::Unset;
+    let key = Row {
+        key: "todo_api_key",
+        data: serde_json::Value::Null,
+        source: opened.key_source,
+        check: match set {
+            true => Check::Ok("set".into()),
+            false => Check::Unset(HINT_TODO_API_KEY),
+        },
+    };
+    let Ok(api) = opened.api else {
+        return vec![url, key];
+    };
+    let check = match api.check() {
+        Ok(()) => Check::Ok(format!("answers at {}", api.url())),
+        Err(e) if e.is::<http::UntrustedCertificate>() => Check::Warn(format!("{e:#}")),
+        Err(e) if devkit_todo_supabase::is_unreachable(&e) => {
+            Check::Warn(format!("unreachable: {e:#}"))
+        }
+        Err(e) => Check::Invalid(format!("{e:#}")),
+    };
+    let answers = Row {
+        key: "todo_api",
+        data: serde_json::Value::Null,
+        source: Source::Unset,
+        check,
+    };
+    vec![url, key, answers]
 }
 
 /// What harness logging is actually doing, rather than what a config says.
