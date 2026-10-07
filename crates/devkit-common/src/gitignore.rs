@@ -80,13 +80,10 @@ fn read_excludes(path: &Path) -> Result<String> {
     }
 }
 
-/// The global excludes file and the `IGNORE_PATTERNS` it lacks. A file that
-/// does not exist lacks every pattern.
-pub fn missing_from_excludes() -> Result<(PathBuf, Vec<&'static str>)> {
-    let path = excludes_path()?;
-    let existing = read_excludes(&path)?;
-    let missing = missing_patterns(&existing);
-    Ok((path, missing))
+/// The `IGNORE_PATTERNS` the excludes file at `path` lacks. A file that does
+/// not exist lacks every pattern.
+pub fn missing_from_excludes(path: &Path) -> Result<Vec<&'static str>> {
+    Ok(missing_patterns(&read_excludes(path)?))
 }
 
 /// Append each of `IGNORE_PATTERNS` the global excludes file lacks, and return

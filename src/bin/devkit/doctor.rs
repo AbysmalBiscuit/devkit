@@ -618,16 +618,22 @@ fn excludes_check(path: &std::path::Path, missing: &[&str]) -> Check {
     }
 }
 
+/// `devkit install` refuses an excludes file it cannot read, so an unreadable
+/// one is named for the user to repair instead.
 fn excludes_row() -> Row {
-    let (check, data) = match devkit_common::gitignore::missing_from_excludes() {
-        Ok((path, missing)) => (
-            excludes_check(&path, &missing),
-            serde_json::json!({ "path": path.to_string_lossy(), "missing": missing }),
-        ),
-        Err(e) => (
-            Check::Warn(format!("{e:#}; run: devkit install")),
-            serde_json::Value::Null,
-        ),
+    use devkit_common::gitignore;
+    let (check, data) = match gitignore::excludes_path() {
+        Err(e) => (Check::Warn(format!("{e:#}")), serde_json::Value::Null),
+        Ok(path) => match gitignore::missing_from_excludes(&path) {
+            Ok(missing) => (
+                excludes_check(&path, &missing),
+                serde_json::json!({ "path": path.to_string_lossy(), "missing": missing }),
+            ),
+            Err(e) => (
+                Check::Warn(format!("{e:#}; repair {}", path.display())),
+                serde_json::json!({ "path": path.to_string_lossy() }),
+            ),
+        },
     };
     Row {
         key: "global_excludes",

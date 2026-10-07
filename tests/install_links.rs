@@ -941,13 +941,19 @@ fn install_links_falls_open_on_an_unusable_state_dir() {
 /// with config rows that have nothing to do with shim names.
 fn doctor_report(exe: &std::path::Path) -> Output {
     let state = tempfile::tempdir().expect("state dir");
+    doctor_report_in(exe, state.path())
+}
+
+/// `doctor_report` with `HOME` and `XDG_STATE_HOME` at `home`, so a test can
+/// seed files there first.
+fn doctor_report_in(exe: &std::path::Path, home: &std::path::Path) -> Output {
     let cwd = tempfile::tempdir().expect("cwd outside any project");
     retry_on_busy(|| {
         Command::new(exe)
             .arg("doctor")
             .current_dir(cwd.path())
-            .env("HOME", state.path())
-            .env("XDG_STATE_HOME", state.path())
+            .env("HOME", home)
+            .env("XDG_STATE_HOME", home)
             .env("DEVKIT_SKIP_AUTOLINK", "1")
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("GIT_CONFIG_GLOBAL")
@@ -1299,6 +1305,29 @@ fn doctor_names_devkit_install_for_each_missing_ignore_pattern() {
         assert!(row.contains(pattern), "should name {pattern}: {row}");
     }
     assert!(row.contains("devkit install"), "should name the fix: {row}");
+}
+
+/// `devkit install` refuses an excludes file it cannot read as text, so
+/// doctor names that file to repair rather than prescribing install.
+#[test]
+fn doctor_names_an_unreadable_excludes_file_to_repair() {
+    let (_dir, exe) = staged();
+    let home = tempfile::tempdir().expect("home");
+    let excludes = home.path().join(".config").join("git").join("ignore");
+    std::fs::create_dir_all(excludes.parent().unwrap()).expect("git config dir");
+    std::fs::write(&excludes, b"node_modules/\n# caf\xe9\n").expect("seed excludes");
+
+    let out = doctor_report_in(&exe, home.path());
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let row = doctor_row(&text, "global_excludes");
+    assert!(
+        row.contains(&format!("repair {}", excludes.display())),
+        "should name the file to repair: {row}"
+    );
+    assert!(
+        !row.contains("devkit install"),
+        "install fails on this file too: {row}"
+    );
 }
 
 /// Windows has no `HOME`; the excludes file then resolves under
