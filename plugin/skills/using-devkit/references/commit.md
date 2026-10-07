@@ -8,9 +8,7 @@ devkit commit --patch hunks.patch --subject '...' --body 'Why, when the subject 
 devkit commit --amend --subject '...'               # a new message for the last commit
 ```
 
-- `--files` commits each path as the working tree has it, new and deleted files included.
-- `--patch` commits part of a file. Write only the hunks to commit as a patch against HEAD (`git diff -- path > hunks.patch`, then trim it); the working tree is not read. A patch whose hunks overlap changes already staged is refused, as is one touching a path whose merge driver could not keep those staged hunks exact.
-- `--amend` changes only the message; staged changes stay staged.
+- To commit part of a file, write only the hunks to commit as a patch against HEAD (`git diff -- path > hunks.patch`, then trim it) and pass it to `--patch`. A patch touching a path whose merge driver could not keep the staged hunks exact is refused.
 - The message is the subject, then `--body` after a blank line, then a `Co-authored-by` trailer per `--coauthor`. `devkit template show commit_message` prints the project's template and any `--arg` it reads; a project can require `--coauthor` of agents.
 - Commit hooks and signing run as they do for `git commit`. A refused or failed commit leaves HEAD and the index unchanged, and says why. With `--patch`, a commit hook that changes the committed tree is refused too.
 - When the output says recovery files were retained, the new HEAD could not be confirmed: inspect `git log` before retrying, and do not run the commit again blind.
