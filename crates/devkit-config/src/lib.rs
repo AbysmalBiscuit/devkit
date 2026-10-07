@@ -174,9 +174,9 @@ pub struct TodoConfig {
     /// state directory. `taskchampion` keeps bare project nodes in an embedded
     /// replica and can sync it to a directory or server. `postgres` keeps
     /// them in a shared database under `todo.postgres.root`, with its activity
-    /// log. `supabase` reaches that database's todos over a Supabase
-    /// project's HTTPS Data API, for a machine that can make HTTP requests
-    /// but not open a Postgres connection, and records no activity.
+    /// log. `supabase` reaches that database's todos and activity log over a
+    /// Supabase project's HTTPS Data API, for a machine that can make HTTP
+    /// requests but not open a Postgres connection.
     /// `DEVKIT_TODO_BACKEND` overrides it with the same spellings.
     pub backend: TodoBackend,
     /// Whose stop a stop hook refuses while the agent has open todos: its

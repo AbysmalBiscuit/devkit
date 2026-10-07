@@ -211,6 +211,45 @@ impl Activity {
     }
 }
 
+/// The records a shared database keeps under one root, as its
+/// `activity_read` function returns them: every event as a log line, and the
+/// last hook of each agent still marked seen, as of `now`.
+#[derive(Debug, Deserialize)]
+pub struct Snapshot {
+    pub now: DateTime<Utc>,
+    pub events: Vec<serde_json::Value>,
+    pub seen: Vec<Seen>,
+}
+
+/// When an agent last fired a hook.
+#[derive(Debug, Deserialize)]
+pub struct Seen {
+    pub session: String,
+    pub agent: String,
+    pub at: DateTime<Utc>,
+}
+
+impl From<Snapshot> for Activity {
+    /// An event that does not parse is skipped.
+    fn from(snapshot: Snapshot) -> Self {
+        let events = snapshot
+            .events
+            .into_iter()
+            .filter_map(|line| serde_json::from_value(line).ok())
+            .collect();
+        let seen: HashMap<(String, String), DateTime<Utc>> = snapshot
+            .seen
+            .into_iter()
+            .map(|s| ((s.session, s.agent), s.at))
+            .collect();
+        Self::of(
+            events,
+            |session, agent| seen.get(&(session.to_string(), agent.to_string())).copied(),
+            snapshot.now,
+        )
+    }
+}
+
 /// The log in one directory: `events.jsonl`, and under `seen/` one empty file
 /// per running agent whose modification time is that agent's last hook.
 pub struct ActivityLog {

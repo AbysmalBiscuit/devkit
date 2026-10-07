@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use devkit_todo::{Edit, Filter, Holder, TodoStore};
+use devkit_todo::{Edit, Filter, Holder, TodoStore, activity::ActivityStore};
 use devkit_todo_supabase::{Api, SupabaseStore};
 
 /// The role and grants the todo reference sets up, for the role PostgREST
@@ -19,7 +19,8 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 GRANT USAGE ON SCHEMA devkit TO devkit_agent;
-GRANT SELECT, INSERT, UPDATE, DELETE ON devkit.todos TO devkit_agent;
+GRANT SELECT, INSERT, UPDATE, DELETE ON devkit.todos, devkit.seen TO devkit_agent;
+GRANT SELECT, INSERT ON devkit.activity TO devkit_agent;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA devkit TO devkit_agent;
 ALTER DEFAULT PRIVILEGES IN SCHEMA devkit GRANT EXECUTE ON FUNCTIONS TO devkit_agent;
 NOTIFY pgrst, 'reload schema';
@@ -34,13 +35,15 @@ pub fn direct_url() -> Option<String> {
     var("DEVKIT_TEST_POSTGRES_URL")
 }
 
-/// Whether the API reads devkit's table and calls its functions.
+/// Whether the API reads devkit's table and calls its todo and activity
+/// functions.
 fn serves(api: &str) -> Result<(), anyhow::Error> {
     let probe = SupabaseStore::new(Api::new(api, None, Duration::from_secs(5))?.into(), "probe");
     probe.list(&Filter::all())?;
     probe.apply(&Edit::ReleaseAll {
         holder: Holder::new("probe"),
     })?;
+    probe.activity().read_now()?;
     Ok(())
 }
 

@@ -1840,7 +1840,7 @@
         "backend": {
           "$ref": "#/$defs/TodoBackend",
           "default": "builtin",
-          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskchampion` keeps bare project nodes in an embedded\nreplica and can sync it to a directory or server. `postgres` keeps\nthem in a shared database under `todo.postgres.root`, with its activity\nlog. `supabase` reaches that database's todos over a Supabase\nproject's HTTPS Data API, for a machine that can make HTTP requests\nbut not open a Postgres connection, and records no activity.\n`DEVKIT_TODO_BACKEND` overrides it with the same spellings."
+          "description": "Which store keeps the todos. `builtin` is a JSON file in devkit's\nstate directory. `taskchampion` keeps bare project nodes in an embedded\nreplica and can sync it to a directory or server. `postgres` keeps\nthem in a shared database under `todo.postgres.root`, with its activity\nlog. `supabase` reaches that database's todos and activity log over a\nSupabase project's HTTPS Data API, for a machine that can make HTTP\nrequests but not open a Postgres connection.\n`DEVKIT_TODO_BACKEND` overrides it with the same spellings."
         },
         "hold_stop": {
           "$ref": "#/$defs/HoldStopSpelling",

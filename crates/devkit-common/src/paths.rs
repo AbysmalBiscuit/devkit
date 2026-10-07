@@ -261,25 +261,19 @@ mod tests {
     /// A resolution that fails for a reason other than absence establishes
     /// nothing. Folding it into "different" is what lets a deletion past the
     /// live-server refusal that reads this.
+    // Windows reports a path through a file as absent rather than not a
+    // directory.
     #[cfg(unix)]
     #[test]
     fn a_path_that_cannot_be_resolved_is_unknown_rather_than_different() {
-        use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
-        let locked = tmp.path().join("locked");
-        std::fs::create_dir(&locked).unwrap();
-        let inside = locked.join("tree");
-        std::fs::create_dir(&inside).unwrap();
+        let file = tmp.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        let inside = file.join("tree");
         let other = tmp.path().join("other");
         std::fs::create_dir(&other).unwrap();
 
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let verdict = path_identity(&inside, &other);
-        // Restored before the assert so a failure cannot leave the tempdir
-        // undeletable.
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-        assert_eq!(verdict, PathIdentity::Unknown);
+        assert_eq!(path_identity(&inside, &other), PathIdentity::Unknown);
         assert!(
             !same_path(&inside, &other),
             "same_path still reads Unknown as no"
@@ -290,33 +284,26 @@ mod tests {
     /// anything; a failure for any other reason leaves the pair undecided
     /// however the other side failed. Reading either of these as the lexical
     /// answer is what lets a deletion past the live-server refusal.
+    // Windows reports a path through a file as absent rather than not a
+    // directory.
     #[cfg(unix)]
     #[test]
     fn a_double_failure_is_unknown_unless_both_paths_are_merely_absent() {
-        use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
-        let locked = tmp.path().join("locked");
-        std::fs::create_dir(&locked).unwrap();
-        let a = locked.join("a");
-        let b = locked.join("b");
-        std::fs::create_dir(&a).unwrap();
-        std::fs::create_dir(&b).unwrap();
+        let file = tmp.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        let a = file.join("a");
+        let b = file.join("b");
         let absent = tmp.path().join("gone");
 
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let verdicts = [
-            path_identity(&a, &b),
-            path_identity(&a, &absent),
-            path_identity(&absent, &a),
-        ];
-        // Restored before the asserts so a failure cannot leave the tempdir
-        // undeletable.
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-
         assert_eq!(
-            verdicts,
+            [
+                path_identity(&a, &b),
+                path_identity(&a, &absent),
+                path_identity(&absent, &a),
+            ],
             [PathIdentity::Unknown; 3],
-            "unreadable/unreadable and unreadable/absent are both undecided"
+            "unresolvable/unresolvable and unresolvable/absent are both undecided"
         );
     }
 

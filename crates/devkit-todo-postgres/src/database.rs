@@ -22,8 +22,8 @@ pub(crate) const UNKNOWN_TODO: &str = "DK002";
 /// tables an application, or Supabase's HTTP API, exposes. It runs as one
 /// transaction, and every statement is idempotent.
 ///
-/// Each todo write is one function, so a client that sends every request as
-/// a transaction of its own, as Supabase's HTTP API does, claims as
+/// Each todo and activity write is one function, so a client that sends every
+/// request as a transaction of its own, as Supabase's HTTP API does, claims as
 /// atomically as one that holds a connection. A database runs this only
 /// once something it needs is missing, so a function whose behaviour
 /// changes takes a new name.
@@ -294,6 +294,57 @@ BEGIN
     RETURN QUERY SELECT locked.id, locked.node, locked.status, locked.holder,
         NULL::text, NULL::text, clock_timestamp();
 END
+$$;
+
+-- Appends each of `p_events`, in order: activity log lines, each stamped by
+-- its `at`, or by the database's clock when it has none.
+CREATE OR REPLACE FUNCTION devkit.activity_record(p_root text, p_events jsonb)
+RETURNS void
+LANGUAGE sql AS $$
+    INSERT INTO devkit.activity (root, at, event)
+    SELECT p_root, coalesce((e.line ->> 'at')::timestamptz, clock_timestamp()), e.line - 'at'
+    FROM jsonb_array_elements(p_events) WITH ORDINALITY AS e(line, n)
+    ORDER BY e.n
+$$;
+
+-- Notes that `p_agent` of `p_session` fired a hook at `p_at`, or now by the
+-- database's clock when null.
+CREATE OR REPLACE FUNCTION devkit.activity_seen(
+    p_root text, p_session text, p_agent text, p_at timestamptz
+) RETURNS void
+LANGUAGE sql AS $$
+    INSERT INTO devkit.seen (root, session, agent, at)
+    VALUES (p_root, p_session, p_agent, coalesce(p_at, clock_timestamp()))
+    ON CONFLICT (root, session, agent) DO UPDATE SET at = excluded.at
+$$;
+
+-- Drops the last-hook marks of `p_agent` of `p_session`, or of every agent of
+-- `p_session` when null.
+CREATE OR REPLACE FUNCTION devkit.activity_forget(
+    p_root text, p_session text, p_agent text
+) RETURNS void
+LANGUAGE sql AS $$
+    DELETE FROM devkit.seen
+    WHERE root = p_root AND session = p_session AND (p_agent IS NULL OR agent = p_agent)
+$$;
+
+-- Every activity log line and last-hook mark under `p_root`, read from one
+-- snapshot, as of `p_now`, or when null as of the call, which comes before
+-- the snapshot.
+CREATE OR REPLACE FUNCTION devkit.activity_read(p_root text, p_now timestamptz)
+RETURNS jsonb
+LANGUAGE sql STABLE AS $$
+    SELECT jsonb_build_object(
+        'now', coalesce(p_now, statement_timestamp()),
+        'events', coalesce((
+            SELECT jsonb_agg(event || jsonb_build_object('at', at) ORDER BY at, id)
+            FROM devkit.activity WHERE root = p_root
+        ), '[]'::jsonb),
+        'seen', coalesce((
+            SELECT jsonb_agg(jsonb_build_object('session', session, 'agent', agent, 'at', at))
+            FROM devkit.seen WHERE root = p_root
+        ), '[]'::jsonb)
+    )
 $$;
 "
     )

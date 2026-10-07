@@ -9,7 +9,7 @@ use devkit_todo::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::Api;
+use crate::{Api, SupabaseActivity};
 
 const COLUMNS: &str = "id,node,description,status,holder,parent,ord,entry,modified";
 
@@ -35,6 +35,11 @@ impl SupabaseStore {
             api,
             root: root.into(),
         }
+    }
+
+    /// The activity log kept beside these todos, under the same root.
+    pub fn activity(&self) -> SupabaseActivity {
+        SupabaseActivity::new(self.api.clone(), &self.root)
     }
 }
 
