@@ -11,9 +11,10 @@
 //!
 //! A `refuse_graphql` file there makes every GraphQL-backed verb fail with
 //! HTTP 403, as the Claude Code cloud proxy does, while `gh api` REST calls
-//! still answer. A non-empty file is the stderr that failure prints. A `create_error.txt` there makes `gh pr create` and the REST
-//! create fail with its contents on stderr, and a `list_error.txt` makes
-//! `gh pr list` fail the same way.
+//! still answer. A non-empty file is the stderr that failure prints. A
+//! `create_error.txt` there makes `gh pr create` and the REST create fail with
+//! its contents on stderr, and a `list_error.txt` makes `gh pr list` fail the
+//! same way.
 
 use std::{
     io::Write,

@@ -357,7 +357,11 @@ pub struct GraphqlStatus {
 
 impl fmt::Display for GraphqlStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GitHub GraphQL answered HTTP {}: {}", self.status, self.body)
+        write!(
+            f,
+            "GitHub GraphQL answered HTTP {}: {}",
+            self.status, self.body
+        )
     }
 }
 

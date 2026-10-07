@@ -563,7 +563,10 @@ fn status_does_not_fall_back_to_rest_when_graphql_is_rate_limited() {
 
     let calls = fake.calls();
     assert!(!calls.contains("--method GET repos/o/r/pulls/9"), "{calls}");
-    assert!(!calls.contains("--method GET repos/o/r/issues/7"), "{calls}");
+    assert!(
+        !calls.contains("--method GET repos/o/r/issues/7"),
+        "{calls}"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("secondary rate limit"), "{out:?}\n{calls}");
 }
