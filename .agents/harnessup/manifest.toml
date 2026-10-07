@@ -23,11 +23,6 @@ name = "superpowers-marketplace"
 source = "obra/superpowers-marketplace"
 harnesses = ["claude"]
 
-[[marketplace]]
-name = "workcell"
-source = "AbysmalBiscuit/workcell"
-harnesses = ["claude"]
-
 [[plugin]]
 id = "devkit@devkit"
 bootstrap = ["hooks/bootstrap-binaries"]
@@ -43,9 +38,6 @@ id = "agent-guard@agent-guard"
 
 [[plugin]]
 id = "superpowers@superpowers-marketplace"
-
-[[plugin]]
-id = "workcell@workcell"
 
 # devkit-mcp and the other command names are links devkit makes when it runs,
 # and Claude starts the plugin's MCP server before any session hook runs it.
