@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 pub struct IssueRecord {
     pub issue: String,
     pub slug: String,
+    /// The branch `issue setup` bound to the issue: the one it created, or
+    /// with `--here` the one already checked out. Absent on records written
+    /// before it existed and on those `pr checkout` writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     pub apps: Vec<String>,
     /// The summary file `issue setup --summary` wrote, so `issue end` removes
     /// the file that actually exists rather than re-deriving a path from a
@@ -150,6 +155,14 @@ impl IssueRecord {
             .map(String::from)
     }
 
+    /// Whether the record still binds a checkout on `branch`: it names that
+    /// branch, or none at all, as a `pr checkout` record and one written
+    /// before branches were recorded do. A checkout switched to another
+    /// branch carries other work, which the issue must not be credited with.
+    pub fn binds(&self, branch: &str) -> bool {
+        self.branch.as_deref().is_none_or(|b| b == branch)
+    }
+
     /// Add `event` to `events`, returning `false` when it was already there.
     pub fn claim(&mut self, event: IssueEvent) -> bool {
         let events = self.events.get_or_insert_with(Vec::new);
@@ -166,6 +179,13 @@ impl IssueRecord {
 pub fn read(worktree: &Path) -> Option<IssueRecord> {
     let body = std::fs::read_to_string(path(worktree)).ok()?;
     toml::from_str(&body).ok()
+}
+
+/// `read` for a checkout on `branch`: `None` also when the record was bound
+/// to another branch. Every reader that acts for the checked-out work, rather
+/// than for the worktree as a directory, reads through this.
+pub fn read_on(worktree: &Path, branch: &str) -> Option<IssueRecord> {
+    read(worktree).filter(|r| r.binds(branch))
 }
 
 /// `read`, but distinguishing a record that is absent from one that exists and

@@ -1151,7 +1151,7 @@
       "description": "Files copied out of a worktree before `issue end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. A failure warns and the worktree goes anyway, unless the\nentry is `required`. Entries run serially in sorted name order, before any\nremoval. Symlinks are followed, the opposite of `worktree_include`, so an\narchive may outlive the link's target.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ issue }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ issue }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
       "properties": {
         "from": {
-          "description": "Glob patterns for the files to copy, relative to the worktree root and\nrendered as minijinja. Name a directory (`.scratch/`) or write\n`.scratch/**` to archive its whole tree; `dir/*` takes direct children\nonly. A pattern that could reach outside the worktree (absolute, rooted,\nholding `..`, or drive-relative like `C:scratch`) is skipped with a\nwarning; one that matches nothing is not a failure. The default issue\nsummary sits outside the worktree, so no pattern reaches it unless\n`templates.issue_summary_path` renders `{{ worktree }}`.",
+          "description": "Glob patterns for the files to copy, relative to the worktree root and\nrendered as minijinja. Name a directory (`.scratch/`) or write\n`.scratch/**` to archive its whole tree; `dir/*` takes direct children\nonly. A pattern that could reach outside the worktree (absolute, rooted,\nholding `..`, or drive-relative like `C:scratch`) is skipped with a\nwarning; one that matches nothing is not a failure. The default issue\nsummary sits under the worktree's `.devkit/`, where a pattern such as\n`.devkit/ISSUE_SUMMARY_*.md` reaches it; a relative\n`templates.issue_summary_path` puts it outside, where no pattern does.",
           "items": {
             "type": "string"
           },
@@ -1712,7 +1712,7 @@
           ]
         },
         "issue_summary_path": {
-          "description": "Where `issue setup --summary` writes the issue summary file. A relative\npath is taken from `defaults.worktree_root`, so the file outlives the\nworktree; render `{{ worktree }}` into it to keep it inside instead.\nContext: the `issue_summary` context below.",
+          "description": "Where `issue setup --summary` writes the issue summary file. A relative\npath is taken from `defaults.worktree_root`, so the file sits beside\nthe worktree and outlives it, and is refused when there is no\n`worktree_root`. Context: the `issue_summary` context below. Defaults\nto `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md`: inside the\nworktree, or the checkout `issue setup --here` binds, where it stays\nuntracked and goes when `issue end` removes the worktree.",
           "type": [
             "string",
             "null"

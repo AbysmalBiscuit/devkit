@@ -42,10 +42,12 @@ fn context(
 
 /// Where the summary file goes: `template` rendered, then taken from
 /// `worktree_root` unless it came out absolute. Rendering `{{ worktree }}` into
-/// the template is what puts the file inside the worktree instead of beside it.
+/// the template, as the default does, puts the file inside the worktree;
+/// leaving it relative puts it beside the worktree. `worktree_root` is asked
+/// for only then, so a project with none can still use an absolute template.
 fn resolve_path(
     template: &str,
-    worktree_root: &Path,
+    worktree_root: impl FnOnce() -> Result<PathBuf>,
     ctx: &serde_json::Value,
     vars: &BTreeMap<String, String>,
 ) -> Result<PathBuf> {
@@ -60,7 +62,7 @@ fn resolve_path(
     Ok(if p.is_absolute() {
         p.to_path_buf()
     } else {
-        worktree_root.join(p)
+        worktree_root()?.join(p)
     })
 }
 
@@ -84,7 +86,6 @@ fn write_if_absent(path: &Path, body: &str) -> Result<bool> {
 pub(crate) fn plan_path(
     cfg: &devkit_config::Config,
     d: &IssueDetails,
-    worktree_root: &Path,
     worktree: &str,
     branch: &str,
     slug: &str,
@@ -94,7 +95,7 @@ pub(crate) fn plan_path(
     let ctx = context(d, worktree, branch, slug, &cfg.defaults.branch_prefix, apps);
     resolve_path(
         cfg.templates.issue_summary_path(),
-        worktree_root,
+        || crate::issue::setup::worktree_root(cfg),
         &ctx,
         vars,
     )
@@ -102,13 +103,12 @@ pub(crate) fn plan_path(
 
 /// Write the summary if nothing is there yet: the tracker's own summary
 /// verbatim, else the `issue_summary` template rendered. Returns the path and
-/// whether this run created it.
-#[allow(clippy::too_many_arguments)]
+/// whether this run created it. A file under the worktree's `.devkit/` gets
+/// that directory's self-ignore, so it never shows up as untracked.
 pub(crate) fn write(
     cfg: &devkit_config::Config,
     d: &IssueDetails,
     tracker_summary: Option<&str>,
-    worktree_root: &Path,
     worktree: &str,
     branch: &str,
     slug: &str,
@@ -118,7 +118,7 @@ pub(crate) fn write(
     let ctx = context(d, worktree, branch, slug, &cfg.defaults.branch_prefix, apps);
     let path = resolve_path(
         cfg.templates.issue_summary_path(),
-        worktree_root,
+        || crate::issue::setup::worktree_root(cfg),
         &ctx,
         vars,
     )?;
@@ -128,15 +128,16 @@ pub(crate) fn write(
             .context("rendering `issue_summary` template")?,
     };
     let written = write_if_absent(&path, &body)?;
+    let devkit_dir = Path::new(worktree).join(".devkit");
+    if path.parent() == Some(devkit_dir.as_path()) {
+        devkit_common::gitignore::write_self_ignore(&devkit_dir);
+    }
     Ok((path, written))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        path::{Path, PathBuf},
-    };
+    use std::{collections::BTreeMap, path::PathBuf};
 
     use super::*;
 
@@ -171,7 +172,7 @@ mod tests {
     fn relative_path_lands_beside_the_worktree_not_inside_it() {
         let p = resolve_path(
             "ISSUE_SUMMARY_{{ issue }}.md",
-            Path::new("/w"),
+            || Ok(PathBuf::from("/w")),
             &ctx(),
             &BTreeMap::new(),
         )
@@ -181,14 +182,23 @@ mod tests {
 
     #[test]
     fn a_worktree_rooted_template_keeps_the_file_inside() {
+        let worktree = std::env::temp_dir().join("eng-42");
+        let ctx = context(
+            &details(),
+            &worktree.display().to_string(),
+            "lev/eng-42-fix",
+            "eng-42-fix",
+            "lev/",
+            &[],
+        );
         let p = resolve_path(
             "{{ worktree }}/ISSUE.md",
-            Path::new("/w"),
-            &ctx(),
+            || anyhow::bail!("an absolute path needs no worktree root"),
+            &ctx,
             &BTreeMap::new(),
         )
         .unwrap();
-        assert_eq!(p, PathBuf::from("/w/eng-42/ISSUE.md"));
+        assert_eq!(p, worktree.join("ISSUE.md"));
     }
 
     #[test]
@@ -263,8 +273,7 @@ mod tests {
             &devkit_config::Config::default(),
             &details(),
             tracker_summary,
-            dir.path(),
-            "/w/eng-42",
+            dir.path().to_str().unwrap(),
             "lev/eng-42-fix",
             "eng-42-fix",
             &[],

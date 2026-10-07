@@ -74,10 +74,10 @@ pub(crate) enum Cmd {
     Setup {
         /// Issue id or issue URL (equivalent to --issue). Omit it, and pass
         /// --slug, for work that has no tracker issue.
-        #[arg(value_name = "ISSUE", conflicts_with = "issue")]
+        #[arg(value_name = "ISSUE", conflicts_with = "issue", group = "issue_ref")]
         issue_pos: Option<String>,
         /// Issue id or issue URL (equivalent to the positional ISSUE).
-        #[arg(long)]
+        #[arg(long, group = "issue_ref")]
         issue: Option<String>,
         /// Short kebab title, without the issue id, rendered into the branch
         /// and worktree names (e.g. `fix-bli-export`). Omit to take the
@@ -113,6 +113,13 @@ pub(crate) enum Cmd {
         /// per-worktree artifacts to it.
         #[arg(long = "no-gitignore")]
         no_gitignore: bool,
+        /// Bind the checkout this runs in to the issue instead of creating a
+        /// worktree: write its issue record (and summary) on the branch
+        /// already checked out, creating no branch and running no worktree
+        /// hooks. Refuses on the default branch. For a session that works
+        /// in one checkout on a branch it was handed.
+        #[arg(long, requires = "issue_ref", conflicts_with = "apps")]
+        here: bool,
     },
     /// Check out an existing PR into a new worktree.
     ///
@@ -498,6 +505,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
             no_summary,
             dry_run,
             no_gitignore,
+            here,
         }) => setup::run(setup::SetupArgs {
             issue: issue_pos.or(issue),
             slug,
@@ -506,6 +514,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
             no_summary,
             dry_run,
             no_gitignore,
+            here,
             dir: cli.dir,
             config: cli.config,
         }),

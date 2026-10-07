@@ -454,12 +454,12 @@ fn unavailable_all(branches: &[String], reason: &str) -> HashMap<String, HeadLoo
 /// sharing the same head branch can never win by riding along in that batch.
 fn partition_by_record(
     rows: &[IssueWorktree],
-    recorded: impl Fn(&str) -> Option<PrLocator>,
+    recorded: impl Fn(&str, &str) -> Option<PrLocator>,
 ) -> (Vec<(String, PrLocator)>, Vec<String>) {
     let mut bound = Vec::new();
     let mut branches = Vec::new();
     for row in rows.iter().filter(|r| r.branch != "DETACHED") {
-        match recorded(&row.worktree) {
+        match recorded(&row.worktree, &row.branch) {
             Some(loc) => bound.push((row.branch.clone(), loc)),
             None => branches.push(row.branch.clone()),
         }
@@ -583,8 +583,8 @@ pub fn fetch_prs(d: &Discovered, f: &forge::Resolved) -> Result<Prs> {
     }
     let repo = f.repos.prs()?;
     let forge = f.forge.as_ref();
-    let (bound, branches) = partition_by_record(&d.rows, |worktree| {
-        devkit_common::record::read(Path::new(worktree)).and_then(|r| r.pr)
+    let (bound, branches) = partition_by_record(&d.rows, |worktree, branch| {
+        devkit_common::record::read_on(Path::new(worktree), branch).and_then(|r| r.pr)
     });
     let recorded = recorded_lookups(bound, repo, forge);
     let batch = forge.prs_by_head(repo, &branches);
@@ -1016,7 +1016,7 @@ mod tests {
             repo: None,
             number: 12,
         };
-        let (bound, branches) = partition_by_record(&[a, b], |worktree| {
+        let (bound, branches) = partition_by_record(&[a, b], |worktree, _| {
             (worktree == "/w/a").then(|| loc.clone())
         });
         assert_eq!(bound, vec![("feat/x".to_string(), loc)]);
@@ -1038,7 +1038,7 @@ mod tests {
             number: 12,
         };
         let (bound, branches) =
-            partition_by_record(std::slice::from_ref(&row), |_| Some(recorded.clone()));
+            partition_by_record(std::slice::from_ref(&row), |_, _| Some(recorded.clone()));
         assert_eq!(bound, vec![("feat/x".to_string(), recorded)]);
         assert!(
             branches.is_empty(),
@@ -1085,7 +1085,7 @@ mod tests {
     fn a_detached_row_never_reaches_either_list() {
         let mut d = wt("UNKNOWN", "NO_PR", false, None);
         d.branch = "DETACHED".into();
-        let (bound, branches) = partition_by_record(&[d], |_| {
+        let (bound, branches) = partition_by_record(&[d], |_, _| {
             Some(PrLocator {
                 repo: None,
                 number: 1,

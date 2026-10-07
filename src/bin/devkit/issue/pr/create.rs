@@ -271,7 +271,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let toplevel = devkit_common::vcs::checkout_root(Path::new(&start))?;
-    let record = devkit_common::record::read(&toplevel);
+    let record = devkit_common::record::read_on(&toplevel, &branch);
 
     let tracker_issue = record.as_ref().and_then(|r| r.tracker_issue());
     if let (Some(variable), Some(issue), Caller::Agent) = (

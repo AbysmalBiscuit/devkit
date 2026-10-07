@@ -5,6 +5,10 @@ description: Use in a cloud session before starting an issue or feature, to find
 
 # Cloud workflow
 
+## Bind the checkout to the issue
+
+Start work on an issue with `issue setup --here <issue> --summary`. It binds this checkout and its assigned branch to the issue, so `issue pr create` writes the line that closes it, and it writes the issue summary, whose path it prints. What else it does and when it refuses is in the `--here` paragraph of the `using-devkit` skill's `references/issues.md`.
+
 ## Find existing work first
 
 The GitHub issue is the plan. Read its description, `Done when`, `Stop and ask if`, `Out of scope`, comments and linked issues. Then look for work already done: commits on this branch, an open PR for it, and a committed spec or plan under `docs/superpowers/specs` and `docs/superpowers/plans`. Read a matching document fully and check that it still describes the request.

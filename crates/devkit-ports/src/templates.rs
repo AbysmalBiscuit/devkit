@@ -134,9 +134,12 @@ pub fn worktree_context(record: Option<&IssueRecord>, branch: Option<&str>) -> s
 fn checkout_context(cfg: &Config, start: &Path) -> serde_json::Map<String, serde_json::Value> {
     let root = vcs::checkout_root(start).unwrap_or_else(|_| start.to_path_buf());
     let branch = Vcs::at(&root).branch(&root).ok();
-    let serde_json::Value::Object(mut m) =
-        worktree_context(record::read(&root).as_ref(), branch.as_deref())
-    else {
+    let serde_json::Value::Object(mut m) = worktree_context(
+        record::read(&root)
+            .filter(|r| branch.as_deref().is_none_or(|b| r.binds(b)))
+            .as_ref(),
+        branch.as_deref(),
+    ) else {
         unreachable!("worktree_context builds an object")
     };
     m.insert(
