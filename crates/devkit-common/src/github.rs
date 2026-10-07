@@ -10,7 +10,11 @@
 
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    fmt,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::{Context, Result};
@@ -154,16 +158,26 @@ impl Api {
     /// POST a raw GraphQL query, returning the response envelope whole
     /// (`{ "data": ..., "errors": ... }`) with no error handling of its own,
     /// so the caller decides which errors it accepts.
+    ///
+    /// A non-2xx answer is a [`GraphqlStatus`] carrying the body, which
+    /// [`graphql_refused`] reads to tell a refusal from a rate limit.
     pub fn graphql_value(&self, query: &str) -> Result<Value> {
-        let _span = devkit_timing::io_span("github graphql", "graphql").entered();
-        Ok(http::send(
-            client()
+        unless_off(|| {
+            let _span = devkit_timing::io_span("github graphql", "graphql").entered();
+            let resp = client()
                 .post(self.graphql_url())
                 .header("Authorization", self.bearer()?)
                 .header("User-Agent", UA)
-                .json(&serde_json::json!({ "query": query })),
-        )?
-        .json()?)
+                .json(&serde_json::json!({ "query": query }))
+                .send()
+                .map_err(http::explain)?;
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().unwrap_or_default().trim().to_string();
+                return Err(GraphqlStatus { status, body }.into());
+            }
+            Ok(resp.json()?)
+        })
     }
 
     /// POST a raw GraphQL query. The response envelope is returned whole
@@ -206,17 +220,19 @@ impl Api {
     /// Send `query` with `gh api graphql --hostname <host>`, returning what
     /// `gh` prints.
     pub fn gh_graphql(&self, query: &str) -> Result<Value> {
-        crate::cmd::gh_json(
-            &[
-                "api",
-                "graphql",
-                "--hostname",
-                self.host(),
-                "-f",
-                &format!("query={query}"),
-            ],
-            ".",
-        )
+        unless_off(|| {
+            crate::cmd::gh_json(
+                &[
+                    "api",
+                    "graphql",
+                    "--hostname",
+                    self.host(),
+                    "-f",
+                    &format!("query={query}"),
+                ],
+                ".",
+            )
+        })
     }
 
     fn rest_direct(
@@ -289,18 +305,89 @@ impl Api {
     }
 }
 
+/// `[github] no_graphql` from the resolved config, which
+/// `DEVKIT_NO_GRAPHQL` overrides.
+static NO_GRAPHQL: AtomicBool = AtomicBool::new(false);
+
+/// Record `[github] no_graphql`. Called beside the config load, as
+/// [`crate::pool::configure`] is.
+pub fn configure(no_graphql: bool) {
+    NO_GRAPHQL.store(no_graphql, Ordering::Relaxed);
+}
+
+/// Whether GraphQL is switched off: `DEVKIT_NO_GRAPHQL` when it parses as a
+/// boolean, else `[github] no_graphql`.
+pub fn graphql_off() -> bool {
+    crate::harness::parse_env_override(std::env::var("DEVKIT_NO_GRAPHQL").ok().as_deref())
+        .unwrap_or_else(|| NO_GRAPHQL.load(Ordering::Relaxed))
+}
+
+/// A GraphQL call devkit did not send because GraphQL is switched off.
+/// [`graphql_refused`] counts it as a refusal, so a read with a REST path
+/// takes it.
+#[derive(Debug)]
+pub struct GraphqlOff;
+
+impl fmt::Display for GraphqlOff {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "GitHub GraphQL is switched off (DEVKIT_NO_GRAPHQL or `[github] no_graphql`) and this \
+             read has no REST path",
+        )
+    }
+}
+
+impl std::error::Error for GraphqlOff {}
+
+/// `send`, a call that uses GraphQL (directly or inside a `gh` verb), unless
+/// GraphQL is switched off; then [`GraphqlOff`], with nothing sent.
+pub fn unless_off<T>(send: impl FnOnce() -> Result<T>) -> Result<T> {
+    if graphql_off() {
+        return Err(GraphqlOff.into());
+    }
+    send()
+}
+
+/// A direct GraphQL call GitHub answered with a non-2xx status.
+#[derive(Debug)]
+pub struct GraphqlStatus {
+    pub status: StatusCode,
+    pub body: String,
+}
+
+impl fmt::Display for GraphqlStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "GitHub GraphQL answered HTTP {}: {}", self.status, self.body)
+    }
+}
+
+impl std::error::Error for GraphqlStatus {}
+
 /// A GraphQL call failed because GitHub refused GraphQL outright (HTTP 403),
 /// as the Claude Code cloud proxy does, rather than over anything in the
-/// request: the GraphQL endpoint's own status for a direct call, `gh`'s
-/// stderr for one through `gh`.
+/// request, or devkit did not send it because GraphQL is switched off: the
+/// GraphQL endpoint's own status for a direct call, `gh`'s stderr for one
+/// through `gh`.
+///
+/// A 403 carrying GitHub's rate-limit message is not a refusal: falling back
+/// to one REST read per item would only spend more of the limit.
 pub fn graphql_refused(e: &anyhow::Error) -> bool {
-    if http::status(e) == Some(StatusCode::FORBIDDEN) {
+    if e.downcast_ref::<GraphqlOff>().is_some() {
         return true;
+    }
+    if let Some(answer) = e.downcast_ref::<GraphqlStatus>() {
+        return answer.status == StatusCode::FORBIDDEN && !rate_limited(&answer.body);
     }
     crate::cmd::failed_stderr(e).is_some_and(|stderr| {
         let stderr = stderr.to_lowercase();
-        stderr.contains("graphql") && stderr.contains("403")
+        stderr.contains("graphql") && stderr.contains("403") && !rate_limited(&stderr)
     })
+}
+
+/// Whether `text` is GitHub's message for its primary or secondary rate limit.
+fn rate_limited(text: &str) -> bool {
+    let text = text.to_lowercase();
+    text.contains("rate limit exceeded") || text.contains("secondary rate limit")
 }
 
 /// `read` applied to every item on devkit's worker pool, in item order: the

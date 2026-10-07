@@ -589,6 +589,11 @@
             "null"
           ]
         },
+        "no_graphql": {
+          "default": false,
+          "description": "Skip GitHub's GraphQL API. A call with a REST path goes straight to\nit, one request per item where GraphQL would batch them; one with\nnone, such as `issue prs`, fails naming this key. Unset, devkit tries\nGraphQL first and uses REST only where GitHub refuses GraphQL outright.\n`DEVKIT_NO_GRAPHQL` (`1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`)\nwins over this.",
+          "type": "boolean"
+        },
         "project": {
           "anyOf": [
             {
@@ -1999,6 +2004,7 @@
       "$ref": "#/$defs/GithubConfig",
       "default": {
         "issues_repo": null,
+        "no_graphql": false,
         "project": null,
         "status_field": null
       },

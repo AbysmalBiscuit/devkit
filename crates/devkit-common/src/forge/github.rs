@@ -22,7 +22,7 @@ use super::{
 use crate::{
     cmd::{gh_capture, gh_json_in},
     forge::rest::encode,
-    github::{Api, Method, each, graphql_refused},
+    github::{Api, Method, each, graphql_refused, unless_off},
 };
 
 pub struct GithubForge {
@@ -678,20 +678,22 @@ impl From<GhPr> for PrBrief {
 
 impl GithubForge {
     fn gh_prs_by_head(&self, repo: &Repo, branch: &str) -> Result<HeadLookup> {
-        let found: Vec<GhPr> = gh_json_in(
-            &[
-                "pr",
-                "list",
-                "--head",
-                branch,
-                "--state",
-                "all",
-                "--json",
-                GH_PR_FIELDS,
-            ],
-            repo,
-            ".",
-        )?;
+        let found: Vec<GhPr> = unless_off(|| {
+            gh_json_in(
+                &[
+                    "pr",
+                    "list",
+                    "--head",
+                    branch,
+                    "--state",
+                    "all",
+                    "--json",
+                    GH_PR_FIELDS,
+                ],
+                repo,
+                ".",
+            )
+        })?;
         Ok(HeadLookup::of(found.into_iter().map(Into::into).collect()))
     }
 
@@ -887,7 +889,7 @@ impl Forge for GithubForge {
         for file in pr.attachments {
             args.extend(["--attach", file]);
         }
-        let out = match gh_capture(&args, repo, &cwd.to_string_lossy()) {
+        let out = match unless_off(|| gh_capture(&args, repo, &cwd.to_string_lossy())) {
             Ok(out) => out,
             Err(e) if graphql_refused(&e) && pr.attachments.is_empty() => {
                 return self.rest_create(repo, pr, cwd);
@@ -934,11 +936,13 @@ impl Forge for GithubForge {
     /// the GraphQL it runs on, the head GitHub publishes on the base
     /// repository is fetched instead, with no upstream set.
     fn checkout(&self, repo: &Repo, pr: &PrBrief, dir: &Path) -> Result<()> {
-        match gh_capture(
-            &["pr", "checkout", &pr.number.to_string()],
-            repo,
-            &dir.to_string_lossy(),
-        ) {
+        match unless_off(|| {
+            gh_capture(
+                &["pr", "checkout", &pr.number.to_string()],
+                repo,
+                &dir.to_string_lossy(),
+            )
+        }) {
             Ok(_) => Ok(()),
             Err(e) if graphql_refused(&e) => super::checkout_ref(
                 dir,
@@ -966,22 +970,24 @@ impl Forge for GithubForge {
     fn timeline(&self, repo: &Repo, role: Role, max: usize) -> Result<Vec<PrTimeline>> {
         let attempt = match self.api.token() {
             Some(_) => self.graphql_timeline(repo, role, max),
-            None => gh_json_in::<Vec<TimelineNode>>(
-                &[
-                    "pr",
-                    "list",
-                    "--search",
-                    qualifier(role),
-                    "--state",
-                    "all",
-                    "--limit",
-                    &max.to_string(),
-                    "--json",
-                    "createdAt,mergedAt,additions,deletions",
-                ],
-                repo,
-                ".",
-            )
+            None => unless_off(|| {
+                gh_json_in::<Vec<TimelineNode>>(
+                    &[
+                        "pr",
+                        "list",
+                        "--search",
+                        qualifier(role),
+                        "--state",
+                        "all",
+                        "--limit",
+                        &max.to_string(),
+                        "--json",
+                        "createdAt,mergedAt,additions,deletions",
+                    ],
+                    repo,
+                    ".",
+                )
+            })
             .map(|found| found.into_iter().map(Into::into).collect()),
         };
         match attempt {

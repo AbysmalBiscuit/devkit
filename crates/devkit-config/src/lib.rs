@@ -820,6 +820,13 @@ pub struct GithubConfig {
     /// The single-select field on `project` that holds the status. `Status`
     /// when unset.
     pub status_field: Option<String>,
+    /// Skip GitHub's GraphQL API. A call with a REST path goes straight to
+    /// it, one request per item where GraphQL would batch them; one with
+    /// none, such as `issue prs`, fails naming this key. Unset, devkit tries
+    /// GraphQL first and uses REST only where GitHub refuses GraphQL outright.
+    /// `DEVKIT_NO_GRAPHQL` (`1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`)
+    /// wins over this.
+    pub no_graphql: bool,
 }
 
 impl GithubConfig {

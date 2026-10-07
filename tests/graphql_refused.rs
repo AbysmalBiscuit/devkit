@@ -503,3 +503,107 @@ fn review_request_finds_the_branch_pr_when_graphql_is_refused() {
         assert!(calls.contains(rest), "{rest} missing: {calls}");
     }
 }
+
+/// With GraphQL switched off, `issue status` reads every batch over REST and
+/// sends no GraphQL request, though GraphQL would answer.
+#[test]
+fn status_skips_graphql_when_it_is_switched_off() {
+    let (graphql, _graphql_origin) = status_project();
+    graphql.serve_graphql(&status_graphql(graphql.head()));
+    let (off, _off_origin) = status_project();
+    off.serve_graphql(&status_graphql(off.head()));
+    off.serve_pr(&pr(9, "MERGED"));
+    off.serve_rest_issue(7, "closed", Some("completed"), "");
+
+    let want = graphql.issue(&["status"]);
+    let got = off.issue_with_env(&["status"], &[("DEVKIT_NO_GRAPHQL", "1")]);
+
+    let calls = off.calls();
+    assert!(want.status.success(), "{want:?}\n{}", graphql.calls());
+    assert!(got.status.success(), "{got:?}\n{calls}");
+    assert_eq!(got.stdout, want.stdout, "{calls}");
+    assert!(!calls.contains("graphql"), "a GraphQL request: {calls}");
+    assert!(calls.contains("--method GET repos/o/r/pulls/9"), "{calls}");
+}
+
+/// `[github] no_graphql` switches GraphQL off too, and `issue prs`, which has
+/// no REST path, says so instead of sending a GraphQL request.
+#[test]
+fn prs_names_the_switch_when_graphql_is_switched_off() {
+    let fake = ghfake::Fake::without_pr("");
+    let config = fake.project().join("no-graphql.toml");
+    std::fs::write(
+        &config,
+        "[forge]\nkind = \"github\"\nrepo = \"o/r\"\n\n[github]\nno_graphql = true\n",
+    )
+    .unwrap();
+
+    let out = fake.issue(&["prs", "--no-cache", "--config", config.to_str().unwrap()]);
+
+    let calls = fake.calls();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{out:?}\n{calls}");
+    assert!(stderr.contains("DEVKIT_NO_GRAPHQL"), "{stderr}");
+    assert!(!calls.contains("graphql"), "a GraphQL request: {calls}");
+}
+
+/// GitHub's secondary rate limit answers GraphQL with a 403 too, but that is
+/// not a refusal: `issue status` reports it rather than reading each PR over
+/// REST, which would only spend more of the limit.
+#[test]
+fn status_does_not_fall_back_to_rest_when_graphql_is_rate_limited() {
+    let (fake, _origin) = status_project();
+    fake.serve_pr(&pr(9, "MERGED"));
+    fake.fail_graphql(
+        "HTTP 403: You have exceeded a secondary rate limit. Please wait a few minutes \
+         before you try again. (https://api.github.com/graphql)",
+    );
+
+    let out = fake.issue(&["status"]);
+
+    let calls = fake.calls();
+    assert!(!calls.contains("--method GET repos/o/r/pulls/9"), "{calls}");
+    assert!(!calls.contains("--method GET repos/o/r/issues/7"), "{calls}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("secondary rate limit"), "{out:?}\n{calls}");
+}
+
+/// With a token, GitHub's primary rate limit on GraphQL is a 403 whose body
+/// says so; `issue pr checkout` of an issue reports it rather than reading the
+/// issue's timeline over REST.
+#[test]
+fn pr_checkout_of_an_issue_reports_a_graphql_rate_limit() {
+    use devkit_common::http::stub::{self, Route};
+
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    let _origin = with_origin(&fake);
+    let api = stub::serve(vec![
+        Route::new(
+            "POST",
+            "/graphql",
+            403,
+            r#"{"message":"API rate limit exceeded for user ID 1.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}"#,
+        ),
+        Route::new("GET", "/repos/o/r/issues/3/timeline", 200, "[]"),
+    ]);
+    let scratch = tempfile::tempdir().unwrap();
+
+    let out = fake.issue_with_env(
+        &[
+            "pr",
+            "checkout",
+            "https://github.com/o/r/issues/3",
+            scratch.path().join("issue-3").to_str().unwrap(),
+        ],
+        &[("GH_TOKEN", "t0k"), ("DEVKIT_TEST_GITHUB_API", &api.url())],
+    );
+
+    let reqs = api.requests();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{out:?}\n{reqs:#?}");
+    assert!(stderr.contains("API rate limit exceeded"), "{stderr}");
+    assert!(
+        !reqs.iter().any(|r| r.path.contains("/timeline")),
+        "{reqs:#?}"
+    );
+}

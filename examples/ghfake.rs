@@ -11,7 +11,7 @@
 //!
 //! A `refuse_graphql` file there makes every GraphQL-backed verb fail with
 //! HTTP 403, as the Claude Code cloud proxy does, while `gh api` REST calls
-//! still answer. A `create_error.txt` there makes `gh pr create` and the REST
+//! still answer. A non-empty file is the stderr that failure prints. A `create_error.txt` there makes `gh pr create` and the REST
 //! create fail with its contents on stderr, and a `list_error.txt` makes
 //! `gh pr list` fail the same way.
 
@@ -143,11 +143,16 @@ fn main() {
         let _ = std::fs::write(dir.join("pr_create.args"), args.join("\0"));
     }
 
-    if uses_graphql(&joined) && dir.join("refuse_graphql").exists() {
-        eprintln!(
-            "HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the \
-             REST API (https://api.github.com/graphql)"
-        );
+    if uses_graphql(&joined)
+        && let Ok(stderr) = std::fs::read_to_string(dir.join("refuse_graphql"))
+    {
+        match stderr.as_str() {
+            "" => eprintln!(
+                "HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the \
+                 REST API (https://api.github.com/graphql)"
+            ),
+            stderr => eprintln!("{stderr}"),
+        }
         std::process::exit(1);
     }
     if joined.starts_with("pr create") {

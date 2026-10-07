@@ -202,6 +202,8 @@ Credentials resolve per forge, from the environment first and then `secrets.toml
 | GitLab | `GITLAB_TOKEN` | the REST API |
 | Forgejo | `FORGEJO_TOKEN`, then `GITEA_TOKEN` | the REST API |
 
+GitHub reads that batch go over GraphQL, one request per batch. Where GitHub refuses GraphQL outright with HTTP 403, as in a Claude Code cloud session, they fall back to REST, one request per item; each command above says what that costs it. A 403 whose message is GitHub's rate limit is not a refusal: it is reported as an error, with no REST fallback. `DEVKIT_NO_GRAPHQL=1` or `[github] no_graphql = true` skips GraphQL altogether, so every read with a REST path goes straight to it, and `issue prs`, which has none, fails naming the switch. `DEVKIT_NO_GRAPHQL=0` turns GraphQL back on over the config key.
+
 A GitLab personal access token needs the `api` scope. A fine-grained one needs Merge Request create, read and update, Approval Configuration, Project, Pipeline and Job read on the project, and User read on the User tab. A Forgejo token needs access to all repositories, since a token limited to specific ones cannot read the user, with `repository` read and write, `issue` read and `user` read.
 
 GitLab and Forgejo mark a draft with a title prefix (`Draft:` and `WIP:`), which `pr ready` removes. Neither reports line counts cheaply, so `issue dashboard`'s PR additions and deletions stay zero there.

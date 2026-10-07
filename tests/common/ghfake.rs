@@ -205,6 +205,12 @@ github = "sweeper[bot]"
         std::fs::write(self.bin.path().join("refuse_graphql"), "").expect("write marker");
     }
 
+    /// Make every GraphQL-backed `gh` verb fail with `stderr`, such as
+    /// GitHub's rate-limit message. `gh api` REST calls keep answering.
+    pub fn fail_graphql(&self, stderr: &str) {
+        std::fs::write(self.bin.path().join("refuse_graphql"), stderr).expect("write marker");
+    }
+
     /// Answer the REST read of a PR's reviews with `payload`, a JSON array of
     /// `{"user":{"login":...},"state":...}`. Without one the fake reports no
     /// reviews at all.
