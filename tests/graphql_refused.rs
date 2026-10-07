@@ -110,6 +110,81 @@ fn pr_checkout_checks_out_the_pr_when_graphql_is_refused() {
     assert!(record.contains("number = 7"), "{record}");
 }
 
+/// A cross-reference on an issue's REST timeline from `source`, an issue or
+/// PR in o/r whose body is `body`.
+fn cross_reference(number: u64, is_pr: bool, body: &str) -> serde_json::Value {
+    let mut source = serde_json::json!({
+        "number": number, "state": "open", "body": body,
+        "html_url": format!("https://github.com/o/r/issues/{number}"),
+        "repository": { "full_name": "o/r" }
+    });
+    if is_pr {
+        source["html_url"] = format!("https://github.com/o/r/pull/{number}").into();
+        source["pull_request"] = serde_json::json!({ "merged_at": null });
+    }
+    serde_json::json!({ "event": "cross-referenced", "source": { "type": "issue", "issue": source } })
+}
+
+/// With a token, as a cloud session has, devkit asks GitHub directly; GraphQL
+/// is refused there too, so an issue's closing PR is read from its REST
+/// timeline: PR 7 closes issue 3, while PR 8 only mentions it.
+#[test]
+fn pr_checkout_of_an_issue_checks_out_its_closing_pr_when_graphql_is_refused() {
+    use devkit_common::http::stub::{self, Route};
+
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    fake.refuse_graphql();
+    let _origin = with_origin(&fake);
+    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+    let timeline = serde_json::json!([
+        { "event": "labeled" },
+        cross_reference(5, false, "Fixes #3"),
+        cross_reference(8, true, "Related to #3, and fixes #30."),
+        cross_reference(7, true, "Some work.\n\nFixes: #3"),
+    ])
+    .to_string();
+    let pr = serde_json::json!({
+        "number": 7, "state": "open", "merged_at": null,
+        "html_url": "https://github.com/o/r/pull/7", "title": "t",
+        "head": { "ref": "lev/eng-1-fix", "sha": fake.head(), "repo": { "owner": { "login": "o" } } },
+        "draft": false, "user": { "login": "LevValle" }
+    })
+    .to_string();
+    let api = stub::serve(vec![
+        Route::new(
+            "POST",
+            "/graphql",
+            403,
+            r#"{"message":"GraphQL is refused"}"#,
+        ),
+        Route::new("GET", "/repos/o/r/issues/3/timeline", 200, &timeline),
+        Route::new("GET", "/repos/o/r/pulls/7", 200, &pr),
+    ]);
+    let scratch = tempfile::tempdir().unwrap();
+    let worktree = scratch.path().join("issue-3");
+
+    let out = fake.issue_with_env(
+        &[
+            "pr",
+            "checkout",
+            "https://github.com/o/r/issues/3",
+            worktree.to_str().unwrap(),
+        ],
+        &[("GH_TOKEN", "t0k"), ("DEVKIT_TEST_GITHUB_API", &api.url())],
+    );
+
+    let reqs = api.requests();
+    assert!(out.status.success(), "{out:?}\n{reqs:#?}");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]).trim(), fake.head());
+    let record = std::fs::read_to_string(worktree.join(".devkit").join("issue.toml")).unwrap();
+    assert!(record.contains("number = 7"), "{record}");
+    assert!(
+        reqs.iter()
+            .any(|r| r.path.starts_with("/repos/o/r/issues/3/timeline")),
+        "{reqs:#?}"
+    );
+}
+
 /// Two issue worktrees: `wts/a` on the PR branch with issue 7 and no recorded
 /// PR, so its PR is found by head branch, and `wts/b` with no issue and PR 9
 /// recorded, so its PR is read by number.

@@ -233,6 +233,111 @@ pub fn parse_issue_pr(resp: &serde_json::Value) -> LinkedChoice {
     rank_linked(&prs)
 }
 
+// --- an issue's closing PRs over REST ----------------------------------------
+
+/// The words GitHub reads as closing the issue a PR body names after them.
+const CLOSING_KEYWORDS: [&str; 9] = [
+    "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
+];
+
+/// Whether a PR in `pr_repo` whose body is `body` closes issue `number` of
+/// `slug` on `host`: a closing keyword, then `#n` (in the PR's own
+/// repository), `owner/repo#n`, or the issue's URL.
+pub fn closes(body: &str, pr_repo: &str, slug: &str, host: &str, number: u64) -> bool {
+    let words: Vec<&str> = body.split_whitespace().collect();
+    words.windows(2).any(|pair| {
+        let keyword = pair[0]
+            .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+            .to_ascii_lowercase();
+        if !CLOSING_KEYWORDS.contains(&keyword.as_str()) {
+            return false;
+        }
+        let reference = pair[1].trim_end_matches(|c: char| ".,;:!?)".contains(c));
+        let named = match reference.split_once('#') {
+            Some(("", n)) => Some((pr_repo.to_string(), n)),
+            Some((repo, n)) if repo.contains('/') => Some((repo.to_string(), n)),
+            _ => None,
+        };
+        let target = match named {
+            Some((repo, n)) => n.parse().ok().map(|n| (repo, n)),
+            None => parse_issue_url(reference, host),
+        };
+        target.is_some_and(|(repo, n)| n == number && repo.eq_ignore_ascii_case(slug))
+    })
+}
+
+/// The PRs an issue's REST timeline links to it: each `connected` PR, and
+/// each `cross-referenced` PR whose body closes issue `number` of `slug`.
+pub fn parse_closing_prs(
+    events: &[serde_json::Value],
+    slug: &str,
+    host: &str,
+    number: u64,
+) -> Vec<LinkedPr> {
+    events
+        .iter()
+        .filter_map(|e| {
+            let connected = match e["event"].as_str()? {
+                "connected" => true,
+                "cross-referenced" => false,
+                _ => return None,
+            };
+            let source = &e["source"]["issue"];
+            let pr = source.get("pull_request")?;
+            let repo = source["repository"]["full_name"].as_str()?;
+            if !connected
+                && !closes(
+                    source["body"].as_str().unwrap_or(""),
+                    repo,
+                    slug,
+                    host,
+                    number,
+                )
+            {
+                return None;
+            }
+            let state = if pr["merged_at"].is_string() {
+                "MERGED".to_string()
+            } else {
+                source["state"].as_str()?.to_uppercase()
+            };
+            Some(LinkedPr {
+                number: source["number"].as_u64()?,
+                state,
+                url: source["html_url"].as_str()?.to_string(),
+                repo: repo.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Every event on issue `number`'s REST timeline, page by page.
+fn rest_timeline(api: &Api, slug: &str, number: u64) -> Result<Vec<serde_json::Value>> {
+    rest_pages(api, &format!("/repos/{slug}/issues/{number}/timeline"))
+}
+
+/// Every item of the REST list at `path`, fetched a full page at a time until
+/// a short page ends it.
+fn rest_pages(api: &Api, path: &str) -> Result<Vec<serde_json::Value>> {
+    const PER_PAGE: usize = 100;
+    let sep = if path.contains('?') { '&' } else { '?' };
+    let mut out = Vec::new();
+    for page in 1.. {
+        let url = format!("{path}{sep}per_page={PER_PAGE}&page={page}");
+        let items = api
+            .rest(Method::GET, &url, None)?
+            .with_context(|| format!("GitHub returned 404 for {url}"))?;
+        let items = items
+            .as_array()
+            .with_context(|| format!("{url} is not a list"))?;
+        out.extend(items.iter().cloned());
+        if items.len() < PER_PAGE {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 // --- assigned issues, with their state-transition history ------------------
 
 /// GraphQL for one page of issues assigned to `login`, with each issue's
@@ -632,12 +737,29 @@ impl Tracker for GithubTracker {
         }
     }
 
+    /// `closedByPullRequestsReferences` over GraphQL; where GitHub refuses
+    /// GraphQL, the closing PRs read from the issue's REST timeline.
     fn issue_pr(&self, id: &str) -> Result<Option<PrRef>> {
         let n: u64 = id
             .parse()
             .with_context(|| format!("bad issue number {id}"))?;
-        let resp = self.api.graphql(&issue_pr_query(&self.repo.slug, n))?;
-        match parse_issue_pr(&resp) {
+        let choice = match self
+            .api
+            .graphql_or_gh(&issue_pr_query(&self.repo.slug, n), Api::graphql)
+        {
+            Ok(resp) => parse_issue_pr(&resp),
+            Err(e) if graphql_refused(&e) => {
+                let events = rest_timeline(&self.api, &self.repo.slug, n)?;
+                rank_linked(&parse_closing_prs(
+                    &events,
+                    &self.repo.slug,
+                    &self.repo.host,
+                    n,
+                ))
+            }
+            Err(e) => return Err(e),
+        };
+        match choice {
             LinkedChoice::None => Ok(None),
             LinkedChoice::One(p) => Ok(Some(p)),
             LinkedChoice::Ambiguous(c) => anyhow::bail!(
@@ -1196,6 +1318,21 @@ mod tests {
             "https://github.com/o/r/pull/1".to_string(),
         );
         assert!(parse_issues_for_prs(&resp, &aliases, "o/r").is_empty());
+    }
+
+    #[test]
+    fn a_closing_keyword_closes_the_issue_it_names_in_any_reference_form() {
+        let closes = |body: &str, pr_repo: &str| closes(body, pr_repo, "o/r", "github.com", 3);
+        assert!(closes("Closes #3.", "o/r"));
+        assert!(closes("(resolved O/R#3)", "x/y"));
+        assert!(closes("fixed https://github.com/o/r/issues/3", "x/y"));
+        assert!(
+            !closes("Fixes #3", "x/y"),
+            "a bare number names the PR's own repository"
+        );
+        assert!(!closes("fixes #30", "o/r"));
+        assert!(!closes("see #3", "o/r"));
+        assert!(!closes("prefixes #3", "o/r"));
     }
 
     #[test]
