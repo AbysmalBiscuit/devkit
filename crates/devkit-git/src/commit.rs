@@ -1,10 +1,10 @@
 //! [`VersionControl::commit`](devkit_vcs::VersionControl::commit) for git.
 //!
-//! A patch is committed from a private index built from HEAD, so the shared
-//! index, which other sessions stage into, is held locked and rewritten only
-//! once the new HEAD is confirmed. What it held is replayed on top of the
-//! commit with `merge-tree`, and anything that cannot replay exactly is
-//! refused before HEAD moves. Every commit hook runs through a wrapper that
+//! Named paths and a patch are committed from a private index built from
+//! HEAD, so the shared index, which other sessions stage into, is held locked
+//! and rewritten only once the new HEAD is confirmed. For a patch, what it
+//! held is replayed on top of the commit with `merge-tree`, and anything that
+//! cannot replay exactly is refused before HEAD moves. Every commit hook runs through a wrapper that
 //! also watches the reference transaction, so a hook that changes the
 //! committed tree aborts the commit instead of publishing it.
 
@@ -47,8 +47,19 @@ const THROWAWAY_IDENTITY: [(&str, &str); 4] = [
 
 pub(crate) fn commit(dir: &Path, selection: &Selection<'_>, message: &str) -> Result<String> {
     match selection {
-        Selection::Paths(paths) => commit_paths(dir, paths, message),
-        Selection::Patch(patch) => commit_patch(dir, patch, message),
+        Selection::Paths(paths) => {
+            ensure!(!paths.is_empty(), "name at least one path to commit");
+            let paths = paths
+                .iter()
+                .map(|p| super::backend::utf8(p))
+                .collect::<Result<Vec<_>>>()?;
+            commit_guarded(dir, &Source::Paths(&paths), message)
+        }
+        Selection::Patch(patch) => {
+            let patch = super::backend::utf8(patch)?;
+            ensure!(Path::new(patch).is_file(), "patch {patch}: no such file");
+            commit_guarded(dir, &Source::Patch(patch), message)
+        }
         Selection::Amend => report(
             Git::at(dir)
                 .args(["commit", "--amend", "--only", "-m", message])
@@ -74,67 +85,6 @@ fn report(out: Output) -> Result<String> {
         }
     );
     Ok(stdout)
-}
-
-/// `git commit --only`, which commits the paths from a temporary index and
-/// then updates just those entries in the shared one. A path-limited commit
-/// can name only a path git knows, so an untracked one is first recorded as
-/// intended, without content, and forgotten again if the commit fails.
-fn commit_paths(dir: &Path, paths: &[PathBuf], message: &str) -> Result<String> {
-    ensure!(!paths.is_empty(), "name at least one path to commit");
-    let paths = paths
-        .iter()
-        .map(|p| super::backend::utf8(p))
-        .collect::<Result<Vec<_>>>()?;
-    let untracked = Git::at(dir)
-        .args([
-            "--literal-pathspecs",
-            "ls-files",
-            "-z",
-            "--others",
-            "--exclude-standard",
-            "--",
-        ])
-        .args(paths.iter().copied())
-        .output()?;
-    let untracked: Vec<&str> = untracked.split('\0').filter(|p| !p.is_empty()).collect();
-    let committed = (|| {
-        if !untracked.is_empty() {
-            Git::at(dir)
-                .args(["--literal-pathspecs", "add", "--intent-to-add", "--"])
-                .args(untracked.iter().copied())
-                .output()?;
-        }
-        report(
-            Git::at(dir)
-                .args([
-                    "--literal-pathspecs",
-                    "commit",
-                    "--only",
-                    "-m",
-                    message,
-                    "--",
-                ])
-                .args(paths.iter().copied())
-                .timeout(SLOW_TIMEOUT)
-                .wait()?,
-        )
-    })();
-    if committed.is_err() && !untracked.is_empty() {
-        Git::at(dir)
-            .args([
-                "--literal-pathspecs",
-                "rm",
-                "--cached",
-                "-q",
-                "--ignore-unmatch",
-                "--",
-            ])
-            .args(untracked.iter().copied())
-            .output()
-            .context("forgetting the paths recorded for the refused commit")?;
-    }
-    committed
 }
 
 /// Locations under the git directory, absolute.
@@ -199,9 +149,18 @@ fn text(git: Git) -> Result<String> {
     Ok(git.output()?.trim().to_string())
 }
 
-fn commit_patch(dir: &Path, patch: &Path, message: &str) -> Result<String> {
-    let patch = super::backend::utf8(patch)?.to_string();
-    ensure!(Path::new(&patch).is_file(), "patch {patch}: no such file");
+/// What a guarded commit records on top of HEAD, with paths relative to the
+/// directory devkit runs in.
+enum Source<'a> {
+    /// The working tree's content of these paths. The shared index takes the
+    /// committed entries for them and keeps everything else it held, as
+    /// `git commit --only` would.
+    Paths(&'a [&'a str]),
+    /// A patch against HEAD. What the shared index held is replayed on top.
+    Patch(&'a str),
+}
+
+fn commit_guarded(dir: &Path, source: &Source<'_>, message: &str) -> Result<String> {
     let top = PathBuf::from(text(Git::at(dir).args(["rev-parse", "--show-toplevel"]))?);
     let [index, hooks_dir] = git_paths(&top, ["index", "hooks"])?;
     let lock = index.with_file_name(format!(
@@ -231,18 +190,19 @@ fn commit_patch(dir: &Path, patch: &Path, message: &str) -> Result<String> {
         scratch: None,
         retain: false,
     };
-    let result = commit_patch_locked(&top, &index, &hooks_dir, &patch, message, &mut held);
+    let result = commit_locked(dir, &top, &index, &hooks_dir, source, message, &mut held);
     match result {
         Err(e) if held.retain => Err(e.context(held.recovery())),
         other => other,
     }
 }
 
-fn commit_patch_locked(
+fn commit_locked(
+    dir: &Path,
     top: &Path,
     index: &Path,
     hooks_dir: &Path,
-    patch: &str,
+    source: &Source<'_>,
     message: &str,
     held: &mut Held,
 ) -> Result<String> {
@@ -300,61 +260,49 @@ fn commit_patch_locked(
         .args(["read-tree", old_head.as_deref().unwrap_or("--empty")])
         .output()?;
     let base_tree = text(private(top, &candidate, &no_hooks)?.args(["write-tree"]))?;
-    private(top, &candidate, &no_hooks)?
-        .args(["apply", "--cached", "--whitespace=nowarn", "--", patch])
-        .output()
-        .context("the patch does not apply to HEAD")?;
+    match source {
+        Source::Paths(paths) => private(dir, &candidate, &no_hooks)?
+            .args(["--literal-pathspecs", "add", "--all", "--"])
+            .args(paths.iter().copied())
+            .output()
+            .context("the named paths cannot be committed")?,
+        Source::Patch(patch) => private(top, &candidate, &no_hooks)?
+            .args(["apply", "--cached", "--whitespace=nowarn", "--", patch])
+            .output()
+            .context("the patch does not apply to HEAD")?,
+    };
     let selected_tree = text(private(top, &candidate, &no_hooks)?.args(["write-tree"]))?;
     ensure!(
         selected_tree != base_tree,
-        "the patch changes nothing relative to HEAD"
+        "the {} nothing relative to HEAD",
+        match source {
+            Source::Paths(_) => "named paths change",
+            Source::Patch(_) => "patch changes",
+        }
     );
-    check_merge_drivers(
-        top,
-        &base_tree,
-        &selected_tree,
-        &prior_tree,
-        &scratch.join("attributes.index"),
-    )?;
-
-    let [merge_base, ours, theirs] =
-        [&base_tree, &selected_tree, &prior_tree].map(|tree| wrap_tree(top, tree));
-    let merge_base = format!("--merge-base={}", merge_base?);
-    let merged = Git::at(top)
-        .args([
-            "-c",
-            "merge.renames=false",
-            "-c",
-            "merge.renormalize=false",
-            "merge-tree",
-            "--write-tree",
-            &merge_base,
-            &ours?,
-            &theirs?,
-        ])
-        .wait()?;
-    match merged.status.code() {
-        Some(0) => {}
-        Some(1) => bail!(
-            "the patch overlaps staged changes; HEAD and the shared index are unchanged\n{}{}",
-            String::from_utf8_lossy(&merged.stderr),
-            String::from_utf8_lossy(&merged.stdout)
-        ),
-        _ => bail!(
-            "git merge-tree could not run ({}); HEAD and the shared index are unchanged\n{}",
-            merged.status,
-            String::from_utf8_lossy(&merged.stderr).trim()
-        ),
-    }
-    let merged_tree = String::from_utf8_lossy(&merged.stdout)
-        .lines()
-        .next()
-        .context("git merge-tree named no tree")?
-        .to_string();
     fs::copy(&original, &replacement)?;
-    private(top, &replacement, &no_hooks)?
-        .args(["read-tree", "-i", "-m", &prior_tree, &merged_tree])
-        .output()?;
+    match source {
+        Source::Paths(paths) => {
+            private(dir, &replacement, &no_hooks)?
+                .args([
+                    "--literal-pathspecs",
+                    "restore",
+                    "--staged",
+                    "--source",
+                    &selected_tree,
+                    "--",
+                ])
+                .args(paths.iter().copied())
+                .output()?;
+        }
+        Source::Patch(_) => replay_staging(
+            top,
+            &scratch,
+            [&base_tree, &selected_tree, &prior_tree].map(String::as_str),
+            &replacement,
+            &no_hooks,
+        )?,
+    }
 
     let state = HookState {
         hooks: hooks_dir.to_path_buf(),
@@ -405,6 +353,64 @@ fn commit_patch_locked(
         ));
     }
     Ok(report)
+}
+
+/// Replays the staging `prior` held, relative to `base`, onto `selected` in
+/// `replacement`, which starts as a copy of the shared index. Anything that
+/// cannot replay exactly is refused.
+fn replay_staging(
+    top: &Path,
+    scratch: &Path,
+    [base_tree, selected_tree, prior_tree]: [&str; 3],
+    replacement: &Path,
+    no_hooks: &Path,
+) -> Result<()> {
+    check_merge_drivers(
+        top,
+        base_tree,
+        selected_tree,
+        prior_tree,
+        &scratch.join("attributes.index"),
+    )?;
+
+    let [merge_base, ours, theirs] =
+        [base_tree, selected_tree, prior_tree].map(|tree| wrap_tree(top, tree));
+    let merge_base = format!("--merge-base={}", merge_base?);
+    let merged = Git::at(top)
+        .args([
+            "-c",
+            "merge.renames=false",
+            "-c",
+            "merge.renormalize=false",
+            "merge-tree",
+            "--write-tree",
+            &merge_base,
+            &ours?,
+            &theirs?,
+        ])
+        .wait()?;
+    match merged.status.code() {
+        Some(0) => {}
+        Some(1) => bail!(
+            "the patch overlaps staged changes; HEAD and the shared index are unchanged\n{}{}",
+            String::from_utf8_lossy(&merged.stderr),
+            String::from_utf8_lossy(&merged.stdout)
+        ),
+        _ => bail!(
+            "git merge-tree could not run ({}); HEAD and the shared index are unchanged\n{}",
+            merged.status,
+            String::from_utf8_lossy(&merged.stderr).trim()
+        ),
+    }
+    let merged_tree = String::from_utf8_lossy(&merged.stdout)
+        .lines()
+        .next()
+        .context("git merge-tree named no tree")?
+        .to_string();
+    private(top, replacement, no_hooks)?
+        .args(["read-tree", "-i", "-m", prior_tree, &merged_tree])
+        .output()?;
+    Ok(())
 }
 
 /// The commit HEAD names, or `None` on an unborn branch.

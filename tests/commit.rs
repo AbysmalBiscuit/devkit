@@ -414,6 +414,37 @@ fn a_hook_that_changes_the_committed_tree_makes_patch_refuse() {
 
 #[cfg(unix)]
 #[test]
+fn a_hook_that_changes_the_committed_tree_makes_files_refuse() {
+    let repo = repo();
+    let dir = repo.path();
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+    std::fs::write(dir.join("b.txt"), lines("b.txt", &[4])).unwrap();
+    let hook = dir.join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\ngit add b.txt\n").unwrap();
+    make_executable(&hook);
+    let before = head(dir);
+    let index = std::fs::read(dir.join(".git/index")).unwrap();
+
+    let out = commit(dir, &["--files", "a.txt", "--subject", "fix: a"]);
+
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("changed the committed tree"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(head(dir), before);
+    assert_eq!(std::fs::read(dir.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        git(dir, &["status", "--porcelain"]),
+        " M a.txt\n M b.txt\n",
+        "the working tree and the shared index are as they were"
+    );
+    assert!(!dir.join(".git/index.lock").exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn a_symlinked_hook_that_rejects_makes_patch_refuse() {
     let repo = repo();
     let dir = repo.path();
