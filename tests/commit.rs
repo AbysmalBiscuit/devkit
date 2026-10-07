@@ -152,6 +152,48 @@ fn a_rejected_files_commit_leaves_the_index_as_it_was() {
 }
 
 #[test]
+fn files_naming_a_directory_skips_its_ignored_files() {
+    let repo = repo();
+    let dir = repo.path();
+    std::fs::write(dir.join(".gitignore"), "ign\n").unwrap();
+    git(dir, &["add", ".gitignore"]);
+    git(dir, &["commit", "-qm", "ignore"]);
+    std::fs::create_dir(dir.join("d")).unwrap();
+    std::fs::write(dir.join("d/new.txt"), "new\n").unwrap();
+    std::fs::write(dir.join("d/ign"), "ignored\n").unwrap();
+
+    let out = commit(dir, &["--files", "d", "--subject", "feat: d"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(changed_in_head(dir), "A\td/new.txt\n");
+    assert_eq!(git(dir, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_refused_files_commit_forgets_the_paths_it_recorded() {
+    let repo = repo();
+    let dir = repo.path();
+    std::fs::write(dir.join(".gitignore"), "ign\n").unwrap();
+    git(dir, &["add", ".gitignore"]);
+    git(dir, &["commit", "-qm", "ignore"]);
+    std::fs::write(dir.join("new.txt"), "new\n").unwrap();
+    std::fs::write(dir.join("ign"), "ignored\n").unwrap();
+    let before = head(dir);
+
+    let out = commit(dir, &[
+        "--files",
+        "new.txt",
+        "ign",
+        "--subject",
+        "feat: new",
+    ]);
+
+    assert!(!out.status.success());
+    assert_eq!(head(dir), before);
+    assert_eq!(git(dir, &["status", "--porcelain"]), "?? new.txt\n");
+}
+
+#[test]
 fn the_project_commit_message_template_renders_the_message() {
     let repo = repo();
     let dir = repo.path();

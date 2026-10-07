@@ -87,36 +87,54 @@ fn commit_paths(dir: &Path, paths: &[PathBuf], message: &str) -> Result<String> 
         .map(|p| super::backend::utf8(p))
         .collect::<Result<Vec<_>>>()?;
     let untracked = Git::at(dir)
-        .args(["--literal-pathspecs", "ls-files", "-z", "--others", "--"])
-        .args(paths.iter().copied())
-        .output()?;
-    let untracked: Vec<&str> = untracked.split('\0').filter(|p| !p.is_empty()).collect();
-    if !untracked.is_empty() {
-        Git::at(dir)
-            .args(["--literal-pathspecs", "add", "--intent-to-add", "--"])
-            .args(untracked.iter().copied())
-            .output()?;
-    }
-    let out = Git::at(dir)
         .args([
             "--literal-pathspecs",
-            "commit",
-            "--only",
-            "-m",
-            message,
+            "ls-files",
+            "-z",
+            "--others",
+            "--exclude-standard",
             "--",
         ])
         .args(paths.iter().copied())
-        .timeout(SLOW_TIMEOUT)
-        .wait()?;
-    if !out.status.success() && !untracked.is_empty() {
+        .output()?;
+    let untracked: Vec<&str> = untracked.split('\0').filter(|p| !p.is_empty()).collect();
+    let committed = (|| {
+        if !untracked.is_empty() {
+            Git::at(dir)
+                .args(["--literal-pathspecs", "add", "--intent-to-add", "--"])
+                .args(untracked.iter().copied())
+                .output()?;
+        }
+        report(
+            Git::at(dir)
+                .args([
+                    "--literal-pathspecs",
+                    "commit",
+                    "--only",
+                    "-m",
+                    message,
+                    "--",
+                ])
+                .args(paths.iter().copied())
+                .timeout(SLOW_TIMEOUT)
+                .wait()?,
+        )
+    })();
+    if committed.is_err() && !untracked.is_empty() {
         Git::at(dir)
-            .args(["--literal-pathspecs", "rm", "--cached", "-q", "--"])
+            .args([
+                "--literal-pathspecs",
+                "rm",
+                "--cached",
+                "-q",
+                "--ignore-unmatch",
+                "--",
+            ])
             .args(untracked.iter().copied())
             .output()
-            .context("forgetting the paths recorded for the failed commit")?;
+            .context("forgetting the paths recorded for the refused commit")?;
     }
-    report(out)
+    committed
 }
 
 /// Locations under the git directory, absolute.
