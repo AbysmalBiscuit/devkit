@@ -401,6 +401,7 @@ github = "sweeper[bot]"
             .env("HOME", self.state.path())
             .env("XDG_STATE_HOME", self.state.path())
             .env("XDG_CONFIG_HOME", self.state.path())
+            .env_remove("GIT_CONFIG_GLOBAL")
             .env_remove("GH_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .env_remove("GH_HOST")
