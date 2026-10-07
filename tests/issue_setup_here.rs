@@ -234,3 +234,23 @@ pr_body = "{% if issue is defined %}Closes #{{ issue }}\n\n{% endif %}{{ input }
     let body = fake.created_pr_arg("--body").expect("gh pr create ran");
     assert!(!body.contains("Closes #7"), "{body}");
 }
+
+#[test]
+fn setup_here_refuses_a_pr_checkout() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    let checkout = devkit_common::record::IssueRecord {
+        issue: "7".into(),
+        slug: "fix".into(),
+        origin: Some(devkit_common::record::RecordOrigin::Checkout),
+        events: Some(vec![]),
+        ..Default::default()
+    };
+    devkit_common::record::write(fake.project(), &checkout).unwrap();
+
+    let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+
+    let stderr = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("issue pr checkout"), "{stderr}");
+    assert_eq!(devkit_common::record::read(fake.project()), Some(checkout));
+}

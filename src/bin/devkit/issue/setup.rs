@@ -525,14 +525,26 @@ fn bind_here(
     let vcs = Vcs::at(&root);
     let branch = vcs.branch(&root)?;
     refuse_default_branch(cfg, &vcs, &root, &branch)?;
-    let refuse_bound =
-        |bound: &str| anyhow::anyhow!("{} is already bound to issue `{bound}`", root.display());
+    // A `pr checkout` record marks a reviewer's checkout of someone else's
+    // PR, whose work an issue binding would claim as this issue's.
+    let refuse_bound = |bound: &devkit_common::record::IssueRecord| -> Result<()> {
+        anyhow::ensure!(
+            bound.origin != Some(RecordOrigin::Checkout),
+            "{} is a review checkout `issue pr checkout` made, not work on an issue",
+            root.display()
+        );
+        anyhow::ensure!(
+            bound.issue == issue,
+            "{} is already bound to issue `{}`",
+            root.display(),
+            bound.issue
+        );
+        Ok(())
+    };
     // Checked again under the lock; refusing here keeps a refused run from
     // writing the summary.
-    if let Some(bound) = devkit_common::record::read(&root)
-        && bound.issue != issue
-    {
-        return Err(refuse_bound(&bound.issue));
+    if let Some(bound) = devkit_common::record::read(&root) {
+        refuse_bound(&bound)?;
     }
     let holder = root.to_string_lossy().into_owned();
     let summary_root = if cfg.defaults.worktree_root.is_empty() {
@@ -584,10 +596,8 @@ fn bind_here(
     };
     let setup_event = cfg.issue.events.setup.is_some();
     let fires_setup = devkit_common::record::update(&root, |rec| {
-        if let Some(bound) = rec.as_ref()
-            && bound.issue != issue
-        {
-            return Err(refuse_bound(&bound.issue));
+        if let Some(bound) = rec.as_ref() {
+            refuse_bound(bound)?;
         }
         let rec = rec.get_or_insert_with(|| devkit_common::record::IssueRecord {
             issue: issue.to_string(),
@@ -601,7 +611,7 @@ fn bind_here(
         if summary.is_some() {
             rec.summary = summary.clone();
         }
-        Ok(setup_event && rec.claim(IssueEvent::Setup))
+        anyhow::Ok(setup_event && rec.claim(IssueEvent::Setup))
     })??;
     if !args.no_gitignore
         && let Err(e) = devkit_common::gitignore::ensure_devkit_ignored()
