@@ -233,9 +233,9 @@ fn cleanup(
             let _ = std::fs::remove_file(path);
         }
         // Records written before they carried a summary path give no way to
-        // name the file, so the parent of the primary checkout — where the
-        // default template puts it — is scanned for one belonging to this
-        // issue. Without a tracker id there is nothing to match a file by.
+        // name the file, so the parent of the primary checkout, where the
+        // default template of that era put it, is scanned for one belonging
+        // to this issue. Without a tracker id there is nothing to match a file by.
         None => {
             if let (Some(id), Ok(read)) = (issue_id.tracker(), std::fs::read_dir(parent)) {
                 for ent in read.flatten() {

@@ -554,8 +554,9 @@ pub struct PreserveConfig {
     /// only. A pattern that could reach outside the worktree (absolute, rooted,
     /// holding `..`, or drive-relative like `C:scratch`) is skipped with a
     /// warning; one that matches nothing is not a failure. The default issue
-    /// summary sits outside the worktree, so no pattern reaches it unless
-    /// `templates.issue_summary_path` renders `{{ worktree }}`.
+    /// summary sits under the worktree's `.devkit/`, where a pattern such as
+    /// `.devkit/ISSUE_SUMMARY_*.md` reaches it; a relative
+    /// `templates.issue_summary_path` puts it outside, where no pattern does.
     pub from: Vec<String>,
     /// Destination directory, rendered as minijinja over `worktree`, `branch`,
     /// `issue`, `slug`, `apps`, `prefix`, `worktree_root`, `primary` and
@@ -1611,7 +1612,7 @@ pub const DEFAULT_ISSUE_TITLE: &str = "{{ input }}";
 pub const DEFAULT_ISSUE_BODY: &str = "{{ input }}";
 pub const DEFAULT_REVIEW_REQUEST: &str = "{{ input }} {{ pr_url }}";
 pub const DEFAULT_REVIEW_FINISH: &str = "{{ input }} {{ pr_url }}";
-pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "ISSUE_SUMMARY_{{ issue }}.md";
+pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md";
 pub const DEFAULT_ISSUE_SUMMARY: &str = "\
 # {{ issue }}: {{ title }}\n\
 \n\
@@ -1845,9 +1846,12 @@ pub struct Templates {
     /// `review_request`, plus `author`.
     pub review_finish: Option<String>,
     /// Where `issue setup --summary` writes the issue summary file. A relative
-    /// path is taken from `defaults.worktree_root`, so the file outlives the
-    /// worktree; render `{{ worktree }}` into it to keep it inside instead.
-    /// Context: the `issue_summary` context below.
+    /// path is taken from `defaults.worktree_root`, so the file sits beside
+    /// the worktree and outlives it, and is refused when there is no
+    /// `worktree_root`. Context: the `issue_summary` context below. Defaults
+    /// to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md`: inside the
+    /// worktree, or the checkout `issue setup --here` binds, where it stays
+    /// untracked and goes when `issue end` removes the worktree.
     pub issue_summary_path: Option<String>,
     /// Body of the file `issue setup --summary` writes when the tracker keeps
     /// no summary of its own; a GitHub issue's non-empty body is written

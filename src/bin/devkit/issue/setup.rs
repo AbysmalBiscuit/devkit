@@ -547,19 +547,11 @@ fn bind_here(
         refuse_bound(&bound)?;
     }
     let holder = root.to_string_lossy().into_owned();
-    let summary_root = if cfg.defaults.worktree_root.is_empty() {
-        root.clone()
-    } else {
-        worktree_root(cfg)?
-    };
 
     if args.dry_run {
         let summary = details
             .as_ref()
-            .map(|d| {
-                crate::issue::summary::plan_path(cfg, d, &summary_root, &holder, &branch, &slug, &[
-                ])
-            })
+            .map(|d| crate::issue::summary::plan_path(cfg, d, &holder, &branch, &slug, &[]))
             .transpose()?;
         Prepared {
             issue: Some(issue.to_string()),
@@ -581,7 +573,6 @@ fn bind_here(
                 cfg,
                 d,
                 tracker_summary.as_deref(),
-                &summary_root,
                 &holder,
                 &branch,
                 &slug,
@@ -701,9 +692,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
     let summary_path = details
         .as_ref()
-        .map(|d| {
-            crate::issue::summary::plan_path(cfg, d, &wt_root, &holder, &branch, &slug, &args.apps)
-        })
+        .map(|d| crate::issue::summary::plan_path(cfg, d, &holder, &branch, &slug, &args.apps))
         .transpose()?;
 
     if args.dry_run {
@@ -767,7 +756,6 @@ pub fn run(args: SetupArgs) -> Result<()> {
                 cfg,
                 d,
                 tracker_summary.as_deref(),
-                &wt_root,
                 &holder,
                 &branch,
                 &slug,
