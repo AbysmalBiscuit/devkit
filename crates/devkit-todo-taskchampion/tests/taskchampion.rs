@@ -173,19 +173,15 @@ fn a_replica_not_created_yet_reads_as_empty() {
     assert!(!data.exists());
 }
 
-#[cfg(unix)]
 #[test]
 fn an_uncreatable_data_dir_names_the_path() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
-    let locked = dir.path().join("ro");
-    std::fs::create_dir(&locked).unwrap();
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let data = locked.join("tc");
+    let file = dir.path().join("file");
+    std::fs::write(&file, "").unwrap();
+    let data = file.join("tc");
     let err = TaskchampionStore::at(data.clone())
         .add(new(None, "a"))
         .unwrap_err();
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(
         format!("{err:#}").contains(&data.display().to_string()),
         "{err:#}"
