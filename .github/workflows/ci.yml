@@ -100,11 +100,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      # The Postgres tests return early without a database, so the test job
-      # skips them. Here they run against Postgres directly and through a
-      # transaction-mode PgBouncer that keeps no prepared statement, as
-      # Supabase's pooler does.
-      - name: Start Postgres and the pooler
+      # The test job skips the database tests. Here they run directly, through
+      # a strict transaction-mode PgBouncer, and over PostgREST, as Supabase.
+      - name: Start Postgres, the pooler and PostgREST
         run: crates/devkit-todo-postgres/testdb/up.sh | sed 's/^export //' >> "$GITHUB_ENV"
       - name: Test the postgres todo backend and rules source
-        run: cargo nextest run --workspace --no-fail-fast -E 'package(devkit-todo-postgres) | binary(todo_postgres) | binary(source_parity) | binary(rules_postgres)'
+        run: cargo nextest run --workspace --no-fail-fast -E 'package(devkit-todo-postgres) | package(devkit-todo-supabase) | binary(todo_postgres) | binary(todo_supabase) | binary(source_parity) | binary(rules_postgres)'

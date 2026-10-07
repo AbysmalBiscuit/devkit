@@ -13,7 +13,7 @@ devrun task fmt                                         # nightly rustfmt; stabl
 
 Run all of them before committing. CI runs them on ubuntu, macos and windows.
 
-The Postgres todo tests return early unless `DEVKIT_TEST_POSTGRES_URL` and `DEVKIT_TEST_POOLER_URL` name a database, directly and through a transaction-mode pooler, and the certificate tests unless `DEVKIT_TEST_POSTGRES_TLS_URL` and `DEVKIT_TEST_POSTGRES_CA` name a server offering TLS and its CA. The Postgres rules tests need `DEVKIT_TEST_POSTGRES_URL` alone. `crates/devkit-todo-postgres/testdb/up.sh` starts them in docker and prints the variables; CI's `postgres` job runs them that way.
+The Postgres todo tests return early unless `DEVKIT_TEST_POSTGRES_URL` and `DEVKIT_TEST_POOLER_URL` name a database, directly and through a transaction-mode pooler, and the certificate tests unless `DEVKIT_TEST_POSTGRES_TLS_URL` and `DEVKIT_TEST_POSTGRES_CA` name a server offering TLS and its CA. The Postgres rules tests need `DEVKIT_TEST_POSTGRES_URL` alone, and the Supabase todo tests need it and `DEVKIT_TEST_SUPABASE_URL`, PostgREST serving that database. `crates/devkit-todo-postgres/testdb/up.sh` starts them in docker and prints the variables; CI's `postgres` job runs them that way.
 
 Text written for agents (the brief, hook injections, help an agent reads) also has an opt-in eval, since CI cannot judge whether an agent understands it. It needs a logged-in `claude`, and every run is billed:
 
@@ -56,6 +56,7 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | `devkit-todo-builtin` | `BuiltinStore`, the todo store devkit ships: one JSON document under the state directory |
 | `devkit-todo-taskchampion` | `TaskchampionStore`, todo lists kept in an embedded taskchampion replica, local or synced to a directory or a sync server |
 | `devkit-todo-postgres` | `PostgresStore`, todo lists kept in a Postgres database that every machine claims against, and `PostgresActivity`, the activity log beside them |
+| `devkit-todo-supabase` | `SupabaseStore`, the same database's todos reached over a Supabase project's HTTPS Data API |
 
 ## Rules
 
