@@ -282,13 +282,10 @@ fn a_session_end_against_a_slow_api_finishes_inside_its_budget() {
     let api = Recorder::delayed(NO_ROWS, Duration::from_millis(800));
     let took = end_session(&api.url);
     assert!(took < SESSION_END_BOUND, "session-end took {took:?}");
-    assert_eq!(
-        paths(&api.heads()),
-        [
-            "/rest/v1/rpc/todo_release_all",
-            "/rest/v1/rpc/activity_record"
-        ]
-    );
+    assert_eq!(paths(&api.heads()), [
+        "/rest/v1/rpc/todo_release_all",
+        "/rest/v1/rpc/activity_record"
+    ]);
 }
 
 /// An API that answers no request within a hook's wait costs a session's
