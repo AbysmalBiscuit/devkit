@@ -920,12 +920,60 @@ mod tests {
     /// branch named for the PR's head at that commit.
     #[test]
     fn a_published_pr_ref_checks_out_as_the_heads_branch() {
-        let git = |dir: &Path, args: &[&str]| {
-            devkit_git::Git::fixture(dir)
-                .args(args.iter().copied())
-                .output()
-                .unwrap()
-        };
+        let (_base, clone, pr_head) = clone_with_pr_ref();
+
+        checkout_ref(&clone, "refs/pull/7/head", "contributor/fix").unwrap();
+
+        assert_eq!(git(&clone, &["rev-parse", "HEAD"]).trim(), pr_head);
+        assert_eq!(
+            git(&clone, &["branch", "--show-current"]).trim(),
+            "contributor/fix"
+        );
+    }
+
+    /// Checking the same PR out again finds its branch already at the PR head
+    /// and keeps it there.
+    #[test]
+    fn a_pr_ref_checks_out_again_onto_its_own_branch() {
+        let (_base, clone, pr_head) = clone_with_pr_ref();
+        checkout_ref(&clone, "refs/pull/7/head", "contributor/fix").unwrap();
+        git(&clone, &["checkout", "-q", "--detach"]);
+
+        checkout_ref(&clone, "refs/pull/7/head", "contributor/fix").unwrap();
+
+        assert_eq!(git(&clone, &["rev-parse", "HEAD"]).trim(), pr_head);
+        assert_eq!(
+            git(&clone, &["branch", "--show-current"]).trim(),
+            "contributor/fix"
+        );
+    }
+
+    /// A local branch of the head's name at another commit may hold unpushed
+    /// work, so it is left where it is and the checkout fails naming it.
+    #[test]
+    fn a_pr_ref_never_moves_a_local_branch_at_another_commit() {
+        let (_base, clone, _pr_head) = clone_with_pr_ref();
+        git(&clone, &["branch", "contributor/fix"]);
+        let local = git(&clone, &["rev-parse", "contributor/fix"]);
+
+        let err = checkout_ref(&clone, "refs/pull/7/head", "contributor/fix").unwrap_err();
+
+        assert!(format!("{err:#}").contains("contributor/fix"), "{err:#}");
+        assert_eq!(git(&clone, &["rev-parse", "contributor/fix"]), local);
+        assert_eq!(git(&clone, &["branch", "--show-current"]).trim(), "main");
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        devkit_git::Git::fixture(dir)
+            .args(args.iter().copied())
+            .output()
+            .unwrap()
+    }
+
+    /// A clone of an upstream on `main` that publishes a PR head one commit
+    /// past `main` as `refs/pull/7/head`, the way a forge does; returns the
+    /// scratch directory, the clone and the PR head.
+    fn clone_with_pr_ref() -> (tempfile::TempDir, std::path::PathBuf, String) {
         let base = tempfile::tempdir().unwrap();
         let upstream = base.path().join("upstream");
         std::fs::create_dir(&upstream).unwrap();
@@ -949,13 +997,7 @@ mod tests {
             &upstream.to_string_lossy(),
             &clone.to_string_lossy(),
         ]);
-        checkout_ref(&clone, "refs/pull/7/head", "contributor/fix").unwrap();
-
-        assert_eq!(git(&clone, &["rev-parse", "HEAD"]).trim(), pr_head);
-        assert_eq!(
-            git(&clone, &["branch", "--show-current"]).trim(),
-            "contributor/fix"
-        );
+        (base, clone, pr_head)
     }
 
     #[test]
