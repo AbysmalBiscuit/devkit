@@ -37,9 +37,11 @@ pub fn write_self_ignore(devkit_dir: &Path) {
 pub const IGNORE_PATTERNS: [&str; 3] = [".devkit/", "*.local", "*.local.*"];
 
 /// The patterns `contents` lacks, in `IGNORE_PATTERNS` order. A bare `.devkit`
-/// line counts as `.devkit/`, since it ignores the same directory.
+/// line counts as `.devkit/`, since it ignores the same directory. Only
+/// trailing whitespace is dropped, as git does: leading spaces are part of
+/// the pattern.
 fn missing_patterns(contents: &str) -> Vec<&'static str> {
-    let lines: Vec<&str> = contents.lines().map(str::trim).collect();
+    let lines: Vec<&str> = contents.lines().map(str::trim_end).collect();
     IGNORE_PATTERNS
         .into_iter()
         .filter(|p| {
@@ -152,9 +154,12 @@ mod tests {
     fn missing_patterns_reports_only_absent_lines() {
         assert_eq!(missing_patterns(""), IGNORE_PATTERNS.to_vec());
         assert_eq!(
-            missing_patterns("node_modules/\n.devkit\n  *.local  \n"),
+            missing_patterns("node_modules/\n.devkit\n*.local  \n"),
             vec!["*.local.*"]
         );
+        assert_eq!(missing_patterns(".devkit/\n  *.local\n*.local.*\n"), vec![
+            "*.local"
+        ]);
         assert!(missing_patterns(".devkit/\n*.local\n*.local.*\n").is_empty());
     }
 }
