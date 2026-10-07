@@ -4,9 +4,9 @@
 //! HEAD, so the shared index, which other sessions stage into, is held locked
 //! and rewritten only once the new HEAD is confirmed. For a patch, what it
 //! held is replayed on top of the commit with `merge-tree`, and anything that
-//! cannot replay exactly is refused before HEAD moves. Every commit hook runs through a wrapper that
-//! also watches the reference transaction, so a hook that changes the
-//! committed tree aborts the commit instead of publishing it.
+//! cannot replay exactly is refused before HEAD moves. Every commit hook runs
+//! through a wrapper that also watches the reference transaction, so a hook
+//! that changes the committed tree aborts the commit instead of publishing it.
 
 use std::{
     collections::BTreeSet,
