@@ -5,7 +5,15 @@ use anyhow::Result;
 /// unclaimable name does not leave the machine half set up.
 pub fn run(args: crate::links::InstallLinksArgs) -> Result<()> {
     let linked = crate::links::run(args);
-    let (path, added) = devkit_common::gitignore::ensure_ignored()?;
+    let (path, added) = match devkit_common::gitignore::ensure_ignored() {
+        Ok(ensured) => ensured,
+        Err(e) => {
+            if let Err(link_err) = &linked {
+                eprintln!("devkit install: {link_err:#}");
+            }
+            return Err(e);
+        }
+    };
     if added.is_empty() {
         println!("current   {}", path.display());
     }
