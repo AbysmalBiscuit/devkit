@@ -142,7 +142,7 @@ pub struct Config {
 /// # assert_eq!(hold("true").unwrap(), HoldStop::Always);
 /// # assert_eq!(hold("false").unwrap(), HoldStop::Never);
 /// # let bad = hold("\"sometimes\"").unwrap_err();
-/// # assert!(format!("{bad:#}").contains("subagents"), "{bad:#}");
+/// # assert!(format!("{bad:#}").contains(&HoldStop::spellings()), "{bad:#}");
 /// # assert!(!HoldStop::Subagents.holds(false) && HoldStop::Subagents.holds(true));
 /// # assert!(HoldStop::Always.holds(false) && !HoldStop::Never.holds(true));
 /// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
@@ -240,6 +240,16 @@ pub enum HoldStop {
 }
 
 impl HoldStop {
+    /// The mode spellings, each in backticks and comma-separated, for error
+    /// texts.
+    pub fn spellings() -> String {
+        <Self as strum::VariantNames>::VARIANTS
+            .iter()
+            .map(|v| format!("`{v}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// Whether this mode refuses a stop, a sub-agent's when `subagent`.
     pub fn holds(self, subagent: bool) -> bool {
         match self {
@@ -257,7 +267,7 @@ impl<'de> Deserialize<'de> for HoldStop {
             type Value = HoldStop;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("one of `always`, `subagents`, `never`, or a boolean")
+                write!(f, "one of {}, or a boolean", HoldStop::spellings())
             }
 
             fn visit_bool<E: serde::de::Error>(self, on: bool) -> Result<HoldStop, E> {

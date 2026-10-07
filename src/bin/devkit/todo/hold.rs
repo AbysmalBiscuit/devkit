@@ -53,7 +53,10 @@ pub(crate) fn effective(
     }
     if let Some(name) = env.map(str::trim).filter(|v| !v.is_empty()) {
         let Ok(mode) = name.parse() else {
-            bail!("{HOLD_VAR}: unknown mode `{name}`, expected `always`, `subagents` or `never`");
+            bail!(
+                "{HOLD_VAR}: unknown mode `{name}`, expected one of {}",
+                HoldStop::spellings()
+            );
         };
         return Ok((mode, HoldSource::Env));
     }
