@@ -15,3 +15,6 @@ devkit.local.toml
 
 # Subagent-driven-development progress ledger (local scratch)
 /.superpowers/
+
+# devkit's per-checkout state: the issue record, summaries and PR drafts.
+/.devkit/
