@@ -7,7 +7,7 @@ description: Use in a cloud session before starting an issue or feature, to find
 
 ## Bind the checkout to the issue
 
-Start work on an issue with `issue setup --here <issue> --summary`. It binds this checkout and its assigned branch to the issue, so `issue pr create` writes the line that closes it, and it writes the issue summary, whose path it prints. It creates no worktree or branch, and refuses on the default branch.
+Start work on an issue with `issue setup --here <issue> --summary`. It binds this checkout and its assigned branch to the issue, so `issue pr create` writes the line that closes it, and it writes the issue summary, whose path it prints. What else it does and when it refuses is in the `--here` paragraph of the `using-devkit` skill's `references/issues.md`.
 
 ## Find existing work first
 
