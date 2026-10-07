@@ -1,7 +1,7 @@
 [package]
 name = "devkit-command"
 edition.workspace = true
-version = "0.14.13" # x-release-please-version
+version = "0.14.14" # x-release-please-version
 
 [dependencies]
 strum.workspace = true

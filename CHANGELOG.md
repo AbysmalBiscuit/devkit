@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.14](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.13...v0.14.14) (2026-10-07)
+
+
+### Features
+
+* **config:** add devkit install to set up the machine ([#287](https://github.com/AbysmalBiscuit/devkit/issues/287)) ([5067e83](https://github.com/AbysmalBiscuit/devkit/commit/5067e83278c841177c7ad1d6d43220df62f335cd)), closes [#282](https://github.com/AbysmalBiscuit/devkit/issues/282)
+* **issue:** add issue edit to rewrite issues from the templates ([#286](https://github.com/AbysmalBiscuit/devkit/issues/286)) ([28c304c](https://github.com/AbysmalBiscuit/devkit/commit/28c304cc9d0aba65cd9e03d4c7ea3947091353ce))
+* **issue:** print summary text on setup dry run ([#294](https://github.com/AbysmalBiscuit/devkit/issues/294)) ([942ca01](https://github.com/AbysmalBiscuit/devkit/commit/942ca0166afb5fd70fa54ef707271620bfa9f193)), closes [#293](https://github.com/AbysmalBiscuit/devkit/issues/293)
+* **todo:** reach the todo database over the Supabase Data API ([#288](https://github.com/AbysmalBiscuit/devkit/issues/288)) ([eba8a14](https://github.com/AbysmalBiscuit/devkit/commit/eba8a1453e3af773e7c9d2fcc58b9a408c8d5db0))
+* **todo:** record activity over supabase ([#295](https://github.com/AbysmalBiscuit/devkit/issues/295)) ([97edf72](https://github.com/AbysmalBiscuit/devkit/commit/97edf7209cf5bc737ee5ebd1a661326440e10b73))
+* **vcs:** commit natively with devkit commit ([#289](https://github.com/AbysmalBiscuit/devkit/issues/289)) ([9514e41](https://github.com/AbysmalBiscuit/devkit/commit/9514e4130cce8bff4717b36faea474f775a6b050))
+
 ## [0.14.13](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.12...v0.14.13) (2026-10-07)
 
 
