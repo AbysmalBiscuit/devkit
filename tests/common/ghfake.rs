@@ -303,6 +303,11 @@ github = "sweeper[bot]"
         self.project.path()
     }
 
+    /// The run's `HOME`, `XDG_STATE_HOME` and `XDG_CONFIG_HOME`.
+    pub fn state(&self) -> &Path {
+        self.state.path()
+    }
+
     /// Every `gh` argument vector the run produced, newline separated.
     pub fn calls(&self) -> String {
         std::fs::read_to_string(self.bin.path().join("gh.log")).unwrap_or_default()
@@ -396,6 +401,7 @@ github = "sweeper[bot]"
             .env("HOME", self.state.path())
             .env("XDG_STATE_HOME", self.state.path())
             .env("XDG_CONFIG_HOME", self.state.path())
+            .env_remove("GIT_CONFIG_GLOBAL")
             .env_remove("GH_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .env_remove("GH_HOST")

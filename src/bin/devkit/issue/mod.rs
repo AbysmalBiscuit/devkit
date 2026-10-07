@@ -111,7 +111,7 @@ pub(crate) enum Cmd {
         #[arg(long)]
         dry_run: bool,
         /// Leave the global gitignore alone instead of adding devkit's
-        /// per-worktree artifacts to it.
+        /// per-worktree artifacts and `*.local` config layers to it.
         #[arg(long = "no-gitignore")]
         no_gitignore: bool,
         /// Bind the checkout this runs in to the issue instead of creating a

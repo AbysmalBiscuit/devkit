@@ -594,8 +594,53 @@ fn gather(steps: &Steps) -> Vec<Row> {
             .unwrap_or_default();
         rules_rows(&settings, configured, &checkout)
     });
+    rows.push(excludes_row());
     rows.extend(steps.during("Checking shim links...", shim_rows));
     rows
+}
+
+/// Severity of the global excludes check: each of devkit's ignore patterns the
+/// file lacks is named, since a missing `*.local` line lets a local config
+/// layer show up in `git status` and be committed.
+fn excludes_check(path: &std::path::Path, missing: &[&str]) -> Check {
+    if missing.is_empty() {
+        Check::Ok(format!(
+            "{} ignores {}",
+            path.display(),
+            devkit_common::gitignore::IGNORE_PATTERNS.join(", ")
+        ))
+    } else {
+        Check::Warn(format!(
+            "{} lacks {}; run: devkit install",
+            path.display(),
+            missing.join(", ")
+        ))
+    }
+}
+
+/// `devkit install` refuses an excludes file it cannot read, so an unreadable
+/// one is named for the user to repair instead.
+fn excludes_row() -> Row {
+    use devkit_common::gitignore;
+    let (check, data) = match gitignore::excludes_path() {
+        Err(e) => (Check::Warn(format!("{e:#}")), serde_json::Value::Null),
+        Ok(path) => match gitignore::missing_from_excludes(&path) {
+            Ok(missing) => (
+                excludes_check(&path, &missing),
+                serde_json::json!({ "path": path.to_string_lossy(), "missing": missing }),
+            ),
+            Err(e) => (
+                Check::Warn(format!("{e:#}; repair {}", path.display())),
+                serde_json::json!({ "path": path.to_string_lossy() }),
+            ),
+        },
+    };
+    Row {
+        key: "global_excludes",
+        data,
+        source: Source::Unset,
+        check,
+    }
 }
 
 /// The secrets-file keys of the todo sync credentials, in `SYNC_VARS` order.
@@ -1269,5 +1314,17 @@ mod tests {
             ),
             other => panic!("expected Warn, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn excludes_check_names_each_missing_pattern_and_the_fix() {
+        let path = std::path::Path::new("/h/.config/git/ignore");
+        assert_eq!(
+            excludes_check(path, &["*.local", "*.local.*"]),
+            Check::Warn(
+                "/h/.config/git/ignore lacks *.local, *.local.*; run: devkit install".into()
+            )
+        );
+        assert!(matches!(excludes_check(path, &[]), Check::Ok(_)));
     }
 }

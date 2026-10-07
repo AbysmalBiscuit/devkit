@@ -6,13 +6,13 @@ use devkit_config::expand_tilde;
 /// Resolve git's global excludes file. A configured `core.excludesfile` wins
 /// (tilde-expanded); otherwise `$XDG_CONFIG_HOME/git/ignore`, else
 /// `<home>/.config/git/ignore` — the path git reads by default.
-fn resolve_excludes_path(configured: Option<&str>, home: &str, xdg: Option<&str>) -> PathBuf {
+fn resolve_excludes_path(configured: Option<&str>, home: &Path, xdg: Option<&str>) -> PathBuf {
     if let Some(c) = configured.map(str::trim).filter(|c| !c.is_empty()) {
         return expand_tilde(c);
     }
     let base = match xdg.map(str::trim).filter(|x| !x.is_empty()) {
         Some(x) => PathBuf::from(x),
-        None => Path::new(home).join(".config"),
+        None => home.join(".config"),
     };
     base.join("git").join("ignore")
 }
@@ -31,43 +31,84 @@ pub fn write_self_ignore(devkit_dir: &Path) {
     }
 }
 
-/// True when `.devkit/` (or `.devkit`) is not already an ignore line.
-fn needs_devkit(contents: &str) -> bool {
-    !contents
-        .lines()
-        .map(str::trim)
-        .any(|l| l == ".devkit/" || l == ".devkit")
+/// The lines devkit wants in git's global excludes file: its per-checkout
+/// state directory, and the `*.local` files its config layers read, such as
+/// `devkit.local.toml`.
+pub const IGNORE_PATTERNS: [&str; 3] = [".devkit/", "*.local", "*.local.*"];
+
+/// The patterns `contents` lacks, in `IGNORE_PATTERNS` order. A bare `.devkit`
+/// line counts as `.devkit/`, since it ignores the same directory. Only
+/// trailing whitespace is dropped, as git does: leading spaces are part of
+/// the pattern.
+fn missing_patterns(contents: &str) -> Vec<&'static str> {
+    let lines: Vec<&str> = contents.lines().map(str::trim_end).collect();
+    IGNORE_PATTERNS
+        .into_iter()
+        .filter(|p| {
+            !lines
+                .iter()
+                .any(|l| l == p || (*p == ".devkit/" && *l == ".devkit"))
+        })
+        .collect()
 }
 
-/// Ensure `.devkit/` is in the global excludes file. Idempotent; append-only.
-/// Returns an error on IO failure — the caller decides whether to ignore it.
-pub fn ensure_devkit_ignored() -> Result<()> {
+/// The global excludes file git reads, resolved the way git resolves it.
+pub fn excludes_path() -> Result<PathBuf> {
     let configured = devkit_git::Git::bare()
         .args(["config", "--global", "core.excludesfile"])
         .output()
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let home = std::env::var("HOME").context("HOME not set")?;
+    let home = crate::paths::try_home().context("HOME and USERPROFILE unset")?;
     let xdg = std::env::var("XDG_CONFIG_HOME").ok();
-    let path = resolve_excludes_path(configured.as_deref(), &home, xdg.as_deref());
+    Ok(resolve_excludes_path(
+        configured.as_deref(),
+        &home,
+        xdg.as_deref(),
+    ))
+}
 
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    if !needs_devkit(&existing) {
-        return Ok(());
+/// The excludes file's text, empty when it does not exist. Any other read
+/// error, such as a file that is not UTF-8, is returned, so a caller never
+/// rewrites lines it could not read.
+fn read_excludes(path: &Path) -> Result<String> {
+    match std::fs::read_to_string(path) {
+        Ok(body) => Ok(body),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+/// The `IGNORE_PATTERNS` the excludes file at `path` lacks. A file that does
+/// not exist lacks every pattern.
+pub fn missing_from_excludes(path: &Path) -> Result<Vec<&'static str>> {
+    Ok(missing_patterns(&read_excludes(path)?))
+}
+
+/// Append each of `IGNORE_PATTERNS` the global excludes file lacks, and return
+/// the file's path and the patterns added.
+/// Idempotent and append-only: existing lines are kept as they were.
+pub fn ensure_ignored() -> Result<(PathBuf, Vec<&'static str>)> {
+    let path = excludes_path()?;
+    let mut body = read_excludes(&path)?;
+    let missing = missing_patterns(&body);
+    if missing.is_empty() {
+        return Ok((path, missing));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let mut body = existing;
     if !body.is_empty() && !body.ends_with('\n') {
         body.push('\n');
     }
-    body.push_str(".devkit/\n");
+    for pattern in &missing {
+        body.push_str(pattern);
+        body.push('\n');
+    }
     std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
-    println!("added .devkit/ to {}", path.display());
-    Ok(())
+    Ok((path, missing))
 }
 
 #[cfg(test)]
@@ -78,19 +119,23 @@ mod tests {
     fn resolve_prefers_configured_path() {
         // A configured excludesfile wins over the xdg/home fallback and is
         // tilde-expanded the same way every other config path is.
-        let p = resolve_excludes_path(Some("~/custom/ignore"), "/home/u", Some("/home/u/.xdg"));
+        let p = resolve_excludes_path(
+            Some("~/custom/ignore"),
+            Path::new("/home/u"),
+            Some("/home/u/.xdg"),
+        );
         assert_eq!(p, expand_tilde("~/custom/ignore"));
     }
 
     #[test]
     fn resolve_uses_xdg_when_unset() {
-        let p = resolve_excludes_path(None, "/home/u", Some("/home/u/.xdg"));
+        let p = resolve_excludes_path(None, Path::new("/home/u"), Some("/home/u/.xdg"));
         assert_eq!(p, PathBuf::from("/home/u/.xdg/git/ignore"));
     }
 
     #[test]
     fn resolve_falls_back_to_home() {
-        let p = resolve_excludes_path(None, "/home/u", None);
+        let p = resolve_excludes_path(None, Path::new("/home/u"), None);
         assert_eq!(p, PathBuf::from("/home/u/.config/git/ignore"));
     }
 
@@ -107,10 +152,15 @@ mod tests {
     }
 
     #[test]
-    fn needs_devkit_detects_presence() {
-        assert!(needs_devkit(""));
-        assert!(needs_devkit("node_modules/\n.other\n"));
-        assert!(!needs_devkit("node_modules/\n.devkit/\n"));
-        assert!(!needs_devkit(".devkit\n"));
+    fn missing_patterns_reports_only_absent_lines() {
+        assert_eq!(missing_patterns(""), IGNORE_PATTERNS.to_vec());
+        assert_eq!(
+            missing_patterns("node_modules/\n.devkit\n*.local  \n"),
+            vec!["*.local.*"]
+        );
+        assert_eq!(missing_patterns(".devkit/\n  *.local\n*.local.*\n"), vec![
+            "*.local"
+        ]);
+        assert!(missing_patterns(".devkit/\n*.local\n*.local.*\n").is_empty());
     }
 }

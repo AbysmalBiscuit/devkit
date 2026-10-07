@@ -941,14 +941,22 @@ fn install_links_falls_open_on_an_unusable_state_dir() {
 /// with config rows that have nothing to do with shim names.
 fn doctor_report(exe: &std::path::Path) -> Output {
     let state = tempfile::tempdir().expect("state dir");
+    doctor_report_in(exe, state.path())
+}
+
+/// `doctor_report` with `HOME` and `XDG_STATE_HOME` at `home`, so a test can
+/// seed files there first.
+fn doctor_report_in(exe: &std::path::Path, home: &std::path::Path) -> Output {
     let cwd = tempfile::tempdir().expect("cwd outside any project");
     retry_on_busy(|| {
         Command::new(exe)
             .arg("doctor")
             .current_dir(cwd.path())
-            .env("HOME", state.path())
-            .env("XDG_STATE_HOME", state.path())
+            .env("HOME", home)
+            .env("XDG_STATE_HOME", home)
             .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("GIT_CONFIG_GLOBAL")
             .output()
     })
 }
@@ -1144,4 +1152,211 @@ fn full_help_still_links_the_old_names() {
     );
     let docm = shim_path(dir.path(), "docm");
     assert!(docm.exists(), "devkit --help never linked docm");
+}
+
+/// Run `devkit install` from `exe` with `HOME` at `home`, and
+/// `XDG_CONFIG_HOME` at `xdg` or unset, so git resolves its global config and
+/// excludes file inside the test's own directories.
+fn install(exe: &std::path::Path, home: &std::path::Path, xdg: Option<&std::path::Path>) -> Output {
+    let out = retry_on_busy(|| {
+        let mut cmd = Command::new(exe);
+        cmd.arg("install")
+            .env("HOME", home)
+            .env("XDG_STATE_HOME", home.join("state"))
+            .env_remove("GIT_CONFIG_GLOBAL")
+            .env_remove("XDG_CONFIG_HOME");
+        if let Some(xdg) = xdg {
+            cmd.env("XDG_CONFIG_HOME", xdg);
+        }
+        cmd.output()
+    });
+    assert!(
+        out.status.success(),
+        "devkit install failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out
+}
+
+#[test]
+fn install_creates_every_shim() {
+    let (dir, exe) = staged();
+    let home = tempfile::tempdir().expect("home");
+    let out = install(&exe, home.path(), None);
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+        assert!(
+            shimtest::same_inode(&exe, &shim_path(dir.path(), name)),
+            "devkit install did not link {name}: {text}"
+        );
+        assert!(
+            text.lines()
+                .any(|l| l.contains("created") && l.contains(name)),
+            "should report {name} created: {text}"
+        );
+    }
+}
+
+#[test]
+fn install_appends_each_ignore_pattern_once() {
+    let (_dir, exe) = staged();
+    let home = tempfile::tempdir().expect("home");
+    let excludes = home.path().join(".config/git/ignore");
+
+    let first = install(&exe, home.path(), None);
+    let text = String::from_utf8_lossy(&first.stdout).to_string();
+    assert_eq!(
+        std::fs::read_to_string(&excludes).expect("excludes written"),
+        ".devkit/\n*.local\n*.local.*\n"
+    );
+    for pattern in [".devkit/", "*.local", "*.local.*"] {
+        assert!(
+            text.lines()
+                .any(|l| l.contains("added") && l.contains(pattern)),
+            "should report {pattern} added: {text}"
+        );
+    }
+
+    let second = install(&exe, home.path(), None);
+    let again = String::from_utf8_lossy(&second.stdout).to_string();
+    assert_eq!(
+        std::fs::read_to_string(&excludes).expect("excludes kept"),
+        ".devkit/\n*.local\n*.local.*\n"
+    );
+    assert!(
+        !again.contains("added"),
+        "a second run adds nothing: {again}"
+    );
+}
+
+/// Git reads `core.excludesfile` when set, else
+/// `$XDG_CONFIG_HOME/git/ignore`, else `~/.config/git/ignore`; install writes
+/// to that same file, and only appends to it.
+#[test]
+fn install_appends_to_the_excludes_file_git_reads() {
+    let (_dir, exe) = staged();
+
+    let home = tempfile::tempdir().expect("home");
+    let custom = home.path().join("custom-ignore");
+    std::fs::write(&custom, "node_modules/\n*.local").expect("seed excludes");
+    std::fs::write(
+        home.path().join(".gitconfig"),
+        format!(
+            "[core]\n\texcludesfile = {}\n",
+            custom.display().to_string().replace('\\', "/")
+        ),
+    )
+    .expect("write gitconfig");
+    let xdg = home.path().join("xdg");
+    install(&exe, home.path(), Some(&xdg));
+    assert_eq!(
+        std::fs::read_to_string(&custom).expect("configured excludes"),
+        "node_modules/\n*.local\n.devkit/\n*.local.*\n"
+    );
+    assert!(!xdg.join("git/ignore").exists());
+    assert!(!home.path().join(".config/git/ignore").exists());
+
+    let home = tempfile::tempdir().expect("home");
+    let xdg = home.path().join("xdg");
+    std::fs::create_dir_all(xdg.join("git")).expect("xdg git dir");
+    std::fs::write(xdg.join("git/ignore"), "# mine\n.devkit\n").expect("seed excludes");
+    install(&exe, home.path(), Some(&xdg));
+    assert_eq!(
+        std::fs::read_to_string(xdg.join("git/ignore")).expect("xdg excludes"),
+        "# mine\n.devkit\n*.local\n*.local.*\n"
+    );
+    assert!(!home.path().join(".config/git/ignore").exists());
+}
+
+/// An excludes file devkit cannot read as text is left as it is, since
+/// rewriting it would drop the lines devkit could not read.
+#[test]
+fn install_fails_without_touching_an_unreadable_excludes_file() {
+    let (_dir, exe) = staged();
+    let home = tempfile::tempdir().expect("home");
+    let excludes = home.path().join(".config/git/ignore");
+    std::fs::create_dir_all(excludes.parent().unwrap()).expect("git config dir");
+    let latin1 = b"node_modules/\n# caf\xe9\n".to_vec();
+    std::fs::write(&excludes, &latin1).expect("seed excludes");
+
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("install")
+            .env("HOME", home.path())
+            .env("XDG_STATE_HOME", home.path().join("state"))
+            .env_remove("GIT_CONFIG_GLOBAL")
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+    });
+    assert!(
+        !out.status.success(),
+        "install should fail on an unreadable excludes file"
+    );
+    assert_eq!(std::fs::read(&excludes).expect("excludes kept"), latin1);
+}
+
+#[test]
+fn doctor_names_devkit_install_for_each_missing_ignore_pattern() {
+    let (_dir, exe) = staged();
+    let out = doctor_report(&exe);
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let row = doctor_row(&text, "global_excludes");
+    for pattern in [".devkit/", "*.local", "*.local.*"] {
+        assert!(row.contains(pattern), "should name {pattern}: {row}");
+    }
+    assert!(row.contains("devkit install"), "should name the fix: {row}");
+}
+
+/// `devkit install` refuses an excludes file it cannot read as text, so
+/// doctor names that file to repair rather than prescribing install.
+#[test]
+fn doctor_names_an_unreadable_excludes_file_to_repair() {
+    let (_dir, exe) = staged();
+    let home = tempfile::tempdir().expect("home");
+    let excludes = home.path().join(".config").join("git").join("ignore");
+    std::fs::create_dir_all(excludes.parent().unwrap()).expect("git config dir");
+    std::fs::write(&excludes, b"node_modules/\n# caf\xe9\n").expect("seed excludes");
+
+    let out = doctor_report_in(&exe, home.path());
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let row = doctor_row(&text, "global_excludes");
+    assert!(
+        row.contains(&format!("repair {}", excludes.display())),
+        "should name the file to repair: {row}"
+    );
+    assert!(
+        !row.contains("devkit install"),
+        "install fails on this file too: {row}"
+    );
+}
+
+/// Windows has no `HOME`; the excludes file then resolves under
+/// `USERPROFILE`, the home every other devkit path falls back to.
+#[test]
+#[cfg(windows)]
+fn install_resolves_home_through_userprofile() {
+    let (_dir, exe) = staged();
+    let profile = tempfile::tempdir().expect("profile");
+    let gitconfig = profile.path().join("gitconfig");
+    std::fs::write(&gitconfig, "").expect("empty gitconfig");
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("install")
+            .env_remove("HOME")
+            .env("USERPROFILE", profile.path())
+            .env("XDG_STATE_HOME", profile.path().join("state"))
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+    });
+    assert!(
+        out.status.success(),
+        "devkit install failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(profile.path().join(".config/git/ignore"))
+            .expect("excludes written under USERPROFILE"),
+        ".devkit/\n*.local\n*.local.*\n"
+    );
 }
