@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.13](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.12...v0.14.13) (2026-10-07)
+
+
+### Features
+
+* **issue:** bind the checkout with setup --here ([#280](https://github.com/AbysmalBiscuit/devkit/issues/280)) ([1e4584b](https://github.com/AbysmalBiscuit/devkit/commit/1e4584b3db8665c6eb50fe113a5cacc1fedeb898))
+* **todo:** hold only sub-agent stops by default ([#279](https://github.com/AbysmalBiscuit/devkit/issues/279)) ([c60f5bb](https://github.com/AbysmalBiscuit/devkit/commit/c60f5bb2634a5b303a0b7b50e29d74b0b2dd3070))
+
 ## [0.14.12](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.11...v0.14.12) (2026-10-07)
 
 
