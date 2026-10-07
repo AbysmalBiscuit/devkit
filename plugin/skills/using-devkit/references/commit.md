@@ -9,6 +9,6 @@ devkit commit --amend --subject '...'               # a new message for the last
 ```
 
 - To commit part of a file, write only the hunks to commit as a patch against HEAD (`git diff -- path > hunks.patch`, then trim it) and pass it to `--patch`. A patch touching a path whose merge driver could not keep the staged hunks exact is refused.
-- The message is the subject, then `--body` after a blank line, then a `Co-authored-by` trailer per `--coauthor`. `devkit template show commit_message` prints the project's template and any `--arg` it reads; a project can require `--coauthor` of agents.
+- The message is the subject, then `--body` after a blank line, then a `Co-authored-by` trailer per `--coauthor`. `devkit template show commit_message` prints the project's template, each message part by its `devkit commit` flag with who must pass it, and any `--arg` it reads. Only `--subject` is required unless the project requires another part, as a project can require `--coauthor` of agents. `devkit template render commit_message` previews the message, taking the parts as `--arg subject=...`, `--arg body=...` and `--arg coauthors=...` (`;`-separated), and needs no more than `devkit commit` does.
 - Commit hooks and signing run as they do for `git commit`. A refused or failed commit leaves HEAD and the index unchanged, and says why. With `--patch`, a commit hook that changes the committed tree is refused too.
 - When the output says recovery files were retained, the new HEAD could not be confirmed: inspect `git log` before retrying, and do not run the commit again blind.

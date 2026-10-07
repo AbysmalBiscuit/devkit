@@ -346,3 +346,49 @@ fn a_built_in_renders_what_its_command_would_send() {
         fake.calls()
     );
 }
+
+/// `commit_message` asks for its parts the way `devkit commit` does: by the
+/// command's flags, with only `--subject` required unless the project
+/// requires another part.
+#[test]
+fn show_names_the_commit_message_parts_by_their_devkit_commit_flags() {
+    let dir = setup();
+    let out = run(dir.path(), &["show", "commit_message", "--json"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows: Vec<(String, String, bool)> = v["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (
+                a["name"].as_str().unwrap().to_string(),
+                a["required_of"].as_str().unwrap().to_string(),
+                a["required"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(rows, [
+        ("--body".to_string(), "never".to_string(), false),
+        ("--coauthor".to_string(), "never".to_string(), false),
+        ("--subject".to_string(), "always".to_string(), true),
+    ]);
+}
+
+#[test]
+fn render_commit_message_needs_only_what_devkit_commit_needs() {
+    let dir = setup();
+    let out = run(dir.path(), &[
+        "render",
+        "commit_message",
+        "--arg",
+        "subject=fix: x",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(stdout(&out), "fix: x");
+
+    let out = run(dir.path(), &["render", "commit_message"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(stderr(&out).contains("--arg subject=..."), "{out:?}");
+    assert!(!stderr(&out).contains("body"), "{out:?}");
+}

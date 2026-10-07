@@ -15,7 +15,7 @@ use devkit_common::{
     template,
     vcs::{self, Vcs, VersionControl},
 };
-use devkit_config::{Config, Templates};
+use devkit_config::{Config, Required, Templates};
 use serde::Serialize;
 
 use crate::task::{TaskArg, arg_rows};
@@ -126,9 +126,10 @@ pub struct CommitMessage<'a> {
     pub coauthors: &'a [String],
 }
 
-/// The parts of a commit message `devkit commit` takes as flags.
 /// Each part of a commit message, as the template variable that reads it and
 /// the `devkit commit` flag that supplies it.
+const COMMIT_MESSAGE: &str = "commit_message";
+
 const COMMIT_PARTS: [(&str, &str); 3] = [
     ("subject", "--subject"),
     ("body", "--body"),
@@ -147,7 +148,33 @@ pub fn commit_message(
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<String> {
-    let name = "commit_message";
+    let coauthors = message.coauthors.join("; ");
+    let parts = [
+        Some(message.subject),
+        message.body,
+        (!coauthors.is_empty()).then_some(coauthors.as_str()),
+    ];
+    render_commit_message(cfg, start, parts, given, caller, true)
+}
+
+/// Whether `devkit commit` can leave out `part`: every part but the subject,
+/// unless `[templates.variables]` declares it.
+fn optional_part(cfg: &Config, part: &str) -> bool {
+    part != "subject" && !cfg.templates.variables.contains_key(part)
+}
+
+/// [`commit_message`] with its parts in `parts`, in [`COMMIT_PARTS`] order,
+/// on top of `given`. A missing part is named by its `devkit commit` flag
+/// when `by_flag`, and as an `--arg` otherwise.
+fn render_commit_message(
+    cfg: &Config,
+    start: &Path,
+    parts: [Option<&str>; 3],
+    given: &BTreeMap<String, String>,
+    caller: Caller,
+    by_flag: bool,
+) -> Result<String> {
+    let name = COMMIT_MESSAGE;
     let (_, _, source) = lookup(cfg, name)?;
     let reads = template::undeclared(&[source])?;
     for k in given.keys() {
@@ -160,13 +187,7 @@ pub fn commit_message(
     for (k, v) in given {
         ctx.insert(k.clone(), serde_json::json!(v));
     }
-    let coauthors = message.coauthors.join("; ");
-    let values = [
-        Some(message.subject),
-        message.body,
-        (!coauthors.is_empty()).then_some(coauthors.as_str()),
-    ];
-    for ((k, flag), v) in COMMIT_PARTS.into_iter().zip(values) {
+    for ((k, flag), v) in COMMIT_PARTS.into_iter().zip(parts) {
         if let Some(v) = v {
             ensure!(
                 reads.contains(k),
@@ -178,17 +199,22 @@ pub fn commit_message(
     let mut defaults = cfg.templates.defaults();
     let mut needed = args(source, &ctx)?;
     for (part, _) in COMMIT_PARTS {
-        if !cfg.templates.variables.contains_key(part) {
+        if optional_part(cfg, part) {
             needed.remove(part);
             defaults.insert(part.to_string(), String::new());
         }
     }
+    let what = if by_flag {
+        "devkit commit".to_string()
+    } else {
+        format!("template `{name}`")
+    };
     ensure_supplied_as(
-        "devkit commit",
+        &what,
         &missing_args(cfg, None, &needed, given, caller),
         |m| match COMMIT_PARTS.iter().find(|(part, _)| *part == m.name) {
-            Some((_, flag)) => m.hint_as(&format!("{flag}=...")),
-            None => m.hint(),
+            Some((_, flag)) if by_flag => m.hint_as(&format!("{flag}=...")),
+            _ => m.hint(),
         },
     )?;
     let text = template::render(source, &ctx, &defaults)
@@ -256,12 +282,26 @@ pub fn show(cfg: &Config, start: &Path, name: &str, caller: Caller) -> Result<Te
     let (kind, description, source) = lookup(cfg, name)?;
     let supplied = checkout_context(cfg, start);
     let names = args(source, &supplied).with_context(|| format!("reading template `{name}`"))?;
+    let mut rows = arg_rows(cfg, None, names, caller);
+    if name == COMMIT_MESSAGE {
+        for row in &mut rows {
+            let Some((part, flag)) = COMMIT_PARTS.iter().find(|(part, _)| *part == row.name) else {
+                continue;
+            };
+            if optional_part(cfg, part) {
+                row.required = false;
+                row.required_of = Required::Never;
+                row.default = Some(String::new());
+            }
+            row.name = flag.to_string();
+        }
+    }
     Ok(Template {
         name: name.to_string(),
         kind,
         description,
         source: source.to_string(),
-        args: arg_rows(cfg, None, names, caller),
+        args: rows,
     })
 }
 
@@ -276,6 +316,9 @@ pub fn render(
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<String> {
+    if name == COMMIT_MESSAGE {
+        return render_commit_message(cfg, start, [None; 3], given, caller, false);
+    }
     let (_, _, source) = lookup(cfg, name)?;
     let reads = template::undeclared(&[source])?;
     for k in given.keys() {
