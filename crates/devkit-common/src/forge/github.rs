@@ -1028,6 +1028,11 @@ impl GithubForge {
             let v = self.rest_found(&format!(
                 "/search/issues?q={q}&per_page={PER_PAGE}&page={page}"
             ))?;
+            // A search GitHub cut short still answers 200, with fewer items.
+            anyhow::ensure!(
+                v["incomplete_results"].as_bool() != Some(true),
+                "GitHub timed out the PR search and returned incomplete results"
+            );
             let items = v["items"]
                 .as_array()
                 .context("a PR search with no items list")?;

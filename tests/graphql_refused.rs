@@ -607,3 +607,25 @@ fn pr_checkout_of_an_issue_reports_a_graphql_rate_limit() {
         "{reqs:#?}"
     );
 }
+
+/// A PR search GitHub cut short answers 200 with `incomplete_results`. The
+/// REST fallback treats it as a failed read rather than counting the partial
+/// page as every PR there is.
+#[test]
+fn dashboard_counts_no_prs_from_an_incomplete_search() {
+    let fake = dashboard_over_rest();
+    fake.answer(
+        "rest_search_issues.json",
+        &serde_json::json!({ "total_count": 2, "incomplete_results": true, "items": [
+            { "number": 7, "pull_request": { "url": "x" } }
+        ] })
+        .to_string(),
+    );
+
+    let out = fake.issue(&["dashboard", "--no-cache"]);
+
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{calls}");
+    assert!(calls.contains("search/issues?q="), "{calls}");
+    assert!(!calls.contains("repos/o/r/pulls/7"), "{calls}");
+}
