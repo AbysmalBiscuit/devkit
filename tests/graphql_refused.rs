@@ -321,7 +321,7 @@ fn dashboard_totals(out: &std::process::Output) -> Vec<String> {
 fn dashboard_over_graphql() -> ghfake::Fake {
     let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
     fake.serve_graphql(
-        &serde_json::json!({ "data": { "repository": { "issues": {
+        &serde_json::json!({ "data": { "viewer": { "login": "LevValle" }, "repository": { "issues": {
             "pageInfo": { "hasNextPage": false, "endCursor": null },
             "nodes": [
                 { "number": 3, "createdAt": "2026-01-05T00:00:00Z", "state": "CLOSED",
@@ -434,8 +434,8 @@ fn dashboard_reports_the_same_issues_and_prs_when_graphql_is_refused() {
     assert_eq!(lines(&got), lines(&want));
 }
 
-/// The assigned-issues and PR-timeline reads stay one GraphQL request each
-/// where GraphQL answers, with no per-item REST read.
+/// The viewer, assigned-issues and PR-timeline reads stay one GraphQL request
+/// each where GraphQL answers, with no per-item REST read.
 #[test]
 fn dashboard_makes_one_graphql_request_per_batched_read() {
     let fake = dashboard_over_graphql();
@@ -444,6 +444,18 @@ fn dashboard_makes_one_graphql_request_per_batched_read() {
 
     let calls = fake.calls();
     assert!(out.status.success(), "{out:?}\n{calls}");
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|l| l.ends_with("query=query { viewer { login } }"))
+            .count(),
+        1,
+        "{calls}"
+    );
+    assert!(
+        !calls.lines().any(|l| l.ends_with("--method GET user")),
+        "{calls}"
+    );
     assert_eq!(calls.matches("filterBy: { assignee").count(), 1, "{calls}");
     assert_eq!(calls.matches("pr list --search").count(), 1, "{calls}");
     for rest in [

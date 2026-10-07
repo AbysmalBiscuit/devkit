@@ -545,10 +545,17 @@ fn fill_remaining_timeline(
 
 /// The authenticated user's own login. `filterBy.assignee` needs a concrete
 /// value; GitHub's `@me` shorthand does not extend to it.
+///
+/// GraphQL first, since GitHub App installation tokens cannot read REST
+/// `/user`; REST only where GitHub refuses GraphQL.
 fn viewer_login(api: &Api) -> Result<String> {
-    let user = api
-        .rest(Method::GET, "/user", None)?
-        .context("GitHub returned 404 for /user")?;
+    let user = match api.graphql_or_gh("query { viewer { login } }", Api::graphql) {
+        Ok(resp) => resp["data"]["viewer"].clone(),
+        Err(e) if graphql_refused(&e) => api
+            .rest(Method::GET, "/user", None)?
+            .context("GitHub returned 404 for /user")?,
+        Err(e) => return Err(e),
+    };
     user["login"]
         .as_str()
         .map(String::from)
@@ -893,7 +900,7 @@ impl Tracker for GithubTracker {
         Some(format!("https://{}/{slug}/issues/{number}", self.repo.host))
     }
 
-    /// The viewer over REST, through `gh` when no token resolves.
+    /// The viewer, through `gh` when no token resolves.
     fn check(&self) -> Result<String> {
         let login = viewer_login(&self.api)
             .with_context(|| format!("no GitHub access ({})", self.api.token_hint()))?;
