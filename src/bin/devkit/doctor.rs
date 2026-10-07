@@ -712,7 +712,7 @@ fn rules_rows(
         let (db, from) = crate::rules::open_database(
             config,
             RULES_DATABASE_WAIT,
-            crate::database_url::UrlLookup::Doppler,
+            crate::secret::SecretLookup::Doppler,
         );
         url_source = Some(from);
         db
@@ -781,7 +781,7 @@ fn todo_database_row(config: &devkit_config::PostgresConfig) -> Row {
     let (db, source) = crate::todo::store::open_database(
         config,
         TODO_DATABASE_WAIT,
-        crate::todo::store::UrlLookup::Doppler,
+        crate::todo::store::SecretLookup::Doppler,
     );
     let check = match db {
         Err(e) => Check::Invalid(e),
@@ -807,7 +807,7 @@ fn todo_api_rows(config: &devkit_config::SupabaseConfig) -> Vec<Row> {
     let opened = crate::todo::store::open_api(
         config,
         TODO_DATABASE_WAIT,
-        crate::todo::store::UrlLookup::Doppler,
+        crate::todo::store::SecretLookup::Doppler,
     );
     let url = Row {
         key: "todo_api_url",

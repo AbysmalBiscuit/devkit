@@ -31,8 +31,8 @@ use devkit_todo_taskchampion::{
 use serde::{Deserialize, de::IntoDeserializer};
 
 use super::sync::SyncOutcome;
-use crate::database_url::{DatabaseUrl, global_ca_file, global_setting};
-pub(crate) use crate::database_url::{UrlLookup, doppler_scope};
+use crate::secret::{Secret, global_ca_file, global_setting};
+pub(crate) use crate::secret::{SecretLookup, doppler_scope};
 
 /// Overrides `[todo] backend`, so a container can pick its store while the
 /// project's own config still loads.
@@ -182,11 +182,11 @@ impl Opener {
     }
 
     /// How this opener finds a secret Doppler holds.
-    fn url_lookup(self) -> UrlLookup {
+    fn secret_lookup(self) -> SecretLookup {
         match (self, SESSION_END.get()) {
-            (Self::Cli, _) => UrlLookup::Doppler,
-            (Self::Hook, None) => UrlLookup::CachedFirst,
-            (Self::Hook, Some(_)) => UrlLookup::CachedOnly,
+            (Self::Cli, _) => SecretLookup::Doppler,
+            (Self::Hook, None) => SecretLookup::CachedFirst,
+            (Self::Hook, Some(_)) => SecretLookup::CachedOnly,
         }
     }
 }
@@ -271,7 +271,7 @@ pub(crate) fn effective_backend(
 pub(crate) fn open_database(
     config: &PostgresConfig,
     wait: Duration,
-    lookup: UrlLookup,
+    lookup: SecretLookup,
 ) -> (Result<Arc<Database>, String>, Source) {
     let scope = doppler_scope(
         config.doppler_project.as_deref(),
@@ -279,7 +279,7 @@ pub(crate) fn open_database(
     );
     let cache = database_url();
     let resolved = cache.resolve(scope.as_ref(), lookup);
-    let Some(url) = resolved.url else {
+    let Some(url) = resolved.value else {
         return (Err(format!("{DATABASE_VAR} is not set")), resolved.source);
     };
     let trust = Trust {
@@ -298,8 +298,8 @@ pub(crate) fn open_database(
 }
 
 /// The todo database's URL and where Doppler's answers for it are kept.
-fn database_url() -> DatabaseUrl {
-    DatabaseUrl {
+fn database_url() -> Secret {
+    Secret {
         var: DATABASE_VAR,
         cache_dir: devkit_todo::state_dir().join("database-url"),
     }
@@ -324,7 +324,7 @@ fn database(config: &PostgresConfig, opener: Opener) -> Arc<Database> {
         .get_or_insert_default()
         .entry(key)
         .or_insert_with(|| {
-            open_database(config, wait, opener.url_lookup())
+            open_database(config, wait, opener.secret_lookup())
                 .0
                 .unwrap_or_else(Database::unusable)
         })
@@ -345,8 +345,8 @@ pub(crate) struct OpenedApi {
 }
 
 /// The key Supabase's API takes and where Doppler's answers for it are kept.
-fn supabase_key() -> DatabaseUrl {
-    DatabaseUrl {
+fn supabase_key() -> Secret {
+    Secret {
         var: SUPABASE_KEY_VAR,
         cache_dir: devkit_todo::state_dir().join("supabase-key"),
     }
@@ -356,7 +356,7 @@ fn supabase_key() -> DatabaseUrl {
 /// config's `[todo.supabase] url`, and its optional key, resolved and kept
 /// as [`open_database`] does the database URL. A key the API answers 401 to
 /// is dropped from the cache.
-pub(crate) fn open_api(config: &SupabaseConfig, wait: Duration, lookup: UrlLookup) -> OpenedApi {
+pub(crate) fn open_api(config: &SupabaseConfig, wait: Duration, lookup: SecretLookup) -> OpenedApi {
     let scope = doppler_scope(
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
@@ -377,12 +377,12 @@ pub(crate) fn open_api(config: &SupabaseConfig, wait: Duration, lookup: UrlLooku
         None => Err(format!(
             "{SUPABASE_URL_VAR} is not set, nor [todo.supabase] url in the global config"
         )),
-        Some(url) => Api::new(&url, key.url.clone(), wait)
+        Some(url) => Api::new(&url, key.value.clone(), wait)
             .map(Arc::new)
             .map_err(|e| format!("{SUPABASE_URL_VAR}: {e:#}")),
     };
     if let (Ok(api), Source::Doppler, Some(scope), Some(secret)) =
-        (&api, &key.source, &scope, &key.url)
+        (&api, &key.source, &scope, &key.value)
     {
         // Only a fresh answer resets the copy's age; reusing it must not.
         if !key.from_cache {
@@ -414,7 +414,7 @@ fn api(config: &SupabaseConfig, opener: Opener) -> Arc<Api> {
         .get_or_insert_default()
         .entry(key)
         .or_insert_with(|| {
-            open_api(config, wait, opener.url_lookup())
+            open_api(config, wait, opener.secret_lookup())
                 .api
                 .unwrap_or_else(|reason| Arc::new(Api::unusable(reason)))
         })
