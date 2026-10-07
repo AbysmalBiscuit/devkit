@@ -60,9 +60,15 @@ enum TemplateCmd {
     /// from `.devkit/issue.toml`; every other name it reads, `input` or
     /// `pr_url` say, is an `--arg`. No length limit such as `branch_max` is
     /// applied.
+    ///
+    /// `commit_message` takes the message's parts as `devkit commit` does,
+    /// by `--subject`, `--body` and `--coauthor`, and refuses them as
+    /// `--arg`. Every other template refuses those three flags.
     Render {
         /// Template to render.
         name: String,
+        #[command(flatten)]
+        message: crate::commit::MessageArgs,
         #[command(flatten)]
         vars: VarArgs,
         /// Emit `{"text": ...}` instead of the bare text.
@@ -111,8 +117,20 @@ pub fn run(cli: TemplateCli) -> Result<()> {
                 }
             }
         }
-        TemplateCmd::Render { name, vars, json } => {
-            let text = templates::render(cfg, Path::new(start), &name, &vars.parse()?, caller)?;
+        TemplateCmd::Render {
+            name,
+            message,
+            vars,
+            json,
+        } => {
+            let text = templates::render(
+                cfg,
+                Path::new(start),
+                &name,
+                Some(&message.parts()),
+                &vars.parse()?,
+                caller,
+            )?;
             if json {
                 println!("{}", serde_json::json!({ "text": text }));
             } else {

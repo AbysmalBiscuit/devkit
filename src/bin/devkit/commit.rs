@@ -12,8 +12,35 @@ use devkit_ports::templates::{self, CommitMessage};
 
 use crate::template::VarArgs;
 
+/// The parts of the message the `commit_message` template renders, taken by
+/// `devkit commit` and `devkit template render`.
+#[derive(clap::Args, Debug, Default)]
+pub(crate) struct MessageArgs {
+    /// The message's subject line, e.g. `fix(scope): imperative summary`.
+    #[arg(long)]
+    subject: Option<String>,
+    /// Why the change is needed, when the subject does not say.
+    #[arg(long)]
+    body: Option<String>,
+    /// A co-author, `Name <email>`, for a `Co-authored-by` trailer.
+    /// Repeatable.
+    #[arg(long = "coauthor", value_name = "NAME <EMAIL>")]
+    coauthors: Vec<String>,
+}
+
+impl MessageArgs {
+    pub(crate) fn parts(&self) -> CommitMessage<'_> {
+        CommitMessage {
+            subject: self.subject.as_deref(),
+            body: self.body.as_deref(),
+            coauthors: &self.coauthors,
+        }
+    }
+}
+
 #[derive(clap::Args)]
 #[command(group(ArgGroup::new("selection").required(true).args(["files", "patch", "amend"])))]
+#[command(mut_arg("subject", |a| a.required(true)))]
 pub struct CommitCli {
     /// Commit these paths as the working tree has them, new and deleted
     /// files included. Changes staged on other paths stay staged.
@@ -27,16 +54,8 @@ pub struct CommitCli {
     /// Give the last commit a new message, leaving staged changes staged.
     #[arg(long)]
     amend: bool,
-    /// The message's subject line, e.g. `fix(scope): imperative summary`.
-    #[arg(long)]
-    subject: String,
-    /// Why the change is needed, when the subject does not say.
-    #[arg(long)]
-    body: Option<String>,
-    /// A co-author, `Name <email>`, for a `Co-authored-by` trailer.
-    /// Repeatable.
-    #[arg(long = "coauthor", value_name = "NAME <EMAIL>")]
-    coauthors: Vec<String>,
+    #[command(flatten)]
+    message: MessageArgs,
     #[command(flatten)]
     vars: VarArgs,
     /// Run as if this command had started in DIR instead of the current
@@ -61,11 +80,7 @@ pub fn run(cli: CommitCli) -> Result<()> {
     let message = templates::commit_message(
         &config,
         &start,
-        &CommitMessage {
-            subject: &cli.subject,
-            body: cli.body.as_deref(),
-            coauthors: &cli.coauthors,
-        },
+        &cli.message.parts(),
         &cli.vars.parse()?,
         devkit_common::caller::caller(),
     )?;
