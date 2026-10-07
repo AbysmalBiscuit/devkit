@@ -306,6 +306,21 @@ fn patch_commits_only_its_hunks_and_keeps_unrelated_staging() {
 }
 
 #[test]
+fn a_relative_patch_is_read_from_the_directory_devkit_runs_in() {
+    let repo = repo();
+    let dir = repo.path();
+    let patch = patch_a_line_1(dir);
+    let sub = dir.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::rename(&patch, sub.join("a.patch")).unwrap();
+
+    let out = commit(&sub, &["--patch", "a.patch", "--subject", "fix: line 1"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(git(dir, &["show", "HEAD:a.txt"]), lines("a.txt", &[1]));
+}
+
+#[test]
 fn a_patch_overlapping_staged_hunks_is_refused_with_head_and_index_unchanged() {
     let repo = repo();
     let dir = repo.path();

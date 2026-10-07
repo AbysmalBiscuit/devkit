@@ -69,7 +69,11 @@ pub fn run(cli: CommitCli) -> Result<()> {
         &cli.vars.parse()?,
         devkit_common::caller::caller(),
     )?;
-    let patch = cli.patch.map(|p| start.join(p));
+    // git applies the patch from the repository's top, not from here.
+    let patch = cli
+        .patch
+        .map(|p| std::path::absolute(start.join(p)))
+        .transpose()?;
     let selection = match (&patch, cli.amend) {
         (Some(patch), _) => Selection::Patch(patch),
         (None, true) => Selection::Amend,
