@@ -40,6 +40,21 @@ fn context(
     })
 }
 
+/// The template variables and render context every summary template sees.
+fn render_inputs(
+    cfg: &devkit_config::Config,
+    d: &IssueDetails,
+    worktree: &str,
+    branch: &str,
+    slug: &str,
+    apps: &[String],
+) -> (BTreeMap<String, String>, serde_json::Value) {
+    (
+        cfg.templates.defaults(),
+        context(d, worktree, branch, slug, &cfg.defaults.branch_prefix, apps),
+    )
+}
+
 /// Where the summary file goes: `template` rendered, then taken from
 /// `worktree_root` unless it came out absolute. Rendering `{{ worktree }}` into
 /// the template, as the default does, puts the file inside the worktree;
@@ -91,13 +106,12 @@ pub(crate) fn plan_path(
     slug: &str,
     apps: &[String],
 ) -> Result<PathBuf> {
-    let vars = &cfg.templates.defaults();
-    let ctx = context(d, worktree, branch, slug, &cfg.defaults.branch_prefix, apps);
+    let (vars, ctx) = render_inputs(cfg, d, worktree, branch, slug, apps);
     resolve_path(
         cfg.templates.issue_summary_path(),
         || crate::issue::setup::worktree_root(cfg),
         &ctx,
-        vars,
+        &vars,
     )
 }
 
@@ -127,9 +141,8 @@ pub(crate) fn text(
     slug: &str,
     apps: &[String],
 ) -> Result<String> {
-    let vars = &cfg.templates.defaults();
-    let ctx = context(d, worktree, branch, slug, &cfg.defaults.branch_prefix, apps);
-    body(cfg, &ctx, vars, tracker_summary)
+    let (vars, ctx) = render_inputs(cfg, d, worktree, branch, slug, apps);
+    body(cfg, &ctx, &vars, tracker_summary)
 }
 
 /// Write the summary if nothing is there yet: the tracker's own summary
@@ -145,15 +158,14 @@ pub(crate) fn write(
     slug: &str,
     apps: &[String],
 ) -> Result<(PathBuf, bool)> {
-    let vars = &cfg.templates.defaults();
-    let ctx = context(d, worktree, branch, slug, &cfg.defaults.branch_prefix, apps);
+    let (vars, ctx) = render_inputs(cfg, d, worktree, branch, slug, apps);
     let path = resolve_path(
         cfg.templates.issue_summary_path(),
         || crate::issue::setup::worktree_root(cfg),
         &ctx,
-        vars,
+        &vars,
     )?;
-    let body = body(cfg, &ctx, vars, tracker_summary)?;
+    let body = body(cfg, &ctx, &vars, tracker_summary)?;
     let written = write_if_absent(&path, &body)?;
     let devkit_dir = Path::new(worktree).join(".devkit");
     if path.parent() == Some(devkit_dir.as_path()) {
