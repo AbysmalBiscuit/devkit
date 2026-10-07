@@ -3,7 +3,7 @@
 
 use std::{fmt, path::Path};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use devkit_config::{HoldStop, TodoConfig};
 use devkit_todo::{Holder, hold::mode_path, node};
 
@@ -98,12 +98,18 @@ pub(crate) fn run(mode: Option<HoldStop>, clear: bool, cwd: &Path) -> Result<()>
         match mode {
             Some(mode) => {
                 if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir)?;
+                    std::fs::create_dir_all(dir).with_context(|| {
+                        format!("creating hold mode directory {}", dir.display())
+                    })?;
                 }
-                std::fs::write(&path, mode.to_string())?;
+                std::fs::write(&path, mode.to_string())
+                    .with_context(|| format!("writing hold mode {}", path.display()))?;
             }
             None => match std::fs::remove_file(&path) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(e)
+                        .with_context(|| format!("removing hold mode {}", path.display()));
+                }
                 _ => {}
             },
         }
