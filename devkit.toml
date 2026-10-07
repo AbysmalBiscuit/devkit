@@ -55,6 +55,9 @@ equals = { method = "create" }
 title = "title"
 body = "body"
 
+[todo]
+hold_stop = "subagents"
+
 [tasks.audit]
 description = "Check Cargo.lock against the RustSec advisory database"
 run = ["cargo", "audit"]
