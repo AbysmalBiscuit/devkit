@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use devkit_vcs::{Changes, DETACHED, NewWorktree, Ownership, VersionControl, Worktree};
+use devkit_vcs::{Changes, DETACHED, NewWorktree, Ownership, Selection, VersionControl, Worktree};
 
 use super::{Git, SLOW_TIMEOUT};
 
@@ -12,6 +12,10 @@ use super::{Git, SLOW_TIMEOUT};
 pub struct GitBackend;
 
 impl VersionControl for GitBackend {
+    fn name(&self) -> &'static str {
+        "git"
+    }
+
     /// A `.git` entry at or above `dir`, or `dir` inside a bare repository.
     fn claims(&self, dir: &Path) -> bool {
         dir.ancestors().any(|d| {
@@ -234,11 +238,15 @@ impl VersionControl for GitBackend {
             .trim()
             .to_string())
     }
+
+    fn commit(&self, dir: &Path, selection: &Selection<'_>, message: &str) -> Result<String> {
+        super::commit::commit(dir, selection, message)
+    }
 }
 
 /// A path handed to git as an argument. A lossy spelling would aim the call,
 /// a removal included, at some other directory.
-fn utf8(path: &Path) -> Result<&str> {
+pub(crate) fn utf8(path: &Path) -> Result<&str> {
     path.to_str()
         .with_context(|| format!("path not UTF-8: {}", path.display()))
 }

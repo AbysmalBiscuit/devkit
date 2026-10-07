@@ -11,6 +11,7 @@
 //! The project's repository is reached through `devkit_common::vcs` instead.
 
 mod backend;
+mod commit;
 
 use std::{
     ffi::OsStr,
@@ -23,6 +24,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 pub use backend::{GitBackend, parse_porcelain};
+pub use commit::{HOOK_VERB as COMMIT_HOOK_VERB, run_hook as run_commit_hook};
 
 /// Default backstop for a git that never returns. Long enough that no healthy
 /// call reaches it, short enough that a wedged one fails instead of hanging a

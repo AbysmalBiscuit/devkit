@@ -11,11 +11,11 @@ use anyhow::{Context, Result, anyhow, ensure};
 use devkit_common::{
     caller::Caller,
     record::{self, IssueRecord},
-    required::{ensure_supplied, missing_args},
+    required::{ensure_supplied, ensure_supplied_as, missing_args},
     template,
     vcs::{self, Vcs, VersionControl},
 };
-use devkit_config::{Config, Templates};
+use devkit_config::{Config, Required, Templates};
 use serde::Serialize;
 
 use crate::task::{TaskArg, arg_rows};
@@ -55,7 +55,7 @@ struct BuiltIn {
     source: fn(&Templates) -> &str,
 }
 
-const BUILT_INS: [BuiltIn; 11] = [
+const BUILT_INS: [BuiltIn; 12] = [
     BuiltIn {
         name: "branch",
         description: "Branch name `issue setup` creates",
@@ -111,7 +111,176 @@ const BUILT_INS: [BuiltIn; 11] = [
         description: "Slack message sent by `issue review finish`",
         source: Templates::review_finish,
     },
+    BuiltIn {
+        name: "commit_message",
+        description: "Message `devkit commit` records",
+        source: Templates::commit_message,
+    },
 ];
+
+/// The parts of a commit message, as `devkit commit`, `devkit template
+/// render` and MCP `templates.render` take them for the `commit_message`
+/// template.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CommitMessage<'a> {
+    pub subject: Option<&'a str>,
+    pub body: Option<&'a str>,
+    pub coauthors: &'a [String],
+}
+
+impl CommitMessage<'_> {
+    fn is_empty(&self) -> bool {
+        self.subject.is_none() && self.body.is_none() && self.coauthors.is_empty()
+    }
+}
+
+/// How a surface names the commit message parts it takes: by the `devkit
+/// commit` flag, or by the MCP parameter of the same name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartNames {
+    Flags,
+    Params,
+}
+
+impl PartNames {
+    /// The part `flag` supplies, as this surface spells it.
+    fn part(self, flag: &str) -> String {
+        match self {
+            PartNames::Flags => flag.to_string(),
+            PartNames::Params => format!("parameter `{}`", flag.trim_start_matches('-')),
+        }
+    }
+
+    /// The template arg `name`, as this surface spells it.
+    fn arg(self, name: &str) -> String {
+        match self {
+            PartNames::Flags => format!("--arg {name}"),
+            PartNames::Params => format!("args.{name}"),
+        }
+    }
+
+    /// The hint naming a missing part supplied by `flag`.
+    fn missing(self, flag: &str) -> String {
+        match self {
+            PartNames::Flags => format!("{flag}=..."),
+            PartNames::Params => self.part(flag),
+        }
+    }
+}
+
+const COMMIT_MESSAGE: &str = "commit_message";
+
+/// Each part of a commit message, as the template variable that reads it and
+/// the `devkit commit` flag that supplies it.
+const COMMIT_PARTS: [(&str, &str); 3] = [
+    ("subject", "--subject"),
+    ("body", "--body"),
+    ("coauthors", "--coauthor"),
+];
+
+/// The message `devkit commit` records: template `commit_message` over
+/// [`checkout_context`], `given`, then the message's parts. A part the caller
+/// left out falls back to `[templates.variables]`, which can require it, as a
+/// project requires `coauthors` of agents; with no entry there it renders
+/// empty.
+pub fn commit_message(
+    cfg: &Config,
+    start: &Path,
+    message: &CommitMessage<'_>,
+    given: &BTreeMap<String, String>,
+    caller: Caller,
+) -> Result<String> {
+    render_commit_parts(
+        cfg,
+        start,
+        ("devkit commit", PartNames::Flags),
+        message,
+        given,
+        caller,
+    )
+}
+
+/// [`commit_message`] for `what`, naming a missing part as `what` takes it.
+fn render_commit_parts(
+    cfg: &Config,
+    start: &Path,
+    what: (&str, PartNames),
+    message: &CommitMessage<'_>,
+    given: &BTreeMap<String, String>,
+    caller: Caller,
+) -> Result<String> {
+    let coauthors = message.coauthors.join("; ");
+    let parts = [
+        message.subject,
+        message.body,
+        (!coauthors.is_empty()).then_some(coauthors.as_str()),
+    ];
+    render_commit_message(cfg, start, parts, given, caller, what)
+}
+
+/// Whether `devkit commit` can leave out `part`: every part but the subject,
+/// unless `[templates.variables]` declares it.
+fn optional_part(cfg: &Config, part: &str) -> bool {
+    part != "subject" && !cfg.templates.variables.contains_key(part)
+}
+
+/// [`commit_message`] with its parts in `parts`, in [`COMMIT_PARTS`] order,
+/// on top of `given`. A missing part is named as `what` takes it, in a
+/// refusal naming `what` as what needs it.
+fn render_commit_message(
+    cfg: &Config,
+    start: &Path,
+    parts: [Option<&str>; 3],
+    given: &BTreeMap<String, String>,
+    caller: Caller,
+    (what, names): (&str, PartNames),
+) -> Result<String> {
+    let name = COMMIT_MESSAGE;
+    let (_, _, source) = lookup(cfg, name)?;
+    let reads = template::undeclared(&[source])?;
+    for k in given.keys() {
+        ensure!(
+            reads.contains(k),
+            "template `{name}` reads no variable `{k}`"
+        );
+    }
+    let mut ctx = checkout_context(cfg, start);
+    for (k, v) in given {
+        ctx.insert(k.clone(), serde_json::json!(v));
+    }
+    for ((k, flag), v) in COMMIT_PARTS.into_iter().zip(parts) {
+        if let Some(v) = v {
+            ensure!(
+                reads.contains(k),
+                "template `{name}` reads no `{k}`, so it would drop {flag}"
+            );
+            ctx.insert(k.to_string(), serde_json::json!(v));
+        }
+    }
+    let mut defaults = cfg.templates.defaults();
+    let mut needed = args(source, &ctx)?;
+    for (part, _) in COMMIT_PARTS {
+        if optional_part(cfg, part) {
+            needed.remove(part);
+            defaults.insert(part.to_string(), String::new());
+        }
+    }
+    ensure_supplied_as(
+        what,
+        &missing_args(cfg, None, &needed, given, caller),
+        |m| match COMMIT_PARTS.iter().find(|(part, _)| *part == m.name) {
+            Some((_, flag)) => m.hint_as(&names.missing(flag)),
+            None => m.hint(),
+        },
+    )?;
+    let text = template::render(source, &ctx, &defaults)
+        .with_context(|| format!("rendering template `{name}`"))?;
+    ensure!(
+        !text.trim().is_empty(),
+        "template `{name}` rendered an empty message"
+    );
+    Ok(text)
+}
 
 /// The context every template renders over: `branch`, and `issue`, `slug`,
 /// `apps` from the worktree's record when it has one. A field with no source
@@ -169,12 +338,26 @@ pub fn show(cfg: &Config, start: &Path, name: &str, caller: Caller) -> Result<Te
     let (kind, description, source) = lookup(cfg, name)?;
     let supplied = checkout_context(cfg, start);
     let names = args(source, &supplied).with_context(|| format!("reading template `{name}`"))?;
+    let mut rows = arg_rows(cfg, None, names, caller);
+    if name == COMMIT_MESSAGE {
+        for row in &mut rows {
+            let Some((part, flag)) = COMMIT_PARTS.iter().find(|(part, _)| *part == row.name) else {
+                continue;
+            };
+            if optional_part(cfg, part) {
+                row.required = false;
+                row.required_of = Required::Never;
+                row.default = Some(String::new());
+            }
+            row.name = flag.to_string();
+        }
+    }
     Ok(Template {
         name: name.to_string(),
         kind,
         description,
         source: source.to_string(),
-        args: arg_rows(cfg, None, names, caller),
+        args: rows,
     })
 }
 
@@ -182,13 +365,34 @@ pub fn show(cfg: &Config, start: &Path, name: &str, caller: Caller) -> Result<Te
 /// top of [`checkout_context`] and `[templates.variables]` underneath. An arg
 /// the template never reads, and a required one left out, are refused before
 /// anything renders. No length limit such as `branch_max` is applied.
+///
+/// Template `commit_message` takes its parts from `parts`, named as `names`
+/// say, and refuses them in `given`; any other template refuses a part.
 pub fn render(
     cfg: &Config,
     start: &Path,
     name: &str,
+    (parts, names): (&CommitMessage<'_>, PartNames),
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<String> {
+    if name == COMMIT_MESSAGE {
+        for (part, flag) in COMMIT_PARTS {
+            ensure!(
+                !given.contains_key(part),
+                "template `{name}` takes `{part}` from {}, not {}",
+                names.part(flag),
+                names.arg(part)
+            );
+        }
+        let what = format!("template `{name}`");
+        return render_commit_parts(cfg, start, (&what, names), parts, given, caller);
+    }
+    let [subject, body, coauthor] = COMMIT_PARTS.map(|(_, flag)| names.part(flag));
+    ensure!(
+        parts.is_empty(),
+        "{subject}, {body} and {coauthor} fill only template `{COMMIT_MESSAGE}`, not `{name}`"
+    );
     let (_, _, source) = lookup(cfg, name)?;
     let reads = template::undeclared(&[source])?;
     for k in given.keys() {

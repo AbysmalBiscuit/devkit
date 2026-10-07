@@ -346,3 +346,113 @@ fn a_built_in_renders_what_its_command_would_send() {
         fake.calls()
     );
 }
+
+/// `commit_message` asks for its parts the way `devkit commit` does: by the
+/// command's flags, with only `--subject` required unless the project
+/// requires another part.
+#[test]
+fn show_names_the_commit_message_parts_by_their_devkit_commit_flags() {
+    let dir = setup();
+    let out = run(dir.path(), &["show", "commit_message", "--json"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows: Vec<(String, String, bool)> = v["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (
+                a["name"].as_str().unwrap().to_string(),
+                a["required_of"].as_str().unwrap().to_string(),
+                a["required"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(rows, [
+        ("--body".to_string(), "never".to_string(), false),
+        ("--coauthor".to_string(), "never".to_string(), false),
+        ("--subject".to_string(), "always".to_string(), true),
+    ]);
+}
+
+/// `render commit_message` takes the message's parts by the flags
+/// `devkit commit` takes them by, and renders what that commit would record.
+#[test]
+fn render_commit_message_takes_the_parts_by_the_devkit_commit_flags() {
+    let dir = setup();
+    let out = run(dir.path(), &[
+        "render",
+        "commit_message",
+        "--subject",
+        "fix: x",
+        "--body",
+        "Why it matters.",
+        "--coauthor",
+        "A Person <a@example.invalid>",
+        "--coauthor",
+        "B Person <b@example.invalid>",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        stdout(&out),
+        "fix: x\n\nWhy it matters.\n\nCo-authored-by: A Person <a@example.invalid>\nCo-authored-by: B Person <b@example.invalid>"
+    );
+}
+
+#[test]
+fn render_commit_message_needs_only_what_devkit_commit_needs() {
+    let dir = setup();
+    let out = run(dir.path(), &[
+        "render",
+        "commit_message",
+        "--subject",
+        "fix: x",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(stdout(&out), "fix: x");
+
+    let out = run(dir.path(), &["render", "commit_message"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(stderr(&out).contains("--subject"), "{out:?}");
+    assert!(!stderr(&out).contains("--arg"), "{out:?}");
+    assert!(!stderr(&out).contains("body"), "{out:?}");
+}
+
+#[test]
+fn render_commit_message_refuses_a_part_given_as_an_arg_naming_its_flag() {
+    let dir = setup();
+    for (arg, flag) in [
+        ("subject=fix: x", "--subject"),
+        ("body=why", "--body"),
+        ("coauthors=A <a@example.invalid>", "--coauthor"),
+    ] {
+        let out = run(dir.path(), &[
+            "render",
+            "commit_message",
+            "--subject",
+            "fix: x",
+            "--arg",
+            arg,
+        ]);
+        assert!(!out.status.success(), "{arg}: {out:?}");
+        assert!(stderr(&out).contains(flag), "{arg}: {out:?}");
+    }
+}
+
+#[test]
+fn render_refuses_the_commit_message_flags_for_other_templates() {
+    let dir = setup();
+    for flags in [&["--subject", "fix: x"][..], &["--body", "why"], &[
+        "--coauthor",
+        "A <a@example.invalid>",
+    ]] {
+        let mut args = vec!["render", "pr_body", "--arg", "input=x"];
+        args.extend_from_slice(flags);
+        let out = run(dir.path(), &args);
+        assert!(!out.status.success(), "{flags:?}: {out:?}");
+        assert!(
+            stderr(&out).contains("commit_message"),
+            "{flags:?}: {out:?}"
+        );
+    }
+}

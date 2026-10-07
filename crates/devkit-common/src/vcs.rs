@@ -10,8 +10,10 @@ use std::{
 use ambassador::Delegate;
 use anyhow::{Context, Result};
 use devkit_git::GitBackend;
+/// The hidden verb `devkit commit`'s hook wrappers run, and its body.
+pub use devkit_git::{COMMIT_HOOK_VERB, run_commit_hook};
 pub use devkit_vcs::{
-    Changes, DETACHED, NewWorktree, Ownership, VersionControl, Worktree,
+    Changes, DETACHED, NewWorktree, Ownership, Selection, VersionControl, Worktree,
     ambassador_impl_VersionControl,
 };
 use strum::{EnumIter, IntoEnumIterator};

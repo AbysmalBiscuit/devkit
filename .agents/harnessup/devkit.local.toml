@@ -7,16 +7,16 @@
 [harness.commands.git-commit]
 programs = ["git"]
 args = ["commit"]
-reason = """Commit with the devkit task, which stages exactly the paths it names:
-  devrun task commit --arg files='src/a.rs,src/b.rs' --arg commit_subject='fix(scope): imperative subject' --arg coauthors='...'
-Part of a file: write those hunks to a patch against HEAD and run `devrun task commit-patch --arg patch=<file>` with the same message args.
-The last commit's message: `devrun task commit-amend` with the message args.
-`devkit config tasks <task>` describes every arg."""
+reason = """Commit with `devkit commit`, which commits exactly what it names and leaves other sessions' staging alone:
+  devkit commit --files src/a.rs src/b.rs --subject 'fix(scope): imperative subject' --coauthor '<model> <email>'
+Part of a file: write those hunks to a patch against HEAD and pass `--patch <file>` instead of `--files`.
+The last commit's message: `devkit commit --amend` with the message flags.
+`devkit commit -h` describes every flag."""
 
 [harness.commands.git-add]
 programs = ["git"]
 args = ["add"]
-reason = """Stage and commit in one step: `devrun task commit` stages the paths it commits, and `devrun task commit-patch` commits part of a file.
+reason = """Commit without staging: `devkit commit --files <paths>` commits the paths it names, and `devkit commit --patch <file>` commits part of a file.
 Rebase conflicts: `devrun task rebase-add --arg files='src/a.rs,src/b.rs'`, then `git rebase --continue`.
 `devkit config tasks <task>` describes every arg."""
 
@@ -118,22 +118,3 @@ parent = "manager"
 [todo.roles.receiver]
 scope = "agent"
 parent = "manager"
-
-[tasks.commit-patch]
-description = "Commit a patch against HEAD while preserving unrelated staging"
-guard = false
-run = ["harnessup", "commit-patch", "--patch", "{{ patch }}", "--message", '''
-{{- commit_subject | trim }}
-{%- if commit_body | trim %}
-
-{{ commit_body | trim }}
-{%- endif %}
-{%- if coauthors | trim(" ;") %}
-{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
-Co-authored-by: {{ c }}
-{%- endfor %}
-{%- endif %}
-''']
-
-[templates.variables]
-patch = { required = "always", description = "Patch file against HEAD holding only the hunks to commit; other hunks and staged changes stay as they are" }

@@ -65,10 +65,27 @@ pub struct NewWorktree<'a> {
     pub branch: Option<&'a str>,
 }
 
+/// What [`VersionControl::commit`] records.
+#[derive(Debug, Clone, Copy)]
+pub enum Selection<'a> {
+    /// These paths as the working tree has them, new and deleted files
+    /// included. A relative path is taken from the directory `commit` is
+    /// given.
+    Paths(&'a [PathBuf]),
+    /// The hunks of a patch against the current revision, whatever the
+    /// working tree holds.
+    Patch(&'a Path),
+    /// No change: a new message for the last commit.
+    Amend,
+}
+
 /// Every question and action devkit puts to a project's repository. Each call
 /// is time-bounded, and none prompts.
 #[ambassador::delegatable_trait]
 pub trait VersionControl {
+    /// The backend's name as messages print it, e.g. `git`.
+    fn name(&self) -> &'static str;
+
     /// Whether `dir` sits in this backend's repository, by a filesystem look
     /// alone. May answer true when unsure. The backend's own tool has the
     /// final word.
@@ -180,4 +197,143 @@ pub trait VersionControl {
     /// The email the repository records authors under. `Err` when none is
     /// configured.
     fn user_email(&self, dir: &::std::path::Path) -> ::anyhow::Result<::std::string::String>;
+
+    /// Commits `selection` in `dir`'s repository with `message`, leaving the
+    /// working tree, and changes anyone else staged, as they were. Refuses
+    /// rather than committing part of the selection. Returns the backend's
+    /// report of the new commit.
+    ///
+    /// The default refuses, naming the backend: one without a staging area
+    /// may have no use for this.
+    fn commit(
+        &self,
+        dir: &::std::path::Path,
+        selection: &::devkit_vcs::Selection<'_>,
+        message: &str,
+    ) -> ::anyhow::Result<::std::string::String> {
+        let _ = (dir, selection, message);
+        ::anyhow::bail!(
+            "the {} backend cannot commit: `devkit commit` is unavailable in this repository",
+            self.name()
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    /// A backend that answers nothing but its name.
+    struct Mute;
+
+    impl VersionControl for Mute {
+        fn name(&self) -> &'static str {
+            "mute"
+        }
+
+        fn claims(&self, _: &Path) -> bool {
+            unimplemented!()
+        }
+
+        fn root(&self, _: &Path) -> anyhow::Result<Option<PathBuf>> {
+            unimplemented!()
+        }
+
+        fn worktrees(&self, _: &Path) -> anyhow::Result<Option<Vec<Worktree>>> {
+            unimplemented!()
+        }
+
+        fn ownership(&self, _: &Path) -> Ownership {
+            unimplemented!()
+        }
+
+        fn branch(&self, _: &Path) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+
+        fn revision(&self, _: &Path) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+
+        fn ahead(&self, _: &Path, _: &str) -> anyhow::Result<u32> {
+            unimplemented!()
+        }
+
+        fn has_branch(&self, _: &Path, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+
+        fn delete_branch(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        fn default_branch(&self, _: &Path) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+
+        fn dirty(&self, _: &Path, _: Changes) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+
+        fn fork_point(&self, _: &Path, _: &str) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+
+        fn changed_paths(&self, _: &Path, _: &str) -> anyhow::Result<Vec<String>> {
+            unimplemented!()
+        }
+
+        fn create_worktree(&self, _: &NewWorktree<'_>) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        fn remove_worktree(&self, _: &Path, _: &Path, _: bool) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        fn prune(&self, _: &Path) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        fn fetch(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        fn push(&self, _: &Path, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        fn pushed(&self, _: &Path) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+
+        fn checkout_remote_ref(&self, _: &Path, _: &str, _: &str, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        fn remote_url(&self, _: &Path, _: &str) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+
+        fn user_email(&self, _: &Path) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn a_backend_without_commit_refuses_naming_itself() {
+        for selection in [
+            Selection::Paths(&[]),
+            Selection::Patch(Path::new("p.diff")),
+            Selection::Amend,
+        ] {
+            let err = Mute
+                .commit(Path::new("."), &selection, "feat: x")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("mute backend"), "{err}");
+        }
+    }
 }

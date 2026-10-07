@@ -9,6 +9,7 @@ mod activity;
 mod auth;
 mod baseline;
 mod brief;
+mod commit;
 mod config;
 mod docs;
 mod doctor;
@@ -94,6 +95,21 @@ enum Cmd {
         /// stdout and needs no envelope.
         #[arg(long)]
         additional_context: bool,
+    },
+    /// Commit named paths or a patch, or reword the last commit.
+    ///
+    /// The message comes from the `commit_message` template. The working
+    /// tree, and changes staged by other sessions, stay as they were, and a
+    /// selection that cannot be committed whole is refused.
+    #[command(display_name = "devkit commit")]
+    Commit(commit::CommitCli),
+    /// Run a repository hook during `devkit commit` and check its commit.
+    #[command(name = devkit_common::vcs::COMMIT_HOOK_VERB, hide = true)]
+    CommitHook {
+        state: PathBuf,
+        hook: String,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Show the resolved config, or list configured apps or tasks.
     #[command(display_name = "devkit config")]
@@ -421,6 +437,8 @@ fn main() -> Result<()> {
                     None => schema::run(),
                     Some(SchemaCmd::Init { path }) => schema::init(&path),
                 },
+                Cmd::Commit(c) => commit::run(c),
+                Cmd::CommitHook { state, hook, args } => commit::run_hook(&state, &hook, &args),
                 Cmd::Config(c) => config::run(c),
                 Cmd::Doctor { json } => doctor::run(json),
                 Cmd::Completions { shell, all } => {

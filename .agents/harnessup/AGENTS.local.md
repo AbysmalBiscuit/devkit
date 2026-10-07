@@ -22,7 +22,7 @@ Completion requires the requested behaviour, the checks `AGENTS.md` names passin
 
 ## Delivery
 
-Commit through `devrun task commit`, which stages only the paths it names. Keep the files harnessup places at the repository root out of commits. Keep the author identity the environment configures, pass your model's name and email in the commit task's `coauthors` argument, then confirm the commit carries its `Co-authored-by` trailer.
+Commit through `devkit commit`, which commits only what it names. Keep the files harnessup places at the repository root out of commits. Keep the author identity the environment configures, pass your model's name and email as `--coauthor`, then confirm the commit carries its `Co-authored-by` trailer.
 
 When the work is done, push and open the PR with `issue pr create`. It opens ready for review, not as a draft, because review bots skip drafts.
 

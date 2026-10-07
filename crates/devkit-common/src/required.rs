@@ -21,11 +21,16 @@ impl Missing {
     /// audience, so an agent's report explains why the same command succeeds
     /// for the human reading it.
     pub fn hint(&self) -> String {
-        let name = &self.name;
+        self.hint_as(&format!("--arg {}=...", self.name))
+    }
+
+    /// [`Missing::hint`] for a surface that takes this value through its own
+    /// flag, spelled `flag`.
+    pub fn hint_as(&self, flag: &str) -> String {
         match self.reason {
-            Required::Never | Required::Always => format!("--arg {name}=..."),
-            Required::Agents => format!("--arg {name}=... (required for agents)"),
-            Required::Humans => format!("--arg {name}=... (required for humans)"),
+            Required::Never | Required::Always => flag.to_string(),
+            Required::Agents => format!("{flag} (required for agents)"),
+            Required::Humans => format!("{flag} (required for humans)"),
         }
     }
 }
@@ -33,14 +38,20 @@ impl Missing {
 /// Refuse the run when anything is missing, naming each arg as `what needs
 /// --arg a=... --arg b=...`, then one [`description_line`] per described arg.
 pub fn ensure_supplied(what: &str, missing: &[Missing]) -> anyhow::Result<()> {
+    ensure_supplied_as(what, missing, Missing::hint)
+}
+
+/// [`ensure_supplied`] with each missing arg spelled by `hint`, for a surface
+/// whose own flags carry some of its args.
+pub fn ensure_supplied_as(
+    what: &str,
+    missing: &[Missing],
+    hint: impl Fn(&Missing) -> String,
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         missing.is_empty(),
         "{what} needs {}{}",
-        missing
-            .iter()
-            .map(Missing::hint)
-            .collect::<Vec<_>>()
-            .join(" "),
+        missing.iter().map(hint).collect::<Vec<_>>().join(" "),
         missing
             .iter()
             .filter_map(|m| Some(description_line(&m.name, m.description.as_deref()?)))

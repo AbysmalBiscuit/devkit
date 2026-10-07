@@ -1763,6 +1763,16 @@ pub const DEFAULT_ISSUE_TITLE: &str = "{{ input }}";
 pub const DEFAULT_ISSUE_BODY: &str = "{{ input }}";
 pub const DEFAULT_REVIEW_REQUEST: &str = "{{ input }} {{ pr_url }}";
 pub const DEFAULT_REVIEW_FINISH: &str = "{{ input }} {{ pr_url }}";
+pub const DEFAULT_COMMIT_MESSAGE: &str = r#"{{- subject | trim }}
+{%- if body | trim %}
+
+{{ body | trim }}
+{%- endif %}
+{%- if coauthors | trim(" ;") %}
+{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
+Co-authored-by: {{ c }}
+{%- endfor %}
+{%- endif %}"#;
 pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md";
 pub const DEFAULT_ISSUE_SUMMARY: &str = "\
 # {{ issue }}: {{ title }}\n\
@@ -2000,6 +2010,11 @@ pub struct Templates {
     /// Slack message sent by `issue review finish`. Same context as
     /// `review_request`, plus `author`.
     pub review_finish: Option<String>,
+    /// Message `devkit commit` records. `subject` is the `--subject`
+    /// argument, `body` the `--body` argument, and `coauthors` every
+    /// `--coauthor`, `;`-separated. Defaults to the subject, then the body
+    /// after a blank line, then a `Co-authored-by` trailer per co-author.
+    pub commit_message: Option<String>,
     /// Where `issue setup --summary` writes the issue summary file. A relative
     /// path is taken from `defaults.worktree_root`, so the file sits beside
     /// the worktree and outlives it, and is refused when there is no
@@ -2096,6 +2111,12 @@ impl Templates {
         self.review_finish
             .as_deref()
             .unwrap_or(DEFAULT_REVIEW_FINISH)
+    }
+
+    pub fn commit_message(&self) -> &str {
+        self.commit_message
+            .as_deref()
+            .unwrap_or(DEFAULT_COMMIT_MESSAGE)
     }
 
     /// Name to value, for building a render context. A declaration with no
