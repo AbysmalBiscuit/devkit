@@ -6,13 +6,13 @@ use devkit_config::expand_tilde;
 /// Resolve git's global excludes file. A configured `core.excludesfile` wins
 /// (tilde-expanded); otherwise `$XDG_CONFIG_HOME/git/ignore`, else
 /// `<home>/.config/git/ignore` — the path git reads by default.
-fn resolve_excludes_path(configured: Option<&str>, home: &str, xdg: Option<&str>) -> PathBuf {
+fn resolve_excludes_path(configured: Option<&str>, home: &Path, xdg: Option<&str>) -> PathBuf {
     if let Some(c) = configured.map(str::trim).filter(|c| !c.is_empty()) {
         return expand_tilde(c);
     }
     let base = match xdg.map(str::trim).filter(|x| !x.is_empty()) {
         Some(x) => PathBuf::from(x),
-        None => Path::new(home).join(".config"),
+        None => home.join(".config"),
     };
     base.join("git").join("ignore")
 }
@@ -60,7 +60,7 @@ pub fn excludes_path() -> Result<PathBuf> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let home = std::env::var("HOME").context("HOME not set")?;
+    let home = crate::paths::try_home().context("HOME and USERPROFILE unset")?;
     let xdg = std::env::var("XDG_CONFIG_HOME").ok();
     Ok(resolve_excludes_path(
         configured.as_deref(),
@@ -122,19 +122,23 @@ mod tests {
     fn resolve_prefers_configured_path() {
         // A configured excludesfile wins over the xdg/home fallback and is
         // tilde-expanded the same way every other config path is.
-        let p = resolve_excludes_path(Some("~/custom/ignore"), "/home/u", Some("/home/u/.xdg"));
+        let p = resolve_excludes_path(
+            Some("~/custom/ignore"),
+            Path::new("/home/u"),
+            Some("/home/u/.xdg"),
+        );
         assert_eq!(p, expand_tilde("~/custom/ignore"));
     }
 
     #[test]
     fn resolve_uses_xdg_when_unset() {
-        let p = resolve_excludes_path(None, "/home/u", Some("/home/u/.xdg"));
+        let p = resolve_excludes_path(None, Path::new("/home/u"), Some("/home/u/.xdg"));
         assert_eq!(p, PathBuf::from("/home/u/.xdg/git/ignore"));
     }
 
     #[test]
     fn resolve_falls_back_to_home() {
-        let p = resolve_excludes_path(None, "/home/u", None);
+        let p = resolve_excludes_path(None, Path::new("/home/u"), None);
         assert_eq!(p, PathBuf::from("/home/u/.config/git/ignore"));
     }
 

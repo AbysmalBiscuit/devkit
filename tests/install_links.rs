@@ -1300,3 +1300,34 @@ fn doctor_names_devkit_install_for_each_missing_ignore_pattern() {
     }
     assert!(row.contains("devkit install"), "should name the fix: {row}");
 }
+
+/// Windows has no `HOME`; the excludes file then resolves under
+/// `USERPROFILE`, the home every other devkit path falls back to.
+#[test]
+#[cfg(windows)]
+fn install_resolves_home_through_userprofile() {
+    let (_dir, exe) = staged();
+    let profile = tempfile::tempdir().expect("profile");
+    let gitconfig = profile.path().join("gitconfig");
+    std::fs::write(&gitconfig, "").expect("empty gitconfig");
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("install")
+            .env_remove("HOME")
+            .env("USERPROFILE", profile.path())
+            .env("XDG_STATE_HOME", profile.path().join("state"))
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+    });
+    assert!(
+        out.status.success(),
+        "devkit install failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(profile.path().join(".config/git/ignore"))
+            .expect("excludes written under USERPROFILE"),
+        ".devkit/\n*.local\n*.local.*\n"
+    );
+}
