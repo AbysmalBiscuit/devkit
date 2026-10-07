@@ -101,6 +101,37 @@ pub(crate) fn plan_path(
     )
 }
 
+/// The summary file's text: the tracker's own summary verbatim, else the
+/// `issue_summary` template rendered against `ctx`.
+fn body(
+    cfg: &devkit_config::Config,
+    ctx: &serde_json::Value,
+    vars: &BTreeMap<String, String>,
+    tracker_summary: Option<&str>,
+) -> Result<String> {
+    match tracker_summary.filter(|s| !s.trim().is_empty()) {
+        Some(s) => Ok(s.to_string()),
+        None => devkit_common::template::render(cfg.templates.issue_summary(), ctx, vars)
+            .context("rendering `issue_summary` template"),
+    }
+}
+
+/// The text [`write`] puts in a fresh summary file, without writing it: what
+/// `--dry-run --summary` reports.
+pub(crate) fn text(
+    cfg: &devkit_config::Config,
+    d: &IssueDetails,
+    tracker_summary: Option<&str>,
+    worktree: &str,
+    branch: &str,
+    slug: &str,
+    apps: &[String],
+) -> Result<String> {
+    let vars = &cfg.templates.defaults();
+    let ctx = context(d, worktree, branch, slug, &cfg.defaults.branch_prefix, apps);
+    body(cfg, &ctx, vars, tracker_summary)
+}
+
 /// Write the summary if nothing is there yet: the tracker's own summary
 /// verbatim, else the `issue_summary` template rendered. Returns the path and
 /// whether this run created it. A file under the worktree's `.devkit/` gets
@@ -122,11 +153,7 @@ pub(crate) fn write(
         &ctx,
         vars,
     )?;
-    let body = match tracker_summary.filter(|s| !s.trim().is_empty()) {
-        Some(s) => s.to_string(),
-        None => devkit_common::template::render(cfg.templates.issue_summary(), &ctx, vars)
-            .context("rendering `issue_summary` template")?,
-    };
+    let body = body(cfg, &ctx, vars, tracker_summary)?;
     let written = write_if_absent(&path, &body)?;
     let devkit_dir = Path::new(worktree).join(".devkit");
     if path.parent() == Some(devkit_dir.as_path()) {

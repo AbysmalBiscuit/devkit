@@ -43,6 +43,10 @@ struct Prepared {
     /// The summary file's path, present only when one was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
+    /// The text the summary file gets, present only on `--dry-run --summary`,
+    /// which writes no file to hold it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary_text: Option<String>,
 }
 
 impl Prepared {
@@ -61,6 +65,9 @@ impl Prepared {
             rows.push(("summary", s.clone()));
         }
         println!("{}", devkit_common::ui::kv_table(&rows));
+        if let Some(text) = &self.summary_text {
+            println!("\n{text}");
+        }
         Ok(())
     }
 }
@@ -520,7 +527,7 @@ fn bind_here(
     issue: &str,
     slug: String,
     details: Option<IssueDetails>,
-) -> Result<()> {
+) -> Result<Prepared> {
     let root = devkit_common::vcs::checkout_root(Path::new(start))?;
     let vcs = Vcs::at(&root);
     let branch = vcs.branch(&root)?;
@@ -549,26 +556,20 @@ fn bind_here(
     let holder = root.to_string_lossy().into_owned();
 
     if args.dry_run {
-        let summary = details
-            .as_ref()
-            .map(|d| crate::issue::summary::plan_path(cfg, d, &holder, &branch, &slug, &[]))
-            .transpose()?;
-        Prepared {
+        let out = dry_run_report(args, cfg, t, details.as_ref(), Planned {
             issue: Some(issue.to_string()),
             worktree: holder,
             branch,
-            summary: summary.map(|p| p.display().to_string()),
-        }
-        .report()?;
+            slug: &slug,
+            apps: &[],
+        })?;
         eprintln!("(dry-run: nothing written)");
-        return Ok(());
+        return Ok(out);
     }
 
     let summary = match &details {
         Some(d) => {
-            let tracker_summary = Steps::new()
-                .during_result("Reading the issue summary\u{2026}", || t.summary(issue))
-                .with_context(|| format!("fetching the summary for {issue}"))?;
+            let tracker_summary = read_tracker_summary(t, issue)?;
             let (path, written) = crate::issue::summary::write(
                 cfg,
                 d,
@@ -608,13 +609,14 @@ fn bind_here(
         ignore_devkit_files();
     }
 
-    Prepared {
+    let out = Prepared {
         issue: Some(issue.to_string()),
         worktree: holder,
         branch,
         summary,
-    }
-    .report()?;
+        summary_text: None,
+    };
+    out.report()?;
     if fires_setup {
         crate::issue::event::fire_inline(
             Path::new(start),
@@ -623,27 +625,100 @@ fn bind_here(
             issue,
         );
     }
-    Ok(())
+    Ok(out)
+}
+
+/// The tracker's own summary of `issue`, which a summary file holds verbatim
+/// in place of the rendered template.
+fn read_tracker_summary(t: &dyn Tracker, issue: &str) -> Result<Option<String>> {
+    Steps::new()
+        .during_result("Reading the issue summary\u{2026}", || t.summary(issue))
+        .with_context(|| format!("fetching the summary for {issue}"))
+}
+
+/// What a dry run reports about the worktree it would set up.
+struct Planned<'a> {
+    issue: Option<String>,
+    worktree: String,
+    branch: String,
+    slug: &'a str,
+    apps: &'a [String],
+}
+
+/// Print and return what `--dry-run` would set up. With `--summary` that
+/// includes the summary file's text, rendered exactly as a real run writes it,
+/// which costs the tracker summary read a real run makes; without it, the
+/// tracker is asked nothing more.
+fn dry_run_report(
+    args: &SetupArgs,
+    cfg: &devkit_config::Config,
+    t: &dyn Tracker,
+    details: Option<&IssueDetails>,
+    plan: Planned<'_>,
+) -> Result<Prepared> {
+    let Planned {
+        issue,
+        worktree,
+        branch,
+        slug,
+        apps,
+    } = plan;
+    let summary = details
+        .map(|d| crate::issue::summary::plan_path(cfg, d, &worktree, &branch, slug, apps))
+        .transpose()?;
+    let summary_text = match (details.filter(|_| args.summary), issue.as_deref()) {
+        (Some(d), Some(id)) => {
+            let tracker_summary = read_tracker_summary(t, id)?;
+            Some(crate::issue::summary::text(
+                cfg,
+                d,
+                tracker_summary.as_deref(),
+                &worktree,
+                &branch,
+                slug,
+                apps,
+            )?)
+        }
+        _ => None,
+    };
+    let out = Prepared {
+        issue,
+        worktree,
+        branch,
+        summary: summary.map(|p| p.display().to_string()),
+        summary_text,
+    };
+    out.report()?;
+    Ok(out)
 }
 
 pub fn run(args: SetupArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
     let cfg = &loaded.config;
-    let catalog = &loaded.catalog;
-
-    for a in &args.apps {
-        anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
-    }
-
     let forge = devkit_common::forge::resolve(&cfg.forge, &cfg.github, &start, None);
     let resolved =
         devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start), &forge.repos);
+    setup(&args, cfg, &loaded.catalog, &resolved).map(drop)
+}
+
+/// `issue setup` against an already loaded config and resolved tracker,
+/// returning what it reported.
+fn setup(
+    args: &SetupArgs,
+    cfg: &devkit_config::Config,
+    catalog: &HashMap<String, devkit_ports::apps::App>,
+    resolved: &Resolved,
+) -> Result<Prepared> {
+    let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
+    for a in &args.apps {
+        anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
+    }
     let t = resolved.tracker.as_ref();
     let issue_ref = args
         .issue
         .as_deref()
-        .map(|i| parse_input(&resolved, i))
+        .map(|i| parse_input(resolved, i))
         .transpose()?;
     anyhow::ensure!(
         issue_ref.is_some() || !args.summary,
@@ -653,7 +728,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let issue = issue_ref.as_ref().map(|r| r.id.clone()).unwrap_or_default();
     let vars = &cfg.templates.defaults();
     let budget = branch_budget(cfg, vars, &issue, &args.apps)?;
-    let details = (issue_ref.is_some() && want_summary(&args, cfg))
+    let details = (issue_ref.is_some() && want_summary(args, cfg))
         .then(|| fetch_details(t, &issue))
         .transpose()?;
     let slug = resolve_slug(
@@ -664,7 +739,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         details.as_ref(),
     )?;
     if args.here {
-        return bind_here(&args, cfg, &start, t, &issue, slug, details);
+        return bind_here(args, cfg, &start, t, &issue, slug, details);
     }
     let dir_slug = short_slug(cfg, vars, &issue, &args.apps, &slug)?;
 
@@ -688,23 +763,23 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let worktree = wt_root.join(&wt_name);
     let holder = worktree.to_string_lossy().into_owned();
 
-    let summary_path = details
-        .as_ref()
-        .map(|d| crate::issue::summary::plan_path(cfg, d, &holder, &branch, &slug, &args.apps))
-        .transpose()?;
-
     if args.dry_run {
-        let out = Prepared {
+        let out = dry_run_report(args, cfg, t, details.as_ref(), Planned {
             issue: issue_ref.map(|r| r.id),
             worktree: holder,
             branch,
-            summary: summary_path.map(|p| p.display().to_string()),
-        };
-        out.report()?;
+            slug: &slug,
+            apps: &args.apps,
+        })?;
         eprintln!("(dry-run: no worktree created)");
-        return Ok(());
+        return Ok(out);
     }
 
+    // Resolved before anything is created, so a summary path that cannot be
+    // rendered fails while there is no worktree to clean up.
+    if let Some(d) = &details {
+        crate::issue::summary::plan_path(cfg, d, &holder, &branch, &slug, &args.apps)?;
+    }
     anyhow::ensure!(
         !worktree.exists(),
         "worktree path already exists: {}",
@@ -712,11 +787,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     );
     let tracker_summary = details
         .is_some()
-        .then(|| {
-            Steps::new()
-                .during_result("Reading the issue summary\u{2026}", || t.summary(&issue))
-                .with_context(|| format!("fetching the summary for {issue}"))
-        })
+        .then(|| read_tracker_summary(t, &issue))
         .transpose()?
         .flatten();
     let primary = devkit_common::vcs::primary_checkout(Path::new(&start))?;
@@ -818,6 +889,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         worktree: holder,
         branch,
         summary: summary_path,
+        summary_text: None,
     };
     // The worktree, its record, its includes and its apps are all in place by
     // now, so the table is not a premature claim. `suspend` hides the live bars
@@ -841,7 +913,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
             &issue,
         );
     }
-    Ok(())
+    Ok(out)
 }
 
 /// Add devkit's ignore patterns to the global excludes file. Reported on
@@ -1030,6 +1102,187 @@ mod tests {
             branch_budget(&cfg, &novars(), "142", &[]).unwrap(),
             MIN_SLUG
         );
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        devkit_git::Git::fixture(dir)
+            .args(args.iter().copied())
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?}: {e:#}"))
+    }
+
+    /// Every path under `dir`, so a test can tell that a run created nothing.
+    fn tree(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(tree(&path));
+            }
+            out.push(path);
+        }
+        out.sort();
+        out
+    }
+
+    /// A primary checkout at `app/` on `main`, pushed to a bare `origin.git`,
+    /// with worktrees placed under `wts/` beside them.
+    struct Project {
+        root: tempfile::TempDir,
+        cfg: devkit_config::Config,
+    }
+
+    impl Project {
+        fn new() -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let origin = root.path().join("origin.git");
+            let app = root.path().join("app");
+            std::fs::create_dir_all(&origin).unwrap();
+            std::fs::create_dir_all(&app).unwrap();
+            git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+            git(&app, &["init", "-q", "-b", "main"]);
+            std::fs::write(app.join("f.txt"), "x\n").unwrap();
+            git(&app, &["add", "-A"]);
+            git(&app, &["commit", "-qm", "init"]);
+            git(&app, &["remote", "add", "origin", origin.to_str().unwrap()]);
+            git(&app, &["push", "-q", "origin", "main"]);
+            let mut cfg = devkit_config::Config::default();
+            cfg.defaults.worktree_root = root.path().join("wts").display().to_string();
+            cfg.defaults.branch_prefix = "x/".into();
+            cfg.defaults.baseline_ref = "origin/main".into();
+            Self { root, cfg }
+        }
+
+        fn app(&self) -> std::path::PathBuf {
+            self.root.path().join("app")
+        }
+
+        fn args(&self, issue: &str, summary: bool, dry_run: bool) -> SetupArgs {
+            SetupArgs {
+                issue: Some(issue.into()),
+                slug: None,
+                apps: vec![],
+                dry_run,
+                summary,
+                no_summary: false,
+                no_gitignore: true,
+                here: false,
+                dir: Some(self.app().display().to_string()),
+                config: None,
+            }
+        }
+
+        fn setup(&self, args: &SetupArgs, tracker: fake::FakeTracker) -> Prepared {
+            let resolved = Resolved {
+                tracker: Box::new(tracker),
+                declared: true,
+                reason: "test".into(),
+            };
+            setup(args, &self.cfg, &HashMap::new(), &resolved).unwrap()
+        }
+    }
+
+    fn eng_7() -> IssueDetails {
+        IssueDetails {
+            id: "ENG-7".into(),
+            title: "Fix the export crash".into(),
+            url: "https://linear.app/acme/issue/ENG-7/fix-the-export-crash".into(),
+            description: "Exporting a CSV panics.".into(),
+            state: "Todo".into(),
+            labels: vec!["export".into()],
+            ..IssueDetails::default()
+        }
+    }
+
+    fn linear() -> fake::FakeTracker {
+        fake::FakeTracker::new()
+            .with_title("ENG-7", "Fix the export crash")
+            .with_details(eng_7())
+    }
+
+    /// A launcher dispatching a Linear issue takes the handoff text from a dry
+    /// run, so it has to be the file a real `--summary` run writes, and the dry
+    /// run must leave no worktree, branch or file behind.
+    #[test]
+    fn a_dry_run_summary_is_the_text_a_real_setup_writes() {
+        let p = Project::new();
+        let branches = git(&p.app(), &["branch", "--format=%(refname:short)"]);
+        let before = tree(p.root.path());
+
+        let dry = p.setup(&p.args("ENG-7", true, true), linear());
+
+        let json = serde_json::to_value(&dry).unwrap();
+        let text = json["summary_text"]
+            .as_str()
+            .expect("summary_text in the JSON");
+        assert!(
+            text.starts_with("# ENG-7: Fix the export crash\n"),
+            "{text}"
+        );
+        assert_eq!(tree(p.root.path()), before, "the dry run created a file");
+        assert_eq!(
+            git(&p.app(), &["branch", "--format=%(refname:short)"]),
+            branches,
+            "the dry run created a branch"
+        );
+
+        let real = p.setup(&p.args("ENG-7", true, false), linear());
+
+        assert_eq!(real.summary, dry.summary);
+        let written = std::fs::read_to_string(real.summary.as_deref().unwrap()).unwrap();
+        assert_eq!(text, written);
+    }
+
+    /// A tracker that keeps its own summary has it written verbatim, so the
+    /// dry run reports that text rather than the rendered template.
+    #[test]
+    fn a_dry_run_summary_carries_the_trackers_own_summary() {
+        let p = Project::new();
+        let tracker = || linear().with_summary("ENG-7", "## Plan\n\nFix it.\n");
+
+        let dry = p.setup(&p.args("ENG-7", true, true), tracker());
+        let real = p.setup(&p.args("ENG-7", true, false), tracker());
+
+        assert_eq!(dry.summary_text.as_deref(), Some("## Plan\n\nFix it.\n"));
+        let written = std::fs::read_to_string(real.summary.as_deref().unwrap()).unwrap();
+        assert_eq!(dry.summary_text.unwrap(), written);
+    }
+
+    /// `--here` reports the same summary text on a dry run as it writes.
+    #[test]
+    fn a_dry_run_here_summary_is_the_text_setup_here_writes() {
+        let p = Project::new();
+        git(&p.app(), &["checkout", "-q", "-b", "feature"]);
+        let here = |dry_run| SetupArgs {
+            here: true,
+            ..p.args("ENG-7", true, dry_run)
+        };
+
+        let dry = p.setup(&here(true), linear());
+        assert!(
+            devkit_common::record::read(&p.app()).is_none(),
+            "the dry run bound the checkout"
+        );
+        let real = p.setup(&here(false), linear());
+
+        let written = std::fs::read_to_string(real.summary.as_deref().unwrap()).unwrap();
+        assert_eq!(dry.summary_text.expect("summary_text"), written);
+    }
+
+    /// Without `--summary` a dry run asks the tracker only for the title its
+    /// slug needs, and reports no summary text.
+    #[test]
+    fn a_dry_run_without_summary_reads_no_more_of_the_tracker() {
+        let p = Project::new();
+        let tracker = linear();
+        let calls = tracker.calls();
+
+        let dry = p.setup(&p.args("ENG-7", false, true), tracker);
+
+        let json = serde_json::to_value(&dry).unwrap();
+        assert!(json.get("summary_text").is_none(), "{json}");
+        assert!(json.get("summary").is_none(), "{json}");
+        assert_eq!(*calls.lock().unwrap(), vec!["title ENG-7".to_string()]);
     }
 
     fn ctx() -> serde_json::Value {

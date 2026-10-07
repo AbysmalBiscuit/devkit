@@ -2,7 +2,10 @@
 //! whole gather path — discovery, state attachment, finished verdict — with no
 //! network and no credentials.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Result;
 
@@ -24,6 +27,10 @@ pub struct FakeTracker {
     prs: HashMap<String, PrRef>,
     assigned: Vec<AssignedIssue>,
     timeline_origin: Option<String>,
+    details: HashMap<String, IssueDetails>,
+    summaries: HashMap<String, String>,
+    /// Every `title`, `details` and `summary` call, as `method id`.
+    calls: Arc<Mutex<Vec<String>>>,
 }
 
 impl FakeTracker {
@@ -39,6 +46,9 @@ impl FakeTracker {
             prs: HashMap::new(),
             assigned: Vec::new(),
             timeline_origin: None,
+            details: HashMap::new(),
+            summaries: HashMap::new(),
+            calls: Arc::default(),
         }
     }
 
@@ -99,6 +109,28 @@ impl FakeTracker {
         self
     }
 
+    /// `details(d.id)` answers with `d`.
+    pub fn with_details(mut self, d: IssueDetails) -> Self {
+        self.details.insert(d.id.clone(), d);
+        self
+    }
+
+    /// `summary(id)` answers with this text.
+    pub fn with_summary(mut self, id: &str, text: &str) -> Self {
+        self.summaries.insert(id.to_string(), text.to_string());
+        self
+    }
+
+    /// The log of every `title`, `details` and `summary` call, as
+    /// `method id`. The handle stays readable once the tracker is boxed.
+    pub fn calls(&self) -> Arc<Mutex<Vec<String>>> {
+        Arc::clone(&self.calls)
+    }
+
+    fn record(&self, method: &str, id: &str) {
+        self.calls.lock().unwrap().push(format!("{method} {id}"));
+    }
+
     /// `timeline_origin` answers with this timestamp.
     pub fn with_timeline_origin(mut self, ts: &str) -> Self {
         self.timeline_origin = Some(ts.to_string());
@@ -134,14 +166,21 @@ impl Tracker for FakeTracker {
     }
 
     fn title(&self, id: &str) -> Result<Option<String>> {
+        self.record("title", id);
         if let Some(t) = self.titles.get(id) {
             return Ok(Some(t.clone()));
         }
         Ok(self.states.get(id).map(|s| s.name.clone()))
     }
 
-    fn details(&self, _id: &str) -> Result<Option<IssueDetails>> {
-        Ok(None)
+    fn details(&self, id: &str) -> Result<Option<IssueDetails>> {
+        self.record("details", id);
+        Ok(self.details.get(id).cloned())
+    }
+
+    fn summary(&self, id: &str) -> Result<Option<String>> {
+        self.record("summary", id);
+        Ok(self.summaries.get(id).cloned())
     }
 
     fn states(&self, ids: &[String]) -> HashMap<String, State> {

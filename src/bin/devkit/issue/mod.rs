@@ -99,7 +99,9 @@ pub(crate) enum Cmd {
         /// (a GitHub issue's body) verbatim, else the tracker facts and
         /// description as a markdown scaffold. Needs the tracker's credential,
         /// and never overwrites a summary that is already there. Set
-        /// `defaults.issue_summary = true` to make this the default.
+        /// `defaults.issue_summary = true` to make this the default. With
+        /// --dry-run, writes nothing and prints the text the file would get
+        /// as `summary_text` instead.
         #[arg(short = 's', long)]
         summary: bool,
         /// Skip the issue summary file for this run, whatever
@@ -107,7 +109,8 @@ pub(crate) enum Cmd {
         #[arg(long = "no-summary", conflicts_with = "summary")]
         no_summary: bool,
         /// Print the resolved issue, worktree, and branch as JSON without
-        /// creating anything.
+        /// creating anything. With --summary, also the summary file's path
+        /// and its text as `summary_text`.
         #[arg(long)]
         dry_run: bool,
         /// Leave the global gitignore alone instead of adding devkit's
