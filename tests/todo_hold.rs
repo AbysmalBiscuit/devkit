@@ -565,6 +565,8 @@ fn todo_hold_prints_the_mode_and_where_it_came_from() {
     assert_eq!(todo_hold(&p, &[], &env), "always (this session)\n");
     let p = always();
     assert_eq!(todo_hold(&p, &[], &IN_S), "always ([todo] hold_stop)\n");
+    let p = Proj::with_home_config("[todo]\nhold_stop = \"subagents\"\n");
+    assert_eq!(todo_hold(&p, &[], &IN_S), "subagents ([todo] hold_stop)\n");
 }
 
 #[test]

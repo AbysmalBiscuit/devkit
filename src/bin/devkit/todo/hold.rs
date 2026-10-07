@@ -1,11 +1,13 @@
 //! Whose stop the todo hold refuses: the mode a session set with
 //! `devkit todo hold`, over [`HOLD_VAR`], over `[todo] hold_stop`.
 
-use std::fmt;
+use std::{fmt, path::Path};
 
 use anyhow::{Result, bail};
 use devkit_config::{HoldStop, TodoConfig};
 use devkit_todo::{Holder, hold::mode_path, node};
+
+use super::store::Store;
 
 /// Overrides `[todo] hold_stop`, so an unattended launcher can hold every
 /// agent while the project's own config still loads.
@@ -41,8 +43,10 @@ fn session_mode(session: &Holder) -> Option<HoldStop> {
 }
 
 /// The hold mode in effect for `session`: its own mode, else `env` (the
-/// value of [`HOLD_VAR`]), else `config`. An unknown `env` value is an error
-/// naming the variable and the accepted spellings.
+/// value of [`HOLD_VAR`]), else `config`, else the default. A loaded config
+/// reports [`HoldSource::Config`] even when no layer set `hold_stop`; only
+/// the config's provenance can tell those apart. An unknown `env` value is an
+/// error naming the variable and the accepted spellings.
 pub(crate) fn effective(
     session: Option<&Holder>,
     env: Option<&str>,
@@ -60,15 +64,30 @@ pub(crate) fn effective(
         };
         return Ok((mode, HoldSource::Env));
     }
-    Ok(match config.map(|c| c.hold_stop) {
-        Some(mode) if mode != HoldStop::default() => (mode, HoldSource::Config),
-        _ => (HoldStop::default(), HoldSource::Default),
+    Ok(match config {
+        Some(config) => (config.hold_stop, HoldSource::Config),
+        None => (HoldStop::default(), HoldSource::Default),
     })
+}
+
+/// The todo config a CLI call in `cwd` reads, kept only when a layer sets
+/// `[todo] hold_stop`, so an unset key reports as the default. A config that
+/// fails to load is an error.
+fn declared_config(cwd: &Path) -> Result<Option<TodoConfig>> {
+    Ok(
+        Store::cli_config_with_provenance(cwd)?.and_then(|(config, provenance)| {
+            provenance
+                .origin
+                .contains_key("todo.hold_stop")
+                .then_some(config)
+        }),
+    )
 }
 
 /// `devkit todo hold`: sets `mode` for the calling session, or drops its
 /// mode with `clear`, then prints the mode in effect and where it came from.
-pub(crate) fn run(mode: Option<HoldStop>, clear: bool, config: Option<&TodoConfig>) -> Result<()> {
+pub(crate) fn run(mode: Option<HoldStop>, clear: bool, cwd: &Path) -> Result<()> {
+    let config = declared_config(cwd)?;
     let get = |key: &str| std::env::var(key).ok();
     let session = node::session_from_env(get).map(|s| Holder::new(s.id));
     if mode.is_some() || clear {
@@ -90,7 +109,7 @@ pub(crate) fn run(mode: Option<HoldStop>, clear: bool, config: Option<&TodoConfi
         }
     }
     let env = std::env::var(HOLD_VAR).ok();
-    let (mode, source) = effective(session.as_ref(), env.as_deref(), config)?;
+    let (mode, source) = effective(session.as_ref(), env.as_deref(), config.as_ref())?;
     println!("{mode} ({source})");
     Ok(())
 }

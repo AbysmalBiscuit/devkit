@@ -182,8 +182,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
         return Ok(());
     }
     if let TodoCommand::Hold { mode, clear } = cli.command {
-        let config = Store::cli_config(&std::env::current_dir()?)?;
-        return hold::run(mode, clear, config.as_ref());
+        return hold::run(mode, clear, &std::env::current_dir()?);
     }
     let caller = caller::caller();
     let get = |key: &str| std::env::var(key).ok();

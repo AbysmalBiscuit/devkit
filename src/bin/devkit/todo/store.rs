@@ -14,7 +14,7 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_config::{
-    NoConfig, PostgresConfig, TaskchampionConfig, TodoBackend, TodoConfig, expand_tilde,
+    NoConfig, PostgresConfig, Provenance, TaskchampionConfig, TodoBackend, TodoConfig, expand_tilde,
 };
 use devkit_todo::{
     TodoStore,
@@ -423,8 +423,15 @@ impl Store {
     /// The config a CLI call in `cwd` reads: `None` when there is none
     /// anywhere, as in a cloud session.
     pub(crate) fn cli_config(cwd: &Path) -> Result<Option<TodoConfig>> {
+        Ok(Self::cli_config_with_provenance(cwd)?.map(|(config, _)| config))
+    }
+
+    /// [`Self::cli_config`] with the provenance of the resolved layers.
+    pub(crate) fn cli_config_with_provenance(
+        cwd: &Path,
+    ) -> Result<Option<(TodoConfig, Provenance)>> {
         match devkit_common::config::resolve(None, cwd) {
-            Ok((config, _)) => Ok(Some(config.todo)),
+            Ok((config, provenance)) => Ok(Some((config.todo, provenance))),
             Err(e) if e.downcast_ref::<NoConfig>().is_some() => Ok(None),
             Err(e) => Err(e),
         }
