@@ -984,8 +984,8 @@ mod tests {
         assert_eq!(d.assignee, "");
     }
 
-    /// The issues endpoint serves a pull request under the same number, which
-    /// the GraphQL `issue` field reported as absent.
+    /// The issues endpoint serves a pull request under the same number; it is
+    /// no issue.
     #[test]
     fn a_pull_request_from_the_issues_endpoint_is_no_issue() {
         let v = serde_json::json!({
