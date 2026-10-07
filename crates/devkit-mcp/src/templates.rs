@@ -89,6 +89,10 @@ struct RenderArgs {
     name: String,
     #[serde(default)]
     args: BTreeMap<String, String>,
+    subject: Option<String>,
+    body: Option<String>,
+    #[serde(default)]
+    coauthor: Vec<String>,
 }
 
 fn render_schema() -> Value {
@@ -96,7 +100,10 @@ fn render_schema() -> Value {
         "type": "object",
         "properties": {
             "name": { "type": "string", "description": "Template name from templates.list." },
-            "args": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Values for the names the template reads, over their [templates.variables] defaults." }
+            "args": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Values for the names the template reads, over their [templates.variables] defaults. Not the commit_message parts, which take their own parameters." },
+            "subject": { "type": "string", "description": "commit_message only: the subject line, as `devkit commit --subject`." },
+            "body": { "type": "string", "description": "commit_message only: the body, as `devkit commit --body`." },
+            "coauthor": { "type": "array", "items": { "type": "string" }, "description": "commit_message only: co-authors, `Name <email>`, one `Co-authored-by` trailer each, as `devkit commit --coauthor`." }
         },
         "required": ["name"],
         "additionalProperties": false
@@ -110,7 +117,14 @@ fn render(ctx: &ServerCtx, args: Value) -> Result<Value> {
         &loaded(ctx)?.config,
         start(ctx),
         &a.name,
-        None,
+        (
+            &templates::CommitMessage {
+                subject: a.subject.as_deref(),
+                body: a.body.as_deref(),
+                coauthors: &a.coauthor,
+            },
+            templates::PartNames::Params,
+        ),
         &a.args,
         devkit_common::caller::caller(),
     )?;

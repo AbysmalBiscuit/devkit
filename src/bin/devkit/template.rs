@@ -127,7 +127,7 @@ pub fn run(cli: TemplateCli) -> Result<()> {
                 cfg,
                 Path::new(start),
                 &name,
-                Some(&message.parts()),
+                (&message.parts(), templates::PartNames::Flags),
                 &vars.parse()?,
                 caller,
             )?;

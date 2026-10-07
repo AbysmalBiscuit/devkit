@@ -531,3 +531,93 @@ fn templates_render_matches_the_cli() {
         "{missing}"
     );
 }
+
+#[test]
+fn templates_render_takes_the_commit_message_parts_as_their_own_parameters() {
+    let proj = project_with_config();
+    let state = tempfile::tempdir().unwrap();
+    let resps = mcp(proj.path(), state.path(), &[
+        call_req(
+            1,
+            "templates.render",
+            json!({
+                "name": "commit_message",
+                "subject": "fix: a",
+                "body": "Why.",
+                "coauthor": ["A <a@example.invalid>", "B <b@example.invalid>"],
+            }),
+        ),
+        call_req(
+            2,
+            "templates.render",
+            json!({ "name": "commit_message", "args": { "subject": "fix: a" } }),
+        ),
+        call_req(
+            3,
+            "templates.render",
+            json!({ "name": "branch", "subject": "fix: a", "args": { "issue": "1", "slug": "s" } }),
+        ),
+        call_req(4, "templates.render", json!({ "name": "commit_message" })),
+        call_req(5, "templates.show", json!({ "name": "commit_message" })),
+    ]);
+
+    let cli = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .current_dir(proj.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("HOME", state.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .args([
+            "template",
+            "render",
+            "commit_message",
+            "--subject",
+            "fix: a",
+            "--body",
+            "Why.",
+            "--coauthor",
+            "A <a@example.invalid>",
+            "--coauthor",
+            "B <b@example.invalid>",
+        ])
+        .output()
+        .unwrap();
+    assert!(cli.status.success(), "{cli:?}");
+    let rendered = tool_json(&resps[0], false);
+    assert_eq!(
+        rendered["text"].as_str().unwrap(),
+        String::from_utf8(cli.stdout).unwrap()
+    );
+    assert_eq!(
+        rendered["text"],
+        "fix: a\n\nWhy.\n\n\
+         Co-authored-by: A <a@example.invalid>\n\
+         Co-authored-by: B <b@example.invalid>"
+    );
+
+    let in_args = tool_json(&resps[1], true);
+    assert!(
+        in_args.as_str().unwrap().contains("parameter `subject`"),
+        "{in_args}"
+    );
+    let elsewhere = tool_json(&resps[2], true);
+    assert!(
+        elsewhere
+            .as_str()
+            .unwrap()
+            .contains("only template `commit_message`"),
+        "{elsewhere}"
+    );
+    let missing = tool_json(&resps[3], true);
+    assert!(
+        missing.as_str().unwrap().contains("parameter `subject`"),
+        "{missing}"
+    );
+    let show = tool_json(&resps[4], false);
+    let names: Vec<&str> = show["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["--body", "--coauthor", "--subject"], "{show}");
+}
