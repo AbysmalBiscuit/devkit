@@ -85,7 +85,7 @@ pub fn run(cli: CommitCli) -> Result<()> {
 
 /// The hidden verb a commit hook wrapper runs; exits with the hook's status.
 pub fn run_hook(state: &Path, hook: &str, args: &[String]) -> Result<()> {
-    let code = devkit_git::run_commit_hook(state, hook, args).unwrap_or_else(|e| {
+    let code = devkit_common::vcs::run_commit_hook(state, hook, args).unwrap_or_else(|e| {
         eprintln!("devkit commit: {e:#}");
         1
     });

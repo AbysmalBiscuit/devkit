@@ -103,7 +103,7 @@ enum Cmd {
     #[command(display_name = "devkit commit")]
     Commit(commit::CommitCli),
     /// Run a repository hook during `devkit commit` and check its commit.
-    #[command(name = devkit_git::COMMIT_HOOK_VERB, hide = true)]
+    #[command(name = devkit_common::vcs::COMMIT_HOOK_VERB, hide = true)]
     CommitHook {
         state: PathBuf,
         hook: String,
