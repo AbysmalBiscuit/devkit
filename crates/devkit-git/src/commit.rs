@@ -525,11 +525,7 @@ fn check_merge_drivers(
             driver
         };
         let custom = Git::at(top)
-            .args([
-                "config",
-                "--get-regexp",
-                &format!("^merge\\.{}\\.", regex_escape(&driver)),
-            ])
+            .args(["config", "--get", &format!("merge.{driver}.driver")])
             .success()?;
         ensure!(
             matches!(driver.as_str(), "text" | "binary") && !custom,
@@ -537,15 +533,6 @@ fn check_merge_drivers(
         );
     }
     Ok(())
-}
-
-fn regex_escape(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| {
-            let escape = "\\.^$|?*+()[]{}".contains(c);
-            escape.then_some('\\').into_iter().chain([c])
-        })
-        .collect()
 }
 
 /// A path as a shell script and git config read it: forward slashes, which

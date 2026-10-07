@@ -350,6 +350,34 @@ fn a_patch_overlapping_staged_hunks_is_refused_with_head_and_index_unchanged() {
     assert!(!dir.join(".git/index.lock").exists());
 }
 
+#[test]
+fn a_patch_sharing_a_path_with_staging_under_a_custom_merge_driver_is_refused() {
+    let repo = repo();
+    let dir = repo.path();
+    std::fs::write(dir.join(".gitattributes"), "a.txt merge=mine\n").unwrap();
+    git(dir, &["config", "merge.mine.driver", "true"]);
+    let patch = patch_a_line_1(dir);
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[5])).unwrap();
+    git(dir, &["add", "a.txt"]);
+    let before = head(dir);
+
+    let out = commit(dir, &[
+        "--patch",
+        patch.to_str().unwrap(),
+        "--subject",
+        "fix: line 1",
+    ]);
+
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("merge driver `mine`"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(head(dir), before);
+    assert_eq!(git(dir, &["show", ":a.txt"]), lines("a.txt", &[5]));
+}
+
 #[cfg(unix)]
 #[test]
 fn a_hook_that_changes_the_committed_tree_makes_patch_refuse() {
