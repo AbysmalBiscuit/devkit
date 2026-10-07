@@ -266,8 +266,9 @@ pub fn closes(body: &str, pr_repo: &str, slug: &str, host: &str, number: u64) ->
     })
 }
 
-/// The PRs an issue's REST timeline links to it: each `connected` PR, and
-/// each `cross-referenced` PR whose body closes issue `number` of `slug`.
+/// The PRs an issue's REST timeline links to it: each `cross-referenced` PR
+/// whose body closes issue `number` of `slug`. A `connected` event names no
+/// PR, so a PR linked only through the Development sidebar is not found.
 pub fn parse_closing_prs(
     events: &[serde_json::Value],
     slug: &str,
@@ -277,23 +278,19 @@ pub fn parse_closing_prs(
     events
         .iter()
         .filter_map(|e| {
-            let connected = match e["event"].as_str()? {
-                "connected" => true,
-                "cross-referenced" => false,
-                _ => return None,
-            };
+            if e["event"].as_str()? != "cross-referenced" {
+                return None;
+            }
             let source = &e["source"]["issue"];
             let pr = source.get("pull_request")?;
             let repo = source["repository"]["full_name"].as_str()?;
-            if !connected
-                && !closes(
-                    source["body"].as_str().unwrap_or(""),
-                    repo,
-                    slug,
-                    host,
-                    number,
-                )
-            {
+            if !closes(
+                source["body"].as_str().unwrap_or(""),
+                repo,
+                slug,
+                host,
+                number,
+            ) {
                 return None;
             }
             let state = if pr["merged_at"].is_string() {
@@ -1392,6 +1389,32 @@ mod tests {
         assert!(!closes("fixes #30", "o/r"));
         assert!(!closes("see #3", "o/r"));
         assert!(!closes("prefixes #3", "o/r"));
+    }
+
+    #[test]
+    fn the_timeline_links_only_prs_whose_body_closes_the_issue() {
+        let reference = |number: u64, body: &str| {
+            serde_json::json!({
+                "event": "cross-referenced",
+                "source": { "type": "issue", "issue": {
+                    "number": number,
+                    "state": "open",
+                    "body": body,
+                    "html_url": format!("https://github.com/o/r/pull/{number}"),
+                    "pull_request": { "merged_at": null },
+                    "repository": { "full_name": "o/r" },
+                }},
+            })
+        };
+        let events = [
+            reference(7, "Fixes #3"),
+            reference(8, "see #3"),
+            serde_json::json!({ "event": "connected", "actor": { "login": "me" } }),
+        ];
+        let prs = parse_closing_prs(&events, "o/r", "github.com", 3);
+        let numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+        assert_eq!(numbers, [7]);
+        assert_eq!(prs[0].state, "OPEN");
     }
 
     #[test]

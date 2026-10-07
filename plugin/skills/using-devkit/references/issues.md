@@ -68,7 +68,7 @@ A bare `3340` is probed against both the PRs and the tracker's issues. A real co
 
 The optional second positional overrides the worktree path (default: `templates.checkout_worktree_dir`, e.g. `3340-fix-login`). The PR's own branch name is kept. `--setup` also runs the per-app setup commands; `--apps a,b` narrows which apps that covers. The worktree gets a `.devkit/issue.toml` record so `issue status` and `issue end` recognise it, and `after_worktree_create` fires with or without `--setup`. Prints `pr`, `worktree`, and `branch`: JSON to a pipe, a table to a terminal.
 
-Where GitHub refuses GraphQL, as in a Claude Code cloud session, the PR's head is fetched from `origin` as `refs/pull/<n>/head` instead of through `gh pr checkout`, and its branch gets no upstream, so pushing to a fork's branch needs that remote added by hand.
+Where GitHub refuses GraphQL, as in a Claude Code cloud session, the PR's head is fetched from `origin` as `refs/pull/<n>/head` instead of through `gh pr checkout`, and its branch gets no upstream, so pushing to a fork's branch needs that remote added by hand. An issue id finds only a PR whose description closes the issue (`Closes`, `Fixes` or `Resolves`), not one linked only through the issue's Development sidebar.
 
 ## `pr create` and `pr ready` — open the PR
 
