@@ -525,12 +525,8 @@ fn bind_here(
     let vcs = Vcs::at(&root);
     let branch = vcs.branch(&root)?;
     refuse_default_branch(cfg, &vcs, &root, &branch)?;
-    let refuse_bound = |bound: &str| {
-        anyhow::anyhow!(
-            "{} is already bound to issue `{bound}`",
-            root.display()
-        )
-    };
+    let refuse_bound =
+        |bound: &str| anyhow::anyhow!("{} is already bound to issue `{bound}`", root.display());
     if let Some(bound) = devkit_common::record::read(&root)
         && bound.issue != issue
     {
@@ -598,6 +594,7 @@ fn bind_here(
             events: Some(vec![]),
             ..Default::default()
         });
+        rec.slug = slug.clone();
         rec.branch = Some(branch.clone());
         if summary.is_some() {
             rec.summary = summary.clone();

@@ -141,3 +141,16 @@ fn setup_here_refuses_a_checkout_bound_to_another_issue() {
     let record = devkit_common::record::read(fake.project()).expect("an issue record");
     assert_eq!(record.issue, "7");
 }
+
+#[test]
+fn setup_here_again_refreshes_the_slug() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    let first = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+    assert!(first.status.success(), "{}", stderr(&first));
+
+    let again = fake.issue(&["setup", "--here", "7", "--slug", "repair", "--no-gitignore"]);
+
+    assert!(again.status.success(), "{}", stderr(&again));
+    let record = devkit_common::record::read(fake.project()).expect("an issue record");
+    assert_eq!(record.slug, "repair");
+}
