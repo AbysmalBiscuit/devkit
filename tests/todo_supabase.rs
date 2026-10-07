@@ -26,6 +26,11 @@ const KEY_VAR: &str = "DEVKIT_TODO_SUPABASE_KEY";
 /// The time a hook gets: the lock budget every hook keeps to.
 const HOOK_BUDGET: Duration = Duration::from_secs(2);
 
+/// The longest a session's end may take against a slow API: the binary's
+/// `SESSION_END_DATABASE_BUDGET` for its todo database work, plus a debug
+/// build's process start on a loaded CI runner.
+const SESSION_END_BOUND: Duration = Duration::from_millis(1500 + 1000);
+
 /// A todo root no other test shares.
 fn fresh_root() -> String {
     let nanos = SystemTime::now()
@@ -269,22 +274,20 @@ fn end_session(url: &str) -> Duration {
 }
 
 /// An API that answers each request a little inside a hook's wait for one,
-/// and all of a session's end's requests together past its budget: the
-/// release and the activity records go out in order, and the hook finishes
-/// within its time.
+/// but two of them together past a session's end's budget: the release goes
+/// out first, the activity record after it runs out of time, and nothing
+/// follows.
 #[test]
 fn a_session_end_against_a_slow_api_finishes_inside_its_budget() {
-    let api = Recorder::delayed(NO_ROWS, Duration::from_millis(700));
+    let api = Recorder::delayed(NO_ROWS, Duration::from_millis(800));
     let took = end_session(&api.url);
-    assert!(took < HOOK_BUDGET, "session-end took {took:?}");
-    let paths = paths(&api.heads());
+    assert!(took < SESSION_END_BOUND, "session-end took {took:?}");
     assert_eq!(
-        paths[..2],
+        paths(&api.heads()),
         [
             "/rest/v1/rpc/todo_release_all",
             "/rest/v1/rpc/activity_record"
-        ],
-        "{paths:?}"
+        ]
     );
 }
 
@@ -294,7 +297,7 @@ fn a_session_end_against_a_slow_api_finishes_inside_its_budget() {
 fn a_session_end_against_a_stalled_api_waits_once() {
     let api = Recorder::delayed(NO_ROWS, Duration::from_secs(10));
     let took = end_session(&api.url);
-    assert!(took < HOOK_BUDGET, "session-end took {took:?}");
+    assert!(took < SESSION_END_BOUND, "session-end took {took:?}");
     assert_eq!(
         paths(&api.heads()),
         ["/rest/v1/rpc/todo_release_all"],
