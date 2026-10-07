@@ -454,13 +454,24 @@ pub fn worktree_root(cfg: &devkit_config::Config) -> Result<std::path::PathBuf> 
 }
 
 /// `rev` as the local branch it names: `origin/main` and
-/// `refs/remotes/origin/main` are both `main`.
-fn local_branch(rev: &str) -> &str {
+/// `refs/remotes/origin/main` are both `main`, and so is `upstream/main` when
+/// `upstream` is a remote of the checkout at `root`.
+fn local_branch<'a>(vcs: &Vcs, root: &Path, rev: &'a str) -> &'a str {
     let rev = rev
         .strip_prefix("refs/remotes/")
         .or_else(|| rev.strip_prefix("refs/heads/"))
         .unwrap_or(rev);
-    rev.strip_prefix("origin/").unwrap_or(rev)
+    match rev.split_once('/') {
+        Some((remote, branch))
+            if remote == "origin"
+                || vcs
+                    .remote_url(root, remote)
+                    .is_ok_and(|url| !url.is_empty()) =>
+        {
+            branch
+        }
+        _ => rev,
+    }
 }
 
 /// Refuse to bind `branch` when it is the repository's default branch, which
@@ -483,7 +494,7 @@ fn refuse_default_branch(
     ]
     .into_iter()
     .flatten()
-    .map(|r| local_branch(&r).to_string())
+    .map(|r| local_branch(vcs, root, &r).to_string())
     .collect();
     anyhow::ensure!(
         !defaults.is_empty(),

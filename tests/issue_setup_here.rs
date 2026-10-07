@@ -101,15 +101,29 @@ fn setup_here_writes_the_summary_when_graphql_is_refused() {
 
 #[test]
 fn setup_here_refuses_the_default_branch_by_name() {
-    let fake = ghfake::Fake::without_pr(CONFIG);
-    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+    for baseline_ref in ["origin/main", "upstream/main"] {
+        let fake = ghfake::Fake::without_pr(CONFIG);
+        let config = fake.project().join("devkit.toml");
+        let toml = std::fs::read_to_string(&config).unwrap().replace(
+            r#"baseline_ref = "origin/main""#,
+            &format!(r#"baseline_ref = "{baseline_ref}""#),
+        );
+        std::fs::write(&config, toml).unwrap();
+        git(fake.project(), &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/o/r.git",
+        ]);
+        git(fake.project(), &["checkout", "-q", "-b", "main"]);
 
-    let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+        let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
 
-    let stderr = stderr(&out);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("`main`"), "{stderr}");
-    assert!(devkit_common::record::read(fake.project()).is_none());
+        let stderr = stderr(&out);
+        assert_eq!(out.status.code(), Some(1), "{baseline_ref}: {stderr}");
+        assert!(stderr.contains("`main`"), "{baseline_ref}: {stderr}");
+        assert!(devkit_common::record::read(fake.project()).is_none());
+    }
 }
 
 #[test]
