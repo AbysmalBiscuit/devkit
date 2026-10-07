@@ -101,10 +101,6 @@ absent = ["pullNumber"]
 title = "title"
 body = "body"
 
-[harness.commands.sudo]
-programs = ["sudo"]
-reason = "Never run sudo. devkit has no privileged path: name the command that needs root in your final report for the user to run."
-
 # Roles for the issue-manage workflow. Workers select their role with
 # `devkit todo role <name>` because they spawn as generic subagents.
 [todo.roles.manager]
