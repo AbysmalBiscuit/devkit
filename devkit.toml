@@ -108,49 +108,6 @@ run = ["bash", "evals/run.sh", "{{ eval_case }}"]
 description = "Grade isolated Claude agents on what they do with the plugin loaded (billed)"
 run = ["bash", "evals/scenario.sh", "{{ scenario }}"]
 
-# Git needs new paths in the index before a path-limited commit can name them.
-[tasks.commit]
-description = "Stage the given paths and commit them with a Conventional Commits message"
-steps = [{ task = "commit-stage" }, { task = "commit-write" }]
-
-[tasks.commit-stage]
-description = "Stage exactly the given paths, new files included"
-guard = false
-run = ["git", "--literal-pathspecs", "add", "--", { split = "{{ files }}", on = "," }]
-
-# The same pathspec at commit time excludes other sessions' staged changes.
-[tasks.commit-write]
-description = "Commit the selected paths while preserving unrelated staging"
-guard = false
-run = ["git", "--literal-pathspecs", "commit", "--only", "-m", '''
-{{- commit_subject | trim }}
-{%- if commit_body | trim %}
-
-{{ commit_body | trim }}
-{%- endif %}
-{%- if coauthors | trim(" ;") %}
-{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
-Co-authored-by: {{ c }}
-{%- endfor %}
-{%- endif %}
-''', "--", { split = "{{ files }}", on = "," }]
-
-[tasks.commit-amend]
-description = "Rewrite the last commit message while preserving staged changes"
-guard = false
-run = ["git", "commit", "--amend", "--only", "-m", '''
-{{- commit_subject | trim }}
-{%- if commit_body | trim %}
-
-{{ commit_body | trim }}
-{%- endif %}
-{%- if coauthors | trim(" ;") %}
-{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
-Co-authored-by: {{ c }}
-{%- endfor %}
-{%- endif %}
-''']
-
 [tasks.rebase-add]
 description = "Mark resolved rebase conflicts by staging the given paths"
 guard = false
@@ -245,10 +202,8 @@ issue_body = '''
 eval_case = "brief"
 scenario = "all"
 
-files = { required = "always", description = "Comma-separated paths to stage and commit, whitespace kept in each; paths other sessions staged stay staged" }
-commit_subject = { required = "always", description = "Conventional Commits subject: `type(scope): imperative summary`" }
-commit_body = { default = "", description = "Why the change is needed, when the subject does not say" }
-coauthors = { default = "", required = "agents", description = "`;`-separated `Name <email>` trailers. Claude Code: `<full model name, e.g. Claude Opus 5> <noreply@anthropic.com>`. Codex: `Codex <noreply@openai.com>`" }
+files = { required = "always", description = "Comma-separated paths to stage, whitespace kept in each" }
+coauthors = { default = "", required = "agents", description = "`Name <email>` of each `Co-authored-by` trailer, one `--coauthor` apiece. Claude Code: `<full model name, e.g. Claude Opus 5> <noreply@anthropic.com>`. Codex: `Codex <noreply@openai.com>`" }
 
 human_tldr = { default = "", description = "A human's summary, written after the PR opens; agents leave it unset" }
 proof = { default = "", required = "agents", description = "One unindented line per `Done when` item, starting with its number in the order the issue lists them (`1. test foo_refuses_gap`, `2. command X and its output`), or with no issue one line per claim the summary makes; a numbered line indented two columns or more answers nothing. Each numbered line gives the evidence that its item holds: the test that covers it, a command and its output, or a screenshot or video under `.devkit/proof/` referenced by that local path (`![after](./.devkit/proof/after.png)`, a video path alone on its line) and passed to `issue pr create --attach`" }
