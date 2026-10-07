@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use devkit::completions::Shell;
 
@@ -508,6 +508,33 @@ pub(crate) enum ReviewCmd {
 
 fn start(dir: &Option<String>) -> String {
     dir.clone().unwrap_or_else(|| ".".to_string())
+}
+
+/// Select the tracker for `issue <verb>`, a command that writes GitHub issues
+/// with `gh`, and refuse any other tracker by pointing at `issue render` and
+/// the tracker's MCP.
+fn github_only(
+    verb: &str,
+    start: &str,
+    config: Option<&str>,
+) -> Result<(devkit_common::tracker::Selected, devkit_config::Config)> {
+    let mut sel = devkit_common::tracker::select(config.map(Path::new), start, None);
+    let cfg = sel
+        .config
+        .take()
+        .with_context(|| format!("`issue {verb}` needs a loadable devkit.toml"))?;
+    let kind = cfg
+        .tracker
+        .kind
+        .unwrap_or_else(|| sel.tracker.tracker.kind());
+    if kind != devkit_config::TrackerKind::Github {
+        bail!(
+            "`issue {verb}` writes GitHub issues only, and this project's tracker is {}. \
+             Render the issue with `devkit issue render` and {verb} it through the tracker's MCP.",
+            kind.as_str()
+        );
+    }
+    Ok((sel, cfg))
 }
 
 pub fn run(cli: IssueCli) -> Result<()> {

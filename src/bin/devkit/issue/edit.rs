@@ -2,8 +2,7 @@
 //! existing GitHub issue. Other trackers edit issues through their MCP, gated
 //! by the pre-tool-use hook on `issue render`'s receipts.
 
-use anyhow::{Context, Result, bail};
-use devkit_config::TrackerKind;
+use anyhow::{Context, Result};
 
 use super::render::{self, Title};
 use crate::template::VarArgs;
@@ -19,23 +18,8 @@ pub(crate) struct EditArgs {
 
 pub(crate) fn run(args: EditArgs) -> Result<()> {
     let start = super::start(&args.dir);
-    let sel = devkit_common::tracker::select(
-        args.config.as_deref().map(std::path::Path::new),
-        &start,
-        None,
-    );
-    let cfg = sel
-        .config
-        .context("`issue edit` needs a loadable devkit.toml")?;
+    let (sel, cfg) = super::github_only("edit", &start, args.config.as_deref())?;
     let tracker = &sel.tracker.tracker;
-    let kind = cfg.tracker.kind.unwrap_or_else(|| tracker.kind());
-    if kind != TrackerKind::Github {
-        bail!(
-            "`issue edit` writes GitHub issues only, and this project's tracker is {}. \
-             Render the issue with `devkit issue render` and edit it through the tracker's MCP.",
-            kind.as_str()
-        );
-    }
     let repo = sel.forge.repos.issues()?;
     let id = tracker.issue_ref(&args.issue)?.id;
 

@@ -2,8 +2,7 @@
 //! issue. Other trackers create issues through their MCP, gated by the
 //! pre-tool-use hook on `issue render`'s receipts.
 
-use anyhow::{Context, Result, bail};
-use devkit_config::TrackerKind;
+use anyhow::{Context, Result};
 
 use super::render;
 use crate::template::VarArgs;
@@ -18,25 +17,7 @@ pub(crate) struct CreateArgs {
 
 pub(crate) fn run(args: CreateArgs) -> Result<()> {
     let start = super::start(&args.dir);
-    let sel = devkit_common::tracker::select(
-        args.config.as_deref().map(std::path::Path::new),
-        &start,
-        None,
-    );
-    let cfg = sel
-        .config
-        .context("`issue create` needs a loadable devkit.toml")?;
-    let kind = cfg
-        .tracker
-        .kind
-        .unwrap_or_else(|| sel.tracker.tracker.kind());
-    if kind != TrackerKind::Github {
-        bail!(
-            "`issue create` writes GitHub issues only, and this project's tracker is {}. \
-             Render the issue with `devkit issue render` and create it through the tracker's MCP.",
-            kind.as_str()
-        );
-    }
+    let (sel, cfg) = super::github_only("create", &start, args.config.as_deref())?;
 
     let rendered = render::render(
         &cfg,
