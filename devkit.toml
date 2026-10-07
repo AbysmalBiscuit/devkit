@@ -210,9 +210,10 @@ Implemented by {{ implemented_by | trim }}
 {%- endif %}
 '''
 
-# Issue body for `devkit issue render` and `issue create`; `input` comes from
-# `--body`. Laid out as a prompt to the agent that works the issue: the task,
-# its finish line, when to stop, then what it may not touch.
+# Issue body for `devkit issue render`, `issue create` and `issue edit`;
+# `input` comes from `--body`. Laid out as a prompt to the agent that works
+# the issue: the task, its finish line, when to stop, then what it may not
+# touch.
 issue_body = '''
 {{- input | trim }}
 {%- if done_when | trim %}

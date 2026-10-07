@@ -1698,7 +1698,7 @@
           "type": "object"
         },
         "issue_body": {
-          "description": "Body of an issue rendered by `issue render` or created by `issue\ncreate`. `{{ input }}` is the `--body` argument and `issue_title` is the\nrendered title. A `[templates.variables]` entry either template reads,\nmarked `required`, must be passed as `--arg`.",
+          "description": "Body of an issue rendered by `issue render`, created by `issue create`,\nor written over an existing issue by `issue edit`. `{{ input }}` is the\n`--body` argument and `issue_title` is the rendered title, or the\nissue's current title when `issue edit` runs without `--title`. A\n`[templates.variables]` entry either rendered template reads, marked\n`required`, must be passed as `--arg`; `issue edit` without `--title`\nasks only for the ones this template reads.",
           "type": [
             "string",
             "null"
@@ -1719,7 +1719,7 @@
           ]
         },
         "issue_title": {
-          "description": "Title of an issue rendered by `issue render` or created by `issue\ncreate`. `{{ input }}` is the `--title` argument; the rendered title\nmust not be empty.",
+          "description": "Title of an issue rendered by `issue render`, created by `issue\ncreate`, or written by `issue edit --title`. `{{ input }}` is the\n`--title` argument; the rendered title must not be empty. `issue edit`\nwithout `--title` keeps the issue's title and does not render this.",
           "type": [
             "string",
             "null"

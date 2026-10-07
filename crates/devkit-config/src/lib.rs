@@ -1916,14 +1916,18 @@ pub struct Templates {
     /// create`. `{{ input }}` is the `--pr-body` argument. `issue pr create`
     /// renders it only when it opens a PR, not when it reuses an open one.
     pub pr_body: Option<String>,
-    /// Title of an issue rendered by `issue render` or created by `issue
-    /// create`. `{{ input }}` is the `--title` argument; the rendered title
-    /// must not be empty.
+    /// Title of an issue rendered by `issue render`, created by `issue
+    /// create`, or written by `issue edit --title`. `{{ input }}` is the
+    /// `--title` argument; the rendered title must not be empty. `issue edit`
+    /// without `--title` keeps the issue's title and does not render this.
     pub issue_title: Option<String>,
-    /// Body of an issue rendered by `issue render` or created by `issue
-    /// create`. `{{ input }}` is the `--body` argument and `issue_title` is the
-    /// rendered title. A `[templates.variables]` entry either template reads,
-    /// marked `required`, must be passed as `--arg`.
+    /// Body of an issue rendered by `issue render`, created by `issue create`,
+    /// or written over an existing issue by `issue edit`. `{{ input }}` is the
+    /// `--body` argument and `issue_title` is the rendered title, or the
+    /// issue's current title when `issue edit` runs without `--title`. A
+    /// `[templates.variables]` entry either rendered template reads, marked
+    /// `required`, must be passed as `--arg`; `issue edit` without `--title`
+    /// asks only for the ones this template reads.
     pub issue_body: Option<String>,
     /// Slack message sent by `issue review request`. Rendered once per
     /// recipient with `name`, `slack_id` (empty for a channel), `pr_url`,
