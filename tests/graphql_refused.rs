@@ -459,7 +459,14 @@ fn dashboard_makes_one_graphql_request_per_batched_read() {
 /// the same way whether GitHub answers GraphQL or refuses it.
 #[test]
 fn review_request_finds_the_branch_pr_when_graphql_is_refused() {
-    let args = ["review", "request", "--no-push", "--no-notify", "--to", "lev"];
+    let args = [
+        "review",
+        "request",
+        "--no-push",
+        "--no-notify",
+        "--to",
+        "lev",
+    ];
     let graphql = ghfake::Fake::new("", &pr(7, "OPEN"));
     graphql.serve_pr(&pr(7, "OPEN"));
     let refused = ghfake::Fake::new("", &pr(7, "OPEN"));
