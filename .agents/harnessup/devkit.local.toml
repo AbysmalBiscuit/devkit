@@ -102,9 +102,10 @@ title = "title"
 body = "body"
 
 # No one watches a cloud session, so its stop hook holds the main agent to
-# its open todos too, not only sub-agents.
+# its open todos too, not only sub-agents. `true` is `always`, spelled so the
+# releases that read `hold_stop` as a boolean still parse this layer.
 [todo]
-hold_stop = "always"
+hold_stop = true
 
 # Roles for the issue-manage workflow. Workers select their role with
 # `devkit todo role <name>` because they spawn as generic subagents.
