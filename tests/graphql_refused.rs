@@ -305,3 +305,152 @@ fn status_makes_one_graphql_request_per_batched_read() {
     assert_eq!(graphql.len(), 3, "{calls}");
     assert!(!calls.contains("--method GET"), "a REST read: {calls}");
 }
+
+/// The two lines `issue dashboard` sums its assigned issues and authored PRs
+/// up in.
+fn dashboard_totals(out: &std::process::Output) -> Vec<String> {
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with("Total assigned:") || l.starts_with("PRs:"))
+        .map(|l| l.split("   Commits:").next().unwrap_or(l).to_string())
+        .collect()
+}
+
+/// Issue 3, closed after its first month, and issue 4, open; PR 7, merged,
+/// and PR 8, open: as GitHub's GraphQL and `gh pr list --search` report them.
+fn dashboard_over_graphql() -> ghfake::Fake {
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    fake.serve_graphql(
+        &serde_json::json!({ "data": { "repository": { "issues": {
+            "pageInfo": { "hasNextPage": false, "endCursor": null },
+            "nodes": [
+                { "number": 3, "createdAt": "2026-01-05T00:00:00Z", "state": "CLOSED",
+                  "stateReason": "COMPLETED", "timelineItems": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null },
+                    "nodes": [{ "__typename": "ClosedEvent", "createdAt": "2026-02-01T00:00:00Z",
+                                "stateReason": "COMPLETED" }] } },
+                { "number": 4, "createdAt": "2026-03-01T00:00:00Z", "state": "OPEN",
+                  "stateReason": null, "timelineItems": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] } }
+            ]
+        } } } })
+        .to_string(),
+    );
+    fake.answer(
+        "pr_search.json",
+        &serde_json::json!([
+            { "createdAt": "2026-01-10T00:00:00Z", "mergedAt": "2026-01-12T00:00:00Z",
+              "additions": 10, "deletions": 2 },
+            { "createdAt": "2026-03-02T00:00:00Z", "mergedAt": null,
+              "additions": 5, "deletions": 1 }
+        ])
+        .to_string(),
+    );
+    fake
+}
+
+/// The same issues and PRs as GitHub's REST API reports them, behind a `gh`
+/// that refuses GraphQL.
+fn dashboard_over_rest() -> ghfake::Fake {
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    fake.refuse_graphql();
+    fake.answer(
+        "rest_issues.json",
+        &serde_json::json!([
+            { "number": 3, "created_at": "2026-01-05T00:00:00Z", "state": "closed",
+              "state_reason": "completed" },
+            { "number": 4, "created_at": "2026-03-01T00:00:00Z", "state": "open",
+              "state_reason": null },
+            { "number": 9, "created_at": "2026-03-03T00:00:00Z", "state": "open",
+              "state_reason": null, "pull_request": { "url": "x" } }
+        ])
+        .to_string(),
+    );
+    fake.answer(
+        "rest_issue_3_events.json",
+        &serde_json::json!([
+            { "event": "assigned", "created_at": "2026-01-05T00:00:00Z" },
+            { "event": "closed", "created_at": "2026-02-01T00:00:00Z",
+              "state_reason": "completed" }
+        ])
+        .to_string(),
+    );
+    fake.answer(
+        "rest_search_issues.json",
+        &serde_json::json!({ "total_count": 2, "items": [
+            { "number": 7, "pull_request": { "url": "x" } },
+            { "number": 8, "pull_request": { "url": "x" } }
+        ] })
+        .to_string(),
+    );
+    for (n, created, merged, additions, deletions) in [
+        (
+            7,
+            "2026-01-10T00:00:00Z",
+            Some("2026-01-12T00:00:00Z"),
+            10,
+            2,
+        ),
+        (8, "2026-03-02T00:00:00Z", None, 5, 1),
+    ] {
+        fake.answer(
+            &format!("rest_pull_{n}.json"),
+            &serde_json::json!({
+                "number": n, "created_at": created, "merged_at": merged,
+                "additions": additions, "deletions": deletions
+            })
+            .to_string(),
+        );
+    }
+    fake
+}
+
+#[test]
+fn dashboard_reports_the_same_issues_and_prs_when_graphql_is_refused() {
+    let graphql = dashboard_over_graphql();
+    let refused = dashboard_over_rest();
+
+    let want = graphql.issue(&["dashboard", "--no-cache"]);
+    let got = refused.issue(&["dashboard", "--no-cache"]);
+
+    assert!(want.status.success(), "{want:?}\n{}", graphql.calls());
+    assert!(got.status.success(), "{got:?}\n{}", refused.calls());
+    assert_eq!(dashboard_totals(&want), vec![
+        "Total assigned: 2   open now: 1",
+        "PRs: 2 opened, 1 merged",
+    ]);
+    assert_eq!(
+        dashboard_totals(&got),
+        dashboard_totals(&want),
+        "{got:?}\n{}",
+        refused.calls()
+    );
+    let lines = |out: &std::process::Output| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|l| l.split("Lines: ").nth(1).map(String::from))
+    };
+    assert_eq!(lines(&want).as_deref(), Some("+15 / -3"));
+    assert_eq!(lines(&got), lines(&want));
+}
+
+/// The assigned-issues and PR-timeline reads stay one GraphQL request each
+/// where GraphQL answers, with no per-item REST read.
+#[test]
+fn dashboard_makes_one_graphql_request_per_batched_read() {
+    let fake = dashboard_over_graphql();
+
+    let out = fake.issue(&["dashboard", "--no-cache"]);
+
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{calls}");
+    assert_eq!(calls.matches("filterBy: { assignee").count(), 1, "{calls}");
+    assert_eq!(calls.matches("pr list --search").count(), 1, "{calls}");
+    for rest in [
+        "repos/o/r/issues?",
+        "/events",
+        "search/issues?q=repo%3Ao%2Fr%20is%3Apr",
+    ] {
+        assert!(!calls.contains(rest), "{rest}: {calls}");
+    }
+}

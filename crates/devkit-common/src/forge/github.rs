@@ -961,10 +961,12 @@ impl Forge for GithubForge {
     }
 
     /// Over GraphQL when a token resolves, paginated up to `max`; otherwise
-    /// `gh pr list --search`.
+    /// `gh pr list --search`. Where GitHub refuses GraphQL, the REST search
+    /// and one PR read per result.
     fn timeline(&self, repo: &Repo, role: Role, max: usize) -> Result<Vec<PrTimeline>> {
-        if self.api.token().is_none() {
-            let found: Vec<TimelineNode> = gh_json_in(
+        let attempt = match self.api.token() {
+            Some(_) => self.graphql_timeline(repo, role, max),
+            None => gh_json_in::<Vec<TimelineNode>>(
                 &[
                     "pr",
                     "list",
@@ -979,9 +981,18 @@ impl Forge for GithubForge {
                 ],
                 repo,
                 ".",
-            )?;
-            return Ok(found.into_iter().map(Into::into).collect());
+            )
+            .map(|found| found.into_iter().map(Into::into).collect()),
+        };
+        match attempt {
+            Err(e) if graphql_refused(&e) => self.rest_timeline(repo, role, max),
+            other => other,
         }
+    }
+}
+
+impl GithubForge {
+    fn graphql_timeline(&self, repo: &Repo, role: Role, max: usize) -> Result<Vec<PrTimeline>> {
         let mut out = Vec::new();
         let mut after: Option<String> = None;
         loop {
@@ -999,6 +1010,38 @@ impl Forge for GithubForge {
         }
         out.truncate(max);
         Ok(out)
+    }
+
+    /// Up to `max` of the PRs the REST search finds, each read for its line
+    /// counts, which search results do not carry.
+    fn rest_timeline(&self, repo: &Repo, role: Role, max: usize) -> Result<Vec<PrTimeline>> {
+        const PER_PAGE: usize = 100;
+        let q = encode(&format!("repo:{} is:pr {}", repo.slug, qualifier(role)));
+        let mut numbers = Vec::new();
+        for page in 1.. {
+            let v = self.rest_found(&format!(
+                "/search/issues?q={q}&per_page={PER_PAGE}&page={page}"
+            ))?;
+            let items = v["items"]
+                .as_array()
+                .context("a PR search with no items list")?;
+            numbers.extend(items.iter().filter_map(|i| i["number"].as_u64()));
+            if items.len() < PER_PAGE || numbers.len() >= max {
+                break;
+            }
+        }
+        numbers.truncate(max);
+        each(&numbers, |n| {
+            let v = self.rest_found(&format!("/repos/{}/pulls/{n}", repo.slug))?;
+            Ok(PrTimeline {
+                created_at: v["created_at"].as_str().map(String::from),
+                merged_at: v["merged_at"].as_str().map(String::from),
+                additions: v["additions"].as_i64().unwrap_or(0),
+                deletions: v["deletions"].as_i64().unwrap_or(0),
+            })
+        })
+        .into_iter()
+        .collect()
     }
 }
 

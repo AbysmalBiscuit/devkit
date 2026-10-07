@@ -238,6 +238,12 @@ github = "sweeper[bot]"
         .expect("write REST issue");
     }
 
+    /// Answer from `file`, one of the canned answers `examples/ghfake.rs`
+    /// names (`pr_search.json`, `rest_issues.json`, ...), with `body`.
+    pub fn answer(&self, file: &str, body: &str) {
+        std::fs::write(self.bin.path().join(file), body).expect("write canned answer");
+    }
+
     /// Answer every `gh api graphql` query with `body`. Without one the fake
     /// fails the call.
     pub fn serve_graphql(&self, body: &str) {

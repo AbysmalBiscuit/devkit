@@ -372,23 +372,74 @@ pub fn assigned_query(slug: &str, login: &str, after: Option<&str>) -> String {
 /// A `(when, from, to)` state transition parsed from one timeline event.
 type Transition = (String, Option<State>, Option<State>);
 
+/// A close (with its GraphQL-spelled reason) or a reopen at `when`.
+fn transition(when: &str, closed: bool, reason: Option<&str>) -> Transition {
+    let (from, to) = if closed {
+        (map_state("OPEN", None), map_state("CLOSED", reason))
+    } else {
+        (map_state("CLOSED", None), map_state("OPEN", None))
+    };
+    (when.to_string(), Some(from), Some(to))
+}
+
 /// One `timelineItems.nodes[]` entry as a `(when, from, to)` transition, or
 /// `None` for an event type outside the two requested.
 fn parse_timeline_transition(n: &serde_json::Value) -> Option<Transition> {
-    let created_at = n["createdAt"].as_str()?.to_string();
+    let created_at = n["createdAt"].as_str()?;
     match n["__typename"].as_str()? {
-        "ClosedEvent" => Some((
-            created_at,
-            Some(map_state("OPEN", None)),
-            Some(map_state("CLOSED", n["stateReason"].as_str())),
-        )),
-        "ReopenedEvent" => Some((
-            created_at,
-            Some(map_state("CLOSED", None)),
-            Some(map_state("OPEN", None)),
-        )),
+        "ClosedEvent" => Some(transition(created_at, true, n["stateReason"].as_str())),
+        "ReopenedEvent" => Some(transition(created_at, false, None)),
         _ => None,
     }
+}
+
+/// One REST issue event as a `(when, from, to)` transition, or `None` for an
+/// event other than a close or a reopen.
+fn parse_rest_transition(e: &serde_json::Value) -> Option<Transition> {
+    let created_at = e["created_at"].as_str()?;
+    match e["event"].as_str()? {
+        "closed" => {
+            let reason = e["state_reason"].as_str().map(str::to_uppercase);
+            Some(transition(created_at, true, reason.as_deref()))
+        }
+        "reopened" => Some(transition(created_at, false, None)),
+        _ => None,
+    }
+}
+
+/// Every issue in `slug` assigned to `login`, with its history, over REST:
+/// the assigned list, then one events read per issue on the worker pool.
+fn rest_assigned(
+    api: &Api,
+    slug: &str,
+    login: &str,
+    on_page: &mut dyn FnMut(usize),
+) -> Result<Vec<AssignedIssue>> {
+    let listed = rest_pages(
+        api,
+        &format!("/repos/{slug}/issues?assignee={}&state=all", encode(login)),
+    )?;
+    let issues: Vec<(u64, &serde_json::Value)> = listed
+        .iter()
+        .filter(|v| v.get("pull_request").is_none())
+        .filter_map(|v| Some((v["number"].as_u64()?, v)))
+        .collect();
+    on_page(issues.len());
+    let events = each(&issues, |(n, _)| {
+        rest_pages(api, &format!("/repos/{slug}/issues/{n}/events"))
+    });
+    issues
+        .iter()
+        .zip(events)
+        .map(|((n, v), events)| {
+            Ok(AssignedIssue {
+                identifier: n.to_string(),
+                created_at: v["created_at"].as_str().unwrap_or("").to_string(),
+                state: rest_state(v),
+                history: events?.iter().filter_map(parse_rest_transition).collect(),
+            })
+        })
+        .collect()
 }
 
 /// One page of [`assigned_query`], plus which issues' nested timeline was
@@ -483,7 +534,7 @@ fn fill_remaining_timeline(
         .parse()
         .with_context(|| format!("bad issue number {number}"))?;
     loop {
-        let resp = api.graphql(&timeline_page_query(slug, n, &cursor))?;
+        let resp = api.graphql_or_gh(&timeline_page_query(slug, n, &cursor), Api::graphql)?;
         let (extra, next) = parse_timeline_page(&resp);
         if let Some(issue) = issues.iter_mut().find(|i| i.identifier == number) {
             issue.history.extend(extra);
@@ -795,14 +846,22 @@ impl Tracker for GithubTracker {
         out
     }
 
+    /// One GraphQL round trip per page, directly when a token resolves and
+    /// through `gh` when not. Where GitHub refuses GraphQL, the REST assigned
+    /// list and one events read per issue.
     fn assigned_history(&self, on_page: &mut dyn FnMut(usize)) -> Result<Vec<AssignedIssue>> {
         let login = viewer_login(&self.api)?;
         let mut out: Vec<AssignedIssue> = Vec::new();
         let mut after: Option<String> = None;
         loop {
-            let resp =
-                self.api
-                    .graphql(&assigned_query(&self.repo.slug, &login, after.as_deref()))?;
+            let query = assigned_query(&self.repo.slug, &login, after.as_deref());
+            let resp = match self.api.graphql_or_gh(&query, Api::graphql) {
+                Ok(resp) => resp,
+                Err(e) if out.is_empty() && graphql_refused(&e) => {
+                    return rest_assigned(&self.api, &self.repo.slug, &login, on_page);
+                }
+                Err(e) => return Err(e),
+            };
             let (mut issues, more) = parse_assigned(&resp);
             for (number, cursor) in more {
                 fill_remaining_timeline(&self.api, &self.repo.slug, &number, cursor, &mut issues)?;
