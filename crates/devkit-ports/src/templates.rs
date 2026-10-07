@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use devkit_common::{
     caller::Caller,
     record::{self, IssueRecord},
-    required::{ensure_supplied, missing_args},
+    required::{ensure_supplied, ensure_supplied_as, missing_args},
     template,
     vcs::{self, Vcs, VersionControl},
 };
@@ -127,7 +127,13 @@ pub struct CommitMessage<'a> {
 }
 
 /// The parts of a commit message `devkit commit` takes as flags.
-const COMMIT_PARTS: [&str; 3] = ["subject", "body", "coauthors"];
+/// Each part of a commit message, as the template variable that reads it and
+/// the `devkit commit` flag that supplies it.
+const COMMIT_PARTS: [(&str, &str); 3] = [
+    ("subject", "--subject"),
+    ("body", "--body"),
+    ("coauthors", "--coauthor"),
+];
 
 /// The message `devkit commit` records: template `commit_message` over
 /// [`checkout_context`], `given`, then the message's parts. A part the caller
@@ -155,35 +161,35 @@ pub fn commit_message(
         ctx.insert(k.clone(), serde_json::json!(v));
     }
     let coauthors = message.coauthors.join("; ");
-    let parts = [
-        ("subject", Some(message.subject)),
-        ("body", message.body),
-        (
-            "coauthors",
-            (!coauthors.is_empty()).then_some(coauthors.as_str()),
-        ),
+    let values = [
+        Some(message.subject),
+        message.body,
+        (!coauthors.is_empty()).then_some(coauthors.as_str()),
     ];
-    for (k, v) in parts {
+    for ((k, flag), v) in COMMIT_PARTS.into_iter().zip(values) {
         if let Some(v) = v {
             ensure!(
                 reads.contains(k),
-                "template `{name}` reads no `{k}`, so it would drop --{}",
-                k.trim_end_matches('s')
+                "template `{name}` reads no `{k}`, so it would drop {flag}"
             );
             ctx.insert(k.to_string(), serde_json::json!(v));
         }
     }
     let mut defaults = cfg.templates.defaults();
     let mut needed = args(source, &ctx)?;
-    for part in COMMIT_PARTS {
+    for (part, _) in COMMIT_PARTS {
         if !cfg.templates.variables.contains_key(part) {
             needed.remove(part);
             defaults.insert(part.to_string(), String::new());
         }
     }
-    ensure_supplied(
+    ensure_supplied_as(
         "devkit commit",
         &missing_args(cfg, None, &needed, given, caller),
+        |m| match COMMIT_PARTS.iter().find(|(part, _)| *part == m.name) {
+            Some((_, flag)) => m.hint_as(&format!("{flag}=...")),
+            None => m.hint(),
+        },
     )?;
     let text = template::render(source, &ctx, &defaults)
         .with_context(|| format!("rendering template `{name}`"))?;

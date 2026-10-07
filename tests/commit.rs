@@ -236,7 +236,11 @@ fn an_agent_must_name_its_coauthors_when_the_project_says_so() {
         .unwrap();
 
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("coauthors"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("devkit commit needs --coauthor=... (required for agents)"),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(head(dir), before);
 }
 
