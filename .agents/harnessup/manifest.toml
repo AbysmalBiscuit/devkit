@@ -3,6 +3,9 @@
 # so Codex entries could only ever report skipped.
 schema = 1
 
+[claude]
+silence_stop_hook = true
+
 [[marketplace]]
 name = "devkit"
 source = "AbysmalBiscuit/devkit"
