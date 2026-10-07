@@ -280,13 +280,7 @@ fn commit_patch_locked(
     let no_hooks = scratch.join("no-hooks");
     fs::create_dir(&no_hooks)?;
 
-    let old_head = Git::at(top)
-        .args(["rev-parse", "--verify", "-q", "HEAD"])
-        .wait()?;
-    let old_head = old_head
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&old_head.stdout).trim().to_string());
+    let old_head = head_commit(top)?;
     let target = head_ref(top)?;
     ensure!(
         old_head.is_some() || target != "HEAD",
@@ -376,13 +370,7 @@ fn commit_patch_locked(
         .timeout(SLOW_TIMEOUT)
         .wait()?;
     let proposed = fs::read_to_string(&state.proposed).ok();
-    let observed = Git::at(top)
-        .args(["rev-parse", "--verify", "-q", "HEAD"])
-        .wait()?;
-    let new_head = observed
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&observed.stdout).trim().to_string());
+    let new_head = head_commit(top)?;
     if proposed.is_none() || new_head != proposed {
         if proposed.is_some() || new_head != old_head || out.status.success() {
             bail!(
@@ -417,6 +405,17 @@ fn commit_patch_locked(
         ));
     }
     Ok(report)
+}
+
+/// The commit HEAD names, or `None` on an unborn branch.
+fn head_commit(dir: &Path) -> Result<Option<String>> {
+    let out = Git::at(dir)
+        .args(["rev-parse", "--verify", "-q", "HEAD"])
+        .wait()?;
+    Ok(out
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()))
 }
 
 /// The ref HEAD points at, or `HEAD` itself when it is detached.
