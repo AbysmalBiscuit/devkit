@@ -414,6 +414,34 @@ fn a_hook_that_changes_the_committed_tree_makes_patch_refuse() {
 
 #[cfg(unix)]
 #[test]
+fn a_symlinked_hook_that_rejects_makes_patch_refuse() {
+    let repo = repo();
+    let dir = repo.path();
+    let patch = patch_a_line_1(dir);
+    let script = dir.join(".git/reject.sh");
+    std::fs::write(&script, "#!/bin/sh\necho rejected by hook >&2\nexit 1\n").unwrap();
+    make_executable(&script);
+    std::os::unix::fs::symlink(&script, dir.join(".git/hooks/pre-commit")).unwrap();
+    let before = head(dir);
+
+    let out = commit(dir, &[
+        "--patch",
+        patch.to_str().unwrap(),
+        "--subject",
+        "fix: line 1",
+    ]);
+
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("rejected by hook"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(head(dir), before);
+}
+
+#[cfg(unix)]
+#[test]
 fn patch_runs_the_repository_hooks() {
     let repo = repo();
     let dir = repo.path();

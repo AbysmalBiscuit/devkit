@@ -598,7 +598,7 @@ fn write_wrappers(scratch: &Path, state: &HookState) -> Result<PathBuf> {
     let mut names = BTreeSet::from(["reference-transaction".to_string()]);
     if let Ok(entries) = fs::read_dir(&state.hooks) {
         for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|t| t.is_file()) {
+            if entry.path().is_file() {
                 names.insert(entry.file_name().to_string_lossy().into_owned());
             }
         }
