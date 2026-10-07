@@ -8,7 +8,7 @@ An implementation request authorizes the investigation, edits, tests, commits, p
 
 Resolve routine choices yourself and record each consequential assumption, with its reason, for the final report. Ask only when the answer would change scope or user-visible behaviour, and keep doing independent work while waiting; silence is not approval.
 
-Before starting an issue or feature, load the `cloud` skill to find existing work and pick a workflow. Work in the provided cloud checkout on its assigned branch; do not create worktrees.
+Before starting an issue or feature, load the `cloud` skill to find existing work and pick a workflow. Work in the provided cloud checkout on its assigned branch; do not create worktrees. Start work on an issue with `issue setup --here <issue> --summary`, which binds this checkout to the issue so the PR closes it, and writes the issue summary.
 
 ## Progress ledger
 
