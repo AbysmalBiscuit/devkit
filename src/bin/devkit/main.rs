@@ -16,6 +16,7 @@ mod doctor;
 mod harness;
 mod hook;
 mod hook_log;
+mod install;
 mod issue;
 mod links;
 mod locks;
@@ -161,6 +162,12 @@ enum Cmd {
     /// Groups the runs by session and agent type, and the held time by todo.
     /// A run with no agent type reports as `subagent`.
     Activity(activity::ActivityCli),
+    /// Set up this machine for devkit; safe to rerun.
+    ///
+    /// Links the old command names as `install-links` does, and appends each
+    /// of devkit's ignore patterns (`.devkit/`, `*.local`, `*.local.*`) that
+    /// git's global excludes file lacks, leaving its other lines as they are.
+    Install(links::InstallLinksArgs),
     /// Install the old command names as hardlinks beside this binary.
     ///
     /// Creates hardlinks such as `issue` and `devrun` beside this
@@ -375,16 +382,18 @@ fn main() -> Result<()> {
     // Checked against the raw argv, the same way the probe intercept above
     // is: `Cli::parse()` hasn't run yet, so this can't ask clap which
     // subcommand it resolved to. Over-matching an argument vector that merely
-    // contains this string is fine — the cost is one skipped automatic pass,
-    // and the next invocation does it. Skipping is what keeps `install-links`
-    // able to report `created`/`replaced`: run unconditionally, this pass
-    // would already have linked everything, and every outcome `links::run`
-    // sees would be `AlreadyLinked`.
-    let is_install_links = args
+    // contains this string, or names `install` first, is fine: the cost is
+    // one skipped automatic pass, and the next invocation does it. Skipping is
+    // what keeps `install-links` and `install` able to report
+    // `created`/`replaced`: run unconditionally, this pass would already
+    // have linked everything, and every outcome `links::run` sees would be
+    // `AlreadyLinked`.
+    let links_explicitly = args
         .iter()
         .skip(1)
-        .any(|a| a.as_os_str() == std::ffi::OsStr::new("install-links"));
-    if !is_install_links && let Ok(exe) = std::env::current_exe() {
+        .any(|a| a.as_os_str() == std::ffi::OsStr::new("install-links"))
+        || args.get(1).map(OsString::as_os_str) == Some(std::ffi::OsStr::new("install"));
+    if !links_explicitly && let Ok(exe) = std::env::current_exe() {
         links::ensure_current(&exe);
     }
     // After the automatic linking pass on purpose: `docs/install.md` promises
@@ -435,6 +444,7 @@ fn main() -> Result<()> {
                 Cmd::Template(c) => template::run(c),
                 Cmd::Todo(c) => todo::run(c),
                 Cmd::Activity(c) => activity::run(c),
+                Cmd::Install(a) => install::run(a),
                 Cmd::InstallLinks(a) => links::run(a),
             }
         }
