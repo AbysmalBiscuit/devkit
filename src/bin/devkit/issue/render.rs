@@ -26,21 +26,30 @@ pub(crate) struct Rendered {
     pub body: String,
 }
 
-/// The required args the two issue templates read that `given` does not
-/// supply.
+/// Where the issue's title comes from.
+#[derive(Clone, Copy)]
+pub(crate) enum Title<'a> {
+    /// Rendered from this input through the `issue_title` template.
+    Input(&'a str),
+    /// The issue's current title, used as is: the `issue_title` template is
+    /// not rendered and its required args are not asked for.
+    Kept(&'a str),
+}
+
+/// The required args the issue templates rendered for `title` read that
+/// `given` does not supply.
 pub(crate) fn missing(
     cfg: &Config,
+    title: Title<'_>,
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<Vec<Missing>> {
     let tmpls = &cfg.templates;
-    missing_required(
-        cfg,
-        &[tmpls.issue_title(), tmpls.issue_body()],
-        ISSUE_CONTEXT_KEYS,
-        given,
-        caller,
-    )
+    let rendered: &[&str] = match title {
+        Title::Input(_) => &[tmpls.issue_title(), tmpls.issue_body()],
+        Title::Kept(_) => &[tmpls.issue_body()],
+    };
+    missing_required(cfg, rendered, ISSUE_CONTEXT_KEYS, given, caller)
 }
 
 fn title_context(title: &str) -> serde_json::Value {
@@ -62,24 +71,27 @@ fn body_context(body: &str, rendered_title: &str) -> serde_json::Value {
 pub(crate) fn render(
     cfg: &Config,
     surface: &str,
-    title: &str,
+    title: Title<'_>,
     body: &str,
     vars: &VarArgs,
     caller: Caller,
 ) -> Result<Rendered> {
     let tmpls = &cfg.templates;
     let given = parse_args(vars, &tmpls.declared())?;
-    devkit_common::required::ensure_supplied(surface, &missing(cfg, &given, caller)?)?;
+    devkit_common::required::ensure_supplied(surface, &missing(cfg, title, &given, caller)?)?;
     let mut values = tmpls.defaults();
     values.extend(given);
 
-    let title = render_review(
-        tmpls.issue_title(),
-        "issue_title",
-        &title_context(title),
-        &values,
-        None,
-    )?;
+    let title = match title {
+        Title::Input(input) => render_review(
+            tmpls.issue_title(),
+            "issue_title",
+            &title_context(input),
+            &values,
+            None,
+        )?,
+        Title::Kept(current) => current.to_string(),
+    };
     if title.trim().is_empty() {
         bail!("--title is required: the `issue_title` template rendered empty");
     }
@@ -108,7 +120,7 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
     let rendered = render(
         &loaded.config,
         "issue render",
-        &args.title,
+        Title::Input(&args.title),
         args.body.as_deref().unwrap_or_default(),
         &args.vars,
         devkit_common::caller::caller(),

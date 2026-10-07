@@ -10,6 +10,7 @@ issue setup --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore]
 issue setup --here <ID|URL> [--slug <slug>] [--summary|--no-summary] [--dry-run] [--no-gitignore]
 issue render --title T [--body B] [--arg k=v] [--arg-file k=path]
 issue create --title T [--body B] [--arg k=v] [--arg-file k=path]
+issue edit <number|URL> --body B [--title T] [--arg k=v] [--arg-file k=path]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue pr [status] [selector] [--json] [--cache-only]  # also the bare `issue pr`
 issue pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title T] [--pr-body B] [--attach <file>[#alt]] [--no-push] [--pr <URL|number>] [--arg k=v] [--arg-file k=path]
@@ -53,17 +54,18 @@ The branch is created with no upstream. git would otherwise track the baseline's
 | `--summary` | Also write a markdown summary file. A tracker that keeps its own summary supplies the file verbatim: under GitHub that is the issue body, so a handoff written into the issue comes back down as the summary. Otherwise, and for a GitHub issue with an empty body, the file is the issue's tracker facts (url, parent, project, state, assignee, priority, estimate, labels) and its description verbatim, then empty `## Summary` and `## Pointers` headings to fill in. A tracker with no equivalent of a field leaves it empty, as GitHub does for parent, project, priority, and estimate. Default path `.devkit/ISSUE_SUMMARY_<ID>.md` inside the worktree (with `--here`, the checkout), untracked like the rest of `.devkit/`, so it goes when the worktree is removed unless a `[preserve]` pattern copies it out; `templates.issue_summary_path` and `templates.issue_summary` override placement and body, and a relative path there is taken from `worktree_root`, beside the worktree, and refused where there is none. Needs the tracker's credential. An existing file is left byte-for-byte and its path still reported. The fetch runs before the worktree is created, so an unknown issue fails clean. `issue end` removes the recorded file when it cleans the worktree up. `defaults.issue_summary = true` makes this the default. Under `--dry-run` the resolved path is reported without the file being written. |
 | `--no-summary` | Skip the summary file for this run, whatever `defaults.issue_summary` says. |
 
-## `render` and `create`: file an issue
+## `render`, `create` and `edit`: write an issue
 
 Issue titles and bodies come from the `issue_title` and `issue_body` templates. `{{ input }}` is `--title` or `--body`, and the body template also sees the rendered `issue_title`. A `[templates.variables]` entry either template reads and marks `required` must be passed as `--arg`. A missing one is refused by name, with its description.
 
 - **GitHub:** `issue create` renders and runs `gh issue create` against `issues_repo`, then prints the issue URL. Under any other tracker it refuses and points at `issue render`.
+- **GitHub, an existing issue:** `issue edit <number|URL> --body B` renders the body and runs `gh issue edit` to replace it. `--title T` also renders and replaces the title; without it the issue keeps its title, which the body template sees as `issue_title`. Under any other tracker it refuses and points at `issue render`.
 - **A tracker MCP (Linear's `save_issue`, GitHub's `issue_write`):** run `issue render`, which prints `{"title": ..., "body": ...}`, and pass both strings unchanged as the MCP call's title and body fields. Line endings and trailing whitespace may differ, but any other edit is denied as text that differs from the render.
-- **Rewriting an existing issue's title or body** goes through `issue render` too. An update that only changes state, labels or assignee needs no render. Linear's `patch` edits the body in place, so it is always refused: render the whole new body and pass it as `description`.
+- **Through a tracker MCP, rewriting an existing issue's title or body** goes through `issue render` too. An update that only changes state, labels or assignee needs no render. Linear's `patch` edits the body in place, so it is always refused: render the whole new body and pass it as `description`.
 
 A denied MCP call names `devkit issue render` and the `--arg`s it needs. The render has to happen in the same agent session as the call, because its receipt is filed under the session id. Receipts live under `.devkit/issue-receipts/` in the repository's main worktree, so a render in any worktree of the repository counts, and session end deletes that session's receipts.
 
-Enforcement is configuration. `[harness.issue_tools.<name>]` entries name the MCP servers and tools that write issues and enforce as soon as they exist. `devkit schema` documents their keys. Refusing a bare `gh issue create` takes a `[harness.commands]` rule with `programs = ["gh"]` and `args = ["issue", "create"]`, and like every command rule it needs `[harness] enforce_commands = true`. `issue create` runs its own `gh`, which the rule never sees.
+Enforcement is configuration. `[harness.issue_tools.<name>]` entries name the MCP servers and tools that write issues and enforce as soon as they exist. `devkit schema` documents their keys. Refusing a bare `gh issue create` takes a `[harness.commands]` rule with `programs = ["gh"]` and `args = ["issue", "create"]`, and a bare `gh issue edit --body` one with `args = ["issue", "edit", "**", "--body*"]`; like every command rule they need `[harness] enforce_commands = true`. `issue create` and `issue edit` run their own `gh`, which the rules never see.
 
 ## `pr checkout` — review someone else's work
 

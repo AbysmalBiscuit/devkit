@@ -93,12 +93,12 @@ const BUILT_INS: [BuiltIn; 11] = [
     },
     BuiltIn {
         name: "issue_title",
-        description: "Title of an issue `issue render` or `issue create` writes",
+        description: "Title of an issue `issue render`, `issue create` or `issue edit --title` writes",
         source: Templates::issue_title,
     },
     BuiltIn {
         name: "issue_body",
-        description: "Body of an issue `issue render` or `issue create` writes",
+        description: "Body of an issue `issue render`, `issue create` or `issue edit` writes",
         source: Templates::issue_body,
     },
     BuiltIn {

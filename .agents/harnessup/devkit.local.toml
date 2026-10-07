@@ -28,36 +28,32 @@ reason = """Open the PR with devkit, which renders the body from the `pr_body` t
 `--pr-body` is the agent summary and `proof` the evidence for each `Done when` item, one unindented line per item starting with its number (`1. test foo_refuses_gap`); the template adds the TL;DR heading and this worktree's closing line. Pass `--draft` when a draft was asked for.
 `devkit template show pr_body` describes every `--arg`; `devkit template render pr_body --arg input='<markdown>' ...` previews the body."""
 
-# devkit has no issue edit verb to redirect to, so this warns rather than blocks.
 [harness.commands.issue-edit-body]
 programs = ["gh"]
 args = ["issue", "edit", "**", "--body*"]
-action = "warn"
-reason = """Pass only a body rendered from the `issue_body` template:
-  devkit issue render --title '<title>' --body '<the task>' --arg done_when='- [ ] ...' | jq -r .body > body.md
-  gh issue edit <number> --body-file body.md
+reason = """Rewrite the issue with devkit, which renders the body from the `issue_body` template:
+  devkit issue edit <number> --body '<the task>' --arg done_when='- [ ] ...'
+`--title` also replaces the title; without it the issue keeps its own.
 `devkit template show issue_body` describes every `--arg`."""
 
 # The short spellings of `--body` and `--body-file`.
 [harness.commands.issue-edit-body-b]
 programs = ["gh"]
 args = ["issue", "edit", "**", "-b*"]
-action = "warn"
-reason = """Pass only a body rendered from the `issue_body` template:
-  devkit issue render --title '<title>' --body '<the task>' --arg done_when='- [ ] ...' | jq -r .body > body.md
-  gh issue edit <number> --body-file body.md
+reason = """Rewrite the issue with devkit, which renders the body from the `issue_body` template:
+  devkit issue edit <number> --body '<the task>' --arg done_when='- [ ] ...'
+`--title` also replaces the title; without it the issue keeps its own.
 `devkit template show issue_body` describes every `--arg`."""
 
 [harness.commands.issue-edit-body-f]
 programs = ["gh"]
 args = ["issue", "edit", "**", "-F*"]
-action = "warn"
-reason = """Pass only a body rendered from the `issue_body` template:
-  devkit issue render --title '<title>' --body '<the task>' --arg done_when='- [ ] ...' | jq -r .body > body.md
-  gh issue edit <number> --body-file body.md
+reason = """Rewrite the issue with devkit, which renders the body from the `issue_body` template:
+  devkit issue edit <number> --body '<the task>' --arg done_when='- [ ] ...'
+`--title` also replaces the title; without it the issue keeps its own.
 `devkit template show issue_body` describes every `--arg`."""
 
-# devkit has no PR edit verb to redirect to either, so these warn too.
+# devkit has no PR edit verb to redirect to, so these warn rather than block.
 [harness.commands.pr-edit-body]
 programs = ["gh"]
 args = ["pr", "edit", "**", "--body*"]

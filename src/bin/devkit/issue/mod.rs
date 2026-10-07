@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use devkit::completions::Shell;
 
@@ -9,6 +9,7 @@ use crate::template::VarArgs;
 pub(crate) mod checkout;
 mod create;
 mod dashboard;
+mod edit;
 mod end;
 mod event;
 mod hooks;
@@ -169,6 +170,22 @@ pub(crate) enum Cmd {
         /// Issue body, the `input` of the `issue_body` template.
         #[arg(long)]
         body: Option<String>,
+        #[command(flatten)]
+        vars: VarArgs,
+    },
+    /// Rewrite a GitHub issue's body (and title) from the issue templates.
+    ///
+    /// Without `--title` the issue keeps its current title, which the
+    /// `issue_body` template reads as `issue_title`.
+    Edit {
+        /// Issue number or issue URL.
+        issue: String,
+        /// New issue title, the `input` of the `issue_title` template.
+        #[arg(long)]
+        title: Option<String>,
+        /// New issue body, the `input` of the `issue_body` template.
+        #[arg(long)]
+        body: String,
         #[command(flatten)]
         vars: VarArgs,
     },
@@ -493,6 +510,33 @@ fn start(dir: &Option<String>) -> String {
     dir.clone().unwrap_or_else(|| ".".to_string())
 }
 
+/// Select the tracker for `issue <verb>`, a command that writes GitHub issues
+/// with `gh`, and refuse any other tracker by pointing at `issue render` and
+/// the tracker's MCP.
+fn github_only(
+    verb: &str,
+    start: &str,
+    config: Option<&str>,
+) -> Result<(devkit_common::tracker::Selected, devkit_config::Config)> {
+    let mut sel = devkit_common::tracker::select(config.map(Path::new), start, None);
+    let cfg = sel
+        .config
+        .take()
+        .with_context(|| format!("`issue {verb}` needs a loadable devkit.toml"))?;
+    let kind = cfg
+        .tracker
+        .kind
+        .unwrap_or_else(|| sel.tracker.tracker.kind());
+    if kind != devkit_config::TrackerKind::Github {
+        bail!(
+            "`issue {verb}` writes GitHub issues only, and this project's tracker is {}. \
+             Render the issue with `devkit issue render` and {verb} it through the tracker's MCP.",
+            kind.as_str()
+        );
+    }
+    Ok((sel, cfg))
+}
+
 pub fn run(cli: IssueCli) -> Result<()> {
     let _timing = devkit_timing::init(timing_mode(cli.timing), cli.timing_log.clone());
     match cli.cmd {
@@ -562,6 +606,19 @@ pub fn run(cli: IssueCli) -> Result<()> {
             config: cli.config,
         }),
         Some(Cmd::Create { title, body, vars }) => create::run(create::CreateArgs {
+            title,
+            body,
+            vars,
+            dir: cli.dir,
+            config: cli.config,
+        }),
+        Some(Cmd::Edit {
+            issue,
+            title,
+            body,
+            vars,
+        }) => edit::run(edit::EditArgs {
+            issue,
             title,
             body,
             vars,
