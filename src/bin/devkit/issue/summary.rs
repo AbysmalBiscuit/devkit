@@ -182,14 +182,23 @@ mod tests {
 
     #[test]
     fn a_worktree_rooted_template_keeps_the_file_inside() {
+        let worktree = std::env::temp_dir().join("eng-42");
+        let ctx = context(
+            &details(),
+            &worktree.display().to_string(),
+            "lev/eng-42-fix",
+            "eng-42-fix",
+            "lev/",
+            &[],
+        );
         let p = resolve_path(
             "{{ worktree }}/ISSUE.md",
             || anyhow::bail!("an absolute path needs no worktree root"),
-            &ctx(),
+            &ctx,
             &BTreeMap::new(),
         )
         .unwrap();
-        assert_eq!(p, PathBuf::from("/w/eng-42/ISSUE.md"));
+        assert_eq!(p, worktree.join("ISSUE.md"));
     }
 
     #[test]
