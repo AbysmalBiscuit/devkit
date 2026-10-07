@@ -111,7 +111,10 @@ fn create(title: &str, body: &str) -> Value {
 fn an_unrendered_pr_create_is_denied_naming_pr_render() {
     let fake = project();
     let reason = pre_tool_use(&fake, "S1", CREATE, create("T", "B")).expect("denied");
-    assert!(reason.contains("devkit issue pr render"), "{reason}");
+    assert!(
+        reason.contains("devkit issue pr render --pr-title"),
+        "{reason}"
+    );
     assert!(reason.contains("--arg proof=..."), "{reason}");
 }
 
