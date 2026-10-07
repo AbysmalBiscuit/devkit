@@ -17,10 +17,7 @@ use crate::{
     issue::{
         receipt,
         render::Rendered,
-        review::{
-            PR_CONTEXT_KEYS, check_required, missing_required, parse_args, render_review,
-            with_fields,
-        },
+        review::{PR_CONTEXT_KEYS, missing_required, parse_args, render_review, with_fields},
     },
     template::VarArgs,
 };
@@ -62,14 +59,7 @@ pub(crate) fn values(
 ) -> Result<BTreeMap<String, String>> {
     let tmpls = &cfg.templates;
     let given = parse_args(vars, &tmpls.declared())?;
-    check_required(
-        surface,
-        cfg,
-        &[tmpls.pr_title(), tmpls.pr_body()],
-        PR_CONTEXT_KEYS,
-        &given,
-        caller,
-    )?;
+    devkit_common::required::ensure_supplied(surface, &missing(cfg, &given, caller)?)?;
     let mut values = tmpls.defaults();
     values.extend(given);
     Ok(values)
