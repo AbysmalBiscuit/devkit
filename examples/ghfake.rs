@@ -11,9 +11,10 @@
 //!
 //! A `refuse_graphql` file there makes every GraphQL-backed verb fail with
 //! HTTP 403, as the Claude Code cloud proxy does, while `gh api` REST calls
-//! still answer. A `create_error.txt` there makes `gh pr create` and the REST
-//! create fail with its contents on stderr, and a `list_error.txt` makes
-//! `gh pr list` fail the same way.
+//! still answer. A non-empty file is the stderr that failure prints. A
+//! `create_error.txt` there makes `gh pr create` and the REST create fail with
+//! its contents on stderr, and a `list_error.txt` makes `gh pr list` fail the
+//! same way.
 
 use std::{
     io::Write,
@@ -23,6 +24,9 @@ use std::{
 /// The file a verb answers from, and what to say when the test did not write
 /// one. `None` means the verb answers nothing and only reports an exit status.
 fn canned(args: &str) -> Option<(&'static str, &'static str)> {
+    if args.starts_with("pr list --search") {
+        return Some(("pr_search.json", "[]"));
+    }
     if args.starts_with("pr list") {
         return Some(("pr_list.json", "[]"));
     }
@@ -79,7 +83,7 @@ fn rest(dir: &Path, args: &[String]) {
         .map_or("GET", String::as_str);
     let Some(path) = args
         .iter()
-        .find(|a| a.starts_with("repos/") || a.as_str() == "user")
+        .find(|a| a.starts_with("repos/") || a.starts_with("search/") || a.as_str() == "user")
     else {
         std::process::exit(1);
     };
@@ -93,6 +97,18 @@ fn rest(dir: &Path, args: &[String]) {
             serve_or_404(dir, "rest_pull_create.json")
         }
         ("GET", ["repos", _, _, "pulls", n]) => serve_or_404(dir, &format!("rest_pull_{n}.json")),
+        ("GET", ["search", "issues"]) => print!(
+            "{}",
+            read_or(dir, "rest_search_issues.json", r#"{"items":[]}"#)
+        ),
+        ("GET", ["repos", _, _, "issues"]) => print!("{}", read_or(dir, "rest_issues.json", "[]")),
+        ("GET", ["repos", _, _, "issues", n]) => serve_or_404(dir, &format!("rest_issue_{n}.json")),
+        ("GET", ["repos", _, _, "issues", n, "events"]) => {
+            print!(
+                "{}",
+                read_or(dir, &format!("rest_issue_{n}_events.json"), "[]")
+            )
+        }
         ("GET", ["repos", _, _, "pulls", _, "requested_reviewers"]) => print!(
             "{}",
             read_or(
@@ -128,11 +144,16 @@ fn main() {
         let _ = std::fs::write(dir.join("pr_create.args"), args.join("\0"));
     }
 
-    if uses_graphql(&joined) && dir.join("refuse_graphql").exists() {
-        eprintln!(
-            "HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the \
-             REST API (https://api.github.com/graphql)"
-        );
+    if uses_graphql(&joined)
+        && let Ok(stderr) = std::fs::read_to_string(dir.join("refuse_graphql"))
+    {
+        match stderr.as_str() {
+            "" => eprintln!(
+                "HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the \
+                 REST API (https://api.github.com/graphql)"
+            ),
+            stderr => eprintln!("{stderr}"),
+        }
         std::process::exit(1);
     }
     if joined.starts_with("pr create") {

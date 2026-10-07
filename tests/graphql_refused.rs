@@ -1,0 +1,634 @@
+//! `issue setup`, `issue status` and `issue pr checkout` work where GitHub
+//! refuses GraphQL, as the Claude Code cloud proxy does.
+//!
+//! Single reads go over REST. Each batched read keeps its one GraphQL request
+//! where GraphQL answers and falls back to REST per item where it is refused.
+
+#[path = "common/ghfake.rs"]
+mod ghfake;
+
+use std::path::{Path, PathBuf};
+
+/// Config naming GitHub Issues as the tracker, which detection alone does not.
+const GITHUB_TRACKER: &str = "\n[tracker]\nkind = \"github\"";
+
+fn pr(number: u64, state: &'static str) -> ghfake::Pr {
+    ghfake::Pr {
+        number,
+        state,
+        is_draft: false,
+        author: "LevValle",
+    }
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    devkit_git::Git::fixture(dir)
+        .args(args.iter().copied())
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?}: {e:#}"))
+}
+
+/// A bare `origin` holding the project's commit as `main` and as PR 7's head
+/// ref, the way GitHub publishes it on the base repository.
+fn with_origin(fake: &ghfake::Fake) -> tempfile::TempDir {
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare"]);
+    git(fake.project(), &[
+        "remote",
+        "add",
+        "origin",
+        origin.path().to_str().unwrap(),
+    ]);
+    git(fake.project(), &["push", "-q", "origin", "HEAD:main"]);
+    git(fake.project(), &[
+        "push",
+        "-q",
+        "origin",
+        "HEAD:refs/pull/7/head",
+    ]);
+    origin
+}
+
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(files_under(&path));
+        } else {
+            out.push(path);
+        }
+    }
+    out
+}
+
+#[test]
+fn setup_writes_the_issue_summary_when_graphql_is_refused() {
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    fake.refuse_graphql();
+    fake.serve_issue("The summary devkit read over REST.");
+    let _origin = with_origin(&fake);
+
+    let out = fake.issue(&["setup", "7", "--slug", "fix", "--summary", "--no-gitignore"]);
+
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{calls}");
+    assert!(calls.contains("--method GET repos/o/r/issues/7"), "{calls}");
+    let summary = files_under(&fake.project().join("wts"))
+        .into_iter()
+        .filter(|p| !p.components().any(|c| c.as_os_str() == ".git"))
+        .find(|p| {
+            std::fs::read_to_string(p)
+                .is_ok_and(|text| text.contains("The summary devkit read over REST."))
+        });
+    assert!(
+        summary.is_some(),
+        "no summary file holds the issue body\n{calls}"
+    );
+}
+
+#[test]
+fn pr_checkout_checks_out_the_pr_when_graphql_is_refused() {
+    let fake = ghfake::Fake::without_pr("");
+    fake.refuse_graphql();
+    fake.serve_pr(&pr(7, "OPEN"));
+    let _origin = with_origin(&fake);
+    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+    let scratch = tempfile::tempdir().unwrap();
+    let worktree = scratch.path().join("pr-7");
+
+    let out = fake.issue(&["pr", "checkout", "#7", worktree.to_str().unwrap()]);
+
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{calls}");
+    assert_eq!(
+        git(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "lev/eng-1-fix"
+    );
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]).trim(), fake.head());
+    let record = std::fs::read_to_string(worktree.join(".devkit").join("issue.toml")).unwrap();
+    assert!(record.contains("number = 7"), "{record}");
+}
+
+/// A cross-reference on an issue's REST timeline from `source`, an issue or
+/// PR in o/r whose body is `body`.
+fn cross_reference(number: u64, is_pr: bool, body: &str) -> serde_json::Value {
+    let mut source = serde_json::json!({
+        "number": number, "state": "open", "body": body,
+        "html_url": format!("https://github.com/o/r/issues/{number}"),
+        "repository": { "full_name": "o/r" }
+    });
+    if is_pr {
+        source["html_url"] = format!("https://github.com/o/r/pull/{number}").into();
+        source["pull_request"] = serde_json::json!({ "merged_at": null });
+    }
+    serde_json::json!({ "event": "cross-referenced", "source": { "type": "issue", "issue": source } })
+}
+
+/// With a token, as a cloud session has, devkit asks GitHub directly; GraphQL
+/// is refused there too, so an issue's closing PR is read from its REST
+/// timeline: PR 7 closes issue 3, while PR 8 only mentions it.
+#[test]
+fn pr_checkout_of_an_issue_checks_out_its_closing_pr_when_graphql_is_refused() {
+    use devkit_common::http::stub::{self, Route};
+
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    fake.refuse_graphql();
+    let _origin = with_origin(&fake);
+    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+    let timeline = serde_json::json!([
+        { "event": "labeled" },
+        cross_reference(5, false, "Fixes #3"),
+        cross_reference(8, true, "Related to #3, and fixes #30."),
+        cross_reference(7, true, "Some work.\n\nFixes: #3"),
+    ])
+    .to_string();
+    let pr = serde_json::json!({
+        "number": 7, "state": "open", "merged_at": null,
+        "html_url": "https://github.com/o/r/pull/7", "title": "t",
+        "head": { "ref": "lev/eng-1-fix", "sha": fake.head(), "repo": { "owner": { "login": "o" } } },
+        "draft": false, "user": { "login": "LevValle" }
+    })
+    .to_string();
+    let api = stub::serve(vec![
+        Route::new(
+            "POST",
+            "/graphql",
+            403,
+            r#"{"message":"GraphQL is refused"}"#,
+        ),
+        Route::new("GET", "/repos/o/r/issues/3/timeline", 200, &timeline),
+        Route::new("GET", "/repos/o/r/pulls/7", 200, &pr),
+    ]);
+    let scratch = tempfile::tempdir().unwrap();
+    let worktree = scratch.path().join("issue-3");
+
+    let out = fake.issue_with_env(
+        &[
+            "pr",
+            "checkout",
+            "https://github.com/o/r/issues/3",
+            worktree.to_str().unwrap(),
+        ],
+        &[("GH_TOKEN", "t0k"), ("DEVKIT_TEST_GITHUB_API", &api.url())],
+    );
+
+    let reqs = api.requests();
+    assert!(out.status.success(), "{out:?}\n{reqs:#?}");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]).trim(), fake.head());
+    let record = std::fs::read_to_string(worktree.join(".devkit").join("issue.toml")).unwrap();
+    assert!(record.contains("number = 7"), "{record}");
+    assert!(
+        reqs.iter()
+            .any(|r| r.path.starts_with("/repos/o/r/issues/3/timeline")),
+        "{reqs:#?}"
+    );
+}
+
+/// Two issue worktrees: `wts/a` on the PR branch with issue 7 and no recorded
+/// PR, so its PR is found by head branch, and `wts/b` with no issue and PR 9
+/// recorded, so its PR is read by number.
+fn status_project() -> (ghfake::Fake, tempfile::TempDir) {
+    let fake = ghfake::Fake::new(GITHUB_TRACKER, &pr(7, "OPEN"));
+    let origin = with_origin(&fake);
+    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+    let a = fake.project().join("wts").join("a");
+    let b = fake.project().join("wts").join("b");
+    git(fake.project(), &[
+        "worktree",
+        "add",
+        "-q",
+        a.to_str().unwrap(),
+        "lev/eng-1-fix",
+    ]);
+    git(fake.project(), &[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "lev/other",
+        b.to_str().unwrap(),
+    ]);
+    let record = |dir: &Path, issue: &str, pr: Option<u64>| {
+        devkit_common::record::write(dir, &devkit_common::record::IssueRecord {
+            issue: issue.into(),
+            slug: "fix".into(),
+            pr: pr.map(|number| devkit_common::forge::PrLocator {
+                repo: Some("o/r".into()),
+                number,
+            }),
+            ..Default::default()
+        })
+        .expect("write issue record");
+    };
+    record(&a, "7", None);
+    record(&b, "", Some(9));
+    (fake, origin)
+}
+
+/// The GraphQL answer to every batched read `issue status` makes, under the
+/// aliases each query gives its items.
+fn status_graphql(head: &str) -> String {
+    let node = |n: u64, state: &str| {
+        serde_json::json!({
+            "number": n, "state": state, "url": format!("https://github.com/o/r/pull/{n}"),
+            "title": "t", "headRefName": "lev/eng-1-fix", "headRefOid": head, "isDraft": false,
+            "author": { "login": "LevValle" }, "headRepositoryOwner": { "login": "o" }
+        })
+    };
+    serde_json::json!({ "data": {
+        "repository": {
+            "b0": { "totalCount": 1, "nodes": [node(7, "OPEN")] },
+            "i0": { "state": "CLOSED", "stateReason": "COMPLETED" }
+        },
+        "r0": { "p0": node(9, "MERGED") }
+    } })
+    .to_string()
+}
+
+#[test]
+fn status_reports_the_same_prs_and_states_when_graphql_is_refused() {
+    let (graphql, _graphql_origin) = status_project();
+    graphql.serve_graphql(&status_graphql(graphql.head()));
+    let (refused, _refused_origin) = status_project();
+    refused.serve_pr(&pr(9, "MERGED"));
+    refused.serve_rest_issue(7, "closed", Some("completed"), "");
+    refused.refuse_graphql();
+
+    let want = graphql.issue(&["status"]);
+    let got = refused.issue(&["status"]);
+
+    let want_out = String::from_utf8_lossy(&want.stdout);
+    let got_out = String::from_utf8_lossy(&got.stdout);
+    assert!(want.status.success(), "{want:?}\n{}", graphql.calls());
+    assert!(got.status.success(), "{got:?}\n{}", refused.calls());
+    for cell in ["#7", "#9", "OPEN", "MERGED", "Done"] {
+        assert!(want_out.contains(cell), "{cell} missing: {want_out}");
+    }
+    assert_eq!(got_out, want_out, "{}", refused.calls());
+    let calls = refused.calls();
+    for rest in [
+        "--method GET repos/o/r/issues/7",
+        "--method GET repos/o/r/pulls/9",
+        "--method GET repos/o/r/pulls?head=o%3Alev%2Feng-1-fix&state=all",
+    ] {
+        assert!(calls.contains(rest), "{rest} missing: {calls}");
+    }
+}
+
+/// Each batched read `issue status` makes is one GraphQL request where GraphQL
+/// answers, sent nowhere else.
+#[test]
+fn status_makes_one_graphql_request_per_batched_read() {
+    let (fake, _origin) = status_project();
+    fake.serve_graphql(&status_graphql(fake.head()));
+
+    let out = fake.issue(&["status"]);
+
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{calls}");
+    let graphql: Vec<&str> = calls
+        .lines()
+        .filter(|l| l.starts_with("api graphql"))
+        .collect();
+    for (read, marker) in [
+        ("PRs by head branch", "pullRequests(headRefName"),
+        ("PRs by number", "pullRequest(number"),
+        ("issue states", "issue(number"),
+    ] {
+        assert_eq!(
+            graphql.iter().filter(|l| l.contains(marker)).count(),
+            1,
+            "{read}: {calls}"
+        );
+    }
+    assert_eq!(graphql.len(), 3, "{calls}");
+    assert!(!calls.contains("--method GET"), "a REST read: {calls}");
+}
+
+/// The two lines `issue dashboard` sums its assigned issues and authored PRs
+/// up in.
+fn dashboard_totals(out: &std::process::Output) -> Vec<String> {
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with("Total assigned:") || l.starts_with("PRs:"))
+        .map(|l| l.split("   Commits:").next().unwrap_or(l).to_string())
+        .collect()
+}
+
+/// Issue 3, closed after its first month, and issue 4, open; PR 7, merged,
+/// and PR 8, open: as GitHub's GraphQL and `gh pr list --search` report them.
+fn dashboard_over_graphql() -> ghfake::Fake {
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    fake.serve_graphql(
+        &serde_json::json!({ "data": { "viewer": { "login": "LevValle" }, "repository": { "issues": {
+            "pageInfo": { "hasNextPage": false, "endCursor": null },
+            "nodes": [
+                { "number": 3, "createdAt": "2026-01-05T00:00:00Z", "state": "CLOSED",
+                  "stateReason": "COMPLETED", "timelineItems": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null },
+                    "nodes": [{ "__typename": "ClosedEvent", "createdAt": "2026-02-01T00:00:00Z",
+                                "stateReason": "COMPLETED" }] } },
+                { "number": 4, "createdAt": "2026-03-01T00:00:00Z", "state": "OPEN",
+                  "stateReason": null, "timelineItems": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] } }
+            ]
+        } } } })
+        .to_string(),
+    );
+    fake.answer(
+        "pr_search.json",
+        &serde_json::json!([
+            { "createdAt": "2026-01-10T00:00:00Z", "mergedAt": "2026-01-12T00:00:00Z",
+              "additions": 10, "deletions": 2 },
+            { "createdAt": "2026-03-02T00:00:00Z", "mergedAt": null,
+              "additions": 5, "deletions": 1 }
+        ])
+        .to_string(),
+    );
+    fake
+}
+
+/// The same issues and PRs as GitHub's REST API reports them, behind a `gh`
+/// that refuses GraphQL.
+fn dashboard_over_rest() -> ghfake::Fake {
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    fake.refuse_graphql();
+    fake.answer(
+        "rest_issues.json",
+        &serde_json::json!([
+            { "number": 3, "created_at": "2026-01-05T00:00:00Z", "state": "closed",
+              "state_reason": "completed" },
+            { "number": 4, "created_at": "2026-03-01T00:00:00Z", "state": "open",
+              "state_reason": null },
+            { "number": 9, "created_at": "2026-03-03T00:00:00Z", "state": "open",
+              "state_reason": null, "pull_request": { "url": "x" } }
+        ])
+        .to_string(),
+    );
+    fake.answer(
+        "rest_issue_3_events.json",
+        &serde_json::json!([
+            { "event": "assigned", "created_at": "2026-01-05T00:00:00Z" },
+            { "event": "closed", "created_at": "2026-02-01T00:00:00Z",
+              "state_reason": "completed" }
+        ])
+        .to_string(),
+    );
+    fake.answer(
+        "rest_search_issues.json",
+        &serde_json::json!({ "total_count": 2, "items": [
+            { "number": 7, "pull_request": { "url": "x" } },
+            { "number": 8, "pull_request": { "url": "x" } }
+        ] })
+        .to_string(),
+    );
+    for (n, created, merged, additions, deletions) in [
+        (
+            7,
+            "2026-01-10T00:00:00Z",
+            Some("2026-01-12T00:00:00Z"),
+            10,
+            2,
+        ),
+        (8, "2026-03-02T00:00:00Z", None, 5, 1),
+    ] {
+        fake.answer(
+            &format!("rest_pull_{n}.json"),
+            &serde_json::json!({
+                "number": n, "created_at": created, "merged_at": merged,
+                "additions": additions, "deletions": deletions
+            })
+            .to_string(),
+        );
+    }
+    fake
+}
+
+#[test]
+fn dashboard_reports_the_same_issues_and_prs_when_graphql_is_refused() {
+    let graphql = dashboard_over_graphql();
+    let refused = dashboard_over_rest();
+
+    let want = graphql.issue(&["dashboard", "--no-cache"]);
+    let got = refused.issue(&["dashboard", "--no-cache"]);
+
+    assert!(want.status.success(), "{want:?}\n{}", graphql.calls());
+    assert!(got.status.success(), "{got:?}\n{}", refused.calls());
+    assert_eq!(dashboard_totals(&want), vec![
+        "Total assigned: 2   open now: 1",
+        "PRs: 2 opened, 1 merged",
+    ]);
+    assert_eq!(
+        dashboard_totals(&got),
+        dashboard_totals(&want),
+        "{got:?}\n{}",
+        refused.calls()
+    );
+    let lines = |out: &std::process::Output| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|l| l.split("Lines: ").nth(1).map(String::from))
+    };
+    assert_eq!(lines(&want).as_deref(), Some("+15 / -3"));
+    assert_eq!(lines(&got), lines(&want));
+}
+
+/// The viewer, assigned-issues and PR-timeline reads stay one GraphQL request
+/// each where GraphQL answers, with no per-item REST read.
+#[test]
+fn dashboard_makes_one_graphql_request_per_batched_read() {
+    let fake = dashboard_over_graphql();
+
+    let out = fake.issue(&["dashboard", "--no-cache"]);
+
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{calls}");
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|l| l.ends_with("query=query { viewer { login } }"))
+            .count(),
+        1,
+        "{calls}"
+    );
+    assert!(
+        !calls.lines().any(|l| l.ends_with("--method GET user")),
+        "{calls}"
+    );
+    assert_eq!(calls.matches("filterBy: { assignee").count(), 1, "{calls}");
+    assert_eq!(calls.matches("pr list --search").count(), 1, "{calls}");
+    for rest in [
+        "repos/o/r/issues?",
+        "/events",
+        "search/issues?q=repo%3Ao%2Fr%20is%3Apr",
+    ] {
+        assert!(!calls.contains(rest), "{rest}: {calls}");
+    }
+}
+
+/// `issue review request` finds this branch's PR and asks for its reviewer
+/// the same way whether GitHub answers GraphQL or refuses it.
+#[test]
+fn review_request_finds_the_branch_pr_when_graphql_is_refused() {
+    let args = [
+        "review",
+        "request",
+        "--no-push",
+        "--no-notify",
+        "--to",
+        "lev",
+    ];
+    let graphql = ghfake::Fake::new("", &pr(7, "OPEN"));
+    graphql.serve_pr(&pr(7, "OPEN"));
+    let refused = ghfake::Fake::new("", &pr(7, "OPEN"));
+    refused.serve_pr(&pr(7, "OPEN"));
+    refused.refuse_graphql();
+
+    let want = graphql.issue(&args);
+    let got = refused.issue(&args);
+
+    let calls = refused.calls();
+    assert!(want.status.success(), "{want:?}\n{}", graphql.calls());
+    assert!(got.status.success(), "{got:?}\n{calls}");
+    assert_eq!(
+        String::from_utf8_lossy(&want.stdout),
+        "https://github.com/o/r/pull/7\n"
+    );
+    assert_eq!(got.stdout, want.stdout);
+    for rest in [
+        "--method GET repos/o/r/pulls?head=o%3Alev%2Feng-1-fix&state=all",
+        "--method POST repos/o/r/pulls/7/requested_reviewers",
+    ] {
+        assert!(calls.contains(rest), "{rest} missing: {calls}");
+    }
+}
+
+/// With GraphQL switched off, `issue status` reads every batch over REST and
+/// sends no GraphQL request, though GraphQL would answer.
+#[test]
+fn status_skips_graphql_when_it_is_switched_off() {
+    let (graphql, _graphql_origin) = status_project();
+    graphql.serve_graphql(&status_graphql(graphql.head()));
+    let (off, _off_origin) = status_project();
+    off.serve_graphql(&status_graphql(off.head()));
+    off.serve_pr(&pr(9, "MERGED"));
+    off.serve_rest_issue(7, "closed", Some("completed"), "");
+
+    let want = graphql.issue(&["status"]);
+    let got = off.issue_with_env(&["status"], &[("DEVKIT_NO_GRAPHQL", "1")]);
+
+    let calls = off.calls();
+    assert!(want.status.success(), "{want:?}\n{}", graphql.calls());
+    assert!(got.status.success(), "{got:?}\n{calls}");
+    assert_eq!(got.stdout, want.stdout, "{calls}");
+    assert!(!calls.contains("graphql"), "a GraphQL request: {calls}");
+    assert!(calls.contains("--method GET repos/o/r/pulls/9"), "{calls}");
+}
+
+/// `[github] no_graphql` switches GraphQL off too, and `issue prs`, which has
+/// no REST path, says so instead of sending a GraphQL request.
+#[test]
+fn prs_names_the_switch_when_graphql_is_switched_off() {
+    let fake = ghfake::Fake::without_pr("");
+    let config = fake.project().join("no-graphql.toml");
+    std::fs::write(
+        &config,
+        "[forge]\nkind = \"github\"\nrepo = \"o/r\"\n\n[github]\nno_graphql = true\n",
+    )
+    .unwrap();
+
+    let out = fake.issue(&["prs", "--no-cache", "--config", config.to_str().unwrap()]);
+
+    let calls = fake.calls();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{out:?}\n{calls}");
+    assert!(stderr.contains("DEVKIT_NO_GRAPHQL"), "{stderr}");
+    assert!(!calls.contains("graphql"), "a GraphQL request: {calls}");
+}
+
+/// GitHub's secondary rate limit answers GraphQL with a 403 too, but that is
+/// not a refusal: `issue status` reports it rather than reading each PR over
+/// REST, which would only spend more of the limit.
+#[test]
+fn status_does_not_fall_back_to_rest_when_graphql_is_rate_limited() {
+    let (fake, _origin) = status_project();
+    fake.serve_pr(&pr(9, "MERGED"));
+    fake.fail_graphql(
+        "HTTP 403: You have exceeded a secondary rate limit. Please wait a few minutes \
+         before you try again. (https://api.github.com/graphql)",
+    );
+
+    let out = fake.issue(&["status"]);
+
+    let calls = fake.calls();
+    assert!(!calls.contains("--method GET repos/o/r/pulls/9"), "{calls}");
+    assert!(
+        !calls.contains("--method GET repos/o/r/issues/7"),
+        "{calls}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("secondary rate limit"), "{out:?}\n{calls}");
+}
+
+/// With a token, GitHub's primary rate limit on GraphQL is a 403 whose body
+/// says so; `issue pr checkout` of an issue reports it rather than reading the
+/// issue's timeline over REST.
+#[test]
+fn pr_checkout_of_an_issue_reports_a_graphql_rate_limit() {
+    use devkit_common::http::stub::{self, Route};
+
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    let _origin = with_origin(&fake);
+    let api = stub::serve(vec![
+        Route::new(
+            "POST",
+            "/graphql",
+            403,
+            r#"{"message":"API rate limit exceeded for user ID 1.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}"#,
+        ),
+        Route::new("GET", "/repos/o/r/issues/3/timeline", 200, "[]"),
+    ]);
+    let scratch = tempfile::tempdir().unwrap();
+
+    let out = fake.issue_with_env(
+        &[
+            "pr",
+            "checkout",
+            "https://github.com/o/r/issues/3",
+            scratch.path().join("issue-3").to_str().unwrap(),
+        ],
+        &[("GH_TOKEN", "t0k"), ("DEVKIT_TEST_GITHUB_API", &api.url())],
+    );
+
+    let reqs = api.requests();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{out:?}\n{reqs:#?}");
+    assert!(stderr.contains("API rate limit exceeded"), "{stderr}");
+    assert!(
+        !reqs.iter().any(|r| r.path.contains("/timeline")),
+        "{reqs:#?}"
+    );
+}
+
+/// A PR search GitHub cut short answers 200 with `incomplete_results`. The
+/// REST fallback treats it as a failed read rather than counting the partial
+/// page as every PR there is.
+#[test]
+fn dashboard_counts_no_prs_from_an_incomplete_search() {
+    let fake = dashboard_over_rest();
+    fake.answer(
+        "rest_search_issues.json",
+        &serde_json::json!({ "total_count": 2, "incomplete_results": true, "items": [
+            { "number": 7, "pull_request": { "url": "x" } }
+        ] })
+        .to_string(),
+    );
+
+    let out = fake.issue(&["dashboard", "--no-cache"]);
+
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{calls}");
+    assert!(calls.contains("search/issues?q="), "{calls}");
+    assert!(!calls.contains("repos/o/r/pulls/7"), "{calls}");
+}

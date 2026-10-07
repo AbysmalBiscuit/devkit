@@ -4,8 +4,9 @@
 //! through `gh api` when it does not, so they work where GitHub refuses
 //! GraphQL. Finding a PR by branch and opening one go through GraphQL or `gh`
 //! first, which find and push to forks, and fall back to REST only when
-//! GitHub refuses GraphQL itself. Checkout goes
-//! through `gh`, which owns the git-level work the API does not do.
+//! GitHub refuses GraphQL itself. A batched read is one GraphQL request, or
+//! one REST read per item where GitHub refuses GraphQL. Checkout goes through
+//! `gh`, which owns the git-level work the API does not do.
 
 use std::{collections::HashMap, path::Path};
 
@@ -21,7 +22,7 @@ use super::{
 use crate::{
     cmd::{gh_capture, gh_json_in},
     forge::rest::encode,
-    github::{Api, Method},
+    github::{Api, Method, each, graphql_refused, unless_off},
 };
 
 pub struct GithubForge {
@@ -631,20 +632,6 @@ fn parse_open_prs_page(v: &Value) -> Result<OpenPrPage> {
 
 // --- gh fallbacks ------------------------------------------------------------
 
-/// A GraphQL call failed because GitHub refused GraphQL outright (HTTP 403),
-/// as the Claude Code cloud proxy does, rather than over anything in the
-/// request: the GraphQL endpoint's own status for a direct call, `gh`'s
-/// stderr for one through `gh`.
-fn graphql_refused(e: &anyhow::Error) -> bool {
-    if crate::http::status(e) == Some(crate::http::StatusCode::FORBIDDEN) {
-        return true;
-    }
-    crate::cmd::failed_stderr(e).is_some_and(|stderr| {
-        let stderr = stderr.to_lowercase();
-        stderr.contains("graphql") && stderr.contains("403")
-    })
-}
-
 /// The `--json` fields a `gh` PR read selects, matching [`GhPr`].
 const GH_PR_FIELDS: &str = "number,state,url,title,headRefName,headRefOid,isDraft,author";
 
@@ -691,20 +678,22 @@ impl From<GhPr> for PrBrief {
 
 impl GithubForge {
     fn gh_prs_by_head(&self, repo: &Repo, branch: &str) -> Result<HeadLookup> {
-        let found: Vec<GhPr> = gh_json_in(
-            &[
-                "pr",
-                "list",
-                "--head",
-                branch,
-                "--state",
-                "all",
-                "--json",
-                GH_PR_FIELDS,
-            ],
-            repo,
-            ".",
-        )?;
+        let found: Vec<GhPr> = unless_off(|| {
+            gh_json_in(
+                &[
+                    "pr",
+                    "list",
+                    "--head",
+                    branch,
+                    "--state",
+                    "all",
+                    "--json",
+                    GH_PR_FIELDS,
+                ],
+                repo,
+                ".",
+            )
+        })?;
         Ok(HeadLookup::of(found.into_iter().map(Into::into).collect()))
     }
 
@@ -810,13 +799,20 @@ impl Forge for GithubForge {
         brief_of_response(body, n, &repo.slug)
     }
 
+    /// One GraphQL round trip, directly when a token resolves and through
+    /// `gh` when not; one REST read per PR where GitHub refuses GraphQL.
     fn prs(&self, targets: &[(Repo, u64)]) -> Result<Vec<PrLookup>> {
         if targets.is_empty() {
             return Ok(Vec::new());
         }
-        anyhow::ensure!(self.api.token().is_some(), "no GitHub token resolved");
-        let v = self.api.graphql_partial(&prs_by_number_query(targets))?;
-        Ok(parse_prs_by_number(&v, targets))
+        match self
+            .api
+            .graphql_or_gh(&prs_by_number_query(targets), Api::graphql_partial)
+        {
+            Ok(v) => Ok(parse_prs_by_number(&v, targets)),
+            Err(e) if graphql_refused(&e) => Ok(each(targets, |(repo, n)| self.pr(repo, *n))),
+            Err(e) => Err(e),
+        }
     }
 
     /// GraphQL once: directly when a token resolves, else through
@@ -847,26 +843,32 @@ impl Forge for GithubForge {
             .unwrap_or_else(|e| HeadLookup::Unavailable(format!("{refused}; REST: {e:#}")))
     }
 
-    /// One GraphQL round trip for every branch. No `gh` fallback: a status
-    /// report over many worktrees marks each branch unknown instead of
-    /// spawning `gh` once per branch.
+    /// One GraphQL round trip for every branch, directly when a token resolves
+    /// and through `gh` when not. Where GitHub refuses GraphQL, one REST read
+    /// per branch, which finds no fork's branch.
     fn prs_by_head(&self, repo: &Repo, branches: &[String]) -> HashMap<String, HeadLookup> {
-        let unavailable = |reason: &str| {
-            branches
-                .iter()
-                .map(|b| (b.clone(), HeadLookup::Unavailable(reason.to_string())))
-                .collect()
-        };
         if branches.is_empty() {
             return HashMap::new();
         }
-        if self.api.token().is_none() {
-            return unavailable("no GitHub token resolved");
-        }
-        match self.api.graphql(&heads_query(&repo.slug, branches)) {
-            Ok(v) => parse_heads(&v, branches),
-            Err(e) => unavailable(&format!("{e:#}")),
-        }
+        let refused = match self
+            .api
+            .graphql_or_gh(&heads_query(&repo.slug, branches), Api::graphql)
+        {
+            Ok(v) => return parse_heads(&v, branches),
+            Err(e) if graphql_refused(&e) => format!("{e:#}"),
+            Err(e) => {
+                let reason = format!("{e:#}");
+                return branches
+                    .iter()
+                    .map(|b| (b.clone(), HeadLookup::Unavailable(reason.clone())))
+                    .collect();
+            }
+        };
+        let found = each(branches, |b| {
+            self.rest_prs_by_head(repo, b)
+                .unwrap_or_else(|e| HeadLookup::Unavailable(format!("{refused}; REST: {e:#}")))
+        });
+        branches.iter().cloned().zip(found).collect()
     }
 
     fn attaches_media(&self) -> bool {
@@ -887,7 +889,7 @@ impl Forge for GithubForge {
         for file in pr.attachments {
             args.extend(["--attach", file]);
         }
-        let out = match gh_capture(&args, repo, &cwd.to_string_lossy()) {
+        let out = match unless_off(|| gh_capture(&args, repo, &cwd.to_string_lossy())) {
             Ok(out) => out,
             Err(e) if graphql_refused(&e) && pr.attachments.is_empty() => {
                 return self.rest_create(repo, pr, cwd);
@@ -930,13 +932,25 @@ impl Forge for GithubForge {
         })
     }
 
+    /// `gh pr checkout`, which sets up a fork's remote. Where GitHub refuses
+    /// the GraphQL it runs on, the head GitHub publishes on the base
+    /// repository is fetched instead, with no upstream set.
     fn checkout(&self, repo: &Repo, pr: &PrBrief, dir: &Path) -> Result<()> {
-        gh_capture(
-            &["pr", "checkout", &pr.number.to_string()],
-            repo,
-            &dir.to_string_lossy(),
-        )?;
-        Ok(())
+        match unless_off(|| {
+            gh_capture(
+                &["pr", "checkout", &pr.number.to_string()],
+                repo,
+                &dir.to_string_lossy(),
+            )
+        }) {
+            Ok(_) => Ok(()),
+            Err(e) if graphql_refused(&e) => super::checkout_ref(
+                dir,
+                &format!("refs/pull/{}/head", pr.number),
+                &pr.head_ref_name,
+            ),
+            Err(e) => Err(e),
+        }
     }
 
     fn open_prs(
@@ -951,27 +965,40 @@ impl Forge for GithubForge {
     }
 
     /// Over GraphQL when a token resolves, paginated up to `max`; otherwise
-    /// `gh pr list --search`.
+    /// `gh pr list --search`. Where GitHub refuses GraphQL, the REST search
+    /// and one PR read per result.
     fn timeline(&self, repo: &Repo, role: Role, max: usize) -> Result<Vec<PrTimeline>> {
-        if self.api.token().is_none() {
-            let found: Vec<TimelineNode> = gh_json_in(
-                &[
-                    "pr",
-                    "list",
-                    "--search",
-                    qualifier(role),
-                    "--state",
-                    "all",
-                    "--limit",
-                    &max.to_string(),
-                    "--json",
-                    "createdAt,mergedAt,additions,deletions",
-                ],
-                repo,
-                ".",
-            )?;
-            return Ok(found.into_iter().map(Into::into).collect());
+        let attempt = match self.api.token() {
+            Some(_) => self.graphql_timeline(repo, role, max),
+            None => unless_off(|| {
+                gh_json_in::<Vec<TimelineNode>>(
+                    &[
+                        "pr",
+                        "list",
+                        "--search",
+                        qualifier(role),
+                        "--state",
+                        "all",
+                        "--limit",
+                        &max.to_string(),
+                        "--json",
+                        "createdAt,mergedAt,additions,deletions",
+                    ],
+                    repo,
+                    ".",
+                )
+            })
+            .map(|found| found.into_iter().map(Into::into).collect()),
+        };
+        match attempt {
+            Err(e) if graphql_refused(&e) => self.rest_timeline(repo, role, max),
+            other => other,
         }
+    }
+}
+
+impl GithubForge {
+    fn graphql_timeline(&self, repo: &Repo, role: Role, max: usize) -> Result<Vec<PrTimeline>> {
         let mut out = Vec::new();
         let mut after: Option<String> = None;
         loop {
@@ -989,6 +1016,43 @@ impl Forge for GithubForge {
         }
         out.truncate(max);
         Ok(out)
+    }
+
+    /// Up to `max` of the PRs the REST search finds, each read for its line
+    /// counts, which search results do not carry.
+    fn rest_timeline(&self, repo: &Repo, role: Role, max: usize) -> Result<Vec<PrTimeline>> {
+        const PER_PAGE: usize = 100;
+        let q = encode(&format!("repo:{} is:pr {}", repo.slug, qualifier(role)));
+        let mut numbers = Vec::new();
+        for page in 1.. {
+            let v = self.rest_found(&format!(
+                "/search/issues?q={q}&per_page={PER_PAGE}&page={page}"
+            ))?;
+            // A search GitHub cut short still answers 200, with fewer items.
+            anyhow::ensure!(
+                v["incomplete_results"].as_bool() != Some(true),
+                "GitHub timed out the PR search and returned incomplete results"
+            );
+            let items = v["items"]
+                .as_array()
+                .context("a PR search with no items list")?;
+            numbers.extend(items.iter().filter_map(|i| i["number"].as_u64()));
+            if items.len() < PER_PAGE || numbers.len() >= max {
+                break;
+            }
+        }
+        numbers.truncate(max);
+        each(&numbers, |n| {
+            let v = self.rest_found(&format!("/repos/{}/pulls/{n}", repo.slug))?;
+            Ok(PrTimeline {
+                created_at: v["created_at"].as_str().map(String::from),
+                merged_at: v["merged_at"].as_str().map(String::from),
+                additions: v["additions"].as_i64().unwrap_or(0),
+                deletions: v["deletions"].as_i64().unwrap_or(0),
+            })
+        })
+        .into_iter()
+        .collect()
     }
 }
 

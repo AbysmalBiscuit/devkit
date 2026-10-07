@@ -159,8 +159,10 @@ pub trait VersionControl {
     fn pushed(&self, dir: &::std::path::Path) -> ::anyhow::Result<bool>;
 
     /// Fetches `remote_ref` from `remote` and checks it out at `dir` as
-    /// `branch`, replacing any local branch of that name. The ref need not
-    /// sit under a branch namespace, as a forge's `refs/pull/7/head` does not.
+    /// `branch`. A local branch of that name already at the fetched commit is
+    /// reused; one anywhere else is an error naming it, since moving it could
+    /// orphan unpushed work. The ref need not sit under a branch namespace, as
+    /// a forge's `refs/pull/7/head` does not.
     fn checkout_remote_ref(
         &self,
         dir: &::std::path::Path,

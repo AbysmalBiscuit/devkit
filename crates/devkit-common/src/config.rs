@@ -49,6 +49,7 @@ pub fn resolve_in(
     );
     if let Ok((cfg, _)) = &resolved {
         crate::pool::configure(cfg.parallelism.threads);
+        crate::github::configure(cfg.github.no_graphql);
     }
     resolved
 }

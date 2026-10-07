@@ -195,8 +195,25 @@ impl VersionControl for GitBackend {
             .network()
             .output()
             .with_context(|| format!("fetching {remote_ref} from {remote}"))?;
+        let fetched = Git::at(dir)
+            .args(["rev-parse", "FETCH_HEAD"])
+            .output()?
+            .trim()
+            .to_string();
+        if self.has_branch(dir, branch)? {
+            let local = Git::at(dir)
+                .args(["rev-parse", &format!("refs/heads/{branch}")])
+                .output()?
+                .trim()
+                .to_string();
+            anyhow::ensure!(
+                local == fetched,
+                "local branch `{branch}` is at {local}, not at {remote_ref} ({fetched}); \
+                 rename or delete it to check this out"
+            );
+        }
         Git::at(dir)
-            .args(["checkout", "-B", branch, "FETCH_HEAD"])
+            .args(["checkout", "-B", branch, &fetched])
             .output()
             .with_context(|| format!("checking out {branch}"))?;
         Ok(())

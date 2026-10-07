@@ -1,9 +1,9 @@
 //! The GitHub Issues adapter.
 //!
-//! Mirrors `linear.rs`'s split: every operation is a `*_query` string builder,
-//! a `parse_*` function over the response, and a networked wrapper. Only the
-//! wrappers touch the network, so each parser tests against a recorded response
-//! and nothing here needs a token under test.
+//! Mirrors `linear.rs`'s split: every operation is a request builder (a
+//! GraphQL `*_query` or a REST path), a `parse_*` function over the response,
+//! and a networked wrapper. Only the wrappers touch the network, so each parser
+//! tests against a recorded response and nothing here needs a token under test.
 
 use std::collections::HashMap;
 
@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 
 use super::{AssignedIssue, IssueDetails, IssueRef, PrRef, State, StateKind, Tracker, TrackerKind};
 use crate::{
-    forge::{Repo, remote::same_host},
-    github::Api,
+    forge::{Repo, remote::same_host, rest::encode},
+    github::{Api, Method, each, graphql_refused},
 };
 
 /// GitHub's `(state, stateReason)` pair, in devkit's vocabulary.
@@ -35,73 +35,47 @@ pub fn map_state(state: &str, reason: Option<&str>) -> State {
     }
 }
 
-// --- one issue's details ----------------------------------------------------
+// --- one issue over REST ----------------------------------------------------
 
-/// GraphQL fetching everything [`IssueDetails`] carries for one issue.
-pub fn issue_query(slug: &str, number: u64) -> String {
-    let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
-    format!(
-        r#"query {{ repository(owner: {o}, name: {n}) {{ issue(number: {number}) {{
-             title url body state stateReason
-             assignees(first: 10) {{ pageInfo {{ hasNextPage }} nodes {{ login }} }}
-             labels(first: 20) {{ pageInfo {{ hasNextPage }} nodes {{ name }} }}
-           }} }} }}"#,
-        o = serde_json::Value::from(owner),
-        n = serde_json::Value::from(name),
-    )
+/// A REST issue's `state` and `state_reason`, which REST spells in lower case.
+fn rest_state(v: &serde_json::Value) -> State {
+    let state = v["state"].as_str().unwrap_or("").to_uppercase();
+    let reason = v["state_reason"].as_str().map(str::to_uppercase);
+    map_state(&state, reason.as_deref())
 }
 
-/// The details from an `issue_query` response. `None` when the repository or
-/// issue does not exist.
-///
-/// Neither `assignees` nor `labels` is paginated: a connection truncated by
-/// its window reads as a partial list with `…` appended, rather than as a
-/// complete one that happens to be short.
-pub fn parse_issue(resp: &serde_json::Value, id: &str) -> Option<IssueDetails> {
-    let node = &resp["data"]["repository"]["issue"];
-    let title = node["title"].as_str()?.to_string();
-    let state = map_state(
-        node["state"].as_str().unwrap_or(""),
-        node["stateReason"].as_str(),
-    );
-    let mut assignees: Vec<&str> = node["assignees"]["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|n| n["login"].as_str())
-        .collect();
-    if node["assignees"]["pageInfo"]["hasNextPage"]
-        .as_bool()
-        .unwrap_or(false)
-    {
-        assignees.push("…");
+/// The details from a `GET /repos/{slug}/issues/{n}` body. `None` for a pull
+/// request, which REST serves from the issues endpoint too, or a body with no
+/// title. REST returns every assignee and label, so neither list is cut.
+pub fn parse_rest_issue(v: &serde_json::Value, id: &str) -> Option<IssueDetails> {
+    if v.get("pull_request").is_some() {
+        return None;
     }
-    let assignee = assignees.join(", ");
-    let mut labels: Vec<String> = node["labels"]["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|n| n["name"].as_str().map(String::from))
-        .collect();
-    if node["labels"]["pageInfo"]["hasNextPage"]
-        .as_bool()
-        .unwrap_or(false)
-    {
-        labels.push("…".to_string());
-    }
+    let names = |list: &str, key: &str| -> Vec<String> {
+        v[list]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n[key].as_str().map(String::from))
+            .collect()
+    };
     Some(IssueDetails {
         id: id.to_string(),
-        title,
-        url: node["url"].as_str().unwrap_or("").to_string(),
-        description: node["body"].as_str().unwrap_or("").to_string(),
-        state: state.name,
-        assignee,
+        title: v["title"].as_str()?.to_string(),
+        url: v["html_url"].as_str().unwrap_or("").to_string(),
+        description: v["body"].as_str().unwrap_or("").to_string(),
+        state: rest_state(v).name,
+        assignee: names("assignees", "login").join(", "),
         priority: String::new(),
         estimate: String::new(),
-        labels,
+        labels: names("labels", "name"),
         parent: String::new(),
         project: String::new(),
     })
+}
+
+fn issue_path(slug: &str, number: u64) -> String {
+    format!("/repos/{slug}/issues/{number}")
 }
 
 // --- batched states ---------------------------------------------------------
@@ -259,6 +233,108 @@ pub fn parse_issue_pr(resp: &serde_json::Value) -> LinkedChoice {
     rank_linked(&prs)
 }
 
+// --- an issue's closing PRs over REST ----------------------------------------
+
+/// The words GitHub reads as closing the issue a PR body names after them.
+const CLOSING_KEYWORDS: [&str; 9] = [
+    "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
+];
+
+/// Whether a PR in `pr_repo` whose body is `body` closes issue `number` of
+/// `slug` on `host`: a closing keyword, then `#n` (in the PR's own
+/// repository), `owner/repo#n`, or the issue's URL.
+pub fn closes(body: &str, pr_repo: &str, slug: &str, host: &str, number: u64) -> bool {
+    let words: Vec<&str> = body.split_whitespace().collect();
+    words.windows(2).any(|pair| {
+        let keyword = pair[0]
+            .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+            .to_ascii_lowercase();
+        if !CLOSING_KEYWORDS.contains(&keyword.as_str()) {
+            return false;
+        }
+        let reference = pair[1].trim_end_matches(|c: char| ".,;:!?)".contains(c));
+        let named = match reference.split_once('#') {
+            Some(("", n)) => Some((pr_repo.to_string(), n)),
+            Some((repo, n)) if repo.contains('/') => Some((repo.to_string(), n)),
+            _ => None,
+        };
+        let target = match named {
+            Some((repo, n)) => n.parse().ok().map(|n| (repo, n)),
+            None => parse_issue_url(reference, host),
+        };
+        target.is_some_and(|(repo, n)| n == number && repo.eq_ignore_ascii_case(slug))
+    })
+}
+
+/// The PRs an issue's REST timeline links to it: each `cross-referenced` PR
+/// whose body closes issue `number` of `slug`. A `connected` event names no
+/// PR, so a PR linked only through the Development sidebar is not found.
+pub fn parse_closing_prs(
+    events: &[serde_json::Value],
+    slug: &str,
+    host: &str,
+    number: u64,
+) -> Vec<LinkedPr> {
+    events
+        .iter()
+        .filter_map(|e| {
+            if e["event"].as_str()? != "cross-referenced" {
+                return None;
+            }
+            let source = &e["source"]["issue"];
+            let pr = source.get("pull_request")?;
+            let repo = source["repository"]["full_name"].as_str()?;
+            if !closes(
+                source["body"].as_str().unwrap_or(""),
+                repo,
+                slug,
+                host,
+                number,
+            ) {
+                return None;
+            }
+            let state = if pr["merged_at"].is_string() {
+                "MERGED".to_string()
+            } else {
+                source["state"].as_str()?.to_uppercase()
+            };
+            Some(LinkedPr {
+                number: source["number"].as_u64()?,
+                state,
+                url: source["html_url"].as_str()?.to_string(),
+                repo: repo.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Every event on issue `number`'s REST timeline, page by page.
+fn timeline_events(api: &Api, slug: &str, number: u64) -> Result<Vec<serde_json::Value>> {
+    rest_pages(api, &format!("/repos/{slug}/issues/{number}/timeline"))
+}
+
+/// Every item of the REST list at `path`, fetched a full page at a time until
+/// a short page ends it.
+fn rest_pages(api: &Api, path: &str) -> Result<Vec<serde_json::Value>> {
+    const PER_PAGE: usize = 100;
+    let sep = if path.contains('?') { '&' } else { '?' };
+    let mut out = Vec::new();
+    for page in 1.. {
+        let url = format!("{path}{sep}per_page={PER_PAGE}&page={page}");
+        let items = api
+            .rest(Method::GET, &url, None)?
+            .with_context(|| format!("GitHub returned 404 for {url}"))?;
+        let items = items
+            .as_array()
+            .with_context(|| format!("{url} is not a list"))?;
+        out.extend(items.iter().cloned());
+        if items.len() < PER_PAGE {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 // --- assigned issues, with their state-transition history ------------------
 
 /// GraphQL for one page of issues assigned to `login`, with each issue's
@@ -293,23 +369,74 @@ pub fn assigned_query(slug: &str, login: &str, after: Option<&str>) -> String {
 /// A `(when, from, to)` state transition parsed from one timeline event.
 type Transition = (String, Option<State>, Option<State>);
 
+/// A close (with its GraphQL-spelled reason) or a reopen at `when`.
+fn transition(when: &str, closed: bool, reason: Option<&str>) -> Transition {
+    let (from, to) = if closed {
+        (map_state("OPEN", None), map_state("CLOSED", reason))
+    } else {
+        (map_state("CLOSED", None), map_state("OPEN", None))
+    };
+    (when.to_string(), Some(from), Some(to))
+}
+
 /// One `timelineItems.nodes[]` entry as a `(when, from, to)` transition, or
 /// `None` for an event type outside the two requested.
 fn parse_timeline_transition(n: &serde_json::Value) -> Option<Transition> {
-    let created_at = n["createdAt"].as_str()?.to_string();
+    let created_at = n["createdAt"].as_str()?;
     match n["__typename"].as_str()? {
-        "ClosedEvent" => Some((
-            created_at,
-            Some(map_state("OPEN", None)),
-            Some(map_state("CLOSED", n["stateReason"].as_str())),
-        )),
-        "ReopenedEvent" => Some((
-            created_at,
-            Some(map_state("CLOSED", None)),
-            Some(map_state("OPEN", None)),
-        )),
+        "ClosedEvent" => Some(transition(created_at, true, n["stateReason"].as_str())),
+        "ReopenedEvent" => Some(transition(created_at, false, None)),
         _ => None,
     }
+}
+
+/// One REST issue event as a `(when, from, to)` transition, or `None` for an
+/// event other than a close or a reopen.
+fn parse_rest_transition(e: &serde_json::Value) -> Option<Transition> {
+    let created_at = e["created_at"].as_str()?;
+    match e["event"].as_str()? {
+        "closed" => {
+            let reason = e["state_reason"].as_str().map(str::to_uppercase);
+            Some(transition(created_at, true, reason.as_deref()))
+        }
+        "reopened" => Some(transition(created_at, false, None)),
+        _ => None,
+    }
+}
+
+/// Every issue in `slug` assigned to `login`, with its history, over REST:
+/// the assigned list, then one events read per issue on the worker pool.
+fn rest_assigned(
+    api: &Api,
+    slug: &str,
+    login: &str,
+    on_page: &mut dyn FnMut(usize),
+) -> Result<Vec<AssignedIssue>> {
+    let listed = rest_pages(
+        api,
+        &format!("/repos/{slug}/issues?assignee={}&state=all", encode(login)),
+    )?;
+    let issues: Vec<(u64, &serde_json::Value)> = listed
+        .iter()
+        .filter(|v| v.get("pull_request").is_none())
+        .filter_map(|v| Some((v["number"].as_u64()?, v)))
+        .collect();
+    on_page(issues.len());
+    let events = each(&issues, |(n, _)| {
+        rest_pages(api, &format!("/repos/{slug}/issues/{n}/events"))
+    });
+    issues
+        .iter()
+        .zip(events)
+        .map(|((n, v), events)| {
+            Ok(AssignedIssue {
+                identifier: n.to_string(),
+                created_at: v["created_at"].as_str().unwrap_or("").to_string(),
+                state: rest_state(v),
+                history: events?.iter().filter_map(parse_rest_transition).collect(),
+            })
+        })
+        .collect()
 }
 
 /// One page of [`assigned_query`], plus which issues' nested timeline was
@@ -404,7 +531,7 @@ fn fill_remaining_timeline(
         .parse()
         .with_context(|| format!("bad issue number {number}"))?;
     loop {
-        let resp = api.graphql(&timeline_page_query(slug, n, &cursor))?;
+        let resp = api.graphql_or_gh(&timeline_page_query(slug, n, &cursor), Api::graphql)?;
         let (extra, next) = parse_timeline_page(&resp);
         if let Some(issue) = issues.iter_mut().find(|i| i.identifier == number) {
             issue.history.extend(extra);
@@ -418,9 +545,18 @@ fn fill_remaining_timeline(
 
 /// The authenticated user's own login. `filterBy.assignee` needs a concrete
 /// value; GitHub's `@me` shorthand does not extend to it.
+///
+/// GraphQL first, since GitHub App installation tokens cannot read REST
+/// `/user`; REST only where GitHub refuses GraphQL.
 fn viewer_login(api: &Api) -> Result<String> {
-    let resp = api.graphql("query { viewer { login } }")?;
-    resp["data"]["viewer"]["login"]
+    let user = match api.graphql_or_gh("query { viewer { login } }", Api::graphql) {
+        Ok(resp) => resp["data"]["viewer"].clone(),
+        Err(e) if graphql_refused(&e) => api
+            .rest(Method::GET, "/user", None)?
+            .context("GitHub returned 404 for /user")?,
+        Err(e) => return Err(e),
+    };
+    user["login"]
         .as_str()
         .map(String::from)
         .context("no viewer login in GitHub response")
@@ -506,25 +642,19 @@ pub fn parse_issues_for_prs(
 
 // --- the repository's earliest issue -----------------------------------------
 
-/// The single oldest issue in the repository, by creation date.
-pub fn timeline_origin_query(slug: &str) -> String {
-    let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
+/// The REST search for the single oldest issue in the repository, by creation
+/// date. The issues list would count pull requests; `is:issue` does not.
+pub fn timeline_origin_path(slug: &str) -> String {
     format!(
-        r#"query {{ repository(owner: {o}, name: {n}) {{
-             issues(first: 1, orderBy: {{ field: CREATED_AT, direction: ASC }}) {{
-               nodes {{ createdAt }}
-             }} }} }}"#,
-        o = serde_json::Value::from(owner),
-        n = serde_json::Value::from(name),
+        "/search/issues?q={}&sort=created&order=asc&per_page=1",
+        encode(&format!("repo:{slug} is:issue"))
     )
 }
 
-/// The earliest issue's `createdAt` from a `timeline_origin_query` response,
+/// The earliest issue's `created_at` from a [`timeline_origin_path`] search,
 /// or `None` when the repository has no issues at all.
 pub fn parse_timeline_origin(resp: &serde_json::Value) -> Option<String> {
-    resp["data"]["repository"]["issues"]["nodes"][0]["createdAt"]
-        .as_str()
-        .map(String::from)
+    resp["items"][0]["created_at"].as_str().map(String::from)
 }
 
 // --- issue URLs / ids --------------------------------------------------------
@@ -608,9 +738,13 @@ impl Tracker for GithubTracker {
         let n: u64 = id
             .parse()
             .with_context(|| format!("bad issue number {id}"))?;
-        let query = issue_query(&self.repo.slug, n);
-        let resp = self.api.graphql_or_gh(&query, Api::graphql_partial)?;
-        Ok(parse_issue(&resp, id))
+        let Some(v) = self
+            .api
+            .rest(Method::GET, &issue_path(&self.repo.slug, n), None)?
+        else {
+            return Ok(None);
+        };
+        Ok(parse_rest_issue(&v, id))
     }
 
     /// The issue body is the summary.
@@ -618,12 +752,39 @@ impl Tracker for GithubTracker {
         Ok(self.details(id)?.map(|d| d.description))
     }
 
+    /// One GraphQL round trip, directly when a token resolves and through
+    /// `gh` when not; one REST read per issue where GitHub refuses GraphQL.
+    /// An issue whose read fails has no entry.
     fn states(&self, ids: &[String]) -> HashMap<String, State> {
         let Some((query, aliases)) = states_query(&self.repo.slug, ids) else {
             return HashMap::new();
         };
-        match self.api.graphql_partial(&query) {
+        match self.api.graphql_or_gh(&query, Api::graphql_partial) {
             Ok(resp) => parse_states(&resp, &aliases),
+            Err(e) if graphql_refused(&e) => {
+                let numbered: Vec<(&String, u64)> = aliases
+                    .values()
+                    .filter_map(|id| Some((id, id.parse().ok()?)))
+                    .collect();
+                let found = each(&numbered, |(_, n)| {
+                    self.api
+                        .rest(Method::GET, &issue_path(&self.repo.slug, *n), None)
+                });
+                numbered
+                    .iter()
+                    .zip(found)
+                    .filter_map(|((id, _), v)| match v {
+                        Ok(Some(v)) if v.get("pull_request").is_none() => {
+                            Some(((*id).clone(), rest_state(&v)))
+                        }
+                        Ok(_) => None,
+                        Err(e) => {
+                            eprintln!("GitHub lookup of issue {id} failed: {e:#}");
+                            None
+                        }
+                    })
+                    .collect()
+            }
             Err(e) => {
                 eprintln!("GitHub lookup failed: {e:#}");
                 HashMap::new()
@@ -631,12 +792,29 @@ impl Tracker for GithubTracker {
         }
     }
 
+    /// `closedByPullRequestsReferences` over GraphQL; where GitHub refuses
+    /// GraphQL, the closing PRs read from the issue's REST timeline.
     fn issue_pr(&self, id: &str) -> Result<Option<PrRef>> {
         let n: u64 = id
             .parse()
             .with_context(|| format!("bad issue number {id}"))?;
-        let resp = self.api.graphql(&issue_pr_query(&self.repo.slug, n))?;
-        match parse_issue_pr(&resp) {
+        let choice = match self
+            .api
+            .graphql_or_gh(&issue_pr_query(&self.repo.slug, n), Api::graphql)
+        {
+            Ok(resp) => parse_issue_pr(&resp),
+            Err(e) if graphql_refused(&e) => {
+                let events = timeline_events(&self.api, &self.repo.slug, n)?;
+                rank_linked(&parse_closing_prs(
+                    &events,
+                    &self.repo.slug,
+                    &self.repo.host,
+                    n,
+                ))
+            }
+            Err(e) => return Err(e),
+        };
+        match choice {
             LinkedChoice::None => Ok(None),
             LinkedChoice::One(p) => Ok(Some(p)),
             LinkedChoice::Ambiguous(c) => anyhow::bail!(
@@ -672,14 +850,22 @@ impl Tracker for GithubTracker {
         out
     }
 
+    /// One GraphQL round trip per page, directly when a token resolves and
+    /// through `gh` when not. Where GitHub refuses GraphQL, the REST assigned
+    /// list and one events read per issue.
     fn assigned_history(&self, on_page: &mut dyn FnMut(usize)) -> Result<Vec<AssignedIssue>> {
         let login = viewer_login(&self.api)?;
         let mut out: Vec<AssignedIssue> = Vec::new();
         let mut after: Option<String> = None;
         loop {
-            let resp =
-                self.api
-                    .graphql(&assigned_query(&self.repo.slug, &login, after.as_deref()))?;
+            let query = assigned_query(&self.repo.slug, &login, after.as_deref());
+            let resp = match self.api.graphql_or_gh(&query, Api::graphql) {
+                Ok(resp) => resp,
+                Err(e) if out.is_empty() && graphql_refused(&e) => {
+                    return rest_assigned(&self.api, &self.repo.slug, &login, on_page);
+                }
+                Err(e) => return Err(e),
+            };
             let (mut issues, more) = parse_assigned(&resp);
             for (number, cursor) in more {
                 fill_remaining_timeline(&self.api, &self.repo.slug, &number, cursor, &mut issues)?;
@@ -698,7 +884,10 @@ impl Tracker for GithubTracker {
     /// creation date: the dashboard timeline is a project's history, and a
     /// contributor's account routinely predates the project by years.
     fn timeline_origin(&self) -> Result<Option<String>> {
-        let resp = self.api.graphql(&timeline_origin_query(&self.repo.slug))?;
+        let resp = self
+            .api
+            .rest(Method::GET, &timeline_origin_path(&self.repo.slug), None)?
+            .context("GitHub returned 404 searching for the oldest issue")?;
         Ok(parse_timeline_origin(&resp))
     }
 
@@ -711,11 +900,10 @@ impl Tracker for GithubTracker {
         Some(format!("https://{}/{slug}/issues/{number}", self.repo.host))
     }
 
+    /// The viewer, through `gh` when no token resolves.
     fn check(&self) -> Result<String> {
-        self.api
-            .token()
-            .with_context(|| format!("no GitHub token ({})", self.api.token_hint()))?;
-        let login = viewer_login(&self.api)?;
+        let login = viewer_login(&self.api)
+            .with_context(|| format!("no GitHub access ({})", self.api.token_hint()))?;
         Ok(format!("github: {login} ({})", self.repo.slug))
     }
 }
@@ -771,41 +959,43 @@ mod tests {
     }
 
     #[test]
-    fn an_open_issue_parses_its_state_and_assignee() {
-        let d = parse_issue(&fixture("gh_issue_open.json"), "6").unwrap();
-        assert_eq!(d.id, "6");
+    fn a_rest_issue_parses_its_state_assignees_and_labels() {
+        let v = serde_json::json!({
+            "number": 6, "title": "Bug: crash on startup", "body": "It crashes.",
+            "html_url": "https://github.com/me/widget/issues/6",
+            "state": "closed", "state_reason": "not_planned",
+            "assignees": [{ "login": "alice" }, { "login": "bob" }],
+            "labels": [{ "name": "bug" }, { "name": "P1" }]
+        });
+        let d = parse_rest_issue(&v, "6").unwrap();
         assert_eq!(d.title, "Bug: crash on startup");
-        assert_eq!(d.state, "Open");
-        assert_eq!(d.assignee, "contributor");
+        assert_eq!(d.description, "It crashes.");
+        assert_eq!(d.url, "https://github.com/me/widget/issues/6");
+        assert_eq!(d.state, "Not planned");
+        assert_eq!(d.assignee, "alice, bob");
         assert_eq!(d.labels, vec!["bug".to_string(), "P1".to_string()]);
     }
 
     #[test]
-    fn a_truncated_assignees_or_labels_connection_is_marked_not_dropped() {
-        // Neither connection paginates; a list wider than the window must stay
-        // visible as incomplete rather than silently reading as the whole list.
-        let resp = serde_json::json!({ "data": { "repository": { "issue": {
-            "title": "t", "state": "OPEN",
-            "assignees": {
-                "pageInfo": { "hasNextPage": true },
-                "nodes": [{ "login": "alice" }]
-            },
-            "labels": {
-                "pageInfo": { "hasNextPage": true },
-                "nodes": [{ "name": "bug" }]
-            }
-        } } } });
-        let d = parse_issue(&resp, "1").unwrap();
-        assert_eq!(d.assignee, "alice, …");
-        assert_eq!(d.labels, vec!["bug".to_string(), "…".to_string()]);
+    fn an_open_rest_issue_with_a_null_body_has_an_empty_summary() {
+        let v = serde_json::json!({
+            "title": "t", "body": null, "state": "open", "state_reason": "reopened",
+            "assignees": [], "labels": []
+        });
+        let d = parse_rest_issue(&v, "1").unwrap();
+        assert_eq!(d.state, "Open");
+        assert_eq!(d.description, "");
+        assert_eq!(d.assignee, "");
     }
 
+    /// The issues endpoint serves a pull request under the same number; it is
+    /// no issue.
     #[test]
-    fn a_closed_issue_with_no_assignee_parses_to_empty_fields() {
-        let d = parse_issue(&fixture("gh_issue_closed.json"), "12").unwrap();
-        assert_eq!(d.state, "Done");
-        assert_eq!(d.assignee, "");
-        assert!(d.labels.is_empty());
+    fn a_pull_request_from_the_issues_endpoint_is_no_issue() {
+        let v = serde_json::json!({
+            "title": "t", "state": "open", "pull_request": { "url": "x" }
+        });
+        assert!(parse_rest_issue(&v, "7").is_none());
     }
 
     #[test]
@@ -1194,20 +1384,57 @@ mod tests {
     }
 
     #[test]
-    fn timeline_origin_query_orders_issues_by_created_at_ascending() {
-        let q = timeline_origin_query("me/widget");
+    fn a_closing_keyword_closes_the_issue_it_names_in_any_reference_form() {
+        let closes = |body: &str, pr_repo: &str| closes(body, pr_repo, "o/r", "github.com", 3);
+        assert!(closes("Closes #3.", "o/r"));
+        assert!(closes("(resolved O/R#3)", "x/y"));
+        assert!(closes("fixed https://github.com/o/r/issues/3", "x/y"));
         assert!(
-            q.contains("orderBy: { field: CREATED_AT, direction: ASC }"),
-            "{q}"
+            !closes("Fixes #3", "x/y"),
+            "a bare number names the PR's own repository"
         );
-        assert!(q.contains("first: 1"), "{q}");
+        assert!(!closes("fixes #30", "o/r"));
+        assert!(!closes("see #3", "o/r"));
+        assert!(!closes("prefixes #3", "o/r"));
+    }
+
+    #[test]
+    fn the_timeline_links_only_prs_whose_body_closes_the_issue() {
+        let reference = |number: u64, body: &str| {
+            serde_json::json!({
+                "event": "cross-referenced",
+                "source": { "type": "issue", "issue": {
+                    "number": number,
+                    "state": "open",
+                    "body": body,
+                    "html_url": format!("https://github.com/o/r/pull/{number}"),
+                    "pull_request": { "merged_at": null },
+                    "repository": { "full_name": "o/r" },
+                }},
+            })
+        };
+        let events = [
+            reference(7, "Fixes #3"),
+            reference(8, "see #3"),
+            serde_json::json!({ "event": "connected", "actor": { "login": "me" } }),
+        ];
+        let prs = parse_closing_prs(&events, "o/r", "github.com", 3);
+        let numbers: Vec<u64> = prs.iter().map(|p| p.number).collect();
+        assert_eq!(numbers, [7]);
+        assert_eq!(prs[0].state, "OPEN");
+    }
+
+    #[test]
+    fn timeline_origin_searches_issues_by_created_at_ascending() {
+        assert_eq!(
+            timeline_origin_path("me/widget"),
+            "/search/issues?q=repo%3Ame%2Fwidget%20is%3Aissue&sort=created&order=asc&per_page=1"
+        );
     }
 
     #[test]
     fn timeline_origin_reads_the_earliest_issues_created_at() {
-        let resp = serde_json::json!({ "data": { "repository": { "issues": {
-            "nodes": [{ "createdAt": "2020-01-01T00:00:00Z" }]
-        } } } });
+        let resp = serde_json::json!({ "items": [{ "created_at": "2020-01-01T00:00:00Z" }] });
         assert_eq!(
             parse_timeline_origin(&resp),
             Some("2020-01-01T00:00:00Z".to_string())
@@ -1216,7 +1443,7 @@ mod tests {
 
     #[test]
     fn no_issues_yields_no_timeline_origin() {
-        let resp = serde_json::json!({ "data": { "repository": { "issues": { "nodes": [] } } } });
+        let resp = serde_json::json!({ "total_count": 0, "items": [] });
         assert_eq!(parse_timeline_origin(&resp), None);
     }
 }
