@@ -1,87 +1,27 @@
 //! `devkit todo`, the session hooks and `devkit doctor` on the Supabase
-//! backend. The tests that need an API read `DEVKIT_TEST_SUPABASE_URL`,
-//! PostgREST serving the database `DEVKIT_TEST_POSTGRES_URL` names, and
-//! return early without both; `crates/devkit-todo-postgres/testdb/up.sh`
-//! starts them. The header and proxy tests need neither.
+//! backend. A test that needs the API [`testapi`] sets up returns early
+//! without one; the header and proxy tests need none.
 
+#[path = "../crates/devkit-todo-supabase/tests/common/testapi.rs"]
+mod testapi;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
-    sync::{Arc, Mutex, OnceLock},
-    time::{Duration, Instant, SystemTime},
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime},
 };
 
-use devkit_todo::{Filter, Holder, Status, Todo, TodoStore};
+use devkit_todo::{Holder, Status, Todo, TodoStore};
 use devkit_todo_supabase::{Api, SupabaseStore};
 use serde_json::{Value, json};
+use testapi::api_url;
 use todoenv::{Proj, stderr, stdout};
 
 const URL_VAR: &str = "DEVKIT_TODO_SUPABASE_URL";
 const KEY_VAR: &str = "DEVKIT_TODO_SUPABASE_KEY";
-
-/// The role and grants the todo reference sets up, for the role PostgREST
-/// serves a request that carries no key as. PostgREST here logs in as a
-/// superuser, so the grant to Supabase's `authenticator` is left out.
-const GRANTS: &str = "
-DO $$ BEGIN
-    CREATE ROLE devkit_agent NOLOGIN;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-GRANT USAGE ON SCHEMA devkit TO devkit_agent;
-GRANT SELECT, INSERT, UPDATE, DELETE ON devkit.todos TO devkit_agent;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA devkit TO devkit_agent;
-ALTER DEFAULT PRIVILEGES IN SCHEMA devkit GRANT EXECUTE ON FUNCTIONS TO devkit_agent;
-NOTIFY pgrst, 'reload schema';
-";
-
-fn var(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
-}
-
-/// The API's URL once PostgREST serves devkit's schema to its role; `None`
-/// without a test database.
-fn api_url() -> Option<String> {
-    static READY: OnceLock<Option<String>> = OnceLock::new();
-    READY
-        .get_or_init(|| {
-            let (api, direct) = (
-                var("DEVKIT_TEST_SUPABASE_URL")?,
-                var("DEVKIT_TEST_POSTGRES_URL")?,
-            );
-            let db = devkit_todo_postgres::Database::new(
-                &direct,
-                Duration::from_secs(10),
-                &devkit_todo_postgres::Trust::default(),
-            )
-            .unwrap();
-            devkit_todo_postgres::PostgresStore::new(db, "schema")
-                .list(&Filter::all())
-                .unwrap();
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async {
-                    let (client, connection) =
-                        tokio_postgres::connect(&direct, tokio_postgres::NoTls)
-                            .await
-                            .unwrap();
-                    tokio::spawn(connection);
-                    client.batch_execute(GRANTS).await.unwrap();
-                });
-            let probe = Api::new(&api, None, Duration::from_secs(5)).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(30);
-            while let Err(e) = probe.check() {
-                assert!(Instant::now() < deadline, "PostgREST never served: {e:#}");
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Some(api)
-        })
-        .clone()
-}
 
 /// A todo root no other test shares.
 fn fresh_root() -> String {

@@ -1,86 +1,21 @@
-//! The Supabase store against PostgREST serving a real database:
-//! `DEVKIT_TEST_SUPABASE_URL` names the API, behind `/rest/v1/` as on
-//! Supabase, and `DEVKIT_TEST_POSTGRES_URL` the database it serves.
-//! `crates/devkit-todo-postgres/testdb/up.sh` starts both. A test returns
-//! early when either is unset.
+//! The Supabase store against PostgREST serving a real database, as
+//! [`testapi`] sets it up. A test returns early without one.
+
+#[path = "common/testapi.rs"]
+mod testapi;
 
 use std::{
     sync::{
-        Barrier, OnceLock,
+        Barrier,
         atomic::{AtomicU32, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use devkit_todo::{Claimed, Edit, Filter, Holder, NewTodo, Status, StatusKind, TodoStore};
+use devkit_todo::{Claimed, Edit, Holder, NewTodo, Status, StatusKind, TodoStore};
 use devkit_todo_supabase::{Api, SupabaseStore};
-
-const API: &str = "DEVKIT_TEST_SUPABASE_URL";
-const DIRECT: &str = "DEVKIT_TEST_POSTGRES_URL";
-
-/// The role and grants the todo reference sets up, for the role PostgREST
-/// serves a request that carries no key as. PostgREST here logs in as a
-/// superuser, so the grant to Supabase's `authenticator` is left out.
-const GRANTS: &str = "
-DO $$ BEGIN
-    CREATE ROLE devkit_agent NOLOGIN;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-GRANT USAGE ON SCHEMA devkit TO devkit_agent;
-GRANT SELECT, INSERT, UPDATE, DELETE ON devkit.todos TO devkit_agent;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA devkit TO devkit_agent;
-ALTER DEFAULT PRIVILEGES IN SCHEMA devkit GRANT EXECUTE ON FUNCTIONS TO devkit_agent;
-NOTIFY pgrst, 'reload schema';
-";
-
-fn var(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
-}
-
-/// The API's URL once the database holds devkit's schema, the role can
-/// reach it, and PostgREST serves it; `None` without a test database.
-fn api_url() -> Option<String> {
-    static READY: OnceLock<Option<String>> = OnceLock::new();
-    READY
-        .get_or_init(|| {
-            let (api, direct) = (var(API)?, var(DIRECT)?);
-            prepare(&direct);
-            let probe = Api::new(&api, None, Duration::from_secs(5)).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(30);
-            while let Err(e) = probe.check() {
-                assert!(Instant::now() < deadline, "PostgREST never served: {e:#}");
-                thread::sleep(Duration::from_millis(100));
-            }
-            Some(api)
-        })
-        .clone()
-}
-
-/// Creates devkit's schema through the postgres backend, then the role and
-/// its grants.
-fn prepare(direct: &str) {
-    let db = devkit_todo_postgres::Database::new(
-        direct,
-        Duration::from_secs(10),
-        &devkit_todo_postgres::Trust::default(),
-    )
-    .unwrap();
-    devkit_todo_postgres::PostgresStore::new(db, "schema")
-        .list(&Filter::all())
-        .unwrap();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        let (client, connection) = tokio_postgres::connect(direct, tokio_postgres::NoTls)
-            .await
-            .unwrap();
-        tokio::spawn(connection);
-        client.batch_execute(GRANTS).await.unwrap();
-    });
-}
+use testapi::api_url;
 
 /// A root no other test shares, so each store starts empty.
 fn fresh_root() -> String {
@@ -179,7 +114,7 @@ fn of_agents_claiming_one_todo_at_once_exactly_one_gets_it() {
 /// machines on either backend share one list.
 #[test]
 fn the_api_and_a_direct_connection_share_the_todos() {
-    let (Some(url), Some(direct)) = (api_url(), var(DIRECT)) else {
+    let (Some(url), Some(direct)) = (api_url(), testapi::direct_url()) else {
         return;
     };
     let root = fresh_root();
