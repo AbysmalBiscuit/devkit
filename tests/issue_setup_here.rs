@@ -154,3 +154,47 @@ fn setup_here_again_refreshes_the_slug() {
     let record = devkit_common::record::read(fake.project()).expect("an issue record");
     assert_eq!(record.slug, "repair");
 }
+
+#[test]
+fn setup_here_refuses_a_detached_head() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    git(fake.project(), &["checkout", "-q", "--detach"]);
+
+    let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+
+    let stderr = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("HEAD is detached"), "{stderr}");
+    assert!(devkit_common::record::read(fake.project()).is_none());
+}
+
+#[test]
+fn setup_here_finds_the_default_branch_through_origin_head() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    let config = fake.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace(r#"baseline_ref = "origin/main""#, r#"baseline_ref = """#);
+    std::fs::write(&config, toml).unwrap();
+    git(fake.project(), &[
+        "update-ref",
+        "refs/remotes/origin/main",
+        "HEAD",
+    ]);
+    git(fake.project(), &[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+    ]);
+    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+
+    let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+
+    let stderr = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("refusing to bind the default branch `main`"),
+        "{stderr}"
+    );
+    assert!(devkit_common::record::read(fake.project()).is_none());
+}
