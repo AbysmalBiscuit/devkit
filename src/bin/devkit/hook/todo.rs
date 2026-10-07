@@ -207,7 +207,8 @@ pub(crate) fn rearm(holder: &payload::Holder) {
     let _ = std::fs::remove_file(hold::hold_path(&to_todo_holder(holder)));
 }
 
-/// Forgets every list `session` and its sub-agents were refused over.
+/// Forgets every list `session` and its sub-agents were refused over, and the
+/// hold mode it set.
 pub(crate) fn forget_holds(session: &payload::Holder) {
     let _ = std::fs::remove_dir_all(hold::hold_dir(&to_todo_holder(session)));
 }
