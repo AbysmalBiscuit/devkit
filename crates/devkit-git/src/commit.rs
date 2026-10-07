@@ -432,7 +432,8 @@ fn head_ref(dir: &Path) -> Result<String> {
 /// way git itself replaces an index.
 fn install(replacement: &Path, lock: &Path, index: &Path) -> Result<()> {
     fs::copy(replacement, lock)?;
-    fs::File::open(lock)?.sync_all()?;
+    // Windows flushes only a handle opened for writing.
+    fs::OpenOptions::new().write(true).open(lock)?.sync_all()?;
     fs::rename(lock, index)?;
     Ok(())
 }
