@@ -20,7 +20,7 @@ The installer places only the binaries. To use devkit inside a coding agent, reg
 
 ## Nightly
 
-Every merge to `main` rebuilds the `nightly` prerelease, so an unreleased change is one command away. It installs into the same directory as the release installer, replacing whichever build is there:
+Every merge to `main` that lands in the next release's changelog rebuilds the `nightly` prerelease, so an unreleased change is one command away. It installs into the same directory as the release installer, replacing whichever build is there:
 
 ```sh
 # Linux / macOS / WSL

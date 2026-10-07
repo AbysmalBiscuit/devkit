@@ -4,18 +4,13 @@ name: nightly
 # `Release` workflow's filter, so stable releases never see it.
 
 on:
-  push:
-    branches: [main]
+  # release-please calls this after a merge to main that changes the release PR.
+  workflow_call:
   # On any other branch, builds every target and publishes nothing.
   workflow_dispatch:
 
 permissions:
   contents: read
-
-# A newer push to main cancels the build of an older one.
-concurrency:
-  group: nightly-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   release:
@@ -42,8 +37,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           # A re-run of an older commit's workflow must not move nightly back.
-          if [ "$(gh api "repos/$GH_REPO/commits/main" --jq .sha)" != "$GITHUB_SHA" ]; then
-            echo "::notice::main has moved past ${GITHUB_SHA}; leaving nightly alone"
+          # Main itself may be past this commit, since merges that leave the
+          # release PR alone build no nightly.
+          if [ "$(gh api "repos/$GH_REPO/compare/nightly...$GITHUB_SHA" --jq .status 2>/dev/null)" = behind ]; then
+            echo "::notice::nightly is already past ${GITHUB_SHA}; leaving it alone"
             exit 0
           fi
           cat >"$RUNNER_TEMP/notes.md" <<EOF

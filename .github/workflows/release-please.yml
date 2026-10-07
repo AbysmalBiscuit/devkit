@@ -18,6 +18,8 @@ jobs:
     name: release-please
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      prs_created: ${{ steps.release.outputs.prs_created }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: release
@@ -46,3 +48,17 @@ jobs:
         run: |
           gh release upload "${{ steps.release.outputs.tag_name }}" \
             schema/devkit-config.json --clobber
+
+  # `prs_created` is true only when the release PR was opened or its changelog
+  # changed, so docs, ci and chore merges and the release PR's own merge build
+  # no nightly.
+  nightly:
+    needs: release-please
+    if: needs.release-please.outputs.prs_created == 'true'
+    permissions:
+      contents: write
+    # A newer push to main cancels the build of an older one.
+    concurrency:
+      group: nightly-${{ github.ref }}
+      cancel-in-progress: true
+    uses: ./.github/workflows/nightly.yml
