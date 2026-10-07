@@ -246,12 +246,13 @@ pub struct CommandRule {
     pub severity: Severity,
 }
 
-/// One `[harness.issue_tools.<name>]` entry: an MCP tool that creates or edits
-/// issues, whose title and body the pre-tool-use hook allows only when
-/// `devkit issue render` produced them in the same agent session.
+/// One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an
+/// MCP tool that creates or edits issues or PRs, whose title and body the
+/// pre-tool-use hook allows only when `devkit issue render` (an issue) or
+/// `devkit issue pr render` (a PR) produced them in the same agent session.
 ///
 /// ```
-/// # use devkit_config::IssueToolRule;
+/// # use devkit_config::RenderedToolRule;
 /// # use serde_json::json;
 /// # let doc: toml::Table = toml::from_str(r#"
 /// [harness.issue_tools.linear]
@@ -268,15 +269,34 @@ pub struct CommandRule {
 /// equals  = { method = "create" }
 /// title   = "title"
 /// body    = "body"
+///
+/// [harness.pr_tools.github-create]
+/// servers = ["*github*"]
+/// tools   = ["create_pull_request"]
+/// title   = "title"
+/// body    = "body"
+///
+/// [harness.pr_tools.github-update]
+/// servers = ["*github*"]
+/// tools   = ["update_pull_request"]
+/// absent  = ["pullNumber"]
+/// title   = "title"
+/// body    = "body"
 /// # "#).unwrap();
-/// # let rule = |name: &str| -> IssueToolRule {
-/// #     doc["harness"]["issue_tools"][name].clone().try_into().unwrap()
+/// # let rule = |table: &str, name: &str| -> RenderedToolRule {
+/// #     doc["harness"][table][name].clone().try_into().unwrap()
 /// # };
-/// # assert!(rule("linear").matches(Some("claude.ai Linear"), "save_issue"));
-/// # assert!(rule("github").is_create(&json!({"method": "create"})));
+/// # assert!(rule("issue_tools", "linear").matches(Some("claude.ai Linear"), "save_issue"));
+/// # assert!(rule("issue_tools", "github").is_create(&json!({"method": "create"})));
+/// # let create = rule("pr_tools", "github-create");
+/// # assert!(!create.matches(Some("github"), "update_pull_request"));
+/// # assert!(create.is_create(&json!({"pullNumber": 5})));
+/// # let update = rule("pr_tools", "github-update");
+/// # assert!(update.matches(Some("github"), "update_pull_request"));
+/// # assert!(!update.is_create(&json!({"pullNumber": 5})));
 /// ```
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
-pub struct IssueToolRule {
+pub struct RenderedToolRule {
     /// MCP server names this entry covers, matched case-insensitively; `*`
     /// matches any run of characters. Empty matches any server.
     #[serde(default)]
@@ -293,9 +313,9 @@ pub struct IssueToolRule {
     /// create.
     #[serde(default)]
     pub equals: BTreeMap<String, String>,
-    /// The input key holding the issue's title.
+    /// The input key holding the title.
     pub title: String,
-    /// The input key holding the issue's body.
+    /// The input key holding the body.
     pub body: String,
     /// Input keys that edit the body without carrying it whole. A call
     /// carrying one is denied, since no render can vouch for the result.
@@ -306,7 +326,7 @@ pub struct IssueToolRule {
     pub enabled: bool,
 }
 
-impl IssueToolRule {
+impl RenderedToolRule {
     /// Whether a call to `tool` on `server` is one this entry covers.
     pub fn matches(&self, server: Option<&str>, tool: &str) -> bool {
         if !self.tools.iter().any(|t| t == tool) {
@@ -324,7 +344,7 @@ impl IssueToolRule {
             .any(|p| wildcard_matches(&p.to_lowercase(), &server))
     }
 
-    /// Whether `input` creates an issue rather than updating one.
+    /// Whether `input` creates an issue or PR rather than updating one.
     pub fn is_create(&self, input: &serde_json::Value) -> bool {
         self.absent
             .iter()
@@ -498,7 +518,12 @@ pub struct HarnessSection {
     /// from `devkit issue render`. Merged across config layers by name.
     /// Enforces on its own presence, independent of `enforce_commands`.
     #[serde(default)]
-    pub issue_tools: BTreeMap<String, IssueToolRule>,
+    pub issue_tools: BTreeMap<String, RenderedToolRule>,
+    /// MCP tools that open or edit PRs, whose title and body must come from
+    /// `devkit issue pr render`. Merged across config layers by name.
+    /// Enforces on its own presence, independent of `enforce_commands`.
+    #[serde(default)]
+    pub pr_tools: BTreeMap<String, RenderedToolRule>,
     /// How the guard resolves a guarded command to one of `[apps]`, from a
     /// workspace path in the command, a `--filter`/`--dir`/`-C` value, or the
     /// shell's directory.
@@ -528,6 +553,7 @@ impl Default for HarnessSection {
             script_files: PolicyAction::Allow,
             commands: BTreeMap::new(),
             issue_tools: BTreeMap::new(),
+            pr_tools: BTreeMap::new(),
             app_match: AppMatch::default(),
             log: LogSection::default(),
         }
@@ -562,12 +588,12 @@ mod tests {
 
     #[test]
     fn issue_tool_rules_match_and_classify() {
-        let linear: IssueToolRule = toml::from_str(
+        let linear: RenderedToolRule = toml::from_str(
             "servers = [\"*linear*\"]\ntools = [\"save_issue\"]\nabsent = [\"id\"]\n\
              title = \"title\"\nbody = \"description\"\nbody_patch = [\"patch\"]\n",
         )
         .unwrap();
-        let github: IssueToolRule = toml::from_str(
+        let github: RenderedToolRule = toml::from_str(
             "servers = [\"*github*\"]\ntools = [\"issue_write\"]\n\
              equals = { method = \"create\" }\ntitle = \"title\"\nbody = \"body\"\n",
         )
@@ -584,12 +610,12 @@ mod tests {
         assert!(!github.is_create(&serde_json::json!({"method": "update"})));
         assert_eq!(linear.body_patch, ["patch"]);
         assert!(linear.enabled);
-        let any_server = IssueToolRule {
+        let any_server = RenderedToolRule {
             servers: vec![],
             ..linear.clone()
         };
         assert!(any_server.matches(None, "save_issue"));
-        let no_tools = IssueToolRule {
+        let no_tools = RenderedToolRule {
             tools: vec![],
             ..linear
         };

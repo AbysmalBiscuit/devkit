@@ -7,6 +7,7 @@ use anyhow::{Result, bail};
 use devkit_common::{
     caller::Caller,
     record::IssueRecord,
+    required::Missing,
     vcs::{Vcs, VersionControl},
 };
 use devkit_config::{Config, Templates};
@@ -16,7 +17,7 @@ use crate::{
     issue::{
         receipt,
         render::Rendered,
-        review::{PR_CONTEXT_KEYS, check_required, parse_args, render_review, with_fields},
+        review::{PR_CONTEXT_KEYS, missing_required, parse_args, render_review, with_fields},
     },
     template::VarArgs,
 };
@@ -30,6 +31,23 @@ pub(super) fn require_pr_title(title: &str) -> Result<()> {
     Ok(())
 }
 
+/// The required args the `pr_title` and `pr_body` templates read that `given`
+/// does not supply.
+pub(crate) fn missing(
+    cfg: &Config,
+    given: &BTreeMap<String, String>,
+    caller: Caller,
+) -> Result<Vec<Missing>> {
+    let tmpls = &cfg.templates;
+    missing_required(
+        cfg,
+        &[tmpls.pr_title(), tmpls.pr_body()],
+        PR_CONTEXT_KEYS,
+        given,
+        caller,
+    )
+}
+
 /// The values a PR's templates render with: the declared defaults under
 /// `vars`. A required one the caller did not pass is refused, naming
 /// `surface`, before either template renders.
@@ -41,14 +59,7 @@ pub(crate) fn values(
 ) -> Result<BTreeMap<String, String>> {
     let tmpls = &cfg.templates;
     let given = parse_args(vars, &tmpls.declared())?;
-    check_required(
-        surface,
-        cfg,
-        &[tmpls.pr_title(), tmpls.pr_body()],
-        PR_CONTEXT_KEYS,
-        &given,
-        caller,
-    )?;
+    devkit_common::required::ensure_supplied(surface, &missing(cfg, &given, caller)?)?;
     let mut values = tmpls.defaults();
     values.extend(given);
     Ok(values)
