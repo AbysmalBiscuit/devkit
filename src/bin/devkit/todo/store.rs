@@ -14,7 +14,7 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_config::{
-    NoConfig, PostgresConfig, TaskchampionConfig, TodoBackend, TodoConfig, expand_tilde,
+    NoConfig, PostgresConfig, Provenance, TaskchampionConfig, TodoBackend, TodoConfig, expand_tilde,
 };
 use devkit_todo::{
     TodoStore,
@@ -422,9 +422,16 @@ impl Store {
 
     /// The config a CLI call in `cwd` reads: `None` when there is none
     /// anywhere, as in a cloud session.
-    fn cli_config(cwd: &Path) -> Result<Option<TodoConfig>> {
+    pub(crate) fn cli_config(cwd: &Path) -> Result<Option<TodoConfig>> {
+        Ok(Self::cli_config_with_provenance(cwd)?.map(|(config, _)| config))
+    }
+
+    /// [`Self::cli_config`] with the provenance of the resolved layers.
+    pub(crate) fn cli_config_with_provenance(
+        cwd: &Path,
+    ) -> Result<Option<(TodoConfig, Provenance)>> {
         match devkit_common::config::resolve(None, cwd) {
-            Ok((config, _)) => Ok(Some(config.todo)),
+            Ok((config, provenance)) => Ok(Some((config.todo, provenance))),
             Err(e) if e.downcast_ref::<NoConfig>().is_some() => Ok(None),
             Err(e) => Err(e),
         }
@@ -545,16 +552,17 @@ impl Store {
     /// The store a stop hook in `cwd` reads open todos from, as
     /// [`Store::for_hook`] builds it, `backend_var` being the value of
     /// `DEVKIT_TODO_BACKEND`. `None` when the config fails to load, the
-    /// backend is unknown, or `[todo] hold_stop` is off: the built-in store's
-    /// lists are not the configured store's, so holding an agent to them
-    /// would be wrong.
+    /// backend is unknown, or `holds`, given the config, says this stop is
+    /// not held: the built-in store's lists are not the configured store's,
+    /// so holding an agent to them would be wrong.
     pub(crate) fn for_hold(
         checkout: &Checkout,
         cwd: &Path,
         backend_var: Option<&str>,
+        holds: impl FnOnce(&TodoConfig) -> bool,
     ) -> Option<Self> {
         let config = Self::hook_config(checkout, cwd, backend_var).ok()?;
-        config.hold_stop.then(|| Self::open(&config, Opener::Hook))
+        holds(&config).then(|| Self::open(&config, Opener::Hook))
     }
 }
 
@@ -691,28 +699,32 @@ mod tests {
         (dir, checkout)
     }
 
+    fn holds_main(config: &TodoConfig) -> bool {
+        config.hold_stop.holds(false)
+    }
+
     #[test]
     fn a_loadable_config_with_the_hold_on_holds() {
         let (dir, checkout) = repo_with("[todo]\nhold_stop = true\n");
-        assert!(Store::for_hold(&checkout, dir.path(), None).is_some());
+        assert!(Store::for_hold(&checkout, dir.path(), None, holds_main).is_some());
     }
 
     #[test]
     fn a_config_that_fails_to_load_never_holds() {
         let (dir, checkout) = repo_with("[todo]\nbackend = 3\n");
-        assert!(Store::for_hold(&checkout, dir.path(), None).is_none());
+        assert!(Store::for_hold(&checkout, dir.path(), None, |_| true).is_none());
     }
 
     #[test]
     fn an_unknown_backend_never_holds() {
         let (dir, checkout) = repo_with("[todo]\nhold_stop = true\n");
-        assert!(Store::for_hold(&checkout, dir.path(), Some("jira")).is_none());
+        assert!(Store::for_hold(&checkout, dir.path(), Some("jira"), |_| true).is_none());
     }
 
     #[test]
     fn hold_stop_off_never_holds() {
         let (dir, checkout) = repo_with("[todo]\nhold_stop = false\n");
-        assert!(Store::for_hold(&checkout, dir.path(), None).is_none());
+        assert!(Store::for_hold(&checkout, dir.path(), None, holds_main).is_none());
     }
 
     #[test]

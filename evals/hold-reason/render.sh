@@ -12,7 +12,8 @@ git init -q -b main "$repo"
 
 run() {
   (cd "$repo" && env -u DEVKIT_CONFIG -u CLAUDE_CODE_SESSION_ID -u CODEX_SESSION_ID \
-    -u DEVKIT_TODO_BACKEND HOME="$scratch/home" XDG_STATE_HOME="$scratch/home" \
+    -u DEVKIT_TODO_BACKEND DEVKIT_TODO_HOLD_STOP=always \
+    HOME="$scratch/home" XDG_STATE_HOME="$scratch/home" \
     XDG_CONFIG_HOME="$scratch/home/config" DEVKIT_SKIP_AUTOLINK=1 "$@")
 }
 run env CLAUDE_CODE_SESSION_ID=s1 "$devkit" todo add "write the migration" > /dev/null

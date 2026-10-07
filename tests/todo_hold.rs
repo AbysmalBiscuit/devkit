@@ -29,6 +29,11 @@ fn codex_stop(p: &Proj) -> Value {
     })
 }
 
+/// A checkout whose config holds every stop, a main agent's included.
+fn always() -> Proj {
+    Proj::with_home_config("[todo]\nhold_stop = \"always\"\n")
+}
+
 fn set(p: &Proj, id: &str, to: StatusKind, by: &str) {
     p.store()
         .apply(&Edit::SetStatus {
@@ -87,7 +92,7 @@ fn a_broken_config_never_holds() {
 
 #[test]
 fn open_todos_block_and_list_their_ids() {
-    let p = Proj::new();
+    let p = always();
     let id = seed(&p, MAIN, "write the migration");
     let reason = blocked(&p.hook("stop", "claude-code", &stop(&p, "S")));
     assert_eq!(
@@ -103,14 +108,16 @@ fn open_todos_block_and_list_their_ids() {
              - Without one, ask a sub-agent on a bigger model and take its answer.\n\
              - Stop for the user only on a decision that is theirs: a destructive or irreversible \
              action, anything outward-facing, a change of scope, or a preference with no default. \
-             To stop for one, end your turn again: this reminder comes once per unchanged list."
+             To stop for one, end your turn again: this reminder comes once per unchanged list.\n\
+             If the user finds these reminders disruptive, `devkit todo hold never` turns them off \
+             for this session."
         )
     );
 }
 
 #[test]
 fn a_second_stop_with_the_same_list_goes_through() {
-    let p = Proj::new();
+    let p = always();
     seed(&p, MAIN, "write the migration");
     blocked(&p.hook("stop", "claude-code", &stop(&p, "S")));
     silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
@@ -118,7 +125,7 @@ fn a_second_stop_with_the_same_list_goes_through() {
 
 #[test]
 fn finishing_one_rearms_on_the_rest() {
-    let p = Proj::new();
+    let p = always();
     let first = seed(&p, MAIN, "write the migration");
     seed(&p, MAIN, "run the migration");
     blocked(&p.hook("stop", "claude-code", &stop(&p, "S")));
@@ -130,7 +137,7 @@ fn finishing_one_rearms_on_the_rest() {
 
 #[test]
 fn a_user_prompt_rearms_and_prints_nothing() {
-    let p = Proj::new();
+    let p = always();
     seed(&p, MAIN, "write the migration");
     blocked(&p.hook("stop", "claude-code", &stop(&p, "S")));
     let prompt = json!({
@@ -145,7 +152,7 @@ fn a_user_prompt_rearms_and_prints_nothing() {
 
 #[test]
 fn a_compaction_rearms() {
-    let p = Proj::new();
+    let p = always();
     seed(&p, MAIN, "write the migration");
     blocked(&p.hook("stop", "claude-code", &stop(&p, "S")));
     let compact = json!({
@@ -160,7 +167,7 @@ fn a_compaction_rearms() {
 
 #[test]
 fn nothing_open_goes_through() {
-    let p = Proj::new();
+    let p = always();
     let id = seed(&p, MAIN, "write the migration");
     set(&p, &id, StatusKind::Completed, "S");
     silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
@@ -168,7 +175,7 @@ fn nothing_open_goes_through() {
 
 #[test]
 fn a_sub_agents_claim_does_not_hold_its_session() {
-    let p = Proj::new();
+    let p = always();
     let id = seed(&p, MAIN, "write the migration");
     set(&p, &id, StatusKind::InProgress, "S/a1");
     silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
@@ -176,7 +183,7 @@ fn a_sub_agents_claim_does_not_hold_its_session() {
 
 #[test]
 fn a_claim_on_another_node_still_holds() {
-    let p = Proj::new();
+    let p = always();
     let id = seed(&p, "proj.other.claude-S", "write the migration");
     set(&p, &id, StatusKind::InProgress, "S");
     let reason = blocked(&p.hook("stop", "claude-code", &stop(&p, "S")));
@@ -185,7 +192,7 @@ fn a_claim_on_another_node_still_holds() {
 
 #[test]
 fn another_sessions_pending_todos_never_hold() {
-    let p = Proj::new();
+    let p = always();
     seed(&p, "proj.main.claude-T", "write the migration");
     seed(&p, "proj.main", "a workspace todo");
     silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
@@ -193,7 +200,7 @@ fn another_sessions_pending_todos_never_hold() {
 
 #[test]
 fn outside_a_workspace_only_claims_hold() {
-    let p = Proj::new();
+    let p = always();
     git(&p, &["commit", "-q", "--allow-empty", "-m", "init"]);
     git(&p, &["checkout", "-q", "--detach"]);
     seed(&p, "proj", "a project todo");
@@ -207,7 +214,7 @@ fn outside_a_workspace_only_claims_hold() {
 
 #[test]
 fn a_codex_interrupt_goes_through() {
-    let p = Proj::new();
+    let p = always();
     seed(&p, "proj.main.codex-S", "write the migration");
     let interrupt = json!({
         "hook_event_name": "Interrupt",
@@ -221,7 +228,7 @@ fn a_codex_interrupt_goes_through() {
 
 #[test]
 fn a_codex_stop_blocks() {
-    let p = Proj::new();
+    let p = always();
     seed(&p, "proj.main.codex-S", "write the migration");
     let reason = blocked(&p.hook("stop", "codex", &codex_stop(&p)));
     assert!(reason.contains("write the migration"), "{reason}");
@@ -229,7 +236,7 @@ fn a_codex_stop_blocks() {
 
 #[test]
 fn cursor_never_holds() {
-    let p = Proj::new();
+    let p = always();
     let id = seed(&p, MAIN, "write the migration");
     set(&p, &id, StatusKind::InProgress, "S");
     let cursor = json!({
@@ -253,7 +260,7 @@ fn cursor_never_holds() {
 
 #[test]
 fn no_session_id_goes_through() {
-    let p = Proj::new();
+    let p = always();
     seed(&p, MAIN, "write the migration");
     silent(&p.hook(
         "stop",
@@ -268,7 +275,7 @@ fn no_session_id_goes_through() {
 
 #[test]
 fn a_queued_capture_lands_before_the_hold_reads() {
-    let p = Proj::new();
+    let p = always();
     let env = [("DEVKIT_TODO_BACKEND", "taskchampion")];
     let tool = |name: &str, input: Value, response: Value| {
         json!({
@@ -299,7 +306,7 @@ fn a_queued_capture_lands_before_the_hold_reads() {
 
 #[test]
 fn session_end_forgets_the_sessions_holds() {
-    let p = Proj::new();
+    let p = always();
     seed(&p, MAIN, "write the migration");
     blocked(&p.hook("stop", "claude-code", &stop(&p, "S")));
     let holds = p
@@ -401,7 +408,7 @@ fn an_allowed_sub_agent_releases_everything() {
 
 #[test]
 fn a_fork_never_holds() {
-    let p = Proj::new();
+    let p = always();
     let id = seed(&p, MAIN, "write the migration");
     set(&p, &id, StatusKind::InProgress, "S");
     silent(&p.hook(
@@ -416,4 +423,171 @@ fn a_sub_agent_that_never_claimed_goes_through() {
     let p = Proj::new();
     seed(&p, MAIN, "write the migration");
     silent(&sub_agent_stop(&p));
+}
+
+/// A main agent with a pending todo and a sub-agent `a1` with a claim, both
+/// in session `S`.
+fn open_main_and_sub_agent(p: &Proj) {
+    seed(p, MAIN, "review the plan");
+    claiming_sub_agent(p);
+}
+
+fn main_stop(p: &Proj, env: &[(&str, &str)]) -> std::process::Output {
+    p.hook_with("stop", "claude-code", &stop(p, "S"), env)
+}
+
+fn sub_agent_stop_with(p: &Proj, env: &[(&str, &str)]) -> std::process::Output {
+    p.hook_with(
+        "subagent-stop",
+        "claude-code",
+        &sub_agent(p, "SubagentStop", Some("general-purpose")),
+        env,
+    )
+}
+
+const IN_S: [(&str, &str); 1] = [("CLAUDE_CODE_SESSION_ID", "S")];
+
+fn todo_hold(p: &Proj, args: &[&str], env: &[(&str, &str)]) -> String {
+    let argv: Vec<&str> = ["todo", "hold"].iter().chain(args).copied().collect();
+    let out = p.devkit(&argv, env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    stdout(&out)
+}
+
+#[test]
+fn by_default_only_a_sub_agent_is_held() {
+    let p = Proj::new();
+    open_main_and_sub_agent(&p);
+    silent(&main_stop(&p, &[]));
+    blocked(&sub_agent_stop(&p));
+}
+
+#[test]
+fn always_holds_both_stops() {
+    let p = always();
+    open_main_and_sub_agent(&p);
+    blocked(&main_stop(&p, &[]));
+    blocked(&sub_agent_stop(&p));
+}
+
+#[test]
+fn never_holds_neither_stop() {
+    let p = Proj::with_home_config("[todo]\nhold_stop = \"never\"\n");
+    open_main_and_sub_agent(&p);
+    silent(&main_stop(&p, &[]));
+    silent(&sub_agent_stop(&p));
+}
+
+#[test]
+fn the_env_overrides_the_config() {
+    let p = Proj::with_home_config("[todo]\nhold_stop = \"never\"\n");
+    open_main_and_sub_agent(&p);
+    blocked(&main_stop(&p, &[("DEVKIT_TODO_HOLD_STOP", "always")]));
+    let p = always();
+    open_main_and_sub_agent(&p);
+    silent(&sub_agent_stop_with(&p, &[(
+        "DEVKIT_TODO_HOLD_STOP",
+        "never",
+    )]));
+    silent(&main_stop(&p, &[("DEVKIT_TODO_HOLD_STOP", "false")]));
+}
+
+#[test]
+fn todo_hold_never_lets_the_sessions_next_held_stop_through() {
+    let p = Proj::new();
+    open_main_and_sub_agent(&p);
+    todo_hold(&p, &["never"], &IN_S);
+    silent(&sub_agent_stop(&p));
+}
+
+#[test]
+fn todo_hold_always_holds_the_main_stop() {
+    let p = Proj::new();
+    open_main_and_sub_agent(&p);
+    todo_hold(&p, &["always"], &IN_S);
+    blocked(&main_stop(&p, &[]));
+}
+
+#[test]
+fn a_session_mode_wins_over_the_env_until_cleared() {
+    let p = Proj::new();
+    open_main_and_sub_agent(&p);
+    let env = [("DEVKIT_TODO_HOLD_STOP", "always")];
+    todo_hold(&p, &["never"], &IN_S);
+    silent(&main_stop(&p, &env));
+    todo_hold(&p, &["--clear"], &IN_S);
+    blocked(&main_stop(&p, &env));
+}
+
+#[test]
+fn clearing_restores_the_config_mode() {
+    let p = always();
+    open_main_and_sub_agent(&p);
+    todo_hold(&p, &["never"], &IN_S);
+    silent(&main_stop(&p, &[]));
+    todo_hold(&p, &["--clear"], &IN_S);
+    blocked(&main_stop(&p, &[]));
+}
+
+#[test]
+fn the_session_mode_ends_with_the_session() {
+    let p = Proj::new();
+    open_main_and_sub_agent(&p);
+    todo_hold(&p, &["always"], &IN_S);
+    let end = json!({
+        "hook_event_name": "SessionEnd",
+        "session_id": "S",
+        "reason": "exit",
+        "cwd": p.path,
+    });
+    silent(&p.hook("session-end", "claude-code", &end));
+    silent(&main_stop(&p, &[]));
+}
+
+#[test]
+fn another_sessions_mode_does_not_apply() {
+    let p = Proj::new();
+    open_main_and_sub_agent(&p);
+    todo_hold(&p, &["always"], &[("CLAUDE_CODE_SESSION_ID", "T")]);
+    silent(&main_stop(&p, &[]));
+}
+
+#[test]
+fn todo_hold_prints_the_mode_and_where_it_came_from() {
+    let p = Proj::new();
+    assert_eq!(todo_hold(&p, &[], &IN_S), "subagents (the default)\n");
+    let env = [
+        ("CLAUDE_CODE_SESSION_ID", "S"),
+        ("DEVKIT_TODO_HOLD_STOP", "never"),
+    ];
+    assert_eq!(todo_hold(&p, &[], &env), "never (DEVKIT_TODO_HOLD_STOP)\n");
+    todo_hold(&p, &["always"], &IN_S);
+    assert_eq!(todo_hold(&p, &[], &env), "always (this session)\n");
+    let p = always();
+    assert_eq!(todo_hold(&p, &[], &IN_S), "always ([todo] hold_stop)\n");
+    let p = Proj::with_home_config("[todo]\nhold_stop = \"subagents\"\n");
+    assert_eq!(todo_hold(&p, &[], &IN_S), "subagents ([todo] hold_stop)\n");
+}
+
+#[test]
+fn setting_a_mode_needs_an_agent_session() {
+    let p = Proj::new();
+    let out = p.devkit(&["todo", "hold", "never"], &[]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("session"), "{}", stderr(&out));
+}
+
+#[test]
+fn an_unknown_env_mode_fails_the_cli_and_never_holds() {
+    let p = always();
+    open_main_and_sub_agent(&p);
+    let env = [("DEVKIT_TODO_HOLD_STOP", "sometimes")];
+    silent(&main_stop(&p, &env));
+    let out = p.devkit(&["todo", "hold"], &env);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("DEVKIT_TODO_HOLD_STOP"),
+        "{}",
+        stderr(&out)
+    );
 }

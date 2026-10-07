@@ -31,7 +31,8 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
 # Runs a command against the label's build, with state, config and cache in
-# its scratch instead of this machine's registry and global config.
+# its scratch instead of this machine's registry and global config. No one
+# watches a run, so its stop hook holds the main agent to its todos too.
 isolated() {
   local label_dir=$1
   shift
@@ -39,6 +40,7 @@ isolated() {
     XDG_STATE_HOME="$label_dir/state" XDG_CONFIG_HOME="$label_dir/config" \
     XDG_CACHE_HOME="$label_dir/cache" GIT_CONFIG_GLOBAL="$label_dir/gitconfig" \
     DEVKIT_NO_BOOTSTRAP=1 DEVKIT_SKIP_AUTOLINK=1 ENABLE_CLAUDEAI_MCP_SERVERS=false \
+    DEVKIT_TODO_HOLD_STOP=always \
     "$@"
 }
 

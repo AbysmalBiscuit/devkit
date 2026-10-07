@@ -18,9 +18,11 @@ use devkit_todo_builtin::BuiltinStore;
 mod testenv;
 
 /// Variables a developer's shell may set that would pick a test's todo
-/// backend, its sync target, or credentials doctor validates over the network.
-const AMBIENT_TODO_VARS: [&str; 10] = [
+/// backend, its sync target, its stop hold, or credentials doctor validates
+/// over the network.
+const AMBIENT_TODO_VARS: [&str; 11] = [
     "DEVKIT_TODO_BACKEND",
+    "DEVKIT_TODO_HOLD_STOP",
     "DEVKIT_TODO_DATABASE_URL",
     "DEVKIT_TODO_SYNC_URL",
     "DEVKIT_TODO_SYNC_CLIENT_ID",
