@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 pub struct IssueRecord {
     pub issue: String,
     pub slug: String,
+    /// The branch `issue setup` bound to the issue: the one it created, or
+    /// with `--here` the one already checked out. Absent on records written
+    /// before it existed and on those `pr checkout` writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     pub apps: Vec<String>,
     /// The summary file `issue setup --summary` wrote, so `issue end` removes
     /// the file that actually exists rather than re-deriving a path from a

@@ -405,6 +405,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         devkit_common::record::write(&worktree, &devkit_common::record::IssueRecord {
             issue: issue.clone(),
             slug: slugify(&meta.title),
+            branch: None,
             apps: if args.setup {
                 args.apps.clone()
             } else {

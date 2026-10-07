@@ -28,6 +28,8 @@ pub struct SetupArgs {
     /// Skip that file for this run even when `defaults.issue_summary` is set.
     pub no_summary: bool,
     pub no_gitignore: bool,
+    /// Bind the checkout `dir` sits in instead of creating a worktree.
+    pub here: bool,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -451,6 +453,163 @@ pub fn worktree_root(cfg: &devkit_config::Config) -> Result<std::path::PathBuf> 
     Ok(expand_tilde(&cfg.defaults.worktree_root))
 }
 
+/// `rev` as the local branch it names: `origin/main` and
+/// `refs/remotes/origin/main` are both `main`.
+fn local_branch(rev: &str) -> &str {
+    let rev = rev
+        .strip_prefix("refs/remotes/")
+        .or_else(|| rev.strip_prefix("refs/heads/"))
+        .unwrap_or(rev);
+    rev.strip_prefix("origin/").unwrap_or(rev)
+}
+
+/// Refuse to bind `branch` when it is the repository's default branch, which
+/// `origin/HEAD` and `defaults.baseline_ref` each name, or when no branch is
+/// checked out. The primary checkout's branch is shared by every session, so
+/// binding it to one issue would hand that issue to all of them.
+fn refuse_default_branch(
+    cfg: &devkit_config::Config,
+    vcs: &Vcs,
+    root: &Path,
+    branch: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        branch != devkit_common::vcs::DETACHED,
+        "`issue setup --here` binds a branch, and HEAD is detached: check out a feature branch first"
+    );
+    let defaults: Vec<String> = [
+        vcs.default_branch(root).ok(),
+        Some(cfg.defaults.baseline_ref.clone()).filter(|r| !r.is_empty()),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|r| local_branch(&r).to_string())
+    .collect();
+    anyhow::ensure!(
+        !defaults.is_empty(),
+        "cannot tell which branch is the default: set `defaults.baseline_ref`, \
+         or run `git remote set-head origin -a` so origin/HEAD names one"
+    );
+    anyhow::ensure!(
+        !defaults.iter().any(|d| d == branch),
+        "refusing to bind the default branch `{branch}` to an issue: check out a feature branch first"
+    );
+    Ok(())
+}
+
+/// `issue setup --here`: bind the checkout `start` sits in to `issue` on the
+/// branch it already has. Writes the record and, when asked, the summary;
+/// creates no branch or worktree and runs no worktree hooks. Running it again
+/// for the same issue refreshes the record, and for another issue refuses.
+fn bind_here(
+    args: &SetupArgs,
+    cfg: &devkit_config::Config,
+    start: &str,
+    t: &dyn Tracker,
+    issue: &str,
+    slug: String,
+    details: Option<IssueDetails>,
+) -> Result<()> {
+    let root = devkit_common::vcs::checkout_root(Path::new(start))?;
+    let vcs = Vcs::at(&root);
+    let branch = vcs.branch(&root)?;
+    refuse_default_branch(cfg, &vcs, &root, &branch)?;
+    if let Some(bound) = devkit_common::record::read(&root)
+        && bound.issue != issue
+    {
+        anyhow::bail!(
+            "{} is already bound to issue `{}`",
+            root.display(),
+            bound.issue
+        );
+    }
+    let holder = root.to_string_lossy().into_owned();
+    let summary_root = if cfg.defaults.worktree_root.is_empty() {
+        root.clone()
+    } else {
+        worktree_root(cfg)?
+    };
+
+    if args.dry_run {
+        let summary = details
+            .as_ref()
+            .map(|d| {
+                crate::issue::summary::plan_path(cfg, d, &summary_root, &holder, &branch, &slug, &[
+                ])
+            })
+            .transpose()?;
+        Prepared {
+            issue: Some(issue.to_string()),
+            worktree: holder,
+            branch,
+            summary: summary.map(|p| p.display().to_string()),
+        }
+        .report()?;
+        eprintln!("(dry-run: nothing written)");
+        return Ok(());
+    }
+
+    let summary = match &details {
+        Some(d) => {
+            let tracker_summary = Steps::new()
+                .during_result("Reading the issue summary\u{2026}", || t.summary(issue))
+                .with_context(|| format!("fetching the summary for {issue}"))?;
+            let (path, written) = crate::issue::summary::write(
+                cfg,
+                d,
+                tracker_summary.as_deref(),
+                &summary_root,
+                &holder,
+                &branch,
+                &slug,
+                &[],
+            )?;
+            if !written {
+                eprintln!("summary already exists, left untouched: {}", path.display());
+            }
+            Some(path.display().to_string())
+        }
+        None => None,
+    };
+    let setup_event = cfg.issue.events.setup.is_some();
+    let fires_setup = devkit_common::record::update(&root, |rec| {
+        let rec = rec.get_or_insert_with(|| devkit_common::record::IssueRecord {
+            issue: issue.to_string(),
+            slug: slug.clone(),
+            origin: Some(RecordOrigin::Setup),
+            events: Some(vec![]),
+            ..Default::default()
+        });
+        rec.branch = Some(branch.clone());
+        if summary.is_some() {
+            rec.summary = summary.clone();
+        }
+        setup_event && rec.claim(IssueEvent::Setup)
+    })?;
+    if !args.no_gitignore
+        && let Err(e) = devkit_common::gitignore::ensure_devkit_ignored()
+    {
+        eprintln!("warning: could not update global gitignore: {e:#}");
+    }
+
+    Prepared {
+        issue: Some(issue.to_string()),
+        worktree: holder,
+        branch,
+        summary,
+    }
+    .report()?;
+    if fires_setup {
+        crate::issue::event::fire_inline(
+            Path::new(start),
+            args.config.as_deref().map(Path::new),
+            IssueEvent::Setup,
+            issue,
+        );
+    }
+    Ok(())
+}
+
 pub fn run(args: SetupArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
@@ -488,6 +647,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
         budget,
         details.as_ref(),
     )?;
+    if args.here {
+        return bind_here(&args, cfg, &start, t, &issue, slug, details);
+    }
     let dir_slug = short_slug(cfg, vars, &issue, &args.apps, &slug)?;
 
     let wt_root = worktree_root(cfg)?;
@@ -597,6 +759,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     devkit_common::record::write(&worktree, &devkit_common::record::IssueRecord {
         issue: issue.clone(),
         slug: slug.clone(),
+        branch: Some(branch.clone()),
         apps: args.apps.clone(),
         summary: summary_path.clone(),
         // `issue setup` has no PR to record — there is none yet.

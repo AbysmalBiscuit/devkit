@@ -7,6 +7,7 @@ Every subcommand works from the primary checkout, which git resolves: the main w
 ```sh
 issue setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary|--no-summary] [--dry-run] [--no-gitignore]
 issue setup --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore]
+issue setup --here <ID|URL> [--slug <slug>] [--summary|--no-summary] [--dry-run] [--no-gitignore]
 issue render --title T [--body B] [--arg k=v] [--arg-file k=path]
 issue create --title T [--body B] [--arg k=v] [--arg-file k=path]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
@@ -33,6 +34,10 @@ Creates a worktree off the baseline ref, symlinks env files, runs the per-app se
 ```
 
 Read `worktree` to know where to `cd`. Under `--summary` the object carries a fourth key, `summary`, holding the summary file's path.
+
+### Binding the checkout you are in
+
+Where you must work in the checkout you were given, on the branch it has, and may create no worktree, `issue setup --here <ID>` binds that checkout to the issue instead. It writes the issue record naming the issue and the branch checked out, and the summary under `--summary`, so `issue pr create` renders the issue's closing line as it would in a worktree. It creates no branch or worktree, runs no `after_worktree_create` hooks, and takes no `--apps`. It refuses on the default branch, which `origin/HEAD` or `defaults.baseline_ref` names, on a detached HEAD, and in a checkout already bound to a different issue. Run again for the same issue, it refreshes the record. The JSON's `worktree` is the checkout itself.
 
 Setup reserves no ports: `devrun up` allocates them when the worktree's servers start. A fresh worktree has no diff to auto-detect from, so name apps explicitly: `devrun up web api`.
 
