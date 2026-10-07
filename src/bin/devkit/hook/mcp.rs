@@ -28,8 +28,7 @@ const PANIC_REASON: &str =
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Gate {
     kind: Kind,
-    /// The thing written, with its article: "an issue".
-    written: &'static str,
+    with_article: &'static str,
     noun: &'static str,
     render: &'static str,
     flags: &'static str,
@@ -37,7 +36,7 @@ pub(super) struct Gate {
 
 pub(super) const ISSUE: Gate = Gate {
     kind: Kind::Issue,
-    written: "an issue",
+    with_article: "an issue",
     noun: "issue",
     render: "devkit issue render",
     flags: "--title ... [--body ...]",
@@ -45,7 +44,7 @@ pub(super) const ISSUE: Gate = Gate {
 
 pub(super) const PR: Gate = Gate {
     kind: Kind::Pr,
-    written: "a PR",
+    with_article: "a PR",
     noun: "PR",
     render: "devkit issue pr render",
     flags: "--pr-title ... [--pr-body ...]",
@@ -121,7 +120,7 @@ fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: 
         return Verdict::Deny(format!(
             "devkit issue guard: this `{tool}` call writes {}, and the payload carries no \
              session id to check its `{render}` receipts against.",
-            gate.written
+            gate.with_article
         ));
     };
     if !receipt::valid_session(session) {
@@ -193,7 +192,7 @@ pub(super) fn decide(
     receipt: &dyn Fn(Field, &str) -> Result<bool>,
 ) -> Result<Verdict> {
     let Gate {
-        written,
+        with_article,
         noun,
         render,
         flags,
@@ -237,8 +236,8 @@ pub(super) fn decide(
             };
             let opening = if absent {
                 format!(
-                    "This call creates {written} with no `{key}`. Pass the `{output}` output \
-                     of `{render}` as `{key}`."
+                    "This call creates {with_article} with no `{key}`. Pass the `{output}` \
+                     output of `{render}` as `{key}`."
                 )
             } else if ctx.session_seen {
                 format!(
@@ -246,8 +245,8 @@ pub(super) fn decide(
                 )
             } else {
                 format!(
-                    "This `{server}` `{tool}` call writes {written} `{key}` that `{render}` did \
-                     not produce in this session."
+                    "This `{server}` `{tool}` call writes {with_article} `{key}` that `{render}` \
+                     did not produce in this session."
                 )
             };
             return Ok(Verdict::Deny(format!(
