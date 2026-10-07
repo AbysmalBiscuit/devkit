@@ -602,12 +602,20 @@ fn write_wrappers(scratch: &Path, state: &HookState) -> Result<PathBuf> {
     let wrappers = scratch.join("hooks");
     fs::create_dir(&wrappers)?;
     let mut names = BTreeSet::from(["reference-transaction".to_string()]);
-    if let Ok(entries) = fs::read_dir(&state.hooks) {
-        for entry in entries.flatten() {
-            if entry.path().is_file() {
-                names.insert(entry.file_name().to_string_lossy().into_owned());
+    let listing = || format!("listing the hooks directory {}", state.hooks.display());
+    match fs::read_dir(&state.hooks) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.with_context(listing)?;
+                if entry.path().is_file() {
+                    names.insert(entry.file_name().to_string_lossy().into_owned());
+                }
             }
         }
+        // No hooks directory is no hooks; any other failure could hide a hook
+        // git would still run.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(listing),
     }
     let exe = std::env::current_exe().context("locating the devkit executable")?;
     for name in names {

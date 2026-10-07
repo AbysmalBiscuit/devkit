@@ -443,6 +443,65 @@ fn a_hook_that_changes_the_committed_tree_makes_files_refuse() {
     assert!(!dir.join(".git/index.lock").exists());
 }
 
+/// A hooks directory git may search but not list can still hold a hook git
+/// runs, so it is refused rather than read as empty. Root lists it anyway,
+/// so the test has nothing to show there.
+#[cfg(unix)]
+#[test]
+fn a_hooks_directory_that_cannot_be_listed_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = repo();
+    let dir = repo.path();
+    let hooks = dir.join(".git/hooks");
+    let hook = hooks.join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho rejected by hook >&2\nexit 1\n").unwrap();
+    make_executable(&hook);
+    std::fs::set_permissions(&hooks, std::fs::Permissions::from_mode(0o111)).unwrap();
+    if std::fs::read_dir(&hooks).is_ok() {
+        std::fs::set_permissions(&hooks, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+    let before = head(dir);
+
+    let out = commit(dir, &["--files", "a.txt", "--subject", "fix: a"]);
+    std::fs::set_permissions(&hooks, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains(".git/hooks"), "{}", stderr(&out));
+    assert_eq!(head(dir), before);
+}
+
+#[test]
+fn a_hooks_path_that_is_not_a_directory_is_refused() {
+    let repo = repo();
+    let dir = repo.path();
+    std::fs::write(dir.join(".git/not-hooks"), "").unwrap();
+    git(dir, &["config", "core.hooksPath", ".git/not-hooks"]);
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+    let before = head(dir);
+
+    let out = commit(dir, &["--files", "a.txt", "--subject", "fix: a"]);
+
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("not-hooks"), "{}", stderr(&out));
+    assert_eq!(head(dir), before);
+    assert_eq!(git(dir, &["status", "--porcelain"]), " M a.txt\n");
+}
+
+#[test]
+fn a_repository_without_a_hooks_directory_commits() {
+    let repo = repo();
+    let dir = repo.path();
+    std::fs::remove_dir_all(dir.join(".git/hooks")).unwrap();
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+
+    let out = commit(dir, &["--files", "a.txt", "--subject", "fix: a"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(changed_in_head(dir), "M\ta.txt\n");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_symlinked_hook_that_rejects_makes_patch_refuse() {
