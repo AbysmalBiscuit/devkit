@@ -67,11 +67,22 @@ pub fn excludes_path() -> Result<PathBuf> {
     ))
 }
 
+/// The excludes file's text, empty when it does not exist. Any other read
+/// error, such as a file that is not UTF-8, is returned, so a caller never
+/// rewrites lines it could not read.
+fn read_excludes(path: &Path) -> Result<String> {
+    match std::fs::read_to_string(path) {
+        Ok(body) => Ok(body),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
 /// The global excludes file and the `IGNORE_PATTERNS` it lacks. A file that
 /// does not exist lacks every pattern.
 pub fn missing_from_excludes() -> Result<(PathBuf, Vec<&'static str>)> {
     let path = excludes_path()?;
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = read_excludes(&path)?;
     let missing = missing_patterns(&existing);
     Ok((path, missing))
 }
@@ -81,7 +92,7 @@ pub fn missing_from_excludes() -> Result<(PathBuf, Vec<&'static str>)> {
 /// Idempotent and append-only: existing lines are kept as they were.
 pub fn ensure_ignored() -> Result<(PathBuf, Vec<&'static str>)> {
     let path = excludes_path()?;
-    let mut body = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut body = read_excludes(&path)?;
     let missing = missing_patterns(&body);
     if missing.is_empty() {
         return Ok((path, missing));

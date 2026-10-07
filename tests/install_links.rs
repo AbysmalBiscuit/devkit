@@ -1262,6 +1262,33 @@ fn install_appends_to_the_excludes_file_git_reads() {
     assert!(!home.path().join(".config/git/ignore").exists());
 }
 
+/// An excludes file devkit cannot read as text is left as it is, since
+/// rewriting it would drop the lines devkit could not read.
+#[test]
+fn install_fails_without_touching_an_unreadable_excludes_file() {
+    let (_dir, exe) = staged();
+    let home = tempfile::tempdir().expect("home");
+    let excludes = home.path().join(".config/git/ignore");
+    std::fs::create_dir_all(excludes.parent().unwrap()).expect("git config dir");
+    let latin1 = b"node_modules/\n# caf\xe9\n".to_vec();
+    std::fs::write(&excludes, &latin1).expect("seed excludes");
+
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("install")
+            .env("HOME", home.path())
+            .env("XDG_STATE_HOME", home.path().join("state"))
+            .env_remove("GIT_CONFIG_GLOBAL")
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+    });
+    assert!(
+        !out.status.success(),
+        "install should fail on an unreadable excludes file"
+    );
+    assert_eq!(std::fs::read(&excludes).expect("excludes kept"), latin1);
+}
+
 #[test]
 fn doctor_names_devkit_install_for_each_missing_ignore_pattern() {
     let (_dir, exe) = staged();
