@@ -47,7 +47,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let toplevel = devkit_common::vcs::checkout_root(Path::new(&start))?;
-    let record = devkit_common::record::read(&toplevel);
+    let record = devkit_common::record::read_on(&toplevel, &branch);
 
     let head = vcs.revision(here)?;
 

@@ -147,7 +147,7 @@ pub(crate) fn run(args: Args) -> Result<()> {
 
     let branch = Vcs::at(here).branch(here)?;
     let toplevel = devkit_common::vcs::checkout_root(here)?;
-    let record = devkit_common::record::read(&toplevel);
+    let record = devkit_common::record::read_on(&toplevel, &branch);
     let texts = Texts::new(
         &loaded.config.templates,
         record.as_ref(),

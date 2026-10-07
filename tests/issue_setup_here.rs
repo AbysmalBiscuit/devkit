@@ -198,3 +198,39 @@ fn setup_here_finds_the_default_branch_through_origin_head() {
     );
     assert!(devkit_common::record::read(fake.project()).is_none());
 }
+
+#[test]
+fn a_pr_from_another_branch_does_not_close_the_bound_issue() {
+    let fake = ghfake::Fake::without_pr(
+        r#"
+[tracker]
+kind = "github"
+
+[templates]
+pr_body = "{% if issue is defined %}Closes #{{ issue }}\n\n{% endif %}{{ input }}"
+"#,
+    );
+    fake.create_opens(&ghfake::Pr {
+        number: 9,
+        state: "OPEN",
+        is_draft: false,
+        author: "LevValle",
+    });
+    let setup = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+    assert!(setup.status.success(), "{}", stderr(&setup));
+    git(fake.project(), &["switch", "-q", "-c", "lev/other-work"]);
+
+    let out = fake.issue(&[
+        "pr",
+        "create",
+        "--no-push",
+        "--pr-title",
+        "t",
+        "--pr-body",
+        "Why.",
+    ]);
+
+    assert!(out.status.success(), "{}\n{}", stderr(&out), fake.calls());
+    let body = fake.created_pr_arg("--body").expect("gh pr create ran");
+    assert!(!body.contains("Closes #7"), "{body}");
+}

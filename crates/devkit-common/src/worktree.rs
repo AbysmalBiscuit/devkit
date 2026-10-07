@@ -95,7 +95,7 @@ impl serde::Serialize for IssueId {
 /// final, since an issueless worktree's branch carries only a slug that may
 /// happen to look like an id.
 pub fn issue_id_of(worktree: &std::path::Path, branch: &str) -> IssueId {
-    if let Some(rec) = crate::record::read(worktree) {
+    if let Some(rec) = crate::record::read_on(worktree, branch) {
         return rec.issue.parse().unwrap_or(IssueId::Unknown);
     }
     let dir = worktree.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -1578,6 +1578,25 @@ mod tests {
         assert_eq!(
             issue_id_of(dir.path(), "lev/eng-1-something"),
             IssueId::Tracker("87".into())
+        );
+    }
+
+    #[test]
+    fn a_record_bound_to_another_branch_gives_way_to_the_branch_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
+        std::fs::write(
+            dir.path().join(".devkit").join("issue.toml"),
+            "issue = \"87\"\nslug = \"fix\"\nbranch = \"lev/87-fix\"\napps = []\n",
+        )
+        .unwrap();
+        assert_eq!(
+            issue_id_of(dir.path(), "lev/87-fix"),
+            IssueId::Tracker("87".into())
+        );
+        assert_eq!(
+            issue_id_of(dir.path(), "lev/eng-1-something"),
+            IssueId::Tracker("ENG-1".into())
         );
     }
 

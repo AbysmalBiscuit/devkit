@@ -12,6 +12,7 @@ use devkit_common::{
         self,
         status::{Outcome, StatusWriter, writer_for},
     },
+    vcs::{Vcs, VersionControl},
 };
 use devkit_config::{Health, IssueEvent};
 
@@ -34,10 +35,12 @@ impl From<EventArg> for IssueEvent {
     }
 }
 
-/// The issue `dir`'s worktree record names, when it names a tracker issue.
+/// The issue `dir`'s worktree record names, when it names a tracker issue
+/// and still binds the branch checked out there.
 fn recorded_issue(dir: &Path) -> Result<String> {
     let root = devkit_common::vcs::checkout_root(dir)?;
-    record::read(&root)
+    let branch = Vcs::at(&root).branch(&root)?;
+    record::read_on(&root, &branch)
         .and_then(|r| r.tracker_issue())
         .with_context(|| format!("{} records no tracker issue; pass ISSUE", root.display()))
 }

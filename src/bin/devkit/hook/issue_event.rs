@@ -32,11 +32,12 @@ fn qualifies(rec: &IssueRecord) -> bool {
 /// Claim `start` for the checkout and spawn its run, when the worktree
 /// qualifies and the project configures `start` against a tracker.
 pub(crate) fn on_session_start(checkout: &Checkout) {
-    let Some(root) = checkout.root() else { return };
+    let Some(here) = checkout.here() else { return };
+    let root = here.path.as_path();
     let RecordState::Ok(rec) = record::read_state(root) else {
         return;
     };
-    if !qualifies(&rec) {
+    if !rec.binds(&here.branch) || !qualifies(&rec) {
         return;
     }
     let Ok((cfg, _)) = devkit_common::config::resolve_in(checkout, None, root) else {

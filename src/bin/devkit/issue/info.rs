@@ -84,7 +84,8 @@ pub fn run(
     };
 
     if cache_only {
-        let recorded_pr = devkit_common::record::read(Path::new(&row.worktree)).and_then(|r| r.pr);
+        let recorded_pr = devkit_common::record::read_on(Path::new(&row.worktree), &row.branch)
+            .and_then(|r| r.pr);
         let cached_pr = seedable_cached_pr(
             crate::issue::info_cache::read(Path::new(&row.worktree)),
             recorded_pr.as_ref(),
