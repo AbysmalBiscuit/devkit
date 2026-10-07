@@ -312,7 +312,7 @@ pub fn parse_closing_prs(
 }
 
 /// Every event on issue `number`'s REST timeline, page by page.
-fn rest_timeline(api: &Api, slug: &str, number: u64) -> Result<Vec<serde_json::Value>> {
+fn timeline_events(api: &Api, slug: &str, number: u64) -> Result<Vec<serde_json::Value>> {
     rest_pages(api, &format!("/repos/{slug}/issues/{number}/timeline"))
 }
 
@@ -800,7 +800,7 @@ impl Tracker for GithubTracker {
         {
             Ok(resp) => parse_issue_pr(&resp),
             Err(e) if graphql_refused(&e) => {
-                let events = rest_timeline(&self.api, &self.repo.slug, n)?;
+                let events = timeline_events(&self.api, &self.repo.slug, n)?;
                 rank_linked(&parse_closing_prs(
                     &events,
                     &self.repo.slug,
