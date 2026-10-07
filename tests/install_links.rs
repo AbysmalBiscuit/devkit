@@ -722,42 +722,14 @@ fn a_skipped_foreign_name_still_completes_the_pass() {
     );
 }
 
-/// Make `dir` writable and delete it once this test process has exited, however
-/// it exits. Files under an unwritable directory cannot be unlinked, so a
-/// staged tree left at 0o555 defeats `TempDir`'s cleanup and `cargo clean`
-/// alike, and no `Drop` guard runs when a timeout, a cancelled job or Ctrl-C
-/// kills the process. The watcher is orphaned into its own process group, so
-/// neither a signal to the test's group nor waiting on the test's children
-/// reaches it.
-#[cfg(unix)]
-fn remove_after_exit(dir: &std::path::Path) {
-    use std::os::unix::process::CommandExt;
-
-    let status = Command::new("sh")
-        .args([
-            "-c",
-            r#"(while kill -0 "$1" 2>/dev/null; do sleep 1; done; chmod u+w "$2"; rm -rf "$2") &"#,
-            "sh",
-        ])
-        .arg(std::process::id().to_string())
-        .arg(dir)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .expect("spawn the cleanup watcher");
-    assert!(status.success(), "cleanup watcher: {status}");
-}
-
 /// A pass that could not link is recorded as partial, and a partial stamp only
 /// suppresses the retry until `RETRY_COOLDOWN` has elapsed. Without that, the
-/// stamp records that a pass ran rather than that the links are correct: an
-/// install directory that was briefly unwritable would leave every shim name
-/// unlinked forever.
+/// stamp records that a pass ran rather than that the links are correct: a
+/// shim name that briefly could not be replaced would stay unlinked forever.
 ///
-/// Unix-only: the failure is produced by making the install directory
-/// unwritable, and Windows has no equivalent `chmod`.
+/// The failure is a devkit at `portm` that turns into a directory once probed,
+/// so removing it to relink fails whoever runs the test. Unix-only: that
+/// devkit is a shell script.
 #[test]
 #[cfg(unix)]
 fn a_failed_pass_is_partial_and_retries_once_the_cooldown_elapses() {
@@ -775,24 +747,28 @@ fn a_failed_pass_is_partial_and_retries_once_the_cooldown_elapses() {
         })
     };
 
-    remove_after_exit(dir.path());
-    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555))
-        .expect("make the install dir unwritable");
-    doctor(state.path());
     let portm = shim_path(dir.path(), "portm");
-    let unwritable_left_it_unlinked = !portm.exists();
-    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
-        .expect("make the install dir writable again");
+    std::fs::write(
+        &portm,
+        b"#!/bin/sh\ncase \"$1\" in\n  --version) echo \"portm 0.9.9\" ;;\n  \
+          --devkit-shim-probe) rm -f \"$0\"; mkdir \"$0\"; echo devkit-shim-ok ;;\n  \
+          *) exit 1 ;;\nesac\n",
+    )
+    .expect("write the devkit at portm");
+    std::fs::set_permissions(&portm, std::fs::Permissions::from_mode(0o755))
+        .expect("make it executable");
+    doctor(state.path());
     let (identity, status) = read_stamp(state.path());
     assert!(
-        unwritable_left_it_unlinked,
-        "an unwritable install dir should have failed every link"
+        portm.is_dir(),
+        "the probed devkit should have left a directory that cannot be relinked"
     );
     assert!(
         status.starts_with("partial:"),
         "a pass with failed links must record a partial stamp, got {status}"
     );
 
+    std::fs::remove_dir(&portm).expect("free the name");
     doctor(state.path());
     assert!(
         !portm.exists(),
