@@ -604,10 +604,8 @@ fn bind_here(
         }
         anyhow::Ok(setup_event && rec.claim(IssueEvent::Setup))
     })??;
-    if !args.no_gitignore
-        && let Err(e) = devkit_common::gitignore::ensure_devkit_ignored()
-    {
-        eprintln!("warning: could not update global gitignore: {e:#}");
+    if !args.no_gitignore {
+        ignore_devkit_files();
     }
 
     Prepared {
@@ -787,10 +785,8 @@ pub fn run(args: SetupArgs) -> Result<()> {
             vec![]
         }),
     })?;
-    if !args.no_gitignore
-        && let Err(e) = devkit_common::gitignore::ensure_devkit_ignored()
-    {
-        eprintln!("warning: could not update global gitignore: {e:#}");
+    if !args.no_gitignore {
+        ignore_devkit_files();
     }
 
     backfill_includes(primary_s, &worktree, &cfg.defaults.worktree_include, &steps);
@@ -846,6 +842,19 @@ pub fn run(args: SetupArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Add devkit's ignore patterns to the global excludes file. Reported on
+/// stderr, since stdout carries the setup summary.
+fn ignore_devkit_files() {
+    match devkit_common::gitignore::ensure_ignored() {
+        Ok((path, added)) => {
+            for pattern in added {
+                eprintln!("added {pattern} to {}", path.display());
+            }
+        }
+        Err(e) => eprintln!("warning: could not update global gitignore: {e:#}"),
+    }
 }
 
 #[cfg(test)]

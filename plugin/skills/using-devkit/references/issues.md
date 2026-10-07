@@ -27,7 +27,7 @@ issue event <setup|start|pr_open> [ID|URL]
 
 ## `setup` — start an issue
 
-Creates a worktree off the baseline ref, symlinks env files, runs the per-app setup commands, adds `.devkit/` (the per-worktree record and cache directory) to the global gitignore, and prints a JSON summary to stdout. An agent's stdout is not a terminal, so JSON is what you get; a person at a terminal sees the same fields as a table.
+Creates a worktree off the baseline ref, symlinks env files, runs the per-app setup commands, adds `.devkit/` (the per-worktree record and cache directory), `*.local` and `*.local.*` (local config layers such as `devkit.local.toml`) to the global gitignore, as `devkit install` does, and prints a JSON summary to stdout. An agent's stdout is not a terminal, so JSON is what you get; a person at a terminal sees the same fields as a table.
 
 ```json
 { "issue": "ENG-123", "worktree": "/abs/path/to/worktree", "branch": "lev/eng-123-fix-auth" }

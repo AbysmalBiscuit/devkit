@@ -343,3 +343,22 @@ fn setup_here_refuses_a_relative_summary_path_without_a_worktree_root() {
     assert!(!wt.join("ISSUE_SUMMARY_7.md").exists());
     assert!(devkit_common::record::read(&wt).is_none());
 }
+
+#[test]
+fn setup_adds_devkit_ignore_patterns_to_the_global_excludes() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    let out = fake.issue(&["setup", "--here", "7", "--slug", "fix"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read_to_string(fake.state().join("git/ignore")).expect("excludes written"),
+        ".devkit/\n*.local\n*.local.*\n"
+    );
+}
+
+#[test]
+fn setup_with_no_gitignore_leaves_the_global_excludes_alone() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!fake.state().join("git/ignore").exists());
+}
