@@ -611,7 +611,7 @@ fn excludes_check(path: &std::path::Path, missing: &[&str]) -> Check {
         ))
     } else {
         Check::Warn(format!(
-            "{} lacks {}; run `devkit install`",
+            "{} lacks {}; run: devkit install",
             path.display(),
             missing.join(", ")
         ))
@@ -625,7 +625,7 @@ fn excludes_row() -> Row {
             serde_json::json!({ "path": path.to_string_lossy(), "missing": missing }),
         ),
         Err(e) => (
-            Check::Warn(format!("{e:#}; run `devkit install`")),
+            Check::Warn(format!("{e:#}; run: devkit install")),
             serde_json::Value::Null,
         ),
     };
@@ -1316,7 +1316,7 @@ mod tests {
         assert_eq!(
             excludes_check(path, &["*.local", "*.local.*"]),
             Check::Warn(
-                "/h/.config/git/ignore lacks *.local, *.local.*; run `devkit install`".into()
+                "/h/.config/git/ignore lacks *.local, *.local.*; run: devkit install".into()
             )
         );
         assert!(matches!(excludes_check(path, &[]), Check::Ok(_)));
