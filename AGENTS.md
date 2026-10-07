@@ -88,4 +88,4 @@ Each rule's reasoning is documented at the named site. Read it before changing t
 
 ## Worktrees and locks
 
-The primary clone stays on `main`. Every branch lives in its own worktree under `../devkit-worktrees/`, and finished work lands by fast-forwarding `main` from outside that worktree. Several agent sessions share each checkout; the `using-devkit` skill covers the file-lock protocol.
+The primary clone stays on `main`. Every branch lives in its own worktree under `../devkit-worktrees/`, and finished work lands on `main` through a pull request, squash-merged by default or rebase-merged when its commits should survive individually. Several agent sessions share each checkout; the `using-devkit` skill covers the file-lock protocol.
