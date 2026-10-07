@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Starts a throwaway Postgres, in front of it the strict transaction-mode
-# pooler `pgbouncer.ini` describes, and a Postgres that offers TLS with a
-# certificate from a CA of its own, then prints the variables the Postgres
+# pooler `pgbouncer.ini` describes and PostgREST behind the path Supabase
+# serves its Data API on, and a Postgres that offers TLS with a certificate
+# from a CA of its own, then prints the variables the Postgres and Supabase
 # todo tests read. Run again to start them afresh; `down.sh` removes them.
 #
 #   eval "$(crates/devkit-todo-postgres/testdb/up.sh)"
@@ -12,7 +13,7 @@ pg_port=${PG_PORT:-55432}
 pooler_port=${POOLER_PORT:-56432}
 name=devkit-todo-pg-$pg_port
 
-docker rm -f "$name" "$name-pooler" "$name-tls" >/dev/null 2>&1 || true
+docker rm -f "$name" "$name-pooler" "$name-tls" "$name-rest" "$name-api" >/dev/null 2>&1 || true
 docker network create "$name" >/dev/null 2>&1 || true
 docker run -d --name "$name" --network "$name" --network-alias postgres \
   -e POSTGRES_PASSWORD=postgres -p "127.0.0.1:$pg_port:5432" \
@@ -26,6 +27,17 @@ docker run -d --name "$name-pooler" --network "$name" \
   -v "$here/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro" \
   -v "$here/userlist.txt:/etc/pgbouncer/userlist.txt:ro" \
   -p "127.0.0.1:$pooler_port:6432" edoburu/pgbouncer:v1.26.0-p0 >/dev/null
+
+# PostgREST serving the `devkit` schema as `devkit_agent` under `/rest/v1/`,
+# as Supabase does. The tests create the role, grants and schema.
+api_port=${API_PORT:-58432}
+docker run -d --name "$name-rest" --network "$name" --network-alias rest \
+  -e PGRST_DB_URI=postgres://postgres:postgres@postgres:5432/postgres \
+  -e PGRST_DB_SCHEMAS=devkit -e PGRST_DB_ANON_ROLE=devkit_agent \
+  postgrest/postgrest:v12.2.12 >/dev/null
+docker run -d --name "$name-api" --network "$name" \
+  -v "$here/api.conf:/etc/nginx/conf.d/default.conf:ro" \
+  -p "127.0.0.1:$api_port:80" nginx:1.27-alpine >/dev/null
 
 # A third server that offers TLS, its certificate signed by a CA of its own,
 # for the tests that check the client verifies it.
@@ -56,5 +68,6 @@ docker exec "$name-tls" pg_isready -U postgres -h 127.0.0.1 >/dev/null
 # These two speak plaintext on purpose, so their URLs say so.
 echo "export DEVKIT_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:$pg_port/postgres?sslmode=disable"
 echo "export DEVKIT_TEST_POOLER_URL=postgres://postgres:postgres@127.0.0.1:$pooler_port/postgres?sslmode=disable"
+echo "export DEVKIT_TEST_SUPABASE_URL=http://127.0.0.1:$api_port"
 echo "export DEVKIT_TEST_POSTGRES_TLS_URL=postgres://postgres:postgres@127.0.0.1:$tls_port/postgres"
 echo "export DEVKIT_TEST_POSTGRES_CA=$certs/ca.crt"

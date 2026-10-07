@@ -20,10 +20,12 @@ mod testenv;
 /// Variables a developer's shell may set that would pick a test's todo
 /// backend, its sync target, its stop hold, or credentials doctor validates
 /// over the network.
-const AMBIENT_TODO_VARS: [&str; 11] = [
+const AMBIENT_TODO_VARS: [&str; 13] = [
     "DEVKIT_TODO_BACKEND",
     "DEVKIT_TODO_HOLD_STOP",
     "DEVKIT_TODO_DATABASE_URL",
+    "DEVKIT_TODO_SUPABASE_URL",
+    "DEVKIT_TODO_SUPABASE_KEY",
     "DEVKIT_TODO_SYNC_URL",
     "DEVKIT_TODO_SYNC_CLIENT_ID",
     "DEVKIT_TODO_SYNC_SECRET",

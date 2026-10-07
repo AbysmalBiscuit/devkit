@@ -24,7 +24,7 @@ use devkit_rules::{
 };
 use strum::VariantNames;
 
-use crate::database_url::{DatabaseUrl, UrlLookup, doppler_scope, global_ca_file};
+use crate::secret::{Secret, SecretLookup, doppler_scope, global_ca_file};
 
 /// The `postgres` source's connection URL.
 pub(crate) const DATABASE_VAR: &str = "DEVKIT_RULES_DATABASE_URL";
@@ -56,10 +56,10 @@ impl Reader {
         }
     }
 
-    fn lookup(self) -> UrlLookup {
+    fn lookup(self) -> SecretLookup {
         match self {
-            Reader::Cli => UrlLookup::Doppler,
-            Reader::Hook => UrlLookup::CachedFirst,
+            Reader::Cli => SecretLookup::Doppler,
+            Reader::Hook => SecretLookup::CachedFirst,
         }
     }
 }
@@ -78,18 +78,18 @@ pub(crate) fn source(settings: &RulesConfig, checkout: &Checkout, reader: Reader
 pub(crate) fn open_database(
     config: &RulesPostgresConfig,
     wait: Duration,
-    lookup: UrlLookup,
+    lookup: SecretLookup,
 ) -> (Database, secrets::Source) {
     let scope = doppler_scope(
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
     );
-    let cache = DatabaseUrl {
+    let cache = Secret {
         var: DATABASE_VAR,
         cache_dir: devkit_common::paths::state_dir().join("rules-database-url"),
     };
     let resolved = cache.resolve(scope.as_ref(), lookup);
-    let Some(url) = resolved.url else {
+    let Some(url) = resolved.value else {
         return (
             Database::unusable(format!("{DATABASE_VAR} is not set")),
             resolved.source,

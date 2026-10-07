@@ -533,6 +533,7 @@ dependencies = [
  "devkit-todo",
  "devkit-todo-builtin",
  "devkit-todo-postgres",
+ "devkit-todo-supabase",
  "devkit-todo-taskchampion",
  "fd-lock",
  "indicatif",
@@ -805,6 +806,22 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
+]
+
+[[package]]
+name = "devkit-todo-supabase"
+version = "0.14.12"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "devkit-common",
+ "devkit-todo",
+ "devkit-todo-postgres",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]

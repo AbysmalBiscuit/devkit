@@ -14,7 +14,8 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_config::{
-    NoConfig, PostgresConfig, Provenance, TaskchampionConfig, TodoBackend, TodoConfig, expand_tilde,
+    NoConfig, PostgresConfig, Provenance, SupabaseConfig, TaskchampionConfig, TodoBackend,
+    TodoConfig, expand_tilde,
 };
 use devkit_todo::{
     TodoStore,
@@ -23,14 +24,15 @@ use devkit_todo::{
 };
 use devkit_todo_builtin::BuiltinStore;
 use devkit_todo_postgres::{Database, PostgresActivity, PostgresStore, Trust};
+use devkit_todo_supabase::{Api, SupabaseStore};
 use devkit_todo_taskchampion::{
     ReplicaSource, SyncTarget, TaskchampionStore, Uuid, replica_location,
 };
 use serde::{Deserialize, de::IntoDeserializer};
 
 use super::sync::SyncOutcome;
-use crate::database_url::{DatabaseUrl, global_ca_file};
-pub(crate) use crate::database_url::{UrlLookup, doppler_scope};
+use crate::secret::{Secret, global_ca_file, global_setting};
+pub(crate) use crate::secret::{SecretLookup, doppler_scope};
 
 /// Overrides `[todo] backend`, so a container can pick its store while the
 /// project's own config still loads.
@@ -47,6 +49,13 @@ pub(crate) const SYNC_VARS: SyncVars = [
 
 /// The Postgres backend's connection URL.
 pub(crate) const DATABASE_VAR: &str = "DEVKIT_TODO_DATABASE_URL";
+
+/// The Supabase backend's API URL, over `[todo.supabase] url` in the global
+/// config.
+pub(crate) const SUPABASE_URL_VAR: &str = "DEVKIT_TODO_SUPABASE_URL";
+
+/// The Supabase backend's API key.
+pub(crate) const SUPABASE_KEY_VAR: &str = "DEVKIT_TODO_SUPABASE_KEY";
 
 /// How long a hook waits for the taskchampion replica's lock before it
 /// queues its write instead, and for each answer from the todo database,
@@ -95,16 +104,58 @@ pub(crate) enum Backend {
     Builtin(BuiltinStore),
     Taskchampion(Replica),
     Postgres(PostgresStore),
+    Supabase(SupabaseStore),
 }
 
 /// Where the activity log is kept: in the todo database on the Postgres
-/// backend, so a swarm reports from one place, and under devkit's state
-/// directory on every other.
+/// backend, so a swarm reports from one place, nowhere on the Supabase
+/// backend, and under devkit's state directory on every other.
 #[derive(Delegate)]
 #[delegate(ActivityStore)]
 pub(crate) enum Activity {
     Local(ActivityLog),
     Postgres(PostgresActivity),
+    Unrecorded(Unrecorded),
+}
+
+/// The log of a backend that records no activity: every write does nothing
+/// and a read is refused.
+pub(crate) struct Unrecorded;
+
+impl Unrecorded {
+    fn refuse<T>() -> Result<T> {
+        bail!("the supabase todo backend records no activity")
+    }
+}
+
+impl ActivityStore for Unrecorded {
+    fn record(&self, _: &devkit_todo::activity::Event) -> Result<()> {
+        Ok(())
+    }
+
+    fn record_now(&self, _: &devkit_todo::activity::What) -> Result<()> {
+        Ok(())
+    }
+
+    fn seen(&self, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn seen_at(&self, _: &str, _: &str, _: std::time::SystemTime) -> Result<()> {
+        Ok(())
+    }
+
+    fn forget(&self, _: &str, _: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+
+    fn read(&self, _: chrono::DateTime<chrono::Utc>) -> Result<devkit_todo::activity::Activity> {
+        Self::refuse()
+    }
+
+    fn read_now(&self) -> Result<devkit_todo::activity::Activity> {
+        Self::refuse()
+    }
 }
 
 /// Who opens a store, which sets how long it waits on a busy replica lock
@@ -127,6 +178,15 @@ impl Opener {
         match self {
             Self::Cli => CLI_DATABASE_WAIT,
             Self::Hook => HOOK_WAIT,
+        }
+    }
+
+    /// How this opener finds a secret Doppler holds.
+    fn secret_lookup(self) -> SecretLookup {
+        match (self, SESSION_END.get()) {
+            (Self::Cli, _) => SecretLookup::Doppler,
+            (Self::Hook, None) => SecretLookup::CachedFirst,
+            (Self::Hook, Some(_)) => SecretLookup::CachedOnly,
         }
     }
 }
@@ -211,7 +271,7 @@ pub(crate) fn effective_backend(
 pub(crate) fn open_database(
     config: &PostgresConfig,
     wait: Duration,
-    lookup: UrlLookup,
+    lookup: SecretLookup,
 ) -> (Result<Arc<Database>, String>, Source) {
     let scope = doppler_scope(
         config.doppler_project.as_deref(),
@@ -219,7 +279,7 @@ pub(crate) fn open_database(
     );
     let cache = database_url();
     let resolved = cache.resolve(scope.as_ref(), lookup);
-    let Some(url) = resolved.url else {
+    let Some(url) = resolved.value else {
         return (Err(format!("{DATABASE_VAR} is not set")), resolved.source);
     };
     let trust = Trust {
@@ -238,8 +298,8 @@ pub(crate) fn open_database(
 }
 
 /// The todo database's URL and where Doppler's answers for it are kept.
-fn database_url() -> DatabaseUrl {
-    DatabaseUrl {
+fn database_url() -> Secret {
+    Secret {
         var: DATABASE_VAR,
         cache_dir: devkit_todo::state_dir().join("database-url"),
     }
@@ -264,12 +324,7 @@ fn database(config: &PostgresConfig, opener: Opener) -> Arc<Database> {
         .get_or_insert_default()
         .entry(key)
         .or_insert_with(|| {
-            let lookup = match (opener, SESSION_END.get()) {
-                (Opener::Cli, _) => UrlLookup::Doppler,
-                (Opener::Hook, None) => UrlLookup::CachedFirst,
-                (Opener::Hook, Some(_)) => UrlLookup::CachedOnly,
-            };
-            open_database(config, wait, lookup)
+            open_database(config, wait, opener.secret_lookup())
                 .0
                 .unwrap_or_else(Database::unusable)
         })
@@ -278,6 +333,96 @@ fn database(config: &PostgresConfig, opener: Opener) -> Arc<Database> {
         db.finish_by(*at);
     }
     db
+}
+
+/// The Supabase API `config` and the environment name, opened with `wait`,
+/// and where its URL and key resolved from.
+pub(crate) struct OpenedApi {
+    /// The API, or why there is none, naming the variable and never a value.
+    pub(crate) api: Result<Arc<Api>, String>,
+    pub(crate) url_source: Source,
+    pub(crate) key_source: Source,
+}
+
+/// The key Supabase's API takes and where Doppler's answers for it are kept.
+fn supabase_key() -> Secret {
+    Secret {
+        var: SUPABASE_KEY_VAR,
+        cache_dir: devkit_todo::state_dir().join("supabase-key"),
+    }
+}
+
+/// The Supabase API: its URL from [`SUPABASE_URL_VAR`], else the global
+/// config's `[todo.supabase] url`, and its optional key, resolved and kept
+/// as [`open_database`] does the database URL. A key the API answers 401 to
+/// is dropped from the cache.
+pub(crate) fn open_api(config: &SupabaseConfig, wait: Duration, lookup: SecretLookup) -> OpenedApi {
+    let scope = doppler_scope(
+        config.doppler_project.as_deref(),
+        config.doppler_config.as_deref(),
+    );
+    let cache = supabase_key();
+    let key = cache.resolve(scope.as_ref(), lookup);
+    let (url, url_source) = match std::env::var(SUPABASE_URL_VAR)
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+    {
+        Some(url) => (Some(url), Source::Env),
+        None => match global_setting(&["todo", "supabase", "url"]) {
+            Some(url) => (Some(url), Source::File),
+            None => (None, Source::Unset),
+        },
+    };
+    let api = match url {
+        None => Err(format!(
+            "{SUPABASE_URL_VAR} is not set, nor [todo.supabase] url in the global config"
+        )),
+        Some(url) => Api::new(&url, key.value.clone(), wait)
+            .map(Arc::new)
+            .map_err(|e| format!("{SUPABASE_URL_VAR}: {e:#}")),
+    };
+    if let (Ok(api), Source::Doppler, Some(scope), Some(secret)) =
+        (&api, &key.source, &scope, &key.value)
+    {
+        // Only a fresh answer resets the copy's age; reusing it must not.
+        if !key.from_cache {
+            cache.remember(scope, secret);
+        }
+        let (scope, secret) = (scope.clone(), secret.clone());
+        api.on_rejected(move || cache.forget(&scope, &secret));
+    }
+    OpenedApi {
+        api,
+        url_source,
+        key_source: key.source,
+    }
+}
+
+/// [`open_api`], once per Doppler scope and wait in a process, so a hook
+/// asks Doppler at most once and waits on an unreachable API once.
+fn api(config: &SupabaseConfig, opener: Opener) -> Arc<Api> {
+    type Key = (Option<String>, Option<String>, Duration);
+    static OPEN: Mutex<Option<HashMap<Key, Arc<Api>>>> = Mutex::new(None);
+    let wait = opener.database_wait();
+    let key = (
+        config.doppler_project.clone(),
+        config.doppler_config.clone(),
+        wait,
+    );
+    let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
+    let api = open
+        .get_or_insert_default()
+        .entry(key)
+        .or_insert_with(|| {
+            open_api(config, wait, opener.secret_lookup())
+                .api
+                .unwrap_or_else(|reason| Arc::new(Api::unusable(reason)))
+        })
+        .clone();
+    if let Some(at) = SESSION_END.get() {
+        api.finish_by(*at);
+    }
+    api
 }
 
 /// The replica's sync target: `server_dir` when set, without reading any
@@ -346,6 +491,7 @@ impl Activity {
                 database(&config.postgres, opener),
                 &config.postgres.root,
             )),
+            TodoBackend::Supabase => Self::Unrecorded(Unrecorded),
             TodoBackend::Builtin | TodoBackend::Taskchampion => Self::Local(ActivityLog::open()),
         }
     }
@@ -374,6 +520,10 @@ impl Store {
             TodoBackend::Postgres => Backend::Postgres(PostgresStore::new(
                 database(&config.postgres, opener),
                 &config.postgres.root,
+            )),
+            TodoBackend::Supabase => Backend::Supabase(SupabaseStore::new(
+                api(&config.supabase, opener),
+                &config.supabase.root,
             )),
         };
         Self {

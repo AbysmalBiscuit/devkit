@@ -334,6 +334,7 @@ pub(crate) struct Input {
     hold_stop: crate::HoldStop,
     taskchampion: crate::TaskchampionConfig,
     postgres: crate::PostgresConfig,
+    supabase: crate::SupabaseConfig,
 }
 
 impl Default for Input {
@@ -347,6 +348,7 @@ impl Default for Input {
             hold_stop: config.hold_stop,
             taskchampion: config.taskchampion,
             postgres: config.postgres,
+            supabase: config.supabase,
         }
     }
 }
@@ -368,6 +370,7 @@ impl TryFrom<Input> for crate::TodoConfig {
             hold_stop: input.hold_stop,
             taskchampion: input.taskchampion,
             postgres: input.postgres,
+            supabase: input.supabase,
         };
         validate(&config).map_err(|error| format!("{error:#}"))?;
         Ok(config)

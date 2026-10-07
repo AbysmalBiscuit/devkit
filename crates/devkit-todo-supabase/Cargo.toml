@@ -1,0 +1,20 @@
+[package]
+name = "devkit-todo-supabase"
+description = "Agent todo lists in the Postgres todo database, reached over a Supabase project's HTTPS Data API"
+edition.workspace = true
+version = "0.14.12" # x-release-please-version
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+devkit-common.workspace = true
+devkit-todo.workspace = true
+
+[dev-dependencies]
+devkit-todo = { workspace = true, features = ["test-support"] }
+devkit-todo-postgres.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
