@@ -33,6 +33,9 @@ fn canned(args: &str) -> Option<(&'static str, &'static str)> {
     if args.starts_with("issue create") {
         return Some(("issue_create.txt", "https://github.com/o/r/issues/42\n"));
     }
+    if args.starts_with("issue edit") {
+        return Some(("issue_edit.txt", "https://github.com/o/r/issues/7\n"));
+    }
     if args.starts_with("pr create") {
         return Some(("pr_create.txt", ""));
     }

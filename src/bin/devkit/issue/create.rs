@@ -41,7 +41,7 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
     let rendered = render::render(
         &cfg,
         "issue create",
-        &args.title,
+        render::Title::Input(&args.title),
         args.body.as_deref().unwrap_or_default(),
         &args.vars,
         devkit_common::caller::caller(),

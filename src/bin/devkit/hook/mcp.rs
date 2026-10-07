@@ -156,7 +156,12 @@ fn required_hint(checkout: &Checkout, cwd: &Path, kind: Kind) -> String {
         return String::new();
     };
     let missing = match kind {
-        Kind::Issue => render::missing(&cfg, &BTreeMap::new(), Caller::Agent),
+        Kind::Issue => render::missing(
+            &cfg,
+            render::Title::Input(""),
+            &BTreeMap::new(),
+            Caller::Agent,
+        ),
         Kind::Pr => pr::render::missing(&cfg, &BTreeMap::new(), Caller::Agent),
     };
     let missing = match missing {

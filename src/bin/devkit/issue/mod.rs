@@ -9,6 +9,7 @@ use crate::template::VarArgs;
 pub(crate) mod checkout;
 mod create;
 mod dashboard;
+mod edit;
 mod end;
 mod event;
 mod hooks;
@@ -169,6 +170,22 @@ pub(crate) enum Cmd {
         /// Issue body, the `input` of the `issue_body` template.
         #[arg(long)]
         body: Option<String>,
+        #[command(flatten)]
+        vars: VarArgs,
+    },
+    /// Rewrite a GitHub issue's body (and title) from the issue templates.
+    ///
+    /// Without `--title` the issue keeps its current title, which the
+    /// `issue_body` template reads as `issue_title`.
+    Edit {
+        /// Issue number or issue URL.
+        issue: String,
+        /// New issue title, the `input` of the `issue_title` template.
+        #[arg(long)]
+        title: Option<String>,
+        /// New issue body, the `input` of the `issue_body` template.
+        #[arg(long)]
+        body: String,
         #[command(flatten)]
         vars: VarArgs,
     },
@@ -562,6 +579,19 @@ pub fn run(cli: IssueCli) -> Result<()> {
             config: cli.config,
         }),
         Some(Cmd::Create { title, body, vars }) => create::run(create::CreateArgs {
+            title,
+            body,
+            vars,
+            dir: cli.dir,
+            config: cli.config,
+        }),
+        Some(Cmd::Edit {
+            issue,
+            title,
+            body,
+            vars,
+        }) => edit::run(edit::EditArgs {
+            issue,
             title,
             body,
             vars,
