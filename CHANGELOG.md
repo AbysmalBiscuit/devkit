@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.14.12](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.11...v0.14.12) (2026-10-07)
+
+
+### Features
+
+* **hooks:** gate GitHub MCP PR writes on pr render ([#275](https://github.com/AbysmalBiscuit/devkit/issues/275)) ([a6749ff](https://github.com/AbysmalBiscuit/devkit/commit/a6749ff794d8c6d2d75048508c7275a7a3794a3e))
+* **issue:** issue pr render prints the PR title and body ([#272](https://github.com/AbysmalBiscuit/devkit/issues/272)) ([37ad92e](https://github.com/AbysmalBiscuit/devkit/commit/37ad92ef43e3aab90738145d9d87839ba1cf6214))
+* **plugin:** add a d_ monogram icon ([#270](https://github.com/AbysmalBiscuit/devkit/issues/270)) ([38731ca](https://github.com/AbysmalBiscuit/devkit/commit/38731caf26e176d84878807cfbd280142f1bed43))
+* **rules:** read and edit rules in Postgres ([#256](https://github.com/AbysmalBiscuit/devkit/issues/256)) ([ebdb88c](https://github.com/AbysmalBiscuit/devkit/commit/ebdb88c7a39af195ca02a5e0331bdb83c9708f81))
+* **rules:** read and edit the sqlite rule store ([#255](https://github.com/AbysmalBiscuit/devkit/issues/255)) ([9c9efe5](https://github.com/AbysmalBiscuit/devkit/commit/9c9efe55dcebc56925cabf2f1f99d193629d1bdc))
+
+
+### Bug Fixes
+
+* **issue:** issue pr create works when GitHub refuses GraphQL ([#271](https://github.com/AbysmalBiscuit/devkit/issues/271)) ([3b614c5](https://github.com/AbysmalBiscuit/devkit/commit/3b614c590468c58d7a9ade6afc79f45f1316fc4a))
+* **issue:** read GitHub over REST when GraphQL is refused ([#274](https://github.com/AbysmalBiscuit/devkit/issues/274)) ([13790e2](https://github.com/AbysmalBiscuit/devkit/commit/13790e228ae068183333e05da2f8d84aca731700))
+
 ## [0.14.11](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.10...v0.14.11) (2026-10-05)
 
 

@@ -2,7 +2,7 @@
 name = "devkit-todo-taskchampion"
 description = "Agent todo lists kept in an embedded taskchampion replica, local or synced"
 edition.workspace = true
-version = "0.14.11" # x-release-please-version
+version = "0.14.12" # x-release-please-version
 
 [dependencies]
 anyhow.workspace = true
