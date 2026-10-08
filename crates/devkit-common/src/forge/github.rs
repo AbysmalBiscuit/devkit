@@ -932,6 +932,10 @@ impl Forge for GithubForge {
         })
     }
 
+    fn head_ref(&self, n: u64) -> Option<String> {
+        Some(format!("refs/pull/{n}/head"))
+    }
+
     /// `gh pr checkout`, which sets up a fork's remote. Where GitHub refuses
     /// the GraphQL it runs on, the head GitHub publishes on the base
     /// repository is fetched instead, with no upstream set.
@@ -944,11 +948,7 @@ impl Forge for GithubForge {
             )
         }) {
             Ok(_) => Ok(()),
-            Err(e) if graphql_refused(&e) => super::checkout_ref(
-                dir,
-                &format!("refs/pull/{}/head", pr.number),
-                &pr.head_ref_name,
-            ),
+            Err(e) if graphql_refused(&e) => super::checkout_head(self, pr, dir),
             Err(e) => Err(e),
         }
     }

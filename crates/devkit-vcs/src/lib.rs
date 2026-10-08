@@ -168,6 +168,15 @@ pub trait VersionControl {
 
     fn fetch(&self, repo: &::std::path::Path, remote: &str) -> ::anyhow::Result<()>;
 
+    /// Fetches the commits `refs` name on `remote`, writing no ref, so other
+    /// sessions' refs and fetch results stay as they were.
+    fn fetch_commits(
+        &self,
+        repo: &::std::path::Path,
+        remote: &str,
+        refs: &[::std::string::String],
+    ) -> ::anyhow::Result<()>;
+
     /// Publishes `branch` to `remote` and tracks it there. Never forces.
     fn push(&self, dir: &::std::path::Path, remote: &str, branch: &str) -> ::anyhow::Result<()>;
 
@@ -298,6 +307,10 @@ mod tests {
         }
 
         fn fetch(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        fn fetch_commits(&self, _: &Path, _: &str, _: &[String]) -> anyhow::Result<()> {
             unimplemented!()
         }
 

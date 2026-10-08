@@ -588,7 +588,43 @@ pub fn fetch_prs(d: &Discovered, f: &forge::Resolved) -> Result<Prs> {
     });
     let recorded = recorded_lookups(bound, repo, forge);
     let batch = forge.prs_by_head(repo, &branches);
-    Ok(Prs::of(merge_lookups(recorded, batch), &d.rows))
+    let lookups = merge_lookups(recorded, batch);
+    fetch_merged_heads(&lookups, &d.rows, forge);
+    Ok(Prs::of(lookups, &d.rows))
+}
+
+/// Fetches, in one request, every merged PR head missing from the worktree's
+/// repository, so [`Prs::of`] can compare it with HEAD. A branch finished
+/// elsewhere and deleted on merge leaves its head reachable only from the
+/// forge's PR ref. One missing ref fails the whole fetch, so a failed batch is
+/// retried one ref at a time; a head that still fails stays uncompared.
+fn fetch_merged_heads(
+    lookups: &HashMap<String, HeadLookup>,
+    rows: &[IssueWorktree],
+    forge: &dyn forge::Forge,
+) {
+    let mut repo = None;
+    let mut refs = Vec::new();
+    for row in rows {
+        let Some(HeadLookup::Unique(pr)) = lookups.get(&row.branch) else {
+            continue;
+        };
+        let worktree = Path::new(&row.worktree);
+        if pr.state == "MERGED"
+            && ahead_of(worktree, &pr.head_ref_oid).is_none()
+            && let Some(head) = forge.head_ref(pr.number)
+        {
+            repo.get_or_insert(worktree);
+            refs.push(head);
+        }
+    }
+    let Some(repo) = repo else { return };
+    let vcs = Vcs::at(repo);
+    if vcs.fetch_commits(repo, "origin", &refs).is_err() && refs.len() > 1 {
+        for head in refs {
+            let _ = vcs.fetch_commits(repo, "origin", &[head]);
+        }
+    }
 }
 
 /// Attach trees (in row order), the branch's PR, tracker state, and the

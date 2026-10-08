@@ -84,6 +84,10 @@ impl Forge for FakeForge {
         self.refuse()
     }
 
+    fn head_ref(&self, n: u64) -> Option<String> {
+        Some(format!("refs/pull/{n}/head"))
+    }
+
     fn checkout(&self, _repo: &Repo, _pr: &PrBrief, _dir: &Path) -> Result<()> {
         self.refuse()
     }
