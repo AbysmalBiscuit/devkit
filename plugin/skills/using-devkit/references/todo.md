@@ -63,7 +63,7 @@ devkit records each subagent run and each stretch a todo spends in progress, whe
 - A run starts at the subagent's start hook and ends at its stop. Without a stop it ends at its session's end. Without either, it ends as `lost` at the agent's last hook once the agent has been silent past a backstop, so no run stays open for good. Parallel runs, two of one type included, are told apart by agent id.
 - Every hook a session fires marks it seen, its main agent's included. The report shows each session as `ended` once its end arrives, `silent since <time>` once it has fired no hook for longer than the backstop, and `active` otherwise. A session the harness reclaimed without an end, such as a Claude Code cloud session, reads as silent, and so does one idle on a long command.
 - A run whose payload names no agent type, such as a Claude Code fork, stores none and reports as `subagent`.
-- An interval starts when a holder claims a todo and ends `completed`, `cancelled`, `released` (stopped, or released when its holder ended), or `handed` when another holder takes it over, a sub-agent from its session or anyone from a silent one, whose own interval starts there.
+- An interval starts when a holder claims a todo and ends `completed`, `cancelled`, `released` (stopped, or released when its holder ended), or `handed` when another holder takes it over, a sub-agent from its session or anyone from an ended or silent one, whose own interval starts there.
 - Only what devkit sees is recorded. A todo started with `task start` or in alacritree has no interval, and Cursor runs are not recorded because its manifest wires no subagent start.
 
 ## Backends
