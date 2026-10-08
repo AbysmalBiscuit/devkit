@@ -434,3 +434,99 @@ fn codex_plan_write_suggests_roles_and_mirrors_the_selected_scope() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(p.todos()[0].node(), "proj.main");
 }
+
+/// `p` with its sub-agent `S/a1` having selected `implementer` in the
+/// checkout.
+fn implementer_in_checkout(p: &Proj) {
+    let role = p.devkit(&["todo", "role", "implementer"], &WORKER);
+    assert!(role.status.success(), "{}", stderr(&role));
+}
+
+#[test]
+fn a_role_selected_in_the_checkout_routes_adds_from_outside_any_repository() {
+    let p = Proj::with_home_config(WORKFLOW);
+    implementer_in_checkout(&p);
+    let add = p.devkit_in(p.outside(), &["todo", "add", "from tmp"], &WORKER, "");
+    assert!(add.status.success(), "{}", stderr(&add));
+    assert_eq!(p.todos()[0].node(), "proj.main.claude-S.a1");
+    assert_eq!(stderr(&add), "");
+}
+
+#[test]
+fn a_role_selected_in_the_checkout_routes_native_tasks_from_outside_any_repository() {
+    let p = Proj::with_home_config(WORKFLOW);
+    implementer_in_checkout(&p);
+    let mut payload = spawn(&p, "general-purpose");
+    payload["cwd"] = json!(p.outside());
+    payload["hook_event_name"] = json!("PostToolUse");
+    payload["tool_name"] = json!("TaskCreate");
+    payload["tool_input"] = json!({"subject": "created task"});
+    payload["tool_response"] = json!({"task": {"id": "1"}});
+    let out = p.hook("post-tool-use", "claude-code", &payload);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(p.todos()[0].node(), "proj.main.claude-S.a1");
+}
+
+#[test]
+fn a_role_assigned_at_spawn_in_the_checkout_routes_adds_from_outside_any_repository() {
+    let p = Proj::new();
+    std::fs::write(p.path.join("devkit.toml"), WORKFLOW).unwrap();
+    let out = p.hook("subagent-start", "claude-code", &spawn(&p, "implementer"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let add = p.devkit_in(p.outside(), &["todo", "add", "from tmp"], &WORKER, "");
+    assert!(add.status.success(), "{}", stderr(&add));
+    assert_eq!(p.todos()[0].node(), "proj.main.claude-S.a1");
+    assert_eq!(stderr(&add), "");
+}
+
+#[test]
+fn a_holder_with_no_recorded_checkout_is_told_its_add_goes_on_global() {
+    let p = Proj::with_home_config(WORKFLOW);
+    let add = p.devkit_in(p.outside(), &["todo", "add", "far"], &WORKER, "");
+    assert!(add.status.success(), "{}", stderr(&add));
+    assert!(
+        stderr(&add).contains("no repository found"),
+        "{}",
+        stderr(&add)
+    );
+    assert_eq!(p.todos()[0].project, None);
+}
+
+#[test]
+fn a_role_the_recorded_checkouts_config_defines_is_not_reported_stale() {
+    let p = Proj::new();
+    std::fs::write(p.path.join("devkit.toml"), WORKFLOW).unwrap();
+    implementer_in_checkout(&p);
+    let add = p.devkit_in(p.outside(), &["todo", "add", "from tmp"], &WORKER, "");
+    assert!(add.status.success(), "{}", stderr(&add));
+    assert!(
+        !stderr(&add).contains("no longer exists"),
+        "{}",
+        stderr(&add)
+    );
+    assert_eq!(p.todos()[0].node(), "proj.main.claude-S.a1");
+}
+
+#[test]
+fn a_held_stop_from_outside_any_repository_sees_the_role_nodes_pending_todo() {
+    let p = Proj::new();
+    std::fs::write(p.path.join("devkit.toml"), WORKFLOW).unwrap();
+    implementer_in_checkout(&p);
+    let add = p.devkit(&["todo", "add", "finish the worker plan"], &WORKER);
+    assert!(add.status.success(), "{}", stderr(&add));
+    let mut payload = spawn(&p, "general-purpose");
+    payload["cwd"] = json!(p.outside());
+    payload["hook_event_name"] = json!("SubagentStop");
+    payload["stop_hook_active"] = json!(false);
+    let out = p.hook("subagent-stop", "claude-code", &payload);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let answer: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", stdout(&out)));
+    assert_eq!(answer["decision"], "block");
+    assert!(
+        answer["reason"]
+            .as_str()
+            .unwrap()
+            .contains("finish the worker plan")
+    );
+}

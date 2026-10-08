@@ -573,3 +573,31 @@ fn a_broken_config_leaves_hooks_on_the_builtin_store() {
     post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
     assert_eq!(by_text(&p, "alpha").status, Status::Pending);
 }
+
+#[test]
+fn attribution_a_claim_check_from_outside_any_repository_reads_the_role_checkouts_store() {
+    let p = Proj::new();
+    std::fs::write(
+        p.path.join("devkit.toml"),
+        "[todo]\nbackend = \"taskchampion\"\n[todo.roles.implementer]\nscope = \"agent\"\n",
+    )
+    .unwrap();
+    let as_holder = |holder| {
+        [
+            ("CLAUDE_CODE_SESSION_ID", "S"),
+            ("DEVKIT_TODO_HOLDER", holder),
+        ]
+    };
+    let role = p.devkit(&["todo", "role", "implementer"], &as_holder("S/a1"));
+    assert!(role.status.success(), "{}", todoenv::stderr(&role));
+    let add = p.devkit(&["todo", "add", "a"], &as_holder("S/a2"));
+    assert!(add.status.success(), "{}", todoenv::stderr(&add));
+    let id = stdout(&add).trim().to_string();
+    let start = p.devkit(&["todo", "start", &id], &as_holder("S/a2"));
+    assert!(start.status.success(), "{}", todoenv::stderr(&start));
+    let mut payload = bash(&p, Some("a1"), &format!("devkit todo done {id}"));
+    payload["cwd"] = json!(p.outside());
+    let out = p.hook("pre-tool-use", CLAUDE_CODE.harness, &payload);
+    let reason = denial(&out).expect("denied");
+    assert!(reason.contains("in progress by S/a2"), "{reason}");
+}

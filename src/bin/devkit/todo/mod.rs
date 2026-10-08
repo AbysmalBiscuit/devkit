@@ -32,7 +32,7 @@ use strum::VariantNames as _;
 use self::{store::Store, sync::SyncOutcome};
 use crate::hook::{
     self, HookEvent,
-    todo::{resolve_role, to_todo_holder},
+    todo::{anchored, resolve_role, to_todo_holder},
 };
 
 #[derive(Args)]
@@ -188,16 +188,20 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let get = |key: &str| std::env::var(key).ok();
     let actor = actor_from_env(caller, get);
     let session = node::session_from_env(get);
-    let cwd = std::env::current_dir()?;
+    let here = std::env::current_dir()?;
+    let roles = Roles::at(devkit_todo::state_dir());
+    let checkout = anchor(Checkout::at(&here), &roles, &actor)?;
+    let cwd = checkout.dir().to_path_buf();
+    let place = node::place_of(&checkout)?;
     let store = Store::for_cli(&cwd)?;
     let layout = Layout::new(store.config())?;
-    let facts = Facts::new(&place_at(&cwd)?, session.as_ref(), &actor);
-    let roles = Roles::at(devkit_todo::state_dir());
+    let facts = Facts::new(&place, session.as_ref(), &actor);
     if let TodoCommand::Role { name: Some(name) } = &cli.command {
         if caller == Caller::Human || session.is_none() {
             bail!("devkit todo role needs an agent session; terminal callers have no role record");
         }
-        roles.record(&layout, &actor, name)?;
+        let checkout = (place != Place::Global).then_some(cwd.as_path());
+        roles.record(&layout, &actor, name, checkout)?;
     }
     let role = roles.resolve(&layout, &facts, &actor, None)?;
     if let Some(warning) = &role.warning {
@@ -223,10 +227,16 @@ pub fn run(cli: TodoCli) -> Result<()> {
         } => {
             let node = match node {
                 Some(node) => node,
-                None => match scope {
-                    Some(scope) => layout.fill(&scope, &facts)?,
-                    None => role.node,
-                },
+                None => {
+                    let node = match scope {
+                        Some(scope) => layout.fill(&scope, &facts)?,
+                        None => role.node,
+                    };
+                    if place == Place::Global && node == GLOBAL {
+                        eprintln!("{}", global_notice(&here));
+                    }
+                    node
+                }
             };
             let id = store.add(NewTodo {
                 project: project_of(node),
@@ -294,9 +304,32 @@ fn hold_modes() -> impl clap::builder::TypedValueParser<Value = HoldStop> {
         .map(|name| name.parse::<HoldStop>().expect("a listed mode parses"))
 }
 
-/// Where `dir` sits: global outside any repository.
-pub(crate) fn place_at(dir: &Path) -> Result<Place> {
-    node::place_of(&Checkout::at(dir))
+/// The checkout a todo call from `holder` resolves its place and config
+/// from: `checkout` itself inside a repository, else the one `holder` last
+/// selected its role in while that is still a repository, else `checkout`,
+/// whose place is global.
+pub(crate) fn anchor(checkout: Checkout, roles: &Roles, holder: &Holder) -> Result<Checkout> {
+    if node::place_of(&checkout)? != Place::Global {
+        return Ok(checkout);
+    }
+    let Some(recorded) = roles.checkout(holder)?.filter(|dir| dir.is_dir()) else {
+        return Ok(checkout);
+    };
+    let recorded = Checkout::at(&recorded);
+    Ok(match node::place_of(&recorded)? {
+        Place::Global => checkout,
+        _ => recorded,
+    })
+}
+
+/// What a caller whose todo lands on the global list for want of a
+/// repository is told.
+pub(crate) fn global_notice(dir: &Path) -> String {
+    format!(
+        "devkit todo: no repository found at {}; adding to the `{GLOBAL}` list. A role \
+         selected in a checkout with `devkit todo role <name>` writes there from anywhere.",
+        dir.display()
+    )
 }
 
 /// The holder a CLI call acts as: the sub-agent [`HOLDER_VAR`] names when its
@@ -466,8 +499,8 @@ fn context(args: &ContextArgs) -> Option<String> {
     let payload = hook::read_payload(Some(args.harness), HookEvent::SessionStart)?;
     payload.session_id()?;
     let viewer = to_todo_holder(&payload.holder().ok()?);
-    let cwd = hook::record::payload_cwd(&payload);
-    let checkout = Checkout::at(&cwd);
+    let checkout = anchored(&Checkout::at(&hook::record::payload_cwd(&payload)), &viewer);
+    let cwd = checkout.dir().to_path_buf();
     let store = Store::for_hook(&checkout, &cwd);
     let (layout, facts, role) = resolve_role(&payload, &checkout, &store, &viewer)?;
     let visible = layout.visible(&facts, &role.name).ok()?;

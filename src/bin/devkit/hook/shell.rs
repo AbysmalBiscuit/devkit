@@ -347,7 +347,7 @@ fn respond(
         return deny(which, &blocks).with(rec);
     }
     if super::todo::writes_todo(&analysis)
-        && let Some(text) = super::todo::nudge(payload, &checkout, &cwd)
+        && let Some(text) = super::todo::nudge(payload, &checkout)
     {
         notes.push(text);
     }
