@@ -9,7 +9,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use devkit_common::store;
 use devkit_todo::{
     Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore, one_line, state_dir,
-    transition,
+    take_over, transition,
 };
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,15 @@ impl Doc {
 
 fn no_todo(id: &str) -> anyhow::Error {
     anyhow!("no todo {id}")
+}
+
+/// Moves `todo` to `next`, when there is one, and returns the change.
+fn move_to(todo: &mut Todo, next: Option<Status>) -> Option<StatusChange> {
+    let next = next?;
+    let change = StatusChange::of(todo, Some(next.clone()));
+    todo.status = next;
+    todo.modified = Some(now());
+    Some(change)
 }
 
 fn now() -> String {
@@ -151,11 +160,13 @@ impl TodoStore for BuiltinStore {
             match edit {
                 Edit::SetStatus { id, to, actor } => {
                     let todo = doc.todo_mut(id)?;
-                    if let Some(next) = transition(&todo.status, *to, actor)? {
-                        changes.push(StatusChange::of(todo, Some(next.clone())));
-                        todo.status = next;
-                        todo.modified = Some(now());
-                    }
+                    let next = transition(&todo.status, *to, actor)?;
+                    changes.extend(move_to(todo, next));
+                }
+                Edit::TakeOver { id, from, actor } => {
+                    let todo = doc.todo_mut(id)?;
+                    let next = take_over(&todo.status, from, actor)?;
+                    changes.extend(move_to(todo, next));
                 }
                 Edit::Describe { id, description } => {
                     let todo = doc.todo_mut(id)?;

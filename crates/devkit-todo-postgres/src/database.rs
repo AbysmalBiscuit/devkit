@@ -204,6 +204,38 @@ BEGIN
 END
 $$;
 
+-- Moves the todo to in progress by `p_actor` while `p_from` still holds it,
+-- as devkit_todo::take_over states it, and otherwise as todo_set_status
+-- moves it for `p_actor` asking for in progress.
+CREATE OR REPLACE FUNCTION devkit.todo_take_over(
+    p_root text, p_id text, p_from text, p_actor text
+) RETURNS TABLE (
+    todo uuid, node text, from_status text, from_holder text,
+    to_status text, to_holder text, at timestamptz
+)
+LANGUAGE plpgsql AS $$
+#variable_conflict use_column
+DECLARE
+    locked devkit.todos := devkit.todo_lock(p_root, p_id);
+BEGIN
+    IF locked.status <> 'in_progress' OR locked.holder <> p_from OR p_from = 'human'
+        OR devkit.todo_covers(p_actor, p_from) THEN
+        RETURN QUERY SELECT * FROM devkit.todo_set_status(p_root, p_id, 'in_progress', p_actor);
+        RETURN;
+    END IF;
+    UPDATE devkit.todos
+    SET holder = p_actor, modified = clock_timestamp()
+    WHERE id = locked.id RETURNING modified INTO at;
+    todo := locked.id;
+    node := locked.node;
+    from_status := locked.status;
+    from_holder := locked.holder;
+    to_status := locked.status;
+    to_holder := p_actor;
+    RETURN NEXT;
+END
+$$;
+
 CREATE OR REPLACE FUNCTION devkit.todo_describe(
     p_root text, p_id text, p_description text
 ) RETURNS void

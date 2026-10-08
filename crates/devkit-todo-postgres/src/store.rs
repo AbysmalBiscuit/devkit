@@ -221,6 +221,16 @@ impl TodoStore for PostgresStore {
                 ])
                 .await
             }
+            Edit::TakeOver { id, from, actor } => {
+                let (from, actor): (&str, &str) = (from, actor);
+                changes(client, "todo_take_over", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                    (&from, Type::TEXT),
+                    (&actor, Type::TEXT),
+                ])
+                .await
+            }
             Edit::Describe { id, description } => {
                 let description = one_line(description);
                 call(client, "SELECT devkit.todo_describe($1, $2, $3)", &[
