@@ -393,6 +393,55 @@ fn every_hook_from_a_main_session_marks_it_seen() {
     }
 }
 
+/// An hour on, by the clock of the process it is passed to.
+const AN_HOUR_LATER: (&str, &str) = ("DEVKIT_TEST_CLOCK_SKEW_SECS", "3600");
+const AS_T: (&str, &str) = ("CLAUDE_CODE_SESSION_ID", "T");
+
+/// A todo session `S` claimed after one hook of its own.
+fn claimed_by_s(p: &Proj) -> String {
+    main_hook(p, "S", "pre-tool-use", &[]);
+    let id = todo(p, &["add", "a"], &[]);
+    todo(p, &["start", &id], &[]);
+    id
+}
+
+#[test]
+fn starting_a_todo_whose_holders_session_went_silent_takes_it_over() {
+    let p = Proj::new();
+    let id = claimed_by_s(&p);
+
+    let out = p.devkit(&["todo", "start", &id], &[AS_T, AN_HOUR_LATER]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(p.todo(&id).status, devkit_todo::Status::InProgress {
+        by: Holder::new("T")
+    });
+    let claims = p.activity().claims;
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    assert_eq!(
+        (&*claims[0].holder, claims[0].outcome),
+        ("S", Some(ClaimEnd::Handed))
+    );
+    assert_eq!((&*claims[1].holder, claims[1].outcome), ("T", None));
+}
+
+#[test]
+fn starting_a_todo_whose_holder_was_seen_within_the_backstop_is_refused() {
+    let p = Proj::new();
+    let id = claimed_by_s(&p);
+
+    let out = p.devkit(&["todo", "start", &id], &[AS_T]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("in progress by S"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(p.todo(&id).status, devkit_todo::Status::InProgress {
+        by: Holder::new("S")
+    });
+}
+
 #[test]
 fn the_report_shows_each_session_ended_silent_or_active() {
     let p = Proj::new();

@@ -16,7 +16,8 @@ use devkit_common::{
 };
 use devkit_config::HoldStop;
 use devkit_todo::{
-    Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
+    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
+    activity::{ActivityStore as _, SessionState},
     holder::HOLDER_VAR,
     layout::{Facts, Layout},
     native::NativeMap,
@@ -236,7 +237,19 @@ pub fn run(cli: TodoCli) -> Result<()> {
             })?;
             println!("{}", devkit_todo::short_id(&id));
         }
-        TodoCommand::Start { ids } => set_status(&store, ids, StatusKind::InProgress, &actor)?,
+        TodoCommand::Start { ids } => {
+            let gone = |holder: &Holder| {
+                Store::activity_for_cli(&cwd)
+                    .and_then(|log| log.read_now())
+                    .is_ok_and(|activity| {
+                        matches!(
+                            activity.session_state(holder),
+                            Some(SessionState::Ended { .. } | SessionState::Silent { .. })
+                        )
+                    })
+            };
+            start(&store, ids, &actor, gone)?
+        }
         TodoCommand::Stop { ids } | TodoCommand::Undone { ids } => {
             set_status(&store, ids, StatusKind::Pending, &actor)?
         }
@@ -318,6 +331,46 @@ pub(crate) fn actor_from_env(caller: Caller, get: impl Fn(&str) -> Option<String
 /// The global list is stored without a node.
 fn project_of(node: String) -> Option<String> {
     (node != GLOBAL).then_some(node)
+}
+
+/// Claims each todo for `actor`. A todo another agent holds is taken over,
+/// its claim ending as handed, when `gone` says that agent's session ended or
+/// has been silent past the backstop; otherwise it is refused naming the
+/// holder.
+fn start(
+    store: &impl TodoStore,
+    ids: Vec<String>,
+    actor: &Holder,
+    gone: impl Fn(&Holder) -> bool,
+) -> Result<()> {
+    if ids.is_empty() {
+        bail!("name at least one todo id");
+    }
+    // As in `set_status`, every id is checked before any is written.
+    let mut edits = Vec::new();
+    for id in &ids {
+        let Some(todo) = store.get(id)? else {
+            bail!("no todo {id}");
+        };
+        let edit = match transition(&todo.status, StatusKind::InProgress, actor) {
+            Err(Claimed { by }) if !by.is_human() && gone(&by) => Edit::TakeOver {
+                id: todo.id,
+                from: by,
+                actor: actor.clone(),
+            },
+            Err(claimed) => return Err(claimed.into()),
+            Ok(_) => Edit::SetStatus {
+                id: todo.id,
+                to: StatusKind::InProgress,
+                actor: actor.clone(),
+            },
+        };
+        edits.push(edit);
+    }
+    for edit in edits {
+        store.apply(&edit)?;
+    }
+    Ok(())
 }
 
 fn set_status(
