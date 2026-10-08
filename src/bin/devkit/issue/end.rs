@@ -1124,31 +1124,44 @@ mod tests {
     /// `eng-1-fix`, merged at `head`: every gate `issue end` reads, except the
     /// worktree's own tree and history.
     fn merged_at(head: &str) -> Selected {
+        merged([(1, head)])
+    }
+
+    /// [`merged_at`] for several issues: ENG-n done, and PR #n from
+    /// `eng-n-fix` merged at its head.
+    fn merged<const N: usize>(prs: [(u64, &str); N]) -> Selected {
         use devkit_common::{forge, tracker};
-        let done = tracker::State {
-            kind: tracker::StateKind::Completed,
-            name: "Done".into(),
-            color: None,
-        };
-        let pr = forge::PrBrief {
-            number: 1,
-            state: "MERGED".into(),
-            url: "https://github.com/o/r/pull/1".into(),
-            title: String::new(),
-            head_ref_name: "eng-1-fix".into(),
-            head_ref_oid: head.into(),
-            head_repo_owner: None,
-            is_draft: false,
-            author_login: None,
-        };
+        let ids = prs.map(|(n, _)| format!("ENG-{n}"));
+        let done: [_; N] = std::array::from_fn(|i| {
+            (ids[i].as_str(), tracker::State {
+                kind: tracker::StateKind::Completed,
+                name: "Done".into(),
+                color: None,
+            })
+        });
+        let forge = prs
+            .into_iter()
+            .fold(forge::fake::FakeForge::new(), |f, (n, head)| {
+                f.with_pr(forge::PrBrief {
+                    number: n,
+                    state: "MERGED".into(),
+                    url: format!("https://github.com/o/r/pull/{n}"),
+                    title: String::new(),
+                    head_ref_name: format!("eng-{n}-fix"),
+                    head_ref_oid: head.into(),
+                    head_repo_owner: None,
+                    is_draft: false,
+                    author_login: None,
+                })
+            });
         Selected {
             tracker: tracker::Resolved {
-                tracker: Box::new(tracker::fake::FakeTracker::with_states([("ENG-1", done)])),
+                tracker: Box::new(tracker::fake::FakeTracker::with_states(done)),
                 declared: true,
                 reason: "fake".into(),
             },
             forge: forge::Resolved {
-                forge: Box::new(forge::fake::FakeForge::new().with_pr(pr)),
+                forge: Box::new(forge),
                 declared: true,
                 reason: "fake".into(),
                 repos: forge::Repos::from_parts(
@@ -1333,6 +1346,29 @@ mod tests {
         end_everything_finished(&main, merged_at(&pr_head));
 
         assert!(wt.exists(), "an uncompared worktree survives");
+    }
+
+    /// A forge deletes old PR refs (GitLab after 14 days), and `git fetch`
+    /// fails whole when one named ref is missing.
+    #[test]
+    fn a_merged_prs_deleted_head_ref_does_not_hold_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt, pr_head) = merged_elsewhere(dir.path());
+        let stale = dir.path().join("wt-eng-2");
+        fixture_git(&main, &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "eng-2-fix",
+            stale.to_str().unwrap(),
+        ]);
+        let deleted = "0123456789abcdef0123456789abcdef01234567";
+
+        end_everything_finished(&main, merged([(1, &pr_head), (2, deleted)]));
+
+        assert!(!wt.exists(), "the fetchable head is compared and removed");
+        assert!(stale.exists(), "the uncompared worktree survives");
     }
 
     fn approved_row(worktree: &str, branch: &str, issue_id: &str) -> IssueWorktree {

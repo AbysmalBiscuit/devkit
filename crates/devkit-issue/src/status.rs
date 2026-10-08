@@ -596,7 +596,8 @@ pub fn fetch_prs(d: &Discovered, f: &forge::Resolved) -> Result<Prs> {
 /// Fetches, in one request, every merged PR head missing from the worktree's
 /// repository, so [`Prs::of`] can compare it with HEAD. A branch finished
 /// elsewhere and deleted on merge leaves its head reachable only from the
-/// forge's PR ref. A failed fetch leaves those heads uncompared.
+/// forge's PR ref. One missing ref fails the whole fetch, so a failed batch is
+/// retried one ref at a time; a head that still fails stays uncompared.
 fn fetch_merged_heads(
     lookups: &HashMap<String, HeadLookup>,
     rows: &[IssueWorktree],
@@ -617,8 +618,12 @@ fn fetch_merged_heads(
             refs.push(head);
         }
     }
-    if let Some(repo) = repo {
-        let _ = Vcs::at(repo).fetch_commits(repo, "origin", &refs);
+    let Some(repo) = repo else { return };
+    let vcs = Vcs::at(repo);
+    if vcs.fetch_commits(repo, "origin", &refs).is_err() && refs.len() > 1 {
+        for head in refs {
+            let _ = vcs.fetch_commits(repo, "origin", &[head]);
+        }
     }
 }
 
