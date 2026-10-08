@@ -340,6 +340,50 @@ fn has_function(url: &str, signature: &str) -> bool {
     })
 }
 
+/// Listens on `channel` in the database `url`, and once listening returns a
+/// thread that yields the first notification's payload, or `None` when none
+/// arrives within ten seconds.
+fn listen(url: &str, channel: &str) -> std::thread::JoinHandle<Option<String>> {
+    let (url, channel) = (url.to_string(), channel.to_string());
+    let (ready, listening) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (client, mut connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+                .await
+                .unwrap();
+            let (sent, received) = std::sync::mpsc::channel();
+            tokio::spawn(async move {
+                while let Some(message) =
+                    std::future::poll_fn(|cx| connection.poll_message(cx)).await
+                {
+                    if let Ok(tokio_postgres::AsyncMessage::Notification(n)) = message {
+                        let _ = sent.send(n.payload().to_string());
+                    }
+                }
+            });
+            client
+                .batch_execute(&format!("LISTEN {channel}"))
+                .await
+                .unwrap();
+            ready.send(()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                if let Ok(payload) = received.try_recv() {
+                    return Some(payload);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            None
+        })
+    });
+    listening.recv().unwrap();
+    thread
+}
+
 #[test]
 fn schema_update_creates_a_function_an_existing_database_lacks() {
     let Some(direct) = var("DEVKIT_TEST_POSTGRES_URL") else {
@@ -355,11 +399,17 @@ fn schema_update_creates_a_function_an_existing_database_lacks() {
     let take_over = "devkit.todo_take_over(text, text, text, text)";
     admin(&db, &format!("DROP FUNCTION {take_over}"));
     assert!(!has_function(&db, take_over));
+    let reload = listen(&db, "pgrst");
 
     let out = devkit(&p, &["todo", "schema", "update"], &env);
 
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(has_function(&db, take_over));
+    assert_eq!(
+        reload.join().unwrap().as_deref(),
+        Some("reload schema"),
+        "PostgREST is told to reload its schema cache"
+    );
     assert!(
         stdout(&out).contains("created devkit.todo_take_over"),
         "{}",

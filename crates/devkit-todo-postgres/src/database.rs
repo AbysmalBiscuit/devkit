@@ -518,11 +518,17 @@ impl Database {
     /// Runs devkit's schema whether or not anything is missing: it creates
     /// each table and function that does not exist yet and replaces every
     /// function with this version's. Returns the tables and functions it
-    /// created, schema-qualified and sorted.
+    /// created, schema-qualified and sorted. It then asks a PostgREST
+    /// serving the database, as Supabase's Data API does, to reload its
+    /// schema cache, so the API finds the functions at once; with nothing
+    /// listening, the notification goes nowhere.
     pub fn update_schema(&self) -> Result<Vec<String>> {
         self.run(async |client| {
             let before = schema_objects(client).await?;
             client.batch_execute(&SCHEMA).await?;
+            client
+                .batch_execute("NOTIFY pgrst, 'reload schema'")
+                .await?;
             let after = schema_objects(client).await?;
             Ok(after.into_iter().filter(|o| !before.contains(o)).collect())
         })
