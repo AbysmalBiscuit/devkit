@@ -124,6 +124,19 @@ fn a_stop_row_carries_the_payloads_agent_type() {
 }
 
 #[test]
+fn a_stop_with_no_recorded_start_is_no_run() {
+    let p = Proj::new();
+    stop(&p, "turn-end", Some("general-purpose"));
+    assert_eq!(p.activity().runs, [], "no run from the log");
+
+    let out = p.devkit(&["activity", "--json"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(report["sessions"], json!([]), "{report:#}");
+    assert_eq!(report["agent_types"], json!([]), "{report:#}");
+}
+
+#[test]
 fn a_run_whose_stop_never_arrives_closes_at_its_sessions_end() {
     let p = Proj::new();
     start(&p, "a1", Some("Explore"));
