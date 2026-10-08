@@ -23,7 +23,7 @@ use devkit_todo::{
     holder::HOLDER_VAR,
     layout::{Facts, Layout},
     native::{MirroredStep, NativeMap},
-    node::{self, Harness, SessionRef},
+    node::{self, GLOBAL, Harness, Place, SessionRef},
     render,
     roles::{ResolvedRole, Roles},
     transition,
@@ -32,11 +32,9 @@ use pabal::AnyHarness;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{
-    payload::{self, Payload},
-    record,
-};
+use super::payload::{self, Payload};
 use crate::todo::{
+    anchor, global_notice,
     hold::{self as hold_mode, HOLD_VAR},
     queue::{self, Deferred},
     store::{BACKEND_VAR, Store},
@@ -337,11 +335,21 @@ pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
     if payload.tool_name().and_then(NativeTool::parse).is_none() {
         return;
     }
-    let cwd = record::payload_cwd(payload);
-    let store = Store::for_hook(checkout, &cwd);
-    let Some(mirror) = Mirror::of(payload, checkout, &store) else {
+    let Ok(actor) = payload.holder() else {
         return;
     };
+    let roles = Roles::at(devkit_todo::state_dir());
+    let Ok(checkout) = anchor(checkout.clone(), &roles, &to_todo_holder(&actor)) else {
+        return;
+    };
+    let cwd = checkout.dir().to_path_buf();
+    let store = Store::for_hook(&checkout, &cwd);
+    let Some(mirror) = Mirror::of(payload, &checkout, &store) else {
+        return;
+    };
+    if mirror.node == GLOBAL && node::place_of(&checkout).is_ok_and(|p| p == Place::Global) {
+        eprintln!("{}", global_notice(&cwd));
+    }
     let entry = || Deferred::Capture {
         mirror: mirror.clone(),
     };

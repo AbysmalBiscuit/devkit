@@ -29,7 +29,9 @@ fn exact_roles_survive_resume_independently_for_session_and_workers() {
     let dir = tempfile::tempdir().unwrap();
     let roles = Roles::at(dir.path().to_path_buf());
     let layout = layout();
-    roles.record(&layout, &Holder::new("S"), "manager").unwrap();
+    roles
+        .record(&layout, &Holder::new("S"), "manager", None)
+        .unwrap();
     roles
         .spawn(&layout, &Holder::new("S/a"), Some("implementer"))
         .unwrap();
@@ -54,7 +56,7 @@ fn exact_roles_survive_resume_independently_for_session_and_workers() {
         "subagent"
     );
     roles
-        .record(&layout, &Holder::new("S/a"), "reviewer")
+        .record(&layout, &Holder::new("S/a"), "reviewer", None)
         .unwrap();
     assert_eq!(
         roles
@@ -86,7 +88,9 @@ fn first_write_suggests_child_roles_once_per_exact_holder() {
     let dir = tempfile::tempdir().unwrap();
     let roles = Roles::at(dir.path().to_path_buf());
     let layout = layout();
-    roles.record(&layout, &Holder::new("S"), "manager").unwrap();
+    roles
+        .record(&layout, &Holder::new("S"), "manager", None)
+        .unwrap();
     let text = roles
         .nudge(&layout, &facts("S/a"), &Holder::new("S/a"))
         .unwrap()
@@ -133,7 +137,7 @@ fn deleted_role_warns_and_falls_back_to_saved_agent_type() {
         .spawn(&layout, &Holder::new("S/a"), Some("implementer"))
         .unwrap();
     roles
-        .record(&layout, &Holder::new("S/a"), "reviewer")
+        .record(&layout, &Holder::new("S/a"), "reviewer", None)
         .unwrap();
     let replacement = Layout::new(
         &Config::parse("[todo.roles.worker]\nscope = 'agent'\nagent_types = ['implementer']")
@@ -165,7 +169,9 @@ fn writes_prune_roles_recorded_more_than_thirty_days_ago() {
         .to_string(),
     )
     .unwrap();
-    roles.record(&layout, &Holder::new("S"), "manager").unwrap();
+    roles
+        .record(&layout, &Holder::new("S"), "manager", None)
+        .unwrap();
     assert_eq!(
         roles
             .resolve(&layout, &facts("old"), &Holder::new("old"), None)
@@ -208,7 +214,7 @@ fn concurrent_writes_keep_all_holders_and_nudge_only_one_writer() {
     let dir = tempfile::tempdir().unwrap();
     let layout = layout();
     Roles::at(dir.path().into())
-        .record(&layout, &Holder::new("S"), "manager")
+        .record(&layout, &Holder::new("S"), "manager", None)
         .unwrap();
     std::thread::scope(|threads| {
         let jobs: Vec<_> = (0..8)
@@ -218,7 +224,7 @@ fn concurrent_writes_keep_all_holders_and_nudge_only_one_writer() {
                 threads.spawn(move || {
                     let roles = Roles::at(path.into());
                     roles
-                        .record(layout, &Holder::new(format!("S/a{index}")), "worker")
+                        .record(layout, &Holder::new(format!("S/a{index}")), "worker", None)
                         .unwrap();
                     roles
                         .nudge(layout, &facts("S/roleless"), &Holder::new("S/roleless"))

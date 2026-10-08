@@ -1,6 +1,9 @@
 //! Persistent caller roles and one-time suggestions, keyed by exact holder.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
@@ -28,6 +31,10 @@ struct Entry {
     agent_type: Option<String>,
     #[serde(default)]
     nudged: bool,
+    /// Where the holder last selected its role, for its calls from outside
+    /// any repository to resolve against.
+    #[serde(default)]
+    checkout: Option<PathBuf>,
     at: DateTime<Utc>,
 }
 
@@ -37,6 +44,7 @@ impl Entry {
             role: None,
             agent_type: None,
             nudged: false,
+            checkout: None,
             at,
         }
     }
@@ -174,7 +182,15 @@ impl Roles {
         })
     }
 
-    pub fn record(&self, layout: &Layout, holder: &Holder, name: &str) -> Result<()> {
+    /// Records `name` as `holder`'s role, and `checkout`, when given, as the
+    /// directory it selected the role in.
+    pub fn record(
+        &self,
+        layout: &Layout,
+        holder: &Holder,
+        name: &str,
+        checkout: Option<&Path>,
+    ) -> Result<()> {
         if holder.is_human() {
             bail!("devkit todo role needs an agent session; terminal callers have no role record");
         }
@@ -195,9 +211,21 @@ impl Roles {
                 .entry(holder.to_string())
                 .or_insert_with(|| Entry::new(now));
             entry.role = Some(name.into());
+            if let Some(checkout) = checkout {
+                entry.checkout = Some(checkout.to_path_buf());
+            }
             entry.at = now;
             Ok(())
         })
+    }
+
+    /// The directory [`Roles::record`] last recorded for `holder`.
+    pub fn checkout(&self, holder: &Holder) -> Result<Option<PathBuf>> {
+        Ok(self
+            .read()?
+            .entries
+            .remove(&holder.to_string())
+            .and_then(|entry| entry.checkout))
     }
 
     pub fn spawn(&self, layout: &Layout, holder: &Holder, agent_type: Option<&str>) -> Result<()> {
