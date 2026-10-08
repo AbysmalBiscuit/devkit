@@ -96,6 +96,33 @@ fn a_run_without_an_agent_type_stores_none() {
     assert_eq!(runs[0].label(), "subagent");
 }
 
+/// The log's raw `subagent_stop` rows, as a reader of the database sees them.
+fn stop_rows(p: &Proj) -> Vec<Value> {
+    std::fs::read_to_string(p.state().join("todo/activity/events.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|row| row["event"] == "subagent_stop")
+        .collect()
+}
+
+#[test]
+fn a_stop_row_carries_the_payloads_agent_type() {
+    let p = Proj::new();
+    stop(&p, "a1", Some("Explore"));
+    stop(&p, "afork", None);
+    let rows = stop_rows(&p);
+    let types: Vec<(&str, &Value)> = rows
+        .iter()
+        .map(|row| (row["agent"].as_str().unwrap(), &row["agent_type"]))
+        .collect();
+    assert_eq!(
+        types,
+        [("a1", &json!("Explore")), ("afork", &Value::Null)],
+        "{rows:?}"
+    );
+}
+
 #[test]
 fn a_run_whose_stop_never_arrives_closes_at_its_sessions_end() {
     let p = Proj::new();
