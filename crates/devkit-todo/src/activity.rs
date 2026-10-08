@@ -50,6 +50,10 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum What {
+    /// Also fired when a session resumes or compacts.
+    SessionStart {
+        session: String,
+    },
     SubagentStart {
         session: String,
         agent: String,
@@ -287,8 +291,10 @@ impl Activity {
 }
 
 /// Every session in time-ordered `events` and `seen`, in order of first
-/// sight. Its own hooks, subagent starts and stops, and claims are signs of
-/// life; an unclaim is not, since another holder may have made it.
+/// sight. Its own hooks, starts, subagent starts and stops, and claims are
+/// signs of life; an unclaim is not, since another holder may have made it.
+/// A main agent's seen mark holds only its latest hook, so a session's start
+/// is what keeps its first sight.
 fn sessions(events: &[Event], seen: &[Seen]) -> Vec<Session> {
     let mut sessions: Vec<Session> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -313,9 +319,9 @@ fn sessions(events: &[Event], seen: &[Seen]) -> Vec<Session> {
     };
     for Event { at, what } in events {
         match what {
-            What::SubagentStart { session, .. } | What::SubagentStop { session, .. } => {
-                note(session, *at, false)
-            }
+            What::SessionStart { session }
+            | What::SubagentStart { session, .. }
+            | What::SubagentStop { session, .. } => note(session, *at, false),
             What::SessionEnd { session } => note(session, *at, true),
             What::Claim { holder, .. } if !holder.is_human() => note(&holder.session(), *at, false),
             What::Claim { .. } | What::Unclaim { .. } => {}
@@ -587,6 +593,7 @@ fn derive(events: Vec<Event>) -> Activity {
                     close_claim(&mut activity.claims[i], at, outcome);
                 }
             }
+            What::SessionStart { .. } => {}
         }
     }
     activity

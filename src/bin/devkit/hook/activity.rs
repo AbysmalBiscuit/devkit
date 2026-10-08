@@ -1,7 +1,8 @@
-//! The activity log's side of the hooks: a subagent run starts and stops, a
-//! session's end closes its runs, and every other hook marks the agent that
-//! fired it seen, a subagent for the backstop on its run and a main agent for
-//! its session's. Silent: a failed write changes nothing the hook does.
+//! The activity log's side of the hooks: a session starts, a subagent run
+//! starts and stops, a session's end closes its runs, and every other hook
+//! marks the agent that fired it seen, a subagent for the backstop on its run
+//! and a main agent for its session's. Silent: a failed write changes nothing
+//! the hook does.
 
 use std::{path::Path, time::Duration};
 
@@ -43,6 +44,9 @@ fn observe(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path)
     let record = |what| log.record_now(&what);
     let session = session.to_string();
     let _ = match (event, agent) {
+        (HookEvent::SessionStart, _) => record(What::SessionStart {
+            session: session.clone(),
+        }),
         (HookEvent::SessionEnd, _) => record(What::SessionEnd {
             session: session.clone(),
         })

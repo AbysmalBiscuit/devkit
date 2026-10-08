@@ -554,3 +554,59 @@ fn the_report_shows_each_session_ended_silent_or_active() {
     assert!(line("Q").contains(" silent since 20"), "{text}");
     assert!(line("A").ends_with(" active"), "{text}");
 }
+
+/// Session `S` started an hour ago, by the clock of the hooks, and fired a
+/// hook now.
+fn started_an_hour_ago(p: &Proj) {
+    let an_hour_ago = ("DEVKIT_TEST_CLOCK_SKEW_SECS", "-3600");
+    main_hook(p, "S", "session-start", &[an_hour_ago]);
+    main_hook(p, "S", "pre-tool-use", &[]);
+}
+
+fn half_an_hour_ago() -> String {
+    devkit_todo::activity::stamp(chrono::Utc::now() - chrono::TimeDelta::minutes(30))
+}
+
+fn reported_sessions(p: &Proj, args: &[&str]) -> Vec<Value> {
+    let out = p.devkit(&[&["activity", "--json"], args].concat(), &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    report["sessions"].as_array().unwrap().clone()
+}
+
+#[test]
+fn a_main_session_whose_hooks_run_past_the_range_end_is_in_the_report() {
+    let p = Proj::new();
+    started_an_hour_ago(&p);
+
+    let sessions = reported_sessions(&p, &["--until", &half_an_hour_ago()]);
+    assert!(
+        sessions.iter().any(|s| s["session"] == "S"),
+        "{sessions:#?}"
+    );
+}
+
+#[test]
+fn an_ended_main_session_is_first_seen_at_its_start() {
+    let p = Proj::new();
+    started_an_hour_ago(&p);
+    hook(
+        &p,
+        "session-end",
+        &json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path}),
+    );
+
+    let sessions = p.activity().sessions;
+    let s = sessions.iter().find(|s| s.session == "S").unwrap();
+    assert!(
+        s.first < chrono::Utc::now() - chrono::TimeDelta::minutes(50),
+        "{sessions:?}"
+    );
+    let reported = reported_sessions(&p, &["--until", &half_an_hour_ago()]);
+    let s = reported.iter().find(|s| s["session"] == "S");
+    assert_eq!(
+        s.map(|s| &s["state"]),
+        Some(&json!("ended")),
+        "{reported:#?}"
+    );
+}
