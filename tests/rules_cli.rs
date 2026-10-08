@@ -460,12 +460,7 @@ fn context_does_not_stamp_a_rule_the_byte_cap_cut() {
 #[test]
 fn context_reserves_the_footer_budget_before_selecting_rules() {
     let (proj, state) = context_project_with_cap(160);
-    let out = run_context(proj.path(), state.path(), &["--additional-context"]);
-    assert!(out.status.success());
-    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let text = envelope["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .unwrap();
+    let text = run_context_answer(proj.path(), state.path());
     assert!(text.len() <= 160, "{} bytes: {text}", text.len());
     assert!(text.contains("devkit rules query --path"), "{text}");
     assert!(!text.contains("Root must"), "{text}");
@@ -494,6 +489,38 @@ fn context_is_silent_when_the_footer_cannot_fit() {
         assert!(text.is_empty(), "{cap}: {text}");
         assert!(!state.path().join("devkit/rules").exists());
     }
+}
+
+/// The block Codex reads out of its session-start answer.
+fn run_context_answer(project: &std::path::Path, state: &std::path::Path) -> String {
+    let mut cmd = devkit();
+    cmd.args(["rules", "context", "--harness", "codex"])
+        .current_dir(project)
+        .env("HOME", state)
+        .env("XDG_STATE_HOME", state)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env_remove("DEVKIT_CONFIG")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    testenv::scrub_identity(&mut cmd);
+    let mut child = cmd.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            serde_json::json!({"session_id": "s", "hook_event_name": "SessionStart"})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("additionalContext")
+        .to_string()
 }
 
 fn run_context(
@@ -585,14 +612,9 @@ fn context_outside_a_devkit_project_prints_nothing_and_exits_zero() {
 }
 
 #[test]
-fn additional_context_wraps_the_block_in_the_json_envelope() {
+fn a_named_harness_reads_the_block_out_of_its_answer() {
     let (proj, state) = context_project();
-    let out = run_context(proj.path(), state.path(), &["--additional-context"]);
-    assert!(out.status.success());
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let text = v["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .expect("additionalContext");
+    let text = run_context_answer(proj.path(), state.path());
     assert!(text.contains("Root must"), "{text}");
 }
 

@@ -90,11 +90,11 @@ enum Cmd {
         /// tell the session it had seen a brief it never got.
         #[arg(long, conflicts_with = "pins_only")]
         if_changed: bool,
-        /// Wrap the brief in the JSON envelope Codex and Cursor read it from,
-        /// instead of printing it bare. Claude Code injects a hook's plain
-        /// stdout and needs no envelope.
+        /// The harness whose hook runs this. The brief then travels inside
+        /// that event's JSON answer, which every harness reads context from
+        /// except Claude Code at session start, where it prints bare.
         #[arg(long)]
-        additional_context: bool,
+        harness: Option<pabal::AnyHarness>,
     },
     /// Commit named paths or a patch, or reword the last commit.
     ///
@@ -431,8 +431,8 @@ fn main() -> Result<()> {
                 Cmd::Brief {
                     pins_only,
                     if_changed,
-                    additional_context,
-                } => brief::run(pins_only, if_changed, additional_context),
+                    harness,
+                } => brief::run(pins_only, if_changed, harness),
                 Cmd::Schema { cmd } => match cmd {
                     None => schema::run(),
                     Some(SchemaCmd::Init { path }) => schema::init(&path),

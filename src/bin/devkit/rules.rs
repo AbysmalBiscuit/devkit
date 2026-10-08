@@ -190,9 +190,11 @@ pub struct StatsArgs {
 
 #[derive(Args)]
 pub struct ContextArgs {
-    /// Emit inside the JSON envelope Codex and Cursor read, rather than plain.
+    /// The harness whose hook runs this. The block then travels inside that
+    /// event's JSON answer, which every harness reads context from except
+    /// Claude Code at session start, where it prints bare.
     #[arg(long)]
-    pub additional_context: bool,
+    pub harness: Option<pabal::AnyHarness>,
 }
 
 #[derive(Args)]
@@ -567,6 +569,10 @@ fn stats_cmd(args: StatsArgs) -> Result<()> {
 /// session hook in any repository, so "no index" is the common case and an
 /// error would be noise in every session that has none.
 fn context_cmd(args: ContextArgs) -> Result<()> {
+    let hook = crate::brief::Hook::read(args.harness);
+    if hook.is_fork() {
+        return Ok(());
+    }
     let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
     };
@@ -597,17 +603,12 @@ fn context_cmd(args: ContextArgs) -> Result<()> {
     );
     let mut text = rendered.text;
     text.push_str(footer);
-    if args.additional_context {
-        println!("{}", crate::brief::envelope(&text));
-    } else {
-        print!("{text}");
-    }
-    // A top-level session's holder is the bare session id. Without this the
-    // first allowed write re-injects everything the session-start block just
-    // showed the agent.
-    if let Some(session) = crate::brief::session_id() {
+    hook.emit(&text);
+    // Without this the agent's first allowed write re-injects everything
+    // this block just showed it.
+    if let Some(holder) = hook.holder() {
         let ids: Vec<String> = rendered.rules.iter().map(|r| r.id.clone()).collect();
-        crate::hook::rules::stamp_ids(&session, &ids);
+        crate::hook::rules::stamp_ids(&holder, &ids);
     }
     Ok(())
 }

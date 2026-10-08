@@ -3,8 +3,9 @@
 #[path = "common/shimtest.rs"]
 mod shimtest;
 use std::{
+    io::Write,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
 };
 
 fn write(path: &Path, body: &str) {
@@ -109,6 +110,30 @@ impl Project {
             cmd.env(key, value);
         }
         cmd.output().unwrap()
+    }
+
+    /// The brief a hook gets, with `payload` on stdin.
+    fn brief_hook(&self, args: &[&str], payload: serde_json::Value) -> Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+        cmd.arg("brief")
+            .args(args)
+            .current_dir(&self.root)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("XDG_STATE_HOME", self.home.join("state"))
+            .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("COLUMNS", "100")
+            .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
     }
 
     fn docm(&self, args: &[&str]) -> Output {
@@ -665,58 +690,29 @@ fn monorepo() -> Project {
     project
 }
 
+/// An agent scanning Tasks for a check finds the one an app owns too, rather
+/// than running the command underneath it.
 #[test]
-fn a_monorepo_brief_names_other_apps_tasks_without_describing_them() {
+fn a_monorepo_brief_lists_every_task_with_the_app_it_runs_in() {
     let project = monorepo();
     let text = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
-    assert!(text.contains("- test: every suite"), "{text}");
-    assert!(
-        text.contains("- web (apps/web): e2e (needs `devrun up api`), test-web"),
-        "{text}"
-    );
-    assert!(
-        text.contains("- api (apps/api): migrate (needs `--arg target=...`)"),
-        "{text}"
-    );
-    assert!(!text.contains("web unit tests"), "{text}");
+    let tasks = text
+        .split("### Tasks")
+        .nth(1)
+        .and_then(|rest| rest.split("###").next())
+        .unwrap_or_else(|| panic!("no Tasks section: {text}"));
+    for line in [
+        "- test: every suite\n",
+        "- test-web: web unit tests (app web)\n",
+        "- e2e: browser tests (app web, needs `devrun up api`)\n",
+        "- migrate: apply migrations (app api, needs `--arg target=...`)\n",
+    ] {
+        assert!(tasks.contains(line), "{line:?} in {tasks}");
+    }
+    assert!(text.contains("- web (apps/web)\n"), "{text}");
+    assert!(text.contains("- api (apps/api)\n"), "{text}");
     assert!(!text.contains('\u{2014}'), "no em dash: {text}");
     assert!(!text.contains("portm"), "{text}");
-}
-
-#[test]
-fn inside_an_app_its_tasks_are_described() {
-    let project = monorepo();
-    let web = project.root.join("apps/web");
-    let out = brief_from(&project, &web, r#"{"session_id":"inside"}"#);
-    let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("  - test-web: web unit tests"), "{text}");
-    assert!(
-        text.contains("  - e2e: browser tests (needs `devrun up api`)"),
-        "{text}"
-    );
-    assert!(text.contains("- api (apps/api): migrate"), "{text}");
-}
-
-#[test]
-fn moving_into_an_app_re_emits_the_brief() {
-    let project = monorepo();
-    let session = r#"{"session_id":"moving"}"#;
-    let web = project.root.join("apps/web");
-    assert!(
-        !brief_from(&project, &project.root, session)
-            .stdout
-            .is_empty()
-    );
-    assert!(
-        brief_from(&project, &project.root, session)
-            .stdout
-            .is_empty()
-    );
-
-    let inside = brief_from(&project, &web, session);
-    let text = String::from_utf8_lossy(&inside.stdout);
-    assert!(text.contains("web unit tests"), "{text}");
-    assert!(brief_from(&project, &web, session).stdout.is_empty());
 }
 
 #[test]
@@ -807,11 +803,14 @@ fn envelope(out: &Output) -> serde_json::Value {
 }
 
 #[test]
-fn additional_context_wraps_the_brief_in_codexs_envelope() {
+fn codex_reads_the_brief_out_of_its_session_start_answer() {
     let project = Project::docs_only();
     project.set_config(&format!("[config]\nroot = true\n\n{DEFAULTS}"));
 
-    let value = envelope(&project.brief(&["--pins-only", "--additional-context"]));
+    let value = envelope(&project.brief_hook(
+        &["--pins-only", "--harness", "codex"],
+        serde_json::json!({"session_id": "s", "hook_event_name": "SessionStart"}),
+    ));
 
     // Codex rejects an object carrying any key beside this one.
     assert_eq!(value.as_object().unwrap().len(), 1, "{value}");
@@ -826,18 +825,16 @@ fn additional_context_wraps_the_brief_in_codexs_envelope() {
 }
 
 #[test]
-fn additional_context_uses_cursors_field_when_cursor_runs_the_hook() {
-    // The two harnesses spell the field differently and Codex refuses a
-    // payload carrying both, so the host has to be told apart.
+fn cursor_reads_the_brief_out_of_its_own_field() {
+    // Cursor and Codex spell the field differently and Codex refuses a
+    // payload carrying both.
     let project = Project::docs_only();
     project.set_config(&format!("[config]\nroot = true\n\n{DEFAULTS}"));
 
-    let value = envelope(
-        &project.brief_env(&["--pins-only", "--additional-context"], &[(
-            "CURSOR_PROJECT_DIR",
-            "/w",
-        )]),
-    );
+    let value = envelope(&project.brief_hook(
+        &["--pins-only", "--harness", "cursor"],
+        serde_json::json!({"session_id": "s", "hook_event_name": "sessionStart"}),
+    ));
 
     assert!(
         value["additional_context"]
@@ -848,11 +845,14 @@ fn additional_context_uses_cursors_field_when_cursor_runs_the_hook() {
 }
 
 #[test]
-fn additional_context_stays_silent_when_there_is_no_brief() {
+fn a_hook_answer_stays_silent_when_there_is_no_brief() {
     // An empty envelope is not the same as no output: it hands the session a
     // context block with nothing in it.
     let project = Project::nothing_to_say();
-    let out = project.brief(&["--additional-context"]);
+    let out = project.brief_hook(
+        &["--harness", "codex"],
+        serde_json::json!({"session_id": "s", "hook_event_name": "SessionStart"}),
+    );
     assert!(
         out.stdout.is_empty(),
         "{}",
