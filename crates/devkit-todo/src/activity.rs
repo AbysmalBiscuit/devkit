@@ -287,10 +287,12 @@ impl Activity {
 /// life; an unclaim is not, since another holder may have made it.
 fn sessions(events: &[Event], seen: &[Seen]) -> Vec<Session> {
     let mut sessions: Vec<Session> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     let mut note = |session: &str, at: DateTime<Utc>, end: bool| {
-        let i = match sessions.iter().position(|s| s.session == session) {
-            Some(i) => i,
+        let i = match index.get(session) {
+            Some(&i) => i,
             None => {
+                index.insert(session.to_string(), sessions.len());
                 sessions.push(Session {
                     session: session.to_string(),
                     first: at,
