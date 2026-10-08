@@ -97,9 +97,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // its run.
         HookEvent::SubagentStop => with_payload_held(harness, cli.event, |p, checkout, cwd| {
             let holder = p.subagent_holder();
-            let answer = holder
-                .as_ref()
-                .and_then(|h| todo::hold(p, h, checkout, cwd));
+            let answer = holder.as_ref().and_then(|h| todo::hold(p, h, checkout));
             let held = match answer {
                 Some(answer) => {
                     print_envelope(&answer);
@@ -109,7 +107,7 @@ pub fn run(cli: HookCli) -> Result<()> {
                     if let Some(h) = &holder {
                         todo::rearm(h);
                     }
-                    todo::release(holder, checkout, cwd);
+                    todo::release(holder, checkout);
                     edit::release_subagent(p);
                     false
                 }
@@ -124,7 +122,7 @@ pub fn run(cli: HookCli) -> Result<()> {
             if let Some(session) = p.session_holder() {
                 todo::forget_holds(&session);
             }
-            todo::release(p.session_holder(), checkout, cwd);
+            todo::release(p.session_holder(), checkout);
             edit::release_session(p);
             clear_receipts(p, checkout);
             let settings = record_in(p, cli.event, checkout, cwd);
@@ -155,7 +153,7 @@ pub fn run(cli: HookCli) -> Result<()> {
         // change it.
         HookEvent::Stop => with_payload(harness, cli.event, |p, checkout, cwd| {
             if let Some(session) = p.session_holder()
-                && let Some(answer) = todo::hold(p, &session, checkout, cwd)
+                && let Some(answer) = todo::hold(p, &session, checkout)
             {
                 print_envelope(&answer);
             }
@@ -315,7 +313,7 @@ pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
         (Some(write), _) => edit::guard(&payload, write, &checkout, &cwd),
         (None, Some(pabal::Tool::Mcp { .. })) => mcp::guard(&payload, &checkout, &cwd),
         (None, _) if todo::writes_native_todo(&payload) => {
-            if let Some(text) = todo::nudge(&payload, &checkout, &cwd)
+            if let Some(text) = todo::nudge(&payload, &checkout)
                 && let Some(answer) = payload.pre_tool_use_context(&text)
             {
                 print_envelope(&answer);

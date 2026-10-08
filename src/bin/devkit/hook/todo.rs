@@ -88,10 +88,23 @@ pub(crate) fn resolve_role(
     Some((layout, facts, role))
 }
 
-pub(crate) fn nudge(payload: &Payload, checkout: &Checkout, cwd: &Path) -> Option<String> {
+/// The checkout a hook from `holder` resolves its todo place and config
+/// from, as [`anchor`] picks it; `checkout` when the role record cannot be
+/// read.
+pub(crate) fn anchored(checkout: &Checkout, holder: &Holder) -> Checkout {
+    anchor(
+        checkout.clone(),
+        &Roles::at(devkit_todo::state_dir()),
+        holder,
+    )
+    .unwrap_or_else(|_| checkout.clone())
+}
+
+pub(crate) fn nudge(payload: &Payload, checkout: &Checkout) -> Option<String> {
     let holder = to_todo_holder(&payload.holder().ok()?);
-    let store = Store::for_hook(checkout, cwd);
-    let (layout, facts, _) = resolve_role(payload, checkout, &store, &holder)?;
+    let checkout = anchored(checkout, &holder);
+    let store = Store::for_hook(&checkout, checkout.dir());
+    let (layout, facts, _) = resolve_role(payload, &checkout, &store, &holder)?;
     if facts.subagent
         && payload.agent_type().is_some_and(|agent_type| {
             layout
@@ -113,11 +126,13 @@ pub(crate) fn nudge(payload: &Payload, checkout: &Checkout, cwd: &Path) -> Optio
 /// lists last injected for it. The release is local and the sync that pushes
 /// it runs detached, so no harness's cap on a session-end hook cuts it short.
 /// Silent: a store failure leaves the claims for a person to reset.
-pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout, cwd: &Path) {
+pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout) {
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
         let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
-        let store = Store::for_hook(checkout, cwd);
+        let checkout = anchored(checkout, &holder);
+        let cwd = checkout.dir();
+        let store = Store::for_hook(&checkout, cwd);
         let entry = || Deferred::Release {
             holder: holder.clone(),
         };
@@ -158,10 +173,10 @@ pub(crate) fn hold(
     payload: &Payload,
     holder: &payload::Holder,
     checkout: &Checkout,
-    cwd: &Path,
 ) -> Option<String> {
     harness_of(payload.harness())?;
     let holder = to_todo_holder(holder);
+    let checkout = anchored(checkout, &holder);
     let session = holder.session();
     let backend_var = std::env::var(BACKEND_VAR).ok();
     let hold_var = std::env::var(HOLD_VAR).ok();
@@ -169,11 +184,11 @@ pub(crate) fn hold(
         hold_mode::effective(Some(&session), hold_var.as_deref(), Some(config))
             .is_ok_and(|(mode, _)| mode.holds(holder != session))
     };
-    let store = Store::for_hold(checkout, cwd, backend_var.as_deref(), holds)?;
+    let store = Store::for_hold(&checkout, checkout.dir(), backend_var.as_deref(), holds)?;
     if let Some(replica) = store.queued_replica() {
         drain(replica.data_dir());
     }
-    let (_, _, role) = resolve_role(payload, checkout, &store, &holder)?;
+    let (_, _, role) = resolve_role(payload, &checkout, &store, &holder)?;
     let pending_node = role.hold_pending.then_some(role.node);
     let todos = store.list(&Filter::all()).ok()?;
     let open = hold::open_for(&todos, &holder, pending_node.as_deref());
@@ -338,10 +353,7 @@ pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
     let Ok(actor) = payload.holder() else {
         return;
     };
-    let roles = Roles::at(devkit_todo::state_dir());
-    let Ok(checkout) = anchor(checkout.clone(), &roles, &to_todo_holder(&actor)) else {
-        return;
-    };
+    let checkout = anchored(checkout, &to_todo_holder(&actor));
     let cwd = checkout.dir().to_path_buf();
     let store = Store::for_hook(&checkout, &cwd);
     let Some(mirror) = Mirror::of(payload, &checkout, &store) else {

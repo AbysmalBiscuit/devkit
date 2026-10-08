@@ -494,3 +494,27 @@ fn a_role_the_recorded_checkouts_config_defines_is_not_reported_stale() {
     );
     assert_eq!(p.todos()[0].node(), "proj.main.claude-S.a1");
 }
+
+#[test]
+fn a_held_stop_from_outside_any_repository_sees_the_role_nodes_pending_todo() {
+    let p = Proj::new();
+    std::fs::write(p.path.join("devkit.toml"), WORKFLOW).unwrap();
+    implementer_in_checkout(&p);
+    let add = p.devkit(&["todo", "add", "finish the worker plan"], &WORKER);
+    assert!(add.status.success(), "{}", stderr(&add));
+    let mut payload = spawn(&p, "general-purpose");
+    payload["cwd"] = json!(p.outside());
+    payload["hook_event_name"] = json!("SubagentStop");
+    payload["stop_hook_active"] = json!(false);
+    let out = p.hook("subagent-stop", "claude-code", &payload);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let answer: Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", stdout(&out)));
+    assert_eq!(answer["decision"], "block");
+    assert!(
+        answer["reason"]
+            .as_str()
+            .unwrap()
+            .contains("finish the worker plan")
+    );
+}

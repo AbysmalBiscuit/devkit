@@ -32,7 +32,7 @@ use strum::VariantNames as _;
 use self::{store::Store, sync::SyncOutcome};
 use crate::hook::{
     self, HookEvent,
-    todo::{resolve_role, to_todo_holder},
+    todo::{anchored, resolve_role, to_todo_holder},
 };
 
 #[derive(Args)]
@@ -499,8 +499,8 @@ fn context(args: &ContextArgs) -> Option<String> {
     let payload = hook::read_payload(Some(args.harness), HookEvent::SessionStart)?;
     payload.session_id()?;
     let viewer = to_todo_holder(&payload.holder().ok()?);
-    let cwd = hook::record::payload_cwd(&payload);
-    let checkout = Checkout::at(&cwd);
+    let checkout = anchored(&Checkout::at(&hook::record::payload_cwd(&payload)), &viewer);
+    let cwd = checkout.dir().to_path_buf();
     let store = Store::for_hook(&checkout, &cwd);
     let (layout, facts, role) = resolve_role(&payload, &checkout, &store, &viewer)?;
     let visible = layout.visible(&facts, &role.name).ok()?;
