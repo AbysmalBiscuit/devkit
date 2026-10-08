@@ -346,34 +346,23 @@ fn start(
     actor: &Holder,
     gone: impl Fn(&Holder) -> bool,
 ) -> Result<()> {
-    if ids.is_empty() {
-        bail!("name at least one todo id");
-    }
-    // As in `set_status`, every id is checked before any is written.
-    let mut edits = Vec::new();
-    for id in &ids {
-        let Some(todo) = store.get(id)? else {
-            bail!("no todo {id}");
-        };
-        let edit = match transition(&todo.status, StatusKind::InProgress, actor) {
-            Err(Claimed { by }) if !by.is_human() && gone(&by) => Edit::TakeOver {
-                id: todo.id,
-                from: by,
-                actor: actor.clone(),
+    apply_checked(store, ids, |todo| {
+        Ok(
+            match transition(&todo.status, StatusKind::InProgress, actor) {
+                Err(Claimed { by }) if !by.is_human() && gone(&by) => Edit::TakeOver {
+                    id: todo.id,
+                    from: by,
+                    actor: actor.clone(),
+                },
+                Err(claimed) => return Err(claimed.into()),
+                Ok(_) => Edit::SetStatus {
+                    id: todo.id,
+                    to: StatusKind::InProgress,
+                    actor: actor.clone(),
+                },
             },
-            Err(claimed) => return Err(claimed.into()),
-            Ok(_) => Edit::SetStatus {
-                id: todo.id,
-                to: StatusKind::InProgress,
-                actor: actor.clone(),
-            },
-        };
-        edits.push(edit);
-    }
-    for edit in edits {
-        store.apply(&edit)?;
-    }
-    Ok(())
+        )
+    })
 }
 
 fn set_status(
@@ -382,25 +371,35 @@ fn set_status(
     to: StatusKind,
     actor: &Holder,
 ) -> Result<()> {
+    apply_checked(store, ids, |todo| {
+        transition(&todo.status, to, actor)?;
+        Ok(Edit::SetStatus {
+            id: todo.id,
+            to,
+            actor: actor.clone(),
+        })
+    })
+}
+
+/// Applies the edit `edit_for` makes of each todo, after checking every id,
+/// so a batch with one unknown or refused todo changes nothing.
+fn apply_checked(
+    store: &impl TodoStore,
+    ids: Vec<String>,
+    edit_for: impl Fn(Todo) -> Result<Edit>,
+) -> Result<()> {
     if ids.is_empty() {
         bail!("name at least one todo id");
     }
-    // Every id is checked before any is written, so a batch with one unknown
-    // or claimed todo changes nothing.
-    let mut todos = Vec::new();
+    let mut edits = Vec::new();
     for id in &ids {
         let Some(todo) = store.get(id)? else {
             bail!("no todo {id}");
         };
-        transition(&todo.status, to, actor)?;
-        todos.push(todo);
+        edits.push(edit_for(todo)?);
     }
-    for todo in todos {
-        store.apply(&Edit::SetStatus {
-            id: todo.id,
-            to,
-            actor: actor.clone(),
-        })?;
+    for edit in edits {
+        store.apply(&edit)?;
     }
     Ok(())
 }
