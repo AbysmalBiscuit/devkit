@@ -1,5 +1,5 @@
-//! `devkit activity`: subagent runs and the time todos were held, over a date
-//! range, from the activity log.
+//! `devkit activity`: sessions and their subagent runs, and the time todos
+//! were held, over a date range, from the activity log.
 
 use std::collections::BTreeMap;
 
@@ -7,7 +7,9 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use clap::Args;
 use devkit_common::ui::printable;
-use devkit_todo::activity::{Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, stamp};
+use devkit_todo::activity::{
+    Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, SessionState, stamp,
+};
 use serde::Serialize;
 
 #[derive(Args)]
@@ -82,6 +84,9 @@ struct Report {
 #[derive(Serialize)]
 struct SessionRuns {
     session: String,
+    /// As of the report's now.
+    #[serde(flatten)]
+    state: SessionState,
     runs: Vec<RunRow>,
 }
 
@@ -125,12 +130,27 @@ impl Report {
         let Activity {
             mut runs,
             mut claims,
+            sessions: known,
             ..
         } = activity;
         runs.sort_by_key(|r| r.start);
         claims.sort_by_key(|c| c.start);
 
-        let mut sessions: Vec<SessionRuns> = Vec::new();
+        let state_of = |session: &str| {
+            known
+                .iter()
+                .find(|s| s.session == session)
+                .map_or(SessionState::Active, |s| s.state(range.now))
+        };
+        let mut sessions: Vec<SessionRuns> = known
+            .iter()
+            .filter(|s| range.seconds(s.first, Some(s.last())).is_some())
+            .map(|s| SessionRuns {
+                session: s.session.clone(),
+                state: s.state(range.now),
+                runs: Vec::new(),
+            })
+            .collect();
         let mut types: BTreeMap<String, TypeTotal> = BTreeMap::new();
         for run in runs {
             let Some(seconds) = range.seconds(run.start, run.end) else {
@@ -148,6 +168,7 @@ impl Report {
                 Some(session) => session.runs.push(row),
                 None => sessions.push(SessionRuns {
                     session: row.run.session.clone(),
+                    state: state_of(&row.run.session),
                     runs: vec![row],
                 }),
             }
@@ -208,7 +229,14 @@ impl Report {
             return out;
         }
         for session in &self.sessions {
-            out.push_str(&format!("\nsession {}\n", printable(&session.session)));
+            out.push_str(&format!(
+                "\nsession {}  {}\n",
+                printable(&session.session),
+                state(session.state)
+            ));
+            if session.runs.is_empty() {
+                continue;
+            }
             let mut t = devkit_common::ui::table(&["TYPE", "AGENT", "START", "TIME", "OUTCOME"]);
             for RunRow { run, seconds } in &session.runs {
                 t.add_row([
@@ -250,6 +278,15 @@ impl Report {
             out.push_str(&format!("{t}\n"));
         }
         out
+    }
+}
+
+/// A session's state as the text report spells it.
+fn state(state: SessionState) -> String {
+    match state {
+        SessionState::Ended { .. } => "ended".to_string(),
+        SessionState::Silent { since } => format!("silent since {}", stamp(since)),
+        SessionState::Active => "active".to_string(),
     }
 }
 

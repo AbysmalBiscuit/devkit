@@ -68,6 +68,16 @@ fn run_argv_env(e: &Env, argv: &[&str], payload: &str, extra: &[(&str, &str)]) -
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Every hook writes the activity log, which must stay this test's own
+    // rather than reach a todo database the developer's shell names.
+    for var in [
+        "DEVKIT_TODO_BACKEND",
+        "DEVKIT_TODO_DATABASE_URL",
+        "DEVKIT_TODO_SUPABASE_URL",
+        "DEVKIT_TODO_SUPABASE_KEY",
+    ] {
+        cmd.env_remove(var);
+    }
     for (k, v) in extra {
         cmd.env(k, v);
     }

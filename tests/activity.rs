@@ -4,7 +4,10 @@
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use devkit_todo::activity::{ActivityStore, BACKSTOP, ClaimEnd, Run, RunEnd};
+use devkit_todo::{
+    Holder,
+    activity::{ActivityStore, BACKSTOP, ClaimEnd, Run, RunEnd, SessionState},
+};
 use serde_json::{Value, json};
 use todoenv::{Proj, stderr, stdout};
 
@@ -341,4 +344,97 @@ fn the_report_escapes_terminal_control_sequences() {
         assert!(!report.contains(raw), "{raw:?} printed raw: {report:?}");
     }
     assert!(report.contains("Explore\\u{1b}]52"), "{report}");
+}
+
+/// Fires hook `verb` as session `session`'s main agent, with `env` set.
+fn main_hook(p: &Proj, session: &str, verb: &str, env: &[(&str, &str)]) {
+    let payload = json!({
+        "hook_event_name": verb,
+        "session_id": session,
+        "tool_name": "Bash",
+        "tool_input": {"command": "ls"},
+        "cwd": p.path,
+    });
+    let out = p.hook_with(verb, "claude-code", &payload, env);
+    assert!(out.status.success(), "{verb}: {}", stderr(&out));
+}
+
+#[test]
+fn every_hook_from_a_main_session_marks_it_seen() {
+    for verb in [
+        "pre-tool-use",
+        "post-tool-use",
+        "user-prompt-submit",
+        "session-start",
+        "stop",
+        "pre-compact",
+    ] {
+        let p = Proj::new();
+        let before: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+        main_hook(&p, "S", verb, &[]);
+        let after: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+
+        let main = Holder::new("S");
+        assert_eq!(
+            p.activity().session_state(&main),
+            Some(SessionState::Active),
+            "{verb}"
+        );
+        let past = after + BACKSTOP + chrono::TimeDelta::seconds(1);
+        let Some(SessionState::Silent { since }) =
+            p.activity_log().read(past).unwrap().session_state(&main)
+        else {
+            panic!("{verb}: S is not silent past the backstop");
+        };
+        assert!(
+            before <= since && since <= after,
+            "{verb}: {since} outside the hook's {before}..{after}"
+        );
+    }
+}
+
+#[test]
+fn the_report_shows_each_session_ended_silent_or_active() {
+    let p = Proj::new();
+    main_hook(&p, "E", "pre-tool-use", &[]);
+    hook(
+        &p,
+        "session-end",
+        &json!({"hook_event_name": "SessionEnd", "session_id": "E", "cwd": p.path}),
+    );
+    main_hook(&p, "Q", "pre-tool-use", &[(
+        "DEVKIT_TEST_CLOCK_SKEW_SECS",
+        "-3600",
+    )]);
+    main_hook(&p, "A", "pre-tool-use", &[]);
+
+    let out = p.devkit(&["activity", "--json"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let state = |session: &str| {
+        report["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["session"] == session)
+            .unwrap_or_else(|| panic!("no session {session}: {report:#}"))
+            .clone()
+    };
+    assert_eq!(state("E")["state"], "ended", "{report:#}");
+    assert_eq!(state("Q")["state"], "silent", "{report:#}");
+    assert!(state("Q")["since"].is_string(), "{report:#}");
+    assert_eq!(state("A")["state"], "active", "{report:#}");
+
+    let out = p.devkit(&["activity"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    let line = |session: &str| {
+        text.lines()
+            .find(|l| l.starts_with(&format!("session {session} ")))
+            .unwrap_or_else(|| panic!("no line for {session}:\n{text}"))
+            .to_string()
+    };
+    assert!(line("E").ends_with(" ended"), "{text}");
+    assert!(line("Q").contains(" silent since 20"), "{text}");
+    assert!(line("A").ends_with(" active"), "{text}");
 }

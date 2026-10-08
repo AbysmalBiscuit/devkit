@@ -1,5 +1,10 @@
 use chrono::{DateTime, TimeDelta, Utc};
-use devkit_todo::activity::{ActivityLog, ActivityStore, BACKSTOP, Event, RunEnd, What};
+use devkit_todo::{
+    Holder,
+    activity::{
+        ActivityLog, ActivityStore, BACKSTOP, Event, MAIN_AGENT, RunEnd, SessionState, What,
+    },
+};
 
 fn t(minutes: i64) -> DateTime<Utc> {
     "2026-10-01T12:00:00Z".parse::<DateTime<Utc>>().unwrap() + TimeDelta::minutes(minutes)
@@ -52,4 +57,32 @@ fn no_run_stays_open_past_the_backstop() {
         .find(|r| r.agent == "never-seen")
         .unwrap();
     assert_eq!(never_seen.end, Some(t(0)));
+}
+
+#[test]
+fn a_session_reads_ended_silent_or_active_by_its_last_sign_of_life() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = ActivityLog::at(dir.path().to_path_buf());
+    log.seen_at("ended.1", MAIN_AGENT, t(0).into()).unwrap();
+    log.record(&Event {
+        at: t(1),
+        what: What::SessionEnd {
+            session: "ended.1".into(),
+        },
+    })
+    .unwrap();
+    log.seen_at("silent.2", MAIN_AGENT, t(0).into()).unwrap();
+    log.seen_at("active.3", MAIN_AGENT, t(0).into()).unwrap();
+    log.seen_at("active.3", "a1", t(40).into()).unwrap();
+
+    let now = t(40) + BACKSTOP;
+    let activity = log.read(now).unwrap();
+    let state = |session: &str| activity.session_state(&Holder::new(session));
+    assert_eq!(state("ended.1"), Some(SessionState::Ended { at: t(1) }));
+    assert_eq!(
+        state("silent.2"),
+        Some(SessionState::Silent { since: t(0) })
+    );
+    assert_eq!(state("active.3/a1"), Some(SessionState::Active));
+    assert_eq!(state("unknown"), None);
 }

@@ -1,12 +1,12 @@
 //! The activity log's side of the hooks: a subagent run starts and stops, a
-//! session's end closes its runs, and every other hook a subagent fires marks
-//! it seen for the backstop. Silent: a failed write changes nothing the hook
-//! does.
+//! session's end closes its runs, and every other hook marks the agent that
+//! fired it seen, a subagent for the backstop on its run and a main agent for
+//! its session's. Silent: a failed write changes nothing the hook does.
 
 use std::{path::Path, time::Duration};
 
 use devkit_common::vcs::Checkout;
-use devkit_todo::activity::{ActivityStore, What};
+use devkit_todo::activity::{ActivityStore, MAIN_AGENT, What};
 
 use super::{HookEvent, gate, payload::Payload};
 use crate::todo::store::Store;
@@ -31,17 +31,14 @@ pub(crate) fn observe_within(payload: &Payload, event: HookEvent, checkout: &Che
     });
 }
 
-/// Records what `event` means for the payload's run, in the log that goes
-/// with the checkout's todo store. Keyed on the raw agent id, so a fork,
-/// which has no agent type, still gets a run.
+/// Records what `event` means for the payload's run, or its session's main
+/// agent, in the log that goes with the checkout's todo store. Keyed on the
+/// raw agent id, so a fork, which has no agent type, still gets a run.
 fn observe(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path) {
     let Some(session) = payload.session_id() else {
         return;
     };
     let agent = payload.agent_id().map(str::to_string);
-    if agent.is_none() && event != HookEvent::SessionEnd {
-        return;
-    }
     let log = Store::activity_for_hook(checkout, cwd);
     let record = |what| log.record_now(&what);
     let session = session.to_string();
@@ -62,7 +59,7 @@ fn observe(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path)
         })
         .and_then(|()| log.forget(&session, Some(&agent))),
         (_, Some(agent)) => log.seen(&session, &agent),
-        (_, None) => Ok(()),
+        (_, None) => log.seen(&session, MAIN_AGENT),
     };
 }
 
