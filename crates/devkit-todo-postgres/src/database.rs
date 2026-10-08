@@ -24,9 +24,10 @@ pub(crate) const UNKNOWN_TODO: &str = "DK002";
 ///
 /// Each todo and activity write is one function, so a client that sends every
 /// request as a transaction of its own, as Supabase's HTTP API does, claims as
-/// atomically as one that holds a connection. A database runs this only
-/// once something it needs is missing, so a function whose behaviour
-/// changes takes a new name.
+/// atomically as one that holds a connection. A database runs this on its
+/// own only once something it needs is missing, and otherwise only when
+/// [`Database::update_schema`] asks, so a function whose behaviour changes
+/// takes a new name.
 static SCHEMA: LazyLock<String> = LazyLock::new(|| {
     format!(
         "
@@ -200,6 +201,38 @@ BEGIN
     from_holder := locked.holder;
     to_status := step.next_status;
     to_holder := step.next_holder;
+    RETURN NEXT;
+END
+$$;
+
+-- Moves the todo to in progress by `p_actor` while `p_from` still holds it,
+-- as devkit_todo::take_over states it, and otherwise as todo_set_status
+-- moves it for `p_actor` asking for in progress.
+CREATE OR REPLACE FUNCTION devkit.todo_take_over(
+    p_root text, p_id text, p_from text, p_actor text
+) RETURNS TABLE (
+    todo uuid, node text, from_status text, from_holder text,
+    to_status text, to_holder text, at timestamptz
+)
+LANGUAGE plpgsql AS $$
+#variable_conflict use_column
+DECLARE
+    locked devkit.todos := devkit.todo_lock(p_root, p_id);
+BEGIN
+    IF locked.status <> 'in_progress' OR locked.holder <> p_from OR p_from = 'human'
+        OR devkit.todo_covers(p_actor, p_from) THEN
+        RETURN QUERY SELECT * FROM devkit.todo_set_status(p_root, p_id, 'in_progress', p_actor);
+        RETURN;
+    END IF;
+    UPDATE devkit.todos
+    SET holder = p_actor, modified = clock_timestamp()
+    WHERE id = locked.id RETURNING modified INTO at;
+    todo := locked.id;
+    node := locked.node;
+    from_status := locked.status;
+    from_holder := locked.holder;
+    to_status := locked.status;
+    to_holder := p_actor;
     RETURN NEXT;
 END
 $$;
@@ -482,6 +515,25 @@ impl Database {
         })
     }
 
+    /// Runs devkit's schema whether or not anything is missing: it creates
+    /// each table and function that does not exist yet and replaces every
+    /// function with this version's. Returns the tables and functions it
+    /// created, schema-qualified and sorted. It then asks a PostgREST
+    /// serving the database, as Supabase's Data API does, to reload its
+    /// schema cache, so the API finds the functions at once; with nothing
+    /// listening, the notification goes nowhere.
+    pub fn update_schema(&self) -> Result<Vec<String>> {
+        self.run(async |client| {
+            let before = schema_objects(client).await?;
+            client.batch_execute(&SCHEMA).await?;
+            client
+                .batch_execute("NOTIFY pgrst, 'reload schema'")
+                .await?;
+            let after = schema_objects(client).await?;
+            Ok(after.into_iter().filter(|o| !before.contains(o)).collect())
+        })
+    }
+
     /// Runs `op` on the connection within the wait, creating a missing
     /// schema and running `op` once more. A connection that times out or
     /// closes is dropped, so the server rolls back what it left open, and a
@@ -599,6 +651,24 @@ pub fn is_unreachable(e: &anyhow::Error) -> bool {
                 .downcast_ref::<tokio_postgres::Error>()
                 .is_some_and(|e| e.as_db_error().is_some())
         })
+}
+
+/// The tables and functions in devkit's schema, schema-qualified and sorted.
+async fn schema_objects(client: &Client) -> Result<Vec<String>> {
+    let rows = client
+        .query_typed(
+            "SELECT 'devkit.' || c.relname FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = 'devkit' AND c.relkind = 'r'
+             UNION
+             SELECT 'devkit.' || p.proname FROM pg_proc p
+                 JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = 'devkit'
+             ORDER BY 1",
+            &[],
+        )
+        .await?;
+    Ok(rows.iter().map(|row| row.get(0)).collect())
 }
 
 /// Whether `e` is the server reporting that devkit's schema, or one of its

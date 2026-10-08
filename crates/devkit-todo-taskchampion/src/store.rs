@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use devkit_common::store::{LockBusy, with_file_lock, with_file_lock_for};
 use devkit_todo::{
     Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore, by_prefix,
-    is_uuid_prefix, one_line, transition,
+    is_uuid_prefix, one_line, take_over, transition,
 };
 use taskchampion::{
     Operations, Server, ServerConfig, SqliteStorage, Task, Uuid, chrono::Utc, storage::AccessMode,
@@ -373,6 +373,21 @@ impl TaskchampionStore {
         replica.commit_operations(ops).await?;
         Ok(())
     }
+
+    /// Moves the task behind `todo` to `next`, when there is one, and
+    /// returns the change.
+    async fn move_to(
+        replica: &mut Replica,
+        todo: &Todo,
+        next: Option<Status>,
+    ) -> Result<Vec<StatusChange>> {
+        let Some(next) = next else {
+            return Ok(Vec::new());
+        };
+        let change = StatusChange::of(todo, Some(next.clone()));
+        Self::change(replica, todo, |task, ops| write_status(task, &next, ops)).await?;
+        Ok(vec![change])
+    }
 }
 
 /// Writes `status` the way taskwarrior's `start`, `done` and `delete` do:
@@ -467,15 +482,13 @@ impl TodoStore for TaskchampionStore {
         self.locked(async |replica| match edit {
             Edit::SetStatus { id, to, actor } => {
                 let todo = self.resolve(replica, id).await?;
-                match transition(&todo.status, *to, actor)? {
-                    Some(next) => {
-                        let change = StatusChange::of(&todo, Some(next.clone()));
-                        Self::change(replica, &todo, |task, ops| write_status(task, &next, ops))
-                            .await?;
-                        Ok(vec![change])
-                    }
-                    None => Ok(Vec::new()),
-                }
+                let next = transition(&todo.status, *to, actor)?;
+                Self::move_to(replica, &todo, next).await
+            }
+            Edit::TakeOver { id, from, actor } => {
+                let todo = self.resolve(replica, id).await?;
+                let next = take_over(&todo.status, from, actor)?;
+                Self::move_to(replica, &todo, next).await
             }
             Edit::Describe { id, description } => {
                 let todo = self.resolve(replica, id).await?;

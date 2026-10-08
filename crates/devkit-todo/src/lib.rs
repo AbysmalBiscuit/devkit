@@ -20,7 +20,7 @@ use devkit_common::paths;
 pub use holder::Holder;
 pub use node::{Filter, NodeMatch};
 use serde::{Deserialize, Serialize};
-pub use transition::{Claimed, Status, StatusKind, transition};
+pub use transition::{Claimed, Status, StatusKind, take_over, transition};
 
 /// The gap left between sibling orders, so a move rarely renumbers siblings.
 pub const ORDER_GAP: i64 = 1024;
@@ -96,6 +96,13 @@ pub enum Edit {
     Relocate {
         id: String,
         project: Option<String>,
+    },
+    /// Moves the todo to in progress by `actor` while `from` still holds
+    /// it, as [`take_over`] rules, for a holder whose session went silent.
+    TakeOver {
+        id: String,
+        from: Holder,
+        actor: Holder,
     },
     /// Every todo in progress by a holder `holder` covers goes back to
     /// pending. A human holder releases nothing.

@@ -4,7 +4,10 @@
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use devkit_todo::activity::{ActivityStore, BACKSTOP, ClaimEnd, Run, RunEnd};
+use devkit_todo::{
+    Holder,
+    activity::{ActivityStore, BACKSTOP, ClaimEnd, Run, RunEnd, SessionState},
+};
 use serde_json::{Value, json};
 use todoenv::{Proj, stderr, stdout};
 
@@ -132,7 +135,13 @@ fn a_stop_with_no_recorded_start_is_no_run() {
     let out = p.devkit(&["activity", "--json"], &[]);
     assert!(out.status.success(), "{}", stderr(&out));
     let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
-    assert_eq!(report["sessions"], json!([]), "{report:#}");
+    let runs: Vec<&Value> = report["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|session| session["runs"].as_array().unwrap())
+        .collect();
+    assert_eq!(runs, Vec::<&Value>::new(), "{report:#}");
     assert_eq!(report["agent_types"], json!([]), "{report:#}");
 }
 
@@ -381,4 +390,223 @@ fn the_report_escapes_terminal_control_sequences() {
         assert!(!report.contains(raw), "{raw:?} printed raw: {report:?}");
     }
     assert!(report.contains("Explore\\u{1b}]52"), "{report}");
+}
+
+/// Fires hook `verb` as session `session`'s main agent, with `env` set.
+fn main_hook(p: &Proj, session: &str, verb: &str, env: &[(&str, &str)]) {
+    let payload = json!({
+        "hook_event_name": verb,
+        "session_id": session,
+        "tool_name": "Bash",
+        "tool_input": {"command": "ls"},
+        "cwd": p.path,
+    });
+    let out = p.hook_with(verb, "claude-code", &payload, env);
+    assert!(out.status.success(), "{verb}: {}", stderr(&out));
+}
+
+#[test]
+fn every_hook_from_a_main_session_marks_it_seen() {
+    for verb in [
+        "pre-tool-use",
+        "post-tool-use",
+        "user-prompt-submit",
+        "session-start",
+        "stop",
+        "pre-compact",
+    ] {
+        let p = Proj::new();
+        let before: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+        main_hook(&p, "S", verb, &[]);
+        let after: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+
+        let main = Holder::new("S");
+        assert_eq!(
+            p.activity().session_state(&main),
+            Some(SessionState::Active),
+            "{verb}"
+        );
+        let past = after + BACKSTOP + chrono::TimeDelta::seconds(1);
+        let Some(SessionState::Silent { since }) =
+            p.activity_log().read(past).unwrap().session_state(&main)
+        else {
+            panic!("{verb}: S is not silent past the backstop");
+        };
+        assert!(
+            before <= since && since <= after,
+            "{verb}: {since} outside the hook's {before}..{after}"
+        );
+    }
+}
+
+#[test]
+fn a_main_stop_held_to_open_todos_marks_the_session_seen() {
+    let p = Proj::with_home_config("[todo]\nhold_stop = \"always\"\n");
+    let an_hour_ago = ("DEVKIT_TEST_CLOCK_SKEW_SECS", "-3600");
+    main_hook(&p, "S", "pre-tool-use", &[an_hour_ago]);
+    let id = todo(&p, &["add", "a"], &[an_hour_ago]);
+    todo(&p, &["start", &id], &[an_hour_ago]);
+
+    let payload = json!({"hook_event_name": "Stop", "session_id": "S", "cwd": p.path});
+    let out = p.hook_with("stop", "claude-code", &payload, &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains(r#""decision":"block""#),
+        "stop not held: {}",
+        stdout(&out)
+    );
+
+    let out = p.devkit(&["todo", "start", &id], &[AS_T]);
+    assert!(!out.status.success(), "T took over a held session's todo");
+}
+
+/// An hour on, by the clock of the process it is passed to.
+const AN_HOUR_LATER: (&str, &str) = ("DEVKIT_TEST_CLOCK_SKEW_SECS", "3600");
+const AS_T: (&str, &str) = ("CLAUDE_CODE_SESSION_ID", "T");
+
+/// A todo session `S` claimed after one hook of its own.
+fn claimed_by_s(p: &Proj) -> String {
+    main_hook(p, "S", "pre-tool-use", &[]);
+    let id = todo(p, &["add", "a"], &[]);
+    todo(p, &["start", &id], &[]);
+    id
+}
+
+#[test]
+fn starting_a_todo_whose_holders_session_went_silent_takes_it_over() {
+    let p = Proj::new();
+    let id = claimed_by_s(&p);
+
+    let out = p.devkit(&["todo", "start", &id], &[AS_T, AN_HOUR_LATER]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(p.todo(&id).status, devkit_todo::Status::InProgress {
+        by: Holder::new("T")
+    });
+    let claims = p.activity().claims;
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    assert_eq!(
+        (&*claims[0].holder, claims[0].outcome),
+        ("S", Some(ClaimEnd::Handed))
+    );
+    assert_eq!((&*claims[1].holder, claims[1].outcome), ("T", None));
+}
+
+#[test]
+fn starting_a_todo_whose_holder_was_seen_within_the_backstop_is_refused() {
+    let p = Proj::new();
+    let id = claimed_by_s(&p);
+
+    let out = p.devkit(&["todo", "start", &id], &[AS_T]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("in progress by S"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(p.todo(&id).status, devkit_todo::Status::InProgress {
+        by: Holder::new("S")
+    });
+}
+
+#[test]
+fn the_report_shows_each_session_ended_silent_or_active() {
+    let p = Proj::new();
+    main_hook(&p, "E", "pre-tool-use", &[]);
+    hook(
+        &p,
+        "session-end",
+        &json!({"hook_event_name": "SessionEnd", "session_id": "E", "cwd": p.path}),
+    );
+    main_hook(&p, "Q", "pre-tool-use", &[(
+        "DEVKIT_TEST_CLOCK_SKEW_SECS",
+        "-3600",
+    )]);
+    main_hook(&p, "A", "pre-tool-use", &[]);
+
+    let out = p.devkit(&["activity", "--json"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let state = |session: &str| {
+        report["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["session"] == session)
+            .unwrap_or_else(|| panic!("no session {session}: {report:#}"))
+            .clone()
+    };
+    assert_eq!(state("E")["state"], "ended", "{report:#}");
+    assert_eq!(state("Q")["state"], "silent", "{report:#}");
+    assert!(state("Q")["since"].is_string(), "{report:#}");
+    assert_eq!(state("A")["state"], "active", "{report:#}");
+
+    let out = p.devkit(&["activity"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    let line = |session: &str| {
+        text.lines()
+            .find(|l| l.starts_with(&format!("session {session} ")))
+            .unwrap_or_else(|| panic!("no line for {session}:\n{text}"))
+            .to_string()
+    };
+    assert!(line("E").ends_with(" ended"), "{text}");
+    assert!(line("Q").contains(" silent since 20"), "{text}");
+    assert!(line("A").ends_with(" active"), "{text}");
+}
+
+/// Session `S` started an hour ago, by the clock of the hooks, and fired a
+/// hook now.
+fn started_an_hour_ago(p: &Proj) {
+    let an_hour_ago = ("DEVKIT_TEST_CLOCK_SKEW_SECS", "-3600");
+    main_hook(p, "S", "session-start", &[an_hour_ago]);
+    main_hook(p, "S", "pre-tool-use", &[]);
+}
+
+fn half_an_hour_ago() -> String {
+    devkit_todo::activity::stamp(chrono::Utc::now() - chrono::TimeDelta::minutes(30))
+}
+
+fn reported_sessions(p: &Proj, args: &[&str]) -> Vec<Value> {
+    let out = p.devkit(&[&["activity", "--json"], args].concat(), &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    report["sessions"].as_array().unwrap().clone()
+}
+
+#[test]
+fn a_main_session_whose_hooks_run_past_the_range_end_is_in_the_report() {
+    let p = Proj::new();
+    started_an_hour_ago(&p);
+
+    let sessions = reported_sessions(&p, &["--until", &half_an_hour_ago()]);
+    assert!(
+        sessions.iter().any(|s| s["session"] == "S"),
+        "{sessions:#?}"
+    );
+}
+
+#[test]
+fn an_ended_main_session_is_first_seen_at_its_start() {
+    let p = Proj::new();
+    started_an_hour_ago(&p);
+    hook(
+        &p,
+        "session-end",
+        &json!({"hook_event_name": "SessionEnd", "session_id": "S", "cwd": p.path}),
+    );
+
+    let sessions = p.activity().sessions;
+    let s = sessions.iter().find(|s| s.session == "S").unwrap();
+    assert!(
+        s.first < chrono::Utc::now() - chrono::TimeDelta::minutes(50),
+        "{sessions:?}"
+    );
+    let reported = reported_sessions(&p, &["--until", &half_an_hour_ago()]);
+    let s = reported.iter().find(|s| s["session"] == "S");
+    assert_eq!(
+        s.map(|s| &s["state"]),
+        Some(&json!("ended")),
+        "{reported:#?}"
+    );
 }

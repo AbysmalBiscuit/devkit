@@ -6,7 +6,7 @@ pub(crate) mod queue;
 pub(crate) mod store;
 pub(crate) mod sync;
 
-use std::{collections::BTreeSet, path::Path};
+use std::{cell::LazyCell, collections::BTreeSet, path::Path};
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand, ValueEnum, builder::TypedValueParser as _};
@@ -16,7 +16,8 @@ use devkit_common::{
 };
 use devkit_config::HoldStop;
 use devkit_todo::{
-    Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
+    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
+    activity::{ActivityStore as _, SessionState},
     holder::HOLDER_VAR,
     layout::{Facts, Layout},
     native::NativeMap,
@@ -127,10 +128,30 @@ pub enum TodoCommand {
         #[arg(long, conflicts_with = "mode")]
         clear: bool,
     },
+    /// Manage the todo database's schema on the postgres backend.
+    Schema {
+        #[command(subcommand)]
+        action: SchemaAction,
+    },
     /// Print the todo block a hook injects.
     ///
     /// Reads the hook payload on stdin, and prints nothing on any failure.
     Context(ContextArgs),
+}
+
+#[derive(Subcommand)]
+pub enum SchemaAction {
+    /// Create the tables and functions the database lacks.
+    ///
+    /// Creates every table and function this devkit needs that the database
+    /// lacks, and replaces each function with this version's. devkit creates
+    /// its schema on first use, but a database that already has one gains a
+    /// function a newer devkit adds only when a postgres call needs it, and
+    /// the supabase backend cannot create it at all. Run this after upgrading
+    /// devkit. It needs the postgres backend: for a supabase deployment, run
+    /// it with DEVKIT_TODO_BACKEND=postgres and DEVKIT_TODO_DATABASE_URL
+    /// naming the project's database.
+    Update,
 }
 
 #[derive(Args)]
@@ -183,6 +204,17 @@ pub fn run(cli: TodoCli) -> Result<()> {
     }
     if let TodoCommand::Hold { mode, clear } = cli.command {
         return hold::run(mode, clear, &std::env::current_dir()?);
+    }
+    if let TodoCommand::Schema {
+        action: SchemaAction::Update,
+    } = cli.command
+    {
+        let (target, created) = Store::update_schema(&std::env::current_dir()?)?;
+        for object in &created {
+            println!("created {object}");
+        }
+        println!("devkit's schema in {target} is up to date");
+        return Ok(());
     }
     let caller = caller::caller();
     let get = |key: &str| std::env::var(key).ok();
@@ -246,7 +278,22 @@ pub fn run(cli: TodoCli) -> Result<()> {
             })?;
             println!("{}", devkit_todo::short_id(&id));
         }
-        TodoCommand::Start { ids } => set_status(&store, ids, StatusKind::InProgress, &actor)?,
+        TodoCommand::Start { ids } => {
+            let activity = LazyCell::new(|| {
+                Store::activity_for_cli(&cwd)
+                    .and_then(|log| log.read_now())
+                    .ok()
+            });
+            let gone = |holder: &Holder| {
+                activity.as_ref().is_some_and(|activity| {
+                    matches!(
+                        activity.session_state(holder),
+                        Some(SessionState::Ended { .. } | SessionState::Silent { .. })
+                    )
+                })
+            };
+            start(&store, ids, &actor, gone)?
+        }
         TodoCommand::Stop { ids } | TodoCommand::Undone { ids } => {
             set_status(&store, ids, StatusKind::Pending, &actor)?
         }
@@ -272,7 +319,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
             None if !background => eprintln!("devkit todo: this todo store has no sync target"),
             None => {}
         },
-        TodoCommand::Context(_) | TodoCommand::Hold { .. } => {
+        TodoCommand::Context(_) | TodoCommand::Hold { .. } | TodoCommand::Schema { .. } => {
             unreachable!("answered before the store is opened")
         }
         TodoCommand::Purge { id } => {
@@ -353,31 +400,70 @@ fn project_of(node: String) -> Option<String> {
     (node != GLOBAL).then_some(node)
 }
 
+/// Claims each todo for `actor`. A todo another agent holds is taken over,
+/// its claim ending as handed, when `gone` says that agent's session ended or
+/// has been silent past the backstop; otherwise it is refused naming the
+/// holder.
+fn start(
+    store: &impl TodoStore,
+    ids: Vec<String>,
+    actor: &Holder,
+    gone: impl Fn(&Holder) -> bool,
+) -> Result<()> {
+    apply_checked(store, ids, |todo| {
+        Ok(
+            match transition(&todo.status, StatusKind::InProgress, actor) {
+                Err(Claimed { by }) if !by.is_human() && gone(&by) => Edit::TakeOver {
+                    id: todo.id,
+                    from: by,
+                    actor: actor.clone(),
+                },
+                Err(claimed) => return Err(claimed.into()),
+                Ok(_) => Edit::SetStatus {
+                    id: todo.id,
+                    to: StatusKind::InProgress,
+                    actor: actor.clone(),
+                },
+            },
+        )
+    })
+}
+
 fn set_status(
     store: &impl TodoStore,
     ids: Vec<String>,
     to: StatusKind,
     actor: &Holder,
 ) -> Result<()> {
+    apply_checked(store, ids, |todo| {
+        transition(&todo.status, to, actor)?;
+        Ok(Edit::SetStatus {
+            id: todo.id,
+            to,
+            actor: actor.clone(),
+        })
+    })
+}
+
+/// Applies the edit `edit_for` makes of each todo, after checking every id,
+/// so a batch with one unknown or refused todo changes nothing.
+fn apply_checked(
+    store: &impl TodoStore,
+    ids: Vec<String>,
+    edit_for: impl Fn(Todo) -> Result<Edit>,
+) -> Result<()> {
     if ids.is_empty() {
         bail!("name at least one todo id");
     }
-    // Every id is checked before any is written, so a batch with one unknown
-    // or claimed todo changes nothing.
-    let mut todos = Vec::new();
+    let mut edits = Vec::new();
     for id in &ids {
         let Some(todo) = store.get(id)? else {
             bail!("no todo {id}");
         };
-        transition(&todo.status, to, actor)?;
-        todos.push(todo);
+        edits.push(edit_for(todo)?);
     }
-    for todo in todos {
-        store.apply(&Edit::SetStatus {
-            id: todo.id,
-            to,
-            actor: actor.clone(),
-        })?;
+    for edit in edits {
+        store.apply(&edit)?;
     }
     Ok(())
 }

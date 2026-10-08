@@ -32,6 +32,7 @@ macro_rules! contract_tests {
             set_status_goes_through_transition,
             a_sub_agent_takes_over_its_sessions_claim,
             a_persons_claim_is_never_taken,
+            taking_over_moves_a_claim_its_holder_still_has,
             undone_drops_the_holder,
             cancel_keeps_the_record,
             a_cancelled_todo_can_be_finished,
@@ -47,6 +48,7 @@ macro_rules! contract_tests {
             claiming_then_completing_records_one_completed_interval,
             releasing_records_each_released_interval,
             a_handed_claim_closes_one_interval_and_opens_the_next,
+            a_taken_over_claim_ends_handed,
         );
     };
     (@each $make:expr; $($case:ident),* $(,)?) => {
@@ -137,6 +139,32 @@ fn claimant(err: &anyhow::Error) -> Option<String> {
     err.chain()
         .find_map(|e| e.downcast_ref::<Claimed>())
         .map(|c| c.by.to_string())
+}
+
+fn take_over(s: &impl TodoStore, id: &str, from: &str, actor: &str) -> anyhow::Result<()> {
+    s.apply(&Edit::TakeOver {
+        id: id.into(),
+        from: Holder::new(from),
+        actor: Holder::new(actor),
+    })
+    .map(drop)
+}
+
+pub fn taking_over_moves_a_claim_its_holder_still_has(s: &impl TodoStore) {
+    let id = add(s, "a");
+    set(s, &id, StatusKind::InProgress, "S").unwrap();
+    take_over(s, &id, "S", "T").unwrap();
+    assert_eq!(get(s, &id).status, in_progress("T"));
+
+    let err = take_over(s, &id, "S", "U").unwrap_err();
+    assert_eq!(claimant(&err).as_deref(), Some("T"), "{err:#}");
+    assert_eq!(get(s, &id).status, in_progress("T"));
+
+    set(s, &id, StatusKind::InProgress, "human").unwrap();
+    let mine = add(s, "b");
+    set(s, &mine, StatusKind::InProgress, "human").unwrap();
+    let err = take_over(s, &mine, "human", "T").unwrap_err();
+    assert_eq!(claimant(&err).as_deref(), Some("human"), "{err:#}");
 }
 
 pub fn add_then_list_round_trips(s: &impl TodoStore) {
@@ -523,4 +551,17 @@ pub fn a_handed_claim_closes_one_interval_and_opens_the_next<S: TodoStore, L: Ac
     );
     assert_eq!(ended(&claims[1]), (id.as_str(), "S/a", None));
     assert_eq!(claims[0].end, Some(claims[1].start));
+}
+
+pub fn a_taken_over_claim_ends_handed<S: TodoStore, L: ActivityStore>(r: &Recorded<S, L>) {
+    let id = add(r, "a");
+    set(r, &id, StatusKind::InProgress, "S").unwrap();
+    take_over(r, &id, "S", "T").unwrap();
+    let claims = claims(r);
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    assert_eq!(
+        ended(&claims[0]),
+        (id.as_str(), "S", Some(ClaimEnd::Handed))
+    );
+    assert_eq!(ended(&claims[1]), (id.as_str(), "T", None));
 }

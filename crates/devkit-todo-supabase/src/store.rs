@@ -250,6 +250,10 @@ impl TodoStore for SupabaseStore {
                 "todo_set_status",
                 json!({ "p_root": root, "p_id": id, "p_to": to, "p_actor": actor }),
             ),
+            Edit::TakeOver { id, from, actor } => self.changes(
+                "todo_take_over",
+                json!({ "p_root": root, "p_id": id, "p_from": from, "p_actor": actor }),
+            ),
             Edit::Describe { id, description } => self.call(
                 "todo_describe",
                 json!({ "p_root": root, "p_id": id, "p_description": one_line(description) }),

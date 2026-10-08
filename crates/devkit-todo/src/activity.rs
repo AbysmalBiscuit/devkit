@@ -1,7 +1,10 @@
-//! Subagent runs and claim intervals. Hooks and store edits append events to
-//! an [`ActivityStore`], without a lock, and [`ActivityStore::read`] pairs
-//! them into records. A run closes at its stop, else its session's end, else
-//! as [`RunEnd::Lost`] once its agent has been silent past [`BACKSTOP`].
+//! Subagent runs, claim intervals and sessions. Hooks and store edits append
+//! events to an [`ActivityStore`], without a lock, and
+//! [`ActivityStore::read`] pairs them into records. A run closes at its stop,
+//! else its session's end, else as [`RunEnd::Lost`] once its agent has been
+//! silent past [`BACKSTOP`]. A session that has been silent as long reads as
+//! [`SessionState::Silent`]: a harness may reclaim a session without ever
+//! sending its end.
 
 use std::{
     collections::HashMap,
@@ -18,8 +21,17 @@ use serde::{Deserialize, Serialize};
 use crate::{Edit, Filter, Holder, NewTodo, Status, StatusChange, Todo, TodoStore};
 
 /// How long an agent may go without firing a hook before its open run counts
-/// as lost, the lifetime of a hook's file lock.
+/// as lost, and a session before it counts as silent, the lifetime of a
+/// hook's file lock.
 pub const BACKSTOP: TimeDelta = TimeDelta::minutes(30);
+
+/// The agent id a session's main agent is marked seen under, which no
+/// subagent's id is.
+pub const MAIN_AGENT: &str = "";
+
+/// The file the local log marks [`MAIN_AGENT`] seen in, a name no
+/// [`segment`] spells.
+const MAIN_FILE: &str = "@main";
 
 /// The label a run without an agent type reports under.
 const SUBAGENT: &str = "subagent";
@@ -38,6 +50,10 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum What {
+    /// Also fired when a session resumes or compacts.
+    SessionStart {
+        session: String,
+    },
     SubagentStart {
         session: String,
         agent: String,
@@ -127,10 +143,56 @@ pub struct Interval {
     pub outcome: Option<ClaimEnd>,
 }
 
+/// What the log knows of one session: when it first and last showed signs
+/// of life, and when it sent its end.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Session {
+    pub session: String,
+    pub first: DateTime<Utc>,
+    /// Its latest hook, subagent start or stop, or claim.
+    pub last_seen: Option<DateTime<Utc>>,
+    /// Its latest end.
+    pub ended: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SessionState {
+    /// It sent its end, and nothing since.
+    Ended {
+        at: DateTime<Utc>,
+    },
+    /// Nothing from it for longer than [`BACKSTOP`]: reclaimed without an
+    /// end, or idle.
+    Silent {
+        since: DateTime<Utc>,
+    },
+    Active,
+}
+
+impl Session {
+    /// Its state as of `now`.
+    pub fn state(&self, now: DateTime<Utc>) -> SessionState {
+        match (self.last_seen, self.ended) {
+            (seen, Some(at)) if seen.is_none_or(|seen| seen <= at) => SessionState::Ended { at },
+            (Some(since), _) if now - since > BACKSTOP => SessionState::Silent { since },
+            _ => SessionState::Active,
+        }
+    }
+
+    /// Its latest sign of life or end.
+    pub fn last(&self) -> DateTime<Utc> {
+        self.last_seen.max(self.ended).unwrap_or(self.first)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Activity {
     pub runs: Vec<Run>,
     pub claims: Vec<Interval>,
+    /// Every session the log has a record of, in order of first sight.
+    #[serde(default)]
+    pub sessions: Vec<Session>,
     /// The time the records were judged as of, by the store's clock.
     #[serde(default)]
     pub as_of: DateTime<Utc>,
@@ -169,8 +231,8 @@ pub trait ActivityStore {
     }
     /// Appends `what`, stamped now by the store's clock.
     fn record_now(&self, what: &::devkit_todo::activity::What) -> ::anyhow::Result<()>;
-    /// Notes that `agent` of `session` fired a hook now, by the store's
-    /// clock.
+    /// Notes that `agent` of `session`, or its main agent as
+    /// [`MAIN_AGENT`], fired a hook now, by the store's clock.
     fn seen(&self, session: &str, agent: &str) -> ::anyhow::Result<()>;
     /// Notes that `agent` of `session` fired a hook at `when`.
     fn seen_at(
@@ -193,26 +255,83 @@ pub trait ActivityStore {
 
 impl Activity {
     /// Pairs `events` into records as of `now`. An open run whose agent last
-    /// fired a hook, by `last_seen`, more than [`BACKSTOP`] before `now`
-    /// closes as lost at that hook, or at its start when it was never seen.
-    pub fn of(
-        mut events: Vec<Event>,
-        last_seen: impl Fn(&str, &str) -> Option<DateTime<Utc>>,
-        now: DateTime<Utc>,
-    ) -> Self {
+    /// fired a hook, by `seen`, more than [`BACKSTOP`] before `now` closes as
+    /// lost at that hook, or at its start when it was never seen.
+    pub fn of(mut events: Vec<Event>, seen: Vec<Seen>, now: DateTime<Utc>) -> Self {
         events.sort_by_key(|e| e.at);
+        let sessions = sessions(&events, &seen);
         let mut activity = derive(events);
+        let marks: HashMap<(&str, &str), DateTime<Utc>> = seen
+            .iter()
+            .map(|s| ((s.session.as_str(), s.agent.as_str()), s.at))
+            .collect();
         for run in activity.runs.iter_mut().filter(|r| r.end.is_none()) {
-            let last =
-                last_seen(&run.session, &run.agent).map_or(run.start, |seen| seen.max(run.start));
+            let last = marks
+                .get(&(run.session.as_str(), run.agent.as_str()))
+                .map_or(run.start, |seen| (*seen).max(run.start));
             if now - last > BACKSTOP {
                 run.end = Some(last);
                 run.outcome = Some(RunEnd::Lost);
             }
         }
+        activity.sessions = sessions;
         activity.as_of = now;
         activity
     }
+
+    /// The state of the session `holder` belongs to, `None` when the log has
+    /// no record of it.
+    pub fn session_state(&self, holder: &Holder) -> Option<SessionState> {
+        let session = holder.session();
+        self.sessions
+            .iter()
+            .find(|s| s.session == *session)
+            .map(|s| s.state(self.as_of))
+    }
+}
+
+/// Every session in time-ordered `events` and `seen`, in order of first
+/// sight. Its own hooks, starts, subagent starts and stops, and claims are
+/// signs of life; an unclaim is not, since another holder may have made it.
+/// A main agent's seen mark holds only its latest hook, so a session's start
+/// is what keeps its first sight.
+fn sessions(events: &[Event], seen: &[Seen]) -> Vec<Session> {
+    let mut sessions: Vec<Session> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut note = |session: &str, at: DateTime<Utc>, end: bool| {
+        let i = match index.get(session) {
+            Some(&i) => i,
+            None => {
+                index.insert(session.to_string(), sessions.len());
+                sessions.push(Session {
+                    session: session.to_string(),
+                    first: at,
+                    last_seen: None,
+                    ended: None,
+                });
+                sessions.len() - 1
+            }
+        };
+        let s = &mut sessions[i];
+        s.first = s.first.min(at);
+        let field = if end { &mut s.ended } else { &mut s.last_seen };
+        *field = (*field).max(Some(at));
+    };
+    for Event { at, what } in events {
+        match what {
+            What::SessionStart { session }
+            | What::SubagentStart { session, .. }
+            | What::SubagentStop { session, .. } => note(session, *at, false),
+            What::SessionEnd { session } => note(session, *at, true),
+            What::Claim { holder, .. } if !holder.is_human() => note(&holder.session(), *at, false),
+            What::Claim { .. } | What::Unclaim { .. } => {}
+        }
+    }
+    for mark in seen {
+        note(&mark.session, mark.at, false);
+    }
+    sessions.sort_by_key(|s| s.first);
+    sessions
 }
 
 /// The records a shared database keeps under one root, as its
@@ -226,7 +345,7 @@ pub struct Snapshot {
 }
 
 /// When an agent last fired a hook.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Seen {
     pub session: String,
     pub agent: String,
@@ -241,21 +360,13 @@ impl From<Snapshot> for Activity {
             .into_iter()
             .filter_map(|line| serde_json::from_value(line).ok())
             .collect();
-        let seen: HashMap<(String, String), DateTime<Utc>> = snapshot
-            .seen
-            .into_iter()
-            .map(|s| ((s.session, s.agent), s.at))
-            .collect();
-        Self::of(
-            events,
-            |session, agent| seen.get(&(session.to_string(), agent.to_string())).copied(),
-            snapshot.now,
-        )
+        Self::of(events, snapshot.seen, snapshot.now)
     }
 }
 
 /// The log in one directory: `events.jsonl`, and under `seen/` one empty file
-/// per running agent whose modification time is that agent's last hook.
+/// per running agent, and per session's main agent, whose modification time
+/// is that agent's last hook.
 pub struct ActivityLog {
     dir: PathBuf,
 }
@@ -273,16 +384,45 @@ impl ActivityLog {
     fn seen_path(&self, session: &str, agent: Option<&str>) -> PathBuf {
         let dir = self.dir.join(SEEN).join(segment(session));
         match agent {
+            Some(MAIN_AGENT) => dir.join(MAIN_FILE),
             Some(agent) => dir.join(segment(agent)),
             None => dir,
         }
     }
 
-    fn last_seen(&self, session: &str, agent: &str) -> Option<DateTime<Utc>> {
-        let modified = fs::metadata(self.seen_path(session, Some(agent)))
-            .and_then(|m| m.modified())
-            .ok()?;
-        Some(modified.into())
+    /// Every mark under `seen/`. One whose name does not decode, or that
+    /// vanishes while being read, is skipped.
+    fn marks(&self) -> Result<Vec<Seen>> {
+        let root = self.dir.join(SEEN);
+        let sessions = match fs::read_dir(&root) {
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            sessions => sessions.with_context(|| format!("reading {}", root.display()))?,
+        };
+        let mut marks = Vec::new();
+        for session_dir in sessions.flatten() {
+            let Some(session) = unsegment(&session_dir.file_name().to_string_lossy()) else {
+                continue;
+            };
+            let Ok(agents) = fs::read_dir(session_dir.path()) else {
+                continue;
+            };
+            for file in agents.flatten() {
+                let name = file.file_name().to_string_lossy().into_owned();
+                let agent = match name.as_str() {
+                    MAIN_FILE => Some(MAIN_AGENT.to_string()),
+                    name => unsegment(name),
+                };
+                let modified = file.metadata().and_then(|m| m.modified());
+                if let (Some(agent), Ok(modified)) = (agent, modified) {
+                    marks.push(Seen {
+                        session: session.clone(),
+                        agent,
+                        at: modified.into(),
+                    });
+                }
+            }
+        }
+        Ok(marks)
     }
 }
 
@@ -348,11 +488,7 @@ impl ActivityStore for ActivityLog {
             .lines()
             .filter_map(|line| serde_json::from_str(line).ok())
             .collect();
-        Ok(Activity::of(
-            events,
-            |session, agent| self.last_seen(session, agent),
-            now,
-        ))
+        Ok(Activity::of(events, self.marks()?, now))
     }
 }
 
@@ -378,6 +514,23 @@ pub fn segment(id: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+/// The id [`segment`] spelled as `name`, `None` for a name it never spells.
+fn unsegment(name: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(name.len());
+    let mut rest = name.bytes();
+    while let Some(b) = rest.next() {
+        match b {
+            b'%' => {
+                let hex = [rest.next()?, rest.next()?];
+                bytes.push(u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?);
+            }
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' => bytes.push(b),
+            _ => return None,
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Pairs time-ordered events into records. A stop or an unclaim with nothing
@@ -440,6 +593,7 @@ fn derive(events: Vec<Event>) -> Activity {
                     close_claim(&mut activity.claims[i], at, outcome);
                 }
             }
+            What::SessionStart { .. } => {}
         }
     }
     activity

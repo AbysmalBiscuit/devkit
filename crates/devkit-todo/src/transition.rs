@@ -99,6 +99,23 @@ pub fn transition(
     }))
 }
 
+/// The status a todo moves to when `actor` takes over the claim `from` held,
+/// for a holder whose session went silent: in progress by `actor` while
+/// `from` still holds it, and otherwise what [`transition`] gives `actor`
+/// asking for in progress. A person's claim is never taken over.
+pub fn take_over(
+    current: &Status,
+    from: &Holder,
+    actor: &Holder,
+) -> Result<Option<Status>, Claimed> {
+    match current {
+        Status::InProgress { by } if by == from && !by.is_human() && !actor.covers(by) => {
+            Ok(Some(Status::InProgress { by: actor.clone() }))
+        }
+        _ => transition(current, StatusKind::InProgress, actor),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +210,23 @@ mod tests {
         assert_eq!(
             transition(&Status::Pending, StatusKind::Pending, &h("T")),
             Ok(None)
+        );
+    }
+
+    #[test]
+    fn taking_over_moves_the_claim_while_its_holder_still_has_it() {
+        assert_eq!(take_over(&ip("S"), &h("S"), &h("T")), Ok(Some(ip("T"))));
+        assert_eq!(
+            take_over(&ip("U"), &h("S"), &h("T")),
+            Err(Claimed { by: h("U") })
+        );
+        assert_eq!(
+            take_over(&Status::Pending, &h("S"), &h("T")),
+            Ok(Some(ip("T")))
+        );
+        assert_eq!(
+            take_over(&ip("human"), &h("human"), &h("T")),
+            Err(Claimed { by: h("human") })
         );
     }
 

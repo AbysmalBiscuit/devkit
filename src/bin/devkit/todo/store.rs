@@ -573,6 +573,30 @@ impl Store {
         Ok(Activity::of(&Self::effective_cli_config(cwd)?, Opener::Cli))
     }
 
+    /// Runs devkit's schema on the todo database a CLI call in `cwd` names,
+    /// returning the database's credential-free target and the tables and
+    /// functions it created. Only the postgres backend reaches the database
+    /// directly; every other backend is refused.
+    pub(crate) fn update_schema(cwd: &Path) -> Result<(String, Vec<String>)> {
+        let config = Self::effective_cli_config(cwd)?;
+        match config.backend {
+            TodoBackend::Postgres => {
+                let db = database(&config.postgres, Opener::Cli);
+                let created = db.update_schema()?;
+                Ok((db.target(), created))
+            }
+            TodoBackend::Supabase => bail!(
+                "the supabase backend cannot change the database's schema; run \
+                 `DEVKIT_TODO_BACKEND=postgres devkit todo schema update` from a machine \
+                 that can connect to the database"
+            ),
+            TodoBackend::Builtin => bail!("the builtin todo backend has no database schema"),
+            TodoBackend::Taskchampion => {
+                bail!("the taskchampion todo backend has no database schema")
+            }
+        }
+    }
+
     /// Runs `f` with taskchampion's replica lock held throughout, so a busy
     /// lock stops all of `f`'s writes or none. Other backends just run `f`.
     pub(crate) fn while_locked<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
