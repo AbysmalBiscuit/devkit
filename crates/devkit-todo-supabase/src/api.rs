@@ -259,7 +259,8 @@ fn advice(code: Option<&str>) -> Option<&'static str> {
     Some(match code? {
         "PGRST106" => "expose the `devkit` schema to the Data API",
         "PGRST202" | "PGRST205" | "42P01" | "42883" | "3F000" => {
-            "create devkit's schema with the postgres backend first"
+            "create or update devkit's schema with \
+             `DEVKIT_TODO_BACKEND=postgres devkit todo schema update`"
         }
         "42501" => "grant the API's role devkit's tables and functions",
         _ => return None,

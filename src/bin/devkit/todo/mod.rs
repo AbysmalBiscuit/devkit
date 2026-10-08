@@ -128,10 +128,30 @@ pub enum TodoCommand {
         #[arg(long, conflicts_with = "mode")]
         clear: bool,
     },
+    /// Manage the todo database's schema on the postgres backend.
+    Schema {
+        #[command(subcommand)]
+        action: SchemaAction,
+    },
     /// Print the todo block a hook injects.
     ///
     /// Reads the hook payload on stdin, and prints nothing on any failure.
     Context(ContextArgs),
+}
+
+#[derive(Subcommand)]
+pub enum SchemaAction {
+    /// Create the tables and functions the database lacks.
+    ///
+    /// Creates every table and function this devkit needs that the database
+    /// lacks, and replaces each function with this version's. devkit creates
+    /// its schema on first use, but a database that already has one gains a
+    /// function a newer devkit adds only when a postgres call needs it, and
+    /// the supabase backend cannot create it at all. Run this after upgrading
+    /// devkit. It needs the postgres backend: for a supabase deployment, run
+    /// it with DEVKIT_TODO_BACKEND=postgres and DEVKIT_TODO_DATABASE_URL
+    /// naming the project's database.
+    Update,
 }
 
 #[derive(Args)]
@@ -184,6 +204,17 @@ pub fn run(cli: TodoCli) -> Result<()> {
     }
     if let TodoCommand::Hold { mode, clear } = cli.command {
         return hold::run(mode, clear, &std::env::current_dir()?);
+    }
+    if let TodoCommand::Schema {
+        action: SchemaAction::Update,
+    } = cli.command
+    {
+        let (target, created) = Store::update_schema(&std::env::current_dir()?)?;
+        for object in &created {
+            println!("created {object}");
+        }
+        println!("devkit's schema in {target} is up to date");
+        return Ok(());
     }
     let caller = caller::caller();
     let get = |key: &str| std::env::var(key).ok();
@@ -278,7 +309,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
             None if !background => eprintln!("devkit todo: this todo store has no sync target"),
             None => {}
         },
-        TodoCommand::Context(_) | TodoCommand::Hold { .. } => {
+        TodoCommand::Context(_) | TodoCommand::Hold { .. } | TodoCommand::Schema { .. } => {
             unreachable!("answered before the store is opened")
         }
         TodoCommand::Purge { id } => {

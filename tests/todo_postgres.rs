@@ -321,6 +321,79 @@ fn creates_its_schema_on_an_empty_database_and_starts_on_an_existing_one() {
     admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
 }
 
+/// Whether the database `url` names has the function `signature`.
+fn has_function(url: &str, signature: &str) -> bool {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(connection);
+        client
+            .query_one("SELECT to_regprocedure($1) IS NOT NULL", &[&signature])
+            .await
+            .unwrap()
+            .get(0)
+    })
+}
+
+#[test]
+fn schema_update_creates_a_function_an_existing_database_lacks() {
+    let Some(direct) = var("DEVKIT_TEST_POSTGRES_URL") else {
+        return;
+    };
+    let name = format!("devkit_{}", fresh_root().replace('-', "_"));
+    admin(&direct, &format!("CREATE DATABASE {name}"));
+    let url = with_dbname(&test_url().unwrap(), &name);
+    let db = with_dbname(&direct, &name);
+    let p = proj("devkit");
+    let env = session("S", &url);
+    added(&p, "first", &env);
+    let take_over = "devkit.todo_take_over(text, text, text, text)";
+    admin(&db, &format!("DROP FUNCTION {take_over}"));
+    assert!(!has_function(&db, take_over));
+
+    let out = devkit(&p, &["todo", "schema", "update"], &env);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(has_function(&db, take_over));
+    assert!(
+        stdout(&out).contains("created devkit.todo_take_over"),
+        "{}",
+        stdout(&out)
+    );
+    let again = devkit(&p, &["todo", "schema", "update"], &env);
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert!(
+        !stdout(&again).contains("created"),
+        "nothing was missing: {}",
+        stdout(&again)
+    );
+
+    admin(&direct, &format!("DROP DATABASE {name} WITH (FORCE)"));
+}
+
+#[test]
+fn schema_update_refuses_a_backend_without_a_database() {
+    let p = proj("devkit");
+    for (backend, says) in [
+        ("builtin", "has no database schema"),
+        ("taskchampion", "has no database schema"),
+        (
+            "supabase",
+            "DEVKIT_TODO_BACKEND=postgres devkit todo schema update",
+        ),
+    ] {
+        let env = vec![("DEVKIT_TODO_BACKEND", backend.to_string())];
+        let out = devkit(&p, &["todo", "schema", "update"], &env);
+        assert!(!out.status.success(), "{backend}: {}", stdout(&out));
+        assert!(stderr(&out).contains(says), "{backend}: {}", stderr(&out));
+    }
+}
+
 fn doctor_rows(p: &Proj, env: &[(&'static str, String)]) -> Vec<Value> {
     let out = devkit(p, &["doctor", "--json"], env);
     serde_json::from_slice(&out.stdout)

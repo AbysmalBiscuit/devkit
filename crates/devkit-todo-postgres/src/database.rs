@@ -24,9 +24,10 @@ pub(crate) const UNKNOWN_TODO: &str = "DK002";
 ///
 /// Each todo and activity write is one function, so a client that sends every
 /// request as a transaction of its own, as Supabase's HTTP API does, claims as
-/// atomically as one that holds a connection. A database runs this only
-/// once something it needs is missing, so a function whose behaviour
-/// changes takes a new name.
+/// atomically as one that holds a connection. A database runs this on its
+/// own only once something it needs is missing, and otherwise only when
+/// [`Database::update_schema`] asks, so a function whose behaviour changes
+/// takes a new name.
 static SCHEMA: LazyLock<String> = LazyLock::new(|| {
     format!(
         "
@@ -514,6 +515,19 @@ impl Database {
         })
     }
 
+    /// Runs devkit's schema whether or not anything is missing: it creates
+    /// each table and function that does not exist yet and replaces every
+    /// function with this version's. Returns the tables and functions it
+    /// created, schema-qualified and sorted.
+    pub fn update_schema(&self) -> Result<Vec<String>> {
+        self.run(async |client| {
+            let before = schema_objects(client).await?;
+            client.batch_execute(&SCHEMA).await?;
+            let after = schema_objects(client).await?;
+            Ok(after.into_iter().filter(|o| !before.contains(o)).collect())
+        })
+    }
+
     /// Runs `op` on the connection within the wait, creating a missing
     /// schema and running `op` once more. A connection that times out or
     /// closes is dropped, so the server rolls back what it left open, and a
@@ -631,6 +645,24 @@ pub fn is_unreachable(e: &anyhow::Error) -> bool {
                 .downcast_ref::<tokio_postgres::Error>()
                 .is_some_and(|e| e.as_db_error().is_some())
         })
+}
+
+/// The tables and functions in devkit's schema, schema-qualified and sorted.
+async fn schema_objects(client: &Client) -> Result<Vec<String>> {
+    let rows = client
+        .query_typed(
+            "SELECT 'devkit.' || c.relname FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = 'devkit' AND c.relkind = 'r'
+             UNION
+             SELECT 'devkit.' || p.proname FROM pg_proc p
+                 JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = 'devkit'
+             ORDER BY 1",
+            &[],
+        )
+        .await?;
+    Ok(rows.iter().map(|row| row.get(0)).collect())
 }
 
 /// Whether `e` is the server reporting that devkit's schema, or one of its
