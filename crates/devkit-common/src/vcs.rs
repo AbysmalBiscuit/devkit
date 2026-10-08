@@ -4,7 +4,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
 };
 
 use ambassador::Delegate;
@@ -120,12 +120,13 @@ pub fn derived_worktree_root(primary: &Path) -> Option<PathBuf> {
 /// once.
 ///
 /// Resolution is lazy, so a caller that turns out not to need a checkout
-/// spawns nothing. It is per-value and never process-wide, because `devkitd`
-/// and the MCP server outlive the worktrees they serve.
+/// spawns nothing. Clones share it, so work handed to another thread with a
+/// clone resolves it once for both. It is never process-wide, because
+/// `devkitd` and the MCP server outlive the worktrees they serve.
 #[derive(Debug, Clone)]
 pub struct Checkout {
     start: PathBuf,
-    resolved: OnceLock<Resolved>,
+    resolved: Arc<OnceLock<Resolved>>,
 }
 
 #[derive(Debug, Clone)]
@@ -146,7 +147,7 @@ impl Checkout {
     pub fn at(start: &Path) -> Self {
         Self {
             start: start.to_path_buf(),
-            resolved: OnceLock::new(),
+            resolved: Arc::default(),
         }
     }
 
