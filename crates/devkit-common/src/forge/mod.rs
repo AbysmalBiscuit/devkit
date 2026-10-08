@@ -7,7 +7,7 @@
 
 use std::{collections::HashMap, path::Path};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 pub use devkit_config::ForgeKind;
 use devkit_config::{ForgeConfig, GithubConfig};
 use serde::{Deserialize, Serialize};
@@ -118,6 +118,15 @@ pub fn pr_number_from_url(url: &str) -> Option<u64> {
 /// so this works for a PR from a fork the local clone has no remote for.
 pub fn checkout_ref(dir: &Path, remote_ref: &str, branch: &str) -> Result<()> {
     Vcs::at(dir).checkout_remote_ref(dir, "origin", remote_ref, branch)
+}
+
+/// [`checkout_ref`] at the ref `forge` publishes `pr`'s head under, as
+/// `pr`'s head branch.
+pub fn checkout_head(forge: &dyn Forge, pr: &PrBrief, dir: &Path) -> Result<()> {
+    let remote_ref = forge
+        .head_ref(pr.number)
+        .context("this forge publishes no pull-request head")?;
+    checkout_ref(dir, &remote_ref, &pr.head_ref_name)
 }
 
 /// The repositories one command works against, resolved once and threaded to
@@ -463,6 +472,9 @@ pub trait Forge: Send + Sync {
     fn add_reviewers(&self, repo: &Repo, n: u64, logins: &[String]) -> Result<()>;
     /// Who is tied to PR `n` as a reviewer.
     fn reviewers(&self, repo: &Repo, n: u64) -> Result<Reviewers>;
+    /// The ref on the base repository holding PR `n`'s head, which outlives
+    /// the head branch, or `None` for a forge that publishes none.
+    fn head_ref(&self, n: u64) -> Option<String>;
     /// Check `pr`'s head out as a local branch in the worktree at `dir`.
     fn checkout(&self, repo: &Repo, pr: &PrBrief, dir: &Path) -> Result<()>;
     /// One page of the viewer's open PRs in `section`.

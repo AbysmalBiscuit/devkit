@@ -636,15 +636,15 @@ impl Forge for GitlabForge {
         Ok(reviewers_of(&standings(&approvals, &entries)))
     }
 
+    /// GitLab deletes it 14 days after the MR closes or merges.
+    fn head_ref(&self, n: u64) -> Option<String> {
+        Some(format!("refs/merge-requests/{n}/head"))
+    }
+
     /// The head ref lives on the target project, so a fork's MR checks out
-    /// with no remote for the fork. GitLab deletes it 14 days after the MR
-    /// closes or merges.
+    /// with no remote for the fork.
     fn checkout(&self, _repo: &Repo, pr: &PrBrief, dir: &Path) -> Result<()> {
-        super::checkout_ref(
-            dir,
-            &format!("refs/merge-requests/{}/head", pr.number),
-            &pr.head_ref_name,
-        )
+        super::checkout_head(self, pr, dir)
     }
 
     /// One list page, then per MR the single-MR read (pipeline, fresh

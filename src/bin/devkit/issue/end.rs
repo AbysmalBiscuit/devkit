@@ -1240,6 +1240,101 @@ mod tests {
         );
     }
 
+    /// A primary checkout cloned from an upstream, with a worktree on
+    /// `eng-1-fix` one commit past `main`, and the upstream publishing PR #1's
+    /// head one commit further at `refs/pull/1/head` alone: a branch a cloud
+    /// session finished, merged and deleted without the clone fetching it.
+    /// Returns the clone, the worktree and the PR head.
+    fn merged_elsewhere(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf, String) {
+        let upstream = repo_with_one_commit(&dir.join("up"));
+        let main = dir.join("main");
+        fixture_git(dir, &[
+            "clone",
+            "-q",
+            upstream.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ]);
+        let wt = dir.join("wt-eng-1");
+        fixture_git(&main, &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "eng-1-fix",
+            wt.to_str().unwrap(),
+        ]);
+        fixture_git(&wt, &["commit", "-q", "--allow-empty", "-m", "the fix"]);
+        let local = rev_parse(&wt, "HEAD");
+        fixture_git(&upstream, &[
+            "fetch",
+            "-q",
+            main.to_str().unwrap(),
+            "eng-1-fix",
+        ]);
+        let pr_head = devkit_git::Git::fixture(&upstream)
+            .args(["commit-tree", &format!("{local}^{{tree}}"), "-p", &local])
+            .args(["-m", "finished in the cloud"])
+            .output()
+            .unwrap()
+            .trim()
+            .to_string();
+        fixture_git(&upstream, &["update-ref", "refs/pull/1/head", &pr_head]);
+        (main, wt, pr_head)
+    }
+
+    fn refs(repo: &std::path::Path) -> Vec<String> {
+        devkit_git::Git::fixture(repo)
+            .args(["for-each-ref", "--format=%(refname)"])
+            .output()
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn a_worktree_its_merged_prs_unfetched_head_contains_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt, pr_head) = merged_elsewhere(dir.path());
+        let mut kept = refs(&main);
+        kept.retain(|r| r != "refs/heads/eng-1-fix");
+
+        end_everything_finished(&main, merged_at(&pr_head));
+
+        assert!(!wt.exists(), "a finished worktree is removed");
+        assert_eq!(refs(&main), kept, "the fetch writes no ref");
+        assert!(!main.join(".git/FETCH_HEAD").exists(), "nor FETCH_HEAD");
+    }
+
+    #[test]
+    fn a_worktree_with_a_commit_its_merged_prs_fetched_head_lacks_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt, pr_head) = merged_elsewhere(dir.path());
+        fixture_git(&wt, &["commit", "-q", "--allow-empty", "-m", "local only"]);
+
+        end_everything_finished(&main, merged_at(&pr_head));
+
+        assert!(wt.exists(), "the worktree survives");
+        fixture_git(&main, &["cat-file", "-e", &format!("{pr_head}^{{commit}}")]);
+    }
+
+    #[test]
+    fn a_merged_prs_head_that_cannot_be_fetched_holds_the_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt, pr_head) = merged_elsewhere(dir.path());
+        let gone = dir.path().join("gone");
+        fixture_git(&main, &[
+            "remote",
+            "set-url",
+            "origin",
+            gone.to_str().unwrap(),
+        ]);
+
+        end_everything_finished(&main, merged_at(&pr_head));
+
+        assert!(wt.exists(), "an uncompared worktree survives");
+    }
+
     fn approved_row(worktree: &str, branch: &str, issue_id: &str) -> IssueWorktree {
         IssueWorktree {
             worktree: worktree.into(),

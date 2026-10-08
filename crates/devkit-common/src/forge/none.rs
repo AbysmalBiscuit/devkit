@@ -73,6 +73,10 @@ impl Forge for NoForge {
         self.refuse()
     }
 
+    fn head_ref(&self, _n: u64) -> Option<String> {
+        None
+    }
+
     fn checkout(&self, _repo: &Repo, _pr: &PrBrief, _dir: &Path) -> Result<()> {
         self.refuse()
     }

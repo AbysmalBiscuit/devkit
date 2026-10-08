@@ -573,12 +573,12 @@ impl Forge for ForgejoForge {
         })
     }
 
+    fn head_ref(&self, n: u64) -> Option<String> {
+        Some(format!("refs/pull/{n}/head"))
+    }
+
     fn checkout(&self, _repo: &Repo, pr: &PrBrief, dir: &Path) -> Result<()> {
-        super::checkout_ref(
-            dir,
-            &format!("refs/pull/{}/head", pr.number),
-            &pr.head_ref_name,
-        )
+        super::checkout_head(self, pr, dir)
     }
 
     fn open_prs(

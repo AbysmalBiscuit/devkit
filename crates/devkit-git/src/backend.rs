@@ -171,6 +171,15 @@ impl VersionControl for GitBackend {
         Ok(())
     }
 
+    fn fetch_commits(&self, repo: &Path, remote: &str, refs: &[String]) -> Result<()> {
+        Git::at(repo)
+            .args(["fetch", "--no-write-fetch-head", "--no-tags", remote])
+            .args(refs.iter().map(String::as_str))
+            .network()
+            .output()?;
+        Ok(())
+    }
+
     fn push(&self, dir: &Path, remote: &str, branch: &str) -> Result<()> {
         Git::at(dir)
             .args(["push", "-u", remote, branch])
