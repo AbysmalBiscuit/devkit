@@ -44,9 +44,13 @@ pub enum What {
         /// Absent where the harness sent none, as for a Claude Code fork.
         agent_type: Option<String>,
     },
+    /// Also fired, with no start before it, for the agent Claude Code runs at
+    /// the end of each turn. A stop with no open run makes no run.
     SubagentStop {
         session: String,
         agent: String,
+        /// Absent where the harness sent none, and in older rows.
+        agent_type: Option<String>,
     },
     SessionEnd {
         session: String,
@@ -403,7 +407,7 @@ fn derive(events: Vec<Event>) -> Activity {
                     outcome: None,
                 });
             }
-            What::SubagentStop { session, agent } => {
+            What::SubagentStop { session, agent, .. } => {
                 if let Some(i) = runs.remove(&(session, agent)) {
                     close_run(&mut activity.runs[i], at, RunEnd::Stopped);
                 }
