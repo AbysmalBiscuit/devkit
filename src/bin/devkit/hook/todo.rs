@@ -100,6 +100,18 @@ pub(crate) fn anchored(checkout: &Checkout, holder: &Holder) -> Checkout {
     .unwrap_or_else(|_| checkout.clone())
 }
 
+/// The checkout a hook with `payload` from `cwd` works in: `cwd`'s own, or,
+/// when `cwd` is outside any repository, the one the payload's holder
+/// recorded with its role, so its todo work and its activity read the same
+/// store.
+pub(crate) fn anchored_at(payload: &Payload, cwd: &Path) -> Checkout {
+    let here = Checkout::at(cwd);
+    match payload.holder() {
+        Ok(holder) => anchored(&here, &to_todo_holder(&holder)),
+        Err(_) => here,
+    }
+}
+
 pub(crate) fn nudge(payload: &Payload, checkout: &Checkout) -> Option<String> {
     let holder = to_todo_holder(&payload.holder().ok()?);
     let checkout = anchored(checkout, &holder);
@@ -130,9 +142,8 @@ pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout) {
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
         let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
-        let checkout = anchored(checkout, &holder);
         let cwd = checkout.dir();
-        let store = Store::for_hook(&checkout, cwd);
+        let store = Store::for_hook(checkout, cwd);
         let entry = || Deferred::Release {
             holder: holder.clone(),
         };
@@ -176,7 +187,6 @@ pub(crate) fn hold(
 ) -> Option<String> {
     harness_of(payload.harness())?;
     let holder = to_todo_holder(holder);
-    let checkout = anchored(checkout, &holder);
     let session = holder.session();
     let backend_var = std::env::var(BACKEND_VAR).ok();
     let hold_var = std::env::var(HOLD_VAR).ok();
@@ -184,11 +194,11 @@ pub(crate) fn hold(
         hold_mode::effective(Some(&session), hold_var.as_deref(), Some(config))
             .is_ok_and(|(mode, _)| mode.holds(holder != session))
     };
-    let store = Store::for_hold(&checkout, checkout.dir(), backend_var.as_deref(), holds)?;
+    let store = Store::for_hold(checkout, checkout.dir(), backend_var.as_deref(), holds)?;
     if let Some(replica) = store.queued_replica() {
         drain(replica.data_dir());
     }
-    let (_, _, role) = resolve_role(payload, &checkout, &store, &holder)?;
+    let (_, _, role) = resolve_role(payload, checkout, &store, &holder)?;
     let pending_node = role.hold_pending.then_some(role.node);
     let todos = store.list(&Filter::all()).ok()?;
     let open = hold::open_for(&todos, &holder, pending_node.as_deref());
@@ -350,16 +360,15 @@ pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
     if payload.tool_name().and_then(NativeTool::parse).is_none() {
         return;
     }
-    let Ok(actor) = payload.holder() else {
+    if payload.holder().is_err() {
         return;
-    };
-    let checkout = anchored(checkout, &to_todo_holder(&actor));
+    }
     let cwd = checkout.dir().to_path_buf();
-    let store = Store::for_hook(&checkout, &cwd);
-    let Some(mirror) = Mirror::of(payload, &checkout, &store) else {
+    let store = Store::for_hook(checkout, &cwd);
+    let Some(mirror) = Mirror::of(payload, checkout, &store) else {
         return;
     };
-    if mirror.node == GLOBAL && node::place_of(&checkout).is_ok_and(|p| p == Place::Global) {
+    if mirror.node == GLOBAL && node::place_of(checkout).is_ok_and(|p| p == Place::Global) {
         eprintln!("{}", global_notice(&cwd));
     }
     let entry = || Deferred::Capture {

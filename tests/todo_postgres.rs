@@ -186,6 +186,51 @@ fn activity_lands_in_the_database() {
     assert!(report.contains("Explore"), "{report}");
 }
 
+#[test]
+fn a_stop_from_outside_any_repository_lands_in_the_role_checkouts_database() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    let root = fresh_root();
+    let p = Proj::new();
+    std::fs::write(
+        p.path.join("devkit.toml"),
+        format!(
+            "[todo]\nbackend = \"postgres\"\n[todo.postgres]\nroot = \"{root}\"\n\
+             [todo.roles.implementer]\nscope = \"agent\"\n"
+        ),
+    )
+    .unwrap();
+    let env = session("S", &url);
+    let start = p.hook_with(
+        "subagent-start",
+        "claude-code",
+        &subagent(&p, "SubagentStart", "a1"),
+        &borrowed(&env),
+    );
+    assert!(start.status.success(), "{}", stderr(&start));
+    let mut worker = env.clone();
+    worker.push(("DEVKIT_TODO_HOLDER", "S/a1".to_string()));
+    let role = devkit(&p, &["todo", "role", "implementer"], &worker);
+    assert!(role.status.success(), "{}", stderr(&role));
+
+    let mut stop = subagent(&p, "SubagentStop", "a1");
+    stop["cwd"] = json!(p.outside());
+    let out = p.hook_with("subagent-stop", "claude-code", &stop, &borrowed(&env));
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let db = Database::new(&url, Duration::from_secs(10), &Trust::default()).unwrap();
+    let activity = PostgresActivity::new(db, &root)
+        .read(SystemTime::now().into())
+        .unwrap();
+    assert_eq!(activity.runs.len(), 1, "{activity:?}");
+    assert_eq!(activity.runs[0].outcome, Some(RunEnd::Stopped));
+    assert!(
+        !p.state().join("todo/activity/events.jsonl").exists(),
+        "nothing recorded locally"
+    );
+}
+
 /// The address of a server that accepts a connection and never answers.
 fn silent_url(silent: &Silent) -> String {
     let addr = silent

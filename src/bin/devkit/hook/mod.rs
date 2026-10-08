@@ -239,8 +239,8 @@ pub(crate) fn read_payload(harness: Option<AnyHarness>, event: HookEvent) -> Opt
 /// An absent payload is read as an empty object rather than skipped, so a verb
 /// a harness fires with no body still records that it fired. The activity log
 /// is written after the verb, whose releases come first. Both read the one
-/// checkout the payload's directory resolves to. A session's end gets one
-/// budget for all of its todo database work, since the harness gives that
+/// checkout [`todo::anchored_at`] resolves the payload to. A session's end gets
+/// one budget for all of its todo database work, since the harness gives that
 /// hook little time in all; every other hook bounds each call on its own.
 fn with_payload(
     harness: Option<AnyHarness>,
@@ -251,10 +251,10 @@ fn with_payload(
         crate::todo::store::end_session_within(crate::todo::store::SESSION_END_DATABASE_BUDGET);
     }
     let payload = read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event));
-    let cwd = record::payload_cwd(&payload);
-    let checkout = Checkout::at(&cwd);
-    let out = f(&payload, &checkout, &cwd);
-    activity::observe_within(&payload, event, &checkout, &cwd);
+    let checkout = todo::anchored_at(&payload, &record::payload_cwd(&payload));
+    let cwd = checkout.dir();
+    let out = f(&payload, &checkout, cwd);
+    activity::observe_within(&payload, event, &checkout, cwd);
     out
 }
 
@@ -266,12 +266,12 @@ fn with_payload_held(
     f: impl FnOnce(&Payload, &Checkout, &Path) -> bool,
 ) -> Result<()> {
     let payload = read_payload(harness, event).unwrap_or_else(|| Payload::empty(harness, event));
-    let cwd = record::payload_cwd(&payload);
-    let checkout = Checkout::at(&cwd);
-    if f(&payload, &checkout, &cwd) {
-        activity::seen_within(&payload, &checkout, &cwd);
+    let checkout = todo::anchored_at(&payload, &record::payload_cwd(&payload));
+    let cwd = checkout.dir();
+    if f(&payload, &checkout, cwd) {
+        activity::seen_within(&payload, &checkout, cwd);
     } else {
-        activity::observe_within(&payload, event, &checkout, &cwd);
+        activity::observe_within(&payload, event, &checkout, cwd);
     }
     Ok(())
 }
