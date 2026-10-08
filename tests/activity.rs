@@ -126,7 +126,7 @@ fn a_stop_row_carries_the_payloads_agent_type() {
 #[test]
 fn a_stop_with_no_recorded_start_is_no_run() {
     let p = Proj::new();
-    stop(&p, "turn-end", Some("general-purpose"));
+    stop(&p, "turn-end", Some("turn-end"));
     assert_eq!(p.activity().runs, [], "no run from the log");
 
     let out = p.devkit(&["activity", "--json"], &[]);
