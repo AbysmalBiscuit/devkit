@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.15](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.14...v0.14.15) (2026-10-08)
+
+
+### Features
+
+* **hooks:** give subagents the project brief ([#298](https://github.com/AbysmalBiscuit/devkit/issues/298)) ([aea26e1](https://github.com/AbysmalBiscuit/devkit/commit/aea26e110a54f5e07b57ae05254fe4cd946e83b9))
+
 ## [0.14.14](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.13...v0.14.14) (2026-10-07)
 
 

@@ -2,7 +2,7 @@
 name = "devkit-todo-supabase"
 description = "Agent todo lists in the Postgres todo database, reached over a Supabase project's HTTPS Data API"
 edition.workspace = true
-version = "0.14.14" # x-release-please-version
+version = "0.14.15" # x-release-please-version
 
 [dependencies]
 anyhow.workspace = true

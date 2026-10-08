@@ -2,7 +2,7 @@
 name = "devkit-todo-builtin"
 description = "The todo store devkit ships: one JSON document under the state directory"
 edition.workspace = true
-version = "0.14.14" # x-release-please-version
+version = "0.14.15" # x-release-please-version
 
 [dependencies]
 anyhow.workspace = true
