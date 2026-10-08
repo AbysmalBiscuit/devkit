@@ -468,6 +468,18 @@ fn a_role_selected_in_the_checkout_routes_native_tasks_from_outside_any_reposito
 }
 
 #[test]
+fn a_role_assigned_at_spawn_in_the_checkout_routes_adds_from_outside_any_repository() {
+    let p = Proj::new();
+    std::fs::write(p.path.join("devkit.toml"), WORKFLOW).unwrap();
+    let out = p.hook("subagent-start", "claude-code", &spawn(&p, "implementer"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let add = p.devkit_in(p.outside(), &["todo", "add", "from tmp"], &WORKER, "");
+    assert!(add.status.success(), "{}", stderr(&add));
+    assert_eq!(p.todos()[0].node(), "proj.main.claude-S.a1");
+    assert_eq!(stderr(&add), "");
+}
+
+#[test]
 fn a_holder_with_no_recorded_checkout_is_told_its_add_goes_on_global() {
     let p = Proj::with_home_config(WORKFLOW);
     let add = p.devkit_in(p.outside(), &["todo", "add", "far"], &WORKER, "");

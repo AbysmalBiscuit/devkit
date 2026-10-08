@@ -228,13 +228,25 @@ impl Roles {
             .and_then(|entry| entry.checkout))
     }
 
-    pub fn spawn(&self, layout: &Layout, holder: &Holder, agent_type: Option<&str>) -> Result<()> {
+    /// Records `holder`'s agent type at its spawn, the role it assigns, and
+    /// `checkout`, when given, as the directory it spawned in, as
+    /// [`Roles::record`] records it.
+    pub fn spawn(
+        &self,
+        layout: &Layout,
+        holder: &Holder,
+        agent_type: Option<&str>,
+        checkout: Option<&Path>,
+    ) -> Result<()> {
         self.write(|doc, now| {
             let entry = doc
                 .entries
                 .entry(holder.to_string())
                 .or_insert_with(|| Entry::new(now));
             entry.agent_type = agent_type.map(str::to_string);
+            if let Some(checkout) = checkout {
+                entry.checkout = Some(checkout.to_path_buf());
+            }
             if entry.role.is_none() {
                 let choice = choose(layout, holder, Some(entry), agent_type);
                 if choice.assigned {

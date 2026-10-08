@@ -33,7 +33,7 @@ fn exact_roles_survive_resume_independently_for_session_and_workers() {
         .record(&layout, &Holder::new("S"), "manager", None)
         .unwrap();
     roles
-        .spawn(&layout, &Holder::new("S/a"), Some("implementer"))
+        .spawn(&layout, &Holder::new("S/a"), Some("implementer"), None)
         .unwrap();
     let resumed = Roles::at(dir.path().to_path_buf());
     let main = resumed
@@ -111,7 +111,7 @@ fn first_write_suggests_child_roles_once_per_exact_holder() {
             .is_some()
     );
     roles
-        .spawn(&layout, &Holder::new("S/c"), Some("implementer"))
+        .spawn(&layout, &Holder::new("S/c"), Some("implementer"), None)
         .unwrap();
     assert!(
         roles
@@ -134,7 +134,7 @@ fn deleted_role_warns_and_falls_back_to_saved_agent_type() {
     let roles = Roles::at(dir.path().to_path_buf());
     let layout = layout();
     roles
-        .spawn(&layout, &Holder::new("S/a"), Some("implementer"))
+        .spawn(&layout, &Holder::new("S/a"), Some("implementer"), None)
         .unwrap();
     roles
         .record(&layout, &Holder::new("S/a"), "reviewer", None)

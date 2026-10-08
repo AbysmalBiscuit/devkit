@@ -58,11 +58,13 @@ pub(crate) fn spawn(payload: &Payload, checkout: &Checkout, cwd: &Path) {
         return;
     };
     let store = Store::for_hook(checkout, cwd);
+    let in_repo = node::place_of(checkout).is_ok_and(|place| place != Place::Global);
     report(Layout::new(store.config()).and_then(|layout| {
         Roles::at(devkit_todo::state_dir()).spawn(
             &layout,
             &to_todo_holder(&holder),
             payload.agent_type(),
+            in_repo.then_some(checkout.dir()),
         )
     }));
 }
