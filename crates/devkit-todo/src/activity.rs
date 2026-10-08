@@ -50,7 +50,6 @@ pub enum What {
         session: String,
         agent: String,
         /// Absent where the harness sent none, and in older rows.
-        #[serde(default)]
         agent_type: Option<String>,
     },
     SessionEnd {
