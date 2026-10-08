@@ -235,3 +235,43 @@ fn every_todo_context_line_names_its_harness_and_parses() {
         }
     }
 }
+
+/// The brief and the rules block answer through the harness a line names, so
+/// a line naming another manifest's harness answers in a shape this one
+/// cannot read.
+#[test]
+fn every_brief_and_rules_line_naming_a_harness_names_its_own_and_parses() {
+    let exe = Path::new(env!("CARGO_BIN_EXE_devkit"));
+    for (f, name) in &MANIFESTS[..3] {
+        for c in commands(f).into_iter().filter(|c| {
+            (c.starts_with("devkit brief") || c.starts_with("devkit rules context"))
+                && c.contains("--harness")
+        }) {
+            assert!(c.contains(&format!("--harness {name}")), "{f}: {c}");
+            let mut args: Vec<&str> = c.split_whitespace().skip(1).collect();
+            args.push("--help");
+            let out = std::process::Command::new(exe)
+                .args(&args)
+                .env("DEVKIT_SKIP_AUTOLINK", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{f}: {c}");
+        }
+    }
+}
+
+#[test]
+fn subagents_start_with_the_brief_and_the_rules() {
+    for (f, name) in &MANIFESTS[..2] {
+        let body = std::fs::read_to_string(f).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let mut start = Vec::new();
+        collect(&v["hooks"]["SubagentStart"], &mut start);
+        for wanted in [
+            format!("devkit brief --harness {name}"),
+            format!("devkit rules context --harness {name}"),
+        ] {
+            assert!(start.contains(&wanted), "{f}: {start:?}");
+        }
+    }
+}

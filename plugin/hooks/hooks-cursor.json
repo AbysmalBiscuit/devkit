@@ -8,7 +8,7 @@
       },
       {
         "type": "command",
-        "command": "devkit brief --additional-context"
+        "command": "devkit brief --harness cursor"
       },
       {
         "type": "command",
@@ -16,7 +16,7 @@
       },
       {
         "type": "command",
-        "command": "devkit rules context --additional-context"
+        "command": "devkit rules context --harness cursor"
       }
     ],
     "sessionEnd": [

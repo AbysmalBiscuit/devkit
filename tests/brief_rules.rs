@@ -107,9 +107,9 @@ fn cursor_is_told_that_nothing_injects_rules_for_it() {
     let out = brief(
         proj.path(),
         state.path(),
-        &["--additional-context"],
-        &[("CURSOR_PROJECT_DIR", "/x")],
-        "",
+        &["--harness", "cursor"],
+        &[],
+        &serde_json::json!({"session_id": "s", "hook_event_name": "sessionStart"}).to_string(),
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let body = unwrapped(

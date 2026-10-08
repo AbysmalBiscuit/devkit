@@ -19,8 +19,8 @@
 //! checkout does have (`apps`, `tasks` and `locks`), which reads downstream
 //! exactly as an absent one, so the bullets introducing it go too. `locks` has
 //! no other way to be decided: whether sessions share this checkout is not
-//! observable. In a monorepo, only the app the session works in has its tasks
-//! described; every other app gets one line naming its tasks.
+//! observable. Every task is listed under Tasks with its description, a task
+//! an app owns tagged with that app, so a scan of Tasks finds every check.
 //!
 //! Two narrower emission modes let other hook events call it without spamming
 //! the session: `--pins-only` emits the library table alone, and `--if-changed`
@@ -33,15 +33,16 @@
 //! `--if-changed` would find the checkout's state unchanged since that stamp
 //! and stay silent, leaving the rest of the brief permanently owed.
 //!
-//! `--additional-context` decides how the brief travels rather than what it
-//! says: Claude Code injects a hook's plain stdout, while Codex and Cursor read
-//! it out of a JSON field, so those two ask for the envelope and every emission
-//! mode above is available under either.
+//! `--harness` decides how the brief travels rather than what it says: Claude
+//! Code's session start reads plain stdout, every other hook the event's JSON
+//! answer. A subagent's brief keeps no watermark, since its payload carries its
+//! parent's session id, and a fork, which inherits its parent's context, gets
+//! none.
 
 use std::{
-    collections::{HashMap, HashSet, hash_map::DefaultHasher},
+    collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
-    io::{IsTerminal, Read},
+    io::IsTerminal,
     path::{Path, PathBuf},
     sync::OnceLock,
 };
@@ -52,61 +53,78 @@ use devkit_config as config;
 use devkit_config::BriefConfig;
 use devkit_ports::{apps::App, load, registry, task};
 use devkit_rules::vocab::Severity;
+use pabal::AnyHarness;
 
-/// How the brief reaches the session. Claude Code injects a hook's plain
-/// stdout; Codex and Cursor read it out of a JSON field instead, and spell that
-/// field differently — Cursor `additional_context`, Codex
-/// `hookSpecificOutput.additionalContext`, which rejects an object carrying any
-/// other key, so one payload cannot serve both and the host has to be told
-/// apart.
-#[derive(Clone, Copy)]
-enum Emit {
-    Stdout,
-    AdditionalContext,
+use crate::hook::{
+    HookEvent,
+    payload::{Holder, Payload},
+};
+
+/// The hook a brief or a rules block answers: its payload, and whether the
+/// text travels inside the event's context answer or as plain stdout.
+pub(crate) struct Hook {
+    payload: Payload,
+    answer: bool,
 }
 
-impl Emit {
-    fn text(self, text: &str) {
-        // An empty envelope is not the same as no output: it would hand the
-        // session a context block with nothing in it.
+impl Hook {
+    /// The payload on stdin, or an empty one when there is none to read: an
+    /// interactive run, or a pipe carrying no JSON object.
+    pub(crate) fn read(harness: Option<AnyHarness>) -> Self {
+        let read = (!std::io::stdin().is_terminal())
+            .then(|| crate::hook::read_payload(harness, HookEvent::SessionStart))
+            .flatten();
+        Self {
+            payload: read.unwrap_or_else(|| Payload::empty(harness, HookEvent::SessionStart)),
+            answer: harness.is_some(),
+        }
+    }
+
+    /// Print `text` the way the host reads it. Nothing where the harness has
+    /// no context channel on this event, and nothing for empty text, which
+    /// would hand the agent a context block with nothing in it.
+    pub(crate) fn emit(&self, text: &str) {
         if text.is_empty() {
             return;
         }
-        match self {
-            Emit::Stdout => print!("{text}"),
-            Emit::AdditionalContext => println!("{}", envelope(text)),
+        if !self.answer {
+            print!("{text}");
+        } else if let Some(answer) = self.payload.context_answer(text) {
+            println!("{answer}");
         }
     }
-}
 
-/// `CURSOR_PROJECT_DIR` is the variable Cursor documents as passed to every
-/// hook process; `CURSOR_PLUGIN_ROOT` is accepted alongside it but is not
-/// documented anywhere.
-fn cursor_host() -> bool {
-    ["CURSOR_PROJECT_DIR", "CURSOR_PLUGIN_ROOT"]
-        .iter()
-        .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
-}
+    /// A fork starts with its parent's context, brief and rules included.
+    pub(crate) fn is_fork(&self) -> bool {
+        self.payload.is_fork()
+    }
 
-pub(crate) fn envelope(text: &str) -> serde_json::Value {
-    if cursor_host() {
-        serde_json::json!({ "additional_context": text })
-    } else {
-        serde_json::json!({
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": text,
-            }
-        })
+    /// The holder the rules this hook shows are recorded under.
+    pub(crate) fn holder(&self) -> Option<Holder> {
+        self.payload.holder().ok()
+    }
+
+    /// The session whose `--if-changed` watermark this brief keeps. `None`
+    /// for a subagent, whose payload carries its parent's session id.
+    fn watermark_session(&self) -> Option<&str> {
+        match self.payload.agent() {
+            Some(_) => None,
+            None => self.payload.session_id().filter(|id| !id.is_empty()),
+        }
+    }
+
+    /// Cursor's hooks never see an edit tool, so nothing injects rules for it.
+    fn cursor(&self) -> bool {
+        self.payload.harness() == AnyHarness::Cursor
     }
 }
 
-pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Result<()> {
-    let out = if additional_context {
-        Emit::AdditionalContext
-    } else {
-        Emit::Stdout
-    };
+pub fn run(pins_only: bool, if_changed: bool, harness: Option<AnyHarness>) -> Result<()> {
+    let hook = Hook::read(harness);
+    if hook.is_fork() {
+        return Ok(());
+    }
+    let cursor = hook.cursor();
     // A brief is context injection, never a gate: any failure (no cwd, no git,
     // no config, unreadable registry) means no output, exit 0.
     let Ok(cwd) = std::env::current_dir() else {
@@ -129,34 +147,36 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
             // next `--if-changed` would compare against a watermark that
             // already matches the current state and stay silent, leaving the
             // devrun half of the brief permanently owed.
-            if let Some(session) = session_id() {
-                let _ = std::fs::remove_file(watermark_path(&session));
+            if let Some(session) = hook.watermark_session() {
+                let _ = std::fs::remove_file(watermark_path(session));
             }
             if let Some(text) = pins_only_text(&cwd, &settings) {
-                out.text(&text);
+                hook.emit(&text);
             }
             return Ok(());
         }
-        if let Some(text) = render(&cwd, &settings, &checkout) {
-            out.text(&text);
-            stamp(&cwd, &settings, &checkout);
+        if let Some(text) = render(&cwd, &settings, &checkout, cursor) {
+            hook.emit(&text);
+            if let Some(session) = hook.watermark_session() {
+                stamp(session, &cwd, &settings, &checkout);
+            }
         }
         return Ok(());
     }
 
-    let session = session_id();
+    let session = hook.watermark_session();
     let digest = snapshot(&cwd, &settings, &checkout).map(|s| s.digest());
     let Some(session) = session else {
         // No id means emit without persisting: a shared per-cwd key would let
         // one session's brief suppress another's re-injection, and a withheld
         // brief is the worse failure.
-        if let Some(text) = render(&cwd, &settings, &checkout) {
-            out.text(&text);
+        if let Some(text) = render(&cwd, &settings, &checkout, cursor) {
+            hook.emit(&text);
         }
         return Ok(());
     };
 
-    let path = watermark_path(&session);
+    let path = watermark_path(session);
     let previous = std::fs::read_to_string(&path).ok();
     let current = digest.map(|d| format!("{d:016x}"));
     if previous.is_some() && previous.as_deref() == current.as_deref() {
@@ -165,13 +185,13 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
     if let Some(current) = &current {
         write_watermark(&path, current);
     }
-    match render(&cwd, &settings, &checkout) {
-        Some(text) => out.text(&text),
+    match render(&cwd, &settings, &checkout, cursor) {
+        Some(text) => hook.emit(&text),
         // Left the project: silence would leave the previous checkout's brief
         // as the most recent thing the agent was told.
         None if previous.is_some() => {
             let _ = std::fs::remove_file(&path);
-            out.text(
+            hook.emit(
                 "## devkit project context\n\nThis directory is not a devkit-managed project; the earlier project brief no longer applies.\n",
             );
         }
@@ -220,13 +240,10 @@ struct PinKey {
 
 /// The devrun half's content, each part absent when there is nothing to say.
 struct DevrunBrief {
-    /// Each app with its directory and its tasks.
+    /// Each app with its directory.
     apps: Option<String>,
-    /// Tasks that belong to no app shown in `apps`.
+    /// Every task, with the app it runs in.
     tasks: Option<String>,
-    /// The project has tasks, even when every one of them is listed under its
-    /// app rather than in `tasks`.
-    has_tasks: bool,
     servers: Option<String>,
     locks: bool,
     /// The write stage claims locks for this checkout, so the agent does not
@@ -265,7 +282,7 @@ impl DevrunBrief {
     fn facilities(&self) -> Facilities {
         Facilities {
             apps: self.apps.is_some(),
-            tasks: self.has_tasks,
+            tasks: self.tasks.is_some(),
             servers: self.servers.is_some(),
             locks: self.locks,
             enforced: self.enforced,
@@ -347,16 +364,12 @@ impl PinKey {
 }
 
 /// Record the full brief this session has just been told, so `--if-changed`
-/// has something to compare against. Without a session id — an interactive run
-/// — there is no session to record it for.
-fn stamp(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) {
-    let Some(session) = session_id() else {
-        return;
-    };
+/// has something to compare against.
+fn stamp(session: &str, cwd: &Path, settings: &BriefConfig, checkout: &Checkout) {
     let Some(digest) = snapshot(cwd, settings, checkout).map(|s| s.digest()) else {
         return;
     };
-    write_watermark(&watermark_path(&session), &format!("{digest:016x}"));
+    write_watermark(&watermark_path(session), &format!("{digest:016x}"));
 }
 
 /// Fails open: an unreadable or unwritable state directory reports "changed",
@@ -364,22 +377,6 @@ fn stamp(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) {
 fn write_watermark(path: &Path, digest: &str) {
     let _ = std::fs::create_dir_all(path.parent().expect("watermark has a parent"));
     let _ = std::fs::write(path, digest);
-}
-
-/// The session id from the hook's stdin JSON. `None` when there is no stdin
-/// to read (an interactive run) or no id in it.
-pub(crate) fn session_id() -> Option<String> {
-    if std::io::stdin().is_terminal() {
-        return None;
-    }
-    let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    value
-        .get("session_id")
-        .and_then(serde_json::Value::as_str)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
 }
 
 /// The watermark file for `session`. The name is a hash of the complete raw
@@ -407,9 +404,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
 
     // The listing is the same text `render` emits, which carries no table and
     // so no terminal width, and a switched-off section is absent from it.
-    let listing = devrun
-        .as_ref()
-        .map(|loaded| Listing::of(loaded, settings, Path::new(&root), cwd));
+    let listing = devrun.as_ref().map(|loaded| Listing::of(loaded, settings));
 
     // One probe, two consumers: `status_table` probes liveness itself, so
     // hashing here and rendering there would take two probes, and a server
@@ -440,13 +435,13 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
 
     let locks = devrun.is_some() && settings.locks;
     let enforced = locks && devkit_common::harness::writes_enabled(checkout, cwd);
-    let (apps, tasks, has_tasks) = match listing {
-        Some(l) => (l.apps, l.tasks, l.has_tasks),
-        None => (None, None, false),
+    let (apps, tasks) = match listing {
+        Some(l) => (l.apps, l.tasks),
+        None => (None, None),
     };
     let facilities = Facilities {
         apps: apps.is_some(),
-        tasks: has_tasks,
+        tasks: tasks.is_some(),
         servers: !servers.is_empty(),
         locks,
         enforced,
@@ -510,7 +505,7 @@ fn fault_text(why: &str) -> String {
     out
 }
 
-fn render(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<String> {
+fn render(cwd: &Path, settings: &BriefConfig, checkout: &Checkout, cursor: bool) -> Option<String> {
     let root = checkout.root()?.to_string_lossy().into_owned();
 
     // Pins are computed before `load`: a devkit.toml carrying [docs] and
@@ -550,7 +545,7 @@ fn render(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<Str
         out.push_str(&devrun_text(sections));
     }
     if let Some(floor) = rules {
-        out.push_str(&rules_text(floor));
+        out.push_str(&rules_text(floor, cursor));
     }
     if let Some(section) = pins {
         out.push_str(&section);
@@ -601,8 +596,8 @@ fn rules_floor(checkout: &Checkout, cwd: &Path, settings: &BriefConfig) -> Optio
 /// What the write hook does with the index, as the reading host sees it. The
 /// hook injects before edit-tool writes only, so shell writes get nothing, and
 /// under Cursor, whose hooks never see an edit tool, nothing does.
-fn rules_text(floor: Severity) -> String {
-    let body = if cursor_host() {
+fn rules_text(floor: Severity, cursor: bool) -> String {
+    let body = if cursor {
         "This repository has a rule index. Cursor edits get no rules added automatically, so run \
          `devkit rules query --path <file>` before editing a file to see the rules that govern it."
             .to_string()
@@ -723,11 +718,10 @@ fn devrun_sections(
     settings: &BriefConfig,
 ) -> Option<DevrunBrief> {
     let loaded = devrun_project(checkout, root, cwd)?;
-    let listing = Listing::of(&loaded, settings, Path::new(root), cwd);
+    let listing = Listing::of(&loaded, settings);
     let sections = DevrunBrief {
         apps: listing.apps,
         tasks: listing.tasks,
-        has_tasks: listing.has_tasks,
         servers: live_servers(root),
         locks: settings.locks,
         enforced: settings.locks
@@ -807,37 +801,34 @@ impl TaskEntry {
         out
     }
 
-    /// The name alone, for an app line that lists its tasks without detail.
-    fn short(&self) -> String {
-        format!("{}{}", self.name, self.caveat())
-    }
-
-    /// What the agent would otherwise learn from a failed run.
+    /// The app it runs in, then what the agent would otherwise learn from a
+    /// failed run.
     fn caveat(&self) -> String {
+        let mut parts: Vec<String> = self.app.iter().map(|app| format!("app {app}")).collect();
         if self.invalid {
-            format!(" (invalid: `devkit config tasks {}` says why)", self.name)
-        } else if self.needs.is_empty() {
+            parts.push(format!(
+                "invalid: `devkit config tasks {}` says why",
+                self.name
+            ));
+        } else if !self.needs.is_empty() {
+            parts.push(format!("needs {}", self.needs.join(", ")));
+        }
+        if parts.is_empty() {
             String::new()
         } else {
-            format!(" (needs {})", self.needs.join(", "))
+            format!(" ({})", parts.join(", "))
         }
     }
 }
 
-/// The apps section and the task list, with an app's task descriptions shown
-/// only while the session works inside that app's directory.
-///
-/// Every other app's line names its tasks, so a monorepo's brief grows by a
-/// line per app rather than a line per task. The working directory decides
-/// this, so `--if-changed` hands the session an app's detail on moving into it.
+/// The apps section and the task list.
 struct Listing {
     apps: Option<String>,
     tasks: Option<String>,
-    has_tasks: bool,
 }
 
 impl Listing {
-    fn of(loaded: &load::Loaded, settings: &BriefConfig, root: &Path, cwd: &Path) -> Listing {
+    fn of(loaded: &load::Loaded, settings: &BriefConfig) -> Listing {
         let entries = if settings.tasks {
             TaskEntry::all(&loaded.config, &loaded.catalog)
         } else {
@@ -849,77 +840,21 @@ impl Listing {
             Vec::new()
         };
         apps.sort_by(|a, b| a.name.cmp(&b.name));
-        let here = current_app(&apps, root, cwd);
-        Listing::build(&entries, &apps, here)
+        Listing::build(&entries, &apps)
     }
 
-    /// `apps` sorted by name; `here` is the app the session works in.
-    fn build(entries: &[TaskEntry], apps: &[&App], here: Option<&str>) -> Listing {
-        let mut apps_text = String::new();
-        let mut placed = HashSet::new();
-        for app in apps {
-            let own: Vec<&TaskEntry> = entries
-                .iter()
-                .filter(|e| e.app.as_deref() == Some(app.name.as_str()))
-                .collect();
-            // An app rooted at the checkout itself has no directory to be
-            // inside, so its tasks read as the project's own.
-            if !has_directory(&app.path) {
-                apps_text.push_str(&format!("- {} ({})\n", app.name, app.path));
-                continue;
-            }
-            placed.extend(own.iter().map(|e| e.name.as_str()));
-            if own.is_empty() {
-                apps_text.push_str(&format!("- {} ({})\n", app.name, app.path));
-            } else if here == Some(app.name.as_str()) {
-                apps_text.push_str(&format!("- {} ({})\n", app.name, app.path));
-                for entry in own {
-                    apps_text.push_str(&format!("  {}\n", entry.line()));
-                }
-            } else {
-                let names: Vec<String> = own.iter().map(|e| e.short()).collect();
-                apps_text.push_str(&format!(
-                    "- {} ({}): {}\n",
-                    app.name,
-                    app.path,
-                    names.join(", ")
-                ));
-            }
-        }
-        let tasks_text: String = entries
+    /// `apps` sorted by name.
+    fn build(entries: &[TaskEntry], apps: &[&App]) -> Listing {
+        let apps_text: String = apps
             .iter()
-            .filter(|e| !placed.contains(e.name.as_str()))
-            .map(|e| format!("{}\n", e.line()))
+            .map(|app| format!("- {} ({})\n", app.name, app.path))
             .collect();
+        let tasks_text: String = entries.iter().map(|e| format!("{}\n", e.line())).collect();
         Listing {
             apps: (!apps_text.is_empty()).then_some(apps_text),
             tasks: (!tasks_text.is_empty()).then_some(tasks_text),
-            has_tasks: !entries.is_empty(),
         }
     }
-}
-
-/// Whether an app path names a directory below the checkout root. An app
-/// rooted at "." exists under every directory and proves nothing.
-fn has_directory(path: &str) -> bool {
-    Path::new(path)
-        .components()
-        .any(|c| matches!(c, std::path::Component::Normal(_)))
-}
-
-/// The app whose directory contains `cwd`, the innermost one when app
-/// directories nest. Git reports the root resolved while the process cwd keeps
-/// the spelling it was entered by (a symlink, a Windows 8.3 short name), so
-/// both are resolved before comparing. Each app directory is resolved whole
-/// because a resolved Windows path is verbatim, where `/` in a joined
-/// `apps/web` would not separate components.
-fn current_app<'a>(apps: &[&'a App], root: &Path, cwd: &Path) -> Option<&'a str> {
-    let resolve = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let cwd = resolve(cwd);
-    apps.iter()
-        .filter(|a| has_directory(&a.path) && cwd.starts_with(resolve(&root.join(&a.path))))
-        .max_by_key(|a| Path::new(&a.path).components().count())
-        .map(|a| a.name.as_str())
 }
 
 /// The port-registry rows held by this worktree, or `None` when it holds
@@ -1062,7 +997,6 @@ mod tests {
         DevrunBrief {
             apps: apps.map(str::to_string),
             tasks: tasks.map(str::to_string),
-            has_tasks: tasks.is_some(),
             servers: servers.map(str::to_string),
             locks,
             enforced: false,
@@ -1077,7 +1011,6 @@ mod tests {
         DevrunBrief {
             apps: apps.map(str::to_string),
             tasks: tasks.map(str::to_string),
-            has_tasks: tasks.is_some(),
             servers: servers.map(str::to_string),
             locks: true,
             enforced: true,
@@ -1174,40 +1107,24 @@ mod tests {
     }
 
     #[test]
-    fn other_apps_name_their_tasks_and_the_current_app_describes_them() {
+    fn every_task_is_listed_and_apps_list_none() {
         let (api, web) = (app("api", "apps/api"), app("web", "apps/web"));
         let entries = [
             entry("test", None, &[]),
             entry("migrate", Some("api"), &["`--arg env=...`"]),
-            entry("test-api", Some("api"), &[]),
             entry("e2e", Some("web"), &["`devrun up api`"]),
         ];
-        let listing = Listing::build(&entries, &[&api, &web], Some("web"));
-        let apps = listing.apps.unwrap();
+        let listing = Listing::build(&entries, &[&api, &web]);
         assert_eq!(
-            apps,
-            "- api (apps/api): migrate (needs `--arg env=...`), test-api\n\
-             - web (apps/web)\n  - e2e: e2e does things (needs `devrun up api`)\n"
+            listing.apps.unwrap(),
+            "- api (apps/api)\n- web (apps/web)\n"
         );
-        assert_eq!(listing.tasks.unwrap(), "- test: test does things\n");
-        assert!(listing.has_tasks);
-    }
-
-    #[test]
-    fn a_checkout_rooted_app_lists_its_tasks_with_the_project() {
-        let chrome = app("chrome", ".");
-        let entries = [entry("shot", Some("chrome"), &[])];
-        let listing = Listing::build(&entries, &[&chrome], None);
-        assert_eq!(listing.apps.unwrap(), "- chrome (.)\n");
-        assert_eq!(listing.tasks.unwrap(), "- shot: shot does things\n");
-    }
-
-    #[test]
-    fn with_the_apps_section_off_every_task_is_described() {
-        let entries = [entry("test-api", Some("api"), &[])];
-        let listing = Listing::build(&entries, &[], None);
-        assert!(listing.apps.is_none());
-        assert_eq!(listing.tasks.unwrap(), "- test-api: test-api does things\n");
+        assert_eq!(
+            listing.tasks.unwrap(),
+            "- test: test does things\n\
+             - migrate: migrate does things (app api, needs `--arg env=...`)\n\
+             - e2e: e2e does things (app web, needs `devrun up api`)\n"
+        );
     }
 
     #[test]
@@ -1217,42 +1134,6 @@ mod tests {
         assert_eq!(
             bad.line(),
             "- bad: bad does things (invalid: `devkit config tasks bad` says why)"
-        );
-    }
-
-    #[test]
-    fn the_current_app_is_the_innermost_directory_holding_the_cwd() {
-        let root = Path::new("/r");
-        let (outer, inner, dot) = (
-            app("outer", "apps"),
-            app("inner", "apps/web"),
-            app("dot", "."),
-        );
-        let apps = [&outer, &inner, &dot];
-        assert_eq!(
-            current_app(&apps, root, Path::new("/r/apps/web/src")),
-            Some("inner")
-        );
-        assert_eq!(
-            current_app(&apps, root, Path::new("/r/apps/x")),
-            Some("outer")
-        );
-        assert_eq!(current_app(&apps, root, Path::new("/r")), None);
-        assert_eq!(current_app(&apps, root, Path::new("/r/apps-old")), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_current_app_matches_across_spellings_of_the_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let real = tmp.path().join("real");
-        std::fs::create_dir_all(real.join("apps/web")).unwrap();
-        let link = tmp.path().join("link");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        let web = app("web", "apps/web");
-        assert_eq!(
-            current_app(&[&web], &link, &real.join("apps/web")),
-            Some("web")
         );
     }
 

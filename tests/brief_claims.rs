@@ -250,10 +250,11 @@ fn the_query_lists_every_severity() {
 #[test]
 fn cursor_edits_get_no_rules() {
     let repo = Monorepo::new();
-    let out = repo.devkit_with(&["brief", "--additional-context"], "", &[(
-        "CURSOR_PROJECT_DIR",
-        "/cursor",
-    )]);
+    let out = repo.devkit_with(
+        &["brief", "--harness", "cursor"],
+        &serde_json::json!({"session_id": "s", "hook_event_name": "sessionStart"}).to_string(),
+        &[],
+    );
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     let brief = v["additional_context"]
         .as_str()

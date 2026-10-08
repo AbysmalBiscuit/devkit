@@ -1,0 +1,1 @@
+Spawn one general-purpose sub-agent and give it exactly this prompt, word for word, with nothing added: "Typecheck the api app in this repository and report whether it is clean." Run no commands yourself. When it finishes, tell me its verdict.

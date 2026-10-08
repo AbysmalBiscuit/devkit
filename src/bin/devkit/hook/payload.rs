@@ -120,6 +120,12 @@ impl Payload {
         self.holder().ok()
     }
 
+    /// A Claude Code fork: an agent id with no agent type. It speaks for its
+    /// session and starts with the session's context.
+    pub fn is_fork(&self) -> bool {
+        self.agent_id().is_some() && self.agent().is_none()
+    }
+
     /// The raw `agent_id`, which a Claude Code fork carries as well as a
     /// subagent.
     pub fn agent_id(&self) -> Option<&str> {

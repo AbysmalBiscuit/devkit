@@ -1,6 +1,6 @@
 # Rules
 
-devkit injects a repository's coding rules into an agent's context: the rules governing a file arrive with the first structured write to it, and the repository's `must` rules arrive at session start. `repo-rules-agent` extracts the rules from the repository's agent docs. `devkit rules query`, `stats` and `context` read the same rules the hooks inject, and `devkit rules add`, `edit` and `remove` change them by hand. Each command's `-h` has its flags; `devkit schema` has every `[rules]` key. This file covers where the rules come from and how each source behaves.
+devkit injects a repository's coding rules into an agent's context: the rules governing a file arrive with the first structured write to it, and the repository's `must` rules arrive at session start and, under Claude Code and Codex, when a subagent starts. `repo-rules-agent` extracts the rules from the repository's agent docs. `devkit rules query`, `stats` and `context` read the same rules the hooks inject, and `devkit rules add`, `edit` and `remove` change them by hand. Each command's `-h` has its flags; `devkit schema` has every `[rules]` key. This file covers where the rules come from and how each source behaves.
 
 ## Sources
 

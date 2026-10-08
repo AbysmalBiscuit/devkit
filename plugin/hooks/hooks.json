@@ -77,6 +77,16 @@
         "hooks": [
           {
             "type": "command",
+            "command": "devkit brief --harness claude-code",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "devkit rules context --harness claude-code",
+            "timeout": 3
+          },
+          {
+            "type": "command",
             "command": "devkit hook subagent-start --harness claude-code"
           },
           {

@@ -1,0 +1,9 @@
+[apps.api]
+base_port = 47300
+path = "apps/api"
+launch = ["cargo", "run", "--quiet"]
+
+[tasks.api-check]
+app = "api"
+description = "Typecheck the api crate"
+run = ["cargo", "check", "--quiet"]
