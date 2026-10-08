@@ -393,6 +393,27 @@ fn every_hook_from_a_main_session_marks_it_seen() {
     }
 }
 
+#[test]
+fn a_main_stop_held_to_open_todos_marks_the_session_seen() {
+    let p = Proj::with_home_config("[todo]\nhold_stop = \"always\"\n");
+    let an_hour_ago = ("DEVKIT_TEST_CLOCK_SKEW_SECS", "-3600");
+    main_hook(&p, "S", "pre-tool-use", &[an_hour_ago]);
+    let id = todo(&p, &["add", "a"], &[an_hour_ago]);
+    todo(&p, &["start", &id], &[an_hour_ago]);
+
+    let payload = json!({"hook_event_name": "Stop", "session_id": "S", "cwd": p.path});
+    let out = p.hook_with("stop", "claude-code", &payload, &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains(r#""decision":"block""#),
+        "stop not held: {}",
+        stdout(&out)
+    );
+
+    let out = p.devkit(&["todo", "start", &id], &[AS_T]);
+    assert!(!out.status.success(), "T took over a held session's todo");
+}
+
 /// An hour on, by the clock of the process it is passed to.
 const AN_HOUR_LATER: (&str, &str) = ("DEVKIT_TEST_CLOCK_SKEW_SECS", "3600");
 const AS_T: (&str, &str) = ("CLAUDE_CODE_SESSION_ID", "T");
