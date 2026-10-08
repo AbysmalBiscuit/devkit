@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.14.16](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.15...v0.14.16) (2026-10-08)
+
+
+### Bug Fixes
+
+* **hooks:** record the agent type on subagent stops ([#307](https://github.com/AbysmalBiscuit/devkit/issues/307)) ([465dac9](https://github.com/AbysmalBiscuit/devkit/commit/465dac93db4e9d0b68460dfd7114757c0e681488))
+* **issue:** fetch merged PR heads before the end gate ([#301](https://github.com/AbysmalBiscuit/devkit/issues/301)) ([814899c](https://github.com/AbysmalBiscuit/devkit/commit/814899caed005ecb0a475990c47c379329221ffa))
+* **todo:** route outside-repo todos via role checkout ([#308](https://github.com/AbysmalBiscuit/devkit/issues/308)) ([2263aa7](https://github.com/AbysmalBiscuit/devkit/commit/2263aa7747b2cc5999a2eaaa5c6b9755c0fe37fd))
+* **todo:** take over claims of silent sessions ([#309](https://github.com/AbysmalBiscuit/devkit/issues/309)) ([78f2f97](https://github.com/AbysmalBiscuit/devkit/commit/78f2f9722bb7a792e13fb8048f923e314a06614e))
+
 ## [0.14.15](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.14...v0.14.15) (2026-10-08)
 
 

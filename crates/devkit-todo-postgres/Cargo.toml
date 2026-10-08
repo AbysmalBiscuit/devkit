@@ -2,7 +2,7 @@
 name = "devkit-todo-postgres"
 description = "Agent todo lists kept in a Postgres database, the single authority for every machine"
 edition.workspace = true
-version = "0.14.15" # x-release-please-version
+version = "0.14.16" # x-release-please-version
 
 [dependencies]
 anyhow.workspace = true
