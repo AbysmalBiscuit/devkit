@@ -62,6 +62,7 @@ devkit records each subagent run and each stretch a todo spends in progress, whe
 
 - A run starts at the subagent's start hook and ends at its stop. Without a stop it ends at its session's end. Without either, it ends as `lost` at the agent's last hook once the agent has been silent past a backstop, so no run stays open for good. Parallel runs, two of one type included, are told apart by agent id.
 - A run whose payload names no agent type, such as a Claude Code fork, stores none and reports as `subagent`.
+- Every stop is recorded, with its agent type when the payload names one. A stop with no recorded start is not a subagent run: it is Claude Code's turn-end agent, which Claude Code runs after each turn without firing a start hook. `devkit activity` reports no run for it, and counting runs from the raw `subagent_start` and `subagent_stop` rows means counting starts, not stops.
 - An interval starts when a holder claims a todo and ends `completed`, `cancelled`, `released` (stopped, or released when its holder ended), or `handed` when another holder takes it over, whose own interval starts there.
 - Only what devkit sees is recorded. A todo started with `task start` or in alacritree has no interval, and Cursor runs are not recorded because its manifest wires no subagent start.
 
