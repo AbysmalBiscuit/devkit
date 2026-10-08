@@ -313,7 +313,13 @@ pub(crate) fn check_claims(
     }
     let (checkout, cwd) = (checkout.clone(), cwd.to_path_buf());
     let check = move || {
-        let store = Store::for_hook(&checkout, &cwd);
+        let anchor = anchored(&checkout, &actor);
+        let cwd = if anchor.dir() == checkout.dir() {
+            cwd.as_path()
+        } else {
+            anchor.dir()
+        };
+        let store = Store::for_hook(&anchor, cwd);
         edits.into_iter().find_map(|(to, id)| {
             let todo = store.get(&id).ok()??;
             let Claimed { by } = transition(&todo.status, to, &actor).err()?;
