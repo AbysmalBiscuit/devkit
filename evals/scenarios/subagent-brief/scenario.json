@@ -1,0 +1,11 @@
+{
+  "max_turns": 8,
+  "checks": [
+    {"id": "delegates-verbatim", "call": "Agent", "match": "\"prompt\":\"Typecheck the api app in this repository and report whether it is clean\\.\""},
+    {"id": "runs-the-app-task", "call": "Bash", "match": "(^|[;&|] *)devrun task api-check( |;|$)"},
+    {"id": "never-runs-cargo", "call": "Bash", "match": "cargo (check|build|clippy|test)", "absent": true},
+    {"id": "never-reads-the-config", "call": "Bash", "match": "devkit\\.toml", "absent": true},
+    {"id": "never-lists-the-tasks", "call": "Bash", "match": "(^|[;&|] *)devrun task *(2>&1)? *($|[;&|])", "absent": true},
+    {"id": "reports-clean", "reply": "clean"}
+  ]
+}
