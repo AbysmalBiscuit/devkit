@@ -56,6 +56,7 @@ fn observe(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path)
         (HookEvent::SubagentStop, Some(agent)) => record(What::SubagentStop {
             session: session.clone(),
             agent: agent.clone(),
+            agent_type: payload.agent_type().map(str::to_string),
         })
         .and_then(|()| log.forget(&session, Some(&agent))),
         (_, Some(agent)) => log.seen(&session, &agent),

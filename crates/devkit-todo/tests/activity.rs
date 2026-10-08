@@ -86,3 +86,14 @@ fn a_session_reads_ended_silent_or_active_by_its_last_sign_of_life() {
     assert_eq!(state("active.3/a1"), Some(SessionState::Active));
     assert_eq!(state("unknown"), None);
 }
+
+#[test]
+fn a_stop_row_without_an_agent_type_parses() {
+    let row = r#"{"at":"2026-01-01T00:00:00Z","event":"subagent_stop","session":"s","agent":"a1"}"#;
+    let event: Event = serde_json::from_str(row).unwrap();
+    assert_eq!(event.what, What::SubagentStop {
+        session: "s".into(),
+        agent: "a1".into(),
+        agent_type: None,
+    });
+}
