@@ -6,7 +6,7 @@ pub(crate) mod queue;
 pub(crate) mod store;
 pub(crate) mod sync;
 
-use std::{collections::BTreeSet, path::Path};
+use std::{cell::LazyCell, collections::BTreeSet, path::Path};
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand, ValueEnum, builder::TypedValueParser as _};
@@ -238,15 +238,18 @@ pub fn run(cli: TodoCli) -> Result<()> {
             println!("{}", devkit_todo::short_id(&id));
         }
         TodoCommand::Start { ids } => {
-            let gone = |holder: &Holder| {
+            let activity = LazyCell::new(|| {
                 Store::activity_for_cli(&cwd)
                     .and_then(|log| log.read_now())
-                    .is_ok_and(|activity| {
-                        matches!(
-                            activity.session_state(holder),
-                            Some(SessionState::Ended { .. } | SessionState::Silent { .. })
-                        )
-                    })
+                    .ok()
+            });
+            let gone = |holder: &Holder| {
+                activity.as_ref().is_some_and(|activity| {
+                    matches!(
+                        activity.session_state(holder),
+                        Some(SessionState::Ended { .. } | SessionState::Silent { .. })
+                    )
+                })
             };
             start(&store, ids, &actor, gone)?
         }
