@@ -732,7 +732,6 @@ dependencies = [
  "devkit-common",
  "devkit-config",
  "devkit-postgres",
- "devkit-rules",
  "devkit-supabase",
  "glob",
  "ring",

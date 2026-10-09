@@ -1,53 +1,66 @@
 //! A remote source read through its cache: when a refresh pulls, what a
-//! failed one leaves, and what reads and edits see.
+//! failed one leaves, and what reads and edits see. The remote is the
+//! `supabase` source over a scripted Data API.
 
-use std::{
-    cell::{Cell, RefCell},
-    path::Path,
-};
+#[path = "common/fakeapi.rs"]
+mod fakeapi;
+
+use std::{path::Path, sync::Arc, time::Duration};
 
 use devkit_rules::{
     cache::{CacheKey, RuleCache},
     edit::Fields,
     model::RuleIndex,
-    remote::{FakeRemote, Remote},
+    remote::Remote,
     source::{CachedSource, RuleSource},
+    supabase::SupabaseSource,
 };
+use devkit_supabase::{Api, Auth, fakehttp::FakeServer};
+use serde_json::Value;
 
 const INDEX: &str = include_str!("fixtures/index.json");
+const REPO: &str = "0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10";
 
 fn index() -> RuleIndex {
     serde_json::from_str(INDEX).unwrap()
 }
 
-fn source(dir: &Path) -> CachedSource {
-    source_at(dir, "/clones/one")
+/// The fixture's live rules as `query_rules` returns them.
+fn rules() -> Vec<Value> {
+    fakeapi::payloads(&index())
 }
 
-/// A source describing the clone at `checkout`, its cache under `dir`.
-fn source_at(dir: &Path, checkout: &str) -> CachedSource {
+fn source(dir: &Path, server: &FakeServer) -> CachedSource {
+    source_at(dir, server, "/clones/one")
+}
+
+/// A source over `server` describing the clone at `checkout`, its cache
+/// under `dir`.
+fn source_at(dir: &Path, server: &FakeServer, checkout: &str) -> CachedSource {
     let cache = RuleCache::at_state_dir(dir, CacheKey {
-        kind: "postgres",
-        repository: "a".to_string(),
+        kind: "supabase",
+        repository: REPO.to_string(),
         source: "fake".to_string(),
     });
-    CachedSource::new(
-        cache,
-        Remote::Fake(FakeRemote {
-            checkout: checkout.to_string(),
-            revision: Cell::new(1),
-            index: RefCell::new(index()),
-            fail: Cell::new(false),
-            pulls: Cell::new(0),
-        }),
+    let api = Api::new(
+        &server.url(),
+        "repo_rules_api",
+        Auth::None,
+        Duration::from_secs(5),
+        "rules API",
     )
+    .unwrap();
+    let remote = SupabaseSource::new(Arc::new(api), Some(REPO), Path::new(checkout));
+    CachedSource::new(cache, Remote::Supabase(remote))
 }
 
-fn fake(source: &CachedSource) -> &FakeRemote {
-    match source.remote() {
-        Remote::Fake(fake) => fake,
-        _ => unreachable!("a fake remote"),
-    }
+/// How many pulls `server` has served.
+fn pulls(server: &FakeServer) -> usize {
+    server
+        .requests()
+        .iter()
+        .filter(|r| r.path_and_query.ends_with("/query_rules"))
+        .count()
 }
 
 fn titles(index: &RuleIndex) -> Vec<String> {
@@ -56,8 +69,13 @@ fn titles(index: &RuleIndex) -> Vec<String> {
 
 #[test]
 fn unchanged_revision_pulls_nothing() {
+    let server = FakeServer::start(vec![
+        (200, fakeapi::stats(1)),
+        (200, fakeapi::page(1, &rules(), None)),
+        (200, fakeapi::stats(1)),
+    ]);
     let dir = tempfile::tempdir().unwrap();
-    let source = source(dir.path());
+    let source = source(dir.path(), &server);
     let first = source.refresh(false).unwrap();
     assert!(first.pulled);
     assert_eq!(first.revision, 1);
@@ -65,17 +83,20 @@ fn unchanged_revision_pulls_nothing() {
     let second = source.refresh(false).unwrap();
     assert!(!second.pulled);
     assert_eq!(second.rules, index().rules.len());
-    assert_eq!(fake(&source).pulls.get(), 1);
+    assert_eq!(pulls(&server), 1);
 }
 
 #[test]
 fn changed_revision_replaces_the_cache() {
+    let server = FakeServer::start(vec![
+        (200, fakeapi::stats(1)),
+        (200, fakeapi::page(1, &rules(), None)),
+        (200, fakeapi::stats(2)),
+        (200, fakeapi::page(2, &rules()[..1], None)),
+    ]);
     let dir = tempfile::tempdir().unwrap();
-    let source = source(dir.path());
+    let source = source(dir.path(), &server);
     source.refresh(false).unwrap();
-    let fake = fake(&source);
-    fake.revision.set(2);
-    fake.index.borrow_mut().rules.truncate(1);
     assert!(source.refresh(false).unwrap().pulled);
     assert_eq!(source.read().unwrap().unwrap().rules.len(), 1);
     assert_eq!(source.cache().meta().unwrap().revision, 2);
@@ -83,21 +104,35 @@ fn changed_revision_replaces_the_cache() {
 
 #[test]
 fn failed_pull_keeps_the_old_cache() {
+    let server = FakeServer::start(vec![
+        (200, fakeapi::stats(1)),
+        (200, fakeapi::page(1, &rules(), None)),
+        (200, fakeapi::stats(2)),
+        (500, serde_json::json!({"message": "down"})),
+    ]);
     let dir = tempfile::tempdir().unwrap();
-    let source = source(dir.path());
+    let source = source(dir.path(), &server);
     source.refresh(false).unwrap();
-    let fake = fake(&source);
-    fake.revision.set(2);
-    fake.index.borrow_mut().rules.truncate(1);
-    fake.fail.set(true);
     source.refresh(false).unwrap_err();
     assert_eq!(titles(&source.read().unwrap().unwrap()), titles(&index()));
+    assert_eq!(source.cache().meta().unwrap().revision, 1);
 }
 
 #[test]
 fn edit_refreshes_the_cache() {
+    let mut renamed = rules();
+    renamed[0]["title"] = "Renamed".into();
+    let key = renamed[0]["rule_key"].as_str().unwrap().to_string();
+    let server = FakeServer::start(vec![
+        (200, fakeapi::stats(1)),
+        (200, fakeapi::page(1, &rules(), None)),
+        (200, fakeapi::page(1, &rules(), None)),
+        (200, fakeapi::put(2, &key)),
+        (200, fakeapi::stats(2)),
+        (200, fakeapi::page(2, &renamed, None)),
+    ]);
     let dir = tempfile::tempdir().unwrap();
-    let source = source(dir.path());
+    let source = source(dir.path(), &server);
     source.refresh(false).unwrap();
     let id = index().rules[0].id.clone();
     let fields = Fields {
@@ -111,36 +146,51 @@ fn edit_refreshes_the_cache() {
 
 #[test]
 fn no_cache_reads_the_remote_and_writes_nothing() {
+    let server = FakeServer::start(vec![(200, fakeapi::page(1, &rules(), None))]);
     let dir = tempfile::tempdir().unwrap();
-    let source = source(dir.path());
+    let source = source(dir.path(), &server);
     assert_eq!(titles(&source.read().unwrap().unwrap()), titles(&index()));
     assert!(!source.cache().path().exists());
 }
 
 #[test]
 fn cache_another_clone_filled_reads_as_this_clone() {
+    let server = FakeServer::start(vec![
+        (200, fakeapi::stats(1)),
+        (200, fakeapi::page(1, &rules(), None)),
+    ]);
+    let down = FakeServer::start(Vec::new());
     let dir = tempfile::tempdir().unwrap();
-    source_at(dir.path(), "/clones/one").refresh(false).unwrap();
-    let other = source_at(dir.path(), "/clones/two");
-    fake(&other).fail.set(true);
+    source_at(dir.path(), &server, "/clones/one")
+        .refresh(false)
+        .unwrap();
+    let other = source_at(dir.path(), &down, "/clones/two");
     assert_eq!(other.read().unwrap().unwrap().repo, "/clones/two");
+    assert!(down.requests().is_empty());
 }
 
 #[test]
 fn force_pulls_at_the_same_revision() {
+    let server = FakeServer::start(vec![
+        (200, fakeapi::stats(1)),
+        (200, fakeapi::page(1, &rules(), None)),
+        (200, fakeapi::stats(1)),
+        (200, fakeapi::page(1, &rules(), None)),
+    ]);
     let dir = tempfile::tempdir().unwrap();
-    let source = source(dir.path());
+    let source = source(dir.path(), &server);
     source.refresh(false).unwrap();
     assert!(source.refresh(true).unwrap().pulled);
-    assert_eq!(fake(&source).pulls.get(), 2);
+    assert_eq!(pulls(&server), 2);
 }
 
 #[test]
 fn location_names_the_remote_and_the_cache() {
+    let server = FakeServer::start(Vec::new());
     let dir = tempfile::tempdir().unwrap();
-    let source = source(dir.path());
+    let source = source(dir.path(), &server);
     let location = source.location();
-    assert!(location.contains("fake"), "{location}");
+    assert!(location.contains(&server.url()), "{location}");
     assert!(
         location.contains(&source.cache().path().display().to_string()),
         "{location}"
