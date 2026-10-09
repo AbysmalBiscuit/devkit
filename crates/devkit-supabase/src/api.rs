@@ -371,9 +371,9 @@ impl Api {
 }
 
 /// `url` without surrounding space or a trailing `/`, an https URL naming a
-/// project and nothing else, or an http one on a loopback host. A user, password, query or fragment
-/// is refused, since the URL appears in errors and output and any of them
-/// can carry a credential, and no error repeats the URL.
+/// project and nothing else, or an http one on a loopback host. A user,
+/// password, query or fragment is refused, since the URL appears in errors and
+/// output and any of them can carry a credential, and no error repeats the URL.
 pub(crate) fn project_url(url: &str, label: &str) -> Result<String> {
     let url = url.trim().trim_end_matches('/');
     let parsed =
