@@ -20,7 +20,7 @@ use devkit_rules::{
     model::RuleIndex,
     postgres::Database,
     query, repo_config,
-    source::{RuleSource, Source, repo_of},
+    source::{Refresh, RuleSource, Source, repo_of},
     vocab::{self, Scope, Severity, Task},
 };
 use devkit_supabase::{
@@ -250,7 +250,7 @@ pub(crate) fn open_api(
 /// Refreshes `source`'s cache when the remote's revision changed. A failure
 /// is one line on stderr, and the cache stays as it was for the read after.
 fn refresh_quietly(source: &Source) {
-    if let Some(Err(e)) = source.refresh(false) {
+    if let Some(Err(e)) = source.refresh(Refresh::IfChanged) {
         let line = format!("{e:#}").replace(['\r', '\n'], " ");
         eprintln!("devkit: {line}");
     }
@@ -353,9 +353,11 @@ pub enum RulesCommand {
     /// Refresh the local cache of a remote rules source.
     ///
     /// Reads every rule from the `postgres` or `supabase` source into the
-    /// cache the hooks read, whatever revision the cache holds, and prints
-    /// the revision and how many rules it holds. Session start refreshes
-    /// the cache on its own when the remote's revision changed.
+    /// cache the hooks read, replacing it whatever revision it holds, and
+    /// prints the revision and how many rules it holds. Session start
+    /// refreshes the cache on its own when the remote's revision changed,
+    /// but never over a later revision; run this when the remote's revision
+    /// went backwards, such as after its database was recreated.
     Pull,
 }
 
@@ -611,7 +613,7 @@ pub fn run(cli: RulesCli) -> Result<()> {
 
 fn pull_cmd() -> Result<()> {
     let here = Here::resolve(None)?;
-    let Some(refreshed) = here.source.refresh(true) else {
+    let Some(refreshed) = here.source.refresh(Refresh::Pull) else {
         anyhow::bail!("rules source `file` has no cache to pull");
     };
     let refreshed = refreshed?;

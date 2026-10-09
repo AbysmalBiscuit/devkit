@@ -64,6 +64,18 @@ pub struct Meta {
     pub pulled_at: i64,
 }
 
+/// What a write does when the cache already holds a later revision than
+/// the one written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Write {
+    /// Replace it anyway, for an explicit pull: a remote whose revision went
+    /// backwards, such as a recreated database, is still the truth.
+    Replace,
+    /// Leave it, for refreshes that may race: the slower of two may hold an
+    /// older pull, which must not replace the newer one already written.
+    KeepNewer,
+}
+
 /// One cache file, holding one repository's rules from one source kind.
 #[derive(Clone, Debug)]
 pub struct RuleCache {
@@ -109,9 +121,9 @@ impl RuleCache {
         Ok(Some(RuleIndex { repo, files, rules }))
     }
 
-    /// Replaces the cache with `index`, read at `revision`, unless the cache
-    /// already holds a later revision.
-    pub fn write(&self, revision: i64, index: &RuleIndex) -> Result<()> {
+    /// Replaces the cache with `index`, read at `revision`, unless `mode` is
+    /// [`Write::KeepNewer`] and the cache already holds a later revision.
+    pub fn write(&self, mode: Write, revision: i64, index: &RuleIndex) -> Result<()> {
         let writing = || format!("writing the rules cache {}", self.path.display());
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).with_context(writing)?;
@@ -123,11 +135,10 @@ impl RuleCache {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .with_context(writing)?;
-        // Two sessions can refresh at once; the slower may hold an older
-        // pull, which must not replace the newer one already written.
-        if self
-            .read_meta(&tx)?
-            .is_some_and(|(meta, _)| meta.revision > revision)
+        if mode == Write::KeepNewer
+            && self
+                .read_meta(&tx)?
+                .is_some_and(|(meta, _)| meta.revision > revision)
         {
             return Ok(());
         }

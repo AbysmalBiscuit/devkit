@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use devkit_rules::{
-    cache::{CacheKey, RuleCache},
+    cache::{CacheKey, RuleCache, Write},
     model::RuleIndex,
 };
 use serde_json::Value;
@@ -35,7 +35,7 @@ fn value(index: &RuleIndex) -> Value {
 fn round_trips_the_index() {
     let dir = tempfile::tempdir().unwrap();
     let cache = cache(dir.path(), "a");
-    cache.write(7, &index()).unwrap();
+    cache.write(Write::Replace, 7, &index()).unwrap();
     assert_eq!(value(&cache.read().unwrap().unwrap()), value(&index()));
     let meta = cache.meta().unwrap();
     assert_eq!(meta.revision, 7);
@@ -48,10 +48,22 @@ fn an_older_pull_leaves_a_newer_cache() {
     let cache = cache(dir.path(), "a");
     let mut older = index();
     older.rules.truncate(1);
-    cache.write(8, &index()).unwrap();
-    cache.write(7, &older).unwrap();
+    cache.write(Write::Replace, 8, &index()).unwrap();
+    cache.write(Write::KeepNewer, 7, &older).unwrap();
     assert_eq!(cache.meta().unwrap().revision, 8);
     assert_eq!(value(&cache.read().unwrap().unwrap()), value(&index()));
+}
+
+#[test]
+fn a_replacing_write_overwrites_a_newer_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = cache(dir.path(), "a");
+    let mut older = index();
+    older.rules.truncate(1);
+    cache.write(Write::Replace, 8, &index()).unwrap();
+    cache.write(Write::Replace, 3, &older).unwrap();
+    assert_eq!(cache.meta().unwrap().revision, 3);
+    assert_eq!(value(&cache.read().unwrap().unwrap()), value(&older));
 }
 
 #[test]
@@ -66,7 +78,9 @@ fn missing_file_reads_as_none() {
 #[test]
 fn meta_for_another_repository_reads_as_no_cache() {
     let dir = tempfile::tempdir().unwrap();
-    cache(dir.path(), "a").write(1, &index()).unwrap();
+    cache(dir.path(), "a")
+        .write(Write::Replace, 1, &index())
+        .unwrap();
     let other = cache(dir.path(), "b");
     assert!(other.meta().is_none());
     assert!(other.read().unwrap().is_none());
@@ -89,11 +103,13 @@ fn meta_from_another_remote_reads_as_no_cache() {
             ..key("a")
         })
     };
-    from("db.example:5432/rules").write(1, &index()).unwrap();
+    from("db.example:5432/rules")
+        .write(Write::Replace, 1, &index())
+        .unwrap();
     let other = from("other.example:5432/rules");
     assert!(other.meta().is_none());
     assert!(other.read().unwrap().is_none());
-    other.write(2, &index()).unwrap();
+    other.write(Write::Replace, 2, &index()).unwrap();
     assert_eq!(other.meta().unwrap().revision, 2);
     assert!(from("db.example:5432/rules").meta().is_none());
 }
@@ -102,14 +118,14 @@ fn meta_from_another_remote_reads_as_no_cache() {
 fn unknown_format_reads_as_none() {
     let dir = tempfile::tempdir().unwrap();
     let cache = cache(dir.path(), "a");
-    cache.write(1, &index()).unwrap();
+    cache.write(Write::Replace, 1, &index()).unwrap();
     rusqlite::Connection::open(cache.path())
         .unwrap()
         .execute("UPDATE meta SET format = 99", [])
         .unwrap();
     assert!(cache.meta().is_none());
     assert!(cache.read().unwrap().is_none());
-    cache.write(2, &index()).unwrap();
+    cache.write(Write::Replace, 2, &index()).unwrap();
     assert!(cache.read().unwrap().is_some());
     assert_eq!(cache.meta().unwrap().revision, 2);
 }
@@ -148,14 +164,16 @@ fn concurrent_refreshes_leave_one_whole_index() {
     second.rules.truncate(2);
     second.rules[0].title = "Changed".to_string();
     let (a, b) = (value(&first), value(&second));
-    cache(dir.path(), "a").write(0, &first).unwrap();
+    cache(dir.path(), "a")
+        .write(Write::Replace, 0, &first)
+        .unwrap();
     std::thread::scope(|s| {
         for (n, written) in [(1, &first), (2, &second)] {
             let path = dir.path();
             s.spawn(move || {
                 let cache = cache(path, "a");
                 for _ in 0..20 {
-                    if let Err(e) = cache.write(n, written) {
+                    if let Err(e) = cache.write(Write::Replace, n, written) {
                         assert!(is_busy(&e), "a write failed other than busy: {e:#}");
                     }
                 }

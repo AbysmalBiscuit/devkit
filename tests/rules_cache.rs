@@ -240,6 +240,42 @@ fn pull_prints_revision_and_count() {
     assert_eq!(rest.trim_end(), "10 rules", "{text}");
 }
 
+/// The revision `devkit rules pull` printed.
+fn pulled_revision(out: &Output) -> i64 {
+    let text = stdout(out);
+    let (_, tail) = text.split_once("revision ").expect("a revision");
+    let (revision, _) = tail.split_once(", ").expect("a count");
+    revision.trim().parse().expect("a numeric revision")
+}
+
+#[test]
+fn pull_replaces_a_cache_ahead_of_the_remote() {
+    let Some((store, repo)) = imported() else {
+        return;
+    };
+    let p = Proj::reading(&repo);
+    let env = [(DATABASE_VAR, store.url.as_str())];
+    let out = p.devkit(&["rules", "pull"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let remote = pulled_revision(&out);
+
+    let cache = p.cache_dir().join(format!("postgres-{repo}.sqlite"));
+    let ahead = remote + 5;
+    rusqlite::Connection::open(&cache)
+        .unwrap()
+        .execute("UPDATE meta SET revision = ?1", [ahead])
+        .unwrap();
+
+    let out = p.devkit(&["rules", "pull"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(pulled_revision(&out), remote, "{}", stdout(&out));
+    let held: i64 = rusqlite::Connection::open(&cache)
+        .unwrap()
+        .query_row("SELECT revision FROM meta", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(held, remote);
+}
+
 #[test]
 fn pull_fails_naming_an_unreachable_database() {
     let p = Proj::reading("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");

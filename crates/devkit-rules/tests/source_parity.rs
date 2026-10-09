@@ -25,7 +25,7 @@ use devkit_rules::{
     postgres::{Database, PostgresSource},
     query::{self, Filter},
     remote::Remote,
-    source::{CachedSource, RuleSource, Source},
+    source::{CachedSource, Refresh, RuleSource, Source},
     sqlite::SqliteSource,
     supabase::SupabaseSource,
     vocab::{Scope, Severity, Task},
@@ -70,7 +70,7 @@ fn sources(dir: &Path) -> (Option<TestStore>, Vec<(&'static str, Source)>) {
         source: "rules database".to_string(),
     });
     let cached = CachedSource::new(cache, Remote::Postgres(postgres));
-    cached.refresh(false).unwrap();
+    cached.refresh(Refresh::IfChanged).unwrap();
     sources.push(("postgres", Source::Cached(cached)));
     (Some(store), sources)
 }
@@ -99,7 +99,7 @@ fn supabase(dir: &Path, export: &Value) -> Source {
         source: server.url(),
     });
     let cached = CachedSource::new(cache, Remote::Supabase(remote));
-    cached.refresh(false).unwrap();
+    cached.refresh(Refresh::IfChanged).unwrap();
     Source::Cached(cached)
 }
 

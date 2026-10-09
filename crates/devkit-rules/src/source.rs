@@ -13,7 +13,7 @@ use devkit_config::{RulesConfig, RulesPostgresConfig, RulesSource, RulesSupabase
 use devkit_supabase::Api;
 
 use crate::{
-    cache::{CacheKey, RuleCache},
+    cache::{CacheKey, RuleCache, Write},
     edit::Fields,
     index::{FileSource, cache_dir},
     model::RuleIndex,
@@ -141,12 +141,27 @@ impl Source {
 
     /// Refreshes a cached source's cache, as [`CachedSource::refresh`] does;
     /// `None` for a source with no cache.
-    pub fn refresh(&self, force: bool) -> Option<Result<Refreshed>> {
+    pub fn refresh(&self, how: Refresh) -> Option<Result<Refreshed>> {
         match self {
             Source::Json(_) | Source::Sqlite(_) => None,
-            Source::Cached(source) => Some(source.refresh(force)),
+            Source::Cached(source) => Some(source.refresh(how)),
         }
     }
+}
+
+/// When a refresh pulls, and what its pull may replace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refresh {
+    /// Pull only when there is no cache or the remote's revision differs
+    /// from the cached one, keeping a cache at a later revision: session
+    /// start and the commands that read rules.
+    IfChanged,
+    /// Always pull, keeping a cache at a later revision: after an edit.
+    AfterEdit,
+    /// Always pull and replace the cache, whatever revision it holds:
+    /// `devkit rules pull`, the recovery for a remote whose revision went
+    /// backwards.
+    Pull,
 }
 
 /// What a refresh found.
@@ -193,12 +208,11 @@ impl CachedSource {
         &self.remote
     }
 
-    /// Pulls the remote's rules into the cache when `force` is set, there is
-    /// no cache, or the remote's revision differs from the cached one. A
-    /// failure leaves the cache as it was.
-    pub fn refresh(&self, force: bool) -> Result<Refreshed> {
+    /// Pulls the remote's rules into the cache as `how` says. A failure
+    /// leaves the cache as it was.
+    pub fn refresh(&self, how: Refresh) -> Result<Refreshed> {
         let revision = self.remote.revision()?;
-        if !force
+        if how == Refresh::IfChanged
             && self.cache.meta().is_some_and(|m| m.revision == revision)
             && let Some(index) = self.cache.read()?
         {
@@ -209,7 +223,11 @@ impl CachedSource {
             });
         }
         let (revision, index) = self.remote.pull()?;
-        self.cache.write(revision, &index)?;
+        let mode = match how {
+            Refresh::Pull => Write::Replace,
+            Refresh::IfChanged | Refresh::AfterEdit => Write::KeepNewer,
+        };
+        self.cache.write(mode, revision, &index)?;
         Ok(Refreshed {
             revision,
             rules: index.rules.len(),
@@ -220,7 +238,7 @@ impl CachedSource {
     /// Refreshes the cache after an edit, which has already succeeded, so a
     /// failure is one line on stderr.
     fn refresh_after_edit(&self) {
-        if let Err(e) = self.refresh(true) {
+        if let Err(e) = self.refresh(Refresh::AfterEdit) {
             report(&e.context("the edit is made, but refreshing the rules cache failed"));
         }
     }

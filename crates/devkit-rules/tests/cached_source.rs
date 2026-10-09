@@ -12,7 +12,7 @@ use devkit_rules::{
     edit::Fields,
     model::RuleIndex,
     remote::Remote,
-    source::{CachedSource, RuleSource},
+    source::{CachedSource, Refresh, RuleSource},
     supabase::SupabaseSource,
 };
 use devkit_supabase::{Api, Auth, fakehttp::FakeServer};
@@ -76,11 +76,11 @@ fn unchanged_revision_pulls_nothing() {
     ]);
     let dir = tempfile::tempdir().unwrap();
     let source = source(dir.path(), &server);
-    let first = source.refresh(false).unwrap();
+    let first = source.refresh(Refresh::IfChanged).unwrap();
     assert!(first.pulled);
     assert_eq!(first.revision, 1);
     assert_eq!(first.rules, index().rules.len());
-    let second = source.refresh(false).unwrap();
+    let second = source.refresh(Refresh::IfChanged).unwrap();
     assert!(!second.pulled);
     assert_eq!(second.rules, index().rules.len());
     assert_eq!(pulls(&server), 1);
@@ -96,8 +96,8 @@ fn changed_revision_replaces_the_cache() {
     ]);
     let dir = tempfile::tempdir().unwrap();
     let source = source(dir.path(), &server);
-    source.refresh(false).unwrap();
-    assert!(source.refresh(false).unwrap().pulled);
+    source.refresh(Refresh::IfChanged).unwrap();
+    assert!(source.refresh(Refresh::IfChanged).unwrap().pulled);
     assert_eq!(source.read().unwrap().unwrap().rules.len(), 1);
     assert_eq!(source.cache().meta().unwrap().revision, 2);
 }
@@ -112,8 +112,8 @@ fn failed_pull_keeps_the_old_cache() {
     ]);
     let dir = tempfile::tempdir().unwrap();
     let source = source(dir.path(), &server);
-    source.refresh(false).unwrap();
-    source.refresh(false).unwrap_err();
+    source.refresh(Refresh::IfChanged).unwrap();
+    source.refresh(Refresh::IfChanged).unwrap_err();
     assert_eq!(titles(&source.read().unwrap().unwrap()), titles(&index()));
     assert_eq!(source.cache().meta().unwrap().revision, 1);
 }
@@ -133,7 +133,7 @@ fn edit_refreshes_the_cache() {
     ]);
     let dir = tempfile::tempdir().unwrap();
     let source = source(dir.path(), &server);
-    source.refresh(false).unwrap();
+    source.refresh(Refresh::IfChanged).unwrap();
     let id = index().rules[0].id.clone();
     let fields = Fields {
         title: Some("Renamed".to_string()),
@@ -162,7 +162,7 @@ fn cache_another_clone_filled_reads_as_this_clone() {
     let down = FakeServer::start(Vec::new());
     let dir = tempfile::tempdir().unwrap();
     source_at(dir.path(), &server, "/clones/one")
-        .refresh(false)
+        .refresh(Refresh::IfChanged)
         .unwrap();
     let other = source_at(dir.path(), &down, "/clones/two");
     assert_eq!(other.read().unwrap().unwrap().repo, "/clones/two");
@@ -179,8 +179,8 @@ fn force_pulls_at_the_same_revision() {
     ]);
     let dir = tempfile::tempdir().unwrap();
     let source = source(dir.path(), &server);
-    source.refresh(false).unwrap();
-    assert!(source.refresh(true).unwrap().pulled);
+    source.refresh(Refresh::IfChanged).unwrap();
+    assert!(source.refresh(Refresh::Pull).unwrap().pulled);
     assert_eq!(pulls(&server), 2);
 }
 
