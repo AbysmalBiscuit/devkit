@@ -109,7 +109,8 @@ impl RuleCache {
         Ok(Some(RuleIndex { repo, files, rules }))
     }
 
-    /// Replaces the cache with `index`, read at `revision`.
+    /// Replaces the cache with `index`, read at `revision`, unless the cache
+    /// already holds a later revision.
     pub fn write(&self, revision: i64, index: &RuleIndex) -> Result<()> {
         let writing = || format!("writing the rules cache {}", self.path.display());
         if let Some(dir) = self.path.parent() {
@@ -122,6 +123,14 @@ impl RuleCache {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .with_context(writing)?;
+        // Two sessions can refresh at once; the slower may hold an older
+        // pull, which must not replace the newer one already written.
+        if self
+            .read_meta(&tx)?
+            .is_some_and(|(meta, _)| meta.revision > revision)
+        {
+            return Ok(());
+        }
         tx.execute_batch(LAYOUT).with_context(writing)?;
         tx.execute(
             "INSERT INTO meta

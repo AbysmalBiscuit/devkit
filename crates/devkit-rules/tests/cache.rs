@@ -43,6 +43,18 @@ fn round_trips_the_index() {
 }
 
 #[test]
+fn an_older_pull_leaves_a_newer_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = cache(dir.path(), "a");
+    let mut older = index();
+    older.rules.truncate(1);
+    cache.write(8, &index()).unwrap();
+    cache.write(7, &older).unwrap();
+    assert_eq!(cache.meta().unwrap().revision, 8);
+    assert_eq!(value(&cache.read().unwrap().unwrap()), value(&index()));
+}
+
+#[test]
 fn missing_file_reads_as_none() {
     let dir = tempfile::tempdir().unwrap();
     let cache = cache(dir.path(), "a");
