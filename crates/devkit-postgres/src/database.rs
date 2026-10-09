@@ -86,10 +86,10 @@ impl Database {
     pub fn new(url: &str, wait: Duration, trust: &Trust, label: &'static str) -> Result<Database> {
         let config = crate::config(url).map_err(|e| {
             let error = anyhow!("the {label} URL does not parse");
-            // A URL's parse errors name an option or a byte offset. Those of
-            // libpq's `key=value` form can repeat a word of an unquoted
-            // value, which may be the password.
-            let url = url.trim_start();
+            // A URL's parse errors name an option or a byte offset. Anything
+            // not starting with the scheme, leading space included, parses
+            // as libpq's `key=value` form, whose errors can repeat a word of
+            // it, which may be the password.
             if url.starts_with("postgres://") || url.starts_with("postgresql://") {
                 anyhow::Error::new(e).context(error)
             } else {

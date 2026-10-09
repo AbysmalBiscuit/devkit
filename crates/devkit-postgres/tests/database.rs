@@ -125,3 +125,9 @@ fn a_key_value_string_that_does_not_parse_repeats_none_of_it() {
         assert_eq!(message, "the rules database URL does not parse", "{url}");
     }
 }
+
+#[test]
+fn a_url_with_a_leading_space_repeats_none_of_it() {
+    let message = parse_error(" postgres://u:secret@h/db?sslmode=require");
+    assert!(!message.contains("secret"), "{message}");
+}
