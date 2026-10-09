@@ -1,5 +1,6 @@
 {
   "max_turns": 24,
+  "harnesses": ["claude"],
   "checks": [
     {"id": "delegates-roleless-worker", "call": "Agent", "match": "general-purpose"},
     {"id": "selects-suggested-role", "file": "WORKER_ROLE.txt", "match": "Role `(implementer|reviewer)`, writing to `repo\\.main\\.claude-[^.`\\r\\n]+\\.[^.`\\r\\n]+`"},
