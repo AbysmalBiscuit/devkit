@@ -289,8 +289,8 @@ pub(crate) fn open_database(
         if !resolved.from_cache {
             cache.remember(&scope, &url);
         }
-        // Only a refused login says the URL went stale, and the write hooks
-        // need it to find their cache.
+        // Only a refused login says the URL went stale; every other failure
+        // keeps it, since the write hooks need it to find their cache.
         db.on_connect_failure(move |e| {
             if devkit_postgres::is_rejected_login(e) {
                 cache.forget(&scope, &url);
