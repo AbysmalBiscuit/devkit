@@ -83,7 +83,7 @@ Every reader loads a whole `RuleIndex` and filters it in memory, so the cache ho
 
 ### `devkit doctor`
 
-The `rules_source` row adds the cache path, its revision and its age.
+A `rules_cache` row, beside `rules_source`, names the cache path, its revision and its age, and warns when there is no cache yet.
 
 ## 3. The Supabase rules source
 
