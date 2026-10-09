@@ -141,6 +141,10 @@ pub(crate) fn update<T>(path: &Path, f: impl FnOnce(&mut IndexDocument) -> Resul
     store::with_lock_strict(Path::new(&lock), path, f)
 }
 
+/// The extractor's synthetic source file for rules a person added, as the
+/// store's own `put_rule` names it.
+pub(crate) const MANUAL_SOURCE: &str = "<manual>";
+
 /// The id the extractor gives a rule: a prefix of the SHA-256 of
 /// `source_file:title`, as `repo-rules-agent` `models.py` computes it.
 pub(crate) fn rule_id(source_file: &str, title: &str) -> String {

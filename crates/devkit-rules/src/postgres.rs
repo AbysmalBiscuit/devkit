@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use tokio_postgres::{GenericClient, IsolationLevel, Row, error::SqlState, types::Type};
 
 use crate::{
-    edit::{Fields, apply, rule_id},
+    edit::{Fields, MANUAL_SOURCE, apply, rule_id},
     model::{Rule, RuleFile, RuleIndex},
     remote::{RemoteRules, parse_repository},
     source::RuleSource,
@@ -21,10 +21,6 @@ use crate::{
 
 /// The storage version this source reads and writes.
 const STORAGE_VERSION: i32 = 1;
-
-/// The source file a rule added by hand belongs to, as the store's own
-/// `put_rule` names it.
-pub(crate) const MANUAL_SOURCE: &str = "<manual>";
 
 pub use devkit_postgres::{Database, is_unreachable};
 

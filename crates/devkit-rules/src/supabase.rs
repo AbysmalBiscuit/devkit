@@ -10,9 +10,8 @@ use devkit_supabase::{Api, Refused};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    edit::{Fields, apply, rule_id},
+    edit::{Fields, MANUAL_SOURCE, apply, rule_id},
     model::{Rule, RuleFile, RuleIndex},
-    postgres::MANUAL_SOURCE,
     remote::{RemoteRules, parse_repository},
     source::RuleSource,
 };
