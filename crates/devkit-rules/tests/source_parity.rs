@@ -1,7 +1,8 @@
 //! Every rule source, fed the same records, gives the same rules and the same
 //! answers to the same queries. The records are one index in the form
 //! `repo-rules-agent export-json` writes: the file source reads it as is, and
-//! the SQLite and Postgres sources read it imported into a store of their own.
+//! the SQLite and Postgres sources read it imported into a store of their own,
+//! the Postgres one through its cache.
 //! A new source joins [`sources`] fed from the same export.
 //!
 //! The Postgres member needs `DEVKIT_TEST_POSTGRES_URL`; without it the test
@@ -16,11 +17,13 @@ use std::{path::Path, time::Duration};
 
 use devkit_common::tls::Trust;
 use devkit_rules::{
+    cache::{CacheKey, RuleCache},
     index::FileSource,
     model::RuleIndex,
     postgres::{Database, PostgresSource},
     query::{self, Filter},
-    source::{RuleSource, Source},
+    remote::Remote,
+    source::{CachedSource, RuleSource, Source},
     sqlite::SqliteSource,
     vocab::{Scope, Severity, Task},
 };
@@ -56,7 +59,13 @@ fn sources(dir: &Path) -> (Option<TestStore>, Vec<(&'static str, Source)>) {
     .unwrap();
     let postgres =
         PostgresSource::new(std::sync::Arc::new(db), Some(&repo), Path::new("/srv/acme"));
-    sources.push(("postgres", Source::Postgres(postgres)));
+    let cache = RuleCache::at_state_dir(dir, CacheKey {
+        kind: "postgres",
+        repository: repo.clone(),
+    });
+    let cached = CachedSource::new(cache, Remote::Postgres(postgres));
+    cached.refresh(false).unwrap();
+    sources.push(("postgres", Source::Cached(cached)));
     (Some(store), sources)
 }
 

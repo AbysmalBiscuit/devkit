@@ -152,6 +152,11 @@ impl PostgresSource {
         Ok((revision, index))
     }
 
+    /// The repository's UUID, lowercased, when the config names a valid one.
+    pub fn repository_id(&self) -> Option<&str> {
+        self.repository.as_deref().ok()
+    }
+
     fn repository(&self) -> Result<&str> {
         self.repository
             .as_deref()

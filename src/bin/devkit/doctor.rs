@@ -745,28 +745,64 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
 /// How long doctor waits for the rules database to answer.
 const RULES_DATABASE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The rules source row and, for the `postgres` source, whether its
-/// database answers.
+/// The rules source row and, for a remote source, its cache and whether the
+/// remote answers.
 fn rules_rows(
     settings: &devkit_config::RulesConfig,
     configured: bool,
     checkout: &devkit_common::vcs::Checkout,
 ) -> Vec<Row> {
+    use devkit_rules::{remote::Remote, source::Source as Rules};
+
     let mut url_source = None;
-    let source = devkit_rules::source::Source::for_checkout(settings, checkout, |config| {
-        let (db, from) = crate::rules::open_database(
-            config,
-            RULES_DATABASE_WAIT,
-            crate::secret::SecretLookup::Doppler,
-        );
-        url_source = Some(from);
-        db
-    });
+    let source = Rules::for_checkout(
+        settings,
+        checkout,
+        |config| {
+            let (db, from) = crate::rules::open_database(
+                config,
+                RULES_DATABASE_WAIT,
+                crate::secret::SecretLookup::Doppler,
+            );
+            url_source = Some(from);
+            db
+        },
+        &devkit_common::paths::state_dir(),
+    );
     let mut rows = vec![rules_row(settings, configured, &source)];
-    if let (devkit_rules::source::Source::Postgres(pg), Some(from)) = (&source, url_source) {
+    let Rules::Cached(cached) = &source else {
+        return rows;
+    };
+    rows.push(rules_cache_row(cached.cache()));
+    if let (Remote::Postgres(pg), Some(from)) = (cached.remote(), url_source) {
         rows.push(rules_database_row(pg, from));
     }
     rows
+}
+
+/// Where a remote source's cache lives, the revision it holds and how old it
+/// is.
+fn rules_cache_row(cache: &devkit_rules::cache::RuleCache) -> Row {
+    let check = match cache.meta() {
+        Some(meta) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64);
+            Check::Ok(format!(
+                "{}: revision {}, pulled {} ago",
+                cache.path().display(),
+                meta.revision,
+                crate::activity::duration((now - meta.pulled_at).max(0))
+            ))
+        }
+        None => Check::Warn("no cache yet: run `devkit rules pull`".to_string()),
+    };
+    Row {
+        key: "rules_cache",
+        data: serde_json::Value::Null,
+        source: Source::Unset,
+        check,
+    }
 }
 
 /// The rules source `[rules] source` names, the kind of store it found and

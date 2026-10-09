@@ -9,7 +9,7 @@ devkit injects a repository's coding rules into an agent's context: the rules go
 - `file` (the default): an index file the extractor writes, of either kind: a **SQLite store** (`index.sqlite`), what `repo-rules index` writes now, or a legacy **JSON index** (`index.json`).
 - `postgres`: one repository in the extractor's shared Postgres store, the `repo_rules` schema, which every machine and the extraction workers use. `[rules.postgres] repository` names the repository's UUID.
 
-`devkit doctor` prints the `rules_source` row: the source, the kind of store it found (`sqlite`, `json` or `postgres`), and where it is.
+`devkit doctor` prints the `rules_source` row: the source, the kind of store it found (`sqlite`, `json` or `postgres`), and where it is. A remote source (`postgres`) is read through a local cache; see [The cache](#the-cache).
 
 Whatever the source, a rule with no tasks applies to every task, the severity filters work as a floor (`--min-severity`) as well as an exact match, and a removed rule never appears. Reading never changes the store.
 
@@ -62,7 +62,7 @@ The role in the URL reads and writes the `repo_rules` tables directly, so it mus
 
 ### Failures
 
-A hook that cannot read the rules injects none and prints one line on stderr naming why: the database is unreachable, gives no answer within the hook's short wait, refuses the login, holds no such repository, or is at an unsupported storage version. The write itself goes ahead. A hook asks Doppler for the URL when its kept copy is missing or stale, and that lookup adds its own wait before the hook connects. `devkit rules query`, `stats`, `add`, `edit` and `remove` exit non-zero with the same cause. `devkit doctor` shows the source, the repository, where the URL resolved from and whether the database answers, never the URL itself.
+Hooks read the rules from the local cache (see [The cache](#the-cache)), so once the cache exists a write hook never waits on the database. With no cache yet, a hook that cannot read the rules injects none and prints one line on stderr naming why: the database is unreachable, gives no answer within the hook's short wait, refuses the login, holds no such repository, or is at an unsupported storage version. The write itself goes ahead. A hook asks Doppler for the URL when its kept copy is missing or stale, and that lookup adds its own wait before the hook connects. `devkit rules query`, `stats`, `add`, `edit` and `remove` exit non-zero with the same cause. `devkit doctor` shows the source, the repository, where the URL resolved from and whether the database answers, never the URL itself.
 
 ### Edits
 
@@ -73,3 +73,15 @@ Each edit is one transaction that first locks the repository's row, as every wri
 - `remove` leaves a pinned tombstone, a rule added by hand included, and every reader skips it.
 
 Imported records can share an id. An edit or removal naming an id that more than one live rule carries changes nothing and says so; change those through `repo-rules-agent`.
+
+## The cache
+
+A remote source's rules are read from a SQLite file under devkit's state directory, `rules-cache/<source>-<repository uuid>.sqlite`, which every worktree and session on the machine shares. The `file` source has no cache. The cache holds one repository's rules from one source; a file naming another source or repository, or written in a format devkit does not know, counts as no cache and is replaced at the next refresh. A refresh replaces the whole file in one transaction, so a reader sees the old rules or the new ones, never a mix.
+
+- **Session start** (`devkit rules context`, which the session hooks run) asks the remote for its revision and pulls the rules only when it differs from the cached one, within the hook's short wait. When that fails it prints one stderr line and injects from the cache it has.
+- **`devkit rules pull`** pulls whatever revision the cache holds and prints the source, the revision and the rule count. It exits non-zero naming the cause when the remote cannot be read, and refuses the `file` source, which has nothing to pull.
+- **`devkit rules query` and `stats`** refresh as session start does, with a command's longer wait. A failed refresh prints one stderr line and the command reads the cache; it exits non-zero only when there is no cache either. Given an index file as an argument, they read that file alone and never touch the cache or the remote.
+- **A write hook** reads the cache alone and never refreshes it. With no cache at all, it reads the remote directly within its short wait and fills nothing.
+- **`add`, `edit` and `remove`** change the remote, then pull it into the cache, so the next read shows the change. When that pull fails the edit still stands, and one stderr line says the cache is stale.
+
+`devkit doctor`'s `rules_cache` row shows the cache's path, the revision it holds and how long ago it was pulled, or warns that there is no cache yet.

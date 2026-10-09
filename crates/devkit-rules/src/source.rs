@@ -12,7 +12,7 @@ use devkit_common::vcs::Checkout;
 use devkit_config::{RulesConfig, RulesPostgresConfig, RulesSource};
 
 use crate::{
-    cache::RuleCache,
+    cache::{CacheKey, RuleCache},
     edit::Fields,
     index::{FileSource, cache_dir},
     model::RuleIndex,
@@ -57,20 +57,20 @@ pub enum Source {
     Json(FileSource),
     /// The SQLite store the extractor writes by default.
     Sqlite(SqliteSource),
-    /// The shared Postgres store.
-    Postgres(PostgresSource),
-    /// A remote store read through its local cache.
+    /// A remote store, such as the shared Postgres store, read through its
+    /// local cache.
     Cached(CachedSource),
 }
 
 impl Source {
     /// The source `settings` names for `checkout`'s repository. `database`
     /// opens the database `[rules.postgres]` names, and is called only for
-    /// the `postgres` source.
+    /// the `postgres` source, whose cache lives under `state_dir`.
     pub fn for_checkout(
         settings: &RulesConfig,
         checkout: &Checkout,
         database: impl FnOnce(&RulesPostgresConfig) -> Arc<Database>,
+        state_dir: &Path,
     ) -> Source {
         let repo = repo_of(checkout);
         match settings.source {
@@ -78,11 +78,21 @@ impl Source {
                 Some(path) => Source::at(PathBuf::from(path), repo),
                 None => Source::cached(repo),
             },
-            RulesSource::Postgres => Source::Postgres(PostgresSource::new(
-                database(&settings.postgres),
-                settings.postgres.repository.as_deref(),
-                repo,
-            )),
+            RulesSource::Postgres => {
+                let source = PostgresSource::new(
+                    database(&settings.postgres),
+                    settings.postgres.repository.as_deref(),
+                    repo,
+                );
+                let key = CacheKey {
+                    kind: "postgres",
+                    repository: source.repository_id().unwrap_or("unset").to_string(),
+                };
+                Source::Cached(CachedSource::new(
+                    RuleCache::at_state_dir(state_dir, key),
+                    Remote::Postgres(source),
+                ))
+            }
         }
     }
 
@@ -109,13 +119,13 @@ impl Source {
     }
 
     /// Whether there are rules to read, found as cheaply as this source
-    /// allows: a file source loads its rules, the Postgres source only
-    /// checks that the store answers and holds the repository. A failure is
+    /// allows: a file source loads its rules, a cached source finds its
+    /// cache or else checks that the remote answers and holds the
+    /// repository. A failure is
     /// one line on stderr and reads as no rules, as with [`RuleSource::load`].
     pub fn present(&self) -> bool {
         match self {
             Source::Json(_) | Source::Sqlite(_) => self.load().is_some(),
-            Source::Postgres(source) => source.check().map_err(|e| report(&e)).is_ok(),
             Source::Cached(source) => {
                 source.cache.meta().is_some()
                     || source.remote.revision().map_err(|e| report(&e)).is_ok()
@@ -127,7 +137,7 @@ impl Source {
     /// `None` for a source with no cache.
     pub fn refresh(&self, force: bool) -> Option<Result<Refreshed>> {
         match self {
-            Source::Json(_) | Source::Sqlite(_) | Source::Postgres(_) => None,
+            Source::Json(_) | Source::Sqlite(_) => None,
             Source::Cached(source) => Some(source.refresh(force)),
         }
     }

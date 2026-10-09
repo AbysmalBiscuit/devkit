@@ -67,9 +67,21 @@ impl Reader {
 
 /// The rule source `settings` names for `checkout`, for `reader`.
 pub(crate) fn source(settings: &RulesConfig, checkout: &Checkout, reader: Reader) -> Source {
-    Source::for_checkout(settings, checkout, |config| {
-        open_database(config, reader.wait(), reader.lookup()).0
-    })
+    Source::for_checkout(
+        settings,
+        checkout,
+        |config| open_database(config, reader.wait(), reader.lookup()).0,
+        &devkit_common::paths::state_dir(),
+    )
+}
+
+/// Refreshes `source`'s cache when the remote's revision changed. A failure
+/// is one line on stderr, and the cache stays as it was for the read after.
+fn refresh_quietly(source: &Source) {
+    if let Some(Err(e)) = source.refresh(false) {
+        let line = format!("{e:#}").replace(['\r', '\n'], " ");
+        eprintln!("devkit: {line}");
+    }
 }
 
 /// The rules database `config` and [`DATABASE_VAR`] name, opened with `wait`,
@@ -145,6 +157,13 @@ pub enum RulesCommand {
     /// outright.
     #[command(visible_aliases = ["rm", "delete"])]
     Remove(RemoveArgs),
+    /// Refresh the local cache of a remote rules source.
+    ///
+    /// Reads every rule from the `postgres` or `supabase` source into the
+    /// cache the hooks read, whatever revision the cache holds, and prints
+    /// the revision and how many rules it holds. Session start refreshes
+    /// the cache on its own when the remote's revision changed.
+    Pull,
 }
 
 #[derive(Args)]
@@ -332,6 +351,7 @@ impl Here {
 /// "no index".
 fn load_or_default(explicit: Option<PathBuf>) -> Result<(String, RuleIndex)> {
     let source = Here::resolve(explicit)?.source;
+    refresh_quietly(&source);
     let location = source.location();
     let loaded = source
         .read()?
@@ -345,7 +365,9 @@ fn load_or_default(explicit: Option<PathBuf>) -> Result<(String, RuleIndex)> {
 /// rules the other would not deliver.
 pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesConfig, RuleIndex)> {
     let rules = enabled_settings(checkout, cwd)?;
-    let loaded = source(&rules, checkout, Reader::Hook).load()?;
+    let source = source(&rules, checkout, Reader::Hook);
+    refresh_quietly(&source);
+    let loaded = source.load()?;
     Some((rules, loaded))
 }
 
@@ -390,7 +412,23 @@ pub fn run(cli: RulesCli) -> Result<()> {
             println!("removed {}", args.id);
             Ok(())
         }
+        RulesCommand::Pull => pull_cmd(),
     }
+}
+
+fn pull_cmd() -> Result<()> {
+    let here = Here::resolve(None)?;
+    let Some(refreshed) = here.source.refresh(true) else {
+        anyhow::bail!("rules source `file` has no cache to pull");
+    };
+    let refreshed = refreshed?;
+    println!(
+        "{}: revision {}, {} rules",
+        here.source.location(),
+        refreshed.revision,
+        refreshed.rules
+    );
+    Ok(())
 }
 
 fn query_cmd(args: QueryArgs) -> Result<()> {
