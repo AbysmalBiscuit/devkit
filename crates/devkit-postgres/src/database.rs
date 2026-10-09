@@ -26,6 +26,9 @@ fn block_on<F: Future>(work: F) -> Result<F::Output> {
     Ok(runtime.block_on(work))
 }
 
+/// What [`Database::on_connect_failure`] runs.
+type OnConnectFailure = dyn Fn(&anyhow::Error) + Send + Sync;
+
 enum State {
     Closed,
     Open(Client),
@@ -59,7 +62,7 @@ pub struct Database {
     deadline: Mutex<Option<Instant>>,
     /// Called with the error each time connecting fails, refused or rejected
     /// alike.
-    on_connect_failure: OnceLock<Box<dyn Fn(&anyhow::Error) + Send + Sync>>,
+    on_connect_failure: OnceLock<Box<OnConnectFailure>>,
     state: Mutex<State>,
 }
 
