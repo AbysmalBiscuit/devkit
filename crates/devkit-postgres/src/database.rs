@@ -134,8 +134,8 @@ impl Database {
     }
 
     /// Runs `f` with the error each time connecting fails, for a caller whose
-    /// URL may have gone stale. [`is_unreachable`] tells a server that never
-    /// answered from one that refused the login.
+    /// URL may have gone stale. [`is_rejected_login`] tells a login the server
+    /// refused from every other failure.
     pub fn on_connect_failure(&self, f: impl Fn(&anyhow::Error) + Send + Sync + 'static) {
         let _ = self.on_connect_failure.set(Box::new(f));
     }
@@ -290,5 +290,20 @@ pub fn is_unreachable(e: &anyhow::Error) -> bool {
             || cause
                 .downcast_ref::<tokio_postgres::Error>()
                 .is_some_and(|e| e.as_db_error().is_none())
+    })
+}
+
+/// Whether `e` is the server refusing these credentials or this database
+/// (SQLSTATE class 28 or `3D000`), which only another URL fixes. A server
+/// out of connections or still starting refuses for a reason that passes.
+pub fn is_rejected_login(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .and_then(tokio_postgres::Error::as_db_error)
+            .is_some_and(|db| {
+                let code = db.code().code();
+                code.starts_with("28") || code == "3D000"
+            })
     })
 }

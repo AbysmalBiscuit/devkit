@@ -715,6 +715,59 @@ fn an_unreachable_database_keeps_the_url_doppler_gave() {
     assert_eq!(doppler_calls(bin.path()), 1);
 }
 
+/// A server that answers every startup with an error carrying `sqlstate`, as
+/// one with no free connection slot answers with `53300`. Returns its
+/// `127.0.0.1:<port>`.
+#[cfg(unix)]
+fn refusing_addr(sqlstate: &'static str) -> String {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut len = [0; 4];
+            if stream.read_exact(&mut len).is_err() {
+                continue;
+            }
+            let mut rest = vec![0; (u32::from_be_bytes(len) as usize).saturating_sub(4)];
+            if stream.read_exact(&mut rest).is_err() {
+                continue;
+            }
+            let mut fields = Vec::new();
+            for (kind, value) in [(b'S', "FATAL"), (b'C', sqlstate), (b'M', "refused")] {
+                fields.push(kind);
+                fields.extend_from_slice(value.as_bytes());
+                fields.push(0);
+            }
+            fields.push(0);
+            let mut message = vec![b'E'];
+            message.extend_from_slice(&(fields.len() as u32 + 4).to_be_bytes());
+            message.extend_from_slice(&fields);
+            let _ = stream.write_all(&message);
+        }
+    });
+    addr
+}
+
+/// A server too busy to take the connection says nothing about the URL, so
+/// the kept URL stays and session start reuses it.
+#[cfg(unix)]
+#[test]
+fn a_database_out_of_connections_keeps_the_url_doppler_gave() {
+    let p = doppler_proj("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
+    let bin = tempfile::tempdir().unwrap();
+    let url = format!(
+        "postgres://agent:pw@{}/rules?sslmode=disable",
+        refusing_addr("53300")
+    );
+    let path = fake_doppler(bin.path(), &url);
+    for _ in 0..2 {
+        let out = p.devkit(&["rules", "context"], &[("PATH", path.as_str())]);
+        assert!(stderr(&out).contains("refused"), "{}", stderr(&out));
+    }
+    assert_eq!(doppler_calls(bin.path()), 1);
+}
+
 /// A login the database refuses drops the kept URL, so the next session
 /// asks Doppler for a rotated credential.
 #[cfg(unix)]

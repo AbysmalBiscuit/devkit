@@ -8,7 +8,7 @@
 mod database;
 
 use anyhow::{Result, anyhow};
-pub use database::{Database, is_unreachable};
+pub use database::{Database, is_rejected_login, is_unreachable};
 use devkit_common::tls::Trust;
 use tokio_postgres::{
     Client, Config, NoTls,
