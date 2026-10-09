@@ -114,6 +114,20 @@ fn at_state_dir_names_the_file_by_kind_and_repository() {
     );
 }
 
+/// Whether `e` is SQLite giving up on a lock another writer held past the
+/// busy timeout, which leaves the cache as it was.
+fn is_busy(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(f, _))
+                if matches!(f.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+        )
+    })
+}
+
+/// Writers racing on one cache each replace it whole or are refused busy,
+/// and a reader only ever sees one whole index.
 #[test]
 fn concurrent_refreshes_leave_one_whole_index() {
     let dir = tempfile::tempdir().unwrap();
@@ -129,7 +143,9 @@ fn concurrent_refreshes_leave_one_whole_index() {
             s.spawn(move || {
                 let cache = cache(path, "a");
                 for _ in 0..20 {
-                    cache.write(n, written).unwrap();
+                    if let Err(e) = cache.write(n, written) {
+                        assert!(is_busy(&e), "a write failed other than busy: {e:#}");
+                    }
                 }
             });
         }
