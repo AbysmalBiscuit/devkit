@@ -95,6 +95,7 @@ impl Proj {
     }
 }
 
+#[cfg(unix)]
 fn find_on_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(name))
