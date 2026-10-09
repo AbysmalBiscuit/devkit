@@ -591,3 +591,72 @@ fn an_unknown_env_mode_fails_the_cli_and_never_holds() {
         stderr(&out)
     );
 }
+
+/// A Claude Code `Stop` from session `S` whose payload lists its in-flight
+/// background tasks and scheduled session crons.
+fn stop_waiting(p: &Proj, background_tasks: Value, session_crons: Value) -> Value {
+    let mut payload = stop(p, "S");
+    payload["background_tasks"] = background_tasks;
+    payload["session_crons"] = session_crons;
+    payload
+}
+
+fn running_agent() -> Value {
+    json!([{
+        "id": "a7",
+        "type": "local_agent",
+        "status": "running",
+        "description": "review the diff",
+    }])
+}
+
+fn loop_cron() -> Value {
+    json!([{
+        "id": "c1",
+        "cron": "*/5 * * * *",
+        "prompt": "check the PR",
+        "recurring": true,
+    }])
+}
+
+#[test]
+fn a_stop_waiting_on_background_work_goes_through_and_keeps_the_claim() {
+    let p = always();
+    let id = seed(&p, MAIN, "stage 5: PR review round 1");
+    set(&p, &id, StatusKind::InProgress, "S");
+    for waiting in [
+        stop_waiting(&p, running_agent(), json!([])),
+        stop_waiting(&p, json!([]), loop_cron()),
+    ] {
+        silent(&p.hook("stop", "claude-code", &waiting));
+        assert_eq!(p.todo(&id).status, devkit_todo::Status::InProgress {
+            by: Holder::new("S")
+        });
+    }
+    let idle = stop_waiting(&p, json!([]), json!([]));
+    let reason = blocked(&p.hook("stop", "claude-code", &idle));
+    assert!(reason.contains("stage 5: PR review round 1"), "{reason}");
+}
+
+#[test]
+fn a_stop_with_nothing_in_flight_is_held_once_per_list() {
+    let p = always();
+    seed(&p, MAIN, "write the migration");
+    let idle = stop_waiting(&p, json!([]), json!([]));
+    blocked(&p.hook("stop", "claude-code", &idle));
+    silent(&p.hook("stop", "claude-code", &idle));
+}
+
+#[test]
+fn a_sub_agent_listed_in_background_tasks_is_still_held() {
+    let p = Proj::new();
+    let id = claiming_sub_agent(&p);
+    let mut payload = sub_agent(&p, "SubagentStop", Some("general-purpose"));
+    payload["background_tasks"] = running_agent();
+    payload["session_crons"] = loop_cron();
+    let reason = blocked(&p.hook("subagent-stop", "claude-code", &payload));
+    assert!(reason.contains("write the migration"), "{reason}");
+    assert_eq!(p.todo(&id).status, devkit_todo::Status::InProgress {
+        by: Holder::new("S/a1")
+    });
+}

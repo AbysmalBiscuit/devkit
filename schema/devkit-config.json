@@ -1845,7 +1845,7 @@
         "hold_stop": {
           "$ref": "#/$defs/HoldStopSpelling",
           "default": "subagents",
-          "description": "Whose stop a stop hook refuses while the agent has open todos: its\nown claims on any node and pending todos when its role holds them.\n`always` holds every agent, `subagents` only sub-agents, and `never`\nnone; `true` and `false` mean `always` and `never`. One reminder per\nunchanged list; stopping again goes through.\n`DEVKIT_TODO_HOLD_STOP` overrides it with the same spellings, and\n`devkit todo hold` overrides both for one session."
+          "description": "Whose stop a stop hook refuses while the agent has open todos: its\nown claims on any node and pending todos when its role holds them.\n`always` holds every agent, `subagents` only sub-agents, and `never`\nnone; `true` and `false` mean `always` and `never`. One reminder per\nunchanged list; stopping again goes through. A Claude Code main\nagent's stop while its background tasks or session crons are in\nflight is never refused.\n`DEVKIT_TODO_HOLD_STOP` overrides it with the same spellings, and\n`devkit todo hold` overrides both for one session."
         },
         "postgres": {
           "$ref": "#/$defs/PostgresConfig",
