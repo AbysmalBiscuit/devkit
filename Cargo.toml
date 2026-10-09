@@ -42,6 +42,7 @@ devkit-ticket.workspace = true
 devkit-mcp.workspace = true
 devkit-docs.workspace = true
 devkit-rules.workspace = true
+devkit-postgres.workspace = true
 devkit-timing.workspace = true
 devkit-todo.workspace = true
 devkit-todo-builtin.workspace = true

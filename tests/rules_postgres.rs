@@ -754,3 +754,33 @@ fn a_project_layer_cannot_name_the_ca_file() {
         "the global CA file is read: {detail}"
     );
 }
+
+#[test]
+fn revision_counts_each_edit() {
+    use devkit_rules::{edit::Fields, source::RuleSource};
+
+    let Some((store, repo)) = imported() else {
+        return;
+    };
+    let db = devkit_postgres::Database::new(
+        &store.url,
+        Duration::from_secs(10),
+        &devkit_common::tls::Trust::default(),
+        "rules database",
+    )
+    .unwrap();
+    let source = devkit_rules::postgres::PostgresSource::new(
+        std::sync::Arc::new(db),
+        Some(&repo),
+        std::path::Path::new("/srv/acme"),
+    );
+    let before = source.revision().unwrap();
+    assert_eq!(before, revision(&store, &repo));
+    let fields = Fields {
+        title: Some("Counted".to_string()),
+        ..Fields::default()
+    };
+    source.add("", fields).unwrap();
+    assert_eq!(source.revision().unwrap(), before + 1);
+    assert_eq!(source.pull().unwrap().0, before + 1);
+}

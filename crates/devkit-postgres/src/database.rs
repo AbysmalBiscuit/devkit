@@ -147,7 +147,7 @@ impl Database {
     /// once, until the wait has passed again. Errors from the network, the
     /// server or the wait name the database; the caller's own refusals read
     /// as they are.
-    pub fn run<T>(&self, op: impl AsyncFn(&mut Client) -> Result<T>) -> Result<T> {
+    pub fn run<T>(&self, op: impl AsyncFnOnce(&mut Client) -> Result<T>) -> Result<T> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let attempt = async {
             let client = self.client(&mut state).await?;

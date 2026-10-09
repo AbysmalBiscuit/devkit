@@ -7,6 +7,7 @@
 
 use std::{
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
@@ -79,7 +80,7 @@ pub(crate) fn open_database(
     config: &RulesPostgresConfig,
     wait: Duration,
     lookup: SecretLookup,
-) -> (Database, secrets::Source) {
+) -> (Arc<Database>, secrets::Source) {
     let scope = doppler_scope(
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
@@ -91,33 +92,30 @@ pub(crate) fn open_database(
     let resolved = cache.resolve(scope.as_ref(), lookup);
     let Some(url) = resolved.value else {
         return (
-            Database::unusable(format!("{DATABASE_VAR} is not set")),
+            Arc::new(Database::unusable(format!("{DATABASE_VAR} is not set"))),
             resolved.source,
         );
     };
     let trust = Trust {
         ca_file: global_ca_file("rules"),
     };
-    let db = match Database::new(&url, trust, wait) {
+    let db = match Database::new(&url, wait, &trust, "rules database") {
         Ok(db) => db,
         Err(e) => {
             return (
-                Database::unusable(format!("{DATABASE_VAR}: {e:#}")),
+                Arc::new(Database::unusable(format!("{DATABASE_VAR}: {e:#}"))),
                 resolved.source,
             );
         }
     };
-    let db = match (&resolved.source, scope) {
-        (secrets::Source::Doppler, Some(scope)) => {
-            // Only a fresh answer resets the copy's age; reusing it must not.
-            if !resolved.from_cache {
-                cache.remember(&scope, &url);
-            }
-            db.on_connect_failure(move || cache.forget(&scope, &url))
+    if let (secrets::Source::Doppler, Some(scope)) = (&resolved.source, scope) {
+        // Only a fresh answer resets the copy's age; reusing it must not.
+        if !resolved.from_cache {
+            cache.remember(&scope, &url);
         }
-        _ => db,
-    };
-    (db, resolved.source)
+        db.on_connect_failure(move || cache.forget(&scope, &url));
+    }
+    (Arc::new(db), resolved.source)
 }
 
 #[derive(Args)]

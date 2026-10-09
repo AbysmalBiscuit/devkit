@@ -527,6 +527,7 @@ dependencies = [
  "devkit-locks",
  "devkit-mcp",
  "devkit-ports",
+ "devkit-postgres",
  "devkit-rules",
  "devkit-ticket",
  "devkit-timing",

@@ -1,7 +1,10 @@
 //! Where rules are read from and edited. `[rules] source` picks the member of
 //! [`Source`], and every read and edit goes through [`RuleSource`].
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use ambassador::Delegate;
 use anyhow::Result;
@@ -63,7 +66,7 @@ impl Source {
     pub fn for_checkout(
         settings: &RulesConfig,
         checkout: &Checkout,
-        database: impl FnOnce(&RulesPostgresConfig) -> Database,
+        database: impl FnOnce(&RulesPostgresConfig) -> Arc<Database>,
     ) -> Source {
         let repo = repo_of(checkout);
         match settings.source {

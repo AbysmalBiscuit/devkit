@@ -47,8 +47,15 @@ fn sources(dir: &Path) -> (Option<TestStore>, Vec<(&'static str, Source)>) {
         return (None, sources);
     };
     let repo = store.import(&export);
-    let db = Database::new(&store.url, Trust::default(), Duration::from_secs(10)).unwrap();
-    let postgres = PostgresSource::new(db, Some(&repo), Path::new("/srv/acme"));
+    let db = Database::new(
+        &store.url,
+        Duration::from_secs(10),
+        &Trust::default(),
+        "rules database",
+    )
+    .unwrap();
+    let postgres =
+        PostgresSource::new(std::sync::Arc::new(db), Some(&repo), Path::new("/srv/acme"));
     sources.push(("postgres", Source::Postgres(postgres)));
     (Some(store), sources)
 }
