@@ -72,7 +72,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-ticket", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskchampion", "crates/devkit-todo-postgres", "crates/devkit-todo-supabase", "crates/devkit-postgres"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-ticket", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskchampion", "crates/devkit-todo-postgres", "crates/devkit-todo-supabase", "crates/devkit-postgres", "crates/devkit-supabase"]
 
 [workspace.package]
 edition = "2024"
@@ -160,6 +160,7 @@ devkit-todo-taskchampion = { path = "crates/devkit-todo-taskchampion" }
 devkit-todo-postgres = { path = "crates/devkit-todo-postgres" }
 devkit-todo-supabase = { path = "crates/devkit-todo-supabase" }
 devkit-postgres = { path = "crates/devkit-postgres" }
+devkit-supabase = { path = "crates/devkit-supabase" }
 tree-sitter = "0.27"
 tree-sitter-bash = "0.25"
 tree-sitter-powershell = "0.26"

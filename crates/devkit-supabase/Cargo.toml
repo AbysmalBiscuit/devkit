@@ -1,0 +1,18 @@
+[package]
+name = "devkit-supabase"
+description = "The Supabase project client devkit's Data-API-backed stores share"
+edition.workspace = true
+version = "0.14.16" # x-release-please-version
+
+[features]
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+devkit-common.workspace = true
+
+[dev-dependencies]
+devkit-supabase = { path = ".", features = ["test-support"] }

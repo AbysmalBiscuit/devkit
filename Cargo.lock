@@ -745,6 +745,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "devkit-supabase"
+version = "0.14.16"
+dependencies = [
+ "anyhow",
+ "devkit-common",
+ "devkit-supabase",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "devkit-ticket"
 version = "0.14.16"
 dependencies = [
@@ -814,10 +826,9 @@ version = "0.14.16"
 dependencies = [
  "anyhow",
  "chrono",
- "devkit-common",
+ "devkit-supabase",
  "devkit-todo",
  "devkit-todo-postgres",
- "reqwest",
  "serde",
  "serde_json",
  "tokio",

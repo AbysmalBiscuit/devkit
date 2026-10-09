@@ -7,10 +7,9 @@ version = "0.14.16" # x-release-please-version
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-devkit-common.workspace = true
+devkit-supabase.workspace = true
 devkit-todo.workspace = true
 
 [dev-dependencies]
