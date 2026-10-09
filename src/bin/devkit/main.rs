@@ -448,8 +448,8 @@ fn main() -> Result<()> {
     // The marker probe `links::answers_probe_marker` uses: answered before
     // any clap parsing, any panic-hook/state-migration/linking setup, and —
     // critically — before `devkit-mcp`'s normal path would start blocking on
-    // stdin. Every shim is this same binary, so this one intercept covers all
-    // six names.
+    // stdin. Every shim is this same binary, so this one intercept covers every
+    // name.
     //
     // The other probe — `--version` — is an ordinary subcommand-shaped arg
     // with no intercept here, so a child spawned with it parses and runs the
