@@ -623,7 +623,7 @@ fn running_agent() -> Value {
 fn loop_cron() -> Value {
     json!([{
         "id": "c1",
-        "cron": "*/5 * * * *",
+        "schedule": "*/5 * * * *",
         "prompt": "check the PR",
         "recurring": true,
     }])
