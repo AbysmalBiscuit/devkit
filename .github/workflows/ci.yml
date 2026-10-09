@@ -39,6 +39,16 @@ jobs:
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
 
+  plugin:
+    name: claude plugin validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude plugin validate --strict plugin
+      - run: claude plugin validate --strict .
+
   clippy:
     name: clippy (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
