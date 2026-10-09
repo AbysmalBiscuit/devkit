@@ -1,6 +1,6 @@
 {
   "name": "devkit",
-  "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle",
+  "description": "Run a fleet of coding agents on one machine without collisions: file locks, ports, dev servers, issue worktrees and shared todos",
   "version": "0.14.16",
   "author": {
     "name": "Lev Velykoivanenko"
@@ -13,7 +13,9 @@
     "file-locks",
     "ports",
     "dev-servers",
-    "worktrees"
+    "worktrees",
+    "todos",
+    "coding-agents"
   ],
   "mcpServers": "./.mcp.json",
   "icon": "./assets/icon.png"

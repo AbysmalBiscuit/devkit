@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "devkit",
-      "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle",
+      "description": "Run a fleet of coding agents on one machine without collisions: file locks, ports, dev servers, issue worktrees and shared todos",
       "source": { "source": "local", "path": "./plugin" },
       "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
       "category": "Coding"

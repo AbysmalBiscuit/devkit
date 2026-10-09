@@ -2,13 +2,13 @@
   "name": "devkit",
   "owner": { "name": "Lev Velykoivanenko" },
   "metadata": {
-    "description": "devkit local-dev coordination plugin"
+    "description": "Run a fleet of coding agents on one machine without collisions"
   },
   "plugins": [
     {
       "name": "devkit",
       "source": "./plugin",
-      "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle"
+      "description": "Run a fleet of coding agents on one machine without collisions: file locks, ports, dev servers, issue worktrees and shared todos"
     }
   ]
 }
