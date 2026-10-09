@@ -21,6 +21,11 @@ fn index() -> RuleIndex {
 }
 
 fn source(dir: &Path) -> CachedSource {
+    source_at(dir, "/clones/one")
+}
+
+/// A source describing the clone at `checkout`, its cache under `dir`.
+fn source_at(dir: &Path, checkout: &str) -> CachedSource {
     let cache = RuleCache::at_state_dir(dir, CacheKey {
         kind: "postgres",
         repository: "a".to_string(),
@@ -28,6 +33,7 @@ fn source(dir: &Path) -> CachedSource {
     CachedSource::new(
         cache,
         Remote::Fake(FakeRemote {
+            checkout: checkout.to_string(),
             revision: Cell::new(1),
             index: RefCell::new(index()),
             fail: Cell::new(false),
@@ -108,6 +114,15 @@ fn no_cache_reads_the_remote_and_writes_nothing() {
     let source = source(dir.path());
     assert_eq!(titles(&source.read().unwrap().unwrap()), titles(&index()));
     assert!(!source.cache().path().exists());
+}
+
+#[test]
+fn cache_another_clone_filled_reads_as_this_clone() {
+    let dir = tempfile::tempdir().unwrap();
+    source_at(dir.path(), "/clones/one").refresh(false).unwrap();
+    let other = source_at(dir.path(), "/clones/two");
+    fake(&other).fail.set(true);
+    assert_eq!(other.read().unwrap().unwrap().repo, "/clones/two");
 }
 
 #[test]

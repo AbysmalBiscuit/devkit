@@ -338,6 +338,10 @@ impl RemoteRules for SupabaseSource {
         let (revision, rules) = self.pull_keyed()?;
         Ok((revision, self.index(rules)))
     }
+
+    fn checkout(&self) -> &str {
+        &self.repo
+    }
 }
 
 impl RuleSource for SupabaseSource {

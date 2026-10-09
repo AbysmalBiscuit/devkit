@@ -232,7 +232,12 @@ impl CachedSource {
 impl RuleSource for CachedSource {
     fn read(&self) -> Result<Option<RuleIndex>> {
         match self.cache.read()? {
-            Some(index) => Ok(Some(index)),
+            // Every clone of the repository shares the cache, which holds
+            // the checkout of whichever pulled last.
+            Some(index) => Ok(Some(RuleIndex {
+                repo: self.remote.checkout().to_string(),
+                ..index
+            })),
             None => self.remote.pull().map(|(_, index)| Some(index)),
         }
     }

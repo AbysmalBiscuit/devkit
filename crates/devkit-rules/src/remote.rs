@@ -20,6 +20,9 @@ pub trait RemoteRules: RuleSource {
     fn revision(&self) -> Result<i64>;
     /// The live rules and the revision they were read at.
     fn pull(&self) -> Result<(i64, RuleIndex)>;
+    /// The local checkout the rules describe, which [`RuleIndex::repo`]
+    /// reports so a query reads that checkout's `.repo-rules` config.
+    fn checkout(&self) -> &str;
 }
 
 /// Every remote rule source.
@@ -44,6 +47,10 @@ impl RemoteRules for PostgresSource {
     fn pull(&self) -> Result<(i64, RuleIndex)> {
         PostgresSource::pull(self)
     }
+
+    fn checkout(&self) -> &str {
+        PostgresSource::checkout(self)
+    }
 }
 
 #[cfg(feature = "test-remote")]
@@ -58,10 +65,11 @@ mod fake {
     use super::RemoteRules;
     use crate::{edit::Fields, model::RuleIndex, source::RuleSource};
 
-    /// A remote holding `index` at `revision`. Setting `fail` fails every
-    /// read; `pulls` counts the pulls. An edit renames a rule and bumps the
-    /// revision.
+    /// A remote holding `index` at `revision`, describing the clone at
+    /// `checkout`. Setting `fail` fails every read; `pulls` counts the
+    /// pulls. An edit renames a rule and bumps the revision.
     pub struct FakeRemote {
+        pub checkout: String,
         pub revision: Cell<i64>,
         pub index: RefCell<RuleIndex>,
         pub fail: Cell<bool>,
@@ -121,7 +129,13 @@ mod fake {
         fn pull(&self) -> Result<(i64, RuleIndex)> {
             self.check()?;
             self.pulls.set(self.pulls.get() + 1);
-            Ok((self.revision.get(), self.index.borrow().clone()))
+            let mut index = self.index.borrow().clone();
+            index.repo = self.checkout.clone();
+            Ok((self.revision.get(), index))
+        }
+
+        fn checkout(&self) -> &str {
+            &self.checkout
         }
     }
 }

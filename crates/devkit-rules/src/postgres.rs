@@ -157,6 +157,11 @@ impl PostgresSource {
         self.repository.as_deref().ok()
     }
 
+    /// The local checkout the rules describe.
+    pub fn checkout(&self) -> &str {
+        &self.repo
+    }
+
     fn repository(&self) -> Result<&str> {
         self.repository
             .as_deref()
