@@ -80,13 +80,14 @@ impl fmt::Debug for Client {
 
 impl Client {
     /// The Auth API of the project at `url`, each request carrying
-    /// `publishable_key` and giving up after `wait`.
-    pub fn new(url: &str, publishable_key: &str, wait: Duration) -> Client {
-        Client {
-            url: url.trim().trim_end_matches('/').to_string(),
+    /// `publishable_key` and giving up after `wait`. The URL is refused as
+    /// [`Api::new`](crate::Api::new) refuses it.
+    pub fn new(url: &str, publishable_key: &str, wait: Duration) -> Result<Client> {
+        Ok(Client {
+            url: crate::api::project_url(url, "Supabase Auth")?,
             publishable_key: publishable_key.to_string(),
             wait,
-        }
+        })
     }
 
     /// The project's URL.

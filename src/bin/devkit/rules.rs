@@ -186,18 +186,18 @@ pub(crate) fn open_api(
         Err(e) => return (Arc::new(Api::unusable(e, API_LABEL)), url_source),
     };
     let auth = match &config.publishable_key {
-        None => Auth::None,
-        Some(key) => {
+        None => Ok(Auth::None),
+        Some(key) => Client::new(&url, key, wait).map(|client| {
             let config = config.clone();
             let credentials = move || resolve_credentials(&config, lookup).0;
             Auth::User(Arc::new(Sessions::new(
-                Client::new(&url, key, wait),
+                client,
                 SessionFile::for_url(&devkit_common::paths::state_dir(), &url),
                 Box::new(credentials),
             )))
-        }
+        }),
     };
-    let api = match Api::new(&url, "repo_rules_api", auth, wait, API_LABEL) {
+    let api = match auth.and_then(|auth| Api::new(&url, "repo_rules_api", auth, wait, API_LABEL)) {
         Ok(api) => api,
         Err(e) => {
             return (

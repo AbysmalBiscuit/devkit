@@ -60,9 +60,9 @@ pub fn run(login: SupabaseLogin) -> Result<()> {
         Some(url) => url,
         None => crate::rules::supabase_url().0?,
     };
-    let url = url.trim().trim_end_matches('/').to_string();
-    let client = Client::new(&url, key, WAIT);
-    let file = SessionFile::for_url(&devkit_common::paths::state_dir(), &url);
+    let client = Client::new(&url, key, WAIT)?;
+    let url = client.url();
+    let file = SessionFile::for_url(&devkit_common::paths::state_dir(), url);
     let (session, who) = if login.password {
         password(&client, &config)?
     } else if login.email {

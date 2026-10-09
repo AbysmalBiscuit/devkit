@@ -64,7 +64,7 @@ impl Fixture {
     }
 
     fn client(&self) -> Client {
-        Client::new(&self.server.url(), "pk", WAIT)
+        Client::new(&self.server.url(), "pk", WAIT).unwrap()
     }
 
     fn file(&self) -> SessionFile {
@@ -298,7 +298,7 @@ fn pkce_challenge_is_s256_of_verifier() {
 
 #[test]
 fn authorize_url_carries_pkce() {
-    let client = Client::new("https://ref.supabase.co", "pk", WAIT);
+    let client = Client::new("https://ref.supabase.co", "pk", WAIT).unwrap();
     let url = client.authorize_url("github", "http://localhost:7471/callback", "ch");
     assert!(
         url.starts_with("https://ref.supabase.co/auth/v1/authorize?"),
@@ -341,7 +341,7 @@ fn an_unanswered_sign_in_fails_the_next_request_at_once() {
     let url = format!("http://{}", silent.local_addr().unwrap());
     let state = tempfile::tempdir().unwrap();
     let sessions = Sessions::new(
-        Client::new(&url, "pk", Duration::from_secs(30)),
+        Client::new(&url, "pk", Duration::from_secs(30)).unwrap(),
         SessionFile::for_url(state.path(), &url),
         credentials(),
     );
@@ -366,4 +366,19 @@ fn an_unanswered_sign_in_fails_the_next_request_at_once() {
     assert!(started.elapsed() < Duration::from_millis(100));
     assert!(devkit_supabase::is_unreachable(&second), "{second:#}");
     drop(silent);
+}
+
+#[test]
+fn a_url_with_credentials_is_refused_without_repeating_it() {
+    for url in [
+        "https://user:secret@ref.supabase.co",
+        "https://secret@ref.supabase.co",
+        "https://ref.supabase.co/?apikey=secret",
+        "https://ref.supabase.co/#secret",
+    ] {
+        let err = Client::new(url, "pk", WAIT).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("URL"), "{message}");
+        assert!(!message.contains("secret"), "{message}");
+    }
 }
