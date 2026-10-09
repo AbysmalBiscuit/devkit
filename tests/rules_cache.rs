@@ -11,8 +11,14 @@ mod testenv;
 
 use std::{
     io::Write,
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::JoinHandle,
 };
 
 use pgstore::TestStore;
@@ -127,6 +133,64 @@ fn imported() -> Option<(TestStore, String)> {
     Some((store, repo))
 }
 
+/// The database `url` names, reached through a local relay until `close`
+/// takes it down, after which the relay's address refuses connections, as
+/// a database that went away looks. The cache knows a database by its
+/// address, so the relay keeps one address across both.
+struct Relay {
+    url: String,
+    addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    accepting: JoinHandle<()>,
+}
+
+impl Relay {
+    fn to(url: &str) -> Relay {
+        let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+        let after_user = after_scheme
+            .rsplit_once('@')
+            .map_or(after_scheme, |(_, rest)| rest);
+        let upstream = after_user.split(['/', '?']).next().unwrap().to_string();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let target = upstream.clone();
+        let accepting = std::thread::spawn(move || {
+            for client in listener.incoming().flatten() {
+                if stopped.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let Ok(server) = TcpStream::connect(&target) {
+                    pipe(&client, &server);
+                    pipe(&server, &client);
+                }
+            }
+        });
+        Relay {
+            url: url.replacen(&upstream, &addr.to_string(), 1),
+            addr,
+            stop,
+            accepting,
+        }
+    }
+
+    fn close(self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(self.addr);
+        self.accepting.join().unwrap();
+    }
+}
+
+/// Copies what `from` sends to `to` until `from` closes.
+fn pipe(from: &TcpStream, to: &TcpStream) {
+    let (mut from, mut to) = (from.try_clone().unwrap(), to.try_clone().unwrap());
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut from, &mut to);
+        let _ = to.shutdown(Shutdown::Write);
+    });
+}
+
 fn cache_files(dir: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(dir)
         .map(|entries| entries.flatten().map(|e| e.path()).collect())
@@ -139,13 +203,16 @@ fn session_hook_fills_the_cache_and_writes_read_it_offline() {
         return;
     };
     let p = Proj::reading(&repo);
-    let out = p.devkit(&["rules", "context"], &[(DATABASE_VAR, &store.url)]);
+    let relay = Relay::to(&store.url);
+    let out = p.devkit(&["rules", "context"], &[(DATABASE_VAR, &relay.url)]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("Root must"), "{}", stdout(&out));
     let cache = p.cache_dir().join(format!("postgres-{repo}.sqlite"));
     assert!(cache.is_file(), "{:?}", cache_files(&p.cache_dir()));
 
-    let out = p.write_hook("crates/foo/bar/lib.rs", &[(DATABASE_VAR, UNREACHABLE)]);
+    let url = relay.url.clone();
+    relay.close();
+    let out = p.write_hook("crates/foo/bar/lib.rs", &[(DATABASE_VAR, &url)]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let answer: Value = serde_json::from_slice(&out.stdout)
         .unwrap_or_else(|e| panic!("{e}: {}{}", stdout(&out), stderr(&out)));
@@ -228,12 +295,12 @@ fn a_query_with_the_database_gone_reads_the_cache_and_says_so() {
         return;
     };
     let p = Proj::reading(&repo);
-    let out = p.devkit(&["rules", "pull"], &[(DATABASE_VAR, &store.url)]);
+    let relay = Relay::to(&store.url);
+    let out = p.devkit(&["rules", "pull"], &[(DATABASE_VAR, &relay.url)]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let out = p.devkit(&["rules", "query", "--format", "json"], &[(
-        DATABASE_VAR,
-        UNREACHABLE,
-    )]);
+    let url = relay.url.clone();
+    relay.close();
+    let out = p.devkit(&["rules", "query", "--format", "json"], &[(DATABASE_VAR, &url)]);
     assert!(out.status.success(), "{}", stderr(&out));
     let rules: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
     assert!(!rules.is_empty());
