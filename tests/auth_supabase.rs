@@ -160,7 +160,7 @@ fn password_sign_in_saves_a_session() {
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("signed in to"),
+        String::from_utf8_lossy(&out.stdout).contains(&format!("signed in to {url} as f@x")),
         "{}",
         String::from_utf8_lossy(&out.stdout)
     );
@@ -222,6 +222,8 @@ fn browser_flow_exchanges_the_code() {
         "{}",
         stderr(&out)
     );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("as f@x"), "{stdout}");
     assert_eq!(p.sessions().len(), 1);
 }
 

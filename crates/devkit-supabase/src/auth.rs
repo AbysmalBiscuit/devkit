@@ -29,6 +29,9 @@ pub struct Session {
     pub refresh_token: String,
     /// When the access token expires, in Unix seconds.
     pub expires_at: i64,
+    /// The signed-in user's email, as the server gave it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
 impl fmt::Debug for Session {
@@ -53,6 +56,13 @@ struct Granted {
     refresh_token: String,
     expires_at: Option<i64>,
     expires_in: Option<i64>,
+    user: Option<User>,
+}
+
+/// The user a token grant signed in.
+#[derive(Deserialize)]
+struct User {
+    email: Option<String>,
 }
 
 /// The error body Supabase Auth answers a refused request with, in either of
@@ -260,6 +270,7 @@ fn session_of(granted: Granted) -> Session {
         access_token: granted.access_token,
         refresh_token: granted.refresh_token,
         expires_at,
+        email: granted.user.and_then(|user| user.email),
     }
 }
 

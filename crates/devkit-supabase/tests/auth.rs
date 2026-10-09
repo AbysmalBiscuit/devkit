@@ -84,6 +84,7 @@ impl Fixture {
                 access_token: access.into(),
                 refresh_token: "r0".into(),
                 expires_at,
+                email: None,
             })
             .unwrap();
     }

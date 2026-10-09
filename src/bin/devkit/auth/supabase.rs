@@ -63,15 +63,15 @@ pub fn run(login: SupabaseLogin) -> Result<()> {
     let client = Client::new(&url, key, WAIT)?;
     let url = client.url();
     let file = SessionFile::for_url(&devkit_common::paths::state_dir(), url);
-    let (session, who) = if login.password {
+    let session = if login.password {
         password(&client, &config)?
     } else if login.email {
         email(&client)?
     } else {
-        (browser(&client, &config, login.with.as_deref())?, None)
+        browser(&client, &config, login.with.as_deref())?
     };
     file.save(&session)?;
-    match who {
+    match &session.email {
         Some(email) => println!("signed in to {url} as {email}"),
         None => println!("signed in to {url}"),
     }
@@ -87,7 +87,7 @@ fn project_config() -> Result<RulesSupabaseConfig> {
     Ok(project.rules.supabase)
 }
 
-fn password(client: &Client, config: &RulesSupabaseConfig) -> Result<(Session, Option<String>)> {
+fn password(client: &Client, config: &RulesSupabaseConfig) -> Result<Session> {
     let (credentials, _) = crate::rules::resolve_credentials(config, SecretLookup::Doppler);
     let Some(credentials) = credentials else {
         bail!(
@@ -96,11 +96,10 @@ fn password(client: &Client, config: &RulesSupabaseConfig) -> Result<(Session, O
             crate::rules::SUPABASE_PASSWORD_VAR
         );
     };
-    let session = client.password(&credentials)?;
-    Ok((session, Some(credentials.email)))
+    client.password(&credentials)
 }
 
-fn email(client: &Client) -> Result<(Session, Option<String>)> {
+fn email(client: &Client) -> Result<Session> {
     if !std::io::stdin().is_terminal() {
         bail!("--email reads a code typed into a terminal; use --password elsewhere");
     }
@@ -108,8 +107,7 @@ fn email(client: &Client) -> Result<(Session, Option<String>)> {
     client.send_code(&email)?;
     eprintln!("Supabase emailed a code to {email}.");
     let code = prompt("Code: ")?;
-    let session = client.verify_code(&email, &code)?;
-    Ok((session, Some(email)))
+    client.verify_code(&email, &code)
 }
 
 fn prompt(label: &str) -> Result<String> {
