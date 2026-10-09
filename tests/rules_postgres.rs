@@ -500,7 +500,7 @@ fn a_stalled_database_injects_nothing_within_the_hooks_wait() {
     assert_eq!(injected(&out), None);
     let err = stderr(&out);
     assert_eq!(err.lines().count(), 1, "{err}");
-    assert!(err.contains("no answer within 1s"), "{err}");
+    assert!(err.contains("no answer within"), "{err}");
 }
 
 /// `devkit brief` with `args`, as session `S`'s hook runs it.
@@ -659,7 +659,8 @@ fn doppler_proj(repo: &str) -> Proj {
     ))
 }
 
-/// Hooks reuse the URL Doppler gave rather than asking it on every write.
+/// Session start asks Doppler and keeps its URL, and write hooks reuse the
+/// kept URL without asking Doppler at all.
 #[cfg(unix)]
 #[test]
 fn hooks_reuse_the_url_doppler_gave() {
@@ -669,18 +670,38 @@ fn hooks_reuse_the_url_doppler_gave() {
     let p = doppler_proj(&repo);
     let bin = tempfile::tempdir().unwrap();
     let path = fake_doppler(bin.path(), &store.url);
+    let env = [("PATH", path.as_str())];
+    let out = p.devkit(&["rules", "context"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
     for session in ["S1", "S2", "S3"] {
-        let out = p.write_hook_as(session, "crates/foo/bar/lib.rs", &[("PATH", path.as_str())]);
+        let out = p.write_hook_as(session, "crates/foo/bar/lib.rs", &env);
         assert!(injected(&out).is_some(), "{}", stderr(&out));
     }
     assert_eq!(doppler_calls(bin.path()), 1);
 }
 
-/// A kept URL that fails to connect is dropped, so the next hook asks Doppler
-/// for a rotated credential or a moved database.
+/// A write hook with no kept URL injects nothing rather than wait on
+/// Doppler.
 #[cfg(unix)]
 #[test]
-fn a_hook_that_cannot_connect_asks_doppler_again() {
+fn a_write_hook_never_asks_doppler() {
+    let p = doppler_proj("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
+    let bin = tempfile::tempdir().unwrap();
+    let url = format!(
+        "postgres://agent:pw@{}/rules?sslmode=disable",
+        refused_addr()
+    );
+    let path = fake_doppler(bin.path(), &url);
+    let out = p.write_hook("crates/foo/bar/lib.rs", &[("PATH", path.as_str())]);
+    assert_eq!(injected(&out), None);
+    assert_eq!(doppler_calls(bin.path()), 0);
+}
+
+/// A database that does not answer leaves the kept URL in place, since the
+/// write hooks find their cache through it, and session start reuses it.
+#[cfg(unix)]
+#[test]
+fn an_unreachable_database_keeps_the_url_doppler_gave() {
     let p = doppler_proj("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
     let bin = tempfile::tempdir().unwrap();
     let url = format!(
@@ -689,8 +710,101 @@ fn a_hook_that_cannot_connect_asks_doppler_again() {
     );
     let path = fake_doppler(bin.path(), &url);
     for _ in 0..2 {
-        let out = p.write_hook("crates/foo/bar/lib.rs", &[("PATH", path.as_str())]);
-        assert_eq!(injected(&out), None);
+        p.devkit(&["rules", "context"], &[("PATH", path.as_str())]);
+    }
+    assert_eq!(doppler_calls(bin.path()), 1);
+}
+
+/// A server that answers every startup with an error carrying `sqlstate`, as
+/// one with no free connection slot answers with `53300`. Returns its
+/// `127.0.0.1:<port>`.
+#[cfg(unix)]
+fn refusing_addr(sqlstate: &'static str) -> String {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut len = [0; 4];
+            if stream.read_exact(&mut len).is_err() {
+                continue;
+            }
+            let mut rest = vec![0; (u32::from_be_bytes(len) as usize).saturating_sub(4)];
+            if stream.read_exact(&mut rest).is_err() {
+                continue;
+            }
+            let mut fields = Vec::new();
+            for (kind, value) in [(b'S', "FATAL"), (b'C', sqlstate), (b'M', "refused")] {
+                fields.push(kind);
+                fields.extend_from_slice(value.as_bytes());
+                fields.push(0);
+            }
+            fields.push(0);
+            let mut message = vec![b'E'];
+            message.extend_from_slice(&(fields.len() as u32 + 4).to_be_bytes());
+            message.extend_from_slice(&fields);
+            let _ = stream.write_all(&message);
+        }
+    });
+    addr
+}
+
+/// A server too busy to take the connection says nothing about the URL, so
+/// the kept URL stays and session start reuses it.
+#[cfg(unix)]
+#[test]
+fn a_database_out_of_connections_keeps_the_url_doppler_gave() {
+    let p = doppler_proj("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
+    let bin = tempfile::tempdir().unwrap();
+    let url = format!(
+        "postgres://agent:pw@{}/rules?sslmode=disable",
+        refusing_addr("53300")
+    );
+    let path = fake_doppler(bin.path(), &url);
+    for _ in 0..2 {
+        let out = p.devkit(&["rules", "context"], &[("PATH", path.as_str())]);
+        assert!(stderr(&out).contains("refused"), "{}", stderr(&out));
+    }
+    assert_eq!(doppler_calls(bin.path()), 1);
+}
+
+/// A refused login or a missing database drops the kept URL, so the next
+/// session asks Doppler again.
+#[cfg(unix)]
+#[test]
+fn a_refused_login_or_missing_database_drops_the_url_doppler_gave() {
+    for sqlstate in ["28P01", "3D000"] {
+        let p = doppler_proj("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
+        let bin = tempfile::tempdir().unwrap();
+        let url = format!(
+            "postgres://agent:pw@{}/rules?sslmode=disable",
+            refusing_addr(sqlstate)
+        );
+        let path = fake_doppler(bin.path(), &url);
+        for _ in 0..2 {
+            p.devkit(&["rules", "context"], &[("PATH", path.as_str())]);
+        }
+        assert_eq!(doppler_calls(bin.path()), 2, "{sqlstate}");
+    }
+}
+
+/// A login the database refuses drops the kept URL, so the next session
+/// asks Doppler for a rotated credential.
+#[cfg(unix)]
+#[test]
+fn a_refused_login_asks_doppler_again() {
+    let Some((store, repo)) = imported() else {
+        return;
+    };
+    let wrong = store
+        .url
+        .replacen("postgres:postgres@", "postgres:wrong@", 1);
+    assert_ne!(wrong, store.url, "the test URL carries postgres:postgres");
+    let p = doppler_proj(&repo);
+    let bin = tempfile::tempdir().unwrap();
+    let path = fake_doppler(bin.path(), &wrong);
+    for _ in 0..2 {
+        p.devkit(&["rules", "context"], &[("PATH", path.as_str())]);
     }
     assert_eq!(doppler_calls(bin.path()), 2);
 }
@@ -753,4 +867,34 @@ fn a_project_layer_cannot_name_the_ca_file() {
         detail.contains(global_ca),
         "the global CA file is read: {detail}"
     );
+}
+
+#[test]
+fn revision_counts_each_edit() {
+    use devkit_rules::{edit::Fields, remote::RemoteRules, source::RuleSource};
+
+    let Some((store, repo)) = imported() else {
+        return;
+    };
+    let db = devkit_postgres::Database::new(
+        &store.url,
+        Duration::from_secs(10),
+        &devkit_common::tls::Trust::default(),
+        "rules database",
+    )
+    .unwrap();
+    let source = devkit_rules::postgres::PostgresSource::new(
+        std::sync::Arc::new(db),
+        Some(&repo),
+        std::path::Path::new("/srv/acme"),
+    );
+    let before = source.revision().unwrap();
+    assert_eq!(before, revision(&store, &repo));
+    let fields = Fields {
+        title: Some("Counted".to_string()),
+        ..Fields::default()
+    };
+    source.add("", fields).unwrap();
+    assert_eq!(source.revision().unwrap(), before + 1);
+    assert_eq!(source.pull().unwrap().0, before + 1);
 }

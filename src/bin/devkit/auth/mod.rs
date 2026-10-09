@@ -13,6 +13,10 @@ use devkit_common::{
 
 use crate::Provider;
 
+mod supabase;
+
+pub use supabase::SupabaseLogin;
+
 fn store_linear(path: &Path, token: &str, id: &linear::LinearIdentity) -> Result<()> {
     secrets::store_at(path, "linear_api_key", token)?;
     secrets::store_at(path, "linear_workspace", &id.workspace_url_key)?;
@@ -23,7 +27,19 @@ fn store_slack(path: &Path, token: &str) -> Result<()> {
     secrets::store_at(path, "slack_token", token)
 }
 
-pub fn run(provider: Provider, token: Option<String>) -> Result<()> {
+pub fn run(provider: Provider, token: Option<String>, login: SupabaseLogin) -> Result<()> {
+    if !matches!(provider, Provider::Supabase) && login.any() {
+        anyhow::bail!(
+            "--with, --email, --password and --url apply to `devkit auth supabase` alone"
+        );
+    }
+    if let Provider::Supabase = provider {
+        anyhow::ensure!(
+            token.is_none(),
+            "`devkit auth supabase` takes no --token: it signs in by browser, --email or --password"
+        );
+        return supabase::run(login);
+    }
     if let Provider::Github = provider {
         // Reporting has nowhere to put a token. Accepting one and discarding it
         // would leave the caller believing devkit now holds their credential.
@@ -55,7 +71,7 @@ pub fn run(provider: Provider, token: Option<String>) -> Result<()> {
             store_slack(&path, &token)?;
             println!("✓ slack: team \"{}\" (user {})", id.team, id.user);
         }
-        Provider::Github => unreachable!("handled above"),
+        Provider::Github | Provider::Supabase => unreachable!("handled above"),
     }
     println!("  saved to {}", path.display());
     Ok(())
@@ -83,6 +99,7 @@ fn hint(provider: Provider) -> &'static str {
         Provider::Linear => "Create a Personal API Key at https://linear.app/settings/api",
         Provider::Slack => "Create a bot token on your Slack app's OAuth & Permissions page",
         Provider::Github => "run: gh auth login",
+        Provider::Supabase => "run: devkit auth supabase",
     }
 }
 
@@ -258,7 +275,12 @@ mod tests {
     /// point without reaching the network.
     #[test]
     fn a_token_handed_to_github_is_refused_rather_than_discarded() {
-        let e = run(Provider::Github, Some("ghp_x".into())).unwrap_err();
+        let e = run(
+            Provider::Github,
+            Some("ghp_x".into()),
+            SupabaseLogin::default(),
+        )
+        .unwrap_err();
         let msg = format!("{e:#}");
         assert!(msg.contains("stores no GitHub credential"), "{msg}");
         assert!(msg.contains("GH_TOKEN"), "{msg}");

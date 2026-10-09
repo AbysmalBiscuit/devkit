@@ -57,19 +57,26 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Store a Linear or Slack token, or report the GitHub identity.
+    /// Store a token, report the GitHub identity, or sign in to Supabase.
     ///
-    /// Validates the credential before writing it. GitHub stores nothing,
-    /// since `gh auth login` or `GH_TOKEN`/`GITHUB_TOKEN` already cover that
-    /// credential; for `github` this reports the identity behind whichever
-    /// token resolves.
+    /// Linear and Slack tokens are stored. Validates the credential before
+    /// writing it. GitHub stores nothing, since `gh auth login` or
+    /// `GH_TOKEN`/`GITHUB_TOKEN` already cover that credential; for
+    /// `github` this reports the identity behind whichever token resolves.
+    /// `supabase` signs in to the project `[rules.supabase]` names, in the
+    /// browser through a provider the project enables, by an emailed code
+    /// (`--email`), or with the email and password the secrets resolve to
+    /// (`--password`), and keeps the session for hooks.
     Auth {
-        /// Credential to validate and store, or `github` to report identity.
+        /// Credential to validate and store, `github` to report identity, or
+        /// `supabase` to sign in to the rules API.
         provider: Provider,
         /// Provide the token non-interactively instead of being prompted.
-        /// Refused for `github`, which stores nothing.
+        /// Refused for `github`, which stores nothing, and for `supabase`.
         #[arg(long)]
         token: Option<String>,
+        #[command(flatten)]
+        supabase: auth::SupabaseLogin,
     },
     /// Print a project brief for the current checkout.
     ///
@@ -209,6 +216,7 @@ enum Provider {
     Linear,
     Slack,
     Github,
+    Supabase,
 }
 
 impl Provider {
@@ -217,6 +225,7 @@ impl Provider {
             Provider::Linear => "Linear",
             Provider::Slack => "Slack",
             Provider::Github => "GitHub",
+            Provider::Supabase => "Supabase",
         }
     }
 }
@@ -427,7 +436,11 @@ fn main() -> Result<()> {
         None => {
             let cli = parse_cli(&args);
             match cli.cmd {
-                Cmd::Auth { provider, token } => auth::run(provider, token),
+                Cmd::Auth {
+                    provider,
+                    token,
+                    supabase,
+                } => auth::run(provider, token, supabase),
                 Cmd::Brief {
                     pins_only,
                     if_changed,

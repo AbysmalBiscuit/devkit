@@ -1,10 +1,14 @@
 //! The Postgres connection devkit's database-backed stores share: how a URL
 //! becomes a connection config, how a database is named without its
-//! credentials, and how a client connects, over TLS unless the URL says
-//! otherwise. What a store does with the connection, how long it waits and
-//! how it reads a failure stay with the store.
+//! credentials, how a client connects, over TLS unless the URL says
+//! otherwise, and the [`Database`] runner that connects on first use and
+//! bounds each operation by a wait. What a store does with the connection
+//! and how it reads its own refusals stay with the store.
+
+mod database;
 
 use anyhow::{Result, anyhow};
+pub use database::{Database, is_rejected_login, is_unreachable};
 use devkit_common::tls::Trust;
 use tokio_postgres::{
     Client, Config, NoTls,

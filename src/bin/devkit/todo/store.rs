@@ -252,7 +252,7 @@ pub(crate) fn open_database(
             cache.remember(scope, &url);
         }
         let scope = scope.clone();
-        db.on_connect_failure(move || cache.forget(&scope, &url));
+        db.on_connect_failure(move |_| cache.forget(&scope, &url));
     }
     (db, resolved.source)
 }

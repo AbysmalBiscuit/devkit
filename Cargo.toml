@@ -42,6 +42,8 @@ devkit-ticket.workspace = true
 devkit-mcp.workspace = true
 devkit-docs.workspace = true
 devkit-rules.workspace = true
+devkit-postgres.workspace = true
+devkit-supabase.workspace = true
 devkit-timing.workspace = true
 devkit-todo.workspace = true
 devkit-todo-builtin.workspace = true
@@ -59,6 +61,7 @@ tempfile.workspace = true
 similar = "2"
 devkit-common = { workspace = true, features = ["test-support"] }
 devkit-git = { workspace = true, features = ["test-support"] }
+devkit-supabase = { workspace = true, features = ["test-support"] }
 same-file.workspace = true
 serde_yaml_ng.workspace = true
 tokio.workspace = true
@@ -71,7 +74,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-ticket", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskchampion", "crates/devkit-todo-postgres", "crates/devkit-todo-supabase", "crates/devkit-postgres"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-ticket", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskchampion", "crates/devkit-todo-postgres", "crates/devkit-todo-supabase", "crates/devkit-postgres", "crates/devkit-supabase"]
 
 [workspace.package]
 edition = "2024"
@@ -136,6 +139,8 @@ rustls-native-certs = "0.8"
 # Already in the tree under reqwest's TLS stack, so taking it directly for
 # `harness_log`'s digest adds no crate to the lock.
 ring = "0.17"
+# PKCE verifiers and challenges for Supabase Auth sign-in.
+base64 = "0.22"
 rpassword = "7"
 rayon = "1.12"
 tracing = "0.1"
@@ -159,6 +164,7 @@ devkit-todo-taskchampion = { path = "crates/devkit-todo-taskchampion" }
 devkit-todo-postgres = { path = "crates/devkit-todo-postgres" }
 devkit-todo-supabase = { path = "crates/devkit-todo-supabase" }
 devkit-postgres = { path = "crates/devkit-postgres" }
+devkit-supabase = { path = "crates/devkit-supabase" }
 tree-sitter = "0.27"
 tree-sitter-bash = "0.25"
 tree-sitter-powershell = "0.26"

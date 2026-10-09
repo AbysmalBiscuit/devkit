@@ -8,8 +8,9 @@ devkit injects a repository's coding rules into an agent's context: the rules go
 
 - `file` (the default): an index file the extractor writes, of either kind: a **SQLite store** (`index.sqlite`), what `repo-rules index` writes now, or a legacy **JSON index** (`index.json`).
 - `postgres`: one repository in the extractor's shared Postgres store, the `repo_rules` schema, which every machine and the extraction workers use. `[rules.postgres] repository` names the repository's UUID.
+- `supabase`: the same store reached over a Supabase project's Data API, through `repo-rules-agent`'s `repo_rules_api` functions, for a machine that can make HTTPS requests but not open a Postgres connection. `[rules.supabase] repository` names the repository's UUID.
 
-`devkit doctor` prints the `rules_source` row: the source, the kind of store it found (`sqlite`, `json` or `postgres`), and where it is.
+`devkit doctor` prints the `rules_source` row: the source, the kind of store it found (`sqlite`, `json`, `postgres` or `supabase`), and where it is. A remote source (`postgres` or `supabase`) is read through a local cache; see [The cache](#the-cache).
 
 Whatever the source, a rule with no tasks applies to every task, the severity filters work as a floor (`--min-severity`) as well as an exact match, and a removed rule never appears. Reading never changes the store.
 
@@ -54,7 +55,7 @@ The connection URL comes from `DEVKIT_RULES_DATABASE_URL`: the environment first
 devkit_rules_database_url = "postgres://..."
 ```
 
-A URL Doppler gives is kept in devkit's state directory, readable only by you, and hooks reuse it for a while instead of asking Doppler on every write. Commands and `devkit doctor` ask Doppler afresh and refresh the kept copy, and a hook that fails to connect with it drops it, so the next hook picks up a rotated credential or a moved database.
+A URL Doppler gives is kept in devkit's state directory, readable only by you, and hooks reuse it instead of asking Doppler on every write. Commands and `devkit doctor` ask Doppler afresh and refresh the kept copy. Session start reuses it for a while, then asks Doppler again, and keeps using it when Doppler gives none. A write hook never asks Doppler: the kept URL names the cache it reads, so writes find their rules offline. A refused login or a missing database drops the kept URL, so the next session picks up a rotated credential; a database that does not answer, or answers busy or starting, leaves it in place.
 
 The connection always uses TLS and verifies the server's certificate against the bundled Mozilla roots, the platform's store, and the PEM file `[rules.postgres] ca_file` names. devkit reads `ca_file` from your own `~/.config/devkit/config.toml` alone; a project's `devkit.toml` cannot add a CA. Only `sslmode=disable` in the URL connects in plaintext.
 
@@ -62,7 +63,7 @@ The role in the URL reads and writes the `repo_rules` tables directly, so it mus
 
 ### Failures
 
-A hook that cannot read the rules injects none and prints one line on stderr naming why: the database is unreachable, gives no answer within the hook's short wait, refuses the login, holds no such repository, or is at an unsupported storage version. The write itself goes ahead. A hook asks Doppler for the URL when its kept copy is missing or stale, and that lookup adds its own wait before the hook connects. `devkit rules query`, `stats`, `add`, `edit` and `remove` exit non-zero with the same cause. `devkit doctor` shows the source, the repository, where the URL resolved from and whether the database answers, never the URL itself.
+Hooks read the rules from the local cache (see [The cache](#the-cache)), so once the cache exists a write hook never waits on the database. With no cache yet, a hook that cannot read the rules injects none and prints one line on stderr naming why: the database is unreachable, gives no answer within the hook's short wait, refuses the login, holds no such repository, or is at an unsupported storage version. The write itself goes ahead. A write hook never asks Doppler for the URL; session start asks when the kept copy is missing or has aged out, and that lookup adds its own wait before it connects. `devkit rules query`, `stats`, `add`, `edit` and `remove` exit non-zero with the same cause. `devkit doctor` shows the source, the repository, where the URL resolved from and whether the database answers, never the URL itself.
 
 ### Edits
 
@@ -73,3 +74,66 @@ Each edit is one transaction that first locks the repository's row, as every wri
 - `remove` leaves a pinned tombstone, a rule added by hand included, and every reader skips it.
 
 Imported records can share an id. An edit or removal naming an id that more than one live rule carries changes nothing and says so; change those through `repo-rules-agent`.
+
+## The Supabase source
+
+```toml
+[rules]
+source = "supabase"
+
+[rules.supabase]
+repository = "<repository uuid>"
+publishable_key = "sb_publishable_..."
+callback_port = 7471            # the default
+doppler_project = "repo-rules"  # optional
+```
+
+The project URL, `https://<project-ref>.supabase.co`, comes from `DEVKIT_RULES_SUPABASE_URL`, else `[rules.supabase] url` in your own `~/.config/devkit/config.toml`. A project's `devkit.toml` cannot set it, so a checkout cannot send your session elsewhere.
+
+The `repo_rules_api` functions run as a signed-in Supabase user, and the repository's `repository_members` table gives that user a role: `reader` reads, `editor` and `owner` also edit. A repository the user has no role on answers exactly as a missing one does. Requests go one of three ways:
+
+- **As the user `devkit auth supabase` signed in.** The session is kept in devkit's state directory, readable only by you, and refreshed before it expires. See [Signing in](#signing-in).
+- **With an email and password.** With no session, or one that no longer refreshes, devkit signs in with `DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD`, which resolve as the Postgres URL does: the environment, then Doppler when `[rules.supabase] doppler_project` is set, then `~/.config/devkit/secrets.toml`. What Doppler gives is kept like the Postgres URL: session start asks Doppler again once the kept copy ages out and keeps it when Doppler gives none, and a write hook never asks Doppler. A sign-in the project refuses, or a request the API answers with 401, drops the kept copy, so the next session picks up a rotated password; a project that does not answer leaves it in place.
+- **With no credentials at all**, when `publishable_key` is unset: for a cloud container behind a proxy that attaches identity itself.
+
+Software factories share one Supabase user with the `reader` role, its email and password kept once in Doppler. Each factory resolves them with its Doppler service token, signs in, and fills its cache at session start; rotating the password in Doppler reaches every factory at its next sign-in. Supabase's service-role key is not used: the functions are granted only to signed-in users and check who is calling, and the key would bypass row-level security across the whole project.
+
+### Signing in
+
+`devkit auth supabase` signs in to the project `[rules.supabase]` names (or `--url`) and keeps the session for every hook and command on the machine. It needs `publishable_key`.
+
+- **Browser** (the default): devkit lists the sign-in providers the project enables, takes the only one or asks which (`--with <provider>` picks one), prints the provider's sign-in page and tries to open it, and waits up to five minutes for the browser to come back to `http://localhost:<callback_port>/callback`. The port defaults to 7471; devkit refuses it when its port registry holds it or something else listens there.
+- **`--email`**: Supabase emails a one-time code, which you type into the terminal. No browser.
+- **`--password`**: signs in with `DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD`, as hooks do when they have no session.
+
+Project setup: enable the providers wanted, add `http://localhost:<callback_port>/callback` to the project's redirect allow list exactly, and give each user a `repository_members` row. A sign-in the project refuses for its redirect says to add that URL. Hooks never open a browser: with no session and no password they fail with one stderr line naming `devkit auth supabase`.
+
+### Edits
+
+Each edit reads the rules afresh, for the repository's current revision and the rule's key, and sends that revision with the change. When another edit got in first, devkit reads again and retries once, then fails naming the conflict.
+
+- `add` files the rule under `<manual>`, and its id is the hash of `<manual>` and the title, the id the server assigns.
+- `edit` sends every editable field, the ones you pass over the rule's current values, and pins the rule.
+- `remove` leaves a pinned tombstone.
+- `--topic` is refused: topics change through `repo-rules-agent`.
+
+An id more than one live rule carries is refused, listing their keys.
+
+### Failures
+
+As for the Postgres source, a hook with a cache never waits on the API, and one without a cache injects nothing and prints one stderr line when the API cannot be read. A user whose role cannot edit gets `your role cannot edit repository <uuid>`; a value the server refuses comes back in the server's words. An expired or refused session is refreshed, then replaced by a password sign-in, then reported as `not signed in ...: run devkit auth supabase`. `devkit doctor` shows where the URL and sign-in resolve from, whether a session is kept and when its token expires, and whether the API answers, never a key, token or password.
+
+The API returns rules without the extractor's file tiers, so where the file source breaks a tie between equally specific rules by the tier of their files, this source keeps the store's order.
+
+## The cache
+
+A remote source's rules are read from a SQLite file under devkit's state directory, `rules-cache/<source>-<repository uuid>.sqlite`, which every worktree and session on the machine shares. The `file` source has no cache. The cache holds one repository's rules from one source; a file naming another source or repository, or written in a format devkit does not know, counts as no cache and is replaced at the next refresh. A refresh replaces the whole file in one transaction, so a reader sees the old rules or the new ones, never a mix.
+
+- **Session start** (`devkit rules context`, which the session hooks run) asks the remote for its revision and pulls the rules only when it differs from the cached one, within the hook's short wait. When that fails it prints one stderr line and injects from the cache it has.
+- **`devkit rules pull`** pulls the remote's rules and replaces the cache with them, whatever revision it holds, and prints the source, the revision and the rule count. It exits non-zero naming the cause when the remote cannot be read, and refuses the `file` source, which has nothing to pull.
+- **A cache ahead of the remote**: every refresh but `devkit rules pull` keeps a cache that holds a later revision than the one it pulled, so two sessions refreshing at once cannot put older rules over newer ones. When the remote's revision goes backwards, for example because its database was recreated, the cache keeps serving the old rules until `devkit rules pull` replaces it with what the remote holds now.
+- **`devkit rules query` and `stats`** refresh as session start does, with a command's longer wait. A failed refresh prints one stderr line and the command reads the cache; it exits non-zero only when there is no cache either. Given an index file as an argument, they read that file alone and never touch the cache or the remote.
+- **A write hook** reads the cache alone and never refreshes it. With no cache at all, it reads the remote directly within its short wait and fills nothing.
+- **`add`, `edit` and `remove`** change the remote, then pull it into the cache, so the next read shows the change. When that pull fails the edit still stands, and one stderr line says the cache is stale.
+
+`devkit doctor`'s `rules_cache` row shows the cache's path, the revision it holds and how long ago it was pulled, or warns that there is no cache yet.

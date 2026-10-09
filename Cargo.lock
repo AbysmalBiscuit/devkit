@@ -527,7 +527,9 @@ dependencies = [
  "devkit-locks",
  "devkit-mcp",
  "devkit-ports",
+ "devkit-postgres",
  "devkit-rules",
+ "devkit-supabase",
  "devkit-ticket",
  "devkit-timing",
  "devkit-todo",
@@ -730,6 +732,7 @@ dependencies = [
  "devkit-common",
  "devkit-config",
  "devkit-postgres",
+ "devkit-supabase",
  "glob",
  "ring",
  "rusqlite",
@@ -741,6 +744,21 @@ dependencies = [
  "tokio-postgres",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "devkit-supabase"
+version = "0.14.16"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "devkit-common",
+ "devkit-supabase",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -805,7 +823,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-postgres",
- "tokio-postgres-rustls",
 ]
 
 [[package]]
@@ -814,10 +831,9 @@ version = "0.14.16"
 dependencies = [
  "anyhow",
  "chrono",
- "devkit-common",
+ "devkit-supabase",
  "devkit-todo",
  "devkit-todo-postgres",
- "reqwest",
  "serde",
  "serde_json",
  "tokio",

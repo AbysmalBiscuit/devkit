@@ -6,168 +6,23 @@
 //! store does, so concurrent edits serialize and each sees the last. No
 //! statement is named, so a transaction-mode pooler may sit in between.
 
-use std::{fmt, path::Path, time::Duration};
+use std::{path::Path, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail};
-use devkit_common::tls::Trust;
 use serde_json::{Map, Value};
-use tokio_postgres::{
-    Client, Config, GenericClient, IsolationLevel, Row, config::SslMode, error::SqlState,
-    types::Type,
-};
+use tokio_postgres::{GenericClient, IsolationLevel, Row, error::SqlState, types::Type};
 
 use crate::{
-    edit::{Fields, rule_id},
+    edit::{Fields, MANUAL_SOURCE, apply, rule_id},
     model::{Rule, RuleFile, RuleIndex},
+    remote::{RemoteRules, parse_repository},
     source::RuleSource,
 };
 
 /// The storage version this source reads and writes.
 const STORAGE_VERSION: i32 = 1;
 
-/// The source file a rule added by hand belongs to, as the store's own
-/// `put_rule` names it.
-const MANUAL_SOURCE: &str = "<manual>";
-
-/// One database, reached afresh for each operation. Each operation,
-/// connecting included, gives up after `wait`.
-pub struct Database {
-    /// Boxed: a parsed config is ten times the size of every other source.
-    config: Result<Box<Config>, String>,
-    trust: Trust,
-    wait: Duration,
-    /// Called each time connecting fails, refused or rejected alike.
-    on_connect_failure: Option<Box<dyn Fn()>>,
-}
-
-impl fmt::Debug for Database {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Database")
-            .field("target", &self.target())
-            .field("wait", &self.wait)
-            .finish()
-    }
-}
-
-impl Database {
-    /// The database `url` names, a `postgres://` URL or libpq's `key=value`
-    /// form. The connection always uses TLS and verifies the server's
-    /// certificate against the default roots and `trust`, unless the URL says
-    /// `sslmode=disable`. An error never repeats the URL, which carries the
-    /// password.
-    pub fn new(url: &str, trust: Trust, wait: Duration) -> Result<Database> {
-        let config = devkit_postgres::config(url)
-            .map_err(|_| anyhow!("the rules database URL does not parse"))?;
-        Ok(Database {
-            config: Ok(Box::new(config)),
-            trust,
-            wait,
-            on_connect_failure: None,
-        })
-    }
-
-    /// A database every operation on fails with `reason`, for a URL that is
-    /// missing or does not parse.
-    pub fn unusable(reason: impl fmt::Display) -> Database {
-        Database {
-            config: Err(reason.to_string()),
-            trust: Trust::default(),
-            wait: Duration::ZERO,
-            on_connect_failure: None,
-        }
-    }
-
-    /// This database, running `f` each time connecting fails, for a caller
-    /// whose URL may have gone stale.
-    pub fn on_connect_failure(self, f: impl Fn() + 'static) -> Database {
-        Database {
-            on_connect_failure: Some(Box::new(f)),
-            ..self
-        }
-    }
-
-    /// `host:port/dbname`, without the user or password.
-    pub fn target(&self) -> String {
-        match &self.config {
-            Ok(config) => devkit_postgres::target(config),
-            Err(_) => "no database".to_string(),
-        }
-    }
-
-    /// Connects and runs `op` within the wait. An error from the database or
-    /// the network names the database; the source's own refusals read as
-    /// they are.
-    fn run<T>(&self, op: impl AsyncFnOnce(&mut Client) -> Result<T>) -> Result<T> {
-        let config = self.config.as_ref().map_err(|reason| anyhow!("{reason}"))?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .context("starting the Postgres runtime")?;
-        let wait = self.wait;
-        let connected = std::cell::Cell::new(false);
-        let attempt = async {
-            let mut client = connect(config, &self.trust).await?;
-            connected.set(true);
-            op(&mut client).await
-        };
-        let out = runtime.block_on(async { tokio::time::timeout(wait, attempt).await });
-        if !connected.get()
-            && let Some(f) = &self.on_connect_failure
-        {
-            f();
-        }
-        let named = |e: anyhow::Error| e.context(format!("rules database {}", self.target()));
-        match out {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(e)) if from_database(&e) => Err(named(e)),
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(named(anyhow::Error::new(NoAnswer(wait)))),
-        }
-    }
-}
-
-async fn connect(config: &Config, trust: &Trust) -> Result<Client> {
-    let tls = match config.get_ssl_mode() {
-        SslMode::Disable => None,
-        _ => Some(
-            devkit_postgres::tls(trust)
-                .await
-                .context("setting up TLS for the rules database")?,
-        ),
-    };
-    Ok(devkit_postgres::connect(config, tls).await?)
-}
-
-/// An operation that ran out of its wait.
-#[derive(Debug)]
-struct NoAnswer(Duration);
-
-impl fmt::Display for NoAnswer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "no answer within {:?}", self.0)
-    }
-}
-
-impl std::error::Error for NoAnswer {}
-
-/// Whether `e` is an operation that got no answer from the server: it could
-/// not connect, timed out, or lost the connection. A refused login, a missing
-/// repository or an unsupported store is an answer.
-pub fn is_unreachable(e: &anyhow::Error) -> bool {
-    e.chain().any(|cause| {
-        cause.downcast_ref::<NoAnswer>().is_some()
-            || cause
-                .downcast_ref::<tokio_postgres::Error>()
-                .is_some_and(|e| e.as_db_error().is_none())
-    })
-}
-
-/// Whether `e` came from the database or the network rather than from the
-/// source's own checks.
-fn from_database(e: &anyhow::Error) -> bool {
-    e.chain()
-        .any(|cause| cause.downcast_ref::<tokio_postgres::Error>().is_some())
-}
+pub use devkit_postgres::{Database, is_unreachable};
 
 /// Whether `e` is the server reporting that a table or schema does not exist.
 fn missing_relation(e: &tokio_postgres::Error) -> bool {
@@ -178,7 +33,7 @@ fn missing_relation(e: &tokio_postgres::Error) -> bool {
 
 /// The rule source over one repository in the store.
 pub struct PostgresSource {
-    db: Database,
+    db: Arc<Database>,
     /// The repository's UUID, lowercased, or why there is none.
     repository: Result<String, String>,
     /// The local checkout the rules describe, reported as the index's `repo`
@@ -189,15 +44,10 @@ pub struct PostgresSource {
 impl PostgresSource {
     /// The repository `repository` names in `db`, describing the checkout at
     /// `repo`.
-    pub fn new(db: Database, repository: Option<&str>, repo: &Path) -> PostgresSource {
-        let repository = match repository.map(str::trim) {
-            None | Some("") => Err("[rules.postgres] repository is not set".to_string()),
-            Some(id) if is_uuid(id) => Ok(id.to_ascii_lowercase()),
-            Some(id) => Err(format!("[rules.postgres] repository {id:?} is not a UUID")),
-        };
+    pub fn new(db: Arc<Database>, repository: Option<&str>, repo: &Path) -> PostgresSource {
         PostgresSource {
             db,
-            repository,
+            repository: parse_repository("[rules.postgres]", repository),
             repo: repo.display().to_string(),
         }
     }
@@ -260,10 +110,29 @@ impl PostgresSource {
     }
 }
 
-impl RuleSource for PostgresSource {
-    fn read(&self) -> Result<Option<RuleIndex>> {
+impl RemoteRules for PostgresSource {
+    /// The repository's revision, which every edit to its rules increments.
+    fn revision(&self) -> Result<i64> {
         let repo = self.repository()?;
-        let (rules, files) = self.db.run(async |client| {
+        self.db.run(async |client| {
+            check_version(&*client).await?;
+            let rows = client
+                .query_typed(
+                    "SELECT revision FROM repo_rules.repositories WHERE repo_id = $1::uuid",
+                    &[(&repo, Type::TEXT)],
+                )
+                .await?;
+            match rows.first() {
+                Some(row) => Ok(row.get(0)),
+                None => bail!("no repository {repo} in the rules store"),
+            }
+        })
+    }
+
+    /// The live rules and the revision they are at, read from one snapshot.
+    fn pull(&self) -> Result<(i64, RuleIndex)> {
+        let repo = self.repository()?;
+        let (revision, rules, files) = self.db.run(async |client| {
             let tx = client
                 .build_transaction()
                 .isolation_level(IsolationLevel::RepeatableRead)
@@ -272,6 +141,13 @@ impl RuleSource for PostgresSource {
                 .await?;
             check_version(&tx).await?;
             find_repository(&tx, repo, false).await?;
+            let revision: i64 = tx
+                .query_typed_one(
+                    "SELECT revision FROM repo_rules.repositories WHERE repo_id = $1::uuid",
+                    &[(&repo, Type::TEXT)],
+                )
+                .await?
+                .get(0);
             let rules = tx
                 .query_typed(&format!("{RULES} AND NOT r.removed {ORDER}"), &[(
                     &repo,
@@ -293,13 +169,33 @@ impl RuleSource for PostgresSource {
                 .map(file_of)
                 .collect::<Result<Vec<_>>>()?;
             tx.commit().await?;
-            Ok((rules, files))
+            Ok((revision, rules, files))
         })?;
-        Ok(Some(RuleIndex {
+        let index = RuleIndex {
             repo: self.repo.clone(),
             files,
             rules,
-        }))
+        };
+        Ok((revision, index))
+    }
+
+    fn repository_id(&self) -> Option<&str> {
+        self.repository.as_deref().ok()
+    }
+
+    fn checkout(&self) -> &str {
+        &self.repo
+    }
+
+    /// The database's host, port and name, which carry no credential.
+    fn identity(&self) -> String {
+        self.db.target()
+    }
+}
+
+impl RuleSource for PostgresSource {
+    fn read(&self) -> Result<Option<RuleIndex>> {
+        self.pull().map(|(_, index)| Some(index))
     }
 
     fn add(&self, _repo: &str, fields: Fields) -> Result<String> {
@@ -478,15 +374,6 @@ fn extra_of(extra: &Map<String, Value>, rule: &Rule) -> String {
     Value::Object(extra).to_string()
 }
 
-/// `rule` with `fields` set, the way the file source sets them.
-fn apply(rule: Rule, fields: Fields) -> Result<Rule> {
-    let Value::Object(mut map) = serde_json::to_value(rule)? else {
-        unreachable!("a struct serializes to an object");
-    };
-    fields.apply(&mut map);
-    Ok(serde_json::from_value(Value::Object(map))?)
-}
-
 /// Fails unless the store is the version this source speaks.
 async fn check_version(db: &impl GenericClient) -> Result<()> {
     let rows = match db
@@ -613,27 +500,4 @@ async fn replace_lists(db: &impl GenericClient, repo: &str, key: &str, rule: &Ru
         .await?;
     }
     Ok(())
-}
-
-/// Whether `id` spells a UUID in its hyphenated form.
-fn is_uuid(id: &str) -> bool {
-    const HYPHENS: [usize; 4] = [8, 13, 18, 23];
-    id.len() == 36
-        && id.char_indices().all(|(i, c)| match HYPHENS.contains(&i) {
-            true => c == '-',
-            false => c.is_ascii_hexdigit(),
-        })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_repository_must_be_a_uuid() {
-        assert!(is_uuid("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10"));
-        assert!(is_uuid("0B6F6C1E-8F0E-4A43-9D55-3C0D2B1F9A10"));
-        assert!(!is_uuid("0b6f6c1e8f0e4a439d553c0d2b1f9a10"));
-        assert!(!is_uuid("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a1g"));
-    }
 }

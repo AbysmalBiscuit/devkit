@@ -296,7 +296,7 @@ fn outcome(end: Option<RunEnd>) -> String {
 }
 
 /// `seconds` as `1h 2m`, `5m 2s` or `12s`.
-fn duration(seconds: i64) -> String {
+pub(crate) fn duration(seconds: i64) -> String {
     let (h, m, s) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
     match (h, m) {
         (0, 0) => format!("{s}s"),

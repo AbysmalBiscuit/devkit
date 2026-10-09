@@ -16,7 +16,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, Transactio
 use serde_json::{Map, Value};
 
 use crate::{
-    edit::{Fields, rule_id},
+    edit::{Fields, MANUAL_SOURCE, rule_id},
     index::resolved,
     model::{Rule, RuleFile, RuleIndex},
     source::RuleSource,
@@ -26,8 +26,6 @@ use crate::{
 const SCHEMA_VERSION: i64 = 1;
 /// How long a write waits for another writer before failing.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-/// The extractor's synthetic source for rules a person added.
-const MANUAL_SOURCE: &str = "<manual>";
 /// Rule fields stored in their own columns or tables rather than in `extra`.
 const COLUMNS: [&str; 12] = [
     "id",

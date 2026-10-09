@@ -1,19 +1,26 @@
 //! Where rules are read from and edited. `[rules] source` picks the member of
 //! [`Source`], and every read and edit goes through [`RuleSource`].
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use ambassador::Delegate;
 use anyhow::Result;
 use devkit_common::vcs::Checkout;
-use devkit_config::{RulesConfig, RulesPostgresConfig, RulesSource};
+use devkit_config::{RulesConfig, RulesPostgresConfig, RulesSource, RulesSupabaseConfig};
+use devkit_supabase::Api;
 
 use crate::{
+    cache::{CacheKey, RuleCache, Write},
     edit::Fields,
     index::{FileSource, cache_dir},
     model::RuleIndex,
     postgres::{Database, PostgresSource},
+    remote::{Remote, RemoteRules},
     sqlite::{self, SqliteSource},
+    supabase::SupabaseSource,
 };
 
 /// A store of rules.
@@ -52,18 +59,23 @@ pub enum Source {
     Json(FileSource),
     /// The SQLite store the extractor writes by default.
     Sqlite(SqliteSource),
-    /// The shared Postgres store.
-    Postgres(PostgresSource),
+    /// A remote store, such as the shared Postgres store, read through its
+    /// local cache.
+    Cached(CachedSource),
 }
 
 impl Source {
     /// The source `settings` names for `checkout`'s repository. `database`
-    /// opens the database `[rules.postgres]` names, and is called only for
-    /// the `postgres` source.
+    /// opens the database `[rules.postgres]` names, called only for the
+    /// `postgres` source, and `api` the Data API `[rules.supabase]` names,
+    /// called only for the `supabase` source. Their caches live under
+    /// `state_dir`.
     pub fn for_checkout(
         settings: &RulesConfig,
         checkout: &Checkout,
-        database: impl FnOnce(&RulesPostgresConfig) -> Database,
+        database: impl FnOnce(&RulesPostgresConfig) -> Arc<Database>,
+        api: impl FnOnce(&RulesSupabaseConfig) -> Arc<Api>,
+        state_dir: &Path,
     ) -> Source {
         let repo = repo_of(checkout);
         match settings.source {
@@ -71,10 +83,21 @@ impl Source {
                 Some(path) => Source::at(PathBuf::from(path), repo),
                 None => Source::cached(repo),
             },
-            RulesSource::Postgres => Source::Postgres(PostgresSource::new(
-                database(&settings.postgres),
-                settings.postgres.repository.as_deref(),
-                repo,
+            RulesSource::Postgres => Source::Cached(CachedSource::at_state_dir(
+                state_dir,
+                Remote::Postgres(PostgresSource::new(
+                    database(&settings.postgres),
+                    settings.postgres.repository.as_deref(),
+                    repo,
+                )),
+            )),
+            RulesSource::Supabase => Source::Cached(CachedSource::at_state_dir(
+                state_dir,
+                Remote::Supabase(SupabaseSource::new(
+                    api(&settings.supabase),
+                    settings.supabase.repository.as_deref(),
+                    repo,
+                )),
             )),
         }
     }
@@ -102,14 +125,166 @@ impl Source {
     }
 
     /// Whether there are rules to read, found as cheaply as this source
-    /// allows: a file source loads its rules, the Postgres source only
-    /// checks that the store answers and holds the repository. A failure is
+    /// allows: a file source loads its rules, a cached source finds its
+    /// cache or else checks that the remote answers and holds the
+    /// repository. A failure is
     /// one line on stderr and reads as no rules, as with [`RuleSource::load`].
     pub fn present(&self) -> bool {
         match self {
             Source::Json(_) | Source::Sqlite(_) => self.load().is_some(),
-            Source::Postgres(source) => source.check().map_err(|e| report(&e)).is_ok(),
+            Source::Cached(source) => {
+                source.cache.meta().is_some()
+                    || source.remote.revision().map_err(|e| report(&e)).is_ok()
+            }
         }
+    }
+
+    /// Refreshes a cached source's cache, as [`CachedSource::refresh`] does;
+    /// `None` for a source with no cache.
+    pub fn refresh(&self, how: Refresh) -> Option<Result<Refreshed>> {
+        match self {
+            Source::Json(_) | Source::Sqlite(_) => None,
+            Source::Cached(source) => Some(source.refresh(how)),
+        }
+    }
+}
+
+/// When a refresh pulls, and what its pull may replace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refresh {
+    /// Pull only when there is no cache or the remote's revision differs
+    /// from the cached one, keeping a cache at a later revision: session
+    /// start and the commands that read rules.
+    IfChanged,
+    /// Always pull, keeping a cache at a later revision: after an edit.
+    AfterEdit,
+    /// Always pull and replace the cache, whatever revision it holds:
+    /// `devkit rules pull`, the recovery for a remote whose revision went
+    /// backwards.
+    Pull,
+}
+
+/// What a refresh found.
+#[derive(Clone, Debug)]
+pub struct Refreshed {
+    /// The remote's revision, which the cache now holds.
+    pub revision: i64,
+    /// How many rules the cache holds.
+    pub rules: usize,
+    /// Whether the rules were read afresh, rather than found current.
+    pub pulled: bool,
+}
+
+/// A remote source read through its local cache. Reads come from the cache
+/// alone once it exists, and from the remote, without filling the cache,
+/// until then; [`CachedSource::refresh`] fills it. Edits go to the remote
+/// and then refresh the cache, so the next read sees them.
+pub struct CachedSource {
+    cache: RuleCache,
+    remote: Remote,
+}
+
+impl CachedSource {
+    pub fn new(cache: RuleCache, remote: Remote) -> CachedSource {
+        CachedSource { cache, remote }
+    }
+
+    /// `remote` read through its cache under `state_dir`, keyed by the
+    /// remote's kind, repository and identity.
+    pub fn at_state_dir(state_dir: &Path, remote: Remote) -> CachedSource {
+        let key = CacheKey {
+            kind: remote.kind(),
+            repository: remote.repository_id().unwrap_or("unset").to_string(),
+            source: remote.identity(),
+        };
+        CachedSource::new(RuleCache::at_state_dir(state_dir, key), remote)
+    }
+
+    pub fn cache(&self) -> &RuleCache {
+        &self.cache
+    }
+
+    pub fn remote(&self) -> &Remote {
+        &self.remote
+    }
+
+    /// Pulls the remote's rules into the cache as `how` says. A failure
+    /// leaves the cache as it was.
+    pub fn refresh(&self, how: Refresh) -> Result<Refreshed> {
+        let revision = self.remote.revision()?;
+        if how == Refresh::IfChanged
+            && self.cache.meta().is_some_and(|m| m.revision == revision)
+            && let Some(index) = self.cache.read()?
+        {
+            return Ok(Refreshed {
+                revision,
+                rules: index.rules.len(),
+                pulled: false,
+            });
+        }
+        let (revision, index) = self.remote.pull()?;
+        let mode = match how {
+            Refresh::Pull => Write::Replace,
+            Refresh::IfChanged | Refresh::AfterEdit => Write::KeepNewer,
+        };
+        self.cache.write(mode, revision, &index)?;
+        Ok(Refreshed {
+            revision,
+            rules: index.rules.len(),
+            pulled: true,
+        })
+    }
+
+    /// Refreshes the cache after an edit, which has already succeeded, so a
+    /// failure is one line on stderr.
+    fn refresh_after_edit(&self) {
+        if let Err(e) = self.refresh(Refresh::AfterEdit) {
+            report(&e.context("the edit is made, but refreshing the rules cache failed"));
+        }
+    }
+}
+
+impl RuleSource for CachedSource {
+    fn read(&self) -> Result<Option<RuleIndex>> {
+        match self.cache.read()? {
+            // Every clone of the repository shares the cache, which holds
+            // the checkout of whichever pulled last.
+            Some(index) => Ok(Some(RuleIndex {
+                repo: self.remote.checkout().to_string(),
+                ..index
+            })),
+            None => self.remote.pull().map(|(_, index)| Some(index)),
+        }
+    }
+
+    fn add(&self, repo: &str, fields: Fields) -> Result<String> {
+        let id = self.remote.add(repo, fields)?;
+        self.refresh_after_edit();
+        Ok(id)
+    }
+
+    fn edit(&self, id: &str, fields: Fields) -> Result<()> {
+        self.remote.edit(id, fields)?;
+        self.refresh_after_edit();
+        Ok(())
+    }
+
+    fn remove(&self, id: &str) -> Result<()> {
+        self.remote.remove(id)?;
+        self.refresh_after_edit();
+        Ok(())
+    }
+
+    fn location(&self) -> String {
+        format!(
+            "{} (cache {})",
+            self.remote.location(),
+            self.cache.path().display()
+        )
+    }
+
+    fn kind(&self) -> &'static str {
+        self.remote.kind()
     }
 }
 

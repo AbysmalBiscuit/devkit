@@ -1380,7 +1380,19 @@
         "source": {
           "$ref": "#/$defs/RulesSource",
           "default": "file",
-          "description": "Where rules are read from and where `devkit rules add|edit|remove`\nwrite: `file`, the index file at `index`, or `postgres`, the\nrepository `rules.postgres.repository` names in `repo-rules-agent`'s\nshared Postgres store."
+          "description": "Where rules are read from and where `devkit rules add|edit|remove`\nwrite: `file`, the index file at `index`; `postgres`, the repository\n`rules.postgres.repository` names in `repo-rules-agent`'s shared\nPostgres store; or `supabase`, the repository\n`rules.supabase.repository` names in that store reached over a\nSupabase project's Data API. Both remote sources are read through a\nlocal cache that session start refreshes."
+        },
+        "supabase": {
+          "$ref": "#/$defs/RulesSupabaseConfig",
+          "default": {
+            "callback_port": 7471,
+            "doppler_config": null,
+            "doppler_project": null,
+            "publishable_key": null,
+            "repository": null,
+            "url": null
+          },
+          "description": "The `supabase` source's settings."
         }
       },
       "type": "object"
@@ -1407,7 +1419,7 @@
         },
         "doppler_project": {
           "default": null,
-          "description": "Read the connection URL, when the environment lacks it, from this\nDoppler project, before the secrets file. Hooks reuse the URL Doppler\nlast gave, kept in devkit's state directory, until it ages out or\nfails to connect.",
+          "description": "Read the connection URL, when the environment lacks it, from this\nDoppler project, before the secrets file. Hooks reuse the URL Doppler\nlast gave, kept in devkit's state directory.",
           "type": [
             "string",
             "null"
@@ -1436,8 +1448,68 @@
           "const": "postgres",
           "description": "`repo-rules-agent`'s Postgres store, at `[rules.postgres]`.",
           "type": "string"
+        },
+        {
+          "const": "supabase",
+          "description": "`repo-rules-agent`'s store over a Supabase project's Data API, at\n`[rules.supabase]`.",
+          "type": "string"
         }
       ]
+    },
+    "RulesSupabaseConfig": {
+      "additionalProperties": false,
+      "description": "Where `[rules] source = \"supabase\"` finds its rules: the repository\n`repository` names, read through `repo-rules-agent`'s `repo_rules_api`\nfunctions on a Supabase project's Data API as a signed-in user.\n`devkit auth supabase` signs in; hooks use that session, or sign in with\n`DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD`, which\nresolve from the environment, then this Doppler scope when set, then the\nsecrets file.\n\n```toml\n[rules]\nsource = \"supabase\"\n\n[rules.supabase]\nurl = \"https://abcdefghijklmnop.supabase.co\"\nrepository = \"0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10\"\npublishable_key = \"sb_publishable_example\"\ncallback_port = 7471           # the default; the allow list needs it exactly\ndoppler_project = \"repo-rules\" # optional\ndoppler_config = \"ci\"          # optional\n```",
+      "properties": {
+        "callback_port": {
+          "default": 7471,
+          "description": "The local port `devkit auth supabase` takes the browser's sign-in\non. The project's redirect allow list must hold\n`http://localhost:<callback_port>/callback` exactly.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "doppler_config": {
+          "default": null,
+          "description": "The Doppler config to read them from. Doppler's own default when\nabsent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "doppler_project": {
+          "default": null,
+          "description": "Read the sign-in email and password, when the environment lacks\nthem, from this Doppler project, before the secrets file. Hooks reuse\nwhat Doppler last gave, kept in devkit's state directory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publishable_key": {
+          "default": null,
+          "description": "The project's publishable key, sent as `apikey` with a signed-in\nuser's token. Without it, requests carry no credentials, for a proxy\nthat attaches them.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repository": {
+          "default": null,
+          "description": "The repository's UUID in the store, its `repo_id`. The source reads\nand edits that repository's rules alone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "default": null,
+          "description": "The project's API URL, `https://<project-ref>.supabase.co`. Read\nfrom `~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`) alone and\nignored in a project's `devkit.toml`, so a checkout cannot send your\nsession elsewhere. `DEVKIT_RULES_SUPABASE_URL` overrides it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "RunAction": {
       "anyOf": [
@@ -2173,7 +2245,15 @@
           "doppler_project": null,
           "repository": null
         },
-        "source": "file"
+        "source": "file",
+        "supabase": {
+          "callback_port": 7471,
+          "doppler_config": null,
+          "doppler_project": null,
+          "publishable_key": null,
+          "repository": null,
+          "url": null
+        }
       },
       "description": "Rule injection settings: enablement, severity floor, and the per-event\nsize budget."
     },

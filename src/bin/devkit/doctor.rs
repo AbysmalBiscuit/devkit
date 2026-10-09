@@ -745,28 +745,147 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
 /// How long doctor waits for the rules database to answer.
 const RULES_DATABASE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The rules source row and, for the `postgres` source, whether its
-/// database answers.
+/// The rules source row and, for a remote source, its cache and whether the
+/// remote answers.
 fn rules_rows(
     settings: &devkit_config::RulesConfig,
     configured: bool,
     checkout: &devkit_common::vcs::Checkout,
 ) -> Vec<Row> {
+    use devkit_rules::{remote::Remote, source::Source as Rules};
+
     let mut url_source = None;
-    let source = devkit_rules::source::Source::for_checkout(settings, checkout, |config| {
-        let (db, from) = crate::rules::open_database(
-            config,
-            RULES_DATABASE_WAIT,
-            crate::secret::SecretLookup::Doppler,
-        );
-        url_source = Some(from);
-        db
-    });
+    let mut api_url_source = None;
+    let source = Rules::for_checkout(
+        settings,
+        checkout,
+        |config| {
+            let (db, from) = crate::rules::open_database(
+                config,
+                RULES_DATABASE_WAIT,
+                crate::secret::SecretLookup::Doppler,
+            );
+            url_source = Some(from);
+            db
+        },
+        |config| {
+            let (api, from) = crate::rules::open_api(
+                config,
+                RULES_DATABASE_WAIT,
+                crate::secret::SecretLookup::Doppler,
+            );
+            api_url_source = Some(from);
+            api
+        },
+        &devkit_common::paths::state_dir(),
+    );
     let mut rows = vec![rules_row(settings, configured, &source)];
-    if let (devkit_rules::source::Source::Postgres(pg), Some(from)) = (&source, url_source) {
-        rows.push(rules_database_row(pg, from));
+    let Rules::Cached(cached) = &source else {
+        return rows;
+    };
+    rows.push(rules_cache_row(cached.cache()));
+    match (cached.remote(), url_source, api_url_source) {
+        (Remote::Postgres(pg), Some(from), _) => rows.push(rules_database_row(pg, from)),
+        (Remote::Supabase(api), _, Some(from)) => {
+            rows.extend(rules_api_rows(api, &settings.supabase, from));
+        }
+        _ => {}
     }
     rows
+}
+
+/// Where the rules API's URL and sign-in resolve from, the kept session and
+/// when it expires, and whether the API answers for the repository. No key,
+/// token or password is shown.
+fn rules_api_rows(
+    source: &devkit_rules::supabase::SupabaseSource,
+    config: &devkit_config::RulesSupabaseConfig,
+    from: Source,
+) -> Vec<Row> {
+    use devkit_rules::{remote::RemoteRules, source::RuleSource};
+
+    let api = source.api();
+    let url = Row {
+        key: "rules_api_url",
+        data: serde_json::Value::Null,
+        source: from,
+        check: match api.url() {
+            "" => Check::Invalid(format!(
+                "{} is not set, nor [rules.supabase] url in the global config",
+                crate::rules::SUPABASE_URL_VAR
+            )),
+            url => Check::Ok(url.to_string()),
+        },
+    };
+    let (credentials, credentials_from) =
+        crate::rules::resolve_credentials(config, crate::secret::SecretLookup::Doppler);
+    let session =
+        devkit_supabase::auth::SessionFile::for_url(&devkit_common::paths::state_dir(), api.url())
+            .load();
+    let now = unix_now();
+    let signed_in = match (&config.publishable_key, session, credentials) {
+        (None, ..) => Check::Ok("no publishable_key: requests carry no credentials".into()),
+        (Some(_), Some(session), _) if session.expires_at > now => Check::Ok(format!(
+            "signed in; the access token expires in {}",
+            crate::activity::duration(session.expires_at - now)
+        )),
+        (Some(_), Some(_), _) => {
+            Check::Ok("signed in; the access token has expired and refreshes on use".into())
+        }
+        (Some(_), None, Some(credentials)) => Check::Ok(format!(
+            "no session; signs in as {} with the password",
+            credentials.email
+        )),
+        (Some(_), None, None) => Check::Warn("not signed in: run `devkit auth supabase`".into()),
+    };
+    let session = Row {
+        key: "rules_api_session",
+        data: serde_json::Value::Null,
+        source: credentials_from,
+        check: signed_in,
+    };
+    let location = source.location();
+    let answers = Row {
+        key: "rules_api",
+        data: serde_json::Value::Null,
+        source: Source::Unset,
+        check: match source.revision() {
+            Ok(revision) => Check::Ok(format!("answers: {location}, revision {revision}")),
+            Err(e) if devkit_supabase::is_unreachable(&e) => {
+                Check::Warn(format!("unreachable: {e:#}"))
+            }
+            Err(e) => Check::Invalid(format!("{e:#}")),
+        },
+    };
+    vec![url, session, answers]
+}
+
+/// The time in Unix seconds, which session expiries and cache pulls are
+/// stamped in.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// Where a remote source's cache lives, the revision it holds and how old it
+/// is.
+fn rules_cache_row(cache: &devkit_rules::cache::RuleCache) -> Row {
+    let check = match cache.meta() {
+        Some(meta) => Check::Ok(format!(
+            "{}: revision {}, pulled {} ago",
+            cache.path().display(),
+            meta.revision,
+            crate::activity::duration((unix_now() - meta.pulled_at).max(0))
+        )),
+        None => Check::Warn("no cache yet: run `devkit rules pull`".to_string()),
+    };
+    Row {
+        key: "rules_cache",
+        data: serde_json::Value::Null,
+        source: Source::Unset,
+        check,
+    }
 }
 
 /// The rules source `[rules] source` names, the kind of store it found and

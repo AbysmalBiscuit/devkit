@@ -7,27 +7,45 @@
 
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use devkit_common::{secrets, tls::Trust, vcs::Checkout};
-use devkit_config::{RulesConfig, RulesPostgresConfig};
+use devkit_config::{RulesConfig, RulesPostgresConfig, RulesSupabaseConfig};
 use devkit_rules::{
     edit,
     model::RuleIndex,
     postgres::Database,
     query, repo_config,
-    source::{RuleSource, Source, repo_of},
+    source::{Refresh, RuleSource, Source, repo_of},
     vocab::{self, Scope, Severity, Task},
+};
+use devkit_supabase::{
+    Api, Auth,
+    auth::{Client, Credentials, SessionFile, Sessions},
 };
 use strum::VariantNames;
 
-use crate::secret::{Secret, SecretLookup, doppler_scope, global_ca_file};
+use crate::secret::{
+    Resolved, Secret, SecretLookup, doppler_scope, global_ca_file, global_setting,
+};
 
 /// The `postgres` source's connection URL.
 pub(crate) const DATABASE_VAR: &str = "DEVKIT_RULES_DATABASE_URL";
+
+/// The `supabase` source's project URL, over `[rules.supabase] url`.
+pub(crate) const SUPABASE_URL_VAR: &str = "DEVKIT_RULES_SUPABASE_URL";
+
+/// The email and password the `supabase` source signs in with when it has
+/// no session.
+pub(crate) const SUPABASE_EMAIL_VAR: &str = "DEVKIT_RULES_SUPABASE_EMAIL";
+pub(crate) const SUPABASE_PASSWORD_VAR: &str = "DEVKIT_RULES_SUPABASE_PASSWORD";
+
+/// What names the rules API in errors.
+const API_LABEL: &str = "rules API";
 
 /// Who reads the rules, which sets how long the database may take and
 /// whether Doppler is asked for its URL.
@@ -36,9 +54,15 @@ pub(crate) enum Reader {
     /// A person at a command: Doppler is asked, and the database gets
     /// [`CLI_DATABASE_WAIT`], long enough to wait out another edit's lock.
     Cli,
-    /// A hook, or a session-start block a hook prints: a cached Doppler URL
-    /// stands in for Doppler, and the database gets [`HOOK_DATABASE_WAIT`].
-    Hook,
+    /// The session-start block a hook prints, which refreshes the cache: a
+    /// cached Doppler URL stands in for Doppler until it ages out, an aged
+    /// one stands in when Doppler gives none, and the database gets
+    /// [`HOOK_DATABASE_WAIT`].
+    Session,
+    /// A hook reading the cache for a write: the cached Doppler URL alone
+    /// names the source, so the hook never waits on Doppler to find its
+    /// cache, and the database gets [`HOOK_DATABASE_WAIT`].
+    Write,
 }
 
 /// How long a command waits on the rules database, connecting included.
@@ -52,23 +76,199 @@ impl Reader {
     fn wait(self) -> Duration {
         match self {
             Reader::Cli => CLI_DATABASE_WAIT,
-            Reader::Hook => HOOK_DATABASE_WAIT,
+            Reader::Session | Reader::Write => HOOK_DATABASE_WAIT,
+        }
+    }
+
+    /// When every remote request this reader makes must be done by.
+    fn deadline(self) -> Option<Instant> {
+        match self {
+            Reader::Cli => None,
+            Reader::Session | Reader::Write => Some(Instant::now() + HOOK_DATABASE_WAIT),
         }
     }
 
     fn lookup(self) -> SecretLookup {
         match self {
             Reader::Cli => SecretLookup::Doppler,
-            Reader::Hook => SecretLookup::CachedFirst,
+            Reader::Session => SecretLookup::CachedFirst,
+            Reader::Write => SecretLookup::CachedOnly,
         }
     }
 }
 
-/// The rule source `settings` names for `checkout`, for `reader`.
+/// The rule source `settings` names for `checkout`, for `reader`. A hook's
+/// remote finishes by one deadline, so a refresh's revision check, pull
+/// pages, sign-in and retries share a single wait between them.
 pub(crate) fn source(settings: &RulesConfig, checkout: &Checkout, reader: Reader) -> Source {
-    Source::for_checkout(settings, checkout, |config| {
-        open_database(config, reader.wait(), reader.lookup()).0
-    })
+    let deadline = reader.deadline();
+    Source::for_checkout(
+        settings,
+        checkout,
+        |config| {
+            let db = open_database(config, reader.wait(), reader.lookup()).0;
+            if let Some(at) = deadline {
+                db.finish_by(at);
+            }
+            db
+        },
+        |config| {
+            let api = open_api(config, reader.wait(), reader.lookup()).0;
+            if let Some(at) = deadline {
+                api.finish_by(at);
+            }
+            api
+        },
+        &devkit_common::paths::state_dir(),
+    )
+}
+
+/// The rules API's project URL: [`SUPABASE_URL_VAR`], else the global
+/// config's `[rules.supabase] url`, and where it came from. A project's
+/// `devkit.toml` cannot set it, so a checkout cannot send a session
+/// elsewhere.
+pub(crate) fn supabase_url() -> (Result<String>, secrets::Source) {
+    if let Some(url) = std::env::var(SUPABASE_URL_VAR)
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+    {
+        return (Ok(url), secrets::Source::Env);
+    }
+    match global_setting(&["rules", "supabase", "url"]) {
+        Some(url) => (Ok(url), secrets::Source::File),
+        None => (
+            Err(anyhow::anyhow!(
+                "{SUPABASE_URL_VAR} is not set, nor [rules.supabase] url in the global config"
+            )),
+            secrets::Source::Unset,
+        ),
+    }
+}
+
+/// The sign-in email and password and where Doppler's answers for each are
+/// kept.
+fn supabase_credentials() -> [Secret; 2] {
+    let state = devkit_common::paths::state_dir();
+    [
+        Secret {
+            var: SUPABASE_EMAIL_VAR,
+            cache_dir: state.join("rules-supabase-email"),
+        },
+        Secret {
+            var: SUPABASE_PASSWORD_VAR,
+            cache_dir: state.join("rules-supabase-password"),
+        },
+    ]
+}
+
+/// The sign-in email and password, resolved as the database URL is, and
+/// where the email resolved from. Doppler's fresh answers are kept for
+/// hooks.
+pub(crate) fn resolve_credentials(
+    config: &RulesSupabaseConfig,
+    lookup: SecretLookup,
+) -> (Option<Credentials>, secrets::Source) {
+    let scope = doppler_scope(
+        config.doppler_project.as_deref(),
+        config.doppler_config.as_deref(),
+    );
+    let [email, password] = supabase_credentials();
+    let resolve = |secret: &Secret| {
+        let resolved = resolve_or_kept(secret, scope.as_ref(), lookup);
+        if let (secrets::Source::Doppler, Some(scope), Some(value), false) = (
+            &resolved.source,
+            &scope,
+            &resolved.value,
+            resolved.from_cache,
+        ) {
+            secret.remember(scope, value);
+        }
+        resolved
+    };
+    let (email, password) = (resolve(&email), resolve(&password));
+    let credentials = email
+        .value
+        .zip(password.value)
+        .map(|(email, password)| Credentials { email, password });
+    (credentials, email.source)
+}
+
+/// The rules API `config` and [`SUPABASE_URL_VAR`] name, opened with
+/// `wait`, and where its URL resolved from. With a publishable key, requests
+/// go as the user signed in through `devkit auth supabase`, or, failing
+/// that, through the email and password the secrets resolve to; without
+/// one, they carry no credentials, for a proxy that attaches them.
+pub(crate) fn open_api(
+    config: &RulesSupabaseConfig,
+    wait: Duration,
+    lookup: SecretLookup,
+) -> (Arc<Api>, secrets::Source) {
+    let (url, url_source) = supabase_url();
+    let url = match url {
+        Ok(url) => url,
+        Err(e) => return (Arc::new(Api::unusable(e, API_LABEL)), url_source),
+    };
+    let auth = match &config.publishable_key {
+        None => Ok(Auth::None),
+        Some(key) => Client::new(&url, key, wait).map(|client| {
+            let config = config.clone();
+            let credentials = move || resolve_credentials(&config, lookup).0;
+            Auth::User(Arc::new(Sessions::new(
+                client,
+                SessionFile::for_url(&devkit_common::paths::state_dir(), &url),
+                Box::new(credentials),
+            )))
+        }),
+    };
+    let api = match auth.and_then(|auth| Api::new(&url, "repo_rules_api", auth, wait, API_LABEL)) {
+        Ok(api) => api,
+        Err(e) => {
+            return (
+                Arc::new(Api::unusable(
+                    format!("{SUPABASE_URL_VAR}: {e:#}"),
+                    API_LABEL,
+                )),
+                url_source,
+            );
+        }
+    };
+    if let Some(scope) = doppler_scope(
+        config.doppler_project.as_deref(),
+        config.doppler_config.as_deref(),
+    ) {
+        api.on_rejected(move || {
+            for secret in supabase_credentials() {
+                if let Some(value) = secret.resolve(Some(&scope), SecretLookup::CachedOnly).value {
+                    secret.forget(&scope, &value);
+                }
+            }
+        });
+    }
+    (Arc::new(api), url_source)
+}
+
+/// Refreshes `source`'s cache when the remote's revision changed. A failure
+/// is one line on stderr, and the cache stays as it was for the read after.
+fn refresh_quietly(source: &Source) {
+    if let Some(Err(e)) = source.refresh(Refresh::IfChanged) {
+        let line = format!("{e:#}").replace(['\r', '\n'], " ");
+        eprintln!("devkit: {line}");
+    }
+}
+
+/// `secret` resolved as `lookup` says, falling back to the copy Doppler last
+/// gave, however old, when nothing else gives a value: the cache is keyed by
+/// the source, so an offline session still finds the cache it filled.
+fn resolve_or_kept(
+    secret: &Secret,
+    scope: Option<&secrets::DopplerScope>,
+    lookup: SecretLookup,
+) -> Resolved {
+    let resolved = secret.resolve(scope, lookup);
+    match (&resolved.value, lookup) {
+        (None, SecretLookup::CachedFirst) => secret.resolve(scope, SecretLookup::CachedOnly),
+        _ => resolved,
+    }
 }
 
 /// The rules database `config` and [`DATABASE_VAR`] name, opened with `wait`,
@@ -79,7 +279,7 @@ pub(crate) fn open_database(
     config: &RulesPostgresConfig,
     wait: Duration,
     lookup: SecretLookup,
-) -> (Database, secrets::Source) {
+) -> (Arc<Database>, secrets::Source) {
     let scope = doppler_scope(
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
@@ -88,36 +288,39 @@ pub(crate) fn open_database(
         var: DATABASE_VAR,
         cache_dir: devkit_common::paths::state_dir().join("rules-database-url"),
     };
-    let resolved = cache.resolve(scope.as_ref(), lookup);
+    let resolved = resolve_or_kept(&cache, scope.as_ref(), lookup);
     let Some(url) = resolved.value else {
         return (
-            Database::unusable(format!("{DATABASE_VAR} is not set")),
+            Arc::new(Database::unusable(format!("{DATABASE_VAR} is not set"))),
             resolved.source,
         );
     };
     let trust = Trust {
         ca_file: global_ca_file("rules"),
     };
-    let db = match Database::new(&url, trust, wait) {
+    let db = match Database::new(&url, wait, &trust, "rules database") {
         Ok(db) => db,
         Err(e) => {
             return (
-                Database::unusable(format!("{DATABASE_VAR}: {e:#}")),
+                Arc::new(Database::unusable(format!("{DATABASE_VAR}: {e:#}"))),
                 resolved.source,
             );
         }
     };
-    let db = match (&resolved.source, scope) {
-        (secrets::Source::Doppler, Some(scope)) => {
-            // Only a fresh answer resets the copy's age; reusing it must not.
-            if !resolved.from_cache {
-                cache.remember(&scope, &url);
-            }
-            db.on_connect_failure(move || cache.forget(&scope, &url))
+    if let (secrets::Source::Doppler, Some(scope)) = (&resolved.source, scope) {
+        // Only a fresh answer resets the copy's age; reusing it must not.
+        if !resolved.from_cache {
+            cache.remember(&scope, &url);
         }
-        _ => db,
-    };
-    (db, resolved.source)
+        // Only a refused login says the URL went stale; every other failure
+        // keeps it, since the write hooks need it to find their cache.
+        db.on_connect_failure(move |e| {
+            if devkit_postgres::is_rejected_login(e) {
+                cache.forget(&scope, &url);
+            }
+        });
+    }
+    (Arc::new(db), resolved.source)
 }
 
 #[derive(Args)]
@@ -147,6 +350,15 @@ pub enum RulesCommand {
     /// outright.
     #[command(visible_aliases = ["rm", "delete"])]
     Remove(RemoveArgs),
+    /// Refresh the local cache of a remote rules source.
+    ///
+    /// Reads every rule from the `postgres` or `supabase` source into the
+    /// cache the hooks read, replacing it whatever revision it holds, and
+    /// prints the revision and how many rules it holds. Session start
+    /// refreshes the cache on its own when the remote's revision changed,
+    /// but never over a later revision; run this when the remote's revision
+    /// went backwards, such as after its database was recreated.
+    Pull,
 }
 
 #[derive(Args)]
@@ -334,6 +546,7 @@ impl Here {
 /// "no index".
 fn load_or_default(explicit: Option<PathBuf>) -> Result<(String, RuleIndex)> {
     let source = Here::resolve(explicit)?.source;
+    refresh_quietly(&source);
     let location = source.location();
     let loaded = source
         .read()?
@@ -347,7 +560,9 @@ fn load_or_default(explicit: Option<PathBuf>) -> Result<(String, RuleIndex)> {
 /// rules the other would not deliver.
 pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesConfig, RuleIndex)> {
     let rules = enabled_settings(checkout, cwd)?;
-    let loaded = source(&rules, checkout, Reader::Hook).load()?;
+    let source = source(&rules, checkout, Reader::Session);
+    refresh_quietly(&source);
+    let loaded = source.load()?;
     Some((rules, loaded))
 }
 
@@ -356,7 +571,7 @@ pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesCon
 /// this, and needs only to know the rules are there.
 pub(crate) fn enabled_rules(checkout: &Checkout, cwd: &Path) -> Option<RulesConfig> {
     let rules = enabled_settings(checkout, cwd)?;
-    source(&rules, checkout, Reader::Hook)
+    source(&rules, checkout, Reader::Session)
         .present()
         .then_some(rules)
 }
@@ -392,7 +607,23 @@ pub fn run(cli: RulesCli) -> Result<()> {
             println!("removed {}", args.id);
             Ok(())
         }
+        RulesCommand::Pull => pull_cmd(),
     }
+}
+
+fn pull_cmd() -> Result<()> {
+    let here = Here::resolve(None)?;
+    let Some(refreshed) = here.source.refresh(Refresh::Pull) else {
+        anyhow::bail!("rules source `file` has no cache to pull");
+    };
+    let refreshed = refreshed?;
+    println!(
+        "{}: revision {}, {} rules",
+        here.source.location(),
+        refreshed.revision,
+        refreshed.rules
+    );
+    Ok(())
 }
 
 fn query_cmd(args: QueryArgs) -> Result<()> {

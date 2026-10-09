@@ -19,6 +19,8 @@ uuid.workspace = true
 devkit-config.workspace = true
 devkit-common.workspace = true
 devkit-postgres.workspace = true
+devkit-supabase.workspace = true
 
 [dev-dependencies]
+devkit-supabase = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
