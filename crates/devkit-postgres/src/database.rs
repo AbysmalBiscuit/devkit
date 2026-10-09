@@ -180,9 +180,7 @@ impl Database {
             false => e,
         });
         let connect_failed = matches!(*state, State::Closed) && out.is_err();
-        if connect_failed
-            && let (Some(f), Err(e)) = (self.on_connect_failure.get(), &out)
-        {
+        if connect_failed && let (Some(f), Err(e)) = (self.on_connect_failure.get(), &out) {
             f(e);
         }
         let failed = match &*state {

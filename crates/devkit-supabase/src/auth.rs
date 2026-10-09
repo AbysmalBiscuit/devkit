@@ -475,7 +475,8 @@ impl Sessions {
     fn replace(&self, kept: Option<&Session>, wait: Duration) -> Result<String> {
         let by = Instant::now() + wait;
         let left = || by.saturating_duration_since(Instant::now());
-        let refreshed = kept.map(|session| self.client.refresh_within(&session.refresh_token, left()));
+        let refreshed =
+            kept.map(|session| self.client.refresh_within(&session.refresh_token, left()));
         let session = match refreshed {
             Some(Ok(session)) => session,
             Some(Err(e)) if http::is_unreachable(&e) => return Err(e),

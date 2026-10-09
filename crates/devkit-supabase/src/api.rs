@@ -345,9 +345,9 @@ impl Api {
     /// request got no answer.
     fn attempt(&self, req: RequestBuilder) -> Result<Response> {
         let budget = self.reachable()?;
-        req.timeout(budget)
-            .send()
-            .map_err(|e| self.noted(http::explain(e).context(format!("{} {}", self.label, self.url))))
+        req.timeout(budget).send().map_err(|e| {
+            self.noted(http::explain(e).context(format!("{} {}", self.label, self.url)))
+        })
     }
 
     /// The error a refused request reads as, running [`Api::on_rejected`]
