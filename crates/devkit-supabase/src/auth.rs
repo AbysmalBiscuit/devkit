@@ -436,13 +436,13 @@ impl Sessions {
 
     fn replace(&self, kept: Option<&Session>) -> Result<String> {
         let refreshed = kept.map(|session| self.client.refresh(&session.refresh_token));
-        let session = match (refreshed, (self.credentials)()) {
-            (Some(Ok(session)), _) => session,
-            (_, Some(credentials)) => self.client.password(&credentials)?,
-            (Some(Err(e)), None) => {
-                return Err(e.context(self.not_signed_in()));
-            }
-            (None, None) => bail!(self.not_signed_in()),
+        let session = match refreshed {
+            Some(Ok(session)) => session,
+            refreshed => match ((self.credentials)(), refreshed) {
+                (Some(credentials), _) => self.client.password(&credentials)?,
+                (None, Some(Err(e))) => return Err(e.context(self.not_signed_in())),
+                (None, _) => bail!(self.not_signed_in()),
+            },
         };
         self.file.save(&session)?;
         Ok(session.access_token)

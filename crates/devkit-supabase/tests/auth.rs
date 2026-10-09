@@ -2,7 +2,10 @@
 //! session file in a scratch state directory.
 
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -136,6 +139,20 @@ fn token_inside_margin_is_refreshed_first() {
     );
     assert_eq!(request.json(), json!({"refresh_token": "r0"}));
     assert_eq!(f.file().load().unwrap().access_token, "a1");
+}
+
+#[test]
+fn successful_refresh_resolves_no_credentials() {
+    let f = Fixture::new(vec![(200, token("a1", "r1"))]);
+    f.save("a0", now() - 10);
+    let resolved = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&resolved);
+    let sessions = f.sessions(Box::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        None
+    }));
+    assert_eq!(sessions.access_token().unwrap(), "a1");
+    assert_eq!(resolved.load(Ordering::SeqCst), 0);
 }
 
 #[test]
