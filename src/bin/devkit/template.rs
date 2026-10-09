@@ -5,7 +5,7 @@ use clap::Subcommand;
 use devkit_ports::{load, task, templates};
 
 /// `--arg` and `--arg-file`, shared by every command that renders templates.
-#[derive(clap::Args, Debug, Default)]
+#[derive(clap::Args, Debug, Default, PartialEq)]
 pub(crate) struct VarArgs {
     /// Set a variable the templates read: `--arg key=value`. Repeatable.
     #[arg(short = 'a', long = "arg", value_name = "KEY=VALUE")]

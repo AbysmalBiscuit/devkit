@@ -14,6 +14,8 @@ use strum::{EnumIter, IntoEnumIterator};
 /// a link nobody creates.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, EnumIter)]
 pub enum Shim {
+    Ticket,
+    Workspace,
     Issue,
     Run,
     Ports,
@@ -27,6 +29,8 @@ impl Shim {
     /// The executable name on PATH.
     pub fn name(self) -> &'static str {
         match self {
+            Shim::Ticket => "ticket",
+            Shim::Workspace => "workspace",
             Shim::Issue => "issue",
             Shim::Run => "devrun",
             Shim::Ports => "portm",
@@ -40,6 +44,8 @@ impl Shim {
     /// The subcommand name clap registers this under.
     pub fn subcommand(self) -> &'static str {
         match self {
+            Shim::Ticket => "ticket",
+            Shim::Workspace => "workspace",
             Shim::Issue => "issue",
             Shim::Run => "run",
             Shim::Ports => "ports",
@@ -47,6 +53,22 @@ impl Shim {
             Shim::Docs => "docs",
             Shim::Mcp => "mcp",
             Shim::Rules => "rules",
+        }
+    }
+
+    /// Whether this name is a hidden alias for commands that moved: it still
+    /// runs and is still linked, but help and completions never offer it.
+    pub fn is_alias(self) -> bool {
+        match self {
+            Shim::Issue => true,
+            Shim::Ticket
+            | Shim::Workspace
+            | Shim::Run
+            | Shim::Ports
+            | Shim::Locks
+            | Shim::Docs
+            | Shim::Mcp
+            | Shim::Rules => false,
         }
     }
 

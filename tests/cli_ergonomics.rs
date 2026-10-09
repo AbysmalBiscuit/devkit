@@ -238,7 +238,8 @@ fn devkit_help_names_every_shim() {
         .expect("spawn devkit --help");
     let text = String::from_utf8(out.stdout).expect("utf-8 help");
     for line in [
-        "issue       = devkit issue",
+        "ticket      = devkit ticket",
+        "workspace   = devkit workspace",
         "devrun      = devkit run",
         "portm       = devkit ports",
         "lockm       = devkit locks",
@@ -272,27 +273,27 @@ fn the_full_view_descends_into_every_group() {
     let (text, ok) = help_run("full", &["--help"]);
     assert!(ok, "devkit --help failed: {text}");
     assert!(text.contains("devkit docs prune"), "{text}");
-    assert!(text.contains("devkit issue review request"), "{text}");
+    assert!(text.contains("devkit pr review request"), "{text}");
 }
 
 #[test]
 fn the_terse_view_lists_only_the_top_level() {
     let (text, _) = help_run("terse", &["--help"]);
     assert!(!text.contains("docs prune"), "{text}");
-    assert!(!text.contains("issue review request"), "{text}");
+    assert!(!text.contains("pr review request"), "{text}");
 }
 
 #[test]
 fn short_help_stays_terse_under_a_full_environment() {
     let (text, _) = help_run("full", &["-h"]);
     assert!(!text.contains("docs prune"), "-h is unconditional: {text}");
-    assert!(text.contains("issue       = devkit issue"), "{text}");
+    assert!(text.contains("ticket      = devkit ticket"), "{text}");
 }
 
 #[test]
 fn the_full_view_keeps_the_shim_footer() {
     let (text, _) = help_run("full", &["--help"]);
-    assert!(text.contains("issue       = devkit issue"), "{text}");
+    assert!(text.contains("ticket      = devkit ticket"), "{text}");
 }
 
 #[test]
@@ -428,11 +429,14 @@ fn short_help_outranks_a_long_help_in_the_same_argv() {
 
 #[test]
 fn the_three_help_spellings_agree() {
-    let a = help_run("full", &["issue", "help", "status"]).0;
-    let b = help_run("full", &["help", "issue", "status"]).0;
-    let c = help_run("full", &["issue", "status", "--help"]).0;
-    assert_eq!(a, b);
-    assert_eq!(b, c);
+    for group in ["workspace", "issue"] {
+        let a = help_run("full", &[group, "help", "status"]).0;
+        let b = help_run("full", &["help", group, "status"]).0;
+        let c = help_run("full", &[group, "status", "--help"]).0;
+        assert!(c.contains(&format!("Usage: devkit {group} status")), "{c}");
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+    }
 }
 
 #[test]
