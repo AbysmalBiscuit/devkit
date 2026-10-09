@@ -11,10 +11,13 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use devkit_common::http;
-use reqwest::blocking::{RequestBuilder, Response};
+use reqwest::{
+    StatusCode,
+    blocking::{RequestBuilder, Response},
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
@@ -73,6 +76,53 @@ struct Refusal {
     message: Option<String>,
     error_description: Option<String>,
     error: Option<String>,
+    error_code: Option<String>,
+}
+
+/// A request Supabase Auth answered with an error status. It carries what
+/// the server said, never what the request sent.
+#[derive(Debug)]
+pub struct AuthRefused {
+    pub status: StatusCode,
+    /// The server's `error_code`, or the OAuth `error` older versions send.
+    pub error_code: Option<String>,
+    pub message: String,
+    url: String,
+}
+
+impl AuthRefused {
+    /// Whether the server refused the credentials themselves: a wrong
+    /// password, or a refresh token it no longer honours. A busy or failing
+    /// server says nothing about them.
+    pub fn refuses_credentials(&self) -> bool {
+        matches!(self.status.as_u16(), 400 | 401 | 403)
+            && matches!(
+                self.error_code.as_deref(),
+                Some("invalid_credentials" | "invalid_grant")
+            )
+    }
+}
+
+impl fmt::Display for AuthRefused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Supabase Auth {} answered {}: {}",
+            self.url, self.status, self.message
+        )
+    }
+}
+
+impl std::error::Error for AuthRefused {}
+
+/// Whether `e` is, or was caused by, Supabase Auth refusing the
+/// credentials, as [`AuthRefused::refuses_credentials`] says.
+pub fn is_refused_credentials(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<AuthRefused>()
+            .is_some_and(AuthRefused::refuses_credentials)
+    })
 }
 
 /// One project's Supabase Auth, under `/auth/v1/`.
@@ -247,12 +297,15 @@ impl Client {
             .msg
             .or(refusal.error_description)
             .or(refusal.message)
-            .or(refusal.error)
+            .or_else(|| refusal.error.clone())
             .unwrap_or_else(|| status.to_string());
-        Err(anyhow!(
-            "Supabase Auth {} answered {status}: {message}",
-            self.url
-        ))
+        Err(AuthRefused {
+            status,
+            error_code: refusal.error_code.or(refusal.error),
+            message,
+            url: self.url.clone(),
+        }
+        .into())
     }
 
     fn body<T: DeserializeOwned>(&self, resp: Response) -> Result<T> {

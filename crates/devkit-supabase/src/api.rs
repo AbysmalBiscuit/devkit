@@ -13,7 +13,7 @@ use reqwest::{
 };
 use serde::{Deserialize, de::DeserializeOwned};
 
-use crate::auth::Sessions;
+use crate::auth::{self, Sessions};
 
 /// The credentials each request carries.
 pub enum Auth {
@@ -54,8 +54,8 @@ pub struct Api {
     /// Held for each request, its sign-in included, so requests made
     /// together wait on an unreachable API once between them.
     turn: Mutex<()>,
-    /// Called each time the API answers 401 or a sign-in is refused, for a
-    /// caller whose credentials may have gone stale.
+    /// Called each time the API answers 401 or Auth refuses the
+    /// credentials, for a caller whose credentials may have gone stale.
     on_rejected: OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// Why every request fails, for a URL that is missing or does not parse.
     unusable: Option<String>,
@@ -188,7 +188,9 @@ impl Api {
         *self.deadline.lock().unwrap_or_else(|e| e.into_inner()) = Some(at);
     }
 
-    /// Runs `f` each time the API answers 401 or a sign-in is refused.
+    /// Runs `f` each time the API answers 401 or Auth refuses the
+    /// credentials. A busy or failing Auth server, an answer that does not
+    /// read, or a session that cannot be saved does not run it.
     pub fn on_rejected(&self, f: impl Fn() + Send + Sync + 'static) {
         let _ = self.on_rejected.set(Box::new(f));
     }
@@ -331,9 +333,9 @@ impl Api {
     }
 
     /// `e`, from a sign-in or refresh that failed, noted as [`Api::noted`]
-    /// does, running [`Api::on_rejected`] when the server answered it.
+    /// does, running [`Api::on_rejected`] when Auth refused the credentials.
     fn signed_out(&self, e: anyhow::Error) -> anyhow::Error {
-        if !http::is_unreachable(&e) {
+        if auth::is_refused_credentials(&e) {
             self.rejected();
         }
         self.noted(e)

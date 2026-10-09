@@ -414,3 +414,39 @@ fn a_url_with_credentials_is_refused_without_repeating_it() {
         assert!(!message.contains("secret"), "{message}");
     }
 }
+
+fn rejections_of(api: &Api) -> Arc<AtomicUsize> {
+    let rejected = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&rejected);
+    api.on_rejected(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    rejected
+}
+
+/// Only a refused credential says the kept one went stale: a busy or
+/// failing server, or an answer that does not read, leaves it kept.
+#[test]
+fn a_sign_in_the_server_fails_keeps_the_credentials() {
+    for answer in [
+        (
+            429,
+            json!({"code": 429, "error_code": "over_request_rate_limit", "msg": "slow down"}),
+        ),
+        (503, json!({"message": "upstream unavailable"})),
+        (200, json!("not a session")),
+    ] {
+        let f = Fixture::new(vec![answer.clone()]);
+        let api = Api::new(
+            &f.server.url(),
+            "repo_rules_api",
+            Auth::User(Arc::new(f.sessions(credentials()))),
+            WAIT,
+            "rules API",
+        )
+        .unwrap();
+        let rejected = rejections_of(&api);
+        let err = api.call("stats_rules", &json!({})).unwrap_err();
+        assert_eq!(rejected.load(Ordering::SeqCst), 0, "{answer:?}: {err:#}");
+    }
+}
