@@ -235,6 +235,16 @@ fn a_codex_stop_blocks() {
 }
 
 #[test]
+fn a_codex_stop_listing_background_tasks_still_blocks() {
+    let p = always();
+    seed(&p, "proj.main.codex-S", "write the migration");
+    let mut payload = codex_stop(&p);
+    payload["background_tasks"] = running_agent();
+    let reason = blocked(&p.hook("stop", "codex", &payload));
+    assert!(reason.contains("write the migration"), "{reason}");
+}
+
+#[test]
 fn cursor_never_holds() {
     let p = always();
     let id = seed(&p, MAIN, "write the migration");
