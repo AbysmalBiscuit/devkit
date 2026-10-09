@@ -9,7 +9,7 @@ mod testenv;
 use std::{
     path::PathBuf,
     process::{Command, Output, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use devkit_rules::model::RuleIndex;
@@ -142,6 +142,32 @@ fn context_hook_reads_supabase_rules() {
         assert_eq!(request.header("apikey"), Some("sb_publishable_test"));
         assert_eq!(request.header("content-profile"), Some("repo_rules_api"));
     }
+}
+
+/// A hook's refresh shares one wait across every request it makes, so an API
+/// that answers each request just inside the wait still cannot hold the hook
+/// for a wait per request.
+#[test]
+fn a_hook_refresh_gives_up_within_one_wait() {
+    let index: RuleIndex = serde_json::from_str(INDEX).unwrap();
+    let rules = fakeapi::payloads(&index);
+    let more = Some((1, "00000000-0000-4000-8000-000000000000"));
+    let server = FakeServer::start_slow(
+        vec![
+            (200, fakeapi::stats(1)),
+            (200, fakeapi::page(1, &rules[..1], more)),
+            (200, fakeapi::page(1, &rules[..1], more)),
+            (200, fakeapi::page(1, &rules[1..], None)),
+        ],
+        Duration::from_millis(700),
+    );
+    let p = Proj::new(&config(""));
+    let started = Instant::now();
+    let out = p.devkit(&["rules", "context"], &[(URL_VAR, &server.url())]);
+    let took = started.elapsed();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(took < Duration::from_millis(1900), "took {took:?}");
+    assert_eq!(server.requests().len(), 2, "{}", stderr(&out));
 }
 
 #[test]

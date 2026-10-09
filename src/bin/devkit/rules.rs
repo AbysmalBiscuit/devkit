@@ -8,7 +8,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -80,6 +80,14 @@ impl Reader {
         }
     }
 
+    /// When every remote request this reader makes must be done by.
+    fn deadline(self) -> Option<Instant> {
+        match self {
+            Reader::Cli => None,
+            Reader::Session | Reader::Write => Some(Instant::now() + HOOK_DATABASE_WAIT),
+        }
+    }
+
     fn lookup(self) -> SecretLookup {
         match self {
             Reader::Cli => SecretLookup::Doppler,
@@ -89,13 +97,28 @@ impl Reader {
     }
 }
 
-/// The rule source `settings` names for `checkout`, for `reader`.
+/// The rule source `settings` names for `checkout`, for `reader`. A hook's
+/// remote finishes by one deadline, so a refresh's revision check, pull
+/// pages, sign-in and retries share a single wait between them.
 pub(crate) fn source(settings: &RulesConfig, checkout: &Checkout, reader: Reader) -> Source {
+    let deadline = reader.deadline();
     Source::for_checkout(
         settings,
         checkout,
-        |config| open_database(config, reader.wait(), reader.lookup()).0,
-        |config| open_api(config, reader.wait(), reader.lookup()).0,
+        |config| {
+            let db = open_database(config, reader.wait(), reader.lookup()).0;
+            if let Some(at) = deadline {
+                db.finish_by(at);
+            }
+            db
+        },
+        |config| {
+            let api = open_api(config, reader.wait(), reader.lookup()).0;
+            if let Some(at) = deadline {
+                api.finish_by(at);
+            }
+            api
+        },
         &devkit_common::paths::state_dir(),
     )
 }

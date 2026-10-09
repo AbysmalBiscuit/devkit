@@ -500,7 +500,7 @@ fn a_stalled_database_injects_nothing_within_the_hooks_wait() {
     assert_eq!(injected(&out), None);
     let err = stderr(&out);
     assert_eq!(err.lines().count(), 1, "{err}");
-    assert!(err.contains("no answer within 1s"), "{err}");
+    assert!(err.contains("no answer within"), "{err}");
 }
 
 /// `devkit brief` with `args`, as session `S`'s hook runs it.

@@ -6,6 +6,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use serde_json::Value;
@@ -45,6 +46,12 @@ impl FakeServer {
     /// Serves `answers`, a status and a JSON body each, one per request in
     /// order.
     pub fn start(answers: Vec<(u16, Value)>) -> FakeServer {
+        FakeServer::start_slow(answers, Duration::ZERO)
+    }
+
+    /// Serves `answers` as [`FakeServer::start`] does, sending each one
+    /// `delay` after its request arrives.
+    pub fn start_slow(answers: Vec<(u16, Value)>, delay: Duration) -> FakeServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let log = Arc::new(Mutex::new(Vec::new()));
@@ -56,6 +63,7 @@ impl FakeServer {
                     continue;
                 };
                 seen.lock().unwrap().push(request);
+                std::thread::sleep(delay);
                 let (status, body) = answers
                     .next()
                     .unwrap_or((500, serde_json::json!({"message": "no scripted answer"})));
