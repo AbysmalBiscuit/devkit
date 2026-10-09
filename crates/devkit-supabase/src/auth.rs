@@ -114,11 +114,7 @@ impl Client {
         .with_context(|| format!("signing in to {} as {}", self.url, c.email))
     }
 
-    /// A new session for the one `refresh_token` belongs to.
-    pub fn refresh(&self, refresh_token: &str) -> Result<Session> {
-        self.refresh_within(refresh_token, self.wait)
-    }
-
+    /// A new session for the one `refresh_token` belongs to, within `wait`.
     fn refresh_within(&self, refresh_token: &str, wait: Duration) -> Result<Session> {
         self.grant_within(
             "refresh_token",
@@ -458,12 +454,7 @@ impl Sessions {
     }
 
     /// A new access token, for one the API refused: a refreshed session,
-    /// else a password sign-in.
-    pub fn renew(&self) -> Result<String> {
-        self.renew_within(self.client.wait)
-    }
-
-    /// [`Sessions::renew`], its grants together giving up after `wait`.
+    /// else a password sign-in, the grants together giving up after `wait`.
     pub(crate) fn renew_within(&self, wait: Duration) -> Result<String> {
         let _turn = self.turn.lock().unwrap_or_else(|e| e.into_inner());
         let kept = self.file.load();
