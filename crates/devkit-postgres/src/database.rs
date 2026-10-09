@@ -81,7 +81,18 @@ impl Database {
     /// to connect in plaintext. An error never repeats the URL, which
     /// carries the password.
     pub fn new(url: &str, wait: Duration, trust: &Trust, label: &'static str) -> Result<Database> {
-        let config = crate::config(url).map_err(|_| anyhow!("the {label} URL does not parse"))?;
+        let config = crate::config(url).map_err(|e| {
+            let error = anyhow!("the {label} URL does not parse");
+            // A URL's parse errors name an option or a byte offset. Those of
+            // libpq's `key=value` form can repeat a word of an unquoted
+            // value, which may be the password.
+            let url = url.trim_start();
+            if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+                anyhow::Error::new(e).context(error)
+            } else {
+                error
+            }
+        })?;
         Ok(Database {
             config: Some(config),
             trust: trust.clone(),

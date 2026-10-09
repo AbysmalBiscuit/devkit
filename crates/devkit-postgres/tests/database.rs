@@ -92,3 +92,36 @@ fn a_url_that_does_not_parse_names_the_label() {
     .unwrap_err();
     assert_eq!(err.to_string(), "the rules database URL does not parse");
 }
+
+fn parse_error(url: &str) -> String {
+    let err = Database::new(
+        url,
+        Duration::from_secs(1),
+        &Trust::default(),
+        "rules database",
+    )
+    .unwrap_err();
+    format!("{err:#}")
+}
+
+#[test]
+fn a_url_that_does_not_parse_says_why_without_its_password() {
+    let message = parse_error("postgres://u:secret@127.0.0.1:notaport/db");
+    assert!(
+        message.starts_with("the rules database URL does not parse: "),
+        "{message}"
+    );
+    assert!(message.contains("port"), "{message}");
+    assert!(!message.contains("secret"), "{message}");
+}
+
+#[test]
+fn a_key_value_string_that_does_not_parse_repeats_none_of_it() {
+    for url in [
+        "host=h user=u password=se cr=et",
+        "host=h user=u password=se c et",
+    ] {
+        let message = parse_error(url);
+        assert_eq!(message, "the rules database URL does not parse", "{url}");
+    }
+}
