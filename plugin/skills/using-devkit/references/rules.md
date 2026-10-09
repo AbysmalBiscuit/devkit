@@ -92,11 +92,21 @@ The project URL, `https://<project-ref>.supabase.co`, comes from `DEVKIT_RULES_S
 
 The `repo_rules_api` functions run as a signed-in Supabase user, and the repository's `repository_members` table gives that user a role: `reader` reads, `editor` and `owner` also edit. A repository the user has no role on answers exactly as a missing one does. Requests go one of three ways:
 
-- **As the user `devkit auth supabase` signed in.** The session is kept in devkit's state directory, readable only by you, and refreshed before it expires.
+- **As the user `devkit auth supabase` signed in.** The session is kept in devkit's state directory, readable only by you, and refreshed before it expires. See [Signing in](#signing-in).
 - **With an email and password.** With no session, or one that no longer refreshes, devkit signs in with `DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD`, which resolve as the Postgres URL does: the environment, then Doppler when `[rules.supabase] doppler_project` is set, then `~/.config/devkit/secrets.toml`. Hooks reuse what Doppler last gave.
 - **With no credentials at all**, when `publishable_key` is unset: for a cloud container behind a proxy that attaches identity itself.
 
 Software factories share one Supabase user with the `reader` role, its email and password kept once in Doppler. Each factory resolves them with its Doppler service token, signs in, and fills its cache at session start; rotating the password in Doppler reaches every factory at its next sign-in. Supabase's service-role key is not used: the functions are granted only to signed-in users and check who is calling, and the key would bypass row-level security across the whole project.
+
+### Signing in
+
+`devkit auth supabase` signs in to the project `[rules.supabase]` names (or `--url`) and keeps the session for every hook and command on the machine. It needs `publishable_key`.
+
+- **Browser** (the default): devkit lists the sign-in providers the project enables, takes the only one or asks which (`--with <provider>` picks one), prints the provider's sign-in page and tries to open it, and waits up to five minutes for the browser to come back to `http://localhost:<callback_port>/callback`. The port defaults to 7471; devkit refuses it when its port registry holds it or something else listens there.
+- **`--email`**: Supabase emails a one-time code, which you type into the terminal. No browser.
+- **`--password`**: signs in with `DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD`, as hooks do when they have no session.
+
+Project setup: enable the providers wanted, add `http://localhost:<callback_port>/callback` to the project's redirect allow list exactly, and give each user a `repository_members` row. A sign-in the project refuses for its redirect says to add that URL. Hooks never open a browser: with no session and no password they fail with one stderr line naming `devkit auth supabase`.
 
 ### Edits
 

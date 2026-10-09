@@ -248,6 +248,16 @@ fn now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
+/// The value of `name` in a URL query string, percent-decoded, such as the
+/// `code` a sign-in callback carries.
+pub fn query_param(query: &str, name: &str) -> Option<String> {
+    reqwest::Url::parse(&format!("http://localhost/?{query}"))
+        .ok()?
+        .query_pairs()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.into_owned())
+}
+
 /// A PKCE pair: the verifier kept by the signing-in process, and the S256
 /// challenge the authorize page is given.
 pub struct Pkce {
