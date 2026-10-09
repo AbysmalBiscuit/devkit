@@ -300,7 +300,10 @@ fn a_query_with_the_database_gone_reads_the_cache_and_says_so() {
     assert!(out.status.success(), "{}", stderr(&out));
     let url = relay.url.clone();
     relay.close();
-    let out = p.devkit(&["rules", "query", "--format", "json"], &[(DATABASE_VAR, &url)]);
+    let out = p.devkit(&["rules", "query", "--format", "json"], &[(
+        DATABASE_VAR,
+        &url,
+    )]);
     assert!(out.status.success(), "{}", stderr(&out));
     let rules: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
     assert!(!rules.is_empty());
