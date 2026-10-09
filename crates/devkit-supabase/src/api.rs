@@ -120,7 +120,9 @@ struct Body {
 
 impl Api {
     /// The API of the project whose URL is `url`, such as
-    /// `https://<project-ref>.supabase.co`, serving `schema`.
+    /// `https://<project-ref>.supabase.co`, serving `schema`. A URL with a
+    /// user or password is refused, since the URL appears in errors, and no
+    /// error repeats it.
     pub fn new(
         url: &str,
         schema: &'static str,
@@ -132,8 +134,12 @@ impl Api {
         let parsed =
             reqwest::Url::parse(url).with_context(|| format!("the {label} URL does not parse"))?;
         ensure!(
+            parsed.username().is_empty() && parsed.password().is_none(),
+            "the {label} URL carries a user or password; credentials go in the publishable key or a sign-in"
+        );
+        ensure!(
             matches!(parsed.scheme(), "https" | "http"),
-            "the {label} URL is not http or https: {url}"
+            "the {label} URL is not http or https"
         );
         Ok(Api {
             url: url.to_string(),
