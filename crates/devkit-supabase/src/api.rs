@@ -277,7 +277,7 @@ impl Api {
         self.rejected();
         let token = sessions
             .renew_within(self.reachable()?)
-            .map_err(|e| self.signed_out(e))?;
+            .map_err(|e| self.noted(e))?;
         let resp = self.attempt(self.authorized(retry, Some(token))?)?;
         if resp.status().is_success() {
             return Ok(resp);

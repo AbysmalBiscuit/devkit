@@ -450,3 +450,27 @@ fn a_sign_in_the_server_fails_keeps_the_credentials() {
         assert_eq!(rejected.load(Ordering::SeqCst), 0, "{answer:?}: {err:#}");
     }
 }
+
+/// A 401 whose renewal is refused says the credentials went stale once.
+#[test]
+fn a_401_then_a_refused_renewal_runs_on_rejected_once() {
+    let f = Fixture::new(vec![
+        (401, json!({"message": "JWT expired"})),
+        (
+            400,
+            json!({"code": 400, "error_code": "invalid_credentials", "msg": "Invalid login credentials"}),
+        ),
+    ]);
+    f.save("a0", now() + 3600);
+    let api = Api::new(
+        &f.server.url(),
+        "repo_rules_api",
+        Auth::User(Arc::new(f.sessions(none()))),
+        WAIT,
+        "rules API",
+    )
+    .unwrap();
+    let rejected = rejections_of(&api);
+    api.call("stats_rules", &json!({})).unwrap_err();
+    assert_eq!(rejected.load(Ordering::SeqCst), 1);
+}
