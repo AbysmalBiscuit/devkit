@@ -6,6 +6,7 @@ mod database;
 mod store;
 
 pub use activity::PostgresActivity;
-pub use database::{Database, is_unreachable};
+pub use database::Database;
 pub use devkit_common::tls::Trust;
+pub use devkit_postgres::is_unreachable;
 pub use store::PostgresStore;

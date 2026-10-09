@@ -805,7 +805,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-postgres",
- "tokio-postgres-rustls",
 ]
 
 [[package]]
