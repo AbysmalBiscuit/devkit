@@ -27,7 +27,7 @@
   - `POST /auth/v1/otp` with `{email, create_user: false}`; `POST /auth/v1/verify` with `{type: "email", email, token}`.
   - `GET /auth/v1/authorize?provider=<p>&redirect_to=<u>&code_challenge=<c>&code_challenge_method=s256` redirects, after sign-in, to `<u>?code=<auth_code>`.
   - Token answers carry `access_token`, `refresh_token`, `expires_at` (unix seconds). Every auth request carries `apikey: <publishable_key>`.
-- `repo_rules_api` contract: `src/rules_agent/storage/sql/postgres/002_supabase.sql` on `repo-rules-agent` branch `swe-12545-migrate-repo-rules-agent-storage-to`, commit `271cf58`.
+- `repo_rules_api` contract: the spec's "The `repo_rules_api` contract" section. devkit holds no copy of the extractor's SQL; never vendor it. Tests run against a fake Data API speaking that contract.
 - Help text stays ASCII. Parallel work goes through `devkit_common::pool`.
 
 ## Review Focus
@@ -255,41 +255,42 @@
 - [ ] **Step 5: Run** the gate and the gated suites. Expected: PASS.
 - [ ] **Step 6: Commit** `feat(rules): cache remote rules and add rules pull`.
 
-### Task 8: `SupabaseSource` in `devkit-rules`, with a test PostgREST
+### Task 8: `SupabaseSource` in `devkit-rules`
 
 **Files:**
 - Create: `crates/devkit-rules/src/supabase.rs`
-- Create: `crates/devkit-rules/tests/fixtures/postgres/002_supabase.sql` (verbatim from the pinned commit, with a header naming it), `crates/devkit-rules/tests/fixtures/postgres/auth_stub.sql`
-- Create: `crates/devkit-rules/tests/common/sbstore.rs`, `crates/devkit-rules/tests/supabase_source.rs`
-- Modify: `crates/devkit-rules/src/{lib.rs,remote.rs}`, `crates/devkit-rules/Cargo.toml` (`devkit-supabase`), `crates/devkit-rules/tests/source_parity.rs`
-- Modify: `crates/devkit-todo-postgres/testdb/up.sh`, `crates/devkit-todo-postgres/testdb/api.conf`, and the CI `postgres` job if it lists variables explicitly
+- Create: `crates/devkit-rules/tests/common/fakeapi.rs`, `crates/devkit-rules/tests/supabase_source.rs`
+- Modify: `crates/devkit-rules/src/{lib.rs,remote.rs}`, `crates/devkit-rules/Cargo.toml` (`devkit-supabase`, and `devkit-supabase` with `test-support` as a dev-dependency), `crates/devkit-rules/tests/source_parity.rs`
 
 **Interfaces:**
-- Consumes: Tasks 3 and 4 `devkit_supabase::Api` (schema `"repo_rules_api"`, label `"rules API"`); Task 6 `RemoteRules`.
+- Consumes: Tasks 3 and 4 `devkit_supabase::Api` (schema `"repo_rules_api"`, label `"rules API"`) and `fakehttp::FakeServer`; Task 6 `RemoteRules`; the spec's "The `repo_rules_api` contract" section, which is the only description of the server devkit has.
 - Produces:
   - `SupabaseSource::new(api: Arc<Api>, repository: Option<&str>, repo: &Path)`; `Remote::Supabase(SupabaseSource)`; `kind()` is `"supabase"`.
-  - `revision`: `call("stats_rules", {"p_repo_id": repo})`. An answer with neither an integer `revision` nor an `error` is refused: `"rules API {url} answered an unrecognised stats_rules shape; devkit reads repo_rules_api as of repo-rules-agent 271cf58"`.
-  - `pull`: `call("query_rules", {"p_repo_id": repo})`, then again with `p_after_position`, `p_after_rule_key` and `p_expected_revision` from `continuation` until it is `null`. `{"error":"conflict"}` restarts the pull; after 3 restarts it errors `"rules changed during the pull 3 times; try again"`.
+  - `revision`: `call("stats_rules", {"p_repo_id": repo})`. An answer with neither an integer `revision` nor an `error` is refused: `"rules API {url} answered an unrecognised stats_rules shape"`.
+  - `pull`: `call("query_rules", {"p_repo_id": repo, "p_limit": page})`, then again with `p_after_position`, `p_after_rule_key` and `p_expected_revision` from `continuation` until it is `null`. `{"error":"conflict"}` restarts the pull; after 3 restarts it errors `"rules changed during the pull 3 times; try again"`. `page` defaults to `100`, the function's own default; `#[doc(hidden)] pub fn with_page_size(self, n: u32) -> Self` sets it for tests.
   - Payload to `Rule`: `id`, `title`, `description`, `category`, `scope` to `scope_raw`, `severity` to `severity_raw`, `directory`, `source_file`, `tasks`, `languages`, `topics` from the payload's extra keys (empty when absent), `pinned`, `removed`. `files` are the distinct `source_file`s in order, with `tier = 0`.
   - `{"error":"not_found"}`: `"repository {uuid} is not in the rules API, or you have no access to it; check repository_members"`.
-  - `add`, `edit`, `remove`: pull afresh; resolve `id` to one live `rule_key`, refusing several and listing them as `postgres.rs` does; call `put_rule` or `remove_rule` with `p_expected_revision`. The payload has exactly `title, description, category, scope, severity, directory, tasks, languages`. `Fields::topics` set is refused: `"topics change through repo-rules-agent on the supabase source"`. A `{"error":"conflict"}` answer pulls again and retries once.
+  - `add`, `edit`, `remove`: pull afresh; resolve `id` to one live `rule_key`, refusing several and listing them as `postgres.rs` does; call `put_rule` or `remove_rule` with `p_expected_revision`. `edit` sends exactly `title, description, category, scope, severity, directory, tasks, languages`; `add` sends the same eight. `Fields::topics` set is refused before any request: `"topics change through repo-rules-agent on the supabase source"`. A `{"error":"conflict"}` answer pulls again and retries once.
   - `Refused` codes: `42501` reads `"your role cannot edit repository {uuid}"`; `22023` passes the server's message through.
-- Test fixture `sbstore.rs`: `TestSupabase::create() -> Option<TestSupabase>`, gated on `DEVKIT_TEST_POSTGRES_URL` and `DEVKIT_TEST_RULES_SUPABASE_URL`.
-  - Loads `auth_stub.sql` (schema `auth`, `auth.users(id uuid primary key)`, `auth.uid()` reading `sub` from `current_setting('request.jwt.claims', true)::jsonb`, roles `anon` and `authenticated`), then `001_schema.sql`, then `002_supabase.sql`, then imports the fixture export, then `NOTIFY pgrst, 'reload schema'`.
-  - `user(&self, role: &str) -> String` inserts an `auth.users` row and a `repository_members` row and returns an HS256 JWT `{"sub": id, "role": "authenticated", "exp": now + 3600}` signed with `ring::hmac` and `DEVKIT_TEST_RULES_JWT_SECRET`.
-- `up.sh`: a `$name-rest-rules` PostgREST with `PGRST_DB_SCHEMAS=repo_rules_api`, `PGRST_DB_ANON_ROLE=anon` and a fixed `PGRST_JWT_SECRET` of at least 32 characters, served by a second nginx server block on `RULES_API_PORT` (default `58433`) under `/rest/v1/`; it prints `DEVKIT_TEST_RULES_SUPABASE_URL` and `DEVKIT_TEST_RULES_JWT_SECRET`.
+- `tests/common/fakeapi.rs`: `fn payloads(index: &RuleIndex) -> Vec<Value>`, each live rule as the contract's payload, with a fresh `rule_key` and its `topics` as an extra field; `fn page(revision: i64, rules: &[Value], continuation: Option<(i64, &str)>) -> Value`; `fn stats(revision: i64) -> Value`. Tests script `FakeServer` answers with these, so every answer has the contract's shape.
 
-- [ ] **Step 1: Write the failing tests** in `crates/devkit-rules/tests/supabase_source.rs`, each with an `Api` built on `Auth::Key(<user jwt>)`, which PostgREST reads as the bearer:
-  - `pull_pages_through_every_rule`: with `ALTER DATABASE ... SET repo_rules.max_query_limit = '2'` and the pull's limit at 2, `pull().1.rules.len()` equals the fixture's live rule count.
-  - `revision_matches_stats_rules`.
-  - `reader_cannot_edit`: as a `reader`, `edit` errors with `cannot edit repository`.
-  - `editor_add_edit_remove`: `add` returns the `<manual>` hash id; `edit` with a new title keeps the id and the next `pull` shows the title; after `remove`, `pull` no longer has the rule.
-  - `topics_are_refused`: `edit` with `topics: Some(..)` errors with `topics change through repo-rules-agent`.
-  - `unknown_repository_is_not_found`: a random UUID; the error contains `repository_members`.
-  - `conflict_mid_pull_restarts`, against `FakeServer`: page 1 answers with a continuation, page 2 answers `{"error":"conflict"}`, the restart answers one full page; `pull` succeeds after 3 rpc calls.
-  - In `source_parity.rs`, `sources()` adds `("supabase", Source::Cached(..Remote::Supabase(..)))` when the Supabase variables are set; `every_source_reads_the_same_records_the_same_way` passes for it.
-- [ ] **Step 2: Run**, testdb restarted, `cargo nextest run -p devkit-rules --test supabase_source --test source_parity`. Expected: FAIL.
-- [ ] **Step 3: Implement** `supabase.rs`, the fixtures, `sbstore.rs` and the testdb changes. `pull` takes its page size from a constructor default of `query_rules`'s own default; the test sets it to 2 through a `#[doc(hidden)] pub fn with_page_size(self, n: u32) -> Self`.
+- [ ] **Step 1: Write the failing tests** in `crates/devkit-rules/tests/supabase_source.rs`, each against a scripted `FakeServer` and an `Api` built on `Auth::None`:
+  - `pull_pages_through_every_rule`: page size 2, the fixture's payloads served two per page with continuations; `pull().1` equals the fixture's live rules; request 2's body carries request 1's continuation as `p_after_position`, `p_after_rule_key`, `p_expected_revision`.
+  - `revision_reads_stats_rules`: `stats(5)` gives `5`.
+  - `unrecognised_stats_shape_is_refused`: answer `{"ok":true}`; the error contains `unrecognised stats_rules shape`.
+  - `conflict_mid_pull_restarts`: page 1 with a continuation, page 2 `{"error":"conflict","revision":8,"generation":"g"}`, then one full page; `pull` succeeds after 3 rpc calls.
+  - `three_conflicts_fail_the_pull`.
+  - `add_sends_null_key_and_eight_fields`: after a pull, `add` sends `put_rule` with `p_rule_key: null`, the pulled `p_expected_revision`, and a `p_payload` whose keys are exactly the eight; it returns the first 12 hex characters of SHA-256 of `"<manual>:<title>"`, computed in the test with `ring::digest`.
+  - `edit_merges_flags_over_the_pulled_rule`: `edit(id, title only)` sends the pulled rule's other seven fields unchanged and the new title, with that rule's `rule_key`.
+  - `remove_sends_rule_key_and_revision`.
+  - `edit_conflict_pulls_and_retries_once`: `put_rule` answers a conflict, the next pull and `put_rule` succeed; exactly two `put_rule` calls.
+  - `reader_cannot_edit`: `put_rule` answers `403 {"code":"42501","message":"repository edit forbidden"}`; the error contains `cannot edit repository`.
+  - `topics_are_refused`: `edit` with `topics: Some(..)` errors with `topics change through repo-rules-agent` and the fake recorded no request.
+  - `ambiguous_id_is_refused`: two payloads share an `id`; `edit` errors listing both `rule_key`s.
+  - `unknown_repository_is_not_found`: `stats_rules` answers `{"error":"not_found"}`; the error contains `repository_members`.
+  - In `source_parity.rs`, `sources()` adds `("supabase", Source::Cached(..Remote::Supabase(..)))` over a `FakeServer` that answers `stats(1)` then one page of the fixture's payloads; `every_source_reads_the_same_records_the_same_way` passes for it. It is not gated: it needs no database.
+- [ ] **Step 2: Run** `cargo nextest run -p devkit-rules --test supabase_source --test source_parity`. Expected: FAIL.
+- [ ] **Step 3: Implement** `supabase.rs` and `fakeapi.rs`.
 - [ ] **Step 4: Run** the tests and the gate. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(rules): read and edit rules through the supabase api`.
 
@@ -311,7 +312,7 @@
 
 - [ ] **Step 1: Write the failing tests:**
   - The config doctest above.
-  - `context_hook_reads_supabase_rules` in `tests/rules_supabase.rs`, gated as in Task 8: the global config has `[rules.supabase] url`; the project `devkit.toml` has `source = "supabase"`, `repository` and any `publishable_key`; a session file pre-written under `$XDG_STATE_HOME/devkit` holds an editor JWT from `sbstore.rs` with `expires_at = now + 3600`. `devkit rules context` prints the fixture's `must` rules, and `devkit rules pull` prints `revision`.
+  - `context_hook_reads_supabase_rules` in `tests/rules_supabase.rs`, against a `FakeServer` scripted with Task 8's `fakeapi` helpers (copy them into `tests/common/` or expose them from `devkit-rules` under feature `test-remote`): `DEVKIT_RULES_SUPABASE_URL` points at the fake; the project `devkit.toml` has `source = "supabase"`, `repository` and any `publishable_key`; a session file pre-written under `$XDG_STATE_HOME/devkit` holds any token with `expires_at = now + 3600`. `devkit rules context` prints the fixture's `must` rules, every rpc request carried that token as its bearer, and `devkit rules pull` prints `revision`.
   - `project_url_is_ignored`: `url` only in the project `devkit.toml`; `devkit rules pull` errors with `[rules.supabase] url in the global config`.
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement** the config, `open_api`, `for_checkout` and the doctor row, and regenerate the schema.
@@ -350,5 +351,5 @@
 
 ## Unresolved questions
 
-- Will `002_supabase.sql` change on `repo-rules-agent` branch `swe-12545` before it merges? Task 8 vendors commit `271cf58`; a later change means vendoring it again and rerunning Task 8's suite.
-- Does the test PostgREST need claims beyond `role: authenticated` for `auth.uid()` to resolve through the stub? Task 8's first run settles it.
+- Will the `repo_rules_api` contract change before `repo-rules-agent`'s storage branch merges? A change means updating the spec's contract section and Task 8's fake.
+- The source is never run against a real Supabase project in CI. Before relying on it, run `devkit rules pull` and an `edit` against a project carrying the extractor's migrations, signed in as a `reader` and as an `editor`.

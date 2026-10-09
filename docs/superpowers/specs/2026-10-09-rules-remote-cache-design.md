@@ -87,7 +87,30 @@ The `rules_source` row adds the cache path, its revision and its age.
 
 ## 3. The Supabase rules source
 
-`SupabaseSource` calls `repo_rules_api` through `devkit-supabase::Api` with schema `repo_rules_api` and `Auth::User` or `Auth::None`. The contract is `src/rules_agent/storage/sql/postgres/002_supabase.sql` in `repo-rules-agent`.
+`SupabaseSource` calls `repo_rules_api` through `devkit-supabase::Api` with schema `repo_rules_api` and `Auth::User` or `Auth::None`. `repo-rules-agent` owns the functions; devkit holds no copy of their SQL and codes against the contract below.
+
+### The `repo_rules_api` contract
+
+Each function is called as `POST /rest/v1/rpc/<name>` with a JSON object of named arguments, and answers one JSON object. Execution is granted to signed-in users (`authenticated`) alone. A repository the caller has no role on answers exactly as a missing one does, `{"error":"not_found"}`. Roles are `reader` (read), `editor` and `owner` (read and edit).
+
+`query_rules(p_repo_id uuid, p_task text, p_language text, p_scope text, p_severity text, p_after_position bigint, p_after_rule_key uuid, p_limit integer = 100, p_expected_revision bigint)`. The filters are optional; devkit sends none.
+
+- Answer: `{"revision": n, "generation": uuid, "rules": [payload, ...], "continuation": null | {"after_position": n, "after_rule_key": uuid, "expected_revision": n}}`. The next page passes the continuation's three fields as `p_after_position`, `p_after_rule_key`, `p_expected_revision`.
+- `{"error": "conflict", "revision": n, "generation": uuid}` when `p_expected_revision` no longer matches.
+- SQLSTATE `22023` ("invalid pagination") when only one cursor field is given, a cursor comes without `p_expected_revision`, or `p_limit` is not between 1 and the server's maximum (1000 unless the server sets `repo_rules.max_query_limit`).
+- A payload is the rule's extra fields merged with `id` (12 hex characters), `rule_key` (uuid), `title`, `description`, `category`, `scope`, `severity`, `directory`, `source_file`, `pinned`, `removed`, `tasks` and `languages` (arrays of strings). Removed rules are never returned. `topics`, when present, is one of the extra fields.
+
+`stats_rules(p_repo_id uuid)`: `{"revision": n, "generation": uuid, "conflict_count": n, "total_rules": n, "total_files": n, "by_severity": {..}, "by_category": {..}, ...}`, or `{"error":"not_found"}`.
+
+`put_rule(p_repo_id uuid, p_rule_key uuid | null, p_expected_revision bigint, p_payload jsonb)`:
+
+- `p_rule_key` null adds a pinned rule; otherwise it edits that rule, pins it and clears `removed`.
+- `p_payload` must hold exactly `title`, `description`, `category`, `scope`, `severity`, `directory` (strings), `tasks` and `languages` (arrays of strings), plus, on an add only, an optional `source_file`. `scope` is `repo`, `directory` or `file-pattern`; `severity` is `must`, `should` or `can`; each task is `code-review`, `code-generation` or `code-questions`.
+- An added rule's id is the first 12 hex characters of SHA-256 of `<source_file or "<manual>">:<title>`.
+- Answer: `{"revision": n + 1, "generation": uuid, "rule_key": uuid}`, `{"error":"conflict","revision": n}`, or `{"error":"not_found"}`.
+- SQLSTATE `42501` ("repository edit forbidden") for a caller below `editor`; `22023` for a missing expected revision, a missing editable field ("full editable payload required"), an unknown or immutable field ("reserved or immutable field"), or an invalid value.
+
+`remove_rule(p_repo_id uuid, p_rule_key uuid, p_expected_revision bigint)`: marks the rule pinned and removed. Answer `{"revision": n + 1, "generation": uuid}`, a conflict or not-found object as above, and the same `42501`.
 
 ### Reads
 
@@ -161,7 +184,7 @@ Failing test first throughout.
 - Extraction: the existing `devkit-todo-postgres`, `devkit-todo-supabase` and rules Postgres suites pass unchanged on the moved code.
 - `devkit-supabase` auth, against a fake HTTP server: password grant, refresh on expiry, 401 then refresh then password then failure, PKCE exchange, session file mode.
 - Cache, with `tempfile` scratch and a fake remote: same revision pulls nothing, changed revision replaces, a failed pull keeps the old cache, an unknown format version rebuilds, an edit refreshes, the write hook's no-cache fallback.
-- Supabase source: `crates/devkit-todo-postgres/testdb` applies the extractor's `001_schema.sql` and `002_supabase.sql` at a pinned commit and configures PostgREST's JWT secret, so tests sign their own users. The Postgres source's read, add, edit, remove, tombstone and ambiguous-id cases run against it, plus a conflict mid-pagination and a `reader`'s refused edit.
+- Supabase source: a fake Data API that speaks the contract above, scripted per test. Paging, conflict restarts, the exact request bodies of `put_rule` and `remove_rule`, ambiguous ids, `--topic`, not-found and `42501` refusals each have a test, and the cached Supabase source joins the source parity suite with the fixture rules served as payloads. A run against a real Supabase project carrying the extractor's migrations is a manual check outside CI.
 - End to end through the real entry points: `devkit hook session-start`, then make the remote unusable, then `devkit hook pre-tool-use` still injects the governing rules from the cache. `devkit rules pull` reports the revision and count.
 
 ## Out of scope
@@ -173,4 +196,4 @@ Failing test first throughout.
 
 ## Open items
 
-- The Supabase source is testable only against the extractor's unmerged `002_supabase.sql`; it ships pinned to that contract.
+- The contract above is read from `repo-rules-agent`'s unmerged storage branch. A change to it before that branch merges means updating this section and the fake.
