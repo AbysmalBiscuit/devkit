@@ -749,11 +749,14 @@ name = "devkit-supabase"
 version = "0.14.16"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "devkit-common",
  "devkit-supabase",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

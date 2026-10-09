@@ -1,7 +1,7 @@
 use std::{
     error::Error,
     fmt,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -13,12 +13,18 @@ use reqwest::{
 };
 use serde::{Deserialize, de::DeserializeOwned};
 
+use crate::auth::Sessions;
+
 /// The credentials each request carries.
 pub enum Auth {
     /// None, for a proxy that attaches them.
     None,
     /// A key, sent as `apikey` and as the bearer token.
     Key(String),
+    /// A signed-in user: the project's publishable key as `apikey`, and the
+    /// user's access token as the bearer token, renewed and the request
+    /// retried once when the API answers 401.
+    User(Arc<Sessions>),
 }
 
 impl fmt::Debug for Auth {
@@ -26,6 +32,7 @@ impl fmt::Debug for Auth {
         f.write_str(match self {
             Auth::None => "None",
             Auth::Key(_) => "Key",
+            Auth::User(_) => "User",
         })
     }
 }
@@ -237,19 +244,49 @@ impl Api {
         if let Some(reason) = &self.unusable {
             bail!("{reason}");
         }
-        let resp = self.attempt(self.authorized(req)?)?;
+        let retry = match &self.auth {
+            Auth::User(_) => req.try_clone(),
+            Auth::None | Auth::Key(_) => None,
+        };
+        let resp = self.attempt(self.authorized(req, None)?)?;
+        if resp.status().is_success() {
+            return Ok(resp);
+        }
+        let (Some(retry), Auth::User(sessions), StatusCode::UNAUTHORIZED) =
+            (retry, &self.auth, resp.status())
+        else {
+            return Err(self.refusal(resp));
+        };
+        self.rejected();
+        let token = sessions.renew()?;
+        let resp = self.attempt(self.authorized(retry, Some(token))?)?;
         if resp.status().is_success() {
             return Ok(resp);
         }
         Err(self.refusal(resp))
     }
 
-    /// `req` with the credentials [`Auth`] says to send.
-    fn authorized(&self, req: RequestBuilder) -> Result<RequestBuilder> {
+    /// `req` with the credentials [`Auth`] says to send: for a user,
+    /// `token` when given, else the session's current access token.
+    fn authorized(&self, req: RequestBuilder, token: Option<String>) -> Result<RequestBuilder> {
         Ok(match &self.auth {
             Auth::None => req,
             Auth::Key(key) => req.header("apikey", key).bearer_auth(key),
+            Auth::User(sessions) => {
+                let token = match token {
+                    Some(token) => token,
+                    None => sessions.access_token()?,
+                };
+                req.header("apikey", sessions.client().publishable_key())
+                    .bearer_auth(token)
+            }
         })
+    }
+
+    fn rejected(&self) {
+        if let Some(f) = self.on_rejected.get() {
+            f();
+        }
     }
 
     /// Sends `req` within the budget, failing at once after an earlier
@@ -280,10 +317,8 @@ impl Api {
     fn refusal(&self, resp: Response) -> anyhow::Error {
         let status = resp.status();
         let body: Body = resp.json().unwrap_or_default();
-        if status == StatusCode::UNAUTHORIZED
-            && let Some(f) = self.on_rejected.get()
-        {
-            f();
+        if status == StatusCode::UNAUTHORIZED {
+            self.rejected();
         }
         Refused {
             status,

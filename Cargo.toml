@@ -137,6 +137,8 @@ rustls-native-certs = "0.8"
 # Already in the tree under reqwest's TLS stack, so taking it directly for
 # `harness_log`'s digest adds no crate to the lock.
 ring = "0.17"
+# PKCE verifiers and challenges for Supabase Auth sign-in.
+base64 = "0.22"
 rpassword = "7"
 rayon = "1.12"
 tracing = "0.1"

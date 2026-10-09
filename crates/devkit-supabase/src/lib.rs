@@ -4,6 +4,7 @@
 //! refusal codes stay with the store.
 
 mod api;
+pub mod auth;
 #[cfg(feature = "test-support")]
 pub mod fakehttp;
 
