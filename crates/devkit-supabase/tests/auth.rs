@@ -312,3 +312,25 @@ fn authorize_url_carries_pkce() {
         "{url}"
     );
 }
+
+#[test]
+fn a_refused_password_sign_in_names_the_command() {
+    let f = Fixture::new(vec![(
+        400,
+        json!({"code": 400, "error_code": "invalid_credentials", "msg": "Invalid login credentials"}),
+    )]);
+    let sessions = Sessions::new(
+        f.client(),
+        f.file(),
+        Box::new(|| {
+            Some(Credentials {
+                email: "f@x".into(),
+                password: "hunter2".into(),
+            })
+        }),
+    );
+    let message = format!("{:#}", sessions.access_token().unwrap_err());
+    assert!(message.contains("devkit auth supabase"), "{message}");
+    assert!(message.contains("Invalid login credentials"), "{message}");
+    assert!(!message.contains("hunter2"), "{message}");
+}

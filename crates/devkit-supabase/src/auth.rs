@@ -439,7 +439,10 @@ impl Sessions {
         let session = match refreshed {
             Some(Ok(session)) => session,
             refreshed => match ((self.credentials)(), refreshed) {
-                (Some(credentials), _) => self.client.password(&credentials)?,
+                (Some(credentials), _) => self
+                    .client
+                    .password(&credentials)
+                    .with_context(|| self.not_signed_in())?,
                 (None, Some(Err(e))) => return Err(e.context(self.not_signed_in())),
                 (None, _) => bail!(self.not_signed_in()),
             },
