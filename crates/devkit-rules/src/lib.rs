@@ -19,4 +19,5 @@ pub mod render;
 pub mod repo_config;
 pub mod source;
 pub mod sqlite;
+pub mod supabase;
 pub mod vocab;

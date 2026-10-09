@@ -9,6 +9,7 @@ use crate::{
     model::RuleIndex,
     postgres::PostgresSource,
     source::{RuleSource, ambassador_impl_RuleSource},
+    supabase::SupabaseSource,
 };
 
 /// A rule source off this machine, which reports the revision its rules are
@@ -28,6 +29,8 @@ pub trait RemoteRules: RuleSource {
 pub enum Remote {
     /// `repo-rules-agent`'s shared Postgres store.
     Postgres(PostgresSource),
+    /// The same store over a Supabase project's Data API.
+    Supabase(SupabaseSource),
     /// An in-memory remote for tests.
     #[cfg(feature = "test-remote")]
     Fake(FakeRemote),

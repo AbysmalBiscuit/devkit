@@ -42,7 +42,7 @@ impl store::Document for IndexDocument {
 }
 
 /// What a person sets on a rule. `None` leaves a field as it is.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Fields {
     pub title: Option<String>,
     pub description: Option<String>,
@@ -121,6 +121,15 @@ impl Fields {
             set("directory", directory.into());
         }
     }
+}
+
+/// `rule` with `fields` set, the way the file source sets them.
+pub(crate) fn apply(rule: Rule, fields: Fields) -> Result<Rule> {
+    let Value::Object(mut map) = serde_json::to_value(rule)? else {
+        unreachable!("a struct serializes to an object");
+    };
+    fields.apply(&mut map);
+    Ok(serde_json::from_value(Value::Object(map))?)
 }
 
 /// Run `f` against the index at `path` under an advisory lock beside it, and

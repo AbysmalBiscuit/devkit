@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use tokio_postgres::{GenericClient, IsolationLevel, Row, error::SqlState, types::Type};
 
 use crate::{
-    edit::{Fields, rule_id},
+    edit::{Fields, apply, rule_id},
     model::{Rule, RuleFile, RuleIndex},
     source::RuleSource,
 };
@@ -23,7 +23,7 @@ const STORAGE_VERSION: i32 = 1;
 
 /// The source file a rule added by hand belongs to, as the store's own
 /// `put_rule` names it.
-const MANUAL_SOURCE: &str = "<manual>";
+pub(crate) const MANUAL_SOURCE: &str = "<manual>";
 
 pub use devkit_postgres::{Database, is_unreachable};
 
@@ -372,15 +372,6 @@ fn extra_of(extra: &Map<String, Value>, rule: &Rule) -> String {
     Value::Object(extra).to_string()
 }
 
-/// `rule` with `fields` set, the way the file source sets them.
-fn apply(rule: Rule, fields: Fields) -> Result<Rule> {
-    let Value::Object(mut map) = serde_json::to_value(rule)? else {
-        unreachable!("a struct serializes to an object");
-    };
-    fields.apply(&mut map);
-    Ok(serde_json::from_value(Value::Object(map))?)
-}
-
 /// Fails unless the store is the version this source speaks.
 async fn check_version(db: &impl GenericClient) -> Result<()> {
     let rows = match db
@@ -510,7 +501,7 @@ async fn replace_lists(db: &impl GenericClient, repo: &str, key: &str, rule: &Ru
 }
 
 /// Whether `id` spells a UUID in its hyphenated form.
-fn is_uuid(id: &str) -> bool {
+pub(crate) fn is_uuid(id: &str) -> bool {
     const HYPHENS: [usize; 4] = [8, 13, 18, 23];
     id.len() == 36
         && id.char_indices().all(|(i, c)| match HYPHENS.contains(&i) {
