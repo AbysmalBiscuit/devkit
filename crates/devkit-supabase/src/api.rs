@@ -54,8 +54,8 @@ pub struct Api {
     /// Held for each request, its sign-in included, so requests made
     /// together wait on an unreachable API once between them.
     turn: Mutex<()>,
-    /// Called each time the API answers 401, for a caller whose
-    /// credentials may have gone stale.
+    /// Called each time the API answers 401 or a sign-in is refused, for a
+    /// caller whose credentials may have gone stale.
     on_rejected: OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// Why every request fails, for a URL that is missing or does not parse.
     unusable: Option<String>,
@@ -188,7 +188,7 @@ impl Api {
         *self.deadline.lock().unwrap_or_else(|e| e.into_inner()) = Some(at);
     }
 
-    /// Runs `f` each time the API answers 401.
+    /// Runs `f` each time the API answers 401 or a sign-in is refused.
     pub fn on_rejected(&self, f: impl Fn() + Send + Sync + 'static) {
         let _ = self.on_rejected.set(Box::new(f));
     }
@@ -275,7 +275,7 @@ impl Api {
         self.rejected();
         let token = sessions
             .renew_within(self.reachable()?)
-            .map_err(|e| self.noted(e))?;
+            .map_err(|e| self.signed_out(e))?;
         let resp = self.attempt(self.authorized(retry, Some(token))?)?;
         if resp.status().is_success() {
             return Ok(resp);
@@ -294,7 +294,7 @@ impl Api {
                     Some(token) => token,
                     None => sessions
                         .access_token_within(self.reachable()?)
-                        .map_err(|e| self.noted(e))?,
+                        .map_err(|e| self.signed_out(e))?,
                 };
                 req.header("apikey", sessions.client().publishable_key())
                     .bearer_auth(token)
@@ -328,6 +328,15 @@ impl Api {
             *self.unreachable.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{e:#}"));
         }
         e
+    }
+
+    /// `e`, from a sign-in or refresh that failed, noted as [`Api::noted`]
+    /// does, running [`Api::on_rejected`] when the server answered it.
+    fn signed_out(&self, e: anyhow::Error) -> anyhow::Error {
+        if !http::is_unreachable(&e) {
+            self.rejected();
+        }
+        self.noted(e)
     }
 
     /// Sends `req` within the budget, failing at once after an earlier

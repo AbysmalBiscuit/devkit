@@ -335,6 +335,31 @@ fn a_refused_password_sign_in_names_the_command() {
     assert!(!message.contains("hunter2"), "{message}");
 }
 
+/// A refused sign-in says the kept credentials went stale, as a 401 from
+/// the API does.
+#[test]
+fn a_refused_sign_in_runs_on_rejected() {
+    let f = Fixture::new(vec![(
+        400,
+        json!({"code": 400, "error_code": "invalid_credentials", "msg": "Invalid login credentials"}),
+    )]);
+    let api = Api::new(
+        &f.server.url(),
+        "repo_rules_api",
+        Auth::User(Arc::new(f.sessions(credentials()))),
+        WAIT,
+        "rules API",
+    )
+    .unwrap();
+    let rejected = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&rejected);
+    api.on_rejected(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    api.call("stats_rules", &json!({})).unwrap_err();
+    assert_eq!(rejected.load(Ordering::SeqCst), 1);
+}
+
 #[test]
 fn an_unanswered_sign_in_fails_the_next_request_at_once() {
     let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -353,6 +378,11 @@ fn an_unanswered_sign_in_fails_the_next_request_at_once() {
         "rules API",
     )
     .unwrap();
+    let rejected = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&rejected);
+    api.on_rejected(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
     let started = std::time::Instant::now();
     let first = api.call("stats_rules", &json!({})).unwrap_err();
     assert!(
@@ -365,6 +395,7 @@ fn an_unanswered_sign_in_fails_the_next_request_at_once() {
     let second = api.call("stats_rules", &json!({})).unwrap_err();
     assert!(started.elapsed() < Duration::from_millis(100));
     assert!(devkit_supabase::is_unreachable(&second), "{second:#}");
+    assert_eq!(rejected.load(Ordering::SeqCst), 0);
     drop(silent);
 }
 
