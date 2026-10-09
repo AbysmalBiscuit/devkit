@@ -147,7 +147,7 @@ Each edit pulls the rules afresh first, for the current revision and the id-to-`
 
 Project setup: enable the providers wanted, add `http://localhost:<callback_port>/callback` to the redirect allow list, and give each user a `repository_members` row.
 
-Hooks never open a browser. With no session and no password, requests carry no credentials (`Auth::None`), which is the cloud container mode behind an identity-attaching proxy.
+Hooks never open a browser. With no `publishable_key` set, requests carry no credentials (`Auth::None`), which is the cloud container mode behind an identity-attaching proxy. With a key set but no session and no password, a request fails asking for `devkit auth supabase`.
 
 ### Software factories
 
