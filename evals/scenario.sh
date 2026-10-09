@@ -6,16 +6,22 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 lib=$root/evals/lib
 name=${1:?usage: evals/scenario.sh <scenario|all> [label=devkit-checkout ...]}
 shift
+# shellcheck source=lib/codex.sh
+source "$lib/codex.sh"
+scenarios=()
 if [[ $name == all ]]; then
-  scenarios=("$root"/evals/scenarios/*/)
+  for dir in "$root"/evals/scenarios/*/; do
+    jq -e --arg h "$harness" '.harnesses // [$h] | index($h)' "$dir/scenario.json" > /dev/null &&
+      scenarios+=("$dir")
+  done
 else
-  scenarios=("$root/evals/scenarios/$name/")
-fi
-for dir in "${scenarios[@]}"; do
+  dir=$root/evals/scenarios/$name/
   [[ -f $dir/scenario.json ]] || { echo "no scenario at $dir" >&2; exit 1; }
-done
+  jq -e --arg h "$harness" '.harnesses // [$h] | index($h)' "$dir/scenario.json" > /dev/null ||
+    { echo "$name does not run on $harness" >&2; exit 1; }
+  scenarios=("$dir")
+fi
 reps=${EVAL_REPS:-3}
-model=${EVAL_MODEL:-claude-opus-5-5}
 [[ $# -eq 0 ]] && set -- "worktree=$root"
 
 # The session running this script must not lend its identity to the hooks of
@@ -30,9 +36,9 @@ mkdir -p "$out"
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
-# Runs a command against the label's build, with state, config and cache in
-# its scratch instead of this machine's registry and global config. No one
-# watches a run, so its stop hook holds the main agent to its todos too.
+# Runs a command against the label's build, with state, config, cache and
+# todos in its scratch instead of this machine's registry, global config and
+# todo store. No one watches a run, so its stop hook holds the main agent too.
 isolated() {
   local label_dir=$1
   shift
@@ -40,7 +46,7 @@ isolated() {
     XDG_STATE_HOME="$label_dir/state" XDG_CONFIG_HOME="$label_dir/config" \
     XDG_CACHE_HOME="$label_dir/cache" GIT_CONFIG_GLOBAL="$label_dir/gitconfig" \
     DEVKIT_NO_BOOTSTRAP=1 DEVKIT_SKIP_AUTOLINK=1 ENABLE_CLAUDEAI_MCP_SERVERS=false \
-    DEVKIT_TODO_HOLD_STOP=always \
+    DEVKIT_TODO_HOLD_STOP=always DEVKIT_TODO_BACKEND=builtin \
     "$@"
 }
 
@@ -67,6 +73,39 @@ captured_files() {
   printf '%s\n' "$files"
 }
 
+# A Codex run in its own copy of the label's CODEX_HOME. Codex has no flag to
+# name the session or cap its turns, so setup.sh runs from a SessionStart hook
+# and `max_turns` does not apply.
+run_codex() {
+  local label_dir=$1 dir=$2 work=$3 base=$4 start thread rollout
+  cp -R "$label_dir/codex-home" "$work/codex"
+  if [[ -x $dir/setup.sh ]]; then
+    cat >> "$work/codex/config.toml" << EOF
+
+[[hooks.SessionStart]]
+matcher = "startup"
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "'$lib/codex-seed.sh' '$dir/setup.sh' '$work/seeded'"
+EOF
+  fi
+  start=$(date +%s)
+  # The plugin's hooks are this checkout's own, and they run before the
+  # sandbox and approval policy are consulted, so bypassing both leaves every
+  # devkit verdict in force.
+  (cd "$work/repo" && isolated "$label_dir" env CODEX_HOME="$work/codex" timeout "${EVAL_TIMEOUT:-600}" \
+    codex exec --json --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox \
+    ${model:+--model "$model"} - < "$dir/prompt.md" > "$base.exec.jsonl" 2> "$base.err") || true
+  : > "$base.jsonl"
+  thread=$(jq -r 'select(.type == "thread.started") | .thread_id' "$base.exec.jsonl")
+  [[ -n $thread ]] || return 0
+  for rollout in "$work"/codex/sessions/*/*/*/rollout-*-"$thread".jsonl; do
+    [[ -f $rollout ]] || continue
+    cp "$rollout" "$base.rollout.jsonl"
+    jq -sc --argjson ms "$((($(date +%s) - start) * 1000))" -f "$lib/codex.jq" "$rollout" > "$base.jsonl"
+  done
+}
+
 run_one() {
   local label=$1 dir=$2 rep=$3
   local scenario plugin label_dir=$scratch/$1 work session
@@ -80,21 +119,24 @@ run_one() {
   git -C "$work/repo" add -A
   git -C "$work/repo" -c user.name=eval -c user.email=eval@example.invalid \
     commit -q --allow-empty -m fixture
-  # setup.sh alone sees the session, so the todos it seeds land on the node
-  # the run's own hooks resolve.
-  if [[ -x $dir/setup.sh ]]; then
-    (cd "$work/repo" && isolated "$label_dir" env CLAUDE_CODE_SESSION_ID="$session" "$dir/setup.sh")
-  fi
-
   local transcript=$out/$label-$scenario-$rep.jsonl
-  # The guard hooks run before the permission mode is consulted, so bypassing
-  # permission prompts leaves every devkit verdict in force.
-  (cd "$work/repo" && isolated "$label_dir" timeout "${EVAL_TIMEOUT:-600}" \
-    claude -p --setting-sources project --plugin-dir "$plugin" \
-    --permission-mode bypassPermissions --no-session-persistence --session-id "$session" \
-    --model "$model" --max-turns "$(jq -r '.max_turns' "$dir/scenario.json")" \
-    --output-format stream-json --verbose \
-    < "$dir/prompt.md" > "$transcript" 2> "$out/$label-$scenario-$rep.err") || true
+  if [[ $harness == codex ]]; then
+    run_codex "$label_dir" "$dir" "$work" "${transcript%.jsonl}"
+  else
+    # setup.sh alone sees the session, so the todos it seeds land on the node
+    # the run's own hooks resolve.
+    if [[ -x $dir/setup.sh ]]; then
+      (cd "$work/repo" && isolated "$label_dir" env CLAUDE_CODE_SESSION_ID="$session" "$dir/setup.sh")
+    fi
+    # The guard hooks run before the permission mode is consulted, so bypassing
+    # permission prompts leaves every devkit verdict in force.
+    (cd "$work/repo" && isolated "$label_dir" timeout "${EVAL_TIMEOUT:-600}" \
+      claude -p --setting-sources project --plugin-dir "$plugin" \
+      --permission-mode bypassPermissions --no-session-persistence --session-id "$session" \
+      --model "$model" --max-turns "$(jq -r '.max_turns' "$dir/scenario.json")" \
+      --output-format stream-json --verbose \
+      < "$dir/prompt.md" > "$transcript" 2> "$out/$label-$scenario-$rep.err") || true
+  fi
   git -C "$work/repo" status --porcelain --untracked-files=all |
     jq -Rsc --argjson files "$(captured_files "$dir/scenario.json" "$work/repo")" \
       '{type: "eval", changed: (split("\n") | map(select(. != "") | .[3:])), files: $files}' >> "$transcript"
@@ -119,6 +161,14 @@ for spec in "$@"; do
     ln -s "$bin/devkit" "$label_dir/bin/$link"
   done
   [[ -x $bin/devkitd ]] && ln -s "$bin/devkitd" "$label_dir/bin/devkitd"
+  if [[ $harness == codex ]]; then
+    codex_home "$label_dir/codex-home"
+    marketplace=$(jq -r .name "$checkout/.agents/plugins/marketplace.json")
+    isolated "$label_dir" env CODEX_HOME="$label_dir/codex-home" \
+      codex plugin marketplace add "$checkout" >> "$out/$label-codex-setup.log" 2>&1
+    isolated "$label_dir" env CODEX_HOME="$label_dir/codex-home" \
+      codex plugin add "devkit@$marketplace" >> "$out/$label-codex-setup.log" 2>&1
+  fi
 done
 
 for label in "${labels[@]}"; do

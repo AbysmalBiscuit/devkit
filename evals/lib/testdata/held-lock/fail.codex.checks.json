@@ -1,0 +1,6 @@
+{
+  "loads-using-devkit": false,
+  "leaves-the-file-alone": false,
+  "never-forces-the-lock": false,
+  "names-the-holder": false
+}

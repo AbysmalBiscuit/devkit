@@ -9,7 +9,8 @@ shift
 case_dir=$root/evals/$case_name
 [[ -f $case_dir/questions.json ]] || { echo "no case at $case_dir" >&2; exit 1; }
 reps=${EVAL_REPS:-3}
-model=${EVAL_MODEL:-claude-opus-5-5}
+# shellcheck source=lib/codex.sh
+source "$lib/codex.sh"
 
 target=${CARGO_TARGET_DIR:-$root/target}
 if [[ $# -eq 0 ]]; then
@@ -32,9 +33,12 @@ prompt() {
 }
 
 # An empty working directory and --safe-mode keep this machine's CLAUDE.md,
-# skills, plugins, hooks and MCP servers out of the agent's context.
+# skills, plugins, hooks and MCP servers out of the agent's context. For
+# Codex, a fresh CODEX_HOME does the same.
 empty=$(mktemp -d)
-trap 'rm -rf "$empty"' EXIT
+codex_dir=$(mktemp -d)
+trap 'rm -rf "$empty" "$codex_dir"' EXIT
+[[ $harness == codex ]] && codex_home "$codex_dir"
 
 labels=()
 for spec in "$@"; do
@@ -44,10 +48,18 @@ for spec in "$@"; do
   "$case_dir/render.sh" "$binary" > "$out/context-$label.txt"
   prompt "$out/context-$label.txt" > "$out/prompt-$label.txt"
   for rep in $(seq 1 "$reps"); do
-    (cd "$empty" && claude -p --safe-mode --strict-mcp-config --tools "" \
-      --no-session-persistence --model "$model" --output-format json \
-      --json-schema "$(cat "$out/schema.json")" \
-      < "$out/prompt-$label.txt" > "$out/$label-$rep.json" 2> "$out/$label-$rep.err") &
+    if [[ $harness == codex ]]; then
+      (cd "$empty" && env CODEX_HOME="$codex_dir" codex exec --json --ephemeral \
+        --skip-git-repo-check --sandbox read-only --output-schema "$out/schema.json" \
+        ${model:+--model "$model"} - \
+        < "$out/prompt-$label.txt" > "$out/$label-$rep.exec.jsonl" 2> "$out/$label-$rep.err"
+      jq -s -f "$lib/codex-result.jq" "$out/$label-$rep.exec.jsonl" > "$out/$label-$rep.json") &
+    else
+      (cd "$empty" && claude -p --safe-mode --strict-mcp-config --tools "" \
+        --no-session-persistence --model "$model" --output-format json \
+        --json-schema "$(cat "$out/schema.json")" \
+        < "$out/prompt-$label.txt" > "$out/$label-$rep.json" 2> "$out/$label-$rep.err") &
+    fi
   done
 done
 wait
