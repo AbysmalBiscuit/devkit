@@ -419,9 +419,9 @@ impl Database {
         self.inner.finish_by(at);
     }
 
-    /// Runs `f` each time connecting fails, for a caller whose URL may have
-    /// gone stale.
-    pub fn on_connect_failure(&self, f: impl Fn() + Send + Sync + 'static) {
+    /// Runs `f` with the error each time connecting fails, for a caller whose
+    /// URL may have gone stale.
+    pub fn on_connect_failure(&self, f: impl Fn(&anyhow::Error) + Send + Sync + 'static) {
         self.inner.on_connect_failure(f);
     }
 

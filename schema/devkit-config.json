@@ -1419,7 +1419,7 @@
         },
         "doppler_project": {
           "default": null,
-          "description": "Read the connection URL, when the environment lacks it, from this\nDoppler project, before the secrets file. Hooks reuse the URL Doppler\nlast gave, kept in devkit's state directory, until it ages out or\nfails to connect.",
+          "description": "Read the connection URL, when the environment lacks it, from this\nDoppler project, before the secrets file. Hooks reuse the URL Doppler\nlast gave, kept in devkit's state directory: session start asks\nDoppler again once it ages out and keeps it when Doppler gives none,\nwrite hooks never ask Doppler, and a login the database refuses\ndrops it.",
           "type": [
             "string",
             "null"
@@ -1478,7 +1478,7 @@
         },
         "doppler_project": {
           "default": null,
-          "description": "Read the sign-in email and password, when the environment lacks\nthem, from this Doppler project, before the secrets file. Hooks reuse\nwhat Doppler last gave, kept in devkit's state directory, until it\nages out or the API refuses it.",
+          "description": "Read the sign-in email and password, when the environment lacks\nthem, from this Doppler project, before the secrets file. Hooks reuse\nwhat Doppler last gave, kept in devkit's state directory: session\nstart asks Doppler again once it ages out and keeps it when Doppler\ngives none, write hooks never ask Doppler, and a sign-in the API\nrefuses drops it.",
           "type": [
             "string",
             "null"

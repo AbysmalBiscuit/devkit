@@ -29,7 +29,9 @@ use devkit_supabase::{
 };
 use strum::VariantNames;
 
-use crate::secret::{Secret, SecretLookup, doppler_scope, global_ca_file, global_setting};
+use crate::secret::{
+    Resolved, Secret, SecretLookup, doppler_scope, global_ca_file, global_setting,
+};
 
 /// The `postgres` source's connection URL.
 pub(crate) const DATABASE_VAR: &str = "DEVKIT_RULES_DATABASE_URL";
@@ -52,9 +54,15 @@ pub(crate) enum Reader {
     /// A person at a command: Doppler is asked, and the database gets
     /// [`CLI_DATABASE_WAIT`], long enough to wait out another edit's lock.
     Cli,
-    /// A hook, or a session-start block a hook prints: a cached Doppler URL
-    /// stands in for Doppler, and the database gets [`HOOK_DATABASE_WAIT`].
-    Hook,
+    /// The session-start block a hook prints, which refreshes the cache: a
+    /// cached Doppler URL stands in for Doppler until it ages out, an aged
+    /// one stands in when Doppler gives none, and the database gets
+    /// [`HOOK_DATABASE_WAIT`].
+    Session,
+    /// A hook reading the cache for a write: the cached Doppler URL alone
+    /// names the source, so the hook never waits on Doppler to find its
+    /// cache, and the database gets [`HOOK_DATABASE_WAIT`].
+    Write,
 }
 
 /// How long a command waits on the rules database, connecting included.
@@ -68,14 +76,15 @@ impl Reader {
     fn wait(self) -> Duration {
         match self {
             Reader::Cli => CLI_DATABASE_WAIT,
-            Reader::Hook => HOOK_DATABASE_WAIT,
+            Reader::Session | Reader::Write => HOOK_DATABASE_WAIT,
         }
     }
 
     fn lookup(self) -> SecretLookup {
         match self {
             Reader::Cli => SecretLookup::Doppler,
-            Reader::Hook => SecretLookup::CachedFirst,
+            Reader::Session => SecretLookup::CachedFirst,
+            Reader::Write => SecretLookup::CachedOnly,
         }
     }
 }
@@ -142,7 +151,7 @@ pub(crate) fn resolve_credentials(
     );
     let [email, password] = supabase_credentials();
     let resolve = |secret: &Secret| {
-        let resolved = secret.resolve(scope.as_ref(), lookup);
+        let resolved = resolve_or_kept(secret, scope.as_ref(), lookup);
         if let (secrets::Source::Doppler, Some(scope), Some(value), false) = (
             &resolved.source,
             &scope,
@@ -224,6 +233,21 @@ fn refresh_quietly(source: &Source) {
     }
 }
 
+/// `secret` resolved as `lookup` says, falling back to the copy Doppler last
+/// gave, however old, when nothing else gives a value: the cache is keyed by
+/// the source, so an offline session still finds the cache it filled.
+fn resolve_or_kept(
+    secret: &Secret,
+    scope: Option<&secrets::DopplerScope>,
+    lookup: SecretLookup,
+) -> Resolved {
+    let resolved = secret.resolve(scope, lookup);
+    match (&resolved.value, lookup) {
+        (None, SecretLookup::CachedFirst) => secret.resolve(scope, SecretLookup::CachedOnly),
+        _ => resolved,
+    }
+}
+
 /// The rules database `config` and [`DATABASE_VAR`] name, opened with `wait`,
 /// and where its URL resolved from. A URL that is missing or does not parse
 /// gives a database every operation on fails, naming the variable and never
@@ -241,7 +265,7 @@ pub(crate) fn open_database(
         var: DATABASE_VAR,
         cache_dir: devkit_common::paths::state_dir().join("rules-database-url"),
     };
-    let resolved = cache.resolve(scope.as_ref(), lookup);
+    let resolved = resolve_or_kept(&cache, scope.as_ref(), lookup);
     let Some(url) = resolved.value else {
         return (
             Arc::new(Database::unusable(format!("{DATABASE_VAR} is not set"))),
@@ -265,7 +289,13 @@ pub(crate) fn open_database(
         if !resolved.from_cache {
             cache.remember(&scope, &url);
         }
-        db.on_connect_failure(move || cache.forget(&scope, &url));
+        // A server that never answered says nothing about the URL, and the
+        // write hooks need it to find their cache.
+        db.on_connect_failure(move |e| {
+            if !devkit_postgres::is_unreachable(e) {
+                cache.forget(&scope, &url);
+            }
+        });
     }
     (Arc::new(db), resolved.source)
 }
@@ -505,7 +535,7 @@ fn load_or_default(explicit: Option<PathBuf>) -> Result<(String, RuleIndex)> {
 /// rules the other would not deliver.
 pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesConfig, RuleIndex)> {
     let rules = enabled_settings(checkout, cwd)?;
-    let source = source(&rules, checkout, Reader::Hook);
+    let source = source(&rules, checkout, Reader::Session);
     refresh_quietly(&source);
     let loaded = source.load()?;
     Some((rules, loaded))
@@ -516,7 +546,7 @@ pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesCon
 /// this, and needs only to know the rules are there.
 pub(crate) fn enabled_rules(checkout: &Checkout, cwd: &Path) -> Option<RulesConfig> {
     let rules = enabled_settings(checkout, cwd)?;
-    source(&rules, checkout, Reader::Hook)
+    source(&rules, checkout, Reader::Session)
         .present()
         .then_some(rules)
 }

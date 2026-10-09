@@ -55,7 +55,7 @@ The connection URL comes from `DEVKIT_RULES_DATABASE_URL`: the environment first
 devkit_rules_database_url = "postgres://..."
 ```
 
-A URL Doppler gives is kept in devkit's state directory, readable only by you, and hooks reuse it for a while instead of asking Doppler on every write. Commands and `devkit doctor` ask Doppler afresh and refresh the kept copy, and a hook that fails to connect with it drops it, so the next hook picks up a rotated credential or a moved database.
+A URL Doppler gives is kept in devkit's state directory, readable only by you, and hooks reuse it instead of asking Doppler on every write. Commands and `devkit doctor` ask Doppler afresh and refresh the kept copy. Session start reuses it for a while, then asks Doppler again, and keeps using it when Doppler gives none. A write hook never asks Doppler: the kept URL names the cache it reads, so writes find their rules offline. A login the database refuses drops the kept URL, so the next session picks up a rotated credential; a database that does not answer leaves it in place.
 
 The connection always uses TLS and verifies the server's certificate against the bundled Mozilla roots, the platform's store, and the PEM file `[rules.postgres] ca_file` names. devkit reads `ca_file` from your own `~/.config/devkit/config.toml` alone; a project's `devkit.toml` cannot add a CA. Only `sslmode=disable` in the URL connects in plaintext.
 

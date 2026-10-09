@@ -57,8 +57,9 @@ pub struct Database {
     label: &'static str,
     /// When set, every operation gives up by then, whatever its wait.
     deadline: Mutex<Option<Instant>>,
-    /// Called each time connecting fails, refused or rejected alike.
-    on_connect_failure: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// Called with the error each time connecting fails, refused or rejected
+    /// alike.
+    on_connect_failure: OnceLock<Box<dyn Fn(&anyhow::Error) + Send + Sync>>,
     state: Mutex<State>,
 }
 
@@ -118,9 +119,10 @@ impl Database {
         *self.deadline.lock().unwrap_or_else(|e| e.into_inner()) = Some(at);
     }
 
-    /// Runs `f` each time connecting fails, for a caller whose URL may have
-    /// gone stale.
-    pub fn on_connect_failure(&self, f: impl Fn() + Send + Sync + 'static) {
+    /// Runs `f` with the error each time connecting fails, for a caller whose
+    /// URL may have gone stale. [`is_unreachable`] tells a server that never
+    /// answered from one that refused the login.
+    pub fn on_connect_failure(&self, f: impl Fn(&anyhow::Error) + Send + Sync + 'static) {
         let _ = self.on_connect_failure.set(Box::new(f));
     }
 
@@ -164,8 +166,10 @@ impl Database {
             false => e,
         });
         let connect_failed = matches!(*state, State::Closed) && out.is_err();
-        if connect_failed && let Some(f) = self.on_connect_failure.get() {
-            f();
+        if connect_failed
+            && let (Some(f), Err(e)) = (self.on_connect_failure.get(), &out)
+        {
+            f(e);
         }
         let failed = match &*state {
             State::Closed => out.is_err(),

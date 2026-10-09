@@ -169,7 +169,7 @@ fn run(payload: &Payload, checkout: &Checkout, cwd: &Path, targets: &[String], h
     // gets both directories' rules.
     let mut chosen = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let loaded = crate::rules::source(settings, checkout, crate::rules::Reader::Hook).load();
+    let loaded = crate::rules::source(settings, checkout, crate::rules::Reader::Write).load();
     if let Some(loaded) = &loaded {
         for target in &relative {
             let filter = Filter {

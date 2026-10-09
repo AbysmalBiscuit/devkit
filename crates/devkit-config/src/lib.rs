@@ -850,8 +850,10 @@ pub struct RulesPostgresConfig {
     pub repository: Option<String>,
     /// Read the connection URL, when the environment lacks it, from this
     /// Doppler project, before the secrets file. Hooks reuse the URL Doppler
-    /// last gave, kept in devkit's state directory, until it ages out or
-    /// fails to connect.
+    /// last gave, kept in devkit's state directory: session start asks
+    /// Doppler again once it ages out and keeps it when Doppler gives none,
+    /// write hooks never ask Doppler, and a login the database refuses
+    /// drops it.
     pub doppler_project: Option<String>,
     /// The Doppler config to read it from. Doppler's own default when absent.
     pub doppler_config: Option<String>,
@@ -912,8 +914,10 @@ pub struct RulesSupabaseConfig {
     pub callback_port: u16,
     /// Read the sign-in email and password, when the environment lacks
     /// them, from this Doppler project, before the secrets file. Hooks reuse
-    /// what Doppler last gave, kept in devkit's state directory, until it
-    /// ages out or the API refuses it.
+    /// what Doppler last gave, kept in devkit's state directory: session
+    /// start asks Doppler again once it ages out and keeps it when Doppler
+    /// gives none, write hooks never ask Doppler, and a sign-in the API
+    /// refuses drops it.
     pub doppler_project: Option<String>,
     /// The Doppler config to read them from. Doppler's own default when
     /// absent.

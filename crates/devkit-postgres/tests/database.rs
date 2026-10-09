@@ -35,7 +35,7 @@ fn unreachable_server_calls_on_connect_failure_and_names_the_label() {
     .unwrap();
     let failures = Arc::new(AtomicU32::new(0));
     let counter = failures.clone();
-    db.on_connect_failure(move || {
+    db.on_connect_failure(move |_| {
         counter.fetch_add(1, Ordering::SeqCst);
     });
     let err = db.run(async |_| Ok(())).unwrap_err();

@@ -334,3 +334,77 @@ fn doctor_reports_the_cache() {
         "{cache}"
     );
 }
+
+/// A `doppler` in `dir` that counts its calls in `calls` and gives `url` as
+/// the rules database URL, or fails as an offline Doppler does when `url` is
+/// `None`, and the `PATH` that finds it first.
+#[cfg(unix)]
+fn fake_doppler(dir: &Path, url: Option<&str>) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let calls = dir.join("calls");
+    let answer = match url {
+        Some(url) => format!("echo '{}'", json!({DATABASE_VAR: {"computed": url}})),
+        None => "exit 1".to_string(),
+    };
+    let doppler = dir.join("doppler");
+    std::fs::write(
+        &doppler,
+        format!("#!/bin/sh\necho call >> '{}'\n{answer}\n", calls.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&doppler, std::fs::Permissions::from_mode(0o755)).unwrap();
+    format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+#[cfg(unix)]
+fn doppler_calls(dir: &Path) -> usize {
+    std::fs::read_to_string(dir.join("calls"))
+        .map(|calls| calls.lines().count())
+        .unwrap_or(0)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_write_hook_reads_the_cache_offline_with_the_url_doppler_gave() {
+    let Some((store, repo)) = imported() else {
+        return;
+    };
+    let p = Proj::new(&format!(
+        "[rules]\nsource = \"postgres\"\n\
+         [rules.postgres]\nrepository = \"{repo}\"\ndoppler_project = \"swarm\"\n"
+    ));
+    let relay = Relay::to(&store.url);
+    let online = tempfile::tempdir().unwrap();
+    let path = fake_doppler(online.path(), Some(&relay.url));
+    let out = p.devkit(&["rules", "context"], &[("PATH", &path)]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("Root must"), "{}", stdout(&out));
+
+    relay.close();
+    let out = p.devkit(&["rules", "context"], &[("PATH", &path)]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let kept = p.home.path().join("devkit/rules-database-url/swarm.json");
+    let hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+    std::fs::File::options()
+        .write(true)
+        .open(&kept)
+        .expect("the URL Doppler gave is kept while the database is unreachable")
+        .set_modified(hours_ago)
+        .unwrap();
+
+    let offline = tempfile::tempdir().unwrap();
+    let path = fake_doppler(offline.path(), None);
+    let out = p.write_hook("crates/foo/bar/lib.rs", &[("PATH", &path)]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let answer: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}{}", stdout(&out), stderr(&out)));
+    let text = answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("Foo bar must"), "{text}");
+    assert_eq!(doppler_calls(offline.path()), 0);
+}
