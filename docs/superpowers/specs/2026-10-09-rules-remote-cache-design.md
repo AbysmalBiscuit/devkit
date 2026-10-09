@@ -58,11 +58,11 @@ A remote reads its rules into a `RuleIndex`, applies an edit, and reports its re
 
 `<state dir>/rules-cache/<source>-<repository uuid>.sqlite`, shared by every worktree and session on the machine.
 
-- `meta`: cache format version, source kind, repository UUID, remote revision, pull time.
-- `rules`: one row per rule with its JSON, the columns queries filter on, and the remote's own key (Supabase's `rule_key`).
-- `rule_tasks`, `rule_languages`: each rule's lists.
+- `meta`: cache format version, source kind, repository UUID, the checkout path the index describes, remote revision, pull time.
+- `files`: one row per rule file, its JSON, in index order.
+- `rules`: one row per live rule, its JSON, in index order.
 
-A refresh replaces every table in one transaction, so a reader sees the whole old cache or the whole new one. A cache whose format version devkit does not know is deleted and pulled again. The cache uses rollback journaling.
+Every reader loads a whole `RuleIndex` and filters it in memory, so the cache holds no filter columns or membership tables. A refresh replaces every table in one transaction, so a reader sees the whole old cache or the whole new one. A cache whose format version devkit does not know, or whose `meta` names another source or repository, is ignored and replaced at the next refresh. The cache uses rollback journaling and a busy timeout, so a read during a refresh waits for it instead of failing.
 
 ### Refresh
 
@@ -70,9 +70,9 @@ A refresh replaces every table in one transaction, so a reader sees the whole ol
 
 | Caller | Refreshes | Wait | On failure |
 |---|---|---|---|
-| session-start hook | when the revision changed | hook wait | one stderr line, keeps the old cache |
+| session hooks (`devkit rules context`) | when the revision changed | hook wait | one stderr line, keeps the old cache |
 | `devkit rules pull` | always | CLI wait | exits non-zero naming the cause |
-| `devkit rules query`, `stats`, `context` | when the revision changed | CLI wait | one stderr line, reads the old cache; exits non-zero only with no cache |
+| `devkit rules query`, `stats` | when the revision changed | CLI wait | one stderr line, reads the old cache; exits non-zero only with no cache |
 | write hook | never | none | with no cache at all, reads the remote directly within the hook wait and writes no cache |
 
 `devkit rules pull` prints the source, the revision and the rule count.
@@ -93,13 +93,13 @@ The `rules_source` row adds the cache path, its revision and its age.
 
 - Revision: `stats_rules(p_repo_id)`.
 - Pull: `query_rules(p_repo_id)` at its default page size, following `continuation` (`after_position`, `after_rule_key`, `expected_revision`) page by page. A page answering `{"error":"conflict"}` restarts the pull; after three restarts the pull fails.
-- Each payload maps to a `Rule`; `rule_key` is kept in the cache for edits.
+- Each payload maps to a `Rule`.
 - `{"error":"not_found"}` covers both a missing repository and one the caller may not read; the error says so and points at `repository_members`.
 - devkit checks the shape of `stats_rules`'s answer and refuses one it does not recognise, as the Postgres source refuses an unknown storage version.
 
 ### Edits
 
-Each edit forces a refresh first, for the current revision and the id-to-`rule_key` mapping.
+Each edit pulls the rules afresh first, for the current revision and the id-to-`rule_key` mapping; the cache does not hold remote keys.
 
 - `add`: `put_rule(repo, null, revision, payload)`. The server assigns the id as the hash of `<manual>:<title>`, the same id devkit computes.
 - `edit`: `put_rule(repo, rule_key, revision, payload)`. The function requires all eight editable fields, so devkit merges the given flags over the cached rule.
@@ -118,7 +118,7 @@ Each edit forces a refresh first, for the current revision and the id-to-`rule_k
 
 `devkit auth supabase` joins `devkit auth`'s providers. It reads `url` and `callback_port` from `[rules.supabase]`, or takes `--url`.
 
-- Default (browser): reads the enabled providers from `GET /auth/v1/settings` and asks which, or takes `--provider`. Opens `/auth/v1/authorize?provider=<p>` with a PKCE challenge and `redirect_to=http://localhost:<callback_port>/callback`, listens on that port (reserved through the port registry), and exchanges the code at `/auth/v1/token?grant_type=pkce`.
+- Default (browser): reads the enabled providers from `GET /auth/v1/settings` and asks which, or takes `--with <provider>`. Opens `/auth/v1/authorize?provider=<p>` with a PKCE challenge and `redirect_to=http://localhost:<callback_port>/callback`, listens on `127.0.0.1:<callback_port>` for the sign-in alone, refusing when the port registry holds that port or it will not bind (the registry hands out ports from a base and cannot promise one fixed port), and exchanges the code at `/auth/v1/token?grant_type=pkce`.
 - `--email`: asks Supabase to email a one-time code (`/auth/v1/otp`) and verifies the code typed in the terminal (`/auth/v1/verify`). No browser.
 - `--password`: signs in with `DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD`.
 
@@ -145,7 +145,7 @@ doppler_project = "repo-rules" # optional
 doppler_config = "ci"          # optional
 ```
 
-Secrets `DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD` resolve as `DEVKIT_RULES_DATABASE_URL` does: environment, Doppler, `~/.config/devkit/secrets.toml`, with hooks reading the kept copy first. The cache has no config key.
+Secrets `DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD` resolve as `DEVKIT_RULES_DATABASE_URL` does: environment, Doppler, `~/.config/devkit/secrets.toml`, with hooks reading the kept copy first. The cache has no config key. `url` is read from the global config alone and ignored in a project's `devkit.toml`, as `[todo.supabase] url` is, so a checkout cannot send your session elsewhere; `DEVKIT_RULES_SUPABASE_URL` overrides it.
 
 ## Docs
 
@@ -173,5 +173,4 @@ Failing test first throughout.
 
 ## Open items
 
-- The GoTrue request and response shapes for `/settings`, `/otp`, `/verify` and the `pkce` grant are to be pinned against GoTrue's source while planning.
 - The Supabase source is testable only against the extractor's unmerged `002_supabase.sql`; it ships pinned to that contract.
