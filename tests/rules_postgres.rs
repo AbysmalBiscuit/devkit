@@ -659,7 +659,8 @@ fn doppler_proj(repo: &str) -> Proj {
     ))
 }
 
-/// Hooks reuse the URL Doppler gave rather than asking it on every write.
+/// Session start asks Doppler and keeps its URL, and write hooks reuse the
+/// kept URL without asking Doppler at all.
 #[cfg(unix)]
 #[test]
 fn hooks_reuse_the_url_doppler_gave() {
@@ -669,18 +670,38 @@ fn hooks_reuse_the_url_doppler_gave() {
     let p = doppler_proj(&repo);
     let bin = tempfile::tempdir().unwrap();
     let path = fake_doppler(bin.path(), &store.url);
+    let env = [("PATH", path.as_str())];
+    let out = p.devkit(&["rules", "context"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
     for session in ["S1", "S2", "S3"] {
-        let out = p.write_hook_as(session, "crates/foo/bar/lib.rs", &[("PATH", path.as_str())]);
+        let out = p.write_hook_as(session, "crates/foo/bar/lib.rs", &env);
         assert!(injected(&out).is_some(), "{}", stderr(&out));
     }
     assert_eq!(doppler_calls(bin.path()), 1);
 }
 
-/// A kept URL that fails to connect is dropped, so the next hook asks Doppler
-/// for a rotated credential or a moved database.
+/// A write hook with no kept URL injects nothing rather than wait on
+/// Doppler.
 #[cfg(unix)]
 #[test]
-fn a_hook_that_cannot_connect_asks_doppler_again() {
+fn a_write_hook_never_asks_doppler() {
+    let p = doppler_proj("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
+    let bin = tempfile::tempdir().unwrap();
+    let url = format!(
+        "postgres://agent:pw@{}/rules?sslmode=disable",
+        refused_addr()
+    );
+    let path = fake_doppler(bin.path(), &url);
+    let out = p.write_hook("crates/foo/bar/lib.rs", &[("PATH", path.as_str())]);
+    assert_eq!(injected(&out), None);
+    assert_eq!(doppler_calls(bin.path()), 0);
+}
+
+/// A database that does not answer leaves the kept URL in place, since the
+/// write hooks find their cache through it, and session start reuses it.
+#[cfg(unix)]
+#[test]
+fn an_unreachable_database_keeps_the_url_doppler_gave() {
     let p = doppler_proj("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
     let bin = tempfile::tempdir().unwrap();
     let url = format!(
@@ -689,8 +710,28 @@ fn a_hook_that_cannot_connect_asks_doppler_again() {
     );
     let path = fake_doppler(bin.path(), &url);
     for _ in 0..2 {
-        let out = p.write_hook("crates/foo/bar/lib.rs", &[("PATH", path.as_str())]);
-        assert_eq!(injected(&out), None);
+        p.devkit(&["rules", "context"], &[("PATH", path.as_str())]);
+    }
+    assert_eq!(doppler_calls(bin.path()), 1);
+}
+
+/// A login the database refuses drops the kept URL, so the next session
+/// asks Doppler for a rotated credential.
+#[cfg(unix)]
+#[test]
+fn a_refused_login_asks_doppler_again() {
+    let Some((store, repo)) = imported() else {
+        return;
+    };
+    let wrong = store
+        .url
+        .replacen("postgres:postgres@", "postgres:wrong@", 1);
+    assert_ne!(wrong, store.url, "the test URL carries postgres:postgres");
+    let p = doppler_proj(&repo);
+    let bin = tempfile::tempdir().unwrap();
+    let path = fake_doppler(bin.path(), &wrong);
+    for _ in 0..2 {
+        p.devkit(&["rules", "context"], &[("PATH", path.as_str())]);
     }
     assert_eq!(doppler_calls(bin.path()), 2);
 }
