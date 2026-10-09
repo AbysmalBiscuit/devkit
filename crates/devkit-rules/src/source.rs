@@ -9,7 +9,8 @@ use std::{
 use ambassador::Delegate;
 use anyhow::Result;
 use devkit_common::vcs::Checkout;
-use devkit_config::{RulesConfig, RulesPostgresConfig, RulesSource};
+use devkit_config::{RulesConfig, RulesPostgresConfig, RulesSource, RulesSupabaseConfig};
+use devkit_supabase::Api;
 
 use crate::{
     cache::{CacheKey, RuleCache},
@@ -19,6 +20,7 @@ use crate::{
     postgres::{Database, PostgresSource},
     remote::{Remote, RemoteRules},
     sqlite::{self, SqliteSource},
+    supabase::SupabaseSource,
 };
 
 /// A store of rules.
@@ -64,12 +66,15 @@ pub enum Source {
 
 impl Source {
     /// The source `settings` names for `checkout`'s repository. `database`
-    /// opens the database `[rules.postgres]` names, and is called only for
-    /// the `postgres` source, whose cache lives under `state_dir`.
+    /// opens the database `[rules.postgres]` names, called only for the
+    /// `postgres` source, and `api` the Data API `[rules.supabase]` names,
+    /// called only for the `supabase` source. Their caches live under
+    /// `state_dir`.
     pub fn for_checkout(
         settings: &RulesConfig,
         checkout: &Checkout,
         database: impl FnOnce(&RulesPostgresConfig) -> Arc<Database>,
+        api: impl FnOnce(&RulesSupabaseConfig) -> Arc<Api>,
         state_dir: &Path,
     ) -> Source {
         let repo = repo_of(checkout);
@@ -91,6 +96,21 @@ impl Source {
                 Source::Cached(CachedSource::new(
                     RuleCache::at_state_dir(state_dir, key),
                     Remote::Postgres(source),
+                ))
+            }
+            RulesSource::Supabase => {
+                let source = SupabaseSource::new(
+                    api(&settings.supabase),
+                    settings.supabase.repository.as_deref(),
+                    repo,
+                );
+                let key = CacheKey {
+                    kind: "supabase",
+                    repository: source.repository_id().unwrap_or("unset").to_string(),
+                };
+                Source::Cached(CachedSource::new(
+                    RuleCache::at_state_dir(state_dir, key),
+                    Remote::Supabase(source),
                 ))
             }
         }

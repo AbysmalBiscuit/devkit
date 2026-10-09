@@ -43,6 +43,7 @@ devkit-mcp.workspace = true
 devkit-docs.workspace = true
 devkit-rules.workspace = true
 devkit-postgres.workspace = true
+devkit-supabase.workspace = true
 devkit-timing.workspace = true
 devkit-todo.workspace = true
 devkit-todo-builtin.workspace = true
@@ -60,6 +61,7 @@ tempfile.workspace = true
 similar = "2"
 devkit-common = { workspace = true, features = ["test-support"] }
 devkit-git = { workspace = true, features = ["test-support"] }
+devkit-supabase = { workspace = true, features = ["test-support"] }
 same-file.workspace = true
 serde_yaml_ng.workspace = true
 tokio.workspace = true

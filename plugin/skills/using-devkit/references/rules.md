@@ -8,8 +8,9 @@ devkit injects a repository's coding rules into an agent's context: the rules go
 
 - `file` (the default): an index file the extractor writes, of either kind: a **SQLite store** (`index.sqlite`), what `repo-rules index` writes now, or a legacy **JSON index** (`index.json`).
 - `postgres`: one repository in the extractor's shared Postgres store, the `repo_rules` schema, which every machine and the extraction workers use. `[rules.postgres] repository` names the repository's UUID.
+- `supabase`: the same store reached over a Supabase project's Data API, through `repo-rules-agent`'s `repo_rules_api` functions, for a machine that can make HTTPS requests but not open a Postgres connection. `[rules.supabase] repository` names the repository's UUID.
 
-`devkit doctor` prints the `rules_source` row: the source, the kind of store it found (`sqlite`, `json` or `postgres`), and where it is. A remote source (`postgres`) is read through a local cache; see [The cache](#the-cache).
+`devkit doctor` prints the `rules_source` row: the source, the kind of store it found (`sqlite`, `json`, `postgres` or `supabase`), and where it is. A remote source (`postgres` or `supabase`) is read through a local cache; see [The cache](#the-cache).
 
 Whatever the source, a rule with no tasks applies to every task, the severity filters work as a floor (`--min-severity`) as well as an exact match, and a removed rule never appears. Reading never changes the store.
 
@@ -73,6 +74,46 @@ Each edit is one transaction that first locks the repository's row, as every wri
 - `remove` leaves a pinned tombstone, a rule added by hand included, and every reader skips it.
 
 Imported records can share an id. An edit or removal naming an id that more than one live rule carries changes nothing and says so; change those through `repo-rules-agent`.
+
+## The Supabase source
+
+```toml
+[rules]
+source = "supabase"
+
+[rules.supabase]
+repository = "<repository uuid>"
+publishable_key = "sb_publishable_..."
+callback_port = 7471            # the default
+doppler_project = "repo-rules"  # optional
+```
+
+The project URL, `https://<project-ref>.supabase.co`, comes from `DEVKIT_RULES_SUPABASE_URL`, else `[rules.supabase] url` in your own `~/.config/devkit/config.toml`. A project's `devkit.toml` cannot set it, so a checkout cannot send your session elsewhere.
+
+The `repo_rules_api` functions run as a signed-in Supabase user, and the repository's `repository_members` table gives that user a role: `reader` reads, `editor` and `owner` also edit. A repository the user has no role on answers exactly as a missing one does. Requests go one of three ways:
+
+- **As the user `devkit auth supabase` signed in.** The session is kept in devkit's state directory, readable only by you, and refreshed before it expires.
+- **With an email and password.** With no session, or one that no longer refreshes, devkit signs in with `DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD`, which resolve as the Postgres URL does: the environment, then Doppler when `[rules.supabase] doppler_project` is set, then `~/.config/devkit/secrets.toml`. Hooks reuse what Doppler last gave.
+- **With no credentials at all**, when `publishable_key` is unset: for a cloud container behind a proxy that attaches identity itself.
+
+Software factories share one Supabase user with the `reader` role, its email and password kept once in Doppler. Each factory resolves them with its Doppler service token, signs in, and fills its cache at session start; rotating the password in Doppler reaches every factory at its next sign-in. Supabase's service-role key is not used: the functions are granted only to signed-in users and check who is calling, and the key would bypass row-level security across the whole project.
+
+### Edits
+
+Each edit reads the rules afresh, for the repository's current revision and the rule's key, and sends that revision with the change. When another edit got in first, devkit reads again and retries once, then fails naming the conflict.
+
+- `add` files the rule under `<manual>`, and its id is the hash of `<manual>` and the title, the id the server assigns.
+- `edit` sends every editable field, the ones you pass over the rule's current values, and pins the rule.
+- `remove` leaves a pinned tombstone.
+- `--topic` is refused: topics change through `repo-rules-agent`.
+
+An id more than one live rule carries is refused, listing their keys.
+
+### Failures
+
+As for the Postgres source, a hook with a cache never waits on the API, and one without a cache injects nothing and prints one stderr line when the API cannot be read. A user whose role cannot edit gets `your role cannot edit repository <uuid>`; a value the server refuses comes back in the server's words. An expired or refused session is refreshed, then replaced by a password sign-in, then reported as `not signed in ...: run devkit auth supabase`. `devkit doctor` shows where the URL and sign-in resolve from, whether a session is kept and when its token expires, and whether the API answers, never a key, token or password.
+
+The API returns rules without the extractor's file tiers, so where the file source breaks a tie between equally specific rules by the tier of their files, this source keeps the store's order.
 
 ## The cache
 

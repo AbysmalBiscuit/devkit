@@ -767,9 +767,12 @@ pub struct RulesConfig {
     /// The rendered total for one event is truncated to this.
     pub max_event_bytes: usize,
     /// Where rules are read from and where `devkit rules add|edit|remove`
-    /// write: `file`, the index file at `index`, or `postgres`, the
-    /// repository `rules.postgres.repository` names in `repo-rules-agent`'s
-    /// shared Postgres store.
+    /// write: `file`, the index file at `index`; `postgres`, the repository
+    /// `rules.postgres.repository` names in `repo-rules-agent`'s shared
+    /// Postgres store; or `supabase`, the repository
+    /// `rules.supabase.repository` names in that store reached over a
+    /// Supabase project's Data API. Both remote sources are read through a
+    /// local cache that session start refreshes.
     pub source: RulesSource,
     /// The `file` source's index: a `repo-rules-agent` SQLite store or a
     /// legacy JSON index, told apart by the file's contents whatever it is
@@ -783,6 +786,8 @@ pub struct RulesConfig {
     pub index: Option<String>,
     /// The `postgres` source's settings.
     pub postgres: RulesPostgresConfig,
+    /// The `supabase` source's settings.
+    pub supabase: RulesSupabaseConfig,
 }
 
 impl Default for RulesConfig {
@@ -796,6 +801,7 @@ impl Default for RulesConfig {
             source: RulesSource::default(),
             index: None,
             postgres: RulesPostgresConfig::default(),
+            supabase: RulesSupabaseConfig::default(),
         }
     }
 }
@@ -810,6 +816,9 @@ pub enum RulesSource {
     File,
     /// `repo-rules-agent`'s Postgres store, at `[rules.postgres]`.
     Postgres,
+    /// `repo-rules-agent`'s store over a Supabase project's Data API, at
+    /// `[rules.supabase]`.
+    Supabase,
 }
 
 /// Where `[rules] source = "postgres"` finds its rules: the repository
@@ -852,6 +861,76 @@ pub struct RulesPostgresConfig {
     /// in a project's `devkit.toml`, so a checkout cannot add a CA your
     /// connection trusts.
     pub ca_file: Option<String>,
+}
+
+/// Where `[rules] source = "supabase"` finds its rules: the repository
+/// `repository` names, read through `repo-rules-agent`'s `repo_rules_api`
+/// functions on a Supabase project's Data API as a signed-in user.
+/// `devkit auth supabase` signs in; hooks use that session, or sign in with
+/// `DEVKIT_RULES_SUPABASE_EMAIL` and `DEVKIT_RULES_SUPABASE_PASSWORD`, which
+/// resolve from the environment, then this Doppler scope when set, then the
+/// secrets file.
+///
+/// ```
+/// # use devkit_config::{Config, RulesSource};
+/// # let cfg = Config::parse(r#"
+/// [rules]
+/// source = "supabase"
+///
+/// [rules.supabase]
+/// url = "https://abcdefghijklmnop.supabase.co"
+/// repository = "0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10"
+/// publishable_key = "sb_publishable_example"
+/// callback_port = 7471           # the default; the allow list needs it exactly
+/// doppler_project = "repo-rules" # optional
+/// doppler_config = "ci"          # optional
+/// # "#).unwrap();
+/// # assert_eq!(cfg.rules.source, RulesSource::Supabase);
+/// # assert_eq!(cfg.rules.supabase.doppler_config.as_deref(), Some("ci"));
+/// # let bare = Config::parse("[rules.supabase]\nrepository = \"x\"\n").unwrap();
+/// # assert_eq!(bare.rules.supabase.callback_port, 7471);
+/// # assert!(Config::parse("[rules.supabase]\nkey = \"x\"\n").is_err());
+/// ```
+#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RulesSupabaseConfig {
+    /// The project's API URL, `https://<project-ref>.supabase.co`. Read
+    /// from `~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`) alone and
+    /// ignored in a project's `devkit.toml`, so a checkout cannot send your
+    /// session elsewhere. `DEVKIT_RULES_SUPABASE_URL` overrides it.
+    pub url: Option<String>,
+    /// The repository's UUID in the store, its `repo_id`. The source reads
+    /// and edits that repository's rules alone.
+    pub repository: Option<String>,
+    /// The project's publishable key, sent as `apikey` with a signed-in
+    /// user's token. Without it, requests carry no credentials, for a proxy
+    /// that attaches them.
+    pub publishable_key: Option<String>,
+    /// The local port `devkit auth supabase` takes the browser's sign-in
+    /// on. The project's redirect allow list must hold
+    /// `http://localhost:<callback_port>/callback` exactly.
+    pub callback_port: u16,
+    /// Read the sign-in email and password, when the environment lacks
+    /// them, from this Doppler project, before the secrets file. Hooks reuse
+    /// what Doppler last gave, kept in devkit's state directory, until it
+    /// ages out or the API refuses it.
+    pub doppler_project: Option<String>,
+    /// The Doppler config to read them from. Doppler's own default when
+    /// absent.
+    pub doppler_config: Option<String>,
+}
+
+impl Default for RulesSupabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: None,
+            repository: None,
+            publishable_key: None,
+            callback_port: 7471,
+            doppler_project: None,
+            doppler_config: None,
+        }
+    }
 }
 
 /// Files injected into an agent's context when the condition on them holds.

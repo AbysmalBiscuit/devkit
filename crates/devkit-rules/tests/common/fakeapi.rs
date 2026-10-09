@@ -7,16 +7,17 @@ use devkit_rules::model::RuleIndex;
 use serde_json::{Value, json};
 
 /// Each live rule of `index` as `query_rules` returns it: its fields, a
-/// fresh `rule_key`, and its topics as one of the extra fields.
+/// `rule_key` of its own, and its topics as one of the extra fields.
 pub fn payloads(index: &RuleIndex) -> Vec<Value> {
     index
         .rules
         .iter()
         .filter(|rule| !rule.removed)
-        .map(|rule| {
+        .enumerate()
+        .map(|(n, rule)| {
             json!({
                 "id": rule.id,
-                "rule_key": uuid::Uuid::new_v4().to_string(),
+                "rule_key": format!("00000000-0000-4000-8000-{n:012x}"),
                 "title": rule.title,
                 "description": rule.description,
                 "category": rule.category,

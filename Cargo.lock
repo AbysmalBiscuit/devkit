@@ -529,6 +529,7 @@ dependencies = [
  "devkit-ports",
  "devkit-postgres",
  "devkit-rules",
+ "devkit-supabase",
  "devkit-ticket",
  "devkit-timing",
  "devkit-todo",
