@@ -126,7 +126,7 @@ fn a_url_that_does_not_parse_names_the_label() {
 #[test]
 fn identity_names_the_project_without_credentials() {
     let api = Api::new(
-        "https://abc.supabase.co/?apikey=k#f",
+        "https://abc.supabase.co/",
         "repo_rules_api",
         Auth::None,
         Duration::from_secs(5),
@@ -142,6 +142,9 @@ fn a_url_with_credentials_is_refused_without_repeating_it() {
         "https://user:secret@abc.supabase.co",
         "https://secret@abc.supabase.co",
         "ftp://user:secret@abc.supabase.co",
+        "https://abc.supabase.co/?apikey=secret",
+        "https://abc.supabase.co?apikey=secret",
+        "https://abc.supabase.co/#secret",
     ] {
         let err = Api::new(
             url,

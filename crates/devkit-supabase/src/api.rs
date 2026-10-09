@@ -121,8 +121,8 @@ struct Body {
 impl Api {
     /// The API of the project whose URL is `url`, such as
     /// `https://<project-ref>.supabase.co`, serving `schema`. A URL with a
-    /// user or password is refused, since the URL appears in errors, and no
-    /// error repeats it.
+    /// user, password, query or fragment is refused, since the URL appears
+    /// in errors, and no error repeats it.
     pub fn new(
         url: &str,
         schema: &'static str,
@@ -130,19 +130,8 @@ impl Api {
         wait: Duration,
         label: &'static str,
     ) -> Result<Api> {
-        let url = url.trim().trim_end_matches('/');
-        let parsed =
-            reqwest::Url::parse(url).with_context(|| format!("the {label} URL does not parse"))?;
-        ensure!(
-            parsed.username().is_empty() && parsed.password().is_none(),
-            "the {label} URL carries a user or password; credentials go in the publishable key or a sign-in"
-        );
-        ensure!(
-            matches!(parsed.scheme(), "https" | "http"),
-            "the {label} URL is not http or https"
-        );
         Ok(Api {
-            url: url.to_string(),
+            url: project_url(url, label)?,
             schema,
             auth,
             wait,
@@ -368,6 +357,29 @@ impl Api {
         }
         .into()
     }
+}
+
+/// `url` without surrounding space or a trailing `/`, an http or https URL
+/// naming a project and nothing else. A user, password, query or fragment
+/// is refused, since the URL appears in errors and output and any of them
+/// can carry a credential, and no error repeats the URL.
+pub(crate) fn project_url(url: &str, label: &str) -> Result<String> {
+    let url = url.trim().trim_end_matches('/');
+    let parsed =
+        reqwest::Url::parse(url).with_context(|| format!("the {label} URL does not parse"))?;
+    ensure!(
+        parsed.username().is_empty() && parsed.password().is_none(),
+        "the {label} URL carries a user or password; credentials go in the publishable key or a sign-in"
+    );
+    ensure!(
+        parsed.query().is_none() && parsed.fragment().is_none(),
+        "the {label} URL carries a query or fragment; it names the project alone"
+    );
+    ensure!(
+        matches!(parsed.scheme(), "https" | "http"),
+        "the {label} URL is not http or https"
+    );
+    Ok(url.to_string())
 }
 
 /// Whether `e` is a request that got no answer: the host did not resolve,
