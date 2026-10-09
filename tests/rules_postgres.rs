@@ -757,7 +757,7 @@ fn a_project_layer_cannot_name_the_ca_file() {
 
 #[test]
 fn revision_counts_each_edit() {
-    use devkit_rules::{edit::Fields, source::RuleSource};
+    use devkit_rules::{edit::Fields, remote::RemoteRules, source::RuleSource};
 
     let Some((store, repo)) = imported() else {
         return;

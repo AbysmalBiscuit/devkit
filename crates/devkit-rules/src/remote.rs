@@ -42,24 +42,6 @@ pub enum Remote {
     Fake(FakeRemote),
 }
 
-impl RemoteRules for PostgresSource {
-    fn revision(&self) -> Result<i64> {
-        PostgresSource::revision(self)
-    }
-
-    fn pull(&self) -> Result<(i64, RuleIndex)> {
-        PostgresSource::pull(self)
-    }
-
-    fn checkout(&self) -> &str {
-        PostgresSource::checkout(self)
-    }
-
-    fn identity(&self) -> String {
-        PostgresSource::identity(self)
-    }
-}
-
 #[cfg(feature = "test-remote")]
 pub use fake::FakeRemote;
 

@@ -15,6 +15,7 @@ use tokio_postgres::{GenericClient, IsolationLevel, Row, error::SqlState, types:
 use crate::{
     edit::{Fields, apply, rule_id},
     model::{Rule, RuleFile, RuleIndex},
+    remote::RemoteRules,
     source::RuleSource,
 };
 
@@ -84,8 +85,48 @@ impl PostgresSource {
         })
     }
 
+    /// The repository's UUID, lowercased, when the config names a valid one.
+    pub fn repository_id(&self) -> Option<&str> {
+        self.repository.as_deref().ok()
+    }
+
+    fn repository(&self) -> Result<&str> {
+        self.repository
+            .as_deref()
+            .map_err(|reason| anyhow!("{reason}"))
+    }
+
+    /// Runs `op` in an edit's transaction: the repository row locked first,
+    /// in a statement of its own, and its revision incremented last.
+    fn edit_with<T>(
+        &self,
+        op: impl AsyncFnOnce(&tokio_postgres::Transaction<'_>, &str) -> Result<T>,
+    ) -> Result<T> {
+        let repo = self.repository()?;
+        self.db.run(async |client| {
+            let tx = client
+                .build_transaction()
+                .isolation_level(IsolationLevel::ReadCommitted)
+                .start()
+                .await?;
+            check_version(&tx).await?;
+            find_repository(&tx, repo, true).await?;
+            let out = op(&tx, repo).await?;
+            tx.query_typed(
+                "UPDATE repo_rules.repositories SET revision = revision + 1
+                 WHERE repo_id = $1::uuid",
+                &[(&repo, Type::TEXT)],
+            )
+            .await?;
+            tx.commit().await?;
+            Ok(out)
+        })
+    }
+}
+
+impl RemoteRules for PostgresSource {
     /// The repository's revision, which every edit to its rules increments.
-    pub fn revision(&self) -> Result<i64> {
+    fn revision(&self) -> Result<i64> {
         let repo = self.repository()?;
         self.db.run(async |client| {
             check_version(&*client).await?;
@@ -103,7 +144,7 @@ impl PostgresSource {
     }
 
     /// The live rules and the revision they are at, read from one snapshot.
-    pub fn pull(&self) -> Result<(i64, RuleIndex)> {
+    fn pull(&self) -> Result<(i64, RuleIndex)> {
         let repo = self.repository()?;
         let (revision, rules, files) = self.db.run(async |client| {
             let tx = client
@@ -152,52 +193,13 @@ impl PostgresSource {
         Ok((revision, index))
     }
 
-    /// The repository's UUID, lowercased, when the config names a valid one.
-    pub fn repository_id(&self) -> Option<&str> {
-        self.repository.as_deref().ok()
-    }
-
-    /// The local checkout the rules describe.
-    pub fn checkout(&self) -> &str {
+    fn checkout(&self) -> &str {
         &self.repo
     }
 
     /// The database's host, port and name, which carry no credential.
-    pub fn identity(&self) -> String {
+    fn identity(&self) -> String {
         self.db.target()
-    }
-
-    fn repository(&self) -> Result<&str> {
-        self.repository
-            .as_deref()
-            .map_err(|reason| anyhow!("{reason}"))
-    }
-
-    /// Runs `op` in an edit's transaction: the repository row locked first,
-    /// in a statement of its own, and its revision incremented last.
-    fn edit_with<T>(
-        &self,
-        op: impl AsyncFnOnce(&tokio_postgres::Transaction<'_>, &str) -> Result<T>,
-    ) -> Result<T> {
-        let repo = self.repository()?;
-        self.db.run(async |client| {
-            let tx = client
-                .build_transaction()
-                .isolation_level(IsolationLevel::ReadCommitted)
-                .start()
-                .await?;
-            check_version(&tx).await?;
-            find_repository(&tx, repo, true).await?;
-            let out = op(&tx, repo).await?;
-            tx.query_typed(
-                "UPDATE repo_rules.repositories SET revision = revision + 1
-                 WHERE repo_id = $1::uuid",
-                &[(&repo, Type::TEXT)],
-            )
-            .await?;
-            tx.commit().await?;
-            Ok(out)
-        })
     }
 }
 
