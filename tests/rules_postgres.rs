@@ -768,6 +768,26 @@ fn a_database_out_of_connections_keeps_the_url_doppler_gave() {
     assert_eq!(doppler_calls(bin.path()), 1);
 }
 
+/// A refused login or a missing database drops the kept URL, so the next
+/// session asks Doppler again.
+#[cfg(unix)]
+#[test]
+fn a_refused_login_or_missing_database_drops_the_url_doppler_gave() {
+    for sqlstate in ["28P01", "3D000"] {
+        let p = doppler_proj("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10");
+        let bin = tempfile::tempdir().unwrap();
+        let url = format!(
+            "postgres://agent:pw@{}/rules?sslmode=disable",
+            refusing_addr(sqlstate)
+        );
+        let path = fake_doppler(bin.path(), &url);
+        for _ in 0..2 {
+            p.devkit(&["rules", "context"], &[("PATH", path.as_str())]);
+        }
+        assert_eq!(doppler_calls(bin.path()), 2, "{sqlstate}");
+    }
+}
+
 /// A login the database refuses drops the kept URL, so the next session
 /// asks Doppler for a rotated credential.
 #[cfg(unix)]
