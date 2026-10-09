@@ -29,6 +29,7 @@ fn source_at(dir: &Path, checkout: &str) -> CachedSource {
     let cache = RuleCache::at_state_dir(dir, CacheKey {
         kind: "postgres",
         repository: "a".to_string(),
+        source: "fake".to_string(),
     });
     CachedSource::new(
         cache,

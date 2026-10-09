@@ -19,6 +19,7 @@ fn key(repository: &str) -> CacheKey {
     CacheKey {
         kind: "postgres",
         repository: repository.to_string(),
+        source: "db.example:5432/rules".to_string(),
     }
 }
 
@@ -60,9 +61,29 @@ fn meta_for_another_repository_reads_as_no_cache() {
     let other_kind = RuleCache::new(dir.path().join("rules-cache").join("c.sqlite"), CacheKey {
         kind: "supabase",
         repository: "a".to_string(),
+        source: "db.example:5432/rules".to_string(),
     });
     assert!(other_kind.meta().is_none());
     assert!(other_kind.read().unwrap().is_none());
+}
+
+#[test]
+fn meta_from_another_remote_reads_as_no_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rules-cache").join("c.sqlite");
+    let from = |source: &str| {
+        RuleCache::new(path.clone(), CacheKey {
+            source: source.to_string(),
+            ..key("a")
+        })
+    };
+    from("db.example:5432/rules").write(1, &index()).unwrap();
+    let other = from("other.example:5432/rules");
+    assert!(other.meta().is_none());
+    assert!(other.read().unwrap().is_none());
+    other.write(2, &index()).unwrap();
+    assert_eq!(other.meta().unwrap().revision, 2);
+    assert!(from("db.example:5432/rules").meta().is_none());
 }
 
 #[test]

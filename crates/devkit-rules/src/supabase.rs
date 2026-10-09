@@ -342,6 +342,10 @@ impl RemoteRules for SupabaseSource {
     fn checkout(&self) -> &str {
         &self.repo
     }
+
+    fn identity(&self) -> String {
+        self.api.identity()
+    }
 }
 
 impl RuleSource for SupabaseSource {

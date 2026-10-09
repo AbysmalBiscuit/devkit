@@ -92,6 +92,7 @@ impl Source {
                 let key = CacheKey {
                     kind: "postgres",
                     repository: source.repository_id().unwrap_or("unset").to_string(),
+                    source: source.identity(),
                 };
                 Source::Cached(CachedSource::new(
                     RuleCache::at_state_dir(state_dir, key),
@@ -107,6 +108,7 @@ impl Source {
                 let key = CacheKey {
                     kind: "supabase",
                     repository: source.repository_id().unwrap_or("unset").to_string(),
+                    source: source.identity(),
                 };
                 Source::Cached(CachedSource::new(
                     RuleCache::at_state_dir(state_dir, key),

@@ -122,3 +122,16 @@ fn a_url_that_does_not_parse_names_the_label() {
     .unwrap_err();
     assert!(err.to_string().contains("rules API URL"), "{err}");
 }
+
+#[test]
+fn identity_names_the_project_without_credentials() {
+    let api = Api::new(
+        "https://user:secret@abc.supabase.co/?apikey=k#f",
+        "repo_rules_api",
+        Auth::None,
+        Duration::from_secs(5),
+        "rules API",
+    )
+    .unwrap();
+    assert_eq!(api.identity(), "https://abc.supabase.co");
+}

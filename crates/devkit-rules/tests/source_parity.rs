@@ -67,6 +67,7 @@ fn sources(dir: &Path) -> (Option<TestStore>, Vec<(&'static str, Source)>) {
     let cache = RuleCache::at_state_dir(dir, CacheKey {
         kind: "postgres",
         repository: repo.clone(),
+        source: "rules database".to_string(),
     });
     let cached = CachedSource::new(cache, Remote::Postgres(postgres));
     cached.refresh(false).unwrap();
@@ -95,6 +96,7 @@ fn supabase(dir: &Path, export: &Value) -> Source {
     let cache = RuleCache::at_state_dir(dir, CacheKey {
         kind: "supabase",
         repository: REPO.to_string(),
+        source: server.url(),
     });
     let cached = CachedSource::new(cache, Remote::Supabase(remote));
     cached.refresh(false).unwrap();

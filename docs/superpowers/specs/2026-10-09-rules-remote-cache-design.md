@@ -58,11 +58,11 @@ A remote reads its rules into a `RuleIndex`, applies an edit, and reports its re
 
 `<state dir>/rules-cache/<source>-<repository uuid>.sqlite`, shared by every worktree and session on the machine.
 
-- `meta`: cache format version, source kind, repository UUID, the checkout path the index describes, remote revision, pull time.
+- `meta`: cache format version, source kind, repository UUID, the remote's credential-free identity (the Postgres host, port and database, or the Supabase project URL), the checkout path of the clone that last pulled, remote revision, pull time.
 - `files`: one row per rule file, its JSON, in index order.
 - `rules`: one row per live rule, its JSON, in index order.
 
-Every reader loads a whole `RuleIndex` and filters it in memory, so the cache holds no filter columns or membership tables. A refresh replaces every table in one transaction, so a reader sees the whole old cache or the whole new one. A cache whose format version devkit does not know, or whose `meta` names another source or repository, is ignored and replaced at the next refresh. The cache uses rollback journaling and a busy timeout, so a read during a refresh waits for it instead of failing.
+Every reader loads a whole `RuleIndex` and filters it in memory, so the cache holds no filter columns or membership tables. A refresh replaces every table in one transaction, so a reader sees the whole old cache or the whole new one. A cache whose format version devkit does not know, or whose `meta` names another source kind, repository or remote, is ignored and replaced at the next refresh. The cache uses rollback journaling and a busy timeout, so a read during a refresh waits for it instead of failing. Every clone of a repository shares its cache, so a read reports the reading clone's checkout as the index's `repo`, never the one stored in `meta`.
 
 ### Refresh
 

@@ -23,6 +23,9 @@ pub trait RemoteRules: RuleSource {
     /// The local checkout the rules describe, which [`RuleIndex::repo`]
     /// reports so a query reads that checkout's `.repo-rules` config.
     fn checkout(&self) -> &str;
+    /// Where the rules live, with no credential in it, which a cache keeps
+    /// to tell one remote from another.
+    fn identity(&self) -> String;
 }
 
 /// Every remote rule source.
@@ -50,6 +53,10 @@ impl RemoteRules for PostgresSource {
 
     fn checkout(&self) -> &str {
         PostgresSource::checkout(self)
+    }
+
+    fn identity(&self) -> String {
+        PostgresSource::identity(self)
     }
 }
 
@@ -136,6 +143,10 @@ mod fake {
 
         fn checkout(&self) -> &str {
             &self.checkout
+        }
+
+        fn identity(&self) -> String {
+            "fake".to_string()
         }
     }
 }

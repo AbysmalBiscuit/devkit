@@ -3,10 +3,11 @@
 //!
 //! Every reader loads the whole [`RuleIndex`] and filters it in memory, so
 //! the file keeps each file and rule as JSON in index order, beside a `meta`
-//! row naming the source kind, repository and revision it holds. A refresh
-//! replaces everything in one transaction, so a reader sees the whole old
-//! index or the whole new one. A file whose format, kind or repository is
-//! not this cache's reads as no cache, and the next refresh replaces it.
+//! row naming the source kind, repository, remote and revision it holds. A
+//! refresh replaces everything in one transaction, so a reader sees the
+//! whole old index or the whole new one. A file whose format, kind,
+//! repository or remote is not this cache's reads as no cache, and the next
+//! refresh replaces it.
 
 use std::{
     path::{Path, PathBuf},
@@ -34,6 +35,7 @@ CREATE TABLE meta (
     format INTEGER NOT NULL,
     kind TEXT NOT NULL,
     repository TEXT NOT NULL,
+    source TEXT NOT NULL,
     repo TEXT NOT NULL,
     revision INTEGER NOT NULL,
     pulled_at INTEGER NOT NULL
@@ -42,11 +44,15 @@ CREATE TABLE files (position INTEGER PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE rules (position INTEGER PRIMARY KEY, json TEXT NOT NULL);
 ";
 
-/// Whose rules a cache holds: the source kind and the repository's UUID.
+/// Whose rules a cache holds: the source kind, the repository's UUID, and
+/// which remote they came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CacheKey {
     pub kind: &'static str,
     pub repository: String,
+    /// The remote's identity with no credential in it, such as a Postgres
+    /// target or a Supabase project URL.
+    pub source: String,
 }
 
 /// What a cache records of its last refresh.
@@ -118,12 +124,14 @@ impl RuleCache {
             .with_context(writing)?;
         tx.execute_batch(LAYOUT).with_context(writing)?;
         tx.execute(
-            "INSERT INTO meta (singleton, format, kind, repository, repo, revision, pulled_at)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO meta
+                 (singleton, format, kind, repository, source, repo, revision, pulled_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 FORMAT,
                 self.key.kind,
                 self.key.repository,
+                self.key.source,
                 index.repo,
                 revision,
                 now()
@@ -167,7 +175,7 @@ impl RuleCache {
     fn read_meta(&self, conn: &Connection) -> Result<Option<(Meta, String)>> {
         let row = conn
             .query_row(
-                "SELECT format, kind, repository, repo, revision, pulled_at
+                "SELECT format, kind, repository, source, repo, revision, pulled_at
                  FROM meta WHERE singleton = 1",
                 [],
                 |row| {
@@ -176,8 +184,9 @@ impl RuleCache {
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
-                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(4)?,
                         row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
                     ))
                 },
             )
@@ -194,8 +203,10 @@ impl RuleCache {
             Err(e) => return Err(e).with_context(|| self.reading()),
         };
         Ok(match row {
-            Some((FORMAT, kind, repository, repo, revision, pulled_at))
-                if kind == self.key.kind && repository == self.key.repository =>
+            Some((FORMAT, kind, repository, source, repo, revision, pulled_at))
+                if kind == self.key.kind
+                    && repository == self.key.repository
+                    && source == self.key.source =>
             {
                 Some((
                     Meta {

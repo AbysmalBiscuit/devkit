@@ -165,6 +165,19 @@ impl Api {
         &self.url
     }
 
+    /// The project's URL without a user, password, query or fragment, so
+    /// it names the project and carries no credential.
+    pub fn identity(&self) -> String {
+        let Ok(mut url) = reqwest::Url::parse(&self.url) else {
+            return String::new();
+        };
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        url.set_query(None);
+        url.set_fragment(None);
+        url.as_str().trim_end_matches('/').to_string()
+    }
+
     /// What names the API in errors.
     pub fn label(&self) -> &'static str {
         self.label

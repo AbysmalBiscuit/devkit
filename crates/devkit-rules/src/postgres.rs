@@ -162,6 +162,11 @@ impl PostgresSource {
         &self.repo
     }
 
+    /// The database's host, port and name, which carry no credential.
+    pub fn identity(&self) -> String {
+        self.db.target()
+    }
+
     fn repository(&self) -> Result<&str> {
         self.repository
             .as_deref()
