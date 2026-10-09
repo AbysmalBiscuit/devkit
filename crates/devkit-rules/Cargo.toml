@@ -3,6 +3,10 @@ name = "devkit-rules"
 edition.workspace = true
 version = "0.14.16" # x-release-please-version
 
+[features]
+# An in-memory remote source, for tests of the cache.
+test-remote = []
+
 [dependencies]
 ambassador.workspace = true
 anyhow.workspace = true
@@ -21,4 +25,5 @@ devkit-common.workspace = true
 devkit-postgres.workspace = true
 
 [dev-dependencies]
+devkit-rules = { path = ".", features = ["test-remote"] }
 tempfile.workspace = true

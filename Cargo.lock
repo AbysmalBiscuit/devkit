@@ -731,6 +731,7 @@ dependencies = [
  "devkit-common",
  "devkit-config",
  "devkit-postgres",
+ "devkit-rules",
  "glob",
  "ring",
  "rusqlite",

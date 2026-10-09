@@ -14,6 +14,7 @@ pub mod index;
 pub mod model;
 pub mod postgres;
 pub mod query;
+pub mod remote;
 pub mod render;
 pub mod repo_config;
 pub mod source;

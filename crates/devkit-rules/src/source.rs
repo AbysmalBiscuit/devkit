@@ -12,10 +12,12 @@ use devkit_common::vcs::Checkout;
 use devkit_config::{RulesConfig, RulesPostgresConfig, RulesSource};
 
 use crate::{
+    cache::RuleCache,
     edit::Fields,
     index::{FileSource, cache_dir},
     model::RuleIndex,
     postgres::{Database, PostgresSource},
+    remote::{Remote, RemoteRules},
     sqlite::{self, SqliteSource},
 };
 
@@ -57,6 +59,8 @@ pub enum Source {
     Sqlite(SqliteSource),
     /// The shared Postgres store.
     Postgres(PostgresSource),
+    /// A remote store read through its local cache.
+    Cached(CachedSource),
 }
 
 impl Source {
@@ -112,7 +116,125 @@ impl Source {
         match self {
             Source::Json(_) | Source::Sqlite(_) => self.load().is_some(),
             Source::Postgres(source) => source.check().map_err(|e| report(&e)).is_ok(),
+            Source::Cached(source) => {
+                source.cache.meta().is_some()
+                    || source.remote.revision().map_err(|e| report(&e)).is_ok()
+            }
         }
+    }
+
+    /// Refreshes a cached source's cache, as [`CachedSource::refresh`] does;
+    /// `None` for a source with no cache.
+    pub fn refresh(&self, force: bool) -> Option<Result<Refreshed>> {
+        match self {
+            Source::Json(_) | Source::Sqlite(_) | Source::Postgres(_) => None,
+            Source::Cached(source) => Some(source.refresh(force)),
+        }
+    }
+}
+
+/// What a refresh found.
+#[derive(Clone, Debug)]
+pub struct Refreshed {
+    /// The remote's revision, which the cache now holds.
+    pub revision: i64,
+    /// How many rules the cache holds.
+    pub rules: usize,
+    /// Whether the rules were read afresh, rather than found current.
+    pub pulled: bool,
+}
+
+/// A remote source read through its local cache. Reads come from the cache
+/// alone once it exists, and from the remote, without filling the cache,
+/// until then; [`CachedSource::refresh`] fills it. Edits go to the remote
+/// and then refresh the cache, so the next read sees them.
+pub struct CachedSource {
+    cache: RuleCache,
+    remote: Remote,
+}
+
+impl CachedSource {
+    pub fn new(cache: RuleCache, remote: Remote) -> CachedSource {
+        CachedSource { cache, remote }
+    }
+
+    pub fn cache(&self) -> &RuleCache {
+        &self.cache
+    }
+
+    pub fn remote(&self) -> &Remote {
+        &self.remote
+    }
+
+    /// Pulls the remote's rules into the cache when `force` is set, there is
+    /// no cache, or the remote's revision differs from the cached one. A
+    /// failure leaves the cache as it was.
+    pub fn refresh(&self, force: bool) -> Result<Refreshed> {
+        let revision = self.remote.revision()?;
+        if !force
+            && self.cache.meta().is_some_and(|m| m.revision == revision)
+            && let Some(index) = self.cache.read()?
+        {
+            return Ok(Refreshed {
+                revision,
+                rules: index.rules.len(),
+                pulled: false,
+            });
+        }
+        let (revision, index) = self.remote.pull()?;
+        self.cache.write(revision, &index)?;
+        Ok(Refreshed {
+            revision,
+            rules: index.rules.len(),
+            pulled: true,
+        })
+    }
+
+    /// Refreshes the cache after an edit, which has already succeeded, so a
+    /// failure is one line on stderr.
+    fn refresh_after_edit(&self) {
+        if let Err(e) = self.refresh(true) {
+            report(&e.context("the edit is made, but refreshing the rules cache failed"));
+        }
+    }
+}
+
+impl RuleSource for CachedSource {
+    fn read(&self) -> Result<Option<RuleIndex>> {
+        match self.cache.read()? {
+            Some(index) => Ok(Some(index)),
+            None => self.remote.pull().map(|(_, index)| Some(index)),
+        }
+    }
+
+    fn add(&self, repo: &str, fields: Fields) -> Result<String> {
+        let id = self.remote.add(repo, fields)?;
+        self.refresh_after_edit();
+        Ok(id)
+    }
+
+    fn edit(&self, id: &str, fields: Fields) -> Result<()> {
+        self.remote.edit(id, fields)?;
+        self.refresh_after_edit();
+        Ok(())
+    }
+
+    fn remove(&self, id: &str) -> Result<()> {
+        self.remote.remove(id)?;
+        self.refresh_after_edit();
+        Ok(())
+    }
+
+    fn location(&self) -> String {
+        format!(
+            "{} (cache {})",
+            self.remote.location(),
+            self.cache.path().display()
+        )
+    }
+
+    fn kind(&self) -> &'static str {
+        self.remote.kind()
     }
 }
 
