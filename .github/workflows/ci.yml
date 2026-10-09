@@ -45,11 +45,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      # Latest on purpose: the check should track what current Claude Code
-      # accepts, not what it accepted when this was pinned.
       - run: npm install -g @anthropic-ai/claude-code
-      # --strict fails on unknown fields and missing metadata, which the
-      # runtime only warns about.
       - run: claude plugin validate --strict plugin
       - run: claude plugin validate --strict .
 
