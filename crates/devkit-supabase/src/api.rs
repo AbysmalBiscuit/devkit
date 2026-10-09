@@ -51,6 +51,9 @@ pub struct Api {
     deadline: Mutex<Option<Instant>>,
     /// Why the last request got no answer, once one did not.
     unreachable: Mutex<Option<String>>,
+    /// Held for each request, its sign-in included, so requests made
+    /// together wait on an unreachable API once between them.
+    turn: Mutex<()>,
     /// Called each time the API answers 401, for a caller whose
     /// credentials may have gone stale.
     on_rejected: OnceLock<Box<dyn Fn() + Send + Sync>>,
@@ -140,6 +143,7 @@ impl Api {
             label,
             deadline: Mutex::new(None),
             unreachable: Mutex::new(None),
+            turn: Mutex::new(()),
             on_rejected: OnceLock::new(),
             unusable: None,
         })
@@ -155,6 +159,7 @@ impl Api {
             label,
             deadline: Mutex::new(None),
             unreachable: Mutex::new(None),
+            turn: Mutex::new(()),
             on_rejected: OnceLock::new(),
             unusable: Some(reason.to_string()),
         }
@@ -257,6 +262,8 @@ impl Api {
         if let Some(reason) = &self.unusable {
             bail!("{reason}");
         }
+        let _turn = self.turn.lock().unwrap_or_else(|e| e.into_inner());
+        self.reachable()?;
         let retry = match &self.auth {
             Auth::User(_) => req.try_clone(),
             Auth::None | Auth::Key(_) => None,
@@ -271,7 +278,9 @@ impl Api {
             return Err(self.refusal(resp));
         };
         self.rejected();
-        let token = sessions.renew()?;
+        let token = sessions
+            .renew_within(self.reachable()?)
+            .map_err(|e| self.noted(e))?;
         let resp = self.attempt(self.authorized(retry, Some(token))?)?;
         if resp.status().is_success() {
             return Ok(resp);
@@ -288,7 +297,9 @@ impl Api {
             Auth::User(sessions) => {
                 let token = match token {
                     Some(token) => token,
-                    None => sessions.access_token()?,
+                    None => sessions
+                        .access_token_within(self.reachable()?)
+                        .map_err(|e| self.noted(e))?,
                 };
                 req.header("apikey", sessions.client().publishable_key())
                     .bearer_auth(token)
@@ -302,27 +313,35 @@ impl Api {
         }
     }
 
-    /// Sends `req` within the budget, failing at once after an earlier
-    /// request got no answer.
-    fn attempt(&self, req: RequestBuilder) -> Result<Response> {
-        let mut unreachable = self.unreachable.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(reason) = &*unreachable {
+    /// The time the next request, to the API or to Auth, may take, or the
+    /// failure an earlier request that got no answer met.
+    fn reachable(&self) -> Result<Duration> {
+        if let Some(reason) = &*self.unreachable.lock().unwrap_or_else(|e| e.into_inner()) {
             return Err(Unreachable(reason.clone()).into());
         }
         let budget = self.budget();
         if budget.is_zero() {
             return Err(Unreachable(format!("{} {}: no time left", self.label, self.url)).into());
         }
-        match req.timeout(budget).send() {
-            Ok(resp) => Ok(resp),
-            Err(e) => {
-                let e = http::explain(e).context(format!("{} {}", self.label, self.url));
-                if http::is_unreachable(&e) {
-                    *unreachable = Some(format!("{e:#}"));
-                }
-                Err(e)
-            }
+        Ok(budget)
+    }
+
+    /// `e`, kept as the reason the requests after it fail at once when it
+    /// got no answer.
+    fn noted(&self, e: anyhow::Error) -> anyhow::Error {
+        if http::is_unreachable(&e) {
+            *self.unreachable.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{e:#}"));
         }
+        e
+    }
+
+    /// Sends `req` within the budget, failing at once after an earlier
+    /// request got no answer.
+    fn attempt(&self, req: RequestBuilder) -> Result<Response> {
+        let budget = self.reachable()?;
+        req.timeout(budget)
+            .send()
+            .map_err(|e| self.noted(http::explain(e).context(format!("{} {}", self.label, self.url))))
     }
 
     /// The error a refused request reads as, running [`Api::on_rejected`]

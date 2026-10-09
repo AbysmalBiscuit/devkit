@@ -334,3 +334,36 @@ fn a_refused_password_sign_in_names_the_command() {
     assert!(message.contains("Invalid login credentials"), "{message}");
     assert!(!message.contains("hunter2"), "{message}");
 }
+
+#[test]
+fn an_unanswered_sign_in_fails_the_next_request_at_once() {
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", silent.local_addr().unwrap());
+    let state = tempfile::tempdir().unwrap();
+    let sessions = Sessions::new(
+        Client::new(&url, "pk", Duration::from_secs(30)),
+        SessionFile::for_url(state.path(), &url),
+        credentials(),
+    );
+    let api = Api::new(
+        &url,
+        "repo_rules_api",
+        Auth::User(Arc::new(sessions)),
+        Duration::from_millis(500),
+        "rules API",
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let first = api.call("stats_rules", &json!({})).unwrap_err();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(devkit_supabase::is_unreachable(&first), "{first:#}");
+    let started = std::time::Instant::now();
+    let second = api.call("stats_rules", &json!({})).unwrap_err();
+    assert!(started.elapsed() < Duration::from_millis(100));
+    assert!(devkit_supabase::is_unreachable(&second), "{second:#}");
+    drop(silent);
+}

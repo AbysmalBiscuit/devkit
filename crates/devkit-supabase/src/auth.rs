@@ -8,7 +8,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -101,17 +101,30 @@ impl Client {
 
     /// Signs in with an email and password.
     pub fn password(&self, c: &Credentials) -> Result<Session> {
-        self.grant(
+        self.password_within(c, self.wait)
+    }
+
+    fn password_within(&self, c: &Credentials, wait: Duration) -> Result<Session> {
+        self.grant_within(
             "password",
             json!({"email": c.email, "password": c.password}),
+            wait,
         )
         .with_context(|| format!("signing in to {} as {}", self.url, c.email))
     }
 
     /// A new session for the one `refresh_token` belongs to.
     pub fn refresh(&self, refresh_token: &str) -> Result<Session> {
-        self.grant("refresh_token", json!({"refresh_token": refresh_token}))
-            .with_context(|| format!("refreshing the session for {}", self.url))
+        self.refresh_within(refresh_token, self.wait)
+    }
+
+    fn refresh_within(&self, refresh_token: &str, wait: Duration) -> Result<Session> {
+        self.grant_within(
+            "refresh_token",
+            json!({"refresh_token": refresh_token}),
+            wait,
+        )
+        .with_context(|| format!("refreshing the session for {}", self.url))
     }
 
     /// The session a browser sign-in's `auth_code` stands for, proven by the
@@ -190,20 +203,31 @@ impl Client {
     }
 
     fn grant(&self, grant_type: &str, body: Value) -> Result<Session> {
+        self.grant_within(grant_type, body, self.wait)
+    }
+
+    /// Runs a token grant, giving up after `wait`.
+    fn grant_within(&self, grant_type: &str, body: Value, wait: Duration) -> Result<Session> {
         let req = http::client()
             .post(format!(
                 "{}?grant_type={grant_type}",
                 self.endpoint("token")
             ))
             .json(&body);
-        let granted: Granted = self.send(req).and_then(|resp| self.body(resp))?;
+        let granted: Granted = self
+            .send_within(req, wait)
+            .and_then(|resp| self.body(resp))?;
         Ok(session_of(granted))
     }
 
     fn send(&self, req: RequestBuilder) -> Result<Response> {
+        self.send_within(req, self.wait)
+    }
+
+    fn send_within(&self, req: RequestBuilder, wait: Duration) -> Result<Response> {
         let resp = req
             .header("apikey", &self.publishable_key)
-            .timeout(self.wait)
+            .timeout(wait)
             .send()
             .map_err(http::explain)
             .with_context(|| format!("Supabase Auth {}", self.url))?;
@@ -418,30 +442,47 @@ impl Sessions {
     /// An access token that is not about to expire: the kept one, else a
     /// refreshed one, else one from a password sign-in.
     pub fn access_token(&self) -> Result<String> {
+        self.access_token_within(self.client.wait)
+    }
+
+    /// [`Sessions::access_token`], its grants together giving up after
+    /// `wait`.
+    pub(crate) fn access_token_within(&self, wait: Duration) -> Result<String> {
         let _turn = self.turn.lock().unwrap_or_else(|e| e.into_inner());
         match self.file.load() {
             Some(session) if session.expires_at - now() >= MARGIN_SECS => Ok(session.access_token),
-            Some(session) => self.replace(Some(&session)),
-            None => self.replace(None),
+            Some(session) => self.replace(Some(&session), wait),
+            None => self.replace(None, wait),
         }
     }
 
     /// A new access token, for one the API refused: a refreshed session,
     /// else a password sign-in.
     pub fn renew(&self) -> Result<String> {
-        let _turn = self.turn.lock().unwrap_or_else(|e| e.into_inner());
-        let kept = self.file.load();
-        self.replace(kept.as_ref())
+        self.renew_within(self.client.wait)
     }
 
-    fn replace(&self, kept: Option<&Session>) -> Result<String> {
-        let refreshed = kept.map(|session| self.client.refresh(&session.refresh_token));
+    /// [`Sessions::renew`], its grants together giving up after `wait`.
+    pub(crate) fn renew_within(&self, wait: Duration) -> Result<String> {
+        let _turn = self.turn.lock().unwrap_or_else(|e| e.into_inner());
+        let kept = self.file.load();
+        self.replace(kept.as_ref(), wait)
+    }
+
+    /// A new session, refreshed from `kept` else signed in by password, all
+    /// within `wait`. A refresh that got no answer is not followed by a
+    /// sign-in, which would wait on the same server again.
+    fn replace(&self, kept: Option<&Session>, wait: Duration) -> Result<String> {
+        let by = Instant::now() + wait;
+        let left = || by.saturating_duration_since(Instant::now());
+        let refreshed = kept.map(|session| self.client.refresh_within(&session.refresh_token, left()));
         let session = match refreshed {
             Some(Ok(session)) => session,
+            Some(Err(e)) if http::is_unreachable(&e) => return Err(e),
             refreshed => match ((self.credentials)(), refreshed) {
                 (Some(credentials), _) => self
                     .client
-                    .password(&credentials)
+                    .password_within(&credentials, left())
                     .with_context(|| self.not_signed_in())?,
                 (None, Some(Err(e))) => return Err(e.context(self.not_signed_in())),
                 (None, _) => bail!(self.not_signed_in()),
