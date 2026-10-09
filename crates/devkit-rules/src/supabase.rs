@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 use crate::{
     edit::{Fields, apply, rule_id},
     model::{Rule, RuleFile, RuleIndex},
-    postgres::{MANUAL_SOURCE, is_uuid},
-    remote::RemoteRules,
+    postgres::MANUAL_SOURCE,
+    remote::{RemoteRules, parse_repository},
     source::RuleSource,
 };
 
@@ -61,14 +61,9 @@ impl SupabaseSource {
     /// The repository `repository` names in `api`, describing the checkout
     /// at `repo`.
     pub fn new(api: Arc<Api>, repository: Option<&str>, repo: &Path) -> SupabaseSource {
-        let repository = match repository.map(str::trim) {
-            None | Some("") => Err("[rules.supabase] repository is not set".to_string()),
-            Some(id) if is_uuid(id) => Ok(id.to_ascii_lowercase()),
-            Some(id) => Err(format!("[rules.supabase] repository {id:?} is not a UUID")),
-        };
         SupabaseSource {
             api,
-            repository,
+            repository: parse_repository("[rules.supabase]", repository),
             repo: repo.display().to_string(),
             page: PAGE,
         }
@@ -78,11 +73,6 @@ impl SupabaseSource {
     #[doc(hidden)]
     pub fn with_page_size(self, n: u32) -> SupabaseSource {
         SupabaseSource { page: n, ..self }
-    }
-
-    /// The repository's UUID, lowercased, when the config names a valid one.
-    pub fn repository_id(&self) -> Option<&str> {
-        self.repository.as_deref().ok()
     }
 
     pub fn api(&self) -> &Api {
@@ -337,6 +327,10 @@ impl RemoteRules for SupabaseSource {
     fn pull(&self) -> Result<(i64, RuleIndex)> {
         let (revision, rules) = self.pull_keyed()?;
         Ok((revision, self.index(rules)))
+    }
+
+    fn repository_id(&self) -> Option<&str> {
+        self.repository.as_deref().ok()
     }
 
     fn checkout(&self) -> &str {

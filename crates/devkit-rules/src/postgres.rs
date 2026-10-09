@@ -15,7 +15,7 @@ use tokio_postgres::{GenericClient, IsolationLevel, Row, error::SqlState, types:
 use crate::{
     edit::{Fields, apply, rule_id},
     model::{Rule, RuleFile, RuleIndex},
-    remote::RemoteRules,
+    remote::{RemoteRules, parse_repository},
     source::RuleSource,
 };
 
@@ -49,14 +49,9 @@ impl PostgresSource {
     /// The repository `repository` names in `db`, describing the checkout at
     /// `repo`.
     pub fn new(db: Arc<Database>, repository: Option<&str>, repo: &Path) -> PostgresSource {
-        let repository = match repository.map(str::trim) {
-            None | Some("") => Err("[rules.postgres] repository is not set".to_string()),
-            Some(id) if is_uuid(id) => Ok(id.to_ascii_lowercase()),
-            Some(id) => Err(format!("[rules.postgres] repository {id:?} is not a UUID")),
-        };
         PostgresSource {
             db,
-            repository,
+            repository: parse_repository("[rules.postgres]", repository),
             repo: repo.display().to_string(),
         }
     }
@@ -83,11 +78,6 @@ impl PostgresSource {
             tx.commit().await?;
             Ok(row.get(0))
         })
-    }
-
-    /// The repository's UUID, lowercased, when the config names a valid one.
-    pub fn repository_id(&self) -> Option<&str> {
-        self.repository.as_deref().ok()
     }
 
     fn repository(&self) -> Result<&str> {
@@ -191,6 +181,10 @@ impl RemoteRules for PostgresSource {
             rules,
         };
         Ok((revision, index))
+    }
+
+    fn repository_id(&self) -> Option<&str> {
+        self.repository.as_deref().ok()
     }
 
     fn checkout(&self) -> &str {
@@ -510,27 +504,4 @@ async fn replace_lists(db: &impl GenericClient, repo: &str, key: &str, rule: &Ru
         .await?;
     }
     Ok(())
-}
-
-/// Whether `id` spells a UUID in its hyphenated form.
-pub(crate) fn is_uuid(id: &str) -> bool {
-    const HYPHENS: [usize; 4] = [8, 13, 18, 23];
-    id.len() == 36
-        && id.char_indices().all(|(i, c)| match HYPHENS.contains(&i) {
-            true => c == '-',
-            false => c.is_ascii_hexdigit(),
-        })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_repository_must_be_a_uuid() {
-        assert!(is_uuid("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a10"));
-        assert!(is_uuid("0B6F6C1E-8F0E-4A43-9D55-3C0D2B1F9A10"));
-        assert!(!is_uuid("0b6f6c1e8f0e4a439d553c0d2b1f9a10"));
-        assert!(!is_uuid("0b6f6c1e-8f0e-4a43-9d55-3c0d2b1f9a1g"));
-    }
 }

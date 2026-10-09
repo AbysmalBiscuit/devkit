@@ -83,38 +83,22 @@ impl Source {
                 Some(path) => Source::at(PathBuf::from(path), repo),
                 None => Source::cached(repo),
             },
-            RulesSource::Postgres => {
-                let source = PostgresSource::new(
+            RulesSource::Postgres => Source::Cached(CachedSource::at_state_dir(
+                state_dir,
+                Remote::Postgres(PostgresSource::new(
                     database(&settings.postgres),
                     settings.postgres.repository.as_deref(),
                     repo,
-                );
-                let key = CacheKey {
-                    kind: "postgres",
-                    repository: source.repository_id().unwrap_or("unset").to_string(),
-                    source: source.identity(),
-                };
-                Source::Cached(CachedSource::new(
-                    RuleCache::at_state_dir(state_dir, key),
-                    Remote::Postgres(source),
-                ))
-            }
-            RulesSource::Supabase => {
-                let source = SupabaseSource::new(
+                )),
+            )),
+            RulesSource::Supabase => Source::Cached(CachedSource::at_state_dir(
+                state_dir,
+                Remote::Supabase(SupabaseSource::new(
                     api(&settings.supabase),
                     settings.supabase.repository.as_deref(),
                     repo,
-                );
-                let key = CacheKey {
-                    kind: "supabase",
-                    repository: source.repository_id().unwrap_or("unset").to_string(),
-                    source: source.identity(),
-                };
-                Source::Cached(CachedSource::new(
-                    RuleCache::at_state_dir(state_dir, key),
-                    Remote::Supabase(source),
-                ))
-            }
+                )),
+            )),
         }
     }
 
@@ -188,6 +172,17 @@ pub struct CachedSource {
 impl CachedSource {
     pub fn new(cache: RuleCache, remote: Remote) -> CachedSource {
         CachedSource { cache, remote }
+    }
+
+    /// `remote` read through its cache under `state_dir`, keyed by the
+    /// remote's kind, repository and identity.
+    pub fn at_state_dir(state_dir: &Path, remote: Remote) -> CachedSource {
+        let key = CacheKey {
+            kind: remote.kind(),
+            repository: remote.repository_id().unwrap_or("unset").to_string(),
+            source: remote.identity(),
+        };
+        CachedSource::new(RuleCache::at_state_dir(state_dir, key), remote)
     }
 
     pub fn cache(&self) -> &RuleCache {
