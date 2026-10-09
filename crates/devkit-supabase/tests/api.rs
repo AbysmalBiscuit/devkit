@@ -137,6 +137,32 @@ fn identity_names_the_project_without_credentials() {
 }
 
 #[test]
+fn plain_http_is_refused_off_loopback() {
+    let new = |url: &str| {
+        Api::new(
+            url,
+            "repo_rules_api",
+            Auth::None,
+            Duration::from_secs(5),
+            "rules API",
+        )
+    };
+    for url in ["http://example.com", "http://10.0.0.1:3000"] {
+        let message = format!("{:#}", new(url).unwrap_err());
+        assert!(message.contains("https"), "{message}");
+        assert!(!message.contains(&url[7..]), "{message}");
+    }
+    for url in [
+        "http://127.0.0.1:54321",
+        "http://127.8.0.1",
+        "http://localhost:54321",
+        "http://[::1]:54321",
+    ] {
+        new(url).unwrap();
+    }
+}
+
+#[test]
 fn a_url_with_credentials_is_refused_without_repeating_it() {
     for url in [
         "https://user:secret@abc.supabase.co",

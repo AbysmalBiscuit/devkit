@@ -370,8 +370,8 @@ impl Api {
     }
 }
 
-/// `url` without surrounding space or a trailing `/`, an http or https URL
-/// naming a project and nothing else. A user, password, query or fragment
+/// `url` without surrounding space or a trailing `/`, an https URL naming a
+/// project and nothing else, or an http one on a loopback host. A user, password, query or fragment
 /// is refused, since the URL appears in errors and output and any of them
 /// can carry a credential, and no error repeats the URL.
 pub(crate) fn project_url(url: &str, label: &str) -> Result<String> {
@@ -390,7 +390,24 @@ pub(crate) fn project_url(url: &str, label: &str) -> Result<String> {
         matches!(parsed.scheme(), "https" | "http"),
         "the {label} URL is not http or https"
     );
+    ensure!(
+        parsed.scheme() == "https" || is_loopback(&parsed),
+        "the {label} URL must use https, since sign-in and every request carry a credential; \
+         plain http is accepted for a loopback host alone"
+    );
     Ok(url.to_string())
+}
+
+/// Whether `url` names this machine: `localhost`, 127.0.0.0/8 or `::1`.
+fn is_loopback(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let ip = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || ip
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Whether `e` is a request that got no answer: the host did not resolve,
