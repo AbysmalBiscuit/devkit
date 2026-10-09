@@ -150,9 +150,11 @@ pub fn run(cli: HookCli) -> Result<()> {
             Ok(())
         }),
         // The verdict comes first and recording after, so a record can never
-        // change it.
+        // change it. A turn that ends to wait on its background work is not
+        // held, and leaves the hold armed for the stop after that work.
         HookEvent::Stop => with_payload(harness, cli.event, |p, checkout, cwd| {
-            if let Some(session) = p.session_holder()
+            if !p.waits_on_background_work()
+                && let Some(session) = p.session_holder()
                 && let Some(answer) = todo::hold(p, &session, checkout)
             {
                 print_envelope(&answer);

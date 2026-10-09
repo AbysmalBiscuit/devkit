@@ -132,6 +132,20 @@ impl Payload {
         self.0.agent_id()
     }
 
+    /// A Claude Code turn that ended to wait on work it started: its
+    /// `background_tasks` (shell, sub-agent, monitor and workflow tasks) or
+    /// `session_crons` (scheduled wakeups) are non-empty, so the session
+    /// resumes when that work reports. A sub-agent's payload lists its parent
+    /// session's tasks, itself among them, so the caller decides whether the
+    /// answer applies. Codex leaves a manager stopped while its children run,
+    /// so it never waits.
+    pub fn waits_on_background_work(&self) -> bool {
+        self.harness() == AnyHarness::ClaudeCode
+            && ["background_tasks", "session_crons"]
+                .iter()
+                .any(|key| self.raw()[key].as_array().is_some_and(|a| !a.is_empty()))
+    }
+
     /// The subagent's type, `subagent_type` being Cursor's. `None` for a
     /// fork, which has an agent id and no type.
     pub fn agent_type(&self) -> Option<&str> {

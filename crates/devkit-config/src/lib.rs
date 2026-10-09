@@ -183,7 +183,9 @@ pub struct TodoConfig {
     /// own claims on any node and pending todos when its role holds them.
     /// `always` holds every agent, `subagents` only sub-agents, and `never`
     /// none; `true` and `false` mean `always` and `never`. One reminder per
-    /// unchanged list; stopping again goes through.
+    /// unchanged list; stopping again goes through. A Claude Code main
+    /// agent's stop while its background tasks or session crons are in
+    /// flight is never refused.
     /// `DEVKIT_TODO_HOLD_STOP` overrides it with the same spellings, and
     /// `devkit todo hold` overrides both for one session.
     #[schemars(with = "todo::HoldStopSpelling")]
