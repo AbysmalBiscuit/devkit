@@ -822,9 +822,7 @@ fn rules_api_rows(
     let session =
         devkit_supabase::auth::SessionFile::for_url(&devkit_common::paths::state_dir(), api.url())
             .load();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
+    let now = unix_now();
     let signed_in = match (&config.publishable_key, session, credentials) {
         (None, ..) => Check::Ok("no publishable_key: requests carry no credentials".into()),
         (Some(_), Some(session), _) if session.expires_at > now => Check::Ok(format!(
@@ -862,21 +860,24 @@ fn rules_api_rows(
     vec![url, session, answers]
 }
 
+/// The time in Unix seconds, which session expiries and cache pulls are
+/// stamped in.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 /// Where a remote source's cache lives, the revision it holds and how old it
 /// is.
 fn rules_cache_row(cache: &devkit_rules::cache::RuleCache) -> Row {
     let check = match cache.meta() {
-        Some(meta) => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs() as i64);
-            Check::Ok(format!(
-                "{}: revision {}, pulled {} ago",
-                cache.path().display(),
-                meta.revision,
-                crate::activity::duration((now - meta.pulled_at).max(0))
-            ))
-        }
+        Some(meta) => Check::Ok(format!(
+            "{}: revision {}, pulled {} ago",
+            cache.path().display(),
+            meta.revision,
+            crate::activity::duration((unix_now() - meta.pulled_at).max(0))
+        )),
         None => Check::Warn("no cache yet: run `devkit rules pull`".to_string()),
     };
     Row {
