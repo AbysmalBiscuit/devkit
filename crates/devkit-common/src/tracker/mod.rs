@@ -123,7 +123,7 @@ pub struct IssueDetails {
     pub project: String,
 }
 
-/// One issue tracker. Every method is read-only: `devkit-issue` is a triage
+/// One issue tracker. Every method is read-only: `devkit-ticket` is a triage
 /// facade and never mutates a tracker.
 pub trait Tracker: Send + Sync {
     fn kind(&self) -> TrackerKind;

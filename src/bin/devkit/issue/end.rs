@@ -12,7 +12,7 @@ use devkit_common::{
     vcs::{Vcs, VersionControl},
     worktree::IssueId,
 };
-use devkit_issue::status::{IssueWorktree, Tree, gather_with, label, tree_of};
+use devkit_ticket::status::{IssueWorktree, Tree, gather_with, label, tree_of};
 
 use crate::issue::triage::render;
 
@@ -1378,9 +1378,9 @@ mod tests {
             issue_id: issue_id.parse().unwrap(),
             record_unreadable: false,
             tree: Tree::Clean,
-            pr: devkit_issue::status::PrStatus::None,
+            pr: devkit_ticket::status::PrStatus::None,
             state: None,
-            verdict: devkit_issue::status::Verdict::Finished,
+            verdict: devkit_ticket::status::Verdict::Finished,
         }
     }
 

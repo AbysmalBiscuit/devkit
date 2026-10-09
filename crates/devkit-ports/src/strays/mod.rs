@@ -1,5 +1,6 @@
 //! Read-only detection of dev servers running outside the port registry.
-//! Serializable, no rendering, no mutation — mirrors the `devkit-issue` facade.
+//! Serializable, no rendering, no mutation — mirrors the `devkit-ticket`
+//! facade.
 
 mod signature;
 pub use signature::{argv_matches, signature};

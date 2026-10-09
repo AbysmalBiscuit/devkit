@@ -38,7 +38,7 @@ devkit-common.workspace = true
 devkit-command.workspace = true
 devkit-ports.workspace = true
 devkit-locks.workspace = true
-devkit-issue.workspace = true
+devkit-ticket.workspace = true
 devkit-mcp.workspace = true
 devkit-docs.workspace = true
 devkit-rules.workspace = true
@@ -71,7 +71,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskchampion", "crates/devkit-todo-postgres", "crates/devkit-todo-supabase", "crates/devkit-postgres"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-ticket", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command", "crates/devkit-vcs", "crates/devkit-git", "crates/devkit-timing", "crates/devkit-todo", "crates/devkit-todo-builtin", "crates/devkit-todo-taskchampion", "crates/devkit-todo-postgres", "crates/devkit-todo-supabase", "crates/devkit-postgres"]
 
 [workspace.package]
 edition = "2024"
@@ -144,7 +144,7 @@ devkit-config = { path = "crates/devkit-config" }
 devkit-common = { path = "crates/devkit-common" }
 devkit-ports = { path = "crates/devkit-ports" }
 devkit-locks = { path = "crates/devkit-locks" }
-devkit-issue = { path = "crates/devkit-issue" }
+devkit-ticket = { path = "crates/devkit-ticket" }
 devkit-mcp = { path = "crates/devkit-mcp" }
 toml_edit = { version = "0.25", features = ["serde"] }
 devkit-docs = { path = "crates/devkit-docs" }

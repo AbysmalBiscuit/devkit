@@ -44,7 +44,7 @@ fn gather_local_returns_offline_rows_without_network() {
     let base = fixture_repo();
     let main = base.path().join("main");
 
-    let report = devkit_issue::status::gather_local(main.to_str().unwrap(), &[]).unwrap();
+    let report = devkit_ticket::status::gather_local(main.to_str().unwrap(), &[]).unwrap();
     let row = report
         .worktrees
         .iter()
@@ -53,7 +53,7 @@ fn gather_local_returns_offline_rows_without_network() {
     assert_eq!(row.pr.state_label(), "NO_PR");
     assert_eq!(row.pr.number(), None);
     assert!(row.state.is_none());
-    assert_eq!(row.tree, devkit_issue::status::Tree::Clean);
+    assert_eq!(row.tree, devkit_ticket::status::Tree::Clean);
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
         main.to_str().unwrap(),
         None,
     );
-    let report = devkit_issue::status::gather_with(
+    let report = devkit_ticket::status::gather_with(
         main.to_str().unwrap(),
         &["NOPE-1".into()],
         &injected,
@@ -109,7 +109,7 @@ fn a_lowercase_record_id_is_found_by_either_spelling() {
 
     for spelling in ["eng-1234", "ENG-1234", "Eng-1234"] {
         let report =
-            devkit_issue::status::gather_local(main.to_str().unwrap(), &[spelling.to_string()])
+            devkit_ticket::status::gather_local(main.to_str().unwrap(), &[spelling.to_string()])
                 .unwrap();
         let ids: Vec<&IssueId> = report.worktrees.iter().map(|r| &r.issue_id).collect();
         assert_eq!(
@@ -146,7 +146,7 @@ fn an_issueless_record_reads_as_none_not_a_branch_scan() {
     )
     .unwrap();
 
-    let found = devkit_issue::status::discover(main.to_str().unwrap(), &[]).unwrap();
+    let found = devkit_ticket::status::discover(main.to_str().unwrap(), &[]).unwrap();
     let row = found
         .rows()
         .iter()

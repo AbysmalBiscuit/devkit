@@ -1,5 +1,5 @@
 use devkit_common::{tracker::StateKind, ui};
-use devkit_issue::status::{IssueWorktree, PrStatus, StatusReport, Tree};
+use devkit_ticket::status::{IssueWorktree, PrStatus, StatusReport, Tree};
 
 fn pr_label(row: &IssueWorktree) -> String {
     match &row.pr {
@@ -149,7 +149,7 @@ pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
 #[cfg(test)]
 mod tests {
     use devkit_common::worktree::IssueId;
-    use devkit_issue::status::{IssueWorktree, Verdict};
+    use devkit_ticket::status::{IssueWorktree, Verdict};
 
     use super::*;
 

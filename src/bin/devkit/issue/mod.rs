@@ -298,7 +298,7 @@ pub(crate) enum Cmd {
         no_cache: bool,
         /// PRs fetched per search page. Lower this if the forge returns
         /// HTTP 504 on a repo with many open PRs.
-        #[arg(long, default_value_t = devkit_issue::prs::DEFAULT_BATCH_SIZE, value_parser = clap::value_parser!(u32).range(1..=100))]
+        #[arg(long, default_value_t = devkit_ticket::prs::DEFAULT_BATCH_SIZE, value_parser = clap::value_parser!(u32).range(1..=100))]
         batch_size: u32,
         /// Extra attempts per page after a failed fetch, with backoff.
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=10))]
@@ -755,7 +755,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
             repo,
             no_cache,
             cli.config,
-            devkit_issue::prs::Fetch {
+            devkit_ticket::prs::Fetch {
                 batch_size,
                 retries,
             },
