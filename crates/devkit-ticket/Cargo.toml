@@ -1,5 +1,5 @@
 [package]
-name = "devkit-issue"
+name = "devkit-ticket"
 edition.workspace = true
 version = "0.14.16" # x-release-please-version
 

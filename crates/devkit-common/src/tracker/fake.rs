@@ -1,4 +1,4 @@
-//! A tracker that answers from a fixed map. Lets `devkit-issue` exercise the
+//! A tracker that answers from a fixed map. Lets `devkit-ticket` exercise the
 //! whole gather path — discovery, state attachment, finished verdict — with no
 //! network and no credentials.
 

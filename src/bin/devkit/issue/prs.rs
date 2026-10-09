@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::Result;
 use devkit_common::{paths, tracker::Tracker, ui};
-use devkit_issue::prs::{MinePrView, ReviewPrView};
+use devkit_ticket::prs::{MinePrView, ReviewPrView};
 
 // rendering ---------------------------------------------------------------------
 
@@ -114,7 +114,7 @@ fn save_snapshot(path: &Path, snap: &Snapshot) -> Result<()> {
 /// keeps the other section's previously cached rows instead of wiping them
 /// with the empty fresh fetch.
 fn next_snapshot(
-    report: &devkit_issue::prs::PrsReport,
+    report: &devkit_ticket::prs::PrsReport,
     want_mine: bool,
     want_reviews: bool,
     prev_mine: Vec<MinePrView>,
@@ -196,7 +196,7 @@ fn legend_lines() -> [String; 2] {
 /// the same rows, or the swap from stale to fresh shifts the screen by the
 /// difference instead of replacing the block in place.
 fn final_lines(
-    report: &devkit_issue::prs::PrsReport,
+    report: &devkit_ticket::prs::PrsReport,
     t: &dyn Tracker,
     mut diff: DiffMap,
     want_mine: bool,
@@ -307,7 +307,7 @@ pub fn run(
     repo: Option<String>,
     no_cache: bool,
     config: Option<String>,
-    fetch: devkit_issue::prs::Fetch,
+    fetch: devkit_ticket::prs::Fetch,
 ) -> Result<()> {
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
@@ -367,7 +367,7 @@ pub fn run(
     };
     let _fetch_spin = live.spinner(&spin_msg);
 
-    let fetched = devkit_issue::prs::gather(
+    let fetched = devkit_ticket::prs::gather(
         forge.forge.as_ref(),
         pr_repo,
         mine,
@@ -473,7 +473,7 @@ mod tests {
         let t = fake::FakeTracker::new();
         let mine = vec![mine_view(12, "MERGE"), mine_view(13, "fix CI")];
         let reviews = vec![review_view(9, "REVIEW NEEDED")];
-        let report = devkit_issue::prs::PrsReport {
+        let report = devkit_ticket::prs::PrsReport {
             mine: mine.clone(),
             reviews: reviews.clone(),
         };
@@ -487,7 +487,7 @@ mod tests {
             );
         }
         // Empty sections render a `(none)` line on both sides.
-        let report = devkit_issue::prs::PrsReport {
+        let report = devkit_ticket::prs::PrsReport {
             mine: vec![],
             reviews: vec![],
         };
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn snapshot_round_trips() {
         let snap = Snapshot {
-            mine: vec![devkit_issue::prs::MinePrView {
+            mine: vec![devkit_ticket::prs::MinePrView {
                 number: 1,
                 url: "https://x/1".into(),
                 issue_ids: vec!["ENG-1".into()],
@@ -548,7 +548,7 @@ mod tests {
     // the empty fresh fetch.
     #[test]
     fn next_snapshot_preserves_unrequested_sections() {
-        let prev_mine = vec![devkit_issue::prs::MinePrView {
+        let prev_mine = vec![devkit_ticket::prs::MinePrView {
             number: 7,
             url: "https://x/7".into(),
             issue_ids: vec!["ENG-7".into()],
@@ -556,9 +556,9 @@ mod tests {
             check_state: "ok".into(),
             action: "awaiting review".into(),
         }];
-        let report = devkit_issue::prs::PrsReport {
+        let report = devkit_ticket::prs::PrsReport {
             mine: vec![],
-            reviews: vec![devkit_issue::prs::ReviewPrView {
+            reviews: vec![devkit_ticket::prs::ReviewPrView {
                 number: 9,
                 url: "https://x/9".into(),
                 issue_ids: vec!["ENG-9".into()],

@@ -6,7 +6,7 @@ use devkit_common::{
     tracker::{State, TrackerKind},
     ui,
 };
-use devkit_issue::status::{self as st, IssueWorktree, StatusReport, TrackerInfo, Tree};
+use devkit_ticket::status::{self as st, IssueWorktree, StatusReport, TrackerInfo, Tree};
 
 use crate::issue::triage::{self, render};
 
@@ -319,7 +319,7 @@ pub fn run(start: &str, ids: &[String], config: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use devkit_common::tracker::StateKind;
-    use devkit_issue::status::{IssueWorktree, PrStatus};
+    use devkit_ticket::status::{IssueWorktree, PrStatus};
 
     use super::*;
 

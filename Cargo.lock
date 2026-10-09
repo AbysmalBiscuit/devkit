@@ -524,11 +524,11 @@ dependencies = [
  "devkit-config",
  "devkit-docs",
  "devkit-git",
- "devkit-issue",
  "devkit-locks",
  "devkit-mcp",
  "devkit-ports",
  "devkit-rules",
+ "devkit-ticket",
  "devkit-timing",
  "devkit-todo",
  "devkit-todo-builtin",
@@ -658,19 +658,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "devkit-issue"
-version = "0.14.16"
-dependencies = [
- "anyhow",
- "devkit-common",
- "devkit-config",
- "devkit-git",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "devkit-locks"
 version = "0.14.16"
 dependencies = [
@@ -694,9 +681,9 @@ dependencies = [
  "devkit-common",
  "devkit-config",
  "devkit-git",
- "devkit-issue",
  "devkit-locks",
  "devkit-ports",
+ "devkit-ticket",
  "serde",
  "serde_json",
  "tempfile",
@@ -754,6 +741,19 @@ dependencies = [
  "tokio-postgres",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "devkit-ticket"
+version = "0.14.16"
+dependencies = [
+ "anyhow",
+ "devkit-common",
+ "devkit-config",
+ "devkit-git",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

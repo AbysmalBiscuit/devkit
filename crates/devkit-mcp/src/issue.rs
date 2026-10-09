@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::tracker;
-use devkit_issue::{prs, status};
+use devkit_ticket::{prs, status};
 use serde::Deserialize;
 use serde_json::Value;
 

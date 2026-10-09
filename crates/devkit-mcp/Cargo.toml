@@ -11,7 +11,7 @@ devkit-common.workspace = true
 devkit-config.workspace = true
 devkit-ports.workspace = true
 devkit-locks.workspace = true
-devkit-issue.workspace = true
+devkit-ticket.workspace = true
 
 [features]
 daemon = ["devkit-ports/daemon", "devkit-locks/daemon"]

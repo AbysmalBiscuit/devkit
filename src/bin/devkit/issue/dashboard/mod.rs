@@ -56,7 +56,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         None,
         false,
         args.config.clone(),
-        devkit_issue::prs::Fetch::default(),
+        devkit_ticket::prs::Fetch::default(),
     ) {
         eprintln!("(PR tables unavailable: {e})");
     }

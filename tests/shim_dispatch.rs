@@ -426,7 +426,7 @@ fn issue_shim_defaults_to_status() {
 /// Parity requirement: the defaulted subcommand must reach `status` through
 /// `devkit issue` too, not just through the shim.
 #[test]
-fn devkit_issue_defaults_to_status() {
+fn issue_subcommand_defaults_to_status() {
     let state = tempfile::tempdir().expect("state dir");
     let project = empty_repo();
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))

@@ -6,7 +6,7 @@ use devkit_common::{
     tracker::{Resolved, State},
     vcs::{Vcs, VersionControl},
 };
-use devkit_issue::status::{self as st, IssueWorktree, PrStatus, StatusReport, TrackerInfo};
+use devkit_ticket::status::{self as st, IssueWorktree, PrStatus, StatusReport, TrackerInfo};
 
 use crate::issue::triage::render;
 

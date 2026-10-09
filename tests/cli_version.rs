@@ -92,7 +92,7 @@ fn issue_reports_version() {
 /// Parity requirement: an `issue` user must see the same behavior through
 /// `devkit issue`, version output included.
 #[test]
-fn devkit_issue_reports_the_package_version() {
+fn issue_subcommand_reports_the_package_version() {
     assert_subcommand_reports_version("issue");
 }
 

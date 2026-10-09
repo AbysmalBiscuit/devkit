@@ -45,7 +45,7 @@ The root package is the `devkit` binary (`src/bin/devkit/`, one module per subco
 | `devkit-locks` | file-lock registry |
 | `devkit-rules` | rule matching and context rendering, and the rule sources: `repo-rules-agent`'s SQLite and Postgres stores and the legacy JSON index |
 | `devkit-command` | IO-free shell-command analyzer (tree-sitter; needs a C compiler) |
-| `devkit-issue` | read-only issue and PR triage |
+| `devkit-ticket` | read-only issue and PR triage |
 | `devkit-mcp` | stdio MCP server over the facades above |
 | `devkit-docs` | version-matched library source checkouts |
 | `devkit-vcs` | the `VersionControl` trait: what devkit asks of a project's repository |
