@@ -7,6 +7,7 @@
 //! writes the store for `devkit rules add`, `edit` and `remove`.
 //! Hook payloads and holder state belong to the callers.
 
+pub mod cache;
 pub mod context;
 pub mod edit;
 pub mod index;

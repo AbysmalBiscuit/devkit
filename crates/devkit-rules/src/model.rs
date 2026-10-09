@@ -100,7 +100,7 @@ impl Rule {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleFile {
     pub path: String,
     pub tier: i64,
@@ -112,7 +112,7 @@ pub struct RuleFile {
     pub content: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleIndex {
     #[serde(default)]
     pub repo: String,
