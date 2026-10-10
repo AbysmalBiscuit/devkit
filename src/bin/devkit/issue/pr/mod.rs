@@ -39,7 +39,7 @@ pub(crate) fn reviewer_logins(targets: &[Target]) -> (Vec<String>, Vec<String>) 
 pub(crate) fn require_existing_pr(pr_state: Option<&str>) -> Result<()> {
     match action_for(pr_state) {
         PrAction::Create => bail!(
-            "no PR for this branch: run `pr create` first, \
+            "no PR for this branch: run `devkit pr create` first, \
              or pass --pr <URL|number>"
         ),
         PrAction::AddReviewer => Ok(()),
@@ -237,7 +237,7 @@ mod tests {
     fn no_pr_names_the_command_that_opens_one() {
         let msg = format!("{}", require_existing_pr(None).unwrap_err());
         assert!(
-            msg.contains("pr create") && !msg.contains("issue pr"),
+            msg.contains("run `devkit pr create`") && !msg.contains("issue pr"),
             "names the way forward: {msg}"
         );
         assert!(require_existing_pr(Some("OPEN")).is_ok());
