@@ -1,6 +1,6 @@
-//! `issue edit`: render the issue templates and write the result over an
+//! `ticket edit`: render the issue templates and write the result over an
 //! existing GitHub issue. Other trackers edit issues through their MCP, gated
-//! by the pre-tool-use hook on `issue render`'s receipts.
+//! by the pre-tool-use hook on `ticket render`'s receipts.
 
 use anyhow::{Context, Result};
 
@@ -35,7 +35,7 @@ pub(crate) fn run(args: EditArgs) -> Result<()> {
     };
     let rendered = render::render(
         &cfg,
-        "issue edit",
+        "ticket edit",
         title,
         &args.body,
         &args.vars,

@@ -342,7 +342,7 @@ pub struct PrTimeline {
     pub deletions: i64,
 }
 
-/// One of the three open-PR searches `issue prs` is built from.
+/// One of the three open-PR searches `pr list` is built from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
     Mine,
@@ -401,7 +401,7 @@ pub struct Checks {
     pub runs: Vec<CheckRun>,
 }
 
-/// An open pull request with what `issue prs` needs to say what to do next.
+/// An open pull request with what `pr list` needs to say what to do next.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenPr {
     pub number: u64,
@@ -595,7 +595,7 @@ fn choose(
 }
 
 /// The forge for this project, with the repositories its commands work
-/// against. `pr_override` is `issue prs --repo`, one invocation's override of
+/// against. `pr_override` is `pr list --repo`, one invocation's override of
 /// `[forge] repo`.
 pub fn resolve(
     cfg: &ForgeConfig,

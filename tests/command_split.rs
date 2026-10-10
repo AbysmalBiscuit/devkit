@@ -69,6 +69,70 @@ fn every_new_spelling_parses() {
     }
 }
 
+/// The old verbs, as the `issue` alias spells them.
+const OLD_VERBS: &[&str] = &[
+    "setup",
+    "status",
+    "end",
+    "sync-includes",
+    "create",
+    "edit",
+    "render",
+    "event",
+    "dashboard",
+    "pr",
+    "prs",
+    "review",
+    "info",
+    "checkout-pr",
+];
+
+/// Help an agent reads to learn a verb names that verb's new command, never
+/// the `issue` spelling it replaced.
+#[test]
+fn no_verb_help_names_the_issue_alias() {
+    let paths: &[&[&str]] = &[
+        &["ticket"],
+        &["ticket", "create"],
+        &["ticket", "edit"],
+        &["ticket", "render"],
+        &["ticket", "event"],
+        &["ticket", "dashboard"],
+        &["workspace"],
+        &["workspace", "setup"],
+        &["workspace", "status"],
+        &["workspace", "end"],
+        &["workspace", "sync-includes"],
+        &["pr"],
+        &["pr", "create"],
+        &["pr", "render"],
+        &["pr", "ready"],
+        &["pr", "status"],
+        &["pr", "checkout"],
+        &["pr", "list"],
+        &["pr", "review"],
+        &["pr", "review", "request"],
+        &["pr", "review", "finish"],
+    ];
+    for path in paths {
+        for flag in ["-h", "--help"] {
+            let mut args = path.to_vec();
+            args.push(flag);
+            let (_home, out) = devkit(&args);
+            let help = text(&out);
+            assert!(out.status.success(), "{}: {help}", args.join(" "));
+            for verb in OLD_VERBS {
+                assert!(
+                    !help.contains(&format!("issue {verb} "))
+                        && !help.contains(&format!("issue {verb}`")),
+                    "`devkit {}` names `issue {verb}`: {help}",
+                    args.join(" ")
+                );
+            }
+        }
+    }
+}
+
 /// The `ticket` and `workspace` links parse as their own roots.
 #[test]
 fn the_new_links_parse_their_own_verbs() {

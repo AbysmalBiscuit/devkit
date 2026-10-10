@@ -112,9 +112,9 @@ pub fn issue_title(id: &str, key: &str) -> Result<Option<String>> {
     Ok(parse_issue_title(&resp))
 }
 
-/// One issue's Linear-side facts, as `issue setup --summary` writes them into a
-/// summary file. Every optional field is `None` when Linear has nothing there,
-/// so a template can tell "no assignee" from an empty name.
+/// One issue's Linear-side facts, as `workspace setup --summary` writes them
+/// into a summary file. Every optional field is `None` when Linear has nothing
+/// there, so a template can tell "no assignee" from an empty name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueDetails {
     pub identifier: String,
@@ -616,7 +616,7 @@ impl From<IssueDetails> for super::IssueDetails {
 
 /// Linear behind the tracker seam. Holds the API key resolved once at
 /// construction; `None` means every call degrades to empty rather than
-/// erroring, which is what keeps `issue status` useful on a machine with no
+/// erroring, which is what keeps `workspace status` useful on a machine with no
 /// key.
 pub struct LinearTracker {
     key: Option<String>,

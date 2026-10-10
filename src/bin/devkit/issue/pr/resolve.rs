@@ -1,6 +1,6 @@
 //! Finding the PR a run acts on, and recording it.
 //!
-//! Every `issue pr` command starts here, and so does `issue review request`:
+//! Every `pr` command starts here, and so does `pr review request`:
 //! push the branch, then resolve the PR from `--pr`, the worktree's record, or
 //! the branch. Opening one is `create`'s job alone.
 
@@ -127,7 +127,7 @@ pub(crate) fn verify_created(
 }
 
 /// Point the worktree's record at its resolved PR, leaving its other fields
-/// alone. A worktree with no record, as outside one `issue setup` created,
+/// alone. A worktree with no record, as outside one `workspace setup` created,
 /// gets none.
 pub(crate) fn record_pr(worktree: &Path, loc: PrLocator) -> Result<()> {
     devkit_common::record::update(worktree, |rec| {

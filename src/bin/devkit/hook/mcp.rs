@@ -1,7 +1,7 @@
 //! The MCP path of `pre-tool-use`: an issue write through a tracker's MCP tool
-//! is allowed only when its title and body are text `devkit issue render`
+//! is allowed only when its title and body are text `devkit ticket render`
 //! produced in the same agent session, and a PR write through a forge's MCP
-//! tool only when they are text `devkit issue pr render` produced.
+//! tool only when they are text `devkit pr render` produced.
 
 use std::{collections::BTreeMap, io::Write, path::Path, sync::OnceLock};
 
@@ -22,7 +22,7 @@ use crate::issue::{
 };
 
 const PANIC_REASON: &str =
-    "devkit issue guard: internal failure while checking an issue or PR write (fail-closed)";
+    "devkit render guard: internal failure while checking an issue or PR write (fail-closed)";
 
 /// What a matched rule writes, and the render whose receipts vouch for it.
 #[derive(Clone, Copy, Debug)]
@@ -38,7 +38,7 @@ pub(super) const ISSUE: Gate = Gate {
     kind: Kind::Issue,
     with_article: "an issue",
     noun: "issue",
-    render: "devkit issue render",
+    render: "devkit ticket render",
     flags: "--title ... [--body ...]",
 };
 
@@ -46,7 +46,7 @@ pub(super) const PR: Gate = Gate {
     kind: Kind::Pr,
     with_article: "a PR",
     noun: "PR",
-    render: "devkit issue pr render",
+    render: "devkit pr render",
     flags: "--pr-title ... [--pr-body ...]",
 };
 
@@ -118,20 +118,20 @@ fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: 
 
     let Some(session) = payload.session_id() else {
         return Verdict::Deny(format!(
-            "devkit issue guard: this `{tool}` call writes {}, and the payload carries no \
+            "devkit render guard: this `{tool}` call writes {}, and the payload carries no \
              session id to check its `{render}` receipts against.",
             gate.with_article
         ));
     };
     if !receipt::valid_session(session) {
         return Verdict::Deny(format!(
-            "devkit issue guard: session id `{session}` is not usable as a directory name, so \
+            "devkit render guard: session id `{session}` is not usable as a directory name, so \
              no `{render}` receipt can match it."
         ));
     }
     let Some(root) = receipt::store_root(checkout) else {
         return Verdict::Deny(format!(
-            "devkit issue guard: {} is not inside a git checkout, where `{render}` keeps its \
+            "devkit render guard: {} is not inside a git checkout, where `{render}` keeps its \
              receipts.",
             cwd.display()
         ));
@@ -145,7 +145,7 @@ fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: 
     decide(rule, server, tool, input, &ctx, &|field, text| {
         receipt::has(&root, gate.kind, session, field, text)
     })
-    .unwrap_or_else(|e| Verdict::Deny(format!("devkit issue guard: {e:#}")))
+    .unwrap_or_else(|e| Verdict::Deny(format!("devkit render guard: {e:#}")))
 }
 
 /// The `--arg`s the templates of `kind` require of an agent, as a sentence to

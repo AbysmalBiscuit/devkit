@@ -1,6 +1,6 @@
-//! `issue create`: render the issue templates and file the result as a GitHub
+//! `ticket create`: render the issue templates and file the result as a GitHub
 //! issue. Other trackers create issues through their MCP, gated by the
-//! pre-tool-use hook on `issue render`'s receipts.
+//! pre-tool-use hook on `ticket render`'s receipts.
 
 use anyhow::{Context, Result};
 
@@ -21,7 +21,7 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
 
     let rendered = render::render(
         &cfg,
-        "issue create",
+        "ticket create",
         render::Title::Input(&args.title),
         args.body.as_deref().unwrap_or_default(),
         &args.vars,

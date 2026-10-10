@@ -72,8 +72,8 @@ pub struct Steps {
 }
 
 // `Steps` must stay `Send + Sync` so scoped worker threads can share one
-// `&Steps` — `issue end` dispatches concurrent removals, each drawing its own
-// bar through the shared `MultiProgress`.
+// `&Steps` — `workspace end` dispatches concurrent removals, each drawing its
+// own bar through the shared `MultiProgress`.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Steps>();

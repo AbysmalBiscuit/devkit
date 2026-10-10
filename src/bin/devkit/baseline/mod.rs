@@ -203,7 +203,7 @@ fn eat(mut h: u64, bytes: &[u8]) -> u64 {
 /// What an app was prepped from. A bare "this app is prepped" flag would go
 /// stale: a project that adds a key to an app's env file would give issue
 /// worktrees the new key and baselines the old one forever, and
-/// `issue sync-includes` no longer reaches baselines.
+/// `workspace sync-includes` no longer reaches baselines.
 ///
 /// FNV-1a rather than `DefaultHasher`, whose output is explicitly not stable
 /// between Rust releases. This value is stored in the marker and compared on a
@@ -579,8 +579,8 @@ impl References {
 ///
 /// The primary checkout is scanned alongside the linked worktrees: `devrun up
 /// --role baseline` run from there writes a record naming the baseline, and a
-/// scan that skipped it would let a sibling `issue end` reclaim a baseline the
-/// primary checkout is still serving from.
+/// scan that skipped it would let a sibling `workspace end` reclaim a baseline
+/// the primary checkout is still serving from.
 ///
 /// A worktree that could not be classified counts as unreadable rather than as
 /// a baseline. Folding it in with the baselines would drop it from the scan
@@ -733,7 +733,7 @@ pub fn release_abandoned(
 
 /// Remove `baseline` when nothing references it any more. The caller's own
 /// worktree must already be gone: counting while it still exists makes two
-/// concurrent `issue end` runs each see the other and each decline.
+/// concurrent `workspace end` runs each see the other and each decline.
 pub fn drop_reference(
     repo: &str,
     baseline: &Path,
@@ -918,8 +918,8 @@ fn decide(
 /// Every worktree git has a registration for, baselines included:
 /// `worktree::discover_all` drops those, and telling a registered tree from an
 /// orphaned one is the whole question here. Read once per sweep: it is one git
-/// process, and the baseline directory lock a sweep holds is one `issue end`
-/// waits on unbounded.
+/// process, and the baseline directory lock a sweep holds is one `workspace
+/// end` waits on unbounded.
 fn registrations(repo: &str) -> Result<Vec<devkit_common::vcs::Worktree>> {
     devkit_common::vcs::worktrees(Path::new(repo))
 }
@@ -1213,9 +1213,9 @@ pub fn prune_all(
     locks::with_dir(baseline_dir, || {
         let refs = referencers(repo)?;
         // Both scans are taken once for the sweep, not once per candidate: each
-        // is a git process, and they run under the directory lock `issue end`
-        // waits on unbounded. Freshness where it matters is the slot lock's
-        // job.
+        // is a git process, and they run under the directory lock `workspace
+        // end` waits on unbounded. Freshness where it matters is the
+        // slot lock's job.
         let registered = registrations(repo)?;
         // Printed once for the sweep rather than once per slot: the note names
         // the worktrees to repair, and it is the same list for every baseline.
@@ -1253,8 +1253,8 @@ pub fn prune_all(
 /// Point a worktree's record at a baseline, leaving its other fields alone.
 ///
 /// A worktree with no record gets one: a worktree made by hand rather than by
-/// `issue setup` still holds a reference, and skipping the write there would
-/// let prune reclaim a baseline that worktree is serving from.
+/// `workspace setup` still holds a reference, and skipping the write there
+/// would let prune reclaim a baseline that worktree is serving from.
 ///
 /// A record that exists and cannot be read is a refusal, not a worktree
 /// without one. Synthesizing over it would replace the issue id, slug, apps,
@@ -2556,7 +2556,7 @@ mod tests {
     /// The primary checkout is a worktree like any other and can name a
     /// baseline in its own record — `devrun up --role baseline` run from there
     /// writes exactly that. A scan that skipped it would let a sibling
-    /// `issue end` reclaim a baseline still in use.
+    /// `workspace end` reclaim a baseline still in use.
     #[test]
     fn a_record_in_the_primary_checkout_counts_as_a_referencer() {
         let f = two_worktrees_sharing_one_baseline();

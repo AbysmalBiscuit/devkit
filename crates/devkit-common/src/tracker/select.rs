@@ -1,16 +1,16 @@
-//! Which tracker and forge a project's `issue` commands talk to, from one
-//! config load.
+//! Which tracker and forge a project's `ticket`, `workspace` and `pr` commands
+//! talk to, from one config load.
 
 use std::path::Path;
 
 use super::Resolved;
 use crate::forge;
 
-/// Everything one config load yields for an `issue` command: the tracker, the
-/// forge and its repositories, the config itself and how its load went.
-/// `issue end` needs the last two, since its preserve entries live in the
-/// config, and acting on an empty table because the config is broken would
-/// remove a worktree having archived nothing.
+/// Everything one config load yields for a `ticket`, `workspace` or `pr`
+/// command: the tracker, the forge and its repositories, the config itself and
+/// how its load went. `workspace end` needs the last two, since its preserve
+/// entries live in the config, and acting on an empty table because the config
+/// is broken would remove a worktree having archived nothing.
 pub struct Selected {
     pub tracker: Resolved,
     pub forge: forge::Resolved,
@@ -21,7 +21,7 @@ pub struct Selected {
 /// Resolve `config` (or the layers found from `start`) and the `origin` remote
 /// into a tracker and forge. A missing or broken config falls back to
 /// detection, so the tracker choice never fails a command. `pr_override` is
-/// `issue prs --repo`.
+/// `pr list --repo`.
 ///
 /// Only `devkit.toml` is loaded, not `devkit_ports::load`, so an unparseable
 /// `doppler.yaml` cannot discard the declared tracker.
@@ -87,7 +87,7 @@ mod tests {
     }
 
     /// A config that does not parse must be distinguishable from no config at
-    /// all: `issue end` refuses on the first and proceeds on the second.
+    /// all: `workspace end` refuses on the first and proceeds on the second.
     #[test]
     fn a_broken_config_reports_broken_and_yields_no_config() {
         let dir = tempfile::tempdir().unwrap();
@@ -129,8 +129,8 @@ mod tests {
         assert!(sel.config.is_none());
     }
 
-    /// The loaded config comes back so `issue end` can read its preserve table
-    /// without a second load.
+    /// The loaded config comes back so `workspace end` can read its preserve
+    /// table without a second load.
     #[test]
     fn a_valid_config_comes_back_with_its_preserve_table() {
         let dir = tempfile::tempdir().unwrap();
@@ -157,8 +157,9 @@ mod tests {
     }
 
     /// A `doppler.yaml` devkit cannot parse says nothing about the config, and
-    /// must not cost `issue end` its preserve table. Doppler's single-project
-    /// form writes `setup` as a mapping where the app catalog expects a list.
+    /// must not cost `workspace end` its preserve table. Doppler's
+    /// single-project form writes `setup` as a mapping where the app
+    /// catalog expects a list.
     #[test]
     fn an_unparseable_doppler_yaml_leaves_the_config_intact() {
         let dir = tempfile::tempdir().unwrap();

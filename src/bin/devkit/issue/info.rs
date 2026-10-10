@@ -53,7 +53,7 @@ pub fn run(
     cache_only: bool,
     config: Option<&str>,
 ) -> Result<()> {
-    // `issue info` reports a single worktree, so discover once (one cheap
+    // `pr status` reports a single worktree, so discover once (one cheap
     // `git worktree list`) and narrow what is per-worktree: the dirty check
     // and the tracker state run for the target alone. The PR lookup stays
     // whole-set — `st::fetch_prs` aliases every discovered branch into one

@@ -1,5 +1,5 @@
-//! Copying a worktree's files out before `issue end` removes it. Resolution and
-//! validation live here; the copy itself is
+//! Copying a worktree's files out before `workspace end` removes it. Resolution
+//! and validation live here; the copy itself is
 //! `devkit_common::worktree::copy_out`.
 
 use std::{

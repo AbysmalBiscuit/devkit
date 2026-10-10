@@ -366,9 +366,10 @@ fn intercept_help(root: &clap::Command, args: &[OsString]) -> Result<bool> {
     }
 
     // Build before walking. `build()` is what assigns each subcommand its
-    // `devkit issue status` usage name and copies the parent's `global(true)`
-    // arguments down; a subcommand cloned out of an unbuilt tree prints
-    // `Usage: status [IDS]...` with no `-C`, `--config` or `--timing`.
+    // `devkit workspace status` usage name and copies the parent's
+    // `global(true)` arguments down; a subcommand cloned out of an unbuilt
+    // tree prints `Usage: status [IDS]...` with no `-C`, `--config` or
+    // `--timing`.
     let mut built = root.clone();
     built.build();
     let mut node = built;

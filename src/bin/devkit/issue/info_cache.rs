@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// The cached PR for a worktree: written after a live `issue info`, read by
-/// `issue info --cache-only`. A PR number is immutable once assigned, so this
+/// The cached PR for a worktree: written after a live `pr status`, read by
+/// `pr status --cache-only`. A PR number is immutable once assigned, so this
 /// needs no TTL — a live run overwrites it and the cache self-heals.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CachedPr {

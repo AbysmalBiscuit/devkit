@@ -1,5 +1,5 @@
 //! The pre-tool-use hook gates a PR write through a forge's MCP tool on the
-//! receipts `devkit issue pr render` leaves.
+//! receipts `devkit pr render` leaves.
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
@@ -64,7 +64,7 @@ fn rendered(out: &Output) -> (String, String) {
     )
 }
 
-/// `devkit issue pr render` as an agent in `session`.
+/// `devkit pr render` as an agent in `session`.
 fn pr_render(fake: &ghfake::Fake, session: &str, title: &str, body: &str) -> (String, String) {
     rendered(&fake.issue_in_session("agent", Some(session), &[
         "pr",
@@ -118,7 +118,7 @@ fn an_unrendered_pr_create_is_denied_naming_pr_render() {
     let fake = project();
     let reason = pre_tool_use(&fake, "S1", CREATE, create("T", "B")).expect("denied");
     assert!(
-        reason.contains("devkit issue pr render --pr-title"),
+        reason.contains("devkit pr render --pr-title") && !reason.contains("issue pr"),
         "{reason}"
     );
     assert!(reason.contains("--arg proof=..."), "{reason}");
@@ -164,7 +164,10 @@ fn a_body_patch_is_denied() {
     let input = json!({"number": 5, "patch": [{"op": "replace"}]});
     let reason = pre_tool_use(&fake, "S1", "mcp__forge__edit_pr", input).expect("denied");
     assert!(reason.contains("`patch`"), "{reason}");
-    assert!(reason.contains("devkit issue pr render"), "{reason}");
+    assert!(
+        reason.contains("devkit pr render") && !reason.contains("issue pr"),
+        "{reason}"
+    );
 }
 
 #[test]

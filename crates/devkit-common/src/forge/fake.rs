@@ -1,5 +1,6 @@
-//! A forge that answers from a fixed list of pull requests. Lets `issue end`
-//! and the status gather run their PR gate with no network and no credentials.
+//! A forge that answers from a fixed list of pull requests. Lets `workspace
+//! end` and the status gather run their PR gate with no network and no
+//! credentials.
 
 use std::path::Path;
 

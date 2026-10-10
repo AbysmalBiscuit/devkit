@@ -308,7 +308,7 @@ fn help_node() -> clap::Command {
 /// which would also swallow an unrecognized subcommand and turn invalid argv
 /// into successful help output.
 ///
-/// `required(false)` alone is not enough. `issue setup`'s positional is
+/// `required(false)` alone is not enough. `workspace setup`'s positional is
 /// `required_unless_present = "issue"`, a separate condition clap evaluates on
 /// its own, so clearing it takes an explicit reset.
 /// `required_unless_present_all`, `required_if_eq*` and required `ArgGroup`s
@@ -423,7 +423,7 @@ mod resolve_tests {
                 clap::Command::new("group")
                     .subcommand(clap::Command::new("status"))
                     .subcommand(clap::Command::new("rm").visible_alias("remove"))
-                    // Mirrors the real `issue setup`: a positional that is
+                    // Mirrors the real `workspace setup`: a positional that is
                     // `required_unless_present`, not plainly `required`. A
                     // probe that only clears `required` still fails here.
                     .subcommand(

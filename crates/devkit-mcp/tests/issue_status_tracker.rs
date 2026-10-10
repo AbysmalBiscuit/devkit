@@ -139,9 +139,9 @@ fn the_status_action_reports_the_configured_tracker_kind() {
     }
 
     // No `[tracker]` table: whichever kind detection lands on, nobody declared
-    // it, and the report has to say so — `declared` is what keeps `issue end`
-    // from reading a detected `none` as "no issue state to wait for". The
-    // assertion holds whether or not this machine has a LINEAR_API_KEY.
+    // it, and the report has to say so — `declared` is what keeps `workspace
+    // end` from reading a detected `none` as "no issue state to wait for".
+    // The assertion holds whether or not this machine has a LINEAR_API_KEY.
     let dir = fixture(None);
     let report = call(
         "issue.status",

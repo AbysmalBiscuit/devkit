@@ -959,7 +959,7 @@ mod tests {
         assert!(!s.requests()[0].path.contains("head="));
     }
 
-    /// `issue end` deletes a branch on `NoMatch`, so a list that never ends
+    /// `workspace end` deletes a branch on `NoMatch`, so a list that never ends
     /// is an unanswered lookup, not an empty one.
     #[test]
     fn a_head_lookup_that_hits_the_page_cap_is_unavailable() {

@@ -47,7 +47,7 @@ fn confirm(label: &str) -> bool {
 }
 
 /// What the record holds that outlives the worktree, read before the removal
-/// takes the record with it: the summary file `issue setup` wrote, and the
+/// takes the record with it: the summary file `workspace setup` wrote, and the
 /// baseline this worktree compared against. The summary comes from the record
 /// rather than being re-derived, so a `issue_summary_path` template edited
 /// since setup cannot leave the old file behind.
@@ -84,11 +84,12 @@ fn recorded_leftovers(
 
 /// Drop this worktree's reference to the baseline it compared against, removing
 /// the baseline when this was the last one. Runs after the worktree is gone, so
-/// two concurrent `issue end` runs cannot each count the other and each
+/// two concurrent `workspace end` runs cannot each count the other and each
 /// decline.
 ///
-/// `issue end --force` is not threaded through: it waives uncommitted changes
-/// in the worktree, not a baseline's running servers, which stay a refusal.
+/// `workspace end --force` is not threaded through: it waives uncommitted
+/// changes in the worktree, not a baseline's running servers, which stay a
+/// refusal.
 fn drop_baseline_reference(main: &Path, pin: &devkit_common::record::BaselinePin) -> Result<()> {
     let repo = main.to_str().context("primary checkout path not UTF-8")?;
     let ports = devkit_ports::registry::snapshot()?;
@@ -203,7 +204,7 @@ fn cleanup(
 
     // Best-effort: `devrun baseline prune` is the guarantee, so a baseline left
     // standing must not fail an otherwise-complete removal. The suggestion is
-    // that command's own `--force`; `issue end --force` waives uncommitted
+    // that command's own `--force`; `workspace end --force` waives uncommitted
     // changes in the worktree and nothing here.
     if let Some(pin) = &baseline
         && let Err(e) = drop_baseline_reference(&main, pin)
@@ -259,7 +260,7 @@ fn row_label(row: &IssueWorktree) -> String {
     }
 }
 
-/// The gates and waivers `issue end` was invoked with. Grouped because five
+/// The gates and waivers `workspace end` was invoked with. Grouped because five
 /// bare `bool` parameters in a row transpose silently at the call site.
 pub struct EndFlags {
     /// Remove without prompting per worktree.
@@ -915,7 +916,8 @@ mod tests {
 
     /// The baseline is counted after the worktree is gone. Counting first would
     /// find this worktree's own record still naming the baseline and decline,
-    /// leaving it behind on the last `issue end` that could have reclaimed it.
+    /// leaving it behind on the last `workspace end` that could have reclaimed
+    /// it.
     #[test]
     fn cleanup_reclaims_the_baseline_the_record_pinned() {
         let dir = tempfile::tempdir().unwrap();
@@ -1121,8 +1123,8 @@ mod tests {
     }
 
     /// A tracker that calls ENG-1 done and a forge whose one PR, #1 from
-    /// `eng-1-fix`, merged at `head`: every gate `issue end` reads, except the
-    /// worktree's own tree and history.
+    /// `eng-1-fix`, merged at `head`: every gate `workspace end` reads, except
+    /// the worktree's own tree and history.
     fn merged_at(head: &str) -> Selected {
         merged([(1, head)])
     }

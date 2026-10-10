@@ -1,5 +1,6 @@
-//! The issue summary file `issue setup --summary` leaves behind: the tracker
-//! facts and description as a scaffold, with the sections an agent fills in.
+//! The issue summary file `workspace setup --summary` leaves behind: the
+//! tracker facts and description as a scaffold, with the sections an agent
+//! fills in.
 
 use std::{
     collections::BTreeMap,
@@ -83,7 +84,7 @@ fn resolve_path(
 
 /// Write `body` to `path`, creating parent directories. Returns whether it was
 /// written: an existing summary is left byte-for-byte, since by the second
-/// `issue setup` it holds investigation the scaffold cannot reproduce.
+/// `workspace setup` it holds investigation the scaffold cannot reproduce.
 fn write_if_absent(path: &Path, body: &str) -> Result<bool> {
     if path.exists() {
         return Ok(false);
@@ -96,7 +97,7 @@ fn write_if_absent(path: &Path, body: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// The path `issue setup --summary` will write, without writing it — what
+/// The path `workspace setup --summary` will write, without writing it — what
 /// `--dry-run` reports.
 pub(crate) fn plan_path(
     cfg: &devkit_config::Config,

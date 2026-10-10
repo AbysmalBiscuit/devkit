@@ -65,7 +65,7 @@ fn reuse_note(number: u64, pr_is_draft: bool, asked: Option<PrCreateState>) -> O
         return None;
     }
     let (is, flag, way_back) = if pr_is_draft {
-        ("a draft", "--ready", "issue pr ready")
+        ("a draft", "--ready", "pr ready")
     } else {
         (
             "ready for review",
@@ -136,7 +136,7 @@ pub(crate) struct Ensure<'a> {
     /// only a run that opens a PR needs a title.
     pub pr_title: RenderTitle<'a>,
     /// Deferred rather than rendered: a `pr_title`/`pr_body` template reading
-    /// `{{ issue }}` cannot be rendered outside a worktree `issue setup`
+    /// `{{ issue }}` cannot be rendered outside a worktree `workspace setup`
     /// created, and a run that only reuses a PR needs neither.
     pub pr_body: RenderBody<'a>,
     /// Logins to request as reviewers.
@@ -253,7 +253,7 @@ pub fn run(args: Args) -> Result<()> {
     check_attachments(forge.forge.as_ref(), Path::new(&start), &args.attach)?;
 
     let caller = devkit_common::caller::caller();
-    let vars = values("issue pr", &loaded.config, &args.vars, caller)?;
+    let vars = values("pr create", &loaded.config, &args.vars, caller)?;
 
     let here = Path::new(&start);
     let vcs = Vcs::at(here);
@@ -410,7 +410,7 @@ mod tests {
 
     /// The hazard the deferred body exists for: `render_review` is strict about
     /// undefined variables, and `worktree_context` binds `issue` only when the
-    /// worktree has an `issue setup` record.
+    /// worktree has a `workspace setup` record.
     #[test]
     fn a_body_template_reading_the_record_fails_without_one() {
         let ctx = worktree_context(None, Some("lev/eng-1-fix"));

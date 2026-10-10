@@ -5,7 +5,7 @@
 //! Linear and GitHub — trends that barely move minute to minute — so each of
 //! those fetches is memoized to `~/.cache/devkit/dashboard/<key>.json` with the
 //! time it was taken. A cached value younger than its TTL is reused instead of
-//! refetched; `issue dashboard --no-cache` bypasses the cache for a fully live
+//! refetched; `ticket dashboard --no-cache` bypasses the cache for a fully live
 //! render. A cache miss or write failure is never fatal: the fetch just runs.
 
 use std::{

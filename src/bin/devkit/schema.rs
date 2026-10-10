@@ -180,8 +180,8 @@ const STARTER: &str = r#"
 # launch = ["pnpm", "dev", "--port", "{{ port }}"]
 
 # Commands run on a lifecycle event, as argv arrays (no shell). Failures warn
-# and are skipped. after_worktree_create runs in a worktree `issue setup` or
-# `issue pr checkout` has just created.
+# and are skipped. after_worktree_create runs in a worktree `workspace setup` or
+# `pr checkout` has just created.
 # [hooks]
 # after_worktree_create = [["zoxide", "add", "{{ worktree }}"]]
 "#;

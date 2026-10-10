@@ -27,13 +27,13 @@ pub enum PrStatus {
         /// a changed string there breaks them.
         is_draft: bool,
         /// Commits at the worktree's HEAD that a merged PR's head does not
-        /// reach: work that exists only on the branch `issue end` deletes.
+        /// reach: work that exists only on the branch `workspace end` deletes.
         /// `None` for a PR that has not merged, and for a merged one whose
         /// head could not be compared.
         #[serde(default)]
         ahead: Option<u32>,
     },
-    /// Several PRs share this head branch. The verdict stays closed: `issue
+    /// Several PRs share this head branch. The verdict stays closed: `workspace
     /// end` reads it to decide whether a worktree may be deleted, and a
     /// stranger's merged PR must not authorize that.
     Ambiguous {
@@ -44,7 +44,7 @@ pub enum PrStatus {
     Unknown { reason: String },
     /// The project declared it has no forge, so there is no PR to wait for.
     /// What stands in for "merged" is the branch's commits being on a remote,
-    /// since `issue end` deletes the branch.
+    /// since `workspace end` deletes the branch.
     Untracked { pushed: bool },
 }
 
@@ -269,7 +269,7 @@ impl Discovered {
     }
 
     /// The discovered worktree rows, with dirty/PR/state still unfilled. Lets a
-    /// single-worktree caller (`issue info`) pick its target without paying the
+    /// single-worktree caller (`pr status`) pick its target without paying the
     /// per-worktree enrichment cost of a full gather.
     pub fn rows(&self) -> &[IssueWorktree] {
         &self.rows
@@ -422,7 +422,7 @@ pub fn tree_stream(paths: &[String], report: impl Fn(usize, Tree) + Send + Clone
 
 /// Whether the commit checked out at `path` is on some remote-tracking branch.
 /// A repository that cannot answer reads as not pushed, since this stands in
-/// for a merged PR before `issue end` deletes the branch.
+/// for a merged PR before `workspace end` deletes the branch.
 pub fn pushed_of(path: &str) -> bool {
     let path = Path::new(path);
     Vcs::at(path).pushed(path).unwrap_or(false)
@@ -670,7 +670,7 @@ pub fn label(kind: TrackerKind) -> &'static str {
 }
 
 /// Whether the worktree may be removed, and every reason it may not. This is
-/// the whole deletion gate: `issue end` removes exactly the rows it calls
+/// the whole deletion gate: `workspace end` removes exactly the rows it calls
 /// finished.
 ///
 /// A reason is `Unknown` when an input could not be read: the record, the
@@ -786,7 +786,7 @@ pub fn gather_with(
 }
 
 /// Local-only status: discovery + tree checks, with no `gh`/tracker network.
-/// PRs stay `NO_PR` and the state stays unknown; callers (e.g. `issue info
+/// PRs stay `NO_PR` and the state stays unknown; callers (e.g. `pr status
 /// --cache-only`) overlay cached data themselves.
 ///
 /// This crate reads no config, so the tracker is detected from `start` rather
@@ -1366,8 +1366,9 @@ mod tests {
         assert_eq!(a.url(), None);
     }
 
-    // The safety gate `issue end` reads before deleting a worktree: neither an
-    // ambiguous nor an unresolved PR may read as finished, and each names why.
+    // The safety gate `workspace end` reads before deleting a worktree: neither
+    // an ambiguous nor an unresolved PR may read as finished, and each
+    // names why.
     #[test]
     fn ambiguous_and_unknown_prs_are_never_finished() {
         let linear = tracker(TrackerKind::Linear, true);
@@ -1396,7 +1397,8 @@ mod tests {
     }
 
     /// A merged PR finishes the worktree only when HEAD holds nothing the PR's
-    /// head lacks, since `issue end` deletes the branch those commits are on.
+    /// head lacks, since `workspace end` deletes the branch those commits are
+    /// on.
     #[test]
     fn a_merged_pr_finishes_only_a_worktree_with_nothing_past_its_head() {
         let linear = tracker(TrackerKind::Linear, true);
@@ -1527,7 +1529,8 @@ mod tests {
     }
 
     /// A project that declared no forge has no PR to wait for, so its commits
-    /// being on a remote is what `issue end` needs before deleting the branch.
+    /// being on a remote is what `workspace end` needs before deleting the
+    /// branch.
     #[test]
     fn a_project_with_no_forge_finishes_once_its_commits_are_pushed() {
         let none = tracker(TrackerKind::None, false);

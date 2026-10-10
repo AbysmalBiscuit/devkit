@@ -1,4 +1,4 @@
-//! `issue pr render`: the PR title and body `issue pr create` would send,
+//! `pr render`: the PR title and body `pr create` would send,
 //! printed for a PR opened some other way, with a receipt per agent session.
 
 #[path = "common/ghfake.rs"]
@@ -165,7 +165,10 @@ fn a_missing_required_arg_is_refused_by_name_before_rendering() {
     assert!(!out.status.success());
     assert!(out.stdout.is_empty(), "nothing rendered");
     let err = stderr(&out);
-    assert!(err.contains("issue pr render"), "{err}");
+    assert!(
+        err.starts_with("Error: pr render needs") && !err.contains("issue pr"),
+        "{err}"
+    );
     assert!(err.contains("--arg proof=..."), "{err}");
     assert!(err.contains("one line per Done when item"), "{err}");
     assert!(receipts(fake.project(), "S1").is_empty());

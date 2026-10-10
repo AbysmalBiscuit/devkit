@@ -1,4 +1,4 @@
-//! `issue pr render`: the PR title and body `issue pr create` would send,
+//! `pr render`: the PR title and body `pr create` would send,
 //! printed for a PR opened some other way, with a receipt per agent session.
 
 use std::{collections::BTreeMap, path::Path};
@@ -72,7 +72,7 @@ pub(crate) struct Texts<'a> {
     ctx: serde_json::Value,
     values: BTreeMap<String, String>,
     /// The worktree to name when a template fails for want of an
-    /// `issue setup` record.
+    /// `workspace setup` record.
     missing_record_at: Option<String>,
     title_input: String,
     body_input: String,
@@ -139,7 +139,7 @@ pub(crate) fn run(args: Args) -> Result<()> {
     let here = Path::new(&start);
     let loaded = devkit_ports::load::load(args.config.as_deref().map(Path::new), here)?;
     let values = values(
-        "issue pr render",
+        "pr render",
         &loaded.config,
         &args.vars,
         devkit_common::caller::caller(),

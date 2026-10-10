@@ -140,10 +140,11 @@ fn baseline_orphans() -> (usize, u64, usize) {
     crate::baseline::orphaned(&dir, &repo.to_string_lossy()).unwrap_or((0, 0, 0))
 }
 
-/// Which tracker `issue` talks to here, and how devkit arrived at it.
-/// Detection is ambient — a globally exported `LINEAR_API_KEY` resolves Linear
-/// for every project on the machine, including one that has nothing in Linear —
-/// so without this row nothing on any CLI path reveals the choice or its cause.
+/// Which tracker `ticket` and `workspace` talk to here, and how devkit arrived
+/// at it. Detection is ambient — a globally exported `LINEAR_API_KEY` resolves
+/// Linear for every project on the machine, including one that has nothing in
+/// Linear — so without this row nothing on any CLI path reveals the choice or
+/// its cause.
 fn resolve_selection(start: &std::path::Path) -> (Resolved, devkit_common::forge::Resolved) {
     let cfg = devkit_ports::load::load(None, start).ok().map(|l| l.config);
     let (kind, forge_cfg, github) = match cfg {
@@ -158,15 +159,15 @@ fn resolve_selection(start: &std::path::Path) -> (Resolved, devkit_common::forge
 }
 
 /// Which forge the PR commands talk to, and why. A forge devkit could not find
-/// fails every PR command and holds `issue end`'s verdict open, with nothing
-/// else on the CLI saying so.
+/// fails every PR command and holds `workspace end`'s verdict open, with
+/// nothing else on the CLI saying so.
 fn forge_check(r: &devkit_common::forge::Resolved) -> Check {
     use devkit_common::forge::ForgeKind;
     let kind = r.forge.kind();
     match kind {
         ForgeKind::None if r.declared => Check::Ok(format!("none: {}", r.reason)),
         ForgeKind::None => Check::Warn(format!(
-            "none: {}; PR commands fail and `issue end` finishes nothing",
+            "none: {}; PR commands fail and `workspace end` finishes nothing",
             r.reason
         )),
         ForgeKind::Github | ForgeKind::Gitlab | ForgeKind::Forgejo => {
@@ -187,10 +188,10 @@ fn forge_check(r: &devkit_common::forge::Resolved) -> Check {
 }
 
 /// A tracker devkit fell back to answers nothing while looking like an answer:
-/// every issue-state gate stays closed and `issue end` cleans up nothing, with
-/// no error to explain it. Naming a `kind` turns that into a decision — except
-/// for a project that already named one devkit could not build, whose fix is
-/// the reason the row already carries.
+/// every issue-state gate stays closed and `workspace end` cleans up nothing,
+/// with no error to explain it. Naming a `kind` turns that into a decision —
+/// except for a project that already named one devkit could not build, whose
+/// fix is the reason the row already carries.
 ///
 /// GitHub is checked ahead of `declared` because a built `GithubTracker` is
 /// ready only when a token is, and an unset token is the single way this arm
