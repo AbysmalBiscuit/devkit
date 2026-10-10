@@ -579,7 +579,7 @@
     },
     "GithubConfig": {
       "additionalProperties": false,
-      "description": "Which GitHub repository holds this project's issues, for the GitHub\ntracker, and which Projects v2 project holds their status for\n`[issue.events]`. The repository pull requests go to is `[forge] repo`,\nsince a project on any forge has one.\n\nUnknown keys are refused: a misspelled `issue_repo` ignored would default\nfrom `origin` and query another repository's issues.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\nproject = \"org/3\"\nstatus_field = \"Status\"\n```",
+      "description": "Which GitHub repository holds this project's issues, for the GitHub\ntracker, and which Projects v2 project holds their status for\n`[ticket.events]`. The repository pull requests go to is `[forge] repo`,\nsince a project on any forge has one.\n\nUnknown keys are refused: a misspelled `issue_repo` ignored would default\nfrom `origin` and query another repository's issues.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\nproject = \"org/3\"\nstatus_field = \"Status\"\n```",
       "properties": {
         "issues_repo": {
           "default": null,
@@ -604,7 +604,7 @@
             }
           ],
           "default": null,
-          "description": "The Projects v2 project whose single-select field holds the issues'\nstatus, which `[issue.events]` moves under the GitHub tracker:\n`\"owner/N\"`, or a bare `N` owned by `issues_repo`'s owner. Without it,\na GitHub tracker's events fail naming this key."
+          "description": "The Projects v2 project whose single-select field holds the issues'\nstatus, which `[ticket.events]` moves under the GitHub tracker:\n`\"owner/N\"`, or a bare `N` owned by `issues_repo`'s owner. Without it,\na GitHub tracker's events fail naming this key."
         },
         "status_field": {
           "default": null,
@@ -739,7 +739,7 @@
         },
         "after_worktree_create": {
           "default": [],
-          "description": "Runs once in the root of a worktree `workspace setup` or\n`pr checkout` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `ticket` (also named\n`issue`), `slug`, `apps`, `prefix`, `role`, and `[templates.variables]`.\nOutput is\ndiscarded, so the command's JSON stays the last line on stdout.",
+          "description": "Runs once in the root of a worktree `workspace setup` or\n`pr checkout` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `ticket` (also named\n`issue`), `slug`, `apps`, `prefix`, `role`, and `[templates.variables]`.\nOutput is discarded, so the command's JSON stays the last line on\nstdout.",
           "items": {
             "items": {
               "type": "string"
@@ -750,7 +750,7 @@
         },
         "after_worktree_remove": {
           "default": [],
-          "description": "Runs once per worktree `workspace end` removed, after every removal in the\nrun has finished, in the main repository root. `ticket`, `slug` and\n`apps` come from the `.devkit/issue.toml` record read before the\nremoval. Rendered over `worktree`, `branch`, `ticket` (also named\n`issue`), `slug`, `apps`,\n`prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A\nworktree kept back or skipped fires nothing. Runs after the run's\nsummary, so a failing hook never un-reports a removal, and is skipped\nwith a warning when the main repository root does not resolve.",
+          "description": "Runs once per worktree `workspace end` removed, after every removal in the\nrun has finished, in the main repository root. `ticket`, `slug` and\n`apps` come from the `.devkit/issue.toml` record read before the\nremoval. Rendered over `worktree`, `branch`, `ticket` (also named\n`issue`), `slug`, `apps`, `prefix`, `worktree_root`, `primary`, and\n`[templates.variables]`. A worktree kept back or skipped fires nothing.\nRuns after the run's summary, so a failing hook never un-reports a\nremoval, and is skipped with a warning when the main repository root\ndoes not resolve.",
           "items": {
             "items": {
               "type": "string"
@@ -1707,7 +1707,7 @@
       "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context. Rendering is strict: an undefined variable is an\nerror, so a typo surfaces on the first run.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ issue }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ issue }}: {{ input }}\"\npr_body            = \"Closes {{ issue }}.\\n\\n{{ input }}\"\nissue_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`issue_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
       "properties": {
         "branch": {
-          "description": "Branch name created by `workspace setup`. Context: `prefix`, `ticket` (also\nnamed `issue`), `slug`, `short_slug`, `apps`. Defaults to `{{ prefix\n}}{{ slug }}`.",
+          "description": "Branch name created by `workspace setup`. Context: `prefix`, `ticket`\n(also named `issue`), `slug`, `short_slug`, `apps`. Defaults to\n`{{ prefix }}{{ slug }}`.",
           "type": [
             "string",
             "null"

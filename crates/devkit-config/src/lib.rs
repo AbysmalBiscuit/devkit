@@ -637,8 +637,8 @@ pub struct HooksConfig {
     /// after the command has reported the worktree. Each argv element is
     /// rendered as minijinja over `worktree`, `branch`, `ticket` (also named
     /// `issue`), `slug`, `apps`, `prefix`, `role`, and `[templates.variables]`.
-    /// Output is
-    /// discarded, so the command's JSON stays the last line on stdout.
+    /// Output is discarded, so the command's JSON stays the last line on
+    /// stdout.
     pub after_worktree_create: Vec<Vec<String>>,
 
     /// Runs once in the root of each worktree `workspace end` is about to
@@ -653,11 +653,11 @@ pub struct HooksConfig {
     /// run has finished, in the main repository root. `ticket`, `slug` and
     /// `apps` come from the `.devkit/issue.toml` record read before the
     /// removal. Rendered over `worktree`, `branch`, `ticket` (also named
-    /// `issue`), `slug`, `apps`,
-    /// `prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A
-    /// worktree kept back or skipped fires nothing. Runs after the run's
-    /// summary, so a failing hook never un-reports a removal, and is skipped
-    /// with a warning when the main repository root does not resolve.
+    /// `issue`), `slug`, `apps`, `prefix`, `worktree_root`, `primary`, and
+    /// `[templates.variables]`. A worktree kept back or skipped fires nothing.
+    /// Runs after the run's summary, so a failing hook never un-reports a
+    /// removal, and is skipped with a warning when the main repository root
+    /// does not resolve.
     pub after_worktree_remove: Vec<Vec<String>>,
 
     /// Runs once at the end of a `workspace end` run that removed at least one
@@ -2035,9 +2035,9 @@ impl From<&str> for VariableDecl {
 /// it is taken from `defaults.worktree_root` instead.
 #[derive(Debug, JsonSchema, Deserialize, Serialize, Default)]
 pub struct Templates {
-    /// Branch name created by `workspace setup`. Context: `prefix`, `ticket` (also
-    /// named `issue`), `slug`, `short_slug`, `apps`. Defaults to `{{ prefix
-    /// }}{{ slug }}`.
+    /// Branch name created by `workspace setup`. Context: `prefix`, `ticket`
+    /// (also named `issue`), `slug`, `short_slug`, `apps`. Defaults to
+    /// `{{ prefix }}{{ slug }}`.
     pub branch: Option<String>,
     /// Longest branch `workspace setup` will render. A derived slug is
     /// shortened on a word boundary to fit. A template whose fixed text

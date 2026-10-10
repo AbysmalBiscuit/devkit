@@ -284,8 +284,7 @@ fn render_commit_message(
 
 /// The context every template renders over: `branch`, and `ticket` (also
 /// under its old name `issue`), `slug`, `apps` from the worktree's record
-/// when it has one. A field with no source
-/// stays undefined rather than empty.
+/// when it has one. A field with no source stays undefined rather than empty.
 pub fn worktree_context(record: Option<&IssueRecord>, branch: Option<&str>) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     if let Some(b) = branch {
