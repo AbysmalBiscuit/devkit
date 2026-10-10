@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-/// Link the old command names, then add devkit's ignore patterns to git's
+/// Link the command names, then add devkit's ignore patterns to git's
 /// global excludes file. The excludes step runs even when a link fails, so one
 /// unclaimable name does not leave the machine half set up.
 pub fn run(args: crate::links::InstallLinksArgs) -> Result<()> {

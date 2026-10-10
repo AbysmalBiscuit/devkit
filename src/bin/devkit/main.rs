@@ -194,7 +194,7 @@ enum Cmd {
     Activity(activity::ActivityCli),
     /// Set up this machine for devkit; safe to rerun.
     ///
-    /// Links the old command names as `install-links` does, and appends each
+    /// Links the command names as `install-links` does, and appends each
     /// of devkit's ignore patterns (`.devkit/`, `*.local`, `*.local.*`) that
     /// git's global excludes file lacks, leaving its other lines as they are.
     Install(links::InstallLinksArgs),
