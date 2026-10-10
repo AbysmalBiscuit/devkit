@@ -8,6 +8,17 @@ use std::{
     time::Duration,
 };
 
+const SHIMS: [&str; 8] = [
+    "ticket",
+    "workspace",
+    "issue",
+    "devrun",
+    "portm",
+    "lockm",
+    "docm",
+    "devkit-mcp",
+];
+
 /// Retry `attempt` briefly on a transient `ExecutableFileBusy`. `staged()`
 /// just finished writing the binary `attempt` executes moments earlier, and
 /// `cargo test`'s default parallelism runs several of these tests at once,
@@ -101,16 +112,7 @@ fn creates_every_shim() {
         String::from_utf8_lossy(&out.stderr)
     );
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    for name in [
-        "ticket",
-        "workspace",
-        "issue",
-        "devrun",
-        "portm",
-        "lockm",
-        "docm",
-        "devkit-mcp",
-    ] {
+    for name in SHIMS {
         assert!(
             shim_path(dir.path(), name).exists(),
             "install-links did not create {name}"
@@ -206,16 +208,7 @@ fn replaces_an_existing_devkit_binary() {
 fn replaces_a_real_devkit_binary_at_every_shim_name() {
     let (dir, exe) = staged();
     let mut stale_paths = Vec::new();
-    for name in [
-        "ticket",
-        "workspace",
-        "issue",
-        "devrun",
-        "portm",
-        "lockm",
-        "docm",
-        "devkit-mcp",
-    ] {
+    for name in SHIMS {
         let stale = shim_path(dir.path(), name);
         std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &stale)
             .unwrap_or_else(|e| panic!("stage a stale {name}: {e}"));
@@ -442,16 +435,7 @@ fn running_twice_is_idempotent() {
         text.contains("current"),
         "second run should report already-linked shims: {text}"
     );
-    for name in [
-        "ticket",
-        "workspace",
-        "issue",
-        "devrun",
-        "portm",
-        "lockm",
-        "docm",
-        "devkit-mcp",
-    ] {
+    for name in SHIMS {
         assert!(
             shimtest::same_inode(&exe, &shim_path(dir.path(), name)),
             "{name} should still be a hardlink to devkit after the second run"
@@ -978,16 +962,7 @@ fn install_links_falls_open_on_an_unusable_state_dir() {
         out.status.success(),
         "install-links must still run without a usable state dir: {text}"
     );
-    for name in [
-        "ticket",
-        "workspace",
-        "issue",
-        "devrun",
-        "portm",
-        "lockm",
-        "docm",
-        "devkit-mcp",
-    ] {
+    for name in SHIMS {
         assert!(
             shim_path(dir.path(), name).exists(),
             "{name} should have been linked despite the state dir: {text}"
@@ -1250,16 +1225,7 @@ fn install_creates_every_shim() {
     let home = tempfile::tempdir().expect("home");
     let out = install(&exe, home.path(), None);
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    for name in [
-        "ticket",
-        "workspace",
-        "issue",
-        "devrun",
-        "portm",
-        "lockm",
-        "docm",
-        "devkit-mcp",
-    ] {
+    for name in SHIMS {
         assert!(
             shimtest::same_inode(&exe, &shim_path(dir.path(), name)),
             "devkit install did not link {name}: {text}"
