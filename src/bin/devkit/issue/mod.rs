@@ -138,15 +138,15 @@ enum IssueCmd {
     Workspace(WorkspaceCmd),
     /// Pull-request lifecycle for this worktree.
     Pr(PrGroup),
-    /// Check out an existing PR into a new worktree, as `pr checkout`.
+    /// Check out an existing PR into a new worktree, as `devkit pr checkout`.
     #[command(hide = true)]
     CheckoutPr(PrCheckout),
-    /// Show one worktree's PR and issue id, as `pr status`.
+    /// Show one worktree's PR and issue id, as `devkit pr status`.
     #[command(hide = true)]
     Info(PrStatus),
-    /// At-a-glance triage of your open PRs, as `pr list`.
+    /// At-a-glance triage of your open PRs, as `devkit pr list`.
     Prs(PrList),
-    /// Request or finish a review, as `pr review`.
+    /// Request or finish a review, as `devkit pr review`.
     Review {
         #[command(subcommand)]
         cmd: ReviewCmd,
