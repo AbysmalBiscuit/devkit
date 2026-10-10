@@ -2,7 +2,7 @@
 name = "devkit-vcs"
 description = "What devkit asks of a repository, whichever version control keeps it"
 edition.workspace = true
-version = "0.14.16" # x-release-please-version
+version = "0.14.17" # x-release-please-version
 
 [dependencies]
 anyhow.workspace = true

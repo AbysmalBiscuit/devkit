@@ -2,7 +2,7 @@
 name = "devkit-supabase"
 description = "The Supabase project client devkit's Data-API-backed stores share"
 edition.workspace = true
-version = "0.14.16" # x-release-please-version
+version = "0.14.17" # x-release-please-version
 
 [features]
 test-support = []

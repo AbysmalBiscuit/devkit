@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.17](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.16...v0.14.17) (2026-10-10)
+
+
+### Features
+
+* **config:** name the tracker config ticket and the role workspace ([#330](https://github.com/AbysmalBiscuit/devkit/issues/330)) ([2811c65](https://github.com/AbysmalBiscuit/devkit/commit/2811c65f2d524d103bcb87e3d189334b009803da))
+* **evals:** run evals through codex ([#325](https://github.com/AbysmalBiscuit/devkit/issues/325)) ([806b2a9](https://github.com/AbysmalBiscuit/devkit/commit/806b2a9770f7a1c2a670c298219dfb2e1cd7c2e2))
+* **rules:** cache remote rules and add a supabase source ([#326](https://github.com/AbysmalBiscuit/devkit/issues/326)) ([eafbe4a](https://github.com/AbysmalBiscuit/devkit/commit/eafbe4adb330f48a82c66c2e2557ed1d3e64d66b))
+* split issue into ticket, workspace and pr ([#327](https://github.com/AbysmalBiscuit/devkit/issues/327)) ([ff16c94](https://github.com/AbysmalBiscuit/devkit/commit/ff16c94af2f2477b93c2bd3ab611b206dac089af))
+
+
+### Bug Fixes
+
+* **todo:** let stop through while background work runs ([#315](https://github.com/AbysmalBiscuit/devkit/issues/315)) ([0f2cca9](https://github.com/AbysmalBiscuit/devkit/commit/0f2cca97470cec8cc9be9d02629e76b750effd89))
+
 ## [0.14.16](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.15...v0.14.16) (2026-10-08)
 
 
