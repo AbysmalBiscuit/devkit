@@ -44,7 +44,7 @@
   },
   {
     "id": "reused-pr",
-    "question": "This branch already has an open PR, #12. Does `devkit issue pr create --attach ./.devkit/proof/after.png` add the screenshot to it?",
+    "question": "This branch already has an open PR, #12. Does `devkit pr create --attach ./.devkit/proof/after.png` add the screenshot to it?",
     "kind": "bool",
     "expect": false,
     "proof": "tests/pr_create_attach.rs a_reused_pr_is_refused_before_it_is_touched"
@@ -60,7 +60,7 @@
   },
   {
     "id": "gitlab-push",
-    "question": "In a project whose forge is GitLab, you run `devkit issue pr create --attach ./.devkit/proof/after.png`. Is the branch pushed?",
+    "question": "In a project whose forge is GitLab, you run `devkit pr create --attach ./.devkit/proof/after.png`. Is the branch pushed?",
     "kind": "bool",
     "expect": false,
     "proof": "tests/pr_create_attach.rs a_forge_without_attachments_refuses_before_the_push"
@@ -81,14 +81,14 @@
   },
   {
     "id": "path-base",
-    "question": "From /home/me you run `devkit issue -C /work/app pr create --attach shot.png`. Give the absolute path the file must be at.",
+    "question": "From /home/me you run `devkit pr -C /work/app create --attach shot.png`. Give the absolute path the file must be at.",
     "kind": "text",
     "expect": ["/work/app/shot.png"],
     "proof": "tests/pr_create_attach.rs each_attachment_reaches_gh_as_its_own_flag"
   },
   {
     "id": "old-gh",
-    "question": "The gh on PATH is 2.98.0. Does `devkit issue pr create --attach ./.devkit/proof/after.png` open a PR?",
+    "question": "The gh on PATH is 2.98.0. Does `devkit pr create --attach ./.devkit/proof/after.png` open a PR?",
     "kind": "bool",
     "expect": false
   }

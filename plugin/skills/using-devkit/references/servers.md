@@ -24,9 +24,9 @@ devkit config variables [--json]
 
 Apps you don't name are auto-detected by diffing `<baseline ref>...HEAD`, so **on a fresh worktree with no diff yet, name the apps explicitly**. Selecting an app with a `url_env` pulls in the `provides_url` app automatically and wires its URL into that env var.
 
-Default `--role issue`. `--role both` runs the issue branch and its baseline side-by-side on separate ports for A/B comparison. The baseline is the worktree at the merge base with the baseline ref, shared by every worktree cut from the same commit and created the first time it is asked for. `--supervise` hands servers to the daemon so they restart on crash within the crash-loop budget. `--dry-run` prints the launch plan without starting; under `--role baseline` it names the directory a real run would use without creating it.
+Default `--role issue`. `--role both` runs the workspace's branch and its baseline side-by-side on separate ports for A/B comparison. The baseline is the worktree at the merge base with the baseline ref, shared by every worktree cut from the same commit and created the first time it is asked for. `--supervise` hands servers to the daemon so they restart on crash within the crash-loop budget. `--dry-run` prints the launch plan without starting; under `--role baseline` it names the directory a real run would use without creating it.
 
-Ports are allocated dynamically from the live registry at start time — `issue setup` reserves none.
+Ports are allocated dynamically from the live registry at start time, and `workspace setup` reserves none.
 
 `up` is idempotent: an (app, role) row that already has a live pid reports the existing server instead of spawning a duplicate.
 
