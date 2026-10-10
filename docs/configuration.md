@@ -153,10 +153,10 @@ Env-only tuning knobs with no `config.toml` equivalent. The `[daemon]` keys, `[p
 | Variable | Default | Meaning |
 |---|---|---|
 | `DEVKIT_CALLER` | _(detect)_ | Override caller-identity detection behind `required = "agents"`/`"humans"` and the `devrun task` args listing. `agent` or `human` (case- and whitespace-insensitive) forces that classification; anything else is ignored. Unset, a harness session variable (`CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`) counts as an agent, else a non-terminal stdin counts as an agent, else the caller is human. Set `human` to see a task's human-facing args from a non-terminal shell, e.g. `DEVKIT_CALLER=human devrun task`. |
-| `DEVKIT_FETCH_TTL_SECS` | `60` | Freshness window for `git fetch`. `issue setup`, `issue pr checkout`, and `devrun up`'s baseline refresh skip a fetch of the same repo+remote made within this many seconds, reusing the remote-tracking refs already on disk (so the ref a worktree is cut from is at most this stale). `0` disables the gate: always fetch. |
-| `DEVKIT_HYPERLINKS` | _(detect)_ | Override OSC 8 hyperlink emission in the `issue`/`portm`/etc. tables. `always`/`1`/`on`/`true`/`yes` forces clickable links; `never`/`0`/`off`/`false`/`no` disables them. Unset auto-detects via [`supports-hyperlinks`](https://crates.io/crates/supports-hyperlinks). Set `always` for a hyperlink-capable terminal that detection misses, e.g. an alacritty fork exporting a bare `TERM=xterm-256color`. |
+| `DEVKIT_FETCH_TTL_SECS` | `60` | Freshness window for `git fetch`. `workspace setup`, `devkit pr checkout`, and `devrun up`'s baseline refresh skip a fetch of the same repo+remote made within this many seconds, reusing the remote-tracking refs already on disk (so the ref a worktree is cut from is at most this stale). `0` disables the gate: always fetch. |
+| `DEVKIT_HYPERLINKS` | _(detect)_ | Override OSC 8 hyperlink emission in the `workspace`/`portm`/etc. tables. `always`/`1`/`on`/`true`/`yes` forces clickable links; `never`/`0`/`off`/`false`/`no` disables them. Unset auto-detects via [`supports-hyperlinks`](https://crates.io/crates/supports-hyperlinks). Set `always` for a hyperlink-capable terminal that detection misses, e.g. an alacritty fork exporting a bare `TERM=xterm-256color`. |
 | `DEVKIT_HELP` | _(detect)_ | `terse` or `full` pins which help view `--help` prints, wherever output goes. |
-| `DEVKIT_TIMING` | _(off)_ | `summary` or `trace` turns on `issue`/`devrun` IO timing without `--timing`. |
+| `DEVKIT_TIMING` | _(off)_ | `summary` or `trace` turns on `ticket`/`workspace`/`devkit pr`/`devrun` IO timing without `--timing`. |
 
 ### TLS trust
 

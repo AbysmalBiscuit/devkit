@@ -1,7 +1,7 @@
 ---
 name: using-devkit
-description: "Use when editing in a checkout other sessions share, when a write or command is denied naming a holder, before running a build or test by hand, for dev servers and ports, for issue worktrees and review, and when editing `devkit.toml`. Covers `devkit`, `devrun`, `issue`, `lockm`, `portm`."
-allowed-tools: Bash(devkit:*), Bash(devrun:*), Bash(issue:*), Bash(lockm:*), Bash(portm:*), Bash(rg:*), Bash(ast-grep:*), Glob, Grep, mcp__devkit__devkit_describe, mcp__devkit__devkit_call
+description: "Use when editing in a checkout other sessions share, when a write or command is denied naming a holder, before running a build or test by hand, for dev servers and ports, for workspaces, tracker tickets and PR review, and when editing `devkit.toml`. Covers `devkit`, `devrun`, `ticket`, `workspace`, `devkit pr`, `lockm`, `portm`."
+allowed-tools: Bash(devkit:*), Bash(devrun:*), Bash(ticket:*), Bash(workspace:*), Bash(lockm:*), Bash(portm:*), Bash(rg:*), Bash(ast-grep:*), Glob, Grep, mcp__devkit__devkit_describe, mcp__devkit__devkit_call
 disable-model-invocation: false
 user-invocable: true
 ---
@@ -11,6 +11,8 @@ user-invocable: true
 `devkit` coordinates many concurrent local dev sessions, human and agent, on one machine. The engine is project-agnostic; every project-specific detail lives in `devkit.toml`.
 
 Every command spells two ways: `portm status` and `devkit ports status` run the same code, reachable through hardlinks `devkit install-links` creates. Each subcommand has `-h`, and when these docs and a `-h` disagree, the `-h` wins.
+
+A **workspace** is a branch's worktree, its ports and its PR. `workspace` sets one up, reports on it and retires it, `devkit pr` opens, ships and reviews its PR, and `ticket` writes and moves the tracker ticket it works on.
 
 Config keys resolve the same way. `devkit schema` prints the JSON Schema derived from the config types, so it holds every key's name, type and default. Dump it when a key is in question instead of trusting a reference doc to be current.
 
@@ -27,15 +29,17 @@ Before running a project build, profiling flow, or verification command by hand,
 | `references/tasks.md` | a `devrun task` needs an `--arg` or a multi-line value, hit a `require_live` gate, or you need to override its env |
 | `references/templates.md` | text for a tool devkit does not send to (a Linear update, a Jira comment, a release note), a branch or worktree named by the project's template, or a PR body or Slack message to read before it goes out |
 | `references/commit.md` | committing: named paths, part of a file, or a new message for the last commit, without disturbing what other sessions staged |
-| `references/issues.md` | starting an issue worktree, checking out a PR, shipping for review, tearing down |
+| `references/workspace.md` | starting a workspace for an issue or a slug, binding the checkout you were given, triage, tearing down |
+| `references/pr.md` | opening a PR, its text without opening it, attaching proof, checking out a PR to review, requesting or finishing review, forges |
+| `references/ticket.md` | writing a tracker ticket or its text for a tracker MCP, moving a ticket's status, the dashboard |
 | `references/config.md` | writing or changing a `devkit.toml`: how layers merge, reading a table's rules before editing it, checking the edit |
 | `references/rules.md` | rules injected on a write or at session start, `devkit rules query` or edits, injected rules missing or a rules warning on stderr, or rules kept in a SQLite store or the shared Postgres store |
 | `references/todo.md` | tracking work of three or more steps, a todo list in your context, claiming a todo as a sub-agent, a todo denied as in progress by another holder, or reporting subagent runs and held time |
 | `references/diagnostics.md` | a `devkit.toml` key's name, type or default is in question, a credential is missing, or you need `doctor` or `brief` |
 
-Global flags go **before** the subcommand (`issue -C ~/git/acme/app status`): `-C/--dir <path>` on `issue`/`devrun`/`portm`, `--config <file>` and `--timing[=trace]` / `--timing-log <FILE>` on `issue`/`devrun`.
+Global flags go **before** the subcommand (`workspace -C ~/git/acme/app status`): `-C/--dir <path>` on `ticket`/`workspace`/`devkit pr`/`devrun`/`portm`, `--config <file>` and `--timing[=trace]` / `--timing-log <FILE>` on `ticket`/`workspace`/`devkit pr`/`devrun`.
 
-`--help` through a pipe prints the command tree below the command asked about, one line per verb (`issue --help` covers `issue` alone); `-h` prints one command's flags and arguments. The tree drops a group's own options, so reach for `-h` when you need a flag.
+`--help` through a pipe prints the command tree below the command asked about, one line per verb (`workspace --help` covers `workspace` alone); `-h` prints one command's flags and arguments. The tree drops a group's own options, so reach for `-h` when you need a flag.
 
 ## Locks
 

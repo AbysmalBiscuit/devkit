@@ -157,7 +157,7 @@ for spec in "$@"; do
   mkdir -p "$label_dir/bin"
   printf '%s\n' "$checkout/plugin" > "$label_dir/plugin"
   printf '[user]\n\tname = eval\n\temail = eval@example.invalid\n' > "$label_dir/gitconfig"
-  for link in devkit issue devrun portm lockm docm devkit-mcp devrules; do
+  for link in devkit ticket workspace issue devrun portm lockm docm devkit-mcp devrules; do
     ln -s "$bin/devkit" "$label_dir/bin/$link"
   done
   [[ -x $bin/devkitd ]] && ln -s "$bin/devkitd" "$label_dir/bin/devkitd"

@@ -9,7 +9,7 @@ devkit schema                                  # JSON Schema for devkit.toml, to
 devkit schema init [<path>]                    # point a devkit.toml at the published schema
 ```
 
-`auth <linear|slack>` prompts without echo (or reads `--token` or piped stdin), validates the token against the live API, and stores it in `~/.config/devkit/secrets.toml` (`0600`). For Linear it also stores the workspace slug, so issue links work without `LINEAR_WORKSPACE`. Tokens always resolve env-first.
+`auth <linear|slack>` prompts without echo (or reads `--token` or piped stdin), validates the token against the live API, and stores it in `~/.config/devkit/secrets.toml` (`0600`). For Linear it also stores the organization's URL slug, so issue links work without the `LINEAR_WORKSPACE` variable. Tokens always resolve env-first.
 
 ## `config`
 
@@ -37,7 +37,7 @@ The plugin's `SessionStart` hook runs it so sessions start already knowing the p
 
 The plugin runs a full brief at `SessionStart`, and at `SubagentStart` under Claude Code and Codex, `--pins-only` at `PostCompact`, and `--if-changed` at `CwdChanged`. A subagent's brief leaves its session's `--if-changed` record alone.
 
-The library-versions section answers for the directory it runs in. At a workspace root it rolls up the members a JS lockfile names (cargo and uv keep members in a manifest, so they resolve per workspace), one row per version they resolve; where members disagree, both versions appear with the workspaces holding them, so an agent reads the right checkout for the app it is editing. A library the reference registry records a checkout for under this project shows even without lockfile evidence, sourced `resolved checkout`, and a checkout whose version is not the one the lockfile names is flagged `; checkout <version>`.
+The library-versions section answers for the directory it runs in. At a monorepo root it rolls up the members a JS lockfile names (cargo and uv keep members in a manifest, so they resolve per member), one row per version they resolve; where members disagree, both versions appear with the members holding them, so an agent reads the right checkout for the app it is editing. A library the reference registry records a checkout for under this project shows even without lockfile evidence, sourced `resolved checkout`, and a checkout whose version is not the one the lockfile names is flagged `; checkout <version>`.
 
 Which sections appear is config-driven: `[brief]` has `enabled`, `pins`, `locks`, `apps`, and `tasks` switches, all defaulting on. A section with nothing to report is omitted whatever its switch says; a switch turned off suppresses the section even when the checkout has something to put in it. Live servers this worktree holds are reported regardless of the `apps` switch — a bound port is a fact about the machine.
 
@@ -49,4 +49,4 @@ Each key's description in `devkit schema` names its env override where it has on
 
 ## Timing
 
-`issue` and `devrun` take a global `--timing` that prints a per-operation breakdown of subprocess and network IO to stderr on exit: count, total, max and p50 per op (`git fetch`, `github REST`, ...), plus wall time, IO-busy time and the concurrency the fan-outs reached. `--timing=trace` adds every op with its start offset, thread and command line; `--timing-log <FILE>` streams one JSON record per op for comparing runs. `DEVKIT_TIMING=summary|trace` does the same without the flag. stdout is never affected.
+`ticket`, `workspace`, `devkit pr` and `devrun` take a global `--timing` that prints a per-operation breakdown of subprocess and network IO to stderr on exit: count, total, max and p50 per op (`git fetch`, `github REST`, ...), plus wall time, IO-busy time and the concurrency the fan-outs reached. `--timing=trace` adds every op with its start offset, thread and command line; `--timing-log <FILE>` streams one JSON record per op for comparing runs. `DEVKIT_TIMING=summary|trace` does the same without the flag. stdout is never affected.

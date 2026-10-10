@@ -38,14 +38,14 @@ const RECORD_DEADLINE: Duration = Duration::from_millis(250);
 /// allowed. Logging that can change a verdict is worse than no logging.
 pub fn record(settings: &Settings, rec: &Record) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        record_faulted(settings, rec, env_fault());
+        record_faulted(settings, rec, env_fault(), env_deadline());
     }));
 }
 
-/// The fault knob is read here and passed down rather than reached for inside
-/// the worker, so a test injects one by argument. Reading the environment from
+/// The knobs are read here and passed down rather than reached for inside
+/// the worker, so a test injects them by argument. Reading the environment from
 /// two threads at once is what makes that the wrong seam.
-fn record_faulted(settings: &Settings, rec: &Record, fault: Option<String>) {
+fn record_faulted(settings: &Settings, rec: &Record, fault: Option<String>, deadline: Duration) {
     if !settings.enabled {
         return;
     }
@@ -58,7 +58,7 @@ fn record_faulted(settings: &Settings, rec: &Record, fault: Option<String>) {
     // `catch_unwind` makes this panic-safe, not block-safe, so the write runs
     // under its own deadline and a worker still blocked on the disk is
     // abandoned rather than waited on.
-    let _ = with_deadline(RECORD_DEADLINE, move || {
+    let _ = with_deadline(deadline, move || {
         inject(fault.as_deref());
         let path = file_for(
             &settings,
@@ -81,6 +81,25 @@ fn env_fault() -> Option<String> {
 #[cfg(not(debug_assertions))]
 fn env_fault() -> Option<String> {
     None
+}
+
+/// The debug-only deadline knob. A test that asserts a record landed sets
+/// `DEVKIT_HARNESS_LOG_DEADLINE_MS` well above [`RECORD_DEADLINE`], because a
+/// loaded CI runner (antivirus scanning a freshly created file on Windows) can
+/// take longer than that to create the day directory and open the file, and
+/// the process then exits with the abandoned worker's record unwritten. A
+/// release binary always uses [`RECORD_DEADLINE`].
+#[cfg(debug_assertions)]
+fn env_deadline() -> Duration {
+    std::env::var("DEVKIT_HARNESS_LOG_DEADLINE_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(RECORD_DEADLINE, Duration::from_millis)
+}
+
+#[cfg(not(debug_assertions))]
+fn env_deadline() -> Duration {
+    RECORD_DEADLINE
 }
 
 fn inject(fault: Option<&str>) {
@@ -309,7 +328,7 @@ mod tests {
     fn a_panic_inside_record_never_escapes() {
         let dir = tempfile::tempdir().unwrap();
         let s = settings_at(dir.path());
-        record_faulted(&s, &a_record(), Some("panic".into()));
+        record_faulted(&s, &a_record(), Some("panic".into()), RECORD_DEADLINE);
     }
 
     #[test]
@@ -317,7 +336,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = settings_at(dir.path());
         let start = std::time::Instant::now();
-        record_faulted(&s, &a_record(), Some("block".into()));
+        record_faulted(&s, &a_record(), Some("block".into()), RECORD_DEADLINE);
         let elapsed = start.elapsed();
         assert!(
             elapsed < Duration::from_secs(5),

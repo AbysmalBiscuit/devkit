@@ -82,12 +82,12 @@ echo "devkit $*" >>"$CURL_LOG"
 exit 0
 EOF
 chmod +x "${STALE}/devkit"
-for b in issue devrun portm lockm docm devkit-mcp; do
+for b in ticket workspace issue devrun portm lockm docm devkit-mcp; do
     printf '#!/usr/bin/env bash\n' >"${STALE}/${b}"
     chmod +x "${STALE}/${b}"
 done
 
-for b in issue devrun portm lockm docm devkit-mcp; do
+for b in ticket workspace issue devrun portm lockm docm devkit-mcp; do
     printf '#!/usr/bin/env bash\n' >"${BIN}/${b}"
     chmod +x "${BIN}/${b}"
 done

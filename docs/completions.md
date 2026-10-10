@@ -6,20 +6,21 @@
 devkit completions zsh  > ~/.zfunc/_devkit
 devrun completions zsh  > ~/.zfunc/_devrun
 docm completions zsh    > ~/.zfunc/_docm
-issue completions zsh   > ~/.zfunc/_issue
 lockm completions zsh   > ~/.zfunc/_lockm
 portm completions zsh   > ~/.zfunc/_portm
+ticket completions zsh  > ~/.zfunc/_ticket
+workspace completions zsh > ~/.zfunc/_workspace
 # bash:
-issue completions bash > ~/.local/share/bash-completion/completions/issue
+workspace completions bash > ~/.local/share/bash-completion/completions/workspace
 ```
 
 A nushell script defines a module and re-exports it, so save it to a file and `source` that file from `config.nu` rather than piping it in:
 
 ```nu
 mkdir ($nu.default-config-dir | path join completions)
-issue completions nushell | save -f ($nu.default-config-dir | path join completions issue.nu)
+workspace completions nushell | save -f ($nu.default-config-dir | path join completions workspace.nu)
 # then in config.nu:
-source ($nu.default-config-dir | path join completions issue.nu)
+source ($nu.default-config-dir | path join completions workspace.nu)
 ```
 
 ## One file for every name

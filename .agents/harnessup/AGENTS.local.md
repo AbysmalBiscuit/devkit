@@ -8,7 +8,7 @@ An implementation request authorizes the investigation, edits, tests, commits, p
 
 Resolve routine choices yourself and record each consequential assumption, with its reason, for the final report. Ask only when the answer would change scope or user-visible behaviour, and keep doing independent work while waiting; silence is not approval.
 
-Before starting an issue or feature, load the `cloud` skill to find existing work and pick a workflow. Work in the provided cloud checkout on its assigned branch; do not create worktrees. Start work on an issue with `issue setup --here <issue> --summary`, which binds this checkout to the issue so the PR closes it, and writes the issue summary.
+Before starting an issue or feature, load the `cloud` skill to find existing work and pick a workflow. Work in the provided cloud checkout on its assigned branch; do not create worktrees. Start work on an issue with `workspace setup --here <issue> --summary`, which binds this checkout to the issue so the PR closes it, and writes the issue summary.
 
 ## Progress ledger
 
@@ -24,7 +24,7 @@ Completion requires the requested behaviour, the checks `AGENTS.md` names passin
 
 Commit through `devkit commit`, which commits only what it names. Keep the files harnessup places at the repository root out of commits. Keep the author identity the environment configures, pass your model's name and email as `--coauthor`, then confirm the commit carries its `Co-authored-by` trailer.
 
-When the work is done, push and open the PR with `issue pr create`. It opens ready for review, not as a draft, because review bots skip drafts.
+When the work is done, push and open the PR with `devkit pr create`. It opens ready for review, not as a draft, because review bots skip drafts.
 
 # Standing preferences
 

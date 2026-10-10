@@ -60,6 +60,9 @@ fn run_argv(e: &Env, argv: &[&str], payload: &str) -> Output {
         .env_remove("DEVKIT_CONFIG")
         .env_remove("DEVKIT_HARNESS_LOG")
         .env_remove("DEVKIT_HARNESS_LOG_FAULT")
+        // These tests assert a record landed, so a slow runner must not trip the
+        // writer's production deadline and exit with the record unwritten.
+        .env("DEVKIT_HARNESS_LOG_DEADLINE_MS", "30000")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -91,9 +94,13 @@ fn records(dir: &Path) -> Vec<serde_json::Value> {
     out
 }
 
-fn sole_record(dir: &Path) -> serde_json::Value {
+fn sole_record(dir: &Path, verb: &str) -> serde_json::Value {
     let mut all = records(dir);
-    assert_eq!(all.len(), 1, "expected exactly one record, got {all:?}");
+    assert_eq!(
+        all.len(),
+        1,
+        "`hook {verb}`: expected exactly one record, got {all:?}"
+    );
     all.remove(0)
 }
 
@@ -160,7 +167,7 @@ fn each_verb_writes_the_kind_its_table_row_names() {
             String::from_utf8_lossy(&out.stdout)
         );
         assert_eq!(out.status.code(), Some(0), "{verb}");
-        let rec = sole_record(&e.log_dir());
+        let rec = sole_record(&e.log_dir(), verb);
         assert_eq!(rec["kind"], kind, "{verb}");
         assert_eq!(rec["event"], verb, "{verb}");
         assert_eq!(rec["vendor_event"], verb, "{verb}: the payload's own name");
@@ -178,7 +185,7 @@ fn a_session_frame_names_which_end_it_is_and_whose() {
     ] {
         clear_records(&e.log_dir());
         run_argv(&e, &["hook", verb], &payload_for(&e, verb));
-        let rec = sole_record(&e.log_dir());
+        let rec = sole_record(&e.log_dir(), verb);
         assert_eq!(rec["end"], end, "{verb}");
         assert_eq!(rec["subagent"], subagent, "{verb}");
     }
@@ -192,7 +199,10 @@ fn a_permission_record_separates_an_ask_from_a_block() {
         &["hook", "permission-request"],
         &payload_for(&e, "permission-request"),
     );
-    assert_eq!(sole_record(&e.log_dir())["blocked"], false);
+    assert_eq!(
+        sole_record(&e.log_dir(), "permission-request")["blocked"],
+        false
+    );
 
     clear_records(&e.log_dir());
     run_argv(
@@ -200,7 +210,7 @@ fn a_permission_record_separates_an_ask_from_a_block() {
         &["hook", "permission-denied"],
         &payload_for(&e, "permission-denied"),
     );
-    let rec = sole_record(&e.log_dir());
+    let rec = sole_record(&e.log_dir(), "permission-denied");
     assert_eq!(rec["blocked"], true);
     assert_eq!(rec["detail"], "not on the allowlist");
 }
@@ -213,7 +223,7 @@ fn a_worktree_record_names_which_way_it_moved() {
         &["hook", "worktree-remove"],
         &payload_for(&e, "worktree-remove"),
     );
-    let rec = sole_record(&e.log_dir());
+    let rec = sole_record(&e.log_dir(), "worktree-remove");
     assert_eq!(rec["change"], "remove");
     assert_eq!(rec["path"], "/tmp/wt");
 }
@@ -226,7 +236,7 @@ fn a_prompt_is_not_recorded_at_the_default_fidelity() {
         &["hook", "user-prompt-submit"],
         &payload_for(&e, "user-prompt-submit"),
     );
-    let rec = sole_record(&e.log_dir());
+    let rec = sole_record(&e.log_dir(), "user-prompt-submit");
     assert_eq!(rec["kind"], "prompt");
     assert!(
         rec["text"].is_null(),
@@ -243,7 +253,10 @@ fn a_prompt_is_recorded_when_the_global_config_asks_for_it() {
         &["hook", "user-prompt-submit"],
         &payload_for(&e, "user-prompt-submit"),
     );
-    assert_eq!(sole_record(&e.log_dir())["text"], "my secret plan");
+    assert_eq!(
+        sole_record(&e.log_dir(), "user-prompt-submit")["text"],
+        "my secret plan"
+    );
 }
 
 /// Codex's post payload exposes `tool_response` as output text rather than a
@@ -262,7 +275,7 @@ fn a_shell_post_carries_absent_rather_than_zero_for_what_codex_omits() {
     })
     .to_string();
     run_argv(&e, &["hook", "post-tool-use"], &codex);
-    let rec = sole_record(&e.log_dir());
+    let rec = sole_record(&e.log_dir(), "post-tool-use");
     assert!(rec["exit_code"].is_null(), "Codex sends no exit code");
     assert_eq!(rec["stdout_bytes"], 16);
     assert_eq!(rec["tool_use_id"], "u1", "so a pre record can join to it");
@@ -276,7 +289,7 @@ fn a_claude_code_post_carries_the_exit_code_it_sends() {
         &["hook", "post-tool-use"],
         &payload_for(&e, "post-tool-use"),
     );
-    let rec = sole_record(&e.log_dir());
+    let rec = sole_record(&e.log_dir(), "post-tool-use");
     assert_eq!(rec["exit_code"], 0);
     assert_eq!(rec["stdout_bytes"], 5);
 }
@@ -291,7 +304,10 @@ fn the_failure_verb_records_an_error() {
         &["hook", "post-tool-use-failure"],
         &payload_for(&e, "post-tool-use-failure"),
     );
-    assert_eq!(sole_record(&e.log_dir())["error"], true);
+    assert_eq!(
+        sole_record(&e.log_dir(), "post-tool-use-failure")["error"],
+        true
+    );
 }
 
 #[test]
@@ -313,7 +329,7 @@ fn a_verb_with_no_payload_still_lands_a_record() {
     let out = run_argv(&e, &["hook", "stop"], "");
     assert_eq!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty());
-    let rec = sole_record(&e.log_dir());
+    let rec = sole_record(&e.log_dir(), "stop");
     assert_eq!(rec["kind"], "lifecycle");
     assert!(rec["session_id"].is_null());
     assert!(rec["vendor_event"].is_null());
@@ -343,7 +359,7 @@ fn session_end_sweeps_after_it_records() {
     assert!(out.stdout.is_empty(), "a release event emits no decision");
     assert!(!old.exists(), "the sweep ran");
     assert_eq!(
-        sole_record(&e.log_dir())["kind"],
+        sole_record(&e.log_dir(), "session-end")["kind"],
         "session",
         "and its own record survived it"
     );
