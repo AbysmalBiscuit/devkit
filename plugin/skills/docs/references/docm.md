@@ -19,7 +19,7 @@ docm prune                        # drop checkouts no live project references
 
 ## Version resolution
 
-A manual `ref` pin wins. Otherwise the requesting workspace's own dependency graph (`Cargo.lock`, `pnpm-lock.yaml`, `package-lock.json`, `bun.lock`, `uv.lock`) is matched against the repository's git tags.
+A manual `ref` pin wins. Otherwise the requesting package's own dependency graph (`Cargo.lock`, `pnpm-lock.yaml`, `package-lock.json`, `bun.lock`, `uv.lock`) is matched against the repository's git tags.
 
 Only a registry install resolves this way, because a version number identifies upstream's code only when the lockfile says it came from the registry the repository publishes to. A git, path, workspace, link or archive dependency is refused by name and needs `--ref`. A remote tarball is judged by the spec that declares it, since npm records the same `resolved` URL for a tarball from the registry host as for an ordinary range.
 

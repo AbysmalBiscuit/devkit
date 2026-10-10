@@ -24,7 +24,7 @@ Every stderr line `docm` prints is a hard stop: read and understand it before do
 ## Steps
 
 1. Match the software the question is about against the listing above. If it is missing there, go to **Registering software**.
-2. Run `docm info <lib>`. It resolves the checkout from the requesting workspace's own manifest and lockfile, not a bare version match: `commit` in the output is the proof of what is checked out, the printed `version` string is not. The output also maps the layout (docs/src/examples dirs, doc system) and carries any notes. The first resolution of a new ref fetches that commit's files and takes a few seconds.
+2. Run `docm info <lib>`. It resolves the checkout from the requesting package's own manifest and lockfile, not a bare version match: `commit` in the output is the proof of what is checked out, the printed `version` string is not. The output also maps the layout (docs/src/examples dirs, doc system) and carries any notes. The first resolution of a new ref fetches that commit's files and takes a few seconds.
 3. Search only under the printed path: the docs dir for guides and concepts, the source dir for API ground truth, examples for usage patterns. Grep and Glob always work. Where they are on PATH, prefer `rg` for multiline patterns and wide context, and `ast-grep -p` when the match depends on code structure rather than text (a signature's shape, a call's arguments).
 4. Answer with `file:line` citations relative to the checkout.
 
@@ -32,7 +32,7 @@ Every stderr line `docm` prints is a hard stop: read and understand it before do
 
 `docm list --project` is filtered to this project, so absence there means "not evidenced in this checkout", not "unregistered". Run `docm list` unfiltered before concluding anything is missing.
 
-Genuinely absent: `docm add <package>` (registry lookup) or `docm add <git-url>`, always with `--notes "<workspace>: <why this version>"` naming the workspace whose manifest or lockfile the version came from. `--project` edits the repo's devkit.toml, so ask the human before adding with it.
+Genuinely absent: `docm add <package>` (registry lookup) or `docm add <git-url>`, always with `--notes "<requesting package>: <why this version>"` naming the package whose manifest or lockfile the version came from. `--project` edits the repo's devkit.toml, so ask the human before adding with it.
 
 ## Rules
 
