@@ -198,7 +198,7 @@ enum Cmd {
     /// of devkit's ignore patterns (`.devkit/`, `*.local`, `*.local.*`) that
     /// git's global excludes file lacks, leaving its other lines as they are.
     Install(links::InstallLinksArgs),
-    /// Install the old command names as hardlinks beside this binary.
+    /// Install the command names as hardlinks beside this binary.
     ///
     /// Creates hardlinks such as `ticket` and `devrun` beside this
     /// executable.
