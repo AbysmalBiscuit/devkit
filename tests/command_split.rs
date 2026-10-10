@@ -123,14 +123,26 @@ fn no_verb_help_names_the_issue_alias() {
             assert!(out.status.success(), "{}: {help}", args.join(" "));
             for verb in OLD_VERBS {
                 assert!(
-                    !help.contains(&format!("issue {verb} "))
-                        && !help.contains(&format!("issue {verb}`")),
+                    !names_issue_verb(&help, verb),
                     "`devkit {}` names `issue {verb}`: {help}",
                     args.join(" ")
                 );
             }
         }
     }
+}
+
+/// Whether `text` spells `issue <verb>` as a whole command word, so
+/// `issue pr` matches at the end of a line or before punctuation while
+/// `issue prs` and `issue pr-x` do not.
+fn names_issue_verb(text: &str, verb: &str) -> bool {
+    let needle = format!("issue {verb}");
+    text.match_indices(&needle).any(|(at, _)| {
+        text[at + needle.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '-')
+    })
 }
 
 /// The `ticket` and `workspace` links parse as their own roots.
