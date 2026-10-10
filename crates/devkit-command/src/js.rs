@@ -828,6 +828,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         script_args: Vec::new(),
                         base: Some(at),
                         cwd: scope.cwd.clone(),
+                        search_path: self.frame.search_path.clone(),
                     }),
                     _ => self.unresolved(node, "a shell command that could not be determined"),
                 }
@@ -903,6 +904,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 words,
                 stdin: Stdin::None,
                 cwd,
+                path: None,
                 language: Language::JavaScript,
                 location: self.at(node),
             },

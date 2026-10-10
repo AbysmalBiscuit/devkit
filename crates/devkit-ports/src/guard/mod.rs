@@ -11,7 +11,7 @@ use std::{
     path::Path,
 };
 
-use devkit_command::{Analysis, Invocation, Value};
+use devkit_command::{Analysis, Invocation, SearchPath, Value};
 use devkit_common::{caller::Caller, shim::OwnBinary};
 use devkit_config::{
     AppMatch, CommandRule, Config, RuleAction, RunAction, RunArg, Severity, wildcard_matches,
@@ -142,10 +142,14 @@ pub fn decide(
 ) -> Verdict {
     let mut verdict = Verdict::default();
     for inv in &analysis.invocations {
-        let own_binary = inv
-            .program
-            .known()
-            .is_some_and(|p| own.runs(p, inv.cwd.as_deref().map(Path::new)));
+        let own_binary = inv.program.known().is_some_and(|p| {
+            let cwd = inv.cwd.as_deref().map(Path::new);
+            match &inv.search_path {
+                SearchPath::Inherited => own.runs(p, cwd),
+                SearchPath::Set(Value::Known(path)) => own.on_path(path.into()).runs(p, cwd),
+                SearchPath::Set(Value::Unknown | Value::Ephemeral(_) | Value::Within(_)) => false,
+            }
+        });
         let typed = inv.typed.join(" ");
         let mut undetermined = false;
         for (name, rule) in rules
@@ -758,6 +762,58 @@ mod tests {
         assert_eq!(verdict_own("ticket create", &r, &on_path).blocks.len(), 1);
         let by_path = format!("'{}' create", slashed(&foreign));
         assert_eq!(verdict_own(&by_path, &r, &own).blocks.len(), 1);
+    }
+
+    /// A command that sets `PATH` for the program looks the name up there, not
+    /// on the hook's own `PATH`.
+    #[test]
+    fn a_shim_name_resolves_on_the_path_the_invocation_sets() {
+        let r = rules(&["ticket"], "not devkit's ticket");
+        let (own_dir, own) = own_links(&["ticket"]);
+        let foreign_dir = tempfile::tempdir().unwrap();
+        std::fs::write(foreign_dir.path().join(shim_file_name("ticket")), "foreign").unwrap();
+        let foreign = slashed(foreign_dir.path());
+        for command in [
+            format!("PATH='{foreign}' ticket create"),
+            format!("env PATH='{foreign}' ticket create"),
+            format!("export PATH='{foreign}'; ticket create"),
+            format!("PATH='{foreign}' bash -c 'ticket create'"),
+        ] {
+            assert_eq!(verdict_own(&command, &r, &own).blocks.len(), 1, "{command}");
+        }
+
+        let on_foreign = OwnBinary::new(
+            std::env::current_exe().unwrap(),
+            Some(foreign_dir.path().as_os_str().to_owned()),
+        );
+        let into_own = format!("env PATH='{}' ticket create", slashed(own_dir.path()));
+        assert!(
+            verdict_own(&into_own, &r, &on_foreign).blocks.is_empty(),
+            "{into_own}"
+        );
+    }
+
+    /// A `PATH` the guard cannot read, or a wrapper that rewrites it, leaves
+    /// the name unresolved, so it is checked like any other program.
+    #[test]
+    fn a_shim_name_under_an_unevaluated_path_change_is_gated() {
+        let r = rules(&["ticket"], "not devkit's ticket");
+        let (_own_dir, own) = own_links(&["ticket"]);
+        for command in [
+            "PATH=\"$HOME/bin:$PATH\" ticket create",
+            "env -i ticket create",
+            "env -u PATH ticket create",
+            "sudo ticket create",
+            "npx ticket create",
+            "command -p ticket create",
+        ] {
+            assert_eq!(verdict_own(command, &r, &own).blocks.len(), 1, "{command}");
+        }
+        assert!(
+            verdict_own("nohup env FOO=1 ticket create", &r, &own)
+                .blocks
+                .is_empty()
+        );
     }
 
     /// A relative program path runs from the directory the command has moved

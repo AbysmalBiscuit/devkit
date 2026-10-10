@@ -133,6 +133,16 @@ impl OwnBinary {
         }
     }
 
+    /// The same binary, judging names against `search_path` in place of the
+    /// `PATH` it was built with, as a command that sets its own `PATH` runs
+    /// them.
+    pub fn on_path(&self, search_path: OsString) -> Self {
+        OwnBinary {
+            exe: self.exe.clone(),
+            search_path: Some(search_path),
+        }
+    }
+
     /// Whether `program`, run from `cwd`, is devkit itself or one of the names
     /// it installs, resolving to this binary. A shim name is judged by the
     /// file it resolves to, the same-file check `devkit install-links` uses
@@ -158,7 +168,8 @@ impl OwnBinary {
 
     /// The file `program` runs: itself when it names a path, or on Windows
     /// that path with `.exe` when only that exists, else the first `PATH`
-    /// entry holding it.
+    /// entry holding it. A relative `PATH` entry, the empty one included, is
+    /// a directory under `cwd`, and with `cwd` unknown it holds nothing.
     fn resolve(&self, program: &str, cwd: Option<&Path>) -> Option<PathBuf> {
         if program.contains(['/', '\\']) {
             let path = Path::new(program);
@@ -174,6 +185,10 @@ impl OwnBinary {
         }
         let file = shim_file_name(windows_stem(program));
         std::env::split_paths(self.search_path.as_ref()?)
+            .filter_map(|dir| match dir.is_absolute() {
+                true => Some(dir),
+                false => cwd.map(|cwd| cwd.join(dir)),
+            })
             .map(|dir| dir.join(&file))
             .find(|candidate| candidate.is_file())
     }

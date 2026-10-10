@@ -1113,6 +1113,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             script_args: scope.argv.clone().unwrap_or_default(),
                             base: Some(self.at(node)),
                             cwd: scope.cwd.clone(),
+                            search_path: self.frame.search_path.clone(),
                         };
                         self.a.source(Language::Python, &source, child);
                         Py::Unknown
@@ -1526,6 +1527,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     script_args: Vec::new(),
                     base: Some(self.at(node)),
                     cwd: scope.cwd.clone(),
+                    search_path: self.frame.search_path.clone(),
                 };
                 self.a.source(Language::Bash, source, child);
             }
@@ -1589,6 +1591,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 words,
                 stdin: Stdin::None,
                 cwd,
+                path: None,
                 language: Language::Python,
                 location: self.at(node),
             },

@@ -479,6 +479,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     span: here.byte_range(),
                 },
                 cwd: scope.cwd.clone(),
+                path: None,
                 language: Language::PowerShell,
                 location: self.at(root),
             },
@@ -495,6 +496,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     script_args: Vec::new(),
                     base: Some(self.at(root)),
                     cwd: scope.cwd.clone(),
+                    search_path: self.frame.search_path.clone(),
                 });
         }
         true
@@ -657,6 +659,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 words,
                 stdin: Stdin::None,
                 cwd: scope.cwd.clone(),
+                path: None,
                 language: Language::PowerShell,
                 location: self.at(node),
             },
@@ -1238,6 +1241,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     words,
                     stdin,
                     cwd: scope.cwd.clone(),
+                    path: None,
                     language: Language::PowerShell,
                     location: at,
                 },
@@ -1388,6 +1392,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     script_args: Vec::new(),
                     base: Some(self.at(node)),
                     cwd: scope.cwd.clone(),
+                    search_path: self.frame.search_path.clone(),
                 }),
                 _ => self.a.uncertain(
                     UncertaintyKind::UnresolvedWrite,
