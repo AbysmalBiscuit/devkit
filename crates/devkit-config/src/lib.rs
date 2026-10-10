@@ -649,9 +649,9 @@ pub struct HooksConfig {
     /// kept back or skipped fires nothing.
     pub before_worktree_remove: Vec<Vec<String>>,
 
-    /// Runs once per worktree `workspace end` removed, after every removal in the
-    /// run has finished, in the main repository root. `ticket`, `slug` and
-    /// `apps` come from the `.devkit/issue.toml` record read before the
+    /// Runs once per worktree `workspace end` removed, after every removal in
+    /// the run has finished, in the main repository root. `ticket`, `slug`
+    /// and `apps` come from the `.devkit/issue.toml` record read before the
     /// removal. Rendered over `worktree`, `branch`, `ticket` (also named
     /// `issue`), `slug`, `apps`, `prefix`, `worktree_root`, `primary`, and
     /// `[templates.variables]`. A worktree kept back or skipped fires nothing.
@@ -686,12 +686,12 @@ pub struct HooksConfig {
 /// # let cfg = Config::parse(r#"
 /// [preserve.scratch]
 /// from     = [".scratch/"]
-/// to       = "{{ worktree_root }}/archive/{{ issue }}/scratch"
+/// to       = "{{ worktree_root }}/archive/{{ ticket }}/scratch"
 /// required = true
 ///
 /// [preserve.notes]
 /// from = ["docs/notes/*.md"]
-/// to   = "{{ primary }}/.devkit/archive/{{ issue }}"
+/// to   = "{{ primary }}/.devkit/archive/{{ ticket }}"
 /// # "#).unwrap();
 /// # assert!(cfg.preserve["scratch"].required);
 /// # assert!(!cfg.preserve["notes"].required);
@@ -724,7 +724,7 @@ pub struct PreserveConfig {
     /// `..` or case difference does not slip past. Created when the first
     /// file lands. An existing file there is truncated and rewritten, so an
     /// interrupted copy leaves a short file. Two worktrees writing one
-    /// filename into the same `to` collide; render `{{ issue }}` into it.
+    /// filename into the same `to` collide; render `{{ ticket }}` into it.
     pub to: String,
     /// Keep the worktree, its branch and its summary when this entry warns,
     /// and exit non-zero. Governs errors only, never an empty match.
@@ -1753,7 +1753,7 @@ impl From<&str> for RunArg {
 /// env = { NITRO_PRESET = "node-server" }
 ///
 /// [tasks.commit]
-/// run = ["git", "commit", "-m", "{% if issue is defined %}{{ issue }}: {% endif %}{{ msg }}"]
+/// run = ["git", "commit", "-m", "{% if ticket is defined %}{{ ticket }}: {% endif %}{{ msg }}"]
 /// guard = true            # redirect an agent's own `git commit` here
 ///
 /// [tasks.profile-lab-os]
@@ -1858,9 +1858,9 @@ pub const DEFAULT_COMMIT_MESSAGE: &str = r#"{{- subject | trim }}
 Co-authored-by: {{ c }}
 {%- endfor %}
 {%- endif %}"#;
-pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md";
+pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ ticket }}.md";
 pub const DEFAULT_ISSUE_SUMMARY: &str = "\
-# {{ issue }}: {{ title }}\n\
+# {{ ticket }}: {{ title }}\n\
 \n\
 - **Issue:** {{ url }}\n\
 {% if parent %}- **Parent:** {{ parent }}\n{% endif %}\
@@ -2014,18 +2014,18 @@ impl From<&str> for VariableDecl {
 /// # use devkit_config::Config;
 /// # let cfg = Config::parse(r#"
 /// [templates]
-/// branch             = "{{ prefix }}{{ issue }}-{{ slug }}"
+/// branch             = "{{ prefix }}{{ ticket }}-{{ slug }}"
 /// worktree_dir       = "{{ slug }}"
-/// pr_title           = "{{ issue }}: {{ input }}"
-/// pr_body            = "Closes {{ issue }}.\n\n{{ input }}"
+/// pr_title           = "{{ ticket }}: {{ input }}"
+/// pr_body            = "Closes {{ ticket }}.\n\n{{ input }}"
 /// issue_summary_path = "{{ worktree }}/.devkit/issue.md"
 ///
 /// [templates.variables]
 /// team = "platform"
 /// # "#).unwrap();
 /// # let t = &cfg.templates;
-/// # assert_eq!(t.branch(), "{{ prefix }}{{ issue }}-{{ slug }}");
-/// # assert_eq!(t.pr_body(), "Closes {{ issue }}.\n\n{{ input }}");
+/// # assert_eq!(t.branch(), "{{ prefix }}{{ ticket }}-{{ slug }}");
+/// # assert_eq!(t.pr_body(), "Closes {{ ticket }}.\n\n{{ input }}");
 /// # assert_eq!(t.worktree_dir_max(), 24);
 /// # assert_eq!(t.variables["team"].default_value(), Some("platform"));
 /// ```
@@ -2108,14 +2108,14 @@ pub struct Templates {
     /// relative path is taken from `defaults.worktree_root`, so the file
     /// sits beside the worktree and outlives it, and is refused when there
     /// is no `worktree_root`. Context: the `issue_summary` context below.
-    /// Defaults to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md`:
+    /// Defaults to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ ticket }}.md`:
     /// inside the worktree, or the checkout `workspace setup --here` binds,
     /// where it stays untracked and goes when `workspace end` removes the
     /// worktree.
     pub issue_summary_path: Option<String>,
-    /// Body of the file `workspace setup --summary` writes when the tracker keeps
-    /// no summary of its own; a GitHub issue's non-empty body is written
-    /// verbatim instead. Context: `ticket` (also named `issue`),
+    /// Body of the file `workspace setup --summary` writes when the tracker
+    /// keeps no summary of its own; a GitHub issue's non-empty body is
+    /// written verbatim instead. Context: `ticket` (also named `issue`),
     /// `title`, `url`, `description`, `state`, `assignee`, `priority`,
     /// `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,
     /// `prefix`, `apps`. A field the tracker left empty renders as the empty
