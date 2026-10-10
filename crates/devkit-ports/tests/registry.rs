@@ -8,8 +8,8 @@ fn main_like() {}
 fn concurrent_alloc_never_collides() {
     // Use this test binary itself as the worker via an env switch.
     if let Ok(holder) = std::env::var("DEVKIT_TEST_ALLOC") {
-        let port =
-            registry::with_lock(|d| Ok(d.alloc_one(&holder, "api", 9100, Role::Issue))).unwrap();
+        let port = registry::with_lock(|d| Ok(d.alloc_one(&holder, "api", 9100, Role::Workspace)))
+            .unwrap();
         print!("{port}");
         std::process::exit(0);
     }

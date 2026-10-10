@@ -456,3 +456,76 @@ fn render_refuses_the_commit_message_flags_for_other_templates() {
         );
     }
 }
+
+/// A branch template reads the worktree's ticket as `ticket` and, by its old
+/// name, as `issue`, both when `devkit template render` renders it and when
+/// `issue setup` names the branch it creates.
+#[test]
+fn branch_templates_read_the_ticket_by_either_name() {
+    let branch = "{{ prefix }}{{ ticket | lower }}-{{ issue | lower }}-{{ slug }}";
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        format!("{CONFIG}\n[templates.custom.unused]\nbody = \"x\"\n").replace(
+            "[templates]\n",
+            &format!("[templates]\nbranch = \"{branch}\"\n"),
+        ),
+    )
+    .unwrap();
+    let out = run(dir.path(), &["render", "branch"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(stdout(&out), "x/eng-1-eng-1-fix");
+
+    let fake = ghfake::Fake::without_pr(&format!(
+        "[tracker]\nkind = \"github\"\n\n[templates]\nbranch = \"{branch}\"\n"
+    ));
+    let origin = tempfile::tempdir().unwrap();
+    let git = |cwd: &Path, args: &[&str]| {
+        devkit_git::Git::fixture(cwd)
+            .args(args.iter().copied())
+            .output()
+            .unwrap()
+    };
+    git(origin.path(), &["init", "-q", "--bare"]);
+    git(fake.project(), &[
+        "remote",
+        "add",
+        "origin",
+        origin.path().to_str().unwrap(),
+    ]);
+    git(fake.project(), &["push", "-q", "origin", "HEAD:main"]);
+
+    let out = fake.issue(&["setup", "65", "--slug", "fix", "--no-gitignore"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["branch"], "lev/65-65-fix", "{json}");
+}
+
+/// This repository's own `pr_body` keys its closing line on
+/// `ticket_magic_word`, and `issue_magic_word`, its old name, still sets it.
+#[test]
+fn the_magic_word_renders_by_either_name() {
+    let config = concat!(env!("CARGO_MANIFEST_DIR"), "/devkit.toml");
+    let dir = setup();
+    let body = |args: &[&str]| {
+        let argv: Vec<&str> = ["render", "pr_body", "--config", config, "--arg", "input=x"]
+            .iter()
+            .chain(args)
+            .copied()
+            .collect();
+        let out = devkit(dir.path(), "human")
+            .args(&argv)
+            .output()
+            .expect("run devkit");
+        assert!(out.status.success(), "{out:?}");
+        stdout(&out)
+    };
+    assert!(body(&[]).contains("\nCloses ENG-1\n"), "{}", body(&[]));
+    for name in ["ticket_magic_word", "issue_magic_word"] {
+        let text = body(&["--arg", &format!("{name}=Refs")]);
+        assert!(text.contains("\nRefs ENG-1\n"), "{name}: {text}");
+    }
+    let text = body(&["--arg", "ticket=12"]);
+    assert!(text.contains("\nCloses #12\n"), "{text}");
+}

@@ -175,7 +175,7 @@ fn task_seq_dry_run_renders_up_step_plan() {
     // presence proves the up step went through the same rendering as
     // `up --dry-run` rather than the old one-line summary.
     assert!(
-        stdout.contains("[issue] api :") && stdout.contains("log:"),
+        stdout.contains("[workspace] api :") && stdout.contains("log:"),
         "up step must render the same [role] app :port / cwd / argv / env / log \
          plan that `up --dry-run` prints: {stdout}"
     );

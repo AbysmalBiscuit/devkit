@@ -22,6 +22,7 @@ fn context(
     apps: &[String],
 ) -> serde_json::Value {
     serde_json::json!({
+        "ticket": d.id,
         "issue": d.id,
         "title": d.title,
         "url": d.url,

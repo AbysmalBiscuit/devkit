@@ -225,7 +225,7 @@
     },
     "CustomTemplate": {
       "additionalProperties": false,
-      "description": "One `[templates.custom]` entry: a template a project writes once and an\nagent renders with `devkit template render <name> --arg key=value`. It\nreads `[templates.variables]` like every other template, plus `branch`,\nand `issue`, `slug` and `apps` from the worktree's `.devkit/issue.toml`.\n\n```toml\n[templates.custom.standup]\ndescription = \"Daily update for #eng-standup\"\nbody = \"\"\"\n**Yesterday:** {{ yesterday }}\n**Today:** {{ today }}\n{% if blockers %}**Blocked on:** {{ blockers }}{% endif %}\n\"\"\"\n\n[templates.variables]\nyesterday = { required = \"always\", description = \"what shipped, one line per item\" }\ntoday = { required = \"always\" }\nblockers = { default = \"\" }\n```",
+      "description": "One `[templates.custom]` entry: a template a project writes once and an\nagent renders with `devkit template render <name> --arg key=value`. It\nreads `[templates.variables]` like every other template, plus `branch`,\nand `ticket` (also named `issue`), `slug` and `apps` from the worktree's\n`.devkit/issue.toml`.\n\n```toml\n[templates.custom.standup]\ndescription = \"Daily update for #eng-standup\"\nbody = \"\"\"\n**Yesterday:** {{ yesterday }}\n**Today:** {{ today }}\n{% if blockers %}**Blocked on:** {{ blockers }}{% endif %}\n\"\"\"\n\n[templates.variables]\nyesterday = { required = \"always\", description = \"what shipped, one line per item\" }\ntoday = { required = \"always\" }\nblockers = { default = \"\" }\n```",
       "properties": {
         "body": {
           "description": "The minijinja source. Rendering is strict: a variable nothing supplies\nis an error, and a trailing newline is kept.",
@@ -579,7 +579,7 @@
     },
     "GithubConfig": {
       "additionalProperties": false,
-      "description": "Which GitHub repository holds this project's issues, for the GitHub\ntracker, and which Projects v2 project holds their status for\n`[issue.events]`. The repository pull requests go to is `[forge] repo`,\nsince a project on any forge has one.\n\nUnknown keys are refused: a misspelled `issue_repo` ignored would default\nfrom `origin` and query another repository's issues.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\nproject = \"org/3\"\nstatus_field = \"Status\"\n```",
+      "description": "Which GitHub repository holds this project's issues, for the GitHub\ntracker, and which Projects v2 project holds their status for\n`[ticket.events]`. The repository pull requests go to is `[forge] repo`,\nsince a project on any forge has one.\n\nUnknown keys are refused: a misspelled `issue_repo` ignored would default\nfrom `origin` and query another repository's issues.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\nproject = \"org/3\"\nstatus_field = \"Status\"\n```",
       "properties": {
         "issues_repo": {
           "default": null,
@@ -604,7 +604,7 @@
             }
           ],
           "default": null,
-          "description": "The Projects v2 project whose single-select field holds the issues'\nstatus, which `[issue.events]` moves under the GitHub tracker:\n`\"owner/N\"`, or a bare `N` owned by `issues_repo`'s owner. Without it,\na GitHub tracker's events fail naming this key."
+          "description": "The Projects v2 project whose single-select field holds the issues'\nstatus, which `[ticket.events]` moves under the GitHub tracker:\n`\"owner/N\"`, or a bare `N` owned by `issues_repo`'s owner. Without it,\na GitHub tracker's events fail naming this key."
         },
         "status_field": {
           "default": null,
@@ -739,7 +739,7 @@
         },
         "after_worktree_create": {
           "default": [],
-          "description": "Runs once in the root of a worktree `workspace setup` or\n`pr checkout` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `issue`, `slug`,\n`apps`, `prefix`, `role`, and `[templates.variables]`. Output is\ndiscarded, so the command's JSON stays the last line on stdout.",
+          "description": "Runs once in the root of a worktree `workspace setup` or\n`pr checkout` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `ticket` (also named\n`issue`), `slug`, `apps`, `prefix`, `role`, and `[templates.variables]`.\nOutput is discarded, so the command's JSON stays the last line on\nstdout.",
           "items": {
             "items": {
               "type": "string"
@@ -750,7 +750,7 @@
         },
         "after_worktree_remove": {
           "default": [],
-          "description": "Runs once per worktree `workspace end` removed, after every removal in\nthe run has finished, in the main repository root. `issue`, `slug`\nand `apps` come from the `.devkit/issue.toml` record read before the\nremoval. Rendered over `worktree`, `branch`, `issue`, `slug`, `apps`,\n`prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A\nworktree kept back or skipped fires nothing. Runs after the run's\nsummary, so a failing hook never un-reports a removal, and is skipped\nwith a warning when the main repository root does not resolve.",
+          "description": "Runs once per worktree `workspace end` removed, after every removal in\nthe run has finished, in the main repository root. `ticket`, `slug`\nand `apps` come from the `.devkit/issue.toml` record read before the\nremoval. Rendered over `worktree`, `branch`, `ticket` (also named\n`issue`), `slug`, `apps`, `prefix`, `worktree_root`, `primary`, and\n`[templates.variables]`. A worktree kept back or skipped fires nothing.\nRuns after the run's summary, so a failing hook never un-reports a\nremoval, and is skipped with a warning when the main repository root\ndoes not resolve.",
           "items": {
             "items": {
               "type": "string"
@@ -769,65 +769,6 @@
             "type": "array"
           },
           "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "IssueConfig": {
-      "additionalProperties": false,
-      "description": "The `[issue]` table. Each event moves the issue's status (a Linear state,\nor `[github] status_field`) from a `from` status to `to`; an event with no\ntable does nothing. The statuses name one board, so keep the events in the\nrepository's `devkit.toml`: tables merge key by key across layers.\n\n```toml\n[issue.events.setup]\nto = \"Todo\"\n\n[issue.events.start]\nfrom = [\"\", \"Todo\", \"Backlog\"]\nto = \"In progress\"\n\n[issue.events.pr_open]\nto = \"In review\"\n\n[github]\nproject = 3            # or \"some-org/7\"\nstatus_field = \"Status\"\n```",
-      "properties": {
-        "events": {
-          "$ref": "#/$defs/IssueEventsConfig",
-          "default": {
-            "pr_open": null,
-            "setup": null,
-            "start": null
-          },
-          "description": "Status moves, keyed by the event that fires them. The event names are\nfixed, so a misspelled one is a parse error."
-        }
-      },
-      "type": "object"
-    },
-    "IssueEventsConfig": {
-      "additionalProperties": false,
-      "description": "One optional status move per event.",
-      "properties": {
-        "pr_open": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EventTransition"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Fired by `pr create`, whether it opened the PR or found one open.\nA failed move warns and the PR stays as it is."
-        },
-        "setup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EventTransition"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Fired by `workspace setup` as its last step, after the\n`after_worktree_create` hooks. A failed move warns and setup succeeds."
-        },
-        "start": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EventTransition"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Fired by the first agent session in a worktree `workspace setup`\ncreated, once per worktree, in the background. `pr checkout`\nworktrees never fire it. List the states work starts from in `from`:\n`[\"*\"]` lets a second worktree pull an issue back from review."
         }
       },
       "type": "object"
@@ -1127,7 +1068,7 @@
       "description": "A file written into an app's directory during `workspace setup`, before the\napp's `setup` commands run. Parent directories are created. Existing files\nare left untouched unless `overwrite` is set.\n\n```toml\n[apps.web]\nbase_port = 4100\nlaunch    = [\"next\", \"dev\", \"-p\", \"{{ port }}\"]\n\n[[apps.web.prep_files]]\npath    = \".env.local\"\ncontent = \"\"\"\nSOME_FEATURE_FLAG=dummy\n\"\"\"\n```",
       "properties": {
         "content": {
-          "description": "File contents, rendered as minijinja over `prefix`, `issue`, `slug`,\n`apps`, `app`, `branch`, `worktree`, `role` and `[templates.variables]`,\nthen written with no newline added. Emit a literal `{{` with\n`{% raw %}...{% endraw %}`.",
+          "description": "File contents, rendered as minijinja over `prefix`, `ticket` (also\nnamed `issue`), `slug`, `apps`, `app`, `branch`, `worktree`, `role` and\n`[templates.variables]`, then written with no newline added. Emit a\nliteral `{{` with `{% raw %}...{% endraw %}`.",
           "type": "string"
         },
         "overwrite": {
@@ -1148,7 +1089,7 @@
     },
     "PreserveConfig": {
       "additionalProperties": false,
-      "description": "Files copied out of a worktree before `workspace end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. A failure warns and the worktree goes anyway, unless the\nentry is `required`. Entries run serially in sorted name order, before any\nremoval. Symlinks are followed, the opposite of `worktree_include`, so an\narchive may outlive the link's target.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ issue }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ issue }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
+      "description": "Files copied out of a worktree before `workspace end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. A failure warns and the worktree goes anyway, unless the\nentry is `required`. Entries run serially in sorted name order, before any\nremoval. Symlinks are followed, the opposite of `worktree_include`, so an\narchive may outlive the link's target.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ ticket }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ ticket }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
       "properties": {
         "from": {
           "description": "Glob patterns for the files to copy, relative to the worktree root and\nrendered as minijinja. Name a directory (`.scratch/`) or write\n`.scratch/**` to archive its whole tree; `dir/*` takes direct children\nonly. A pattern that could reach outside the worktree (absolute, rooted,\nholding `..`, or drive-relative like `C:scratch`) is skipped with a\nwarning; one that matches nothing is not a failure. The default issue\nsummary sits under the worktree's `.devkit/`, where a pattern such as\n`.devkit/ISSUE_SUMMARY_*.md` reaches it; a relative\n`templates.issue_summary_path` puts it outside, where no pattern does.",
@@ -1163,7 +1104,7 @@
           "type": "boolean"
         },
         "to": {
-          "description": "Destination directory, rendered as minijinja over `worktree`, `branch`,\n`issue`, `slug`, `apps`, `prefix`, `worktree_root`, `primary` and\n`[templates.variables]`. Issue fields come from the worktree's\n`.devkit/issue.toml` and render empty without one, and `primary` fails\nwhen the primary checkout cannot be resolved. Must render to a\nnon-empty absolute path outside every worktree the run removes; the\nfilesystem decides that, so a symlink, `..` or case difference does not\nslip past. Created when the first file lands. An existing file there is\ntruncated and rewritten, so an interrupted copy leaves a short file.\nTwo worktrees writing one filename into the same `to` collide; render\n`{{ issue }}` into it.",
+          "description": "Destination directory, rendered as minijinja over `worktree`, `branch`,\n`ticket` (also named `issue`), `slug`, `apps`, `prefix`,\n`worktree_root`, `primary` and `[templates.variables]`. Issue fields\ncome from the worktree's `.devkit/issue.toml` and render empty\nwithout one, and `primary` fails when the primary checkout cannot be\nresolved. Must render to a non-empty absolute path outside every\nworktree the run removes; the filesystem decides that, so a symlink,\n`..` or case difference does not slip past. Created when the first\nfile lands. An existing file there is truncated and rewritten, so an\ninterrupted copy leaves a short file. Two worktrees writing one\nfilename into the same `to` collide; render `{{ ticket }}` into it.",
           "type": "string"
         }
       },
@@ -1654,7 +1595,7 @@
       "type": "object"
     },
     "TaskConfig": {
-      "description": "A canned oneshot invoked by name via `devrun task`: either a command\n(`run`, optionally scoped to an `app` for cwd + static_env) or a sequence\n(`steps`). Exactly one of `run`/`steps` must be set; a sequence task\ncarries no `app`/`env`. Validated at resolution, not at parse.\n\n```toml\n[tasks.api-prod-build]\ndescription = \"prod nitro build (node-server preset)\"\napp = \"api-prod\"        # run in this app's dir, inherit its static_env\nrun = [\"doppler\", \"run\", \"-c\", \"dev_local\",\n       \"--preserve-env=NITRO_PRESET\", \"--\", \"bun\", \"nitro\", \"build\"]\nenv = { NITRO_PRESET = \"node-server\" }\n\n[tasks.commit]\nrun = [\"git\", \"commit\", \"-m\", \"{% if issue is defined %}{{ issue }}: {% endif %}{{ msg }}\"]\nguard = true            # redirect an agent's own `git commit` here\n\n[tasks.profile-lab-os]\ndescription = \"prod api + profiled lab-os, wired together\"\nsteps = [\n  { task = \"api-prod-build\" },\n  { up = \"api-prod\" },\n]\n```\n\n`msg` is an arg of the `commit` task: no `[templates.variables]` entry\nsupplies it, so `devrun task commit --arg msg=...` is required.",
+      "description": "A canned oneshot invoked by name via `devrun task`: either a command\n(`run`, optionally scoped to an `app` for cwd + static_env) or a sequence\n(`steps`). Exactly one of `run`/`steps` must be set; a sequence task\ncarries no `app`/`env`. Validated at resolution, not at parse.\n\n```toml\n[tasks.api-prod-build]\ndescription = \"prod nitro build (node-server preset)\"\napp = \"api-prod\"        # run in this app's dir, inherit its static_env\nrun = [\"doppler\", \"run\", \"-c\", \"dev_local\",\n       \"--preserve-env=NITRO_PRESET\", \"--\", \"bun\", \"nitro\", \"build\"]\nenv = { NITRO_PRESET = \"node-server\" }\n\n[tasks.commit]\nrun = [\"git\", \"commit\", \"-m\", \"{% if ticket is defined %}{{ ticket }}: {% endif %}{{ msg }}\"]\nguard = true            # redirect an agent's own `git commit` here\n\n[tasks.profile-lab-os]\ndescription = \"prod api + profiled lab-os, wired together\"\nsteps = [\n  { task = \"api-prod-build\" },\n  { up = \"api-prod\" },\n]\n```\n\n`msg` is an arg of the `commit` task: no `[templates.variables]` entry\nsupplies it, so `devrun task commit --arg msg=...` is required.",
       "properties": {
         "app": {
           "default": null,
@@ -1706,7 +1647,7 @@
         },
         "run": {
           "default": [],
-          "description": "The command as one argv (program + args), run in the foreground with\nits exit code propagated. Every entry is a minijinja template over\n`{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `issue`,\n`slug`, `branch` from the worktree; any other name read is an arg of\nthe task, required unless a variable supplies a default. Minijinja's\n`default` filter and `is defined` do not make an arg optional. `issue`,\n`slug` and `branch` are undefined outside an issue worktree, so a task\nrun in both guards them with `{% if issue is defined %}`. The program\nmust be a plain string. A Doppler invocation is refused for `prd` the\nsame as an app's `launch`. Mutually exclusive with `steps`.",
+          "description": "The command as one argv (program + args), run in the foreground with\nits exit code propagated. Every entry is a minijinja template over\n`{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `ticket`\n(also named `issue`), `slug`, `branch` from the worktree; any other name\nread is an arg of the task, required unless a variable supplies a\ndefault. Minijinja's `default` filter and `is defined` do not make\nan arg optional. `ticket`, `issue`, `slug` and `branch` are\nundefined outside an issue worktree, so a task run in both guards\nthem with `{% if ticket is defined %}`. The program must be a plain\nstring. A Doppler invocation is refused for `prd` the same as an\napp's `launch`. Mutually exclusive with `steps`.",
           "items": {
             "$ref": "#/$defs/RunArg"
           },
@@ -1763,10 +1704,10 @@
       "type": "object"
     },
     "Templates": {
-      "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context. Rendering is strict: an undefined variable is an\nerror, so a typo surfaces on the first run.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ issue }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ issue }}: {{ input }}\"\npr_body            = \"Closes {{ issue }}.\\n\\n{{ input }}\"\nissue_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`issue_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
+      "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context. Rendering is strict: an undefined variable is an\nerror, so a typo surfaces on the first run.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ ticket }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ ticket }}: {{ input }}\"\npr_body            = \"Closes {{ ticket }}.\\n\\n{{ input }}\"\nissue_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`issue_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
       "properties": {
         "branch": {
-          "description": "Branch name created by `workspace setup`. Context: `prefix`, `issue`,\n`slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.",
+          "description": "Branch name created by `workspace setup`. Context: `prefix`, `ticket`\n(also named `issue`), `slug`, `short_slug`, `apps`. Defaults to\n`{{ prefix }}{{ slug }}`.",
           "type": [
             "string",
             "null"
@@ -1812,29 +1753,15 @@
           "description": "Templates no command sends, rendered by `devkit template render\n<name>` for the caller to deliver itself. A built-in template never\ntakes one's name: `render` looks here first.",
           "type": "object"
         },
-        "issue_body": {
-          "description": "Body of an issue rendered by `ticket render`, created by `ticket\ncreate`, or written over an existing issue by `ticket edit`. `{{\ninput }}` is the `--body` argument and `issue_title` is the rendered\ntitle, or the issue's current title when `ticket edit` runs without\n`--title`. A `[templates.variables]` entry either rendered template\nreads, marked `required`, must be passed as `--arg`; `ticket edit`\nwithout `--title` asks only for the ones this template reads.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "issue_summary": {
-          "description": "Body of the file `workspace setup --summary` writes when the tracker\nkeeps no summary of its own; a GitHub issue's non-empty body is\nwritten verbatim instead. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps`. A field the tracker left empty renders as the empty\nstring, so `{% if parent %}` drops its line.",
+          "description": "Body of the file `workspace setup --summary` writes when the tracker\nkeeps no summary of its own; a GitHub issue's non-empty body is\nwritten verbatim instead. Context: `ticket` (also named `issue`),\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps`. A field the tracker left empty renders as the empty\nstring, so `{% if parent %}` drops its line.",
           "type": [
             "string",
             "null"
           ]
         },
         "issue_summary_path": {
-          "description": "Where `workspace setup --summary` writes the issue summary file. A\nrelative path is taken from `defaults.worktree_root`, so the file\nsits beside the worktree and outlives it, and is refused when there\nis no `worktree_root`. Context: the `issue_summary` context below.\nDefaults to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md`:\ninside the worktree, or the checkout `workspace setup --here` binds,\nwhere it stays untracked and goes when `workspace end` removes the\nworktree.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "issue_title": {
-          "description": "Title of an issue rendered by `ticket render`, created by `ticket\ncreate`, or written by `ticket edit --title`. `{{ input }}` is the\n`--title` argument; the rendered title must not be empty. `ticket edit`\nwithout `--title` keeps the issue's title and does not render this.",
+          "description": "Where `workspace setup --summary` writes the issue summary file. A\nrelative path is taken from `defaults.worktree_root`, so the file\nsits beside the worktree and outlives it, and is refused when there\nis no `worktree_root`. Context: the `issue_summary` context below.\nDefaults to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ ticket }}.md`:\ninside the worktree, or the checkout `workspace setup --here` binds,\nwhere it stays untracked and goes when `workspace end` removes the\nworktree.",
           "type": [
             "string",
             "null"
@@ -1862,7 +1789,21 @@
           ]
         },
         "review_request": {
-          "description": "Slack message sent by `pr review request`. Rendered once per\nrecipient with `name`, `slack_id` (empty for a channel), `pr_url`,\n`pr_title` (the PR's own title from GitHub), `input`, and `branch`,\n`issue`, `slug`, `apps` from the worktree's `.devkit/issue.toml`.",
+          "description": "Slack message sent by `pr review request`. Rendered once per\nrecipient with `name`, `slack_id` (empty for a channel), `pr_url`,\n`pr_title` (the PR's own title from GitHub), `input`, and `branch`,\n`ticket` (also named `issue`), `slug`, `apps` from the worktree's\n`.devkit/issue.toml`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ticket_body": {
+          "description": "Body of a ticket rendered by `ticket render`, created by `ticket\ncreate`, or written over an existing ticket by `ticket edit`. `{{\ninput }}` is the `--body` argument and `ticket_title` (or\n`issue_title`) is the rendered title, or the ticket's current title\nwhen `ticket edit` runs without `--title`. A `[templates.variables]`\nentry either rendered template reads, marked `required`, must be passed\nas `--arg`; `ticket edit` without `--title` asks only for the ones this\ntemplate reads. `issue_body`, its old name, is read as this key.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ticket_title": {
+          "description": "Title of a ticket rendered by `ticket render`, created by `ticket\ncreate`, or written by `ticket edit --title`. `{{ input }}` is the\n`--title` argument; the rendered title must not be empty. `ticket edit`\nwithout `--title` keeps the ticket's title and does not render this.\n`issue_title`, its old name, is read as this key.",
           "type": [
             "string",
             "null"
@@ -1891,6 +1832,65 @@
             "integer",
             "null"
           ]
+        }
+      },
+      "type": "object"
+    },
+    "TicketConfig": {
+      "additionalProperties": false,
+      "description": "The `[ticket]` table, also read under its old name `[issue]`. Each event\nmoves the ticket's status (a Linear state, or `[github] status_field`) from\na `from` status to `to`; an event with no table does nothing. The statuses\nname one board, so keep the events in the repository's `devkit.toml`: tables\nmerge key by key across layers.\n\n```toml\n[ticket.events.setup]\nto = \"Todo\"\n\n[ticket.events.start]\nfrom = [\"\", \"Todo\", \"Backlog\"]\nto = \"In progress\"\n\n[ticket.events.pr_open]\nto = \"In review\"\n\n[github]\nproject = 3            # or \"some-org/7\"\nstatus_field = \"Status\"\n```",
+      "properties": {
+        "events": {
+          "$ref": "#/$defs/TicketEventsConfig",
+          "default": {
+            "pr_open": null,
+            "setup": null,
+            "start": null
+          },
+          "description": "Status moves, keyed by the event that fires them. The event names are\nfixed, so a misspelled one is a parse error."
+        }
+      },
+      "type": "object"
+    },
+    "TicketEventsConfig": {
+      "additionalProperties": false,
+      "description": "One optional status move per event.",
+      "properties": {
+        "pr_open": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fired by `pr create`, whether it opened the PR or found one open.\nA failed move warns and the PR stays as it is."
+        },
+        "setup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fired by `workspace setup` as its last step, after the\n`after_worktree_create` hooks. A failed move warns and setup succeeds."
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fired by the first agent session in a worktree `workspace setup`\ncreated, once per worktree, in the background. `pr checkout`\nworktrees never fire it. List the states work starts from in `from`:\n`[\"*\"]` lets a second worktree pull an issue back from review."
         }
       },
       "type": "object"
@@ -2065,7 +2065,7 @@
           "type": "object"
         }
       ],
-      "description": "One `[templates.variables]` entry: a bare string, or a table carrying a\n`default`, a `required` marking and a `description`.\n\n`deny_unknown_fields` for the reason `RunAction` documents: under untagged\nmatching a misspelled key beside a well-formed pair deserializes silently,\nand the author sees no diagnostic while their guard does nothing.\n\n```toml\n[templates.variables]\nteam = \"platform\"                              # a constant, never required\nmsg = { default = \"wip\", required = \"agents\" } # defaulted, but agents must pass it\nticket = { required = \"always\" }               # declared, no default, always required\nbody = { default = \"\", description = \"why the change was made, if the subject does not say\" }\n```\n\n`default` is the fallback used when nothing else supplies the name, which\nis what these entries have always been: `template::render` merges them\nunderneath the context, and `--arg` overwrites them. Note that minijinja's\nown `default` filter is a different thing and does not affect whether an\narg is required."
+      "description": "One `[templates.variables]` entry: a bare string, or a table carrying a\n`default`, a `required` marking and a `description`.\n\n`deny_unknown_fields` for the reason `RunAction` documents: under untagged\nmatching a misspelled key beside a well-formed pair deserializes silently,\nand the author sees no diagnostic while their guard does nothing.\n\n```toml\n[templates.variables]\nteam = \"platform\"                              # a constant, never required\nmsg = { default = \"wip\", required = \"agents\" } # defaulted, but agents must pass it\nreviewer = { required = \"always\" }             # declared, no default, always required\nbody = { default = \"\", description = \"why the change was made, if the subject does not say\" }\n```\n\n`default` is the fallback used when nothing else supplies the name, which\nis what these entries have always been: `template::render` merges them\nunderneath the context, and `--arg` overwrites them. Note that minijinja's\nown `default` filter is a different thing and does not affect whether an\narg is required."
     }
   },
   "$id": "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json",
@@ -2182,17 +2182,6 @@
       },
       "description": "Commands devkit runs when a lifecycle event fires, keyed\n`{before,after}_<event>`."
     },
-    "issue": {
-      "$ref": "#/$defs/IssueConfig",
-      "default": {
-        "events": {
-          "pr_open": null,
-          "setup": null,
-          "start": null
-        }
-      },
-      "description": "What devkit does to an issue's tracker status when it acts on that\nissue."
-    },
     "linear": {
       "$ref": "#/$defs/LinearConfig",
       "default": {
@@ -2274,19 +2263,30 @@
         "checkout_worktree_dir_max": null,
         "commit_message": null,
         "custom": {},
-        "issue_body": null,
         "issue_summary": null,
         "issue_summary_path": null,
-        "issue_title": null,
         "pr_body": null,
         "pr_title": null,
         "review_finish": null,
         "review_request": null,
+        "ticket_body": null,
+        "ticket_title": null,
         "variables": {},
         "worktree_dir": null,
         "worktree_dir_max": null
       },
       "description": "Minijinja templates for the strings `workspace setup` and `pr review`\ngenerate — branch names, worktree directories, PR fields, Slack bodies."
+    },
+    "ticket": {
+      "$ref": "#/$defs/TicketConfig",
+      "default": {
+        "events": {
+          "pr_open": null,
+          "setup": null,
+          "start": null
+        }
+      },
+      "description": "What devkit does to a ticket's tracker status when it acts on that\nticket. `[issue]`, its old name, is read as this table."
     },
     "todo": {
       "$ref": "#/$defs/TodoConfig",

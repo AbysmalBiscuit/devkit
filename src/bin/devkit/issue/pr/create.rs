@@ -148,7 +148,7 @@ pub(crate) struct Ensure<'a> {
     pub require_reviewer: bool,
     pub steps: &'a Steps,
     /// Claim the `pr_open` event in the record, which holds a tracker issue
-    /// and has `[issue.events.pr_open]` configured.
+    /// and has `[ticket.events.pr_open]` configured.
     pub claim_pr_open: bool,
 }
 
@@ -339,7 +339,7 @@ pub fn run(args: Args) -> Result<()> {
         attachments: &args.attach,
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
         steps: &steps,
-        claim_pr_open: tracker_issue.is_some() && loaded.config.issue.events.pr_open.is_some(),
+        claim_pr_open: tracker_issue.is_some() && loaded.config.ticket.events.pr_open.is_some(),
     })?;
 
     println!("{}", resolved.url);

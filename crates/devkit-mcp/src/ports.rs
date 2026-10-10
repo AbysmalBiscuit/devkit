@@ -65,7 +65,7 @@ fn alloc_schema() -> Value {
         "properties": {
             "root": { "type": "string", "description": "Absolute path to the project root (holds devkit.toml)." },
             "apps": { "type": "array", "items": { "type": "string" }, "description": "App names from the devkit.toml catalog." },
-            "role": { "type": "string", "enum": ["issue", "baseline"], "description": "Allocation role (default issue)." },
+            "role": { "type": "string", "enum": ["workspace", "issue", "baseline"], "description": "Allocation role (default workspace; `issue` is its old name)." },
             "holder": { "type": "string", "description": "Holder identity for the reservation; must be an existing path. Defaults to root." }
         },
         "required": ["root", "apps"],
@@ -76,7 +76,7 @@ fn alloc_schema() -> Value {
 fn alloc(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: AllocArgs = serde_json::from_value(args).context("invalid ports.alloc arguments")?;
     let holder = a.holder.unwrap_or_else(|| a.root.clone());
-    let role = a.role.unwrap_or(Role::Issue);
+    let role = a.role.unwrap_or(Role::Workspace);
     let loaded = devkit_ports::load::load(None, std::path::Path::new(&a.root))
         .context("loading devkit.toml")?;
     let mut reqs = Vec::with_capacity(a.apps.len());
@@ -110,7 +110,7 @@ fn release_schema() -> Value {
         "type": "object",
         "properties": {
             "root": { "type": "string", "description": "Absolute path to the project root (the default holder)." },
-            "role": { "type": "string", "enum": ["issue", "baseline"], "description": "Only release this role (default: all roles)." },
+            "role": { "type": "string", "enum": ["workspace", "issue", "baseline"], "description": "Only release this role (default: all roles)." },
             "holder": { "type": "string", "description": "Override the holder (defaults to root)." }
         },
         "required": ["root"],

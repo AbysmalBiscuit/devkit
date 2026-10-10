@@ -822,7 +822,7 @@ mod tests {
             &ports,
             None,
             Path::new("/wt"),
-            Role::Issue,
+            Role::Workspace,
             &BTreeMap::new(),
             &BTreeMap::new(),
         )
@@ -845,7 +845,7 @@ mod tests {
             &ports,
             None,
             Path::new("/wt"),
-            Role::Issue,
+            Role::Workspace,
             &BTreeMap::new(),
             &BTreeMap::new(),
         )
@@ -871,7 +871,7 @@ mod tests {
         data.entries.insert(45123, crate::registry::Entry {
             app: "web".into(),
             holder: "/w".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: None,
             logfile: None,
             ts: crate::registry::now(),
@@ -892,7 +892,7 @@ mod tests {
         data.entries.insert(port, crate::registry::Entry {
             app: "web".into(),
             holder: "/w".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: None,
             logfile: None,
             ts: crate::registry::now(),
@@ -918,7 +918,7 @@ mod tests {
             &ports,
             None,
             std::path::Path::new("/root"),
-            Role::Issue,
+            Role::Workspace,
             &BTreeMap::new(),
             &BTreeMap::new(),
         )
@@ -1019,7 +1019,7 @@ mod tests {
         // before bring_down runs.
         let holderdir = tempfile::tempdir().unwrap();
         let holder = holderdir.path().to_str().unwrap().to_string();
-        registry::alloc(&holder, &[("web".to_string(), 7000)], Role::Issue).unwrap();
+        registry::alloc(&holder, &[("web".to_string(), 7000)], Role::Workspace).unwrap();
         let out = bring_down(&holder, None).unwrap();
         assert_eq!(out.stopped, 0, "no pid recorded, nothing to stop");
         assert_eq!(out.freed.len(), 1, "the reservation is freed");
@@ -1038,7 +1038,7 @@ mod tests {
         let got = registry::alloc(
             &holder,
             &[("api".to_string(), 7300), ("web".to_string(), 7400)],
-            Role::Issue,
+            Role::Workspace,
         )
         .unwrap();
         let ports: Vec<u16> = got.into_iter().map(|(_, p)| p).collect();
@@ -1067,7 +1067,7 @@ mod tests {
             d.entries.insert(7100, crate::registry::Entry {
                 app: "web".into(),
                 holder: holder.clone(),
-                role: Role::Issue,
+                role: Role::Workspace,
                 pid: None,
                 logfile: Some(logfile.clone()),
                 ts: crate::registry::now(),
@@ -1128,7 +1128,7 @@ mod tests {
         };
         // Non-blocking: returns immediately; the just-spawned server is
         // "starting".
-        let out = launch(&[plan], "/w-launch-test", Role::Issue, false, false).unwrap();
+        let out = launch(&[plan], "/w-launch-test", Role::Workspace, false, false).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].port, port);
         assert!(out[0].pid.is_some());
@@ -1200,8 +1200,8 @@ mod tests {
         let mut data = Data::default();
         let me = std::process::id();
         data.entries
-            .insert(49811, entry("api", "/wt", Role::Issue, Some(me)));
-        let s = existing_server(&data, &plan("api", 49811), "/wt", Role::Issue)
+            .insert(49811, entry("api", "/wt", Role::Workspace, Some(me)));
+        let s = existing_server(&data, &plan("api", 49811), "/wt", Role::Workspace)
             .expect("live pid on matching row must be reported");
         assert_eq!(s.pid, Some(me));
         assert_eq!(s.port, 49811);
@@ -1210,9 +1210,11 @@ mod tests {
     #[test]
     fn existing_server_ignores_dead_pid() {
         let mut data = Data::default();
-        data.entries
-            .insert(49812, entry("api", "/wt", Role::Issue, Some(dead_pid())));
-        assert!(existing_server(&data, &plan("api", 49812), "/wt", Role::Issue).is_none());
+        data.entries.insert(
+            49812,
+            entry("api", "/wt", Role::Workspace, Some(dead_pid())),
+        );
+        assert!(existing_server(&data, &plan("api", 49812), "/wt", Role::Workspace).is_none());
     }
 
     #[test]
@@ -1238,7 +1240,7 @@ mod tests {
             &catalog,
             &["resolve-ports-primary".to_string()],
             &holder,
-            Role::Issue,
+            Role::Workspace,
             &BTreeMap::new(),
         )
         .expect("selected app plus its referenced app resolve");
@@ -1269,7 +1271,7 @@ mod tests {
             &catalog,
             &["resolve-ports-selected".to_string()],
             "/wt",
-            Role::Issue,
+            Role::Workspace,
             &BTreeMap::new(),
         )
         .expect_err("a ports[...] reference to an app absent from the catalog must error");
@@ -1285,16 +1287,16 @@ mod tests {
         let mut data = Data::default();
         let me = std::process::id();
         data.entries
-            .insert(49813, entry("api", "/wt", Role::Issue, None));
+            .insert(49813, entry("api", "/wt", Role::Workspace, None));
         data.entries
-            .insert(49814, entry("web", "/wt", Role::Issue, Some(me)));
+            .insert(49814, entry("web", "/wt", Role::Workspace, Some(me)));
         data.entries
-            .insert(49815, entry("api", "/other", Role::Issue, Some(me)));
+            .insert(49815, entry("api", "/other", Role::Workspace, Some(me)));
         data.entries
             .insert(49816, entry("api", "/wt", Role::Baseline, Some(me)));
-        assert!(existing_server(&data, &plan("api", 49813), "/wt", Role::Issue).is_none());
-        assert!(existing_server(&data, &plan("api", 49814), "/wt", Role::Issue).is_none());
-        assert!(existing_server(&data, &plan("api", 49815), "/wt", Role::Issue).is_none());
-        assert!(existing_server(&data, &plan("api", 49816), "/wt", Role::Issue).is_none());
+        assert!(existing_server(&data, &plan("api", 49813), "/wt", Role::Workspace).is_none());
+        assert!(existing_server(&data, &plan("api", 49814), "/wt", Role::Workspace).is_none());
+        assert!(existing_server(&data, &plan("api", 49815), "/wt", Role::Workspace).is_none());
+        assert!(existing_server(&data, &plan("api", 49816), "/wt", Role::Workspace).is_none());
     }
 }

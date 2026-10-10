@@ -24,14 +24,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    Issue,
+    /// A worktree's own servers. `issue` is accepted as an alias, in
+    /// registry records and on the command line.
+    #[serde(alias = "issue")]
+    #[value(alias = "issue")]
+    Workspace,
     Baseline,
 }
 
 impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
-            Role::Issue => "issue",
+            Role::Workspace => "workspace",
             Role::Baseline => "baseline",
         }
     }
@@ -243,7 +247,7 @@ mod tests {
         d.entries.insert(9100, Entry {
             app: "api".into(),
             holder: "/w".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: None,
             logfile: None,
             ts: 1,
@@ -259,7 +263,7 @@ mod tests {
         data.entries.insert(4100, Entry {
             app: "api".into(),
             holder: "/w/root".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: Some(42),
             logfile: None,
             ts: now(),
@@ -279,7 +283,7 @@ mod tests {
         data.entries.insert(4100, Entry {
             app: "api".into(),
             holder: "/w/root".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: Some(42),
             logfile: None,
             ts: now(),
@@ -287,7 +291,7 @@ mod tests {
         data.entries.insert(4200, Entry {
             app: "web".into(),
             holder: "/w/root".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: Some(43),
             logfile: None,
             ts: now(),
@@ -315,7 +319,7 @@ mod tests {
         data.entries.insert(4100, Entry {
             app: "api".into(),
             holder: "/w/root".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: Some(42),
             logfile: None,
             ts: now(),
@@ -349,14 +353,14 @@ pub fn holder_alive(holder: &str) -> bool {
     std::path::Path::new(holder).exists()
 }
 
-/// Port of `app`'s live reservation under `holder` (issue role): a row whose
-/// pid is set and alive. The pid probe keeps the answer correct even on an
-/// unpruned view; keep calls outside `with_lock`.
+/// Port of `app`'s live reservation under `holder` (workspace role): a row
+/// whose pid is set and alive. The pid probe keeps the answer correct even on
+/// an unpruned view; keep calls outside `with_lock`.
 pub fn live_port(data: &Data, holder: &str, app: &str) -> Option<u16> {
     data.entries.iter().find_map(|(port, e)| {
         (e.holder == holder
             && e.app == app
-            && e.role == Role::Issue
+            && e.role == Role::Workspace
             && e.pid.is_some_and(pid_alive))
         .then_some(*port)
     })
@@ -966,16 +970,16 @@ mod ops_tests {
     #[test]
     fn alloc_is_idempotent_per_holder() {
         let mut d = Data::default();
-        let a = d.alloc_one("/w", "api", 9100, Role::Issue);
-        let b = d.alloc_one("/w", "api", 9100, Role::Issue);
+        let a = d.alloc_one("/w", "api", 9100, Role::Workspace);
+        let b = d.alloc_one("/w", "api", 9100, Role::Workspace);
         assert_eq!(a, b);
         assert_eq!(d.entries.len(), 1);
     }
     #[test]
     fn alloc_skips_claimed_ports() {
         let mut d = Data::default();
-        let a = d.alloc_one("/w1", "api", 9100, Role::Issue);
-        let b = d.alloc_one("/w2", "api", 9100, Role::Issue);
+        let a = d.alloc_one("/w1", "api", 9100, Role::Workspace);
+        let b = d.alloc_one("/w2", "api", 9100, Role::Workspace);
         assert_ne!(a, b);
     }
     #[test]
@@ -984,7 +988,7 @@ mod ops_tests {
         d.entries.insert(9100, Entry {
             app: "api".into(),
             holder: "/definitely/not/here".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: None,
             logfile: None,
             ts: now(),
@@ -999,7 +1003,7 @@ mod ops_tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        d.alloc_one(&cwd, "api", 9100, Role::Issue);
+        d.alloc_one(&cwd, "api", 9100, Role::Workspace);
         let freed = d.release(&cwd, None);
         assert_eq!(freed.len(), 1);
         assert!(d.entries.is_empty());
@@ -1010,7 +1014,14 @@ mod ops_tests {
         // record_pid re-inserts the row so `down` can still find and
         // stop it.
         let mut d = Data::default();
-        d.record_pid(9100, "api", "/w", Role::Issue, 4321, PathBuf::from("/log"));
+        d.record_pid(
+            9100,
+            "api",
+            "/w",
+            Role::Workspace,
+            4321,
+            PathBuf::from("/log"),
+        );
         assert_eq!(d.entries[&9100].pid, Some(4321));
         assert_eq!(d.entries[&9100].app, "api");
         assert_eq!(d.entries[&9100].holder, "/w");
@@ -1018,8 +1029,15 @@ mod ops_tests {
     #[test]
     fn record_pid_updates_existing_reservation() {
         let mut d = Data::default();
-        let port = d.alloc_one("/w", "api", 9100, Role::Issue);
-        d.record_pid(port, "api", "/w", Role::Issue, 99, PathBuf::from("/log"));
+        let port = d.alloc_one("/w", "api", 9100, Role::Workspace);
+        d.record_pid(
+            port,
+            "api",
+            "/w",
+            Role::Workspace,
+            99,
+            PathBuf::from("/log"),
+        );
         assert_eq!(d.entries.len(), 1);
         assert_eq!(d.entries[&port].pid, Some(99));
     }
@@ -1043,8 +1061,8 @@ mod ops_tests {
     #[test]
     fn release_ports_removes_only_listed_present_ports() {
         let mut d = Data::default();
-        let p1 = d.alloc_one("/w", "api", 9100, Role::Issue);
-        let p2 = d.alloc_one("/w", "web", 9200, Role::Issue);
+        let p1 = d.alloc_one("/w", "api", 9100, Role::Workspace);
+        let p2 = d.alloc_one("/w", "web", 9200, Role::Workspace);
         // Release the first allocated port and one absent port (65000 is
         // unlikely to be allocated).
         let freed = d.release_ports(&[p1, 65000]);
@@ -1059,7 +1077,7 @@ mod ops_tests {
         d.entries.insert(9100, Entry {
             app: "api".into(),
             holder: "/definitely/not/here".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: None,
             logfile: None,
             ts: now(),
@@ -1078,7 +1096,7 @@ mod ops_tests {
         d.entries.insert(47360, Entry {
             app: "api".into(),
             holder: dir.path().to_string_lossy().into_owned(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: None,
             logfile: None,
             ts: now().saturating_sub(RESERVATION_GRACE_SECS),
@@ -1107,7 +1125,7 @@ mod ops_tests {
             &FlockStore::at(dir.path()),
             &dir.path().to_string_lossy(),
             &[("api".into(), busy)],
-            Role::Issue,
+            Role::Workspace,
         )
         .unwrap();
 
@@ -1139,7 +1157,7 @@ mod ops_tests {
         real.entries.insert(47500, Entry {
             app: "other".into(),
             holder: "/gone".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: None,
             logfile: None,
             ts: now(),
@@ -1153,7 +1171,7 @@ mod ops_tests {
             &store,
             &dir.path().to_string_lossy(),
             &[("api".into(), 47400), ("web".into(), 47500)],
-            Role::Issue,
+            Role::Workspace,
         )
         .unwrap();
 
@@ -1171,24 +1189,34 @@ mod ops_tests {
     #[test]
     fn live_port_requires_matching_live_row() {
         let mut d = Data::default();
-        let p = d.alloc_one("/wt", "api", 47340, Role::Issue);
+        let p = d.alloc_one("/wt", "api", 47340, Role::Workspace);
         assert_eq!(live_port(&d, "/wt", "api"), None); // pid-less reservation
-        d.record_pid(p, "api", "/wt", Role::Issue, std::process::id(), "l".into());
+        d.record_pid(
+            p,
+            "api",
+            "/wt",
+            Role::Workspace,
+            std::process::id(),
+            "l".into(),
+        );
         assert_eq!(live_port(&d, "/wt", "api"), Some(p));
         assert_eq!(live_port(&d, "/other", "api"), None); // wrong holder
         assert_eq!(live_port(&d, "/wt", "web"), None); // wrong app
-        d.record_pid(p, "api", "/wt", Role::Issue, u32::MAX, "l".into());
+        d.record_pid(p, "api", "/wt", Role::Workspace, u32::MAX, "l".into());
         assert_eq!(live_port(&d, "/wt", "api"), None); // dead pid
     }
 
     #[test]
     fn alloc_one_skips_foreign_holder_row() {
         let mut d = Data::default();
-        assert_eq!(d.alloc_one("/foreign", "api", 47350, Role::Issue), 47350);
+        assert_eq!(
+            d.alloc_one("/foreign", "api", 47350, Role::Workspace),
+            47350
+        );
         // Same app under a different holder never captures the foreign row.
-        assert_eq!(d.alloc_one("/mine", "api", 47350, Role::Issue), 47351);
+        assert_eq!(d.alloc_one("/mine", "api", 47350, Role::Workspace), 47351);
         // Idempotent per holder.
-        assert_eq!(d.alloc_one("/mine", "api", 47350, Role::Issue), 47351);
+        assert_eq!(d.alloc_one("/mine", "api", 47350, Role::Workspace), 47351);
     }
 }
 
@@ -1202,7 +1230,7 @@ mod store_seam_tests {
     fn alloc_with_reserves_pidless_then_record_pid_attaches() {
         let dir = tempfile::tempdir().unwrap();
         let store = FlockStore::at(dir.path());
-        let out = alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
+        let out = alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Workspace).unwrap();
         let (_, port) = out[0];
         let d = store.snapshot().unwrap();
         assert_eq!(
@@ -1214,7 +1242,7 @@ mod store_seam_tests {
             port,
             "api",
             "/w",
-            Role::Issue,
+            Role::Workspace,
             4321,
             PathBuf::from("/log"),
         )
@@ -1227,7 +1255,7 @@ mod store_seam_tests {
     fn release_with_frees_holder() {
         let dir = tempfile::tempdir().unwrap();
         let store = FlockStore::at(dir.path());
-        alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
+        alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Workspace).unwrap();
         let freed = release_with(&store, "/w", None).unwrap();
         assert_eq!(freed.len(), 1);
         assert!(store.snapshot().unwrap().entries.is_empty());
@@ -1250,7 +1278,7 @@ mod store_seam_tests {
         let _held = excl.try_write().expect("take exclusive gate");
         let err = store
             .commit(|d| {
-                d.alloc_one("/w", "api", 9100, Role::Issue);
+                d.alloc_one("/w", "api", 9100, Role::Workspace);
                 Ok(())
             })
             .unwrap_err();
@@ -1271,7 +1299,7 @@ mod store_seam_tests {
                 d.entries.insert(9100, Entry {
                     app: "api".into(),
                     holder: "/definitely/not/here".into(),
-                    role: Role::Issue,
+                    role: Role::Workspace,
                     pid: None,
                     logfile: None,
                     ts: 0,
@@ -1302,7 +1330,7 @@ mod store_seam_tests {
         let dir = tempfile::tempdir().unwrap();
         let state = std::sync::Arc::new(std::sync::Mutex::new(Data::default()));
         let store = MemoryStore::new(state.clone(), dir.path().join("ports.json"));
-        alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
+        alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Workspace).unwrap();
         // memory updated
         assert_eq!(state.lock().unwrap().entries.len(), 1);
         // file written through (load sees it)
@@ -1319,7 +1347,7 @@ mod store_seam_tests {
         let bad = dir.path().join("as-dir");
         std::fs::create_dir_all(&bad).unwrap();
         let store = MemoryStore::new(state.clone(), bad);
-        let err = alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue);
+        let err = alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Workspace);
         assert!(err.is_err(), "write-through failure must error");
         assert!(
             state.lock().unwrap().entries.is_empty(),
@@ -1349,11 +1377,11 @@ mod select_tests {
         // current worktree
         d.entries.insert(
             9100,
-            entry("api", "/wt/feat-a", Role::Issue, Some(11), 1000),
+            entry("api", "/wt/feat-a", Role::Workspace, Some(11), 1000),
         );
         d.entries.insert(
             9200,
-            entry("web", "/wt/feat-a", Role::Issue, Some(12), 1000),
+            entry("web", "/wt/feat-a", Role::Workspace, Some(12), 1000),
         );
         // another worktree
         d.entries
@@ -1438,7 +1466,7 @@ mod select_tests {
             scope: Scope::All,
             filter: Filter::Columns(ColumnFilter {
                 app: vec!["api".into()],
-                role: Some(Role::Issue),
+                role: Some(Role::Workspace),
                 ..Default::default()
             }),
         };

@@ -22,9 +22,9 @@ pub(crate) enum Cmd {
         /// Worktree root the ports belong to; defaults to the current worktree.
         #[arg(long)]
         holder: Option<String>,
-        /// Role the reservation belongs to; issue and baseline get separate
-        /// ports.
-        #[arg(long, value_enum, default_value = "issue")]
+        /// Role the reservation belongs to; workspace and baseline get
+        /// separate ports.
+        #[arg(long, value_enum, default_value = "workspace")]
         role: Role,
         /// Apps to reserve a port for, one row each.
         apps: Vec<String>,

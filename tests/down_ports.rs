@@ -20,7 +20,7 @@ fn down_ports_releases_listed_reservations() {
     let alloc = h.request(&Request::Alloc {
         holder,
         reqs: vec![("api".into(), 9100), ("web".into(), 9200)],
-        role: Role::Issue,
+        role: Role::Workspace,
     });
     let ports: Vec<u16> = match alloc {
         Response::Ports(v) => v.into_iter().map(|(_, p)| p).collect(),

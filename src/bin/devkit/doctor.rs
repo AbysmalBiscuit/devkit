@@ -259,7 +259,7 @@ fn tasks_row(start: &std::path::Path) -> Option<Row> {
     })
 }
 
-/// Each `[issue.events]` transition, checked against the tracker: on GitHub,
+/// Each `[ticket.events]` transition, checked against the tracker: on GitHub,
 /// that the project and its single-select field exist, hold every status the
 /// events name, and that the token may read them. None when no event is
 /// configured or the config does not load, which the `config` row reports.
@@ -272,7 +272,7 @@ fn issue_events_row(
     use devkit_config::IssueEvent;
 
     let (cfg, _) = devkit_common::config::resolve(None, start).ok()?;
-    let events = &cfg.issue.events;
+    let events = &cfg.ticket.events;
     if !events.any() {
         return None;
     }

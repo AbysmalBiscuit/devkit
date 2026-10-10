@@ -67,7 +67,7 @@ pub(crate) enum Cmd {
         /// ref. A fresh worktree has no diff yet, so name them there.
         apps: Vec<String>,
         /// Which side to run.
-        #[arg(long, value_enum, default_value = "issue")]
+        #[arg(long, value_enum, default_value = "workspace")]
         role: RoleSelector,
         /// Environment override for the launched servers, above the app's
         /// `static_env`. Repeatable.
@@ -204,12 +204,13 @@ pub(crate) enum BaselineCmd {
     },
 }
 
-/// CLI selector over registry roles. `Both` runs/affects the issue branch and a
+/// CLI selector over registry roles. `Both` runs/affects the worktree and a
 /// fresh baseline side-by-side; it is not itself a registry `Role`.
 #[derive(Clone, Copy, ValueEnum, PartialEq)]
 pub(crate) enum RoleSelector {
-    /// The issue branch's servers.
-    Issue,
+    /// The worktree's own servers. `issue` is accepted as its old name.
+    #[value(alias = "issue")]
+    Workspace,
     /// The baseline checkout's servers, for A/B comparison.
     Baseline,
     /// Both roles: `up` runs them side-by-side on separate ports, filters match
@@ -221,16 +222,16 @@ impl RoleSelector {
     /// Registry roles this selector expands to (for `up`).
     fn roles(self) -> &'static [Role] {
         match self {
-            RoleSelector::Issue => &[Role::Issue],
+            RoleSelector::Workspace => &[Role::Workspace],
             RoleSelector::Baseline => &[Role::Baseline],
-            RoleSelector::Both => &[Role::Issue, Role::Baseline],
+            RoleSelector::Both => &[Role::Workspace, Role::Baseline],
         }
     }
 
     /// Registry-role filter for `down`/`logs`: `None` means "all roles".
     fn filter(self) -> Option<Role> {
         match self {
-            RoleSelector::Issue => Some(Role::Issue),
+            RoleSelector::Workspace => Some(Role::Workspace),
             RoleSelector::Baseline => Some(Role::Baseline),
             RoleSelector::Both => None,
         }
@@ -682,7 +683,7 @@ fn cmd_task(
                             cli,
                             cwd,
                             std::slice::from_ref(app),
-                            RoleSelector::Issue,
+                            RoleSelector::Workspace,
                             env_pairs,
                             env_file,
                             UpFlags {
@@ -771,9 +772,9 @@ fn cmd_up(
         let mut g = Vec::new();
         for r in role.roles() {
             match r {
-                Role::Issue => {
+                Role::Workspace => {
                     g.push((
-                        Role::Issue,
+                        Role::Workspace,
                         issue_holder.clone(),
                         PathBuf::from(&issue_holder),
                     ));
@@ -1579,8 +1580,8 @@ mod tests {
     #[test]
     fn touches_foreign_detects_other_holders() {
         use super::touches_foreign;
-        let cur = entry("/wt/cur", registry::Role::Issue);
-        let other = entry("/wt/other", registry::Role::Issue);
+        let cur = entry("/wt/cur", registry::Role::Workspace);
+        let other = entry("/wt/other", registry::Role::Workspace);
         assert!(!touches_foreign(&[(1, &cur)], "/wt/cur", None));
         assert!(touches_foreign(&[(1, &cur), (2, &other)], "/wt/cur", None));
     }
@@ -1890,7 +1891,7 @@ mod tests {
         let mut data = devkit_ports::registry::Data::default();
         data.entries.insert(
             4100,
-            status_urls_entry("api", "/wt", devkit_ports::registry::Role::Issue),
+            status_urls_entry("api", "/wt", devkit_ports::registry::Role::Workspace),
         );
         let mut catalog = HashMap::new();
         catalog.insert("api".to_string(), status_urls_app(None));
@@ -1909,21 +1910,21 @@ mod tests {
         // Group 1: front on 4100, peer references front's port.
         data.entries.insert(
             4100,
-            status_urls_entry("front", "/wt1", devkit_ports::registry::Role::Issue),
+            status_urls_entry("front", "/wt1", devkit_ports::registry::Role::Workspace),
         );
         data.entries.insert(
             4101,
-            status_urls_entry("peer", "/wt1", devkit_ports::registry::Role::Issue),
+            status_urls_entry("peer", "/wt1", devkit_ports::registry::Role::Workspace),
         );
         // Group 2: front on a different port, so a peer resolving the wrong
         // group's port would give a different answer.
         data.entries.insert(
             4200,
-            status_urls_entry("front", "/wt2", devkit_ports::registry::Role::Issue),
+            status_urls_entry("front", "/wt2", devkit_ports::registry::Role::Workspace),
         );
         data.entries.insert(
             4201,
-            status_urls_entry("peer", "/wt2", devkit_ports::registry::Role::Issue),
+            status_urls_entry("peer", "/wt2", devkit_ports::registry::Role::Workspace),
         );
 
         let mut catalog = HashMap::new();
@@ -1950,7 +1951,7 @@ mod tests {
         let mut data = devkit_ports::registry::Data::default();
         data.entries.insert(
             4100,
-            status_urls_entry("ghost", "/wt", devkit_ports::registry::Role::Issue),
+            status_urls_entry("ghost", "/wt", devkit_ports::registry::Role::Workspace),
         );
 
         let urls = status_urls(&data, None, &HashMap::new(), &BTreeMap::new());
@@ -1963,11 +1964,11 @@ mod tests {
         let mut data = devkit_ports::registry::Data::default();
         data.entries.insert(
             4100,
-            status_urls_entry("api", "/wt1", devkit_ports::registry::Role::Issue),
+            status_urls_entry("api", "/wt1", devkit_ports::registry::Role::Workspace),
         );
         data.entries.insert(
             4200,
-            status_urls_entry("api", "/wt2", devkit_ports::registry::Role::Issue),
+            status_urls_entry("api", "/wt2", devkit_ports::registry::Role::Workspace),
         );
         let mut catalog = HashMap::new();
         catalog.insert("api".to_string(), status_urls_app(None));

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::registry::{Data, Role};
 
 /// Wire-format version. Bump on any incompatible change to these types.
-pub const PROTO: u32 = 3;
+pub const PROTO: u32 = 4;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -97,7 +97,7 @@ mod tests {
         let msg = Request::Alloc {
             holder: "/w".into(),
             reqs,
-            role: Role::Issue,
+            role: Role::Workspace,
         };
         let mut buf: Vec<u8> = Vec::new();
         send(&mut buf, &msg).unwrap();
@@ -111,7 +111,7 @@ mod tests {
         match back {
             Request::Alloc { holder, role, .. } => {
                 assert_eq!(holder, "/w");
-                assert_eq!(role, Role::Issue);
+                assert_eq!(role, Role::Workspace);
             }
             _ => panic!("wrong variant"),
         }

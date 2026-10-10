@@ -32,7 +32,7 @@ fn supervised_python_server_becomes_ready() {
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
@@ -71,7 +71,7 @@ fn restart_after_kill() {
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
@@ -141,7 +141,7 @@ fn restart_survives_concurrent_snapshot() {
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
@@ -254,7 +254,7 @@ while True:
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: vec![
             "python3".into(),
             "-c".into(),
@@ -345,7 +345,7 @@ while True:
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: vec![
             "python3".into(),
             "-c".into(),
@@ -428,7 +428,7 @@ while True:
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: vec![
             "python3".into(),
             "-c".into(),
@@ -524,7 +524,7 @@ while True:
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: vec![
             "python3".into(),
             "-c".into(),
@@ -584,7 +584,7 @@ fn cap_requested_without_delegation_falls_back() {
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
@@ -612,7 +612,7 @@ fn second_supervise_of_live_server_is_noop() {
     let req = Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
@@ -651,7 +651,7 @@ fn down_does_not_restart() {
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
-        role: Role::Issue,
+        role: Role::Workspace,
         argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),

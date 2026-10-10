@@ -227,3 +227,56 @@ fn a_symlinked_devkit_dir_is_refused_and_its_target_survives() {
     assert!(old.exists(), "the symlink's target was swept");
     assert!(!outside.path().join("issue-receipts").join("S1").exists());
 }
+
+/// A project at `config`, under a `devkit.local.toml` of `local` when given.
+fn project_with(config: &str, local: Option<&str>) -> tempfile::TempDir {
+    let p = project();
+    std::fs::write(p.path().join("devkit.toml"), config).unwrap();
+    if let Some(local) = local {
+        std::fs::write(p.path().join("devkit.local.toml"), local).unwrap();
+    }
+    p
+}
+
+fn rendered(p: &Path) -> (String, String) {
+    let out = render(p, &[("CLAUDE_CODE_SESSION_ID", "S1")], &[
+        "--title", "x", "--body", "y",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    (
+        json["title"].as_str().unwrap().to_string(),
+        json["body"].as_str().unwrap().to_string(),
+    )
+}
+
+#[test]
+fn tickets_render_from_the_ticket_templates() {
+    let p = project_with(
+        "[templates]\n\
+         ticket_title = \"T: {{ input }}\"\n\
+         ticket_body = \"{{ ticket_title }} / {{ issue_title }} / {{ input }}\"\n",
+        None,
+    );
+    assert_eq!(
+        rendered(p.path()),
+        ("T: x".into(), "T: x / T: x / y".into())
+    );
+}
+
+#[test]
+fn a_project_overriding_the_issue_templates_keeps_its_override() {
+    let p = project_with(
+        "[templates]\n\
+         issue_title = \"Old: {{ input }}\"\n\
+         issue_body = \"{{ issue_title }} | {{ input }}\"\n",
+        None,
+    );
+    assert_eq!(rendered(p.path()), ("Old: x".into(), "Old: x | y".into()));
+
+    let p = project_with(
+        "[templates]\nticket_body = \"new {{ input }}\"\n",
+        Some("[templates]\nissue_body = \"local {{ input }}\"\n"),
+    );
+    assert_eq!(rendered(p.path()), ("x".into(), "local y".into()));
+}

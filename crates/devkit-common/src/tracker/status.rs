@@ -1,4 +1,4 @@
-//! Moving an issue's tracker status, as `[issue.events]` configures.
+//! Moving an issue's tracker status, as `[ticket.events]` configures.
 //!
 //! Kept apart from the read-only [`Tracker`](super::Tracker): the triage
 //! facade and the MCP server hold trackers and never write to one.
@@ -15,8 +15,8 @@ use crate::forge::Repos;
 pub trait StatusWriter {
     /// Read the issue's status and move it as `event`'s transition `t`
     /// allows, in one read and at most the writes the move needs. A `to` the
-    /// tracker lacks is an error naming `[issue.events.<event>] to` and listing
-    /// the names the tracker has.
+    /// tracker lacks is an error naming `[ticket.events.<event>] to` and
+    /// listing the names the tracker has.
     fn move_status(&self, id: &str, event: IssueEvent, t: &EventTransition) -> Result<Outcome>;
 }
 
@@ -42,7 +42,7 @@ pub fn apply(
 ) -> Result<Outcome> {
     Ok(match target(t, current.as_deref()) {
         Target::To(to) => {
-            write(to).with_context(|| format!("[issue.events.{event}] to"))?;
+            write(to).with_context(|| format!("[ticket.events.{event}] to"))?;
             Outcome::Moved {
                 from: current,
                 to: to.to_string(),
@@ -266,7 +266,7 @@ mod tests {
             bail!("no option")
         })
         .unwrap_err();
-        assert!(format!("{failed:#}").starts_with("[issue.events.pr_open] to: no option"));
+        assert!(format!("{failed:#}").starts_with("[ticket.events.pr_open] to: no option"));
     }
 
     #[test]

@@ -51,10 +51,10 @@ pub struct Config {
     /// the table is absent.
     #[serde(default)]
     pub tracker: TrackerConfig,
-    /// What devkit does to an issue's tracker status when it acts on that
-    /// issue.
+    /// What devkit does to a ticket's tracker status when it acts on that
+    /// ticket. `[issue]`, its old name, is read as this table.
     #[serde(default)]
-    pub issue: IssueConfig,
+    pub ticket: TicketConfig,
     /// Width of the shared worker pool. Machine tuning; carries no project
     /// convention, so a config may hold it alone.
     #[serde(default)]
@@ -635,9 +635,10 @@ pub struct HooksConfig {
     /// Runs once in the root of a worktree `workspace setup` or
     /// `pr checkout` has just created, after its apps are prepared and
     /// after the command has reported the worktree. Each argv element is
-    /// rendered as minijinja over `worktree`, `branch`, `issue`, `slug`,
-    /// `apps`, `prefix`, `role`, and `[templates.variables]`. Output is
-    /// discarded, so the command's JSON stays the last line on stdout.
+    /// rendered as minijinja over `worktree`, `branch`, `ticket` (also named
+    /// `issue`), `slug`, `apps`, `prefix`, `role`, and `[templates.variables]`.
+    /// Output is discarded, so the command's JSON stays the last line on
+    /// stdout.
     pub after_worktree_create: Vec<Vec<String>>,
 
     /// Runs once in the root of each worktree `workspace end` is about to
@@ -649,13 +650,14 @@ pub struct HooksConfig {
     pub before_worktree_remove: Vec<Vec<String>>,
 
     /// Runs once per worktree `workspace end` removed, after every removal in
-    /// the run has finished, in the main repository root. `issue`, `slug`
+    /// the run has finished, in the main repository root. `ticket`, `slug`
     /// and `apps` come from the `.devkit/issue.toml` record read before the
-    /// removal. Rendered over `worktree`, `branch`, `issue`, `slug`, `apps`,
-    /// `prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A
-    /// worktree kept back or skipped fires nothing. Runs after the run's
-    /// summary, so a failing hook never un-reports a removal, and is skipped
-    /// with a warning when the main repository root does not resolve.
+    /// removal. Rendered over `worktree`, `branch`, `ticket` (also named
+    /// `issue`), `slug`, `apps`, `prefix`, `worktree_root`, `primary`, and
+    /// `[templates.variables]`. A worktree kept back or skipped fires nothing.
+    /// Runs after the run's summary, so a failing hook never un-reports a
+    /// removal, and is skipped with a warning when the main repository root
+    /// does not resolve.
     pub after_worktree_remove: Vec<Vec<String>>,
 
     /// Runs once at the end of a `workspace end` run that removed at least one
@@ -684,12 +686,12 @@ pub struct HooksConfig {
 /// # let cfg = Config::parse(r#"
 /// [preserve.scratch]
 /// from     = [".scratch/"]
-/// to       = "{{ worktree_root }}/archive/{{ issue }}/scratch"
+/// to       = "{{ worktree_root }}/archive/{{ ticket }}/scratch"
 /// required = true
 ///
 /// [preserve.notes]
 /// from = ["docs/notes/*.md"]
-/// to   = "{{ primary }}/.devkit/archive/{{ issue }}"
+/// to   = "{{ primary }}/.devkit/archive/{{ ticket }}"
 /// # "#).unwrap();
 /// # assert!(cfg.preserve["scratch"].required);
 /// # assert!(!cfg.preserve["notes"].required);
@@ -713,16 +715,16 @@ pub struct PreserveConfig {
     /// `templates.issue_summary_path` puts it outside, where no pattern does.
     pub from: Vec<String>,
     /// Destination directory, rendered as minijinja over `worktree`, `branch`,
-    /// `issue`, `slug`, `apps`, `prefix`, `worktree_root`, `primary` and
-    /// `[templates.variables]`. Issue fields come from the worktree's
-    /// `.devkit/issue.toml` and render empty without one, and `primary` fails
-    /// when the primary checkout cannot be resolved. Must render to a
-    /// non-empty absolute path outside every worktree the run removes; the
-    /// filesystem decides that, so a symlink, `..` or case difference does not
-    /// slip past. Created when the first file lands. An existing file there is
-    /// truncated and rewritten, so an interrupted copy leaves a short file.
-    /// Two worktrees writing one filename into the same `to` collide; render
-    /// `{{ issue }}` into it.
+    /// `ticket` (also named `issue`), `slug`, `apps`, `prefix`,
+    /// `worktree_root`, `primary` and `[templates.variables]`. Issue fields
+    /// come from the worktree's `.devkit/issue.toml` and render empty
+    /// without one, and `primary` fails when the primary checkout cannot be
+    /// resolved. Must render to a non-empty absolute path outside every
+    /// worktree the run removes; the filesystem decides that, so a symlink,
+    /// `..` or case difference does not slip past. Created when the first
+    /// file lands. An existing file there is truncated and rewritten, so an
+    /// interrupted copy leaves a short file. Two worktrees writing one
+    /// filename into the same `to` collide; render `{{ ticket }}` into it.
     pub to: String,
     /// Keep the worktree, its branch and its summary when this entry warns,
     /// and exit non-zero. Governs errors only, never an empty match.
@@ -1012,7 +1014,7 @@ pub struct LinearConfig {
 
 /// Which GitHub repository holds this project's issues, for the GitHub
 /// tracker, and which Projects v2 project holds their status for
-/// `[issue.events]`. The repository pull requests go to is `[forge] repo`,
+/// `[ticket.events]`. The repository pull requests go to is `[forge] repo`,
 /// since a project on any forge has one.
 ///
 /// Unknown keys are refused: a misspelled `issue_repo` ignored would default
@@ -1045,7 +1047,7 @@ pub struct GithubConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_repo: Option<String>,
     /// The Projects v2 project whose single-select field holds the issues'
-    /// status, which `[issue.events]` moves under the GitHub tracker:
+    /// status, which `[ticket.events]` moves under the GitHub tracker:
     /// `"owner/N"`, or a bare `N` owned by `issues_repo`'s owner. Without it,
     /// a GitHub tracker's events fail naming this key.
     pub project: Option<ProjectRef>,
@@ -1135,7 +1137,7 @@ impl IssueEvent {
     /// Every event, in the order each fires on an issue.
     pub const ALL: [IssueEvent; 3] = [IssueEvent::Setup, IssueEvent::Start, IssueEvent::PrOpen];
 
-    /// The `[issue.events]` spelling, which is also the serialized form.
+    /// The `[ticket.events]` spelling, which is also the serialized form.
     pub fn as_str(self) -> &'static str {
         match self {
             IssueEvent::Setup => "setup",
@@ -1151,29 +1153,30 @@ impl std::fmt::Display for IssueEvent {
     }
 }
 
-/// The `[issue]` table. Each event moves the issue's status (a Linear state,
-/// or `[github] status_field`) from a `from` status to `to`; an event with no
-/// table does nothing. The statuses name one board, so keep the events in the
-/// repository's `devkit.toml`: tables merge key by key across layers.
+/// The `[ticket]` table, also read under its old name `[issue]`. Each event
+/// moves the ticket's status (a Linear state, or `[github] status_field`) from
+/// a `from` status to `to`; an event with no table does nothing. The statuses
+/// name one board, so keep the events in the repository's `devkit.toml`: tables
+/// merge key by key across layers.
 ///
 /// ```
 /// # use devkit_config::{Config, IssueEvent, ProjectRef};
 /// # let cfg = Config::parse(r#"
-/// [issue.events.setup]
+/// [ticket.events.setup]
 /// to = "Todo"
 ///
-/// [issue.events.start]
+/// [ticket.events.start]
 /// from = ["", "Todo", "Backlog"]
 /// to = "In progress"
 ///
-/// [issue.events.pr_open]
+/// [ticket.events.pr_open]
 /// to = "In review"
 ///
 /// [github]
 /// project = 3            # or "some-org/7"
 /// status_field = "Status"
 /// # "#).unwrap();
-/// # let events = &cfg.issue.events;
+/// # let events = &cfg.ticket.events;
 /// # assert_eq!(events.get(IssueEvent::Setup).unwrap().from, ["*"]);
 /// # assert_eq!(events.get(IssueEvent::Start).unwrap().from, ["", "Todo", "Backlog"]);
 /// # assert_eq!(events.get(IssueEvent::PrOpen).unwrap().to, "In review");
@@ -1181,16 +1184,16 @@ impl std::fmt::Display for IssueEvent {
 /// ```
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct IssueConfig {
+pub struct TicketConfig {
     /// Status moves, keyed by the event that fires them. The event names are
     /// fixed, so a misspelled one is a parse error.
-    pub events: IssueEventsConfig,
+    pub events: TicketEventsConfig,
 }
 
 /// One optional status move per event.
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct IssueEventsConfig {
+pub struct TicketEventsConfig {
     /// Fired by `workspace setup` as its last step, after the
     /// `after_worktree_create` hooks. A failed move warns and setup succeeds.
     pub setup: Option<EventTransition>,
@@ -1204,7 +1207,7 @@ pub struct IssueEventsConfig {
     pub pr_open: Option<EventTransition>,
 }
 
-impl IssueEventsConfig {
+impl TicketEventsConfig {
     /// The transition configured for `event`, if any.
     pub fn get(&self, event: IssueEvent) -> Option<&EventTransition> {
         match event {
@@ -1632,10 +1635,10 @@ pub struct Person {
 pub struct PrepFile {
     /// Target path, relative to the app's directory.
     pub path: String,
-    /// File contents, rendered as minijinja over `prefix`, `issue`, `slug`,
-    /// `apps`, `app`, `branch`, `worktree`, `role` and `[templates.variables]`,
-    /// then written with no newline added. Emit a literal `{{` with
-    /// `{% raw %}...{% endraw %}`.
+    /// File contents, rendered as minijinja over `prefix`, `ticket` (also
+    /// named `issue`), `slug`, `apps`, `app`, `branch`, `worktree`, `role` and
+    /// `[templates.variables]`, then written with no newline added. Emit a
+    /// literal `{{` with `{% raw %}...{% endraw %}`.
     pub content: String,
     /// Overwrite an existing file rather than skipping it.
     #[serde(default)]
@@ -1750,7 +1753,7 @@ impl From<&str> for RunArg {
 /// env = { NITRO_PRESET = "node-server" }
 ///
 /// [tasks.commit]
-/// run = ["git", "commit", "-m", "{% if issue is defined %}{{ issue }}: {% endif %}{{ msg }}"]
+/// run = ["git", "commit", "-m", "{% if ticket is defined %}{{ ticket }}: {% endif %}{{ msg }}"]
 /// guard = true            # redirect an agent's own `git commit` here
 ///
 /// [tasks.profile-lab-os]
@@ -1781,14 +1784,15 @@ pub struct TaskConfig {
     pub app: Option<String>,
     /// The command as one argv (program + args), run in the foreground with
     /// its exit code propagated. Every entry is a minijinja template over
-    /// `{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `issue`,
-    /// `slug`, `branch` from the worktree; any other name read is an arg of
-    /// the task, required unless a variable supplies a default. Minijinja's
-    /// `default` filter and `is defined` do not make an arg optional. `issue`,
-    /// `slug` and `branch` are undefined outside an issue worktree, so a task
-    /// run in both guards them with `{% if issue is defined %}`. The program
-    /// must be a plain string. A Doppler invocation is refused for `prd` the
-    /// same as an app's `launch`. Mutually exclusive with `steps`.
+    /// `{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `ticket`
+    /// (also named `issue`), `slug`, `branch` from the worktree; any other name
+    /// read is an arg of the task, required unless a variable supplies a
+    /// default. Minijinja's `default` filter and `is defined` do not make
+    /// an arg optional. `ticket`, `issue`, `slug` and `branch` are
+    /// undefined outside an issue worktree, so a task run in both guards
+    /// them with `{% if ticket is defined %}`. The program must be a plain
+    /// string. A Doppler invocation is refused for `prd` the same as an
+    /// app's `launch`. Mutually exclusive with `steps`.
     #[serde(default)]
     pub run: Vec<RunArg>,
     /// A sequence run in order, stopping at the first failure, each step a
@@ -1840,8 +1844,8 @@ pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
 pub const DEFAULT_WORKTREE_DIR: &str = "{{ slug }}";
 pub const DEFAULT_PR_TITLE: &str = "{{ input }}";
 pub const DEFAULT_PR_BODY: &str = "{{ input }}";
-pub const DEFAULT_ISSUE_TITLE: &str = "{{ input }}";
-pub const DEFAULT_ISSUE_BODY: &str = "{{ input }}";
+pub const DEFAULT_TICKET_TITLE: &str = "{{ input }}";
+pub const DEFAULT_TICKET_BODY: &str = "{{ input }}";
 pub const DEFAULT_REVIEW_REQUEST: &str = "{{ input }} {{ pr_url }}";
 pub const DEFAULT_REVIEW_FINISH: &str = "{{ input }} {{ pr_url }}";
 pub const DEFAULT_COMMIT_MESSAGE: &str = r#"{{- subject | trim }}
@@ -1854,9 +1858,9 @@ pub const DEFAULT_COMMIT_MESSAGE: &str = r#"{{- subject | trim }}
 Co-authored-by: {{ c }}
 {%- endfor %}
 {%- endif %}"#;
-pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md";
+pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ ticket }}.md";
 pub const DEFAULT_ISSUE_SUMMARY: &str = "\
-# {{ issue }}: {{ title }}\n\
+# {{ ticket }}: {{ title }}\n\
 \n\
 - **Issue:** {{ url }}\n\
 {% if parent %}- **Parent:** {{ parent }}\n{% endif %}\
@@ -1887,8 +1891,8 @@ pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
 /// underneath the context.
 ///
 /// Only these two. `issue`, `slug`, `branch`, `apps` and `prefix` have been
-/// context keys from the start, so a project may already shadow one on
-/// purpose.
+/// context keys from the start, and `ticket` names the same value as `issue`,
+/// so a project may already shadow one on purpose.
 const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
 
 /// Who must supply an `--arg` even though a default exists. `Never` is the
@@ -1920,13 +1924,13 @@ pub enum Required {
 /// [templates.variables]
 /// team = "platform"                              # a constant, never required
 /// msg = { default = "wip", required = "agents" } # defaulted, but agents must pass it
-/// ticket = { required = "always" }               # declared, no default, always required
+/// reviewer = { required = "always" }             # declared, no default, always required
 /// body = { default = "", description = "why the change was made, if the subject does not say" }
 /// # "#).unwrap();
 /// # let v = &cfg.templates.variables;
 /// # assert_eq!(v["team"].required(), Required::Never);
 /// # assert_eq!(v["msg"].default_value(), Some("wip"));
-/// # assert_eq!(v["ticket"].default_value(), None);
+/// # assert_eq!(v["reviewer"].default_value(), None);
 /// # assert!(v["body"].description().unwrap().starts_with("why"));
 /// ```
 ///
@@ -2010,18 +2014,18 @@ impl From<&str> for VariableDecl {
 /// # use devkit_config::Config;
 /// # let cfg = Config::parse(r#"
 /// [templates]
-/// branch             = "{{ prefix }}{{ issue }}-{{ slug }}"
+/// branch             = "{{ prefix }}{{ ticket }}-{{ slug }}"
 /// worktree_dir       = "{{ slug }}"
-/// pr_title           = "{{ issue }}: {{ input }}"
-/// pr_body            = "Closes {{ issue }}.\n\n{{ input }}"
+/// pr_title           = "{{ ticket }}: {{ input }}"
+/// pr_body            = "Closes {{ ticket }}.\n\n{{ input }}"
 /// issue_summary_path = "{{ worktree }}/.devkit/issue.md"
 ///
 /// [templates.variables]
 /// team = "platform"
 /// # "#).unwrap();
 /// # let t = &cfg.templates;
-/// # assert_eq!(t.branch(), "{{ prefix }}{{ issue }}-{{ slug }}");
-/// # assert_eq!(t.pr_body(), "Closes {{ issue }}.\n\n{{ input }}");
+/// # assert_eq!(t.branch(), "{{ prefix }}{{ ticket }}-{{ slug }}");
+/// # assert_eq!(t.pr_body(), "Closes {{ ticket }}.\n\n{{ input }}");
 /// # assert_eq!(t.worktree_dir_max(), 24);
 /// # assert_eq!(t.variables["team"].default_value(), Some("platform"));
 /// ```
@@ -2031,8 +2035,9 @@ impl From<&str> for VariableDecl {
 /// it is taken from `defaults.worktree_root` instead.
 #[derive(Debug, JsonSchema, Deserialize, Serialize, Default)]
 pub struct Templates {
-    /// Branch name created by `workspace setup`. Context: `prefix`, `issue`,
-    /// `slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.
+    /// Branch name created by `workspace setup`. Context: `prefix`, `ticket`
+    /// (also named `issue`), `slug`, `short_slug`, `apps`. Defaults to
+    /// `{{ prefix }}{{ slug }}`.
     pub branch: Option<String>,
     /// Longest branch `workspace setup` will render. A derived slug is
     /// shortened on a word boundary to fit. A template whose fixed text
@@ -2070,23 +2075,26 @@ pub struct Templates {
     /// create`. `{{ input }}` is the `--pr-body` argument. `pr create`
     /// renders it only when it opens a PR, not when it reuses an open one.
     pub pr_body: Option<String>,
-    /// Title of an issue rendered by `ticket render`, created by `ticket
+    /// Title of a ticket rendered by `ticket render`, created by `ticket
     /// create`, or written by `ticket edit --title`. `{{ input }}` is the
     /// `--title` argument; the rendered title must not be empty. `ticket edit`
-    /// without `--title` keeps the issue's title and does not render this.
-    pub issue_title: Option<String>,
-    /// Body of an issue rendered by `ticket render`, created by `ticket
-    /// create`, or written over an existing issue by `ticket edit`. `{{
-    /// input }}` is the `--body` argument and `issue_title` is the rendered
-    /// title, or the issue's current title when `ticket edit` runs without
-    /// `--title`. A `[templates.variables]` entry either rendered template
-    /// reads, marked `required`, must be passed as `--arg`; `ticket edit`
-    /// without `--title` asks only for the ones this template reads.
-    pub issue_body: Option<String>,
+    /// without `--title` keeps the ticket's title and does not render this.
+    /// `issue_title`, its old name, is read as this key.
+    pub ticket_title: Option<String>,
+    /// Body of a ticket rendered by `ticket render`, created by `ticket
+    /// create`, or written over an existing ticket by `ticket edit`. `{{
+    /// input }}` is the `--body` argument and `ticket_title` (or
+    /// `issue_title`) is the rendered title, or the ticket's current title
+    /// when `ticket edit` runs without `--title`. A `[templates.variables]`
+    /// entry either rendered template reads, marked `required`, must be passed
+    /// as `--arg`; `ticket edit` without `--title` asks only for the ones this
+    /// template reads. `issue_body`, its old name, is read as this key.
+    pub ticket_body: Option<String>,
     /// Slack message sent by `pr review request`. Rendered once per
     /// recipient with `name`, `slack_id` (empty for a channel), `pr_url`,
     /// `pr_title` (the PR's own title from GitHub), `input`, and `branch`,
-    /// `issue`, `slug`, `apps` from the worktree's `.devkit/issue.toml`.
+    /// `ticket` (also named `issue`), `slug`, `apps` from the worktree's
+    /// `.devkit/issue.toml`.
     pub review_request: Option<String>,
     /// Slack message sent by `pr review finish`. Same context as
     /// `review_request`, plus `author`.
@@ -2100,14 +2108,14 @@ pub struct Templates {
     /// relative path is taken from `defaults.worktree_root`, so the file
     /// sits beside the worktree and outlives it, and is refused when there
     /// is no `worktree_root`. Context: the `issue_summary` context below.
-    /// Defaults to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md`:
+    /// Defaults to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ ticket }}.md`:
     /// inside the worktree, or the checkout `workspace setup --here` binds,
     /// where it stays untracked and goes when `workspace end` removes the
     /// worktree.
     pub issue_summary_path: Option<String>,
     /// Body of the file `workspace setup --summary` writes when the tracker
     /// keeps no summary of its own; a GitHub issue's non-empty body is
-    /// written verbatim instead. Context: `issue`,
+    /// written verbatim instead. Context: `ticket` (also named `issue`),
     /// `title`, `url`, `description`, `state`, `assignee`, `priority`,
     /// `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,
     /// `prefix`, `apps`. A field the tracker left empty renders as the empty
@@ -2163,12 +2171,12 @@ impl Templates {
         self.pr_body.as_deref().unwrap_or(DEFAULT_PR_BODY)
     }
 
-    pub fn issue_title(&self) -> &str {
-        self.issue_title.as_deref().unwrap_or(DEFAULT_ISSUE_TITLE)
+    pub fn ticket_title(&self) -> &str {
+        self.ticket_title.as_deref().unwrap_or(DEFAULT_TICKET_TITLE)
     }
 
-    pub fn issue_body(&self) -> &str {
-        self.issue_body.as_deref().unwrap_or(DEFAULT_ISSUE_BODY)
+    pub fn ticket_body(&self) -> &str {
+        self.ticket_body.as_deref().unwrap_or(DEFAULT_TICKET_BODY)
     }
 
     pub fn review_request(&self) -> &str {
@@ -2222,7 +2230,8 @@ impl Templates {
 /// One `[templates.custom]` entry: a template a project writes once and an
 /// agent renders with `devkit template render <name> --arg key=value`. It
 /// reads `[templates.variables]` like every other template, plus `branch`,
-/// and `issue`, `slug` and `apps` from the worktree's `.devkit/issue.toml`.
+/// and `ticket` (also named `issue`), `slug` and `apps` from the worktree's
+/// `.devkit/issue.toml`.
 ///
 /// ```
 /// # use devkit_config::Config;
@@ -2352,9 +2361,48 @@ pub struct AppConfig {
 
 impl Config {
     pub fn parse(s: &str) -> Result<Self> {
-        let cfg: Config = toml::from_str(s).context("parsing devkit.toml")?;
+        let mut table: toml::Table = toml::from_str(s).context("parsing devkit.toml")?;
+        read_renamed_keys(&mut table).context("parsing devkit.toml")?;
+        let cfg: Config = toml::Value::Table(table)
+            .try_into()
+            .context("parsing devkit.toml")?;
         Ok(cfg)
     }
+}
+
+/// Templates renamed from their `issue_` spelling, old name first. A layer
+/// may still set the old name, and `devkit template` still takes it.
+pub const RENAMED_TEMPLATES: [(&str, &str); 2] = [
+    ("issue_title", "ticket_title"),
+    ("issue_body", "ticket_body"),
+];
+
+/// Move each key a layer sets under its old name to its current one, so
+/// layers merge as though every one used the current names. A layer setting
+/// one key under both names is refused: neither spelling outranks the other
+/// within a file.
+fn read_renamed_keys(layer: &mut toml::Table) -> Result<()> {
+    rename_key(layer, "", "issue", "ticket")?;
+    if let Some(toml::Value::Table(templates)) = layer.get_mut("templates") {
+        for (old, new) in RENAMED_TEMPLATES {
+            rename_key(templates, "templates.", old, new)?;
+        }
+    }
+    Ok(())
+}
+
+fn rename_key(table: &mut toml::Table, prefix: &str, old: &str, new: &str) -> Result<()> {
+    let Some(value) = table.remove(old) else {
+        return Ok(());
+    };
+    if table.contains_key(new) {
+        bail!(
+            "`{prefix}{old}` is the old name of `{prefix}{new}`, and one layer sets both; \
+             keep only `{prefix}{new}`"
+        );
+    }
+    table.insert(new.to_string(), value);
+    Ok(())
 }
 
 /// Per-leaf record of which config layer supplied each value.
@@ -2721,7 +2769,11 @@ pub(crate) fn resolve_with_home(
     // passing `.`) must not leak into that value.
     let start_buf = absolutize(start)?;
     let start = start_buf.as_path();
-    let layers = discover(explicit, start, main_checkout, home)?;
+    let mut layers = discover(explicit, start, main_checkout, home)?;
+    for (path, table) in &mut layers {
+        read_renamed_keys(table)
+            .with_context(|| format!("reading config layer {}", path.display()))?;
+    }
     let order: Vec<PathBuf> = layers.iter().map(|(p, _)| p.clone()).collect();
     let (merged, origin, shadowed) = merge_layers(&layers);
     if let Some(warning) = check_baseline_path(&origin, home)? {
@@ -4036,12 +4088,12 @@ overwrite = true
     }
 
     #[test]
-    fn issue_templates_default_to_the_input() {
+    fn ticket_templates_default_to_the_input() {
         let t = Templates::default();
-        assert_eq!(t.issue_title(), "{{ input }}");
-        assert_eq!(t.issue_body(), "{{ input }}");
+        assert_eq!(t.ticket_title(), "{{ input }}");
+        assert_eq!(t.ticket_body(), "{{ input }}");
         let c = Config::parse("[templates]\nissue_body = \"x {{ input }}\"\n").unwrap();
-        assert_eq!(c.templates.issue_body(), "x {{ input }}");
+        assert_eq!(c.templates.ticket_body(), "x {{ input }}");
     }
 
     #[test]
@@ -4771,14 +4823,123 @@ steps = [
     #[test]
     fn issue_events_parse_and_default_from_to_any() {
         let cfg = Config::parse("[issue.events.start]\nto = \"In progress\"\n").unwrap();
-        let t = cfg.issue.events.get(IssueEvent::Start).unwrap();
+        let t = cfg.ticket.events.get(IssueEvent::Start).unwrap();
         assert_eq!(
             (t.from.clone(), t.to.as_str()),
             (vec!["*".to_string()], "In progress")
         );
-        assert!(cfg.issue.events.get(IssueEvent::Setup).is_none());
-        assert!(cfg.issue.events.any());
-        assert!(!Config::parse("").unwrap().issue.events.any());
+        assert!(cfg.ticket.events.get(IssueEvent::Setup).is_none());
+        assert!(cfg.ticket.events.any());
+        assert!(!Config::parse("").unwrap().ticket.events.any());
+    }
+
+    /// Resolve a tracked `devkit.toml` under a `devkit.local.toml` beside it.
+    fn resolve_two_layers(tracked: &str, local: &str) -> Result<(Config, Provenance)> {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(
+            repo.path().join("devkit.toml"),
+            format!("[config]\nroot = true\n{tracked}"),
+        )
+        .unwrap();
+        std::fs::write(repo.path().join("devkit.local.toml"), local).unwrap();
+        resolve_with_home(None, repo.path(), None, None, None, None)
+    }
+
+    #[test]
+    fn the_ticket_table_loads_and_the_issue_table_still_does() {
+        for table in ["ticket", "issue"] {
+            let (cfg, prov) = resolve_two_layers(
+                &format!("[{table}.events.setup]\nto = \"Todo\"\n"),
+                &format!("[{table}.events.start]\nto = \"In progress\"\n"),
+            )
+            .unwrap();
+            let events = &cfg.ticket.events;
+            assert_eq!(
+                events.get(IssueEvent::Setup).unwrap().to,
+                "Todo",
+                "[{table}]"
+            );
+            assert_eq!(
+                events.get(IssueEvent::Start).unwrap().to,
+                "In progress",
+                "[{table}]"
+            );
+            assert!(
+                prov.origin["ticket.events.start.to"].ends_with("devkit.local.toml"),
+                "[{table}]"
+            );
+        }
+    }
+
+    #[test]
+    fn an_issue_table_in_a_higher_layer_overrides_a_ticket_table_below_it() {
+        let (cfg, prov) = resolve_two_layers(
+            "[ticket.events.pr_open]\nto = \"In review\"\n[ticket.events.setup]\nto = \"Todo\"\n",
+            "[issue.events.pr_open]\nto = \"Review\"\n",
+        )
+        .unwrap();
+        let events = &cfg.ticket.events;
+        assert_eq!(events.get(IssueEvent::PrOpen).unwrap().to, "Review");
+        assert_eq!(events.get(IssueEvent::Setup).unwrap().to, "Todo");
+        assert_eq!(prov.shadowed["ticket.events.pr_open.to"].len(), 1);
+
+        let (cfg, _) = resolve_two_layers(
+            "[issue.events.pr_open]\nto = \"Review\"\n",
+            "[ticket.events.pr_open]\nto = \"In review\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.ticket.events.get(IssueEvent::PrOpen).unwrap().to,
+            "In review"
+        );
+    }
+
+    #[test]
+    fn the_ticket_templates_load_and_the_issue_templates_still_do() {
+        let (cfg, _) = resolve_two_layers(
+            "[templates]\nticket_title = \"t {{ input }}\"\nticket_body = \"b {{ input }}\"\n",
+            "",
+        )
+        .unwrap();
+        assert_eq!(cfg.templates.ticket_title(), "t {{ input }}");
+        assert_eq!(cfg.templates.ticket_body(), "b {{ input }}");
+
+        let (cfg, prov) = resolve_two_layers(
+            "[templates]\nticket_title = \"t {{ input }}\"\nticket_body = \"b {{ input }}\"\n",
+            "[templates]\nissue_body = \"old {{ input }}\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.templates.ticket_title(), "t {{ input }}");
+        assert_eq!(cfg.templates.ticket_body(), "old {{ input }}");
+        assert!(prov.origin["templates.ticket_body"].ends_with("devkit.local.toml"));
+    }
+
+    #[test]
+    fn one_layer_setting_a_key_under_both_names_is_refused() {
+        for (body, old, new) in [
+            (
+                "[issue.events.setup]\nto = \"a\"\n[ticket.events.start]\nto = \"b\"\n",
+                "issue",
+                "ticket",
+            ),
+            (
+                "[templates]\nissue_title = \"a\"\nticket_title = \"b\"\n",
+                "templates.issue_title",
+                "templates.ticket_title",
+            ),
+            (
+                "[templates]\nissue_body = \"a\"\nticket_body = \"b\"\n",
+                "templates.issue_body",
+                "templates.ticket_body",
+            ),
+        ] {
+            let msg = format!("{:#}", resolve_two_layers(body, "").unwrap_err());
+            assert!(msg.contains(&format!("`{old}`")), "{msg}");
+            assert!(msg.contains(&format!("`{new}`")), "{msg}");
+            assert!(msg.contains("devkit.toml"), "{msg}");
+            let msg = format!("{:#}", Config::parse(body).unwrap_err());
+            assert!(msg.contains(&format!("`{new}`")), "{msg}");
+        }
     }
 
     #[test]

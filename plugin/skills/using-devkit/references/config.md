@@ -13,6 +13,8 @@
 
 The `[harness]` switches and `[harness.log]` resolve across layers by rules of their own, which their descriptions give.
 
+A renamed key still loads under its old name, read as the new one before layers merge, so a layer using the old name overrides a lower layer using the new one and the reverse. `[issue]` reads as `[ticket]`, and `templates.issue_title` and `templates.issue_body` as `templates.ticket_title` and `templates.ticket_body`. One layer setting a key under both names is refused.
+
 ## Before editing a table
 
 Read the table's schema description first. A trap that belongs to one key or table is written there and nowhere else:

@@ -43,7 +43,7 @@ pub(crate) fn on_session_start(checkout: &Checkout) {
     let Ok((cfg, _)) = devkit_common::config::resolve_in(checkout, None, root) else {
         return;
     };
-    if cfg.issue.events.start.is_none() {
+    if cfg.ticket.events.start.is_none() {
         return;
     }
     let start = root.to_string_lossy();

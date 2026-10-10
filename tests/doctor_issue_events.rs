@@ -1,12 +1,12 @@
-//! `devkit doctor` checks `[issue.events]` against the tracker: the project,
+//! `devkit doctor` checks `[ticket.events]` against the tracker: the project,
 //! its status field, every status name, and the token's scope.
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
 
 const EVENTS: &str = "[tracker]\nkind = \"github\"\n\
-                      [issue.events.start]\nfrom = [\"\", \"Todo\"]\nto = \"In progress\"\n\
-                      [issue.events.pr_open]\nto = \"In review\"\n";
+                      [ticket.events.start]\nfrom = [\"\", \"Todo\"]\nto = \"In progress\"\n\
+                      [ticket.events.pr_open]\nto = \"In review\"\n";
 
 const BOARD: &str = r#"{"data":{"repositoryOwner":{"projectV2":{"id":"PVT_3","field":{"id":"F","options":[
   {"id":"a","name":"Todo"},{"id":"b","name":"In progress"},{"id":"c","name":"In review"}]}}}}}"#;
@@ -91,7 +91,7 @@ fn a_sentinel_target_fails_naming_its_key() {
     gh.serve_graphql(BOARD);
     let row = row(&gh).expect("an issue_events row");
     assert_eq!(row["status"], "invalid", "{row}");
-    assert!(detail(&row).contains("[issue.events.pr_open] to"), "{row}");
+    assert!(detail(&row).contains("[ticket.events.pr_open] to"), "{row}");
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn a_missing_from_name_fails_naming_its_key() {
     let row = row(&gh).expect("an issue_events row");
     assert_eq!(row["status"], "invalid", "{row}");
     assert!(
-        detail(&row).contains("[issue.events.start] from")
+        detail(&row).contains("[ticket.events.start] from")
             && detail(&row).contains("no option `Backlog`"),
         "{row}"
     );

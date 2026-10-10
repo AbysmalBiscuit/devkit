@@ -384,6 +384,7 @@ fn probe_ctx(
 ) -> serde_json::Value {
     serde_json::json!({
         "prefix": cfg.defaults.branch_prefix,
+        "ticket": issue,
         "issue": issue,
         "slug": slug,
         "short_slug": short_slug,
@@ -595,7 +596,7 @@ fn bind_here(
         }
         None => None,
     };
-    let setup_event = cfg.issue.events.setup.is_some();
+    let setup_event = cfg.ticket.events.setup.is_some();
     let fires_setup = devkit_common::record::update(&root, |rec| {
         if let Some(bound) = rec.as_ref() {
             refuse_bound(bound)?;
@@ -755,6 +756,7 @@ fn setup(
     let wt_root = worktree_root(cfg)?;
     let ctx = serde_json::json!({
         "prefix": cfg.defaults.branch_prefix,
+        "ticket": issue,
         "issue": issue,
         "slug": slug,
         "short_slug": dir_slug,
@@ -848,7 +850,7 @@ fn setup(
     };
     // The setup event is claimed in the record's first write, so firing it
     // costs no second one.
-    let fires_setup = !issue.is_empty() && cfg.issue.events.setup.is_some();
+    let fires_setup = !issue.is_empty() && cfg.ticket.events.setup.is_some();
     devkit_common::record::write(&worktree, &devkit_common::record::IssueRecord {
         issue: issue.clone(),
         slug: slug.clone(),

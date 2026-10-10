@@ -15,7 +15,7 @@ use devkit_common::{
     template,
     vcs::{self, Vcs, VersionControl},
 };
-use devkit_config::{Config, Required, Templates};
+use devkit_config::{Config, RENAMED_TEMPLATES, Required, Templates};
 use serde::Serialize;
 
 use crate::task::{TaskArg, arg_rows};
@@ -92,14 +92,14 @@ const BUILT_INS: [BuiltIn; 12] = [
         source: Templates::pr_body,
     },
     BuiltIn {
-        name: "issue_title",
-        description: "Title of an issue `ticket render`, `ticket create` or `ticket edit --title` writes",
-        source: Templates::issue_title,
+        name: "ticket_title",
+        description: "Title of a ticket `ticket render`, `ticket create` or `ticket edit --title` writes",
+        source: Templates::ticket_title,
     },
     BuiltIn {
-        name: "issue_body",
-        description: "Body of an issue `ticket render`, `ticket create` or `ticket edit` writes",
-        source: Templates::issue_body,
+        name: "ticket_body",
+        description: "Body of a ticket `ticket render`, `ticket create` or `ticket edit` writes",
+        source: Templates::ticket_body,
     },
     BuiltIn {
         name: "review_request",
@@ -282,15 +282,16 @@ fn render_commit_message(
     Ok(text)
 }
 
-/// The context every template renders over: `branch`, and `issue`, `slug`,
-/// `apps` from the worktree's record when it has one. A field with no source
-/// stays undefined rather than empty.
+/// The context every template renders over: `branch`, and `ticket` (also
+/// under its old name `issue`), `slug`, `apps` from the worktree's record
+/// when it has one. A field with no source stays undefined rather than empty.
 pub fn worktree_context(record: Option<&IssueRecord>, branch: Option<&str>) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     if let Some(b) = branch {
         m.insert("branch".into(), serde_json::json!(b));
     }
     if let Some(r) = record {
+        m.insert("ticket".into(), serde_json::json!(r.issue));
         m.insert("issue".into(), serde_json::json!(r.issue));
         m.insert("slug".into(), serde_json::json!(r.slug));
         m.insert("apps".into(), serde_json::json!(r.apps));
@@ -419,6 +420,10 @@ fn lookup<'a>(cfg: &'a Config, name: &str) -> Result<(Kind, String, &'a str)> {
             &c.body,
         ));
     }
+    let name = RENAMED_TEMPLATES
+        .iter()
+        .find_map(|(old, new)| (*old == name).then_some(*new))
+        .unwrap_or(name);
     BUILT_INS
         .iter()
         .find(|b| b.name == name)
@@ -478,7 +483,7 @@ mod tests {
             .into_iter()
             .map(|t| t.name)
             .collect();
-        for name in ["issue_title", "issue_body"] {
+        for name in ["ticket_title", "ticket_body"] {
             assert_eq!(names.iter().filter(|n| *n == name).count(), 1, "{names:?}");
         }
     }

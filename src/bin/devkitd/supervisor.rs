@@ -381,7 +381,7 @@ mod tests {
         let key = Key {
             holder: "/w".into(),
             app: app.into(),
-            role: Role::Issue,
+            role: Role::Workspace,
         };
         s.insert_owned(key, pid, port, PathBuf::new(), Launch {
             argv: vec!["true".into()],
@@ -394,15 +394,15 @@ mod tests {
     fn restart_budget_blocks_after_max() {
         let mut s = sup();
         live(&mut s, "api", 1, 9100);
-        assert!(s.may_restart("/w", "api", Role::Issue)); // 1
-        assert!(s.may_restart("/w", "api", Role::Issue)); // 2
-        assert!(!s.may_restart("/w", "api", Role::Issue)); // exhausted (max=2)
+        assert!(s.may_restart("/w", "api", Role::Workspace)); // 1
+        assert!(s.may_restart("/w", "api", Role::Workspace)); // 2
+        assert!(!s.may_restart("/w", "api", Role::Workspace)); // exhausted (max=2)
     }
 
     #[test]
     fn unknown_key_has_no_restart_budget() {
         let mut s = sup();
-        assert!(!s.may_restart("/w", "ghost", Role::Issue));
+        assert!(!s.may_restart("/w", "ghost", Role::Workspace));
     }
 
     #[test]
@@ -410,9 +410,9 @@ mod tests {
         let mut s = sup();
         live(&mut s, "api", 1, 9100);
         live(&mut s, "lab-os", 2, 9200);
-        assert!(s.may_restart("/w", "api", Role::Issue));
-        assert!(s.may_restart("/w", "api", Role::Issue));
-        assert!(s.may_restart("/w", "lab-os", Role::Issue)); // different child, own budget
+        assert!(s.may_restart("/w", "api", Role::Workspace));
+        assert!(s.may_restart("/w", "api", Role::Workspace));
+        assert!(s.may_restart("/w", "lab-os", Role::Workspace)); // different child, own budget
     }
 
     #[test]
@@ -420,28 +420,28 @@ mod tests {
         let mut s = sup(); // max_restarts = 2
         live(&mut s, "api", 1, 9100);
         // Peeking any number of times must not consume the budget.
-        assert!(s.can_restart("/w", "api", Role::Issue));
-        assert!(s.can_restart("/w", "api", Role::Issue));
-        assert!(s.can_restart("/w", "api", Role::Issue));
+        assert!(s.can_restart("/w", "api", Role::Workspace));
+        assert!(s.can_restart("/w", "api", Role::Workspace));
+        assert!(s.can_restart("/w", "api", Role::Workspace));
         // Two real attempts still succeed; the third is blocked.
-        assert!(s.may_restart("/w", "api", Role::Issue));
-        assert!(s.may_restart("/w", "api", Role::Issue));
-        assert!(!s.may_restart("/w", "api", Role::Issue));
+        assert!(s.may_restart("/w", "api", Role::Workspace));
+        assert!(s.may_restart("/w", "api", Role::Workspace));
+        assert!(!s.may_restart("/w", "api", Role::Workspace));
         // Once exhausted, the peek reports false too.
-        assert!(!s.can_restart("/w", "api", Role::Issue));
+        assert!(!s.can_restart("/w", "api", Role::Workspace));
     }
 
     #[test]
     fn can_restart_unknown_key_is_false() {
         let mut s = sup();
-        assert!(!s.can_restart("/w", "ghost", Role::Issue));
+        assert!(!s.can_restart("/w", "ghost", Role::Workspace));
     }
 
     fn key_for(app: &str) -> Key {
         Key {
             holder: "/w".into(),
             app: app.into(),
-            role: Role::Issue,
+            role: Role::Workspace,
         }
     }
 
@@ -520,7 +520,7 @@ mod tests {
         let key = Key {
             holder: "/w".into(),
             app: "api".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
         };
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("portd-test.log");
@@ -597,8 +597,8 @@ mod tests {
         live_self(&mut s, "api");
         let k = key_for("api");
         // Exhaust the budget directly.
-        assert!(s.may_restart("/w", "api", Role::Issue));
-        assert!(!s.may_restart("/w", "api", Role::Issue));
+        assert!(s.may_restart("/w", "api", Role::Workspace));
+        assert!(!s.may_restart("/w", "api", Role::Workspace));
         // Threshold reached -> GiveUp exactly once (budget gone).
         s.mem_limit_actions(2);
         let acts = s.mem_limit_actions(2);

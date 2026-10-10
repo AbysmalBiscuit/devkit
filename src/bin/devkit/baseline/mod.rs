@@ -245,6 +245,7 @@ fn bootstrap_context(sha: &str, apps: &[String], prefix: &str) -> serde_json::Va
     let id = format!("baseline-{}", short(sha));
     serde_json::json!({
         "prefix": prefix,
+        "ticket": id,
         "issue": id,
         "slug": id,
         "branch": id,

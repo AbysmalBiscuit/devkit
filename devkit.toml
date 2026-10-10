@@ -133,7 +133,9 @@ worktree_dir = '''
 # PR body for `devkit pr create`; `input` comes from `--pr-body`.
 # Only a human supplies `human_tldr`.
 pr_body = '''
-{%- set own = (issue_magic_word ~ " " ~ ("#" if issue and issue[0] in "0123456789" else "") ~ issue) if issue else "" -%}
+{%- set id = ticket or issue -%}
+{%- set magic = issue_magic_word or ticket_magic_word -%}
+{%- set own = (magic ~ " " ~ ("#" if id and id[0] in "0123456789" else "") ~ id) if id else "" -%}
 {%- set ref_lines = ((own ~ ";" ~ refs) if own else refs) | split(";") | map("trim") | reject("eq", "") | list -%}
 {%- set agent = agent_model or agent_harness -%}
 ## TL;DR (human written)
@@ -170,11 +172,11 @@ Implemented by {{ implemented_by | trim }}
 {%- endif %}
 '''
 
-# Issue body for `devkit ticket render`, `ticket create` and `ticket edit`;
+# Ticket body for `devkit ticket render`, `ticket create` and `ticket edit`;
 # `input` comes from `--body`. Laid out as a prompt to the agent that works
 # the issue: the task, its finish line, when to stop, then what it may not
 # touch.
-issue_body = '''
+ticket_body = '''
 {{- input | trim }}
 {%- if done_when | trim %}
 
@@ -219,8 +221,10 @@ context = { default = "", description = "Links, error output, the parent and blo
 
 # Supplied by the render context in a worktree `workspace setup` created; declared
 # so the templates also render outside one.
-issue = { default = "", description = "The worktree's own issue id, filled in an issue worktree; pass it only outside one" }
-issue_magic_word = { default = "Closes", description = "Keyword on the worktree's own issue line: `Refs` when this branch does not finish the issue" }
+ticket = { default = "", description = "The worktree's own issue id, filled in an issue worktree; pass it only outside one" }
+issue = { default = "", description = "Old name of `ticket`" }
+ticket_magic_word = { default = "Closes", description = "Keyword on the worktree's own issue line: `Refs` when this branch does not finish the issue" }
+issue_magic_word = { default = "", description = "Old name of `ticket_magic_word`, which it overrides when set" }
 refs = { default = "", description = "Every other issue line, `;`-separated, each with its own keyword: `Closes #12; Refs #90`" }
 
 agent_model = { default = "", required = "agents", description = "Full name of the model that did the work, e.g. `Claude Opus 5`" }

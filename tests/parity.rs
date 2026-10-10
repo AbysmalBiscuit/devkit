@@ -21,7 +21,7 @@ fn alloc_through_daemon_writes_registry() {
     let resp = h.request(&Request::Alloc {
         holder: holder.clone(),
         reqs: vec![("api".into(), 19100)],
-        role: Role::Issue,
+        role: Role::Workspace,
     });
 
     let ports = match resp {
@@ -70,7 +70,7 @@ fn snapshot_roundtrips() {
     h.request(&Request::Alloc {
         holder: holder.clone(),
         reqs: vec![("api".into(), 19200)],
-        role: Role::Issue,
+        role: Role::Workspace,
     });
 
     let snap = match h.request(&Request::Snapshot) {

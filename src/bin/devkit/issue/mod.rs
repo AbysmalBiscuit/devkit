@@ -241,15 +241,15 @@ impl IssueCli {
 pub(crate) enum TicketCmd {
     /// Render an issue title and body for a tracker MCP call.
     ///
-    /// Uses the `issue_title` and `issue_body` templates. Prints {"title": ...,
-    /// "body": ...}. Pass both unchanged to the tracker's MCP tool: inside
-    /// an agent session this records a receipt, and the pre-tool-use hook
-    /// denies an issue write whose text has none.
+    /// Uses the `ticket_title` and `ticket_body` templates. Prints
+    /// {"title": ..., "body": ...}. Pass both unchanged to the tracker's MCP
+    /// tool: inside an agent session this records a receipt, and the
+    /// pre-tool-use hook denies an issue write whose text has none.
     Render {
-        /// Issue title, the `input` of the `issue_title` template.
+        /// Issue title, the `input` of the `ticket_title` template.
         #[arg(long)]
         title: String,
-        /// Issue body, the `input` of the `issue_body` template.
+        /// Issue body, the `input` of the `ticket_body` template.
         #[arg(long)]
         body: Option<String>,
         #[command(flatten)]
@@ -257,10 +257,10 @@ pub(crate) enum TicketCmd {
     },
     /// Create a GitHub issue from the issue templates.
     Create {
-        /// Issue title, the `input` of the `issue_title` template.
+        /// Issue title, the `input` of the `ticket_title` template.
         #[arg(long)]
         title: String,
-        /// Issue body, the `input` of the `issue_body` template.
+        /// Issue body, the `input` of the `ticket_body` template.
         #[arg(long)]
         body: Option<String>,
         #[command(flatten)]
@@ -269,20 +269,20 @@ pub(crate) enum TicketCmd {
     /// Rewrite a GitHub issue's body (and title) from the issue templates.
     ///
     /// Without `--title` the issue keeps its current title, which the
-    /// `issue_body` template reads as `issue_title`.
+    /// `ticket_body` template reads as `ticket_title` and `issue_title`.
     Edit {
         /// Issue number or issue URL.
         issue: String,
-        /// New issue title, the `input` of the `issue_title` template.
+        /// New issue title, the `input` of the `ticket_title` template.
         #[arg(long)]
         title: Option<String>,
-        /// New issue body, the `input` of the `issue_body` template.
+        /// New issue body, the `input` of the `ticket_body` template.
         #[arg(long)]
         body: String,
         #[command(flatten)]
         vars: VarArgs,
     },
-    /// Move the issue's tracker status as [issue.events] configures EVENT.
+    /// Move the issue's tracker status as [ticket.events] configures EVENT.
     ///
     /// Reads the status and moves it to the event's `to` when it is in the
     /// event's `from`. setup, start and pr_open already fire on their own;

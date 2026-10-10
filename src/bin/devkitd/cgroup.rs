@@ -41,7 +41,7 @@ pub(crate) fn leaf_name(key: &Key) -> String {
             .collect::<String>()
     };
     let role = match key.role {
-        Role::Issue => "issue",
+        Role::Workspace => "workspace",
         Role::Baseline => "baseline",
     };
     // Hash the raw (un-sanitized) fields with NUL separators so that field
@@ -120,23 +120,23 @@ mod tests {
 
     #[test]
     fn leaf_name_is_filesystem_safe_and_distinct() {
-        let a = leaf_name(&key("/home/ex/wt", "web", Role::Issue));
+        let a = leaf_name(&key("/home/ex/wt", "web", Role::Workspace));
         assert!(!a.contains('/'), "no slashes in a leaf name: {a}");
         // The readable prefix is intact; the trailing hash makes names unique.
         assert!(
-            a.starts_with("_home_ex_wt__web__issue__"),
+            a.starts_with("_home_ex_wt__web__workspace__"),
             "expected readable prefix in: {a}"
         );
         // Role distinguishes otherwise-identical keys.
         let b = leaf_name(&key("/home/ex/wt", "web", Role::Baseline));
         assert_ne!(a, b);
         // App distinguishes.
-        let c = leaf_name(&key("/home/ex/wt", "api", Role::Issue));
+        let c = leaf_name(&key("/home/ex/wt", "api", Role::Workspace));
         assert_ne!(a, c);
         // Distinct holders that sanitize to the same prefix must still differ
         // (the trailing hash disambiguates).
-        let p = leaf_name(&key("/a/b", "web", Role::Issue));
-        let q = leaf_name(&key("/a_b", "web", Role::Issue));
+        let p = leaf_name(&key("/a/b", "web", Role::Workspace));
+        let q = leaf_name(&key("/a_b", "web", Role::Workspace));
         assert_ne!(p, q, "punctuation-only difference must not collide");
     }
 
@@ -150,8 +150,8 @@ mod tests {
         // block rmdir, and a tmpfs dir has none).
         let base = tempfile::tempdir().unwrap();
         let servers = base.path().join("servers");
-        let live = key("/w", "api", Role::Issue);
-        let orphan = key("/w", "ghost", Role::Issue);
+        let live = key("/w", "api", Role::Workspace);
+        let orphan = key("/w", "ghost", Role::Workspace);
         std::fs::create_dir_all(servers.join(leaf_name(&live))).unwrap();
         std::fs::create_dir_all(servers.join(leaf_name(&orphan))).unwrap();
         let d = crate::test_daemon_with_base(base.path().to_path_buf(), 1 << 30);

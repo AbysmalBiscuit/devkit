@@ -79,18 +79,18 @@ fn gate_waiver_scoping_and_lazy_resolution() {
 
     // Holder scoping: a foreign holder on BASE never satisfies my gate and
     // never leaks into my allocation.
-    registry::with_lock(|d| Ok(d.alloc_one(foreign_s, "api", BASE, Role::Issue))).unwrap();
+    registry::with_lock(|d| Ok(d.alloc_one(foreign_s, "api", BASE, Role::Workspace))).unwrap();
     let err = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none, &none).unwrap_err();
     assert!(format!("{err:#}").contains("no live server"), "{err:#}");
 
     let my_port =
-        registry::with_lock(|d| Ok(d.alloc_one(mine_s, "api", BASE, Role::Issue))).unwrap();
+        registry::with_lock(|d| Ok(d.alloc_one(mine_s, "api", BASE, Role::Workspace))).unwrap();
     assert_eq!(my_port, BASE + 1);
     registry::record_pid(
         my_port,
         "api",
         mine_s,
-        Role::Issue,
+        Role::Workspace,
         std::process::id(),
         tmp.path().join("api.log"),
     )
@@ -102,13 +102,14 @@ fn gate_waiver_scoping_and_lazy_resolution() {
     // port — nothing is cached from the earlier call.
     registry::release_ports(&[my_port]).unwrap();
     registry::release_ports(&[BASE]).unwrap(); // free the foreign row too
-    let moved = registry::with_lock(|d| Ok(d.alloc_one(mine_s, "api", BASE, Role::Issue))).unwrap();
+    let moved =
+        registry::with_lock(|d| Ok(d.alloc_one(mine_s, "api", BASE, Role::Workspace))).unwrap();
     assert_eq!(moved, BASE);
     registry::record_pid(
         moved,
         "api",
         mine_s,
-        Role::Issue,
+        Role::Workspace,
         std::process::id(),
         tmp.path().join("api.log"),
     )

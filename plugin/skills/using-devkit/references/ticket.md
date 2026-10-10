@@ -14,10 +14,10 @@ ticket dashboard [--chart bar|line] [--bucket B] [--mode M] [--aggregate cumulat
 
 ## `render`, `create` and `edit`: write a ticket
 
-Ticket titles and bodies come from the `issue_title` and `issue_body` templates. `{{ input }}` is `--title` or `--body`, and the body template also sees the rendered `issue_title`. A `[templates.variables]` entry either template reads and marks `required` must be passed as `--arg`. A missing one is refused by name, with its description.
+Ticket titles and bodies come from the `ticket_title` and `ticket_body` templates; `issue_title` and `issue_body`, their old names, still load. `{{ input }}` is `--title` or `--body`, and the body template also sees the rendered title as `ticket_title` and as `issue_title`. A `[templates.variables]` entry either template reads and marks `required` must be passed as `--arg`. A missing one is refused by name, with its description.
 
 - **GitHub:** `ticket create` renders and runs `gh issue create` against `issues_repo`, then prints the issue URL. Under any other tracker it refuses and points at `ticket render`.
-- **GitHub, an existing issue:** `ticket edit <number|URL> --body B` renders the body and runs `gh issue edit` to replace it. `--title T` also renders and replaces the title; without it the issue keeps its title, which the body template sees as `issue_title`. Under any other tracker it refuses and points at `ticket render`.
+- **GitHub, an existing issue:** `ticket edit <number|URL> --body B` renders the body and runs `gh issue edit` to replace it. `--title T` also renders and replaces the title; without it the issue keeps its title, which the body template sees as `ticket_title`. Under any other tracker it refuses and points at `ticket render`.
 - **A tracker MCP (Linear's `save_issue`, GitHub's `issue_write`):** run `ticket render`, which prints `{"title": ..., "body": ...}`, and pass both strings unchanged as the MCP call's title and body fields. Line endings and trailing whitespace may differ, but any other edit is denied as text that differs from the render.
 - **Through a tracker MCP, rewriting an existing ticket's title or body** goes through `ticket render` too. An update that only changes state, labels or assignee needs no render. Linear's `patch` edits the body in place, so it is always refused: render the whole new body and pass it as `description`.
 
@@ -27,7 +27,7 @@ Enforcement is configuration. `[harness.issue_tools.<name>]` entries name the MC
 
 ## Status events
 
-`[issue.events]` moves the ticket's tracker status when devkit acts on it: a Linear workflow state, or on GitHub the single-select field of the Projects v2 project `[github] project` names. Each event moves the ticket only from a status its `from` lists, and a ticket already at `to` is left alone. With no `[issue.events]`, devkit reads and writes no tracker status. `devkit schema` documents the keys.
+`[ticket.events]` moves the ticket's tracker status when devkit acts on it: a Linear workflow state, or on GitHub the single-select field of the Projects v2 project `[github] project` names. Each event moves the ticket only from a status its `from` lists, and a ticket already at `to` is left alone. `[issue.events]`, its old name, still loads. With neither, devkit reads and writes no tracker status. `devkit schema` documents the keys.
 
 | Event | Fires | Where |
 |---|---|---|

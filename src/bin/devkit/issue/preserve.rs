@@ -49,6 +49,7 @@ pub(crate) fn context(
     let mut ctx = serde_json::json!({
         "worktree": worktree.display().to_string(),
         "branch": branch,
+        "ticket": record.map(|r| r.issue.as_str()).unwrap_or_default(),
         "issue": record.map(|r| r.issue.as_str()).unwrap_or_default(),
         "slug": record.map(|r| r.slug.as_str()).unwrap_or_default(),
         "apps": record.map(|r| r.apps.clone()).unwrap_or_default(),
