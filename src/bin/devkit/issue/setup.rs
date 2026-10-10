@@ -502,7 +502,7 @@ fn refuse_default_branch(
 ) -> Result<()> {
     anyhow::ensure!(
         branch != devkit_common::vcs::DETACHED,
-        "`issue setup --here` binds a branch, and HEAD is detached: check out a feature branch first"
+        "`workspace setup --here` binds a branch, and HEAD is detached: check out a feature branch first"
     );
     let defaults: Vec<String> = [
         vcs.default_branch(root).ok(),
@@ -524,8 +524,8 @@ fn refuse_default_branch(
     Ok(())
 }
 
-/// `issue setup --here`: bind the checkout `start` sits in to `issue` on the
-/// branch it already has. Writes the record and, when asked, the summary;
+/// `workspace setup --here`: bind the checkout `start` sits in to `issue` on
+/// the branch it already has. Writes the record and, when asked, the summary;
 /// creates no branch or worktree and runs no worktree hooks. Running it again
 /// for the same issue refreshes the record, and for another issue refuses.
 fn bind_here(
@@ -546,7 +546,7 @@ fn bind_here(
     let refuse_bound = |bound: &devkit_common::record::IssueRecord| -> Result<()> {
         anyhow::ensure!(
             bound.origin != Some(RecordOrigin::Checkout),
-            "{} is a review checkout `issue pr checkout` made, not work on an issue",
+            "{} is a review checkout `pr checkout` made, not work on an issue",
             root.display()
         );
         anyhow::ensure!(
@@ -711,7 +711,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     setup(&args, cfg, &loaded.catalog, &resolved).map(drop)
 }
 
-/// `issue setup` against an already loaded config and resolved tracker,
+/// `workspace setup` against an already loaded config and resolved tracker,
 /// returning what it reported.
 fn setup(
     args: &SetupArgs,
@@ -826,8 +826,8 @@ fn setup(
     })?;
 
     // The summary lands before the record so the record can name it: that is
-    // how `issue end` knows which file to remove, whatever the path template
-    // said at setup time.
+    // how `workspace end` knows which file to remove, whatever the path
+    // template said at setup time.
     let summary_path = match &details {
         Some(d) => {
             let (path, written) = crate::issue::summary::write(
@@ -855,7 +855,7 @@ fn setup(
         branch: Some(branch.clone()),
         apps: args.apps.clone(),
         summary: summary_path.clone(),
-        // `issue setup` has no PR to record — there is none yet.
+        // `workspace setup` has no PR to record — there is none yet.
         pr: None,
         baseline: None,
         origin: Some(RecordOrigin::Setup),

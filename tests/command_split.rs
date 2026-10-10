@@ -69,6 +69,82 @@ fn every_new_spelling_parses() {
     }
 }
 
+/// The old verbs, as the `issue` alias spells them.
+const OLD_VERBS: &[&str] = &[
+    "setup",
+    "status",
+    "end",
+    "sync-includes",
+    "create",
+    "edit",
+    "render",
+    "event",
+    "dashboard",
+    "pr",
+    "prs",
+    "review",
+    "info",
+    "checkout-pr",
+];
+
+/// Help an agent reads to learn a verb names that verb's new command, never
+/// the `issue` spelling it replaced.
+#[test]
+fn no_verb_help_names_the_issue_alias() {
+    let paths: &[&[&str]] = &[
+        &["ticket"],
+        &["ticket", "create"],
+        &["ticket", "edit"],
+        &["ticket", "render"],
+        &["ticket", "event"],
+        &["ticket", "dashboard"],
+        &["workspace"],
+        &["workspace", "setup"],
+        &["workspace", "status"],
+        &["workspace", "end"],
+        &["workspace", "sync-includes"],
+        &["pr"],
+        &["pr", "create"],
+        &["pr", "render"],
+        &["pr", "ready"],
+        &["pr", "status"],
+        &["pr", "checkout"],
+        &["pr", "list"],
+        &["pr", "review"],
+        &["pr", "review", "request"],
+        &["pr", "review", "finish"],
+    ];
+    for path in paths {
+        for flag in ["-h", "--help"] {
+            let mut args = path.to_vec();
+            args.push(flag);
+            let (_home, out) = devkit(&args);
+            let help = text(&out);
+            assert!(out.status.success(), "{}: {help}", args.join(" "));
+            for verb in OLD_VERBS {
+                assert!(
+                    !names_issue_verb(&help, verb),
+                    "`devkit {}` names `issue {verb}`: {help}",
+                    args.join(" ")
+                );
+            }
+        }
+    }
+}
+
+/// Whether `text` spells `issue <verb>` as a whole command word, so
+/// `issue pr` matches at the end of a line or before punctuation while
+/// `issue prs` and `issue pr-x` do not.
+fn names_issue_verb(text: &str, verb: &str) -> bool {
+    let needle = format!("issue {verb}");
+    text.match_indices(&needle).any(|(at, _)| {
+        text[at + needle.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '-')
+    })
+}
+
 /// The `ticket` and `workspace` links parse as their own roots.
 #[test]
 fn the_new_links_parse_their_own_verbs() {

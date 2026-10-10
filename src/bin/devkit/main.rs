@@ -194,13 +194,13 @@ enum Cmd {
     Activity(activity::ActivityCli),
     /// Set up this machine for devkit; safe to rerun.
     ///
-    /// Links the old command names as `install-links` does, and appends each
+    /// Links the command names as `install-links` does, and appends each
     /// of devkit's ignore patterns (`.devkit/`, `*.local`, `*.local.*`) that
     /// git's global excludes file lacks, leaving its other lines as they are.
     Install(links::InstallLinksArgs),
-    /// Install the old command names as hardlinks beside this binary.
+    /// Install the command names as hardlinks beside this binary.
     ///
-    /// Creates hardlinks such as `issue` and `devrun` beside this
+    /// Creates hardlinks such as `ticket` and `devrun` beside this
     /// executable.
     InstallLinks(links::InstallLinksArgs),
 }
@@ -366,9 +366,10 @@ fn intercept_help(root: &clap::Command, args: &[OsString]) -> Result<bool> {
     }
 
     // Build before walking. `build()` is what assigns each subcommand its
-    // `devkit issue status` usage name and copies the parent's `global(true)`
-    // arguments down; a subcommand cloned out of an unbuilt tree prints
-    // `Usage: status [IDS]...` with no `-C`, `--config` or `--timing`.
+    // `devkit workspace status` usage name and copies the parent's
+    // `global(true)` arguments down; a subcommand cloned out of an unbuilt
+    // tree prints `Usage: status [IDS]...` with no `-C`, `--config` or
+    // `--timing`.
     let mut built = root.clone();
     built.build();
     let mut node = built;

@@ -192,7 +192,7 @@ pub fn run(cli: HookCli) -> Result<()> {
     }
 }
 
-/// Delete the ending session's `issue render` and `issue pr render` receipts
+/// Delete the ending session's `ticket render` and `pr render` receipts
 /// in the payload's checkout. Best-effort: a receipt left behind is swept by a
 /// later render of the same kind.
 fn clear_receipts(payload: &Payload, checkout: &Checkout) {
@@ -298,7 +298,7 @@ pub(crate) fn legacy_lock_event(event: &str) -> Result<()> {
 }
 
 /// The payload's own tool picks the path: an edit goes to the edit guard, an
-/// MCP call to the issue guard, and everything else to the shell guard. The
+/// MCP call to the render guard, and everything else to the shell guard. The
 /// decision belongs here, where the payload is, rather than in one matcher
 /// block per subsystem in each manifest.
 ///

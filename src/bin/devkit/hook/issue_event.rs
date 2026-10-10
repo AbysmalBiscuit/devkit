@@ -22,7 +22,7 @@ pub(crate) fn log_path(root: &Path) -> std::path::PathBuf {
 }
 
 /// Whether a session starting in this worktree may fire `start`: a worktree
-/// `issue setup` created, for a tracker issue. The origin is required, not
+/// `workspace setup` created, for a tracker issue. The origin is required, not
 /// inferred: `devrun up` gives a hand-made worktree a record named after its
 /// branch, and a branch like `ENG-123` reads as a tracker id.
 fn qualifies(rec: &IssueRecord) -> bool {

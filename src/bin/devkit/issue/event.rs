@@ -1,6 +1,6 @@
-//! `devkit issue event`: move an issue's tracker status as `[issue.events]`
-//! configures one event. Every trigger ends here: `issue setup` and
-//! `issue pr create` inline, the SessionStart hook in the background, and a
+//! `devkit ticket event`: move a ticket's tracker status as `[issue.events]`
+//! configures one event. Every trigger ends here: `workspace setup` and
+//! `pr create` inline, the SessionStart hook in the background, and a
 //! person rerunning one by hand.
 
 use std::path::Path;
@@ -16,7 +16,7 @@ use devkit_common::{
 };
 use devkit_config::{Health, IssueEvent};
 
-/// The `issue event` argument, spelled as `[issue.events]` spells it.
+/// The `ticket event` argument, spelled as `[issue.events]` spells it.
 #[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
 pub(crate) enum EventArg {
     Setup,
@@ -85,7 +85,7 @@ pub(crate) fn fire(
 pub(crate) fn fire_inline(dir: &Path, config: Option<&Path>, event: IssueEvent, issue: &str) {
     match fire(dir, config, event, Some(issue)) {
         Ok(line) => eprintln!("{line}"),
-        Err(e) => eprintln!("warning: issue event {event}: {e:#}"),
+        Err(e) => eprintln!("warning: ticket event {event}: {e:#}"),
     }
 }
 
@@ -97,7 +97,7 @@ pub(crate) fn run(
     log_file: Option<&Path>,
 ) -> Result<()> {
     let event = IssueEvent::from(event);
-    let fired = fire(dir, config, event, issue).with_context(|| format!("issue event {event}"));
+    let fired = fire(dir, config, event, issue).with_context(|| format!("ticket event {event}"));
     if let Some(path) = log_file {
         let line = match &fired {
             Ok(line) => line.clone(),

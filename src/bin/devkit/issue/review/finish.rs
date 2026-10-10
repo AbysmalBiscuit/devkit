@@ -57,7 +57,7 @@ pub fn run(args: Args) -> Result<()> {
     let mut vars = tmpls.defaults();
     let given = parse_args(&args.vars, &tmpls.declared())?;
     check_required(
-        "issue review finish",
+        "pr review finish",
         &loaded.config,
         &[tmpls.review_finish()],
         REVIEW_FINISH_CONTEXT_KEYS,

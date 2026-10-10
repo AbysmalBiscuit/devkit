@@ -1,5 +1,5 @@
 //! The pre-tool-use hook gates an issue write through a tracker's MCP tool on
-//! the receipts `devkit issue render` leaves, and session end clears them.
+//! the receipts `devkit ticket render` leaves, and session end clears them.
 
 #[path = "common/testenv.rs"]
 mod testenv;
@@ -89,18 +89,18 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// `devkit issue render` in `project` as an agent whose harness exports
+/// `devkit ticket render` in `project` as an agent whose harness exports
 /// `vars`, returning the rendered title and body.
 fn render_as(project: &Path, vars: &[(&str, &str)], title: &str, body: &str) -> (String, String) {
     let state = tempfile::tempdir().unwrap();
     let mut cmd = devkit(project, state.path());
-    cmd.args(["issue", "render", "--title", title, "--body", body])
+    cmd.args(["ticket", "render", "--title", title, "--body", body])
         .args(["--arg", "acceptance=A"])
         .env("DEVKIT_CALLER", "agent");
     for (k, v) in vars {
         cmd.env(k, v);
     }
-    let out = cmd.output().expect("spawn devkit issue render");
+    let out = cmd.output().expect("spawn devkit ticket render");
     assert!(out.status.success(), "{}", stderr(&out));
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     (
@@ -152,7 +152,10 @@ fn an_unrendered_create_is_denied_with_the_render_command() {
     let p = project();
     let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, create("T", "B")));
     let reason = denial(&out).expect("denied");
-    assert!(reason.contains("devkit issue render"), "{reason}");
+    assert!(
+        reason.contains("devkit ticket render") && !reason.contains("issue render"),
+        "{reason}"
+    );
     assert!(reason.contains("--arg acceptance=..."), "{reason}");
 }
 
@@ -287,7 +290,10 @@ fn codex_payloads_are_gated_too() {
     };
     let before = hook("codex", "pre-tool-use", p.path(), &payload("T", "B"));
     let reason = denial(&before).expect("denied before the render");
-    assert!(reason.contains("devkit issue render"), "{reason}");
+    assert!(
+        reason.contains("devkit ticket render") && !reason.contains("issue render"),
+        "{reason}"
+    );
 
     let (t, b) = render_as(p.path(), &[("CODEX_SESSION_ID", "S")], "T", "B");
     let after = hook("codex", "pre-tool-use", p.path(), &payload(&t, &b));

@@ -1,4 +1,4 @@
-//! The proof gate on `issue pr create`: an agent's proof must answer every
+//! The proof gate on `pr create`: an agent's proof must answer every
 //! item under the issue's `Done when` (or `Acceptance criteria`) section.
 
 use std::collections::BTreeSet;

@@ -40,8 +40,8 @@ pub(crate) fn guard_branch(branch: &str) -> Result<()> {
     Ok(())
 }
 
-/// Map a detected PR state to the next action. `issue pr create` is the only
-/// caller that acts on `Create` by opening a PR; `issue pr ready` and `issue
+/// Map a detected PR state to the next action. `pr create` is the only
+/// caller that acts on `Create` by opening a PR; `pr ready` and `pr
 /// review request` refuse it, since neither opens one.
 pub(crate) fn action_for(pr_state: Option<&str>) -> PrAction {
     match pr_state {
@@ -132,7 +132,7 @@ pub(crate) const REVIEW_FINISH_CONTEXT_KEYS: &[&str] = &[
 
 /// Refuse a required `--arg` this run's templates read and the caller did not
 /// supply. `templates` are the ones this command can render, taken statically:
-/// `issue pr` builds title and body in closures `ensure` may not call, and
+/// `pr` builds title and body in closures `ensure` may not call, and
 /// gating on that would move the error after the push. `context_keys` are the
 /// names the command's render context binds, which no `--arg` can supply.
 ///
@@ -204,7 +204,9 @@ pub(crate) fn render_review(
         .with_context(|| format!("rendering `{key}` template"));
     if let Some(worktree) = missing_record_at {
         r = r.with_context(|| {
-            format!("no .devkit/issue.toml found in {worktree} — was it created by `issue setup`?")
+            format!(
+                "no .devkit/issue.toml found in {worktree} — was it created by `workspace setup`?"
+            )
         });
     }
     r
@@ -377,7 +379,7 @@ mod tests {
         let expected =
             |k: &[&str]| -> BTreeSet<String> { k.iter().map(|s| s.to_string()).collect() };
 
-        // `issue pr` renders pr_title and pr_body directly off the worktree
+        // `pr` renders pr_title and pr_body directly off the worktree
         // context, with `input` on both and `pr_title` bound for the body.
         let base = worktree_context(Some(&record), Some("lev/eng-1-fix"));
         let pr = with_fields(&base, &[

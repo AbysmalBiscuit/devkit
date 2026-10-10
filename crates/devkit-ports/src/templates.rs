@@ -58,57 +58,57 @@ struct BuiltIn {
 const BUILT_INS: [BuiltIn; 12] = [
     BuiltIn {
         name: "branch",
-        description: "Branch name `issue setup` creates",
+        description: "Branch name `workspace setup` creates",
         source: Templates::branch,
     },
     BuiltIn {
         name: "worktree_dir",
-        description: "Worktree directory name `issue setup` creates",
+        description: "Worktree directory name `workspace setup` creates",
         source: Templates::worktree_dir,
     },
     BuiltIn {
         name: "checkout_worktree_dir",
-        description: "Worktree directory name `issue pr checkout` creates",
+        description: "Worktree directory name `pr checkout` creates",
         source: Templates::checkout_worktree_dir,
     },
     BuiltIn {
         name: "issue_summary_path",
-        description: "Where `issue setup --summary` writes the summary",
+        description: "Where `workspace setup --summary` writes the summary",
         source: Templates::issue_summary_path,
     },
     BuiltIn {
         name: "issue_summary",
-        description: "Summary file `issue setup --summary` writes",
+        description: "Summary file `workspace setup --summary` writes",
         source: Templates::issue_summary,
     },
     BuiltIn {
         name: "pr_title",
-        description: "Title of a PR rendered by `issue pr render` or opened by `issue pr create`",
+        description: "Title of a PR rendered by `pr render` or opened by `pr create`",
         source: Templates::pr_title,
     },
     BuiltIn {
         name: "pr_body",
-        description: "Body of a PR rendered by `issue pr render` or opened by `issue pr create`",
+        description: "Body of a PR rendered by `pr render` or opened by `pr create`",
         source: Templates::pr_body,
     },
     BuiltIn {
         name: "issue_title",
-        description: "Title of an issue `issue render`, `issue create` or `issue edit --title` writes",
+        description: "Title of an issue `ticket render`, `ticket create` or `ticket edit --title` writes",
         source: Templates::issue_title,
     },
     BuiltIn {
         name: "issue_body",
-        description: "Body of an issue `issue render`, `issue create` or `issue edit` writes",
+        description: "Body of an issue `ticket render`, `ticket create` or `ticket edit` writes",
         source: Templates::issue_body,
     },
     BuiltIn {
         name: "review_request",
-        description: "Slack message sent by `issue review request`",
+        description: "Slack message sent by `pr review request`",
         source: Templates::review_request,
     },
     BuiltIn {
         name: "review_finish",
-        description: "Slack message sent by `issue review finish`",
+        description: "Slack message sent by `pr review finish`",
         source: Templates::review_finish,
     },
     BuiltIn {

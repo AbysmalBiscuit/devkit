@@ -1,4 +1,4 @@
-//! Slug derivation, shared by the tracker adapters and the `issue` CLI.
+//! Slug derivation, shared by the tracker adapters and `workspace setup`.
 
 /// Lowercase, collapse non-alphanumerics to single dashes, trim dashes.
 pub fn slugify(s: &str) -> String {

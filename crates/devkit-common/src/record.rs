@@ -4,38 +4,39 @@ use anyhow::{Context, Result, bail};
 use devkit_config::IssueEvent;
 use serde::{Deserialize, Serialize};
 
-/// Per-worktree record written by `issue setup`, carrying the setup-time
+/// Per-worktree record written by `workspace setup`, carrying the setup-time
 /// context that is otherwise unavailable later: the authoritative issue id, and
-/// the slug, apps and summary path that `issue review` and `issue end` need.
+/// the slug, apps and summary path that `pr review` and `workspace end` need.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IssueRecord {
     pub issue: String,
     pub slug: String,
-    /// The branch `issue setup` bound to the issue: the one it created, or
+    /// The branch `workspace setup` bound to the issue: the one it created, or
     /// with `--here` the one already checked out. Absent on records written
     /// before it existed and on those `pr checkout` writes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub apps: Vec<String>,
-    /// The summary file `issue setup --summary` wrote, so `issue end` removes
-    /// the file that actually exists rather than re-deriving a path from a
-    /// template that may have changed since. Absent on records written before
-    /// the summary existed, and on setups that asked for none.
+    /// The summary file `workspace setup --summary` wrote, so `workspace end`
+    /// removes the file that actually exists rather than re-deriving a path
+    /// from a template that may have changed since. Absent on records
+    /// written before the summary existed, and on setups that asked for
+    /// none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     /// The pull request this worktree's work belongs to, written by
-    /// `pr checkout` and by `issue review request` whenever either resolves
+    /// `pr checkout` and by `pr review request` whenever either resolves
     /// one. The locator identifies both repository and number, so a PR outside
     /// `pr_repo` is still findable. Absent on records written before it existed
-    /// and on an `issue setup` worktree whose PR does not exist yet.
+    /// and on a `workspace setup` worktree whose PR does not exist yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr: Option<crate::forge::PrLocator>,
     /// The baseline this worktree compares against, written whenever `devrun
     /// up` resolves one. Absent on records written before baselines were
     /// per-worktree, and on a worktree that has never run one. The path is
-    /// stored alongside the sha because it is what `issue end` deletes: a sha
-    /// alone would resolve somewhere new the moment `baseline_dir` changed,
-    /// orphaning every existing baseline.
+    /// stored alongside the sha because it is what `workspace end` deletes: a
+    /// sha alone would resolve somewhere new the moment `baseline_dir`
+    /// changed, orphaning every existing baseline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<BaselinePin>,
     /// Which command created the worktree. Absent on records written before
@@ -52,15 +53,15 @@ pub struct IssueRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordOrigin {
-    /// `issue setup`: the worktree where the issue's work happens.
+    /// `workspace setup`: the worktree where the issue's work happens.
     Setup,
-    /// `issue pr checkout`: a reviewer's worktree on an existing PR.
+    /// `pr checkout`: a reviewer's worktree on an existing PR.
     Checkout,
 }
 
 /// One worktree's pin on a baseline: which sha it was built at, and where it
-/// lives, so `issue end` can remove that exact directory without re-deriving
-/// it from a `baseline_dir` that may have since changed.
+/// lives, so `workspace end` can remove that exact directory without
+/// re-deriving it from a `baseline_dir` that may have since changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BaselinePin {
     pub sha: String,

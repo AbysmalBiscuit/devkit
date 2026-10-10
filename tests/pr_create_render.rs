@@ -1,13 +1,13 @@
-//! `issue pr create` renders a template only for the run that sends it.
+//! `pr create` renders a template only for the run that sends it.
 //!
 //! Templating is strict about undefined variables, and `{{ issue }}` is bound
-//! only in a worktree `issue setup` recorded. So a template that reads it is a
-//! live failure for every run that renders one it has no use for.
+//! only in a worktree `workspace setup` recorded. So a template that reads it
+//! is a live failure for every run that renders one it has no use for.
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
 
-/// A `pr_body` that cannot render outside an `issue setup` worktree.
+/// A `pr_body` that cannot render outside a `workspace setup` worktree.
 const BODY_NEEDS_THE_RECORD: &str = r#"
 [templates]
 pr_body = "Closes {{ issue }}"

@@ -234,7 +234,7 @@ fn an_orphaned_baseline_is_reclaimed_and_the_dry_run_agrees() {
 }
 
 /// Removing the directory the operator is standing in leaves their shell in a
-/// path that no longer resolves. `issue end` refuses the same way for a
+/// path that no longer resolves. `workspace end` refuses the same way for a
 /// worktree.
 #[test]
 fn prune_refuses_the_baseline_it_is_standing_in() {

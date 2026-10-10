@@ -65,7 +65,7 @@ fn an_unknown_origin_host_fails_a_pr_command_without_calling_gh() {
     );
 }
 
-/// With no forge, `issue status` still reports every worktree, holding each
+/// With no forge, `workspace status` still reports every worktree, holding each
 /// one unfinished with the reason, rather than failing on the PR lookup.
 #[test]
 fn status_reports_worktrees_without_a_forge() {

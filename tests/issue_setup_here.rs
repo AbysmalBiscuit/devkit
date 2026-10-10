@@ -1,4 +1,4 @@
-//! `issue setup --here` binds the checkout it runs in to an issue, for a
+//! `workspace setup --here` binds the checkout it runs in to an issue, for a
 //! session that works on a branch it was handed and may create no worktree.
 
 #[path = "common/ghfake.rs"]
@@ -251,7 +251,10 @@ fn setup_here_refuses_a_pr_checkout() {
 
     let stderr = stderr(&out);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("issue pr checkout"), "{stderr}");
+    assert!(
+        stderr.contains("`pr checkout`") && !stderr.contains("issue pr"),
+        "{stderr}"
+    );
     assert_eq!(devkit_common::record::read(fake.project()), Some(checkout));
 }
 

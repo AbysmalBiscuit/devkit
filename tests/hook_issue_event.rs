@@ -1,5 +1,5 @@
 //! The SessionStart hook claims the `start` status event in a worktree
-//! `issue setup` created and fires it in the background, once per worktree.
+//! `workspace setup` created and fires it in the background, once per worktree.
 
 #[path = "common/ghfake.rs"]
 mod ghfake;

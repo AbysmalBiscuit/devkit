@@ -188,7 +188,7 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 /// [harness.commands.git-worktree]
 /// programs = ["git"]
 /// args     = ["worktree", "add"]
-/// reason   = "use `issue setup <id>`, which records the worktree"
+/// reason   = "use `workspace setup <id>`, which records the worktree"
 ///
 /// [harness.commands.nitro-dev]
 /// programs = ["bun", "node"]
@@ -248,8 +248,8 @@ pub struct CommandRule {
 
 /// One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an
 /// MCP tool that creates or edits issues or PRs, whose title and body the
-/// pre-tool-use hook allows only when `devkit issue render` (an issue) or
-/// `devkit issue pr render` (a PR) produced them in the same agent session.
+/// pre-tool-use hook allows only when `devkit ticket render` (an issue) or
+/// `devkit pr render` (a PR) produced them in the same agent session.
 ///
 /// ```
 /// # use devkit_config::RenderedToolRule;
@@ -515,12 +515,12 @@ pub struct HarnessSection {
     #[serde(default)]
     pub commands: BTreeMap<String, CommandRule>,
     /// MCP tools that create or edit issues, whose title and body must come
-    /// from `devkit issue render`. Merged across config layers by name.
+    /// from `devkit ticket render`. Merged across config layers by name.
     /// Enforces on its own presence, independent of `enforce_commands`.
     #[serde(default)]
     pub issue_tools: BTreeMap<String, RenderedToolRule>,
     /// MCP tools that open or edit PRs, whose title and body must come from
-    /// `devkit issue pr render`. Merged across config layers by name.
+    /// `devkit pr render`. Merged across config layers by name.
     /// Enforces on its own presence, independent of `enforce_commands`.
     #[serde(default)]
     pub pr_tools: BTreeMap<String, RenderedToolRule>,

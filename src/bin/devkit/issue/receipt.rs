@@ -1,5 +1,5 @@
-//! Render receipts: an empty file per title and per body `issue render` or
-//! `issue pr render` produced in an agent session, named by the digest of its
+//! Render receipts: an empty file per title and per body `ticket render` or
+//! `pr render` produced in an agent session, named by the digest of its
 //! text. The pre-tool-use hook allows an issue-writing MCP call only when its
 //! text has an issue receipt.
 

@@ -25,11 +25,11 @@ pub struct Config {
     #[serde(default)]
     pub defaults: Defaults,
     /// One table per runnable app, keyed by the app id passed to
-    /// `issue setup --apps` and `devrun up`.
+    /// `workspace setup --apps` and `devrun up`.
     #[serde(default)]
     pub apps: HashMap<String, AppConfig>,
     /// Reviewer/recipient aliases, keyed by the short name passed to
-    /// `issue review --to`.
+    /// `pr review --to`.
     #[serde(default)]
     pub people: HashMap<String, Person>,
     /// The `devkitd` supervisor: autostart gate, crash-loop budget, and the
@@ -47,7 +47,8 @@ pub struct Config {
     /// is absent.
     #[serde(default)]
     pub forge: ForgeConfig,
-    /// Which issue tracker backs `issue`. Detected when the table is absent.
+    /// Which issue tracker backs `ticket`, `workspace` and `pr`. Detected when
+    /// the table is absent.
     #[serde(default)]
     pub tracker: TrackerConfig,
     /// What devkit does to an issue's tracker status when it acts on that
@@ -58,7 +59,7 @@ pub struct Config {
     /// convention, so a config may hold it alone.
     #[serde(default)]
     pub parallelism: ParallelismConfig,
-    /// Minijinja templates for the strings `issue setup` and `issue review`
+    /// Minijinja templates for the strings `workspace setup` and `pr review`
     /// generate — branch names, worktree directories, PR fields, Slack bodies.
     #[serde(default)]
     pub templates: Templates,
@@ -72,7 +73,7 @@ pub struct Config {
     /// `{before,after}_<event>`.
     #[serde(default)]
     pub hooks: HooksConfig,
-    /// Files copied out of an issue worktree before `issue end` removes it,
+    /// Files copied out of an issue worktree before `workspace end` removes it,
     /// keyed by the name that labels the entry's progress step and its
     /// warnings.
     #[serde(default)]
@@ -609,7 +610,7 @@ impl Default for McpConfig {
 /// for. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and
 /// globs are not available. A hook that fails to render, spawn, or exit zero
 /// warns on stderr and the remaining hooks still run. Output is captured and
-/// discarded. A `devkit.toml` that fails to load leaves `issue end` with no
+/// discarded. A `devkit.toml` that fails to load leaves `workspace end` with no
 /// hooks, so none of its keys run.
 ///
 /// ```
@@ -631,25 +632,25 @@ impl Default for McpConfig {
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HooksConfig {
-    /// Runs once in the root of a worktree `issue setup` or
-    /// `issue pr checkout` has just created, after its apps are prepared and
+    /// Runs once in the root of a worktree `workspace setup` or
+    /// `pr checkout` has just created, after its apps are prepared and
     /// after the command has reported the worktree. Each argv element is
     /// rendered as minijinja over `worktree`, `branch`, `issue`, `slug`,
     /// `apps`, `prefix`, `role`, and `[templates.variables]`. Output is
     /// discarded, so the command's JSON stays the last line on stdout.
     pub after_worktree_create: Vec<Vec<String>>,
 
-    /// Runs once in the root of each worktree `issue end` is about to remove,
-    /// after `[preserve]` has copied its files out and before any removal in
-    /// the run starts. Worktrees run one at a time, in confirmed order.
-    /// Rendered over the same keys as `after_worktree_remove`. A failing hook
-    /// warns and the worktree is still removed. A worktree kept back or
-    /// skipped fires nothing.
+    /// Runs once in the root of each worktree `workspace end` is about to
+    /// remove, after `[preserve]` has copied its files out and before any
+    /// removal in the run starts. Worktrees run one at a time, in confirmed
+    /// order. Rendered over the same keys as `after_worktree_remove`. A
+    /// failing hook warns and the worktree is still removed. A worktree
+    /// kept back or skipped fires nothing.
     pub before_worktree_remove: Vec<Vec<String>>,
 
-    /// Runs once per worktree `issue end` removed, after every removal in the
-    /// run has finished, in the main repository root. `issue`, `slug` and
-    /// `apps` come from the `.devkit/issue.toml` record read before the
+    /// Runs once per worktree `workspace end` removed, after every removal in
+    /// the run has finished, in the main repository root. `issue`, `slug`
+    /// and `apps` come from the `.devkit/issue.toml` record read before the
     /// removal. Rendered over `worktree`, `branch`, `issue`, `slug`, `apps`,
     /// `prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A
     /// worktree kept back or skipped fires nothing. Runs after the run's
@@ -657,7 +658,7 @@ pub struct HooksConfig {
     /// with a warning when the main repository root does not resolve.
     pub after_worktree_remove: Vec<Vec<String>>,
 
-    /// Runs once at the end of an `issue end` run that removed at least one
+    /// Runs once at the end of a `workspace end` run that removed at least one
     /// worktree, after every `after_worktree_remove` hook, in the main
     /// repository root. It carries `removed` (the removed paths, in confirmed
     /// order, rendered as one argv slot), `count`, `prefix`, `worktree_root`,
@@ -667,7 +668,7 @@ pub struct HooksConfig {
     pub after_end: Vec<Vec<String>>,
 }
 
-/// Files copied out of a worktree before `issue end` removes it. Each entry
+/// Files copied out of a worktree before `workspace end` removes it. Each entry
 /// names its own destination, so one run can archive different files to
 /// different places. A failure warns and the worktree goes anyway, unless the
 /// entry is `required`. Entries run serially in sorted name order, before any
@@ -1000,7 +1001,7 @@ pub struct FileCondition {
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct LinearConfig {
-    /// Query Linear for the issues linked to each PR in `issue prs` and the
+    /// Query Linear for the issues linked to each PR in `pr list` and the
     /// `issue.prs` MCP action, adding every linked id to the ISSUE column. One
     /// extra batched round trip per 25 PRs. Fail-soft: with no key or on a
     /// Linear error the column keeps the id derived from the PR text. Linear
@@ -1053,7 +1054,7 @@ pub struct GithubConfig {
     pub status_field: Option<String>,
     /// Skip GitHub's GraphQL API. A call with a REST path goes straight to
     /// it, one request per item where GraphQL would batch them; one with
-    /// none, such as `issue prs`, fails naming this key. Unset, devkit tries
+    /// none, such as `pr list`, fails naming this key. Unset, devkit tries
     /// GraphQL first and uses REST only where GitHub refuses GraphQL outright.
     /// `DEVKIT_NO_GRAPHQL` (`1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`)
     /// wins over this.
@@ -1122,11 +1123,11 @@ impl From<ProjectRef> for ProjectSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueEvent {
-    /// `issue setup` created the issue's worktree.
+    /// `workspace setup` created the issue's worktree.
     Setup,
-    /// The first agent session started in a worktree `issue setup` created.
+    /// The first agent session started in a worktree `workspace setup` created.
     Start,
-    /// `issue pr create` opened the issue's PR or found it open.
+    /// `pr create` opened the issue's PR or found it open.
     PrOpen,
 }
 
@@ -1190,15 +1191,15 @@ pub struct IssueConfig {
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IssueEventsConfig {
-    /// Fired by `issue setup` as its last step, after the
+    /// Fired by `workspace setup` as its last step, after the
     /// `after_worktree_create` hooks. A failed move warns and setup succeeds.
     pub setup: Option<EventTransition>,
-    /// Fired by the first agent session in a worktree `issue setup` created,
-    /// once per worktree, in the background. `issue pr checkout` worktrees
-    /// never fire it. List the states work starts from in `from`: `["*"]` lets
-    /// a second worktree pull an issue back from review.
+    /// Fired by the first agent session in a worktree `workspace setup`
+    /// created, once per worktree, in the background. `pr checkout`
+    /// worktrees never fire it. List the states work starts from in `from`:
+    /// `["*"]` lets a second worktree pull an issue back from review.
     pub start: Option<EventTransition>,
-    /// Fired by `issue pr create`, whether it opened the PR or found one open.
+    /// Fired by `pr create`, whether it opened the PR or found one open.
     /// A failed move warns and the PR stays as it is.
     pub pr_open: Option<EventTransition>,
 }
@@ -1293,11 +1294,11 @@ pub struct ForgeConfig {
     /// Force a forge instead of detecting one. With no forge, commands that
     /// read or write a pull request fail and say so; worktrees, ports, locks
     /// and docs keep working. `none` declares that this project has no pull
-    /// requests, so `issue end` finishes a worktree once its tracker issue is
-    /// done, its tree is clean and its commits are on a remote. Detection that
-    /// finds no forge holds that verdict open instead, because `issue end`
-    /// deletes branches. `devkit doctor`'s `forge` row shows which forge
-    /// resolved and why.
+    /// requests, so `workspace end` finishes a worktree once its tracker issue
+    /// is done, its tree is clean and its commits are on a remote.
+    /// Detection that finds no forge holds that verdict open instead,
+    /// because `workspace end` deletes branches. `devkit doctor`'s `forge`
+    /// row shows which forge resolved and why.
     pub kind: Option<ForgeKind>,
     /// The forge's hostname, for a self-hosted instance such as GitHub
     /// Enterprise Server or a company GitLab. Defaults to the kind's public
@@ -1305,7 +1306,7 @@ pub struct ForgeConfig {
     pub host: Option<String>,
     /// Repository pull requests are opened against, e.g. `upstream/app`, or
     /// `group/subgroup/app` on GitLab. Defaults from an `origin` remote on the
-    /// forge's host (an ssh alias is resolved with `ssh -G`). `issue prs
+    /// forge's host (an ssh alias is resolved with `ssh -G`). `pr list
     /// --repo` overrides it for one run, and an ambient `GH_REPO` never does.
     pub repo: Option<String>,
 }
@@ -1352,21 +1353,22 @@ impl std::fmt::Display for TrackerKind {
 /// Naming the kind is what stops a `LINEAR_API_KEY` exported machine-wide from
 /// resolving Linear for a project that does not use it.
 ///
-/// Every tracker question goes through the resolved tracker: `issue setup`'s
-/// slug and summary, `issue pr checkout`'s bare-number disambiguation,
-/// `issue dashboard`'s timeline, and the ISSUE column of `issue prs`.
+/// Every tracker question goes through the resolved tracker: `workspace
+/// setup`'s slug and summary, `pr checkout`'s bare-number disambiguation,
+/// `ticket dashboard`'s timeline, and the ISSUE column of `pr list`.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TrackerConfig {
     /// Force a tracker instead of detecting one. Detection also decides when
     /// no config resolves: outside any devkit project, or when the config
-    /// fails to load. Every `issue` command and the `issue.status` MCP action
-    /// read it. `github` authenticates through `gh auth login`, `GH_TOKEN` or
-    /// `GITHUB_TOKEN`; under it a bare number is a PR, since issues and PRs
-    /// share one numbering, and with no resolvable `[github] issues_repo` the
-    /// project runs with no tracker. `none` declares no issue states, so a
-    /// merged PR and a clean tree finish a worktree. Detection that finds
-    /// nothing is different: it holds that verdict open, because `issue end`
+    /// fails to load. Every `ticket`, `workspace` and `pr` command and the
+    /// `issue.status` MCP action read it. `github` authenticates through
+    /// `gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN`; under it a bare
+    /// number is a PR, since issues and PRs share one numbering, and with
+    /// no resolvable `[github] issues_repo` the project runs with no
+    /// tracker. `none` declares no issue states, so a merged PR and a clean
+    /// tree finish a worktree. Detection that finds nothing is different:
+    /// it holds that verdict open, because `workspace end`
     /// deletes branches. `devkit doctor`'s `tracker` row shows which tracker
     /// resolved and why.
     pub kind: Option<TrackerKind>,
@@ -1396,7 +1398,7 @@ pub struct ParallelismConfig {
     pub threads: Option<std::num::NonZeroUsize>,
 }
 
-/// The state a PR is opened in by `issue pr create` when neither `--draft` nor
+/// The state a PR is opened in by `pr create` when neither `--draft` nor
 /// `--ready` is passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1459,7 +1461,7 @@ pub struct Defaults {
     /// `~/git/example_worktrees` beside `~/git/example`.
     #[serde(default)]
     pub worktree_root: String,
-    /// Prefix on branches created by `issue setup`, e.g. `you/`. `${VAR}`
+    /// Prefix on branches created by `workspace setup`, e.g. `you/`. `${VAR}`
     /// expands, as in `"${USER}/"`, and nothing else does.
     #[serde(default)]
     pub branch_prefix: String,
@@ -1488,23 +1490,23 @@ pub struct Defaults {
     /// paths from doppler.yaml and to detect changed apps in a diff.
     #[serde(default = "default_apps_dir")]
     pub apps_dir: String,
-    /// Base branch `issue pr create` opens PRs against (e.g. "main",
+    /// Base branch `pr create` opens PRs against (e.g. "main",
     /// "staging"). `--base` overrides it for one run.
     #[serde(default = "default_pr_base")]
     pub pr_base: String,
-    /// State `issue pr create` opens a PR in when neither `--draft` nor
+    /// State `pr create` opens a PR in when neither `--draft` nor
     /// `--ready` is given. Draft by default, so a new PR never lands in
     /// anyone's review queue until it is marked ready.
     #[serde(default)]
     pub pr_create_state: PrCreateState,
     /// Refuse any run that would leave a PR ready for review with no human
-    /// GitHub reviewer other than its own author: `issue pr create --ready`,
-    /// `issue pr ready`, and the draft-to-ready flip in `issue review request`.
+    /// GitHub reviewer other than its own author: `pr create --ready`,
+    /// `pr ready`, and the draft-to-ready flip in `pr review request`.
     /// Off by default.
     #[serde(default)]
     pub require_pr_reviewer: bool,
     /// The `[templates.variables]` name whose `--arg` carries a PR's proof.
-    /// When set, an agent's `issue pr create` in an issue worktree is refused
+    /// When set, an agent's `pr create` in an issue worktree is refused
     /// before the push unless that proof answers every item of the issue's
     /// `Done when` or `Acceptance criteria` section, each on a line starting
     /// with the item's number (`2. <evidence>`). Unset by default.
@@ -1522,8 +1524,8 @@ pub struct Defaults {
     #[serde(default = "default_stray_scan_width")]
     pub stray_scan_width: u16,
     /// Glob patterns (relative to the primary checkout's root) for untracked
-    /// local files `issue setup` and `issue pr checkout` copy into a new
-    /// worktree, and `issue sync-includes` into existing ones. Existing
+    /// local files `workspace setup` and `pr checkout` copy into a new
+    /// worktree, and `workspace sync-includes` into existing ones. Existing
     /// destinations are left alone, and a failed copy warns. Anchor patterns
     /// (`apps/*/.env.local`): `**` descends into `node_modules`. `a/**` matches
     /// every path below `a`, direct children included; a bare `**` covers the
@@ -1536,7 +1538,7 @@ pub struct Defaults {
     /// (`linked/**`) is walked through; write `linked/` to get the link.
     #[serde(default)]
     pub worktree_include: Vec<String>,
-    /// Write the issue summary file on every `issue setup`, as though
+    /// Write the issue summary file on every `workspace setup`, as though
     /// `--summary` were passed. `--summary` / `--no-summary` still win for one
     /// run. Its path and body come from `templates.issue_summary_path` and
     /// `templates.issue_summary`.
@@ -1599,12 +1601,12 @@ pub struct Person {
     /// Slack user or channel id, e.g. `U0XXXXXXXXX`.
     pub slack: String,
     /// GitHub login requested as the PR reviewer when this alias is passed to
-    /// `issue review request --to`. Omit and the alias only gets Slacked.
+    /// `pr review request --to`. Omit and the alias only gets Slacked.
     #[serde(default)]
     pub github: Option<String>,
 }
 
-/// A file written into an app's directory during `issue setup`, before the
+/// A file written into an app's directory during `workspace setup`, before the
 /// app's `setup` commands run. Parent directories are created. Existing files
 /// are left untouched unless `overwrite` is set.
 ///
@@ -1823,15 +1825,15 @@ pub struct TaskConfig {
     pub required_args: std::collections::BTreeMap<String, Required>,
 }
 
-/// Longest branch `issue setup` renders before it shortens the slug to fit,
-/// and the width the `issue status` branch column renders before eliding. One
-/// number so a branch devkit created is never the one the table has to cut.
+/// Longest branch `workspace setup` renders before it shortens the slug to fit,
+/// and the width the `workspace status` branch column renders before eliding.
+/// One number so a branch devkit created is never the one the table has to cut.
 pub const DEFAULT_BRANCH_MAX: usize = 46;
-/// Longest worktree directory name `issue setup` renders. Shorter than the
+/// Longest worktree directory name `workspace setup` renders. Shorter than the
 /// branch limit because a directory name is charged against a filesystem path
 /// limit and a branch name is not.
 pub const DEFAULT_WORKTREE_DIR_MAX: usize = 24;
-/// Longest worktree directory name `issue pr checkout` renders.
+/// Longest worktree directory name `pr checkout` renders.
 pub const DEFAULT_CHECKOUT_WORKTREE_DIR_MAX: usize = 46;
 
 pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
@@ -1947,7 +1949,7 @@ pub enum VariableDecl {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         required: Option<Required>,
         /// What to pass for this arg, shown beside it where devkit asks for
-        /// it: a missing-arg error (`issue pr create` and `issue review`
+        /// it: a missing-arg error (`pr create` and `pr review`
         /// included), a command-guard redirect to a task that reads it,
         /// `devkit config tasks <name>` and `devkit config variables`.
         /// Explain an arg here rather than in a guard rule's `reason`.
@@ -2029,64 +2031,64 @@ impl From<&str> for VariableDecl {
 /// it is taken from `defaults.worktree_root` instead.
 #[derive(Debug, JsonSchema, Deserialize, Serialize, Default)]
 pub struct Templates {
-    /// Branch name created by `issue setup`. Context: `prefix`, `issue`,
+    /// Branch name created by `workspace setup`. Context: `prefix`, `issue`,
     /// `slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.
     pub branch: Option<String>,
-    /// Longest branch `issue setup` will render. A derived slug is shortened on
-    /// a word boundary to fit. A template whose fixed text already fills this
-    /// yields the shortest slug still worth reading rather than an error, since
-    /// a git ref has no hard length limit. `short_slug` is not measured by it.
-    /// Defaults to 46.
+    /// Longest branch `workspace setup` will render. A derived slug is
+    /// shortened on a word boundary to fit. A template whose fixed text
+    /// already fills this yields the shortest slug still worth reading
+    /// rather than an error, since a git ref has no hard length limit.
+    /// `short_slug` is not measured by it. Defaults to 46.
     pub branch_max: Option<usize>,
-    /// Worktree directory name created by `issue setup`, relative to
+    /// Worktree directory name created by `workspace setup`, relative to
     /// `defaults.worktree_root`. Same context as `branch`; defaults to
     /// `{{ slug }}`.
     pub worktree_dir: Option<String>,
-    /// Longest worktree directory name `issue setup` will render from
+    /// Longest worktree directory name `workspace setup` will render from
     /// `{{ short_slug }}`. A template whose fixed text already fills this is an
     /// error: a limit on a filesystem path that does not hold is worse than a
     /// setup that stops. Has no effect on a `worktree_dir` that does not render
     /// `{{ short_slug }}`. Defaults to 24.
     pub worktree_dir_max: Option<usize>,
-    /// Worktree directory name created by `issue pr checkout`. Context:
+    /// Worktree directory name created by `pr checkout`. Context:
     /// `pr_number`, `pr_title`, `linear_id`, `linear_title`. Titles are
     /// slugified, and the `linear_*` names are historical: they carry
     /// whichever tracker's id and title resolved, and are empty on the
     /// PR-only path. Defaults to `{{ pr_number }}-{{ pr_title }}`, plus
     /// `_[{{ linear_id }}]` when reached through an issue.
     pub checkout_worktree_dir: Option<String>,
-    /// Longest worktree directory name `issue pr checkout` will render.
+    /// Longest worktree directory name `pr checkout` will render.
     /// `pr_title` and `linear_title` are shortened to fit, splitting the budget
     /// when a template renders both. A template whose fixed text already fills
     /// this is an error. Defaults to 46.
     pub checkout_worktree_dir_max: Option<usize>,
-    /// Title of a PR rendered by `issue pr render` or opened by `issue pr
+    /// Title of a PR rendered by `pr render` or opened by `pr
     /// create`. `{{ input }}` is the `--pr-title` argument; the rendered title
     /// must not be empty.
     pub pr_title: Option<String>,
-    /// Body of a PR rendered by `issue pr render` or opened by `issue pr
-    /// create`. `{{ input }}` is the `--pr-body` argument. `issue pr create`
+    /// Body of a PR rendered by `pr render` or opened by `pr
+    /// create`. `{{ input }}` is the `--pr-body` argument. `pr create`
     /// renders it only when it opens a PR, not when it reuses an open one.
     pub pr_body: Option<String>,
-    /// Title of an issue rendered by `issue render`, created by `issue
-    /// create`, or written by `issue edit --title`. `{{ input }}` is the
-    /// `--title` argument; the rendered title must not be empty. `issue edit`
+    /// Title of an issue rendered by `ticket render`, created by `ticket
+    /// create`, or written by `ticket edit --title`. `{{ input }}` is the
+    /// `--title` argument; the rendered title must not be empty. `ticket edit`
     /// without `--title` keeps the issue's title and does not render this.
     pub issue_title: Option<String>,
-    /// Body of an issue rendered by `issue render`, created by `issue create`,
-    /// or written over an existing issue by `issue edit`. `{{ input }}` is the
-    /// `--body` argument and `issue_title` is the rendered title, or the
-    /// issue's current title when `issue edit` runs without `--title`. A
-    /// `[templates.variables]` entry either rendered template reads, marked
-    /// `required`, must be passed as `--arg`; `issue edit` without `--title`
-    /// asks only for the ones this template reads.
+    /// Body of an issue rendered by `ticket render`, created by `ticket
+    /// create`, or written over an existing issue by `ticket edit`. `{{
+    /// input }}` is the `--body` argument and `issue_title` is the rendered
+    /// title, or the issue's current title when `ticket edit` runs without
+    /// `--title`. A `[templates.variables]` entry either rendered template
+    /// reads, marked `required`, must be passed as `--arg`; `ticket edit`
+    /// without `--title` asks only for the ones this template reads.
     pub issue_body: Option<String>,
-    /// Slack message sent by `issue review request`. Rendered once per
+    /// Slack message sent by `pr review request`. Rendered once per
     /// recipient with `name`, `slack_id` (empty for a channel), `pr_url`,
     /// `pr_title` (the PR's own title from GitHub), `input`, and `branch`,
     /// `issue`, `slug`, `apps` from the worktree's `.devkit/issue.toml`.
     pub review_request: Option<String>,
-    /// Slack message sent by `issue review finish`. Same context as
+    /// Slack message sent by `pr review finish`. Same context as
     /// `review_request`, plus `author`.
     pub review_finish: Option<String>,
     /// Message `devkit commit` records. `subject` is the `--subject`
@@ -2094,17 +2096,18 @@ pub struct Templates {
     /// `--coauthor`, `;`-separated. Defaults to the subject, then the body
     /// after a blank line, then a `Co-authored-by` trailer per co-author.
     pub commit_message: Option<String>,
-    /// Where `issue setup --summary` writes the issue summary file. A relative
-    /// path is taken from `defaults.worktree_root`, so the file sits beside
-    /// the worktree and outlives it, and is refused when there is no
-    /// `worktree_root`. Context: the `issue_summary` context below. Defaults
-    /// to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md`: inside the
-    /// worktree, or the checkout `issue setup --here` binds, where it stays
-    /// untracked and goes when `issue end` removes the worktree.
+    /// Where `workspace setup --summary` writes the issue summary file. A
+    /// relative path is taken from `defaults.worktree_root`, so the file
+    /// sits beside the worktree and outlives it, and is refused when there
+    /// is no `worktree_root`. Context: the `issue_summary` context below.
+    /// Defaults to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md`:
+    /// inside the worktree, or the checkout `workspace setup --here` binds,
+    /// where it stays untracked and goes when `workspace end` removes the
+    /// worktree.
     pub issue_summary_path: Option<String>,
-    /// Body of the file `issue setup --summary` writes when the tracker keeps
-    /// no summary of its own; a GitHub issue's non-empty body is written
-    /// verbatim instead. Context: `issue`,
+    /// Body of the file `workspace setup --summary` writes when the tracker
+    /// keeps no summary of its own; a GitHub issue's non-empty body is
+    /// written verbatim instead. Context: `issue`,
     /// `title`, `url`, `description`, `state`, `assignee`, `priority`,
     /// `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,
     /// `prefix`, `apps`. A field the tracker left empty renders as the empty
@@ -2322,8 +2325,8 @@ pub struct AppConfig {
     /// provider up too.
     #[serde(default)]
     pub provides_url: bool,
-    /// Commands run in the app's directory during `issue setup`, in order. Each
-    /// inner array is one argv (program + args), e.g.
+    /// Commands run in the app's directory during `workspace setup`, in order.
+    /// Each inner array is one argv (program + args), e.g.
     /// `[["doppler","run","-c","local","--","bun","install"]]`.
     #[serde(default)]
     pub setup: Vec<Vec<String>>,
@@ -2341,7 +2344,7 @@ pub struct AppConfig {
     /// `--env` both win over it.
     #[serde(default)]
     pub static_env: HashMap<String, String>,
-    /// Files written into the app's directory during `issue setup`, before
+    /// Files written into the app's directory during `workspace setup`, before
     /// `setup` runs. A deeper layer's list replaces this one whole.
     #[serde(default)]
     pub prep_files: Vec<PrepFile>,

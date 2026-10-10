@@ -272,7 +272,7 @@ github = "sweeper[bot]"
         std::fs::write(&path, toml).expect("write devkit.toml");
     }
 
-    /// Make the project an `issue setup` worktree for issue `id`.
+    /// Make the project a `workspace setup` worktree for issue `id`.
     pub fn record_issue(&self, id: &str) {
         devkit_common::record::write(self.project(), &devkit_common::record::IssueRecord {
             issue: id.into(),

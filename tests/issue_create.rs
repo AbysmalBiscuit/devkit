@@ -1,4 +1,4 @@
-//! `devkit issue create` and `devkit issue edit` render the issue templates
+//! `devkit ticket create` and `devkit ticket edit` render the issue templates
 //! and write the result through `gh issue create` and `gh issue edit`, on
 //! GitHub only.
 
@@ -61,7 +61,7 @@ fn a_linear_tracker_is_pointed_at_render() {
     let out = fake.issue(&["create", "--title", "T", "--arg", "acceptance=A"]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("devkit issue render"),
+        stderr(&out).contains("devkit ticket render") && !stderr(&out).contains("issue render"),
         "{}",
         stderr(&out)
     );
@@ -119,7 +119,7 @@ fn edit_under_a_linear_tracker_is_pointed_at_render() {
     let out = fake.issue(&["edit", "7", "--body", "B", "--arg", "acceptance=A"]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("devkit issue render"),
+        stderr(&out).contains("devkit ticket render") && !stderr(&out).contains("issue render"),
         "{}",
         stderr(&out)
     );

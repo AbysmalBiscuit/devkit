@@ -14,7 +14,7 @@ use crate::vcs::{self, Worktree};
 
 /// Marker identifying a baseline worktree. Baselines are linked worktrees, so
 /// without a way to tell one apart each becomes an `UNKNOWN` row in
-/// `issue status`, `sync-includes --all` copies into it, and
+/// `workspace status`, `sync-includes --all` copies into it, and
 /// `--clean-worktree` can remove one while worktrees still reference it.
 pub const BASELINE_MARKER: &str = ".devkit/baseline.toml";
 
@@ -47,15 +47,15 @@ pub fn baseline_state(worktree: &Path) -> BaselineState {
 
 /// Whether a worktree is one to treat as a baseline. An undecidable one counts:
 /// classifying it as an issue worktree is the unsafe direction for the listing
-/// consumers, putting an unknown tree into `issue status`, into a
+/// consumers, putting an unknown tree into `workspace status`, into a
 /// `sync-includes --all` copy, and within reach of `--clean-worktree`.
 pub fn is_baseline(worktree: &Path) -> bool {
     !matches!(baseline_state(worktree), BaselineState::No)
 }
 
 /// Which issue a worktree works on. The derived order sorts tracker ids first,
-/// then `NONE`, then `UNKNOWN`, which is the order `issue status` lists rows
-/// in.
+/// then `NONE`, then `UNKNOWN`, which is the order `workspace status` lists
+/// rows in.
 ///
 /// Parsing reads a setup record's `issue` field, which stores this as text:
 /// empty for a worktree set up with no issue, `UNKNOWN` where `pr checkout`
@@ -176,7 +176,7 @@ pub fn discover_all(start: &str) -> Result<Worktrees> {
 
 /// (main_repo_path, other_worktrees) from a path inside any worktree, for the
 /// callers that only need trees to list. Baselines are filtered out: they are
-/// linked worktrees, so `issue status`, `sync-includes --all` and
+/// linked worktrees, so `workspace status`, `sync-includes --all` and
 /// `--clean-worktree` would otherwise treat one as an issue worktree — and a
 /// worktree that cannot be classified is filtered out with them. A caller that
 /// must not silently lose one uses [`discover_all`].

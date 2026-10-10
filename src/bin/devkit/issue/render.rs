@@ -1,4 +1,4 @@
-//! `issue render`: an issue's title and body from the `issue_title` and
+//! `ticket render`: an issue's title and body from the `issue_title` and
 //! `issue_body` templates, printed for a tracker MCP call, with a receipt per
 //! field the pre-tool-use hook checks that call against.
 
@@ -119,7 +119,7 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
         devkit_ports::load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
     let rendered = render(
         &loaded.config,
-        "issue render",
+        "ticket render",
         Title::Input(&args.title),
         args.body.as_deref().unwrap_or_default(),
         &args.vars,

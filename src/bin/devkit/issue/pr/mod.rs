@@ -33,13 +33,13 @@ pub(crate) fn reviewer_logins(targets: &[Target]) -> (Vec<String>, Vec<String>) 
     (logins, warnings)
 }
 
-/// Marking a PR ready acts on one that exists. Opening one is `issue pr
+/// Marking a PR ready acts on one that exists. Opening one is `pr
 /// create`'s job, so a branch with no PR is an error naming it rather than a
 /// silent create.
 pub(crate) fn require_existing_pr(pr_state: Option<&str>) -> Result<()> {
     match action_for(pr_state) {
         PrAction::Create => bail!(
-            "no PR for this branch: run `issue pr create` first, \
+            "no PR for this branch: run `pr create` first, \
              or pass --pr <URL|number>"
         ),
         PrAction::AddReviewer => Ok(()),
@@ -237,7 +237,7 @@ mod tests {
     fn no_pr_names_the_command_that_opens_one() {
         let msg = format!("{}", require_existing_pr(None).unwrap_err());
         assert!(
-            msg.contains("issue pr create"),
+            msg.contains("pr create") && !msg.contains("issue pr"),
             "names the way forward: {msg}"
         );
         assert!(require_existing_pr(Some("OPEN")).is_ok());

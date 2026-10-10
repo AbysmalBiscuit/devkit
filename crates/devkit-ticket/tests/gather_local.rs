@@ -120,7 +120,7 @@ fn a_lowercase_record_id_is_found_by_either_spelling() {
     }
 }
 
-/// `issue setup --slug` with no issue records an empty id. The branch then
+/// `workspace setup --slug` with no issue records an empty id. The branch then
 /// carries only the slug, and a slug like `utf-8-fix` looks like an issue id,
 /// so the record has to settle it rather than the branch scan.
 #[test]

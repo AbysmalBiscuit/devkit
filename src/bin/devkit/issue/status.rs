@@ -306,7 +306,7 @@ pub fn run(start: &str, ids: &[String], config: Option<&str>) -> Result<()> {
     let finished = render(&report, false);
     if finished > 0 {
         println!(
-            "\n{} Run `issue end` to remove them.",
+            "\n{} Run `workspace end` to remove them.",
             ui::green(&format!("{finished} finished."))
         );
     }

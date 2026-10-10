@@ -547,7 +547,7 @@ impl Forge for GitlabForge {
         brief_of_response(body, n, &repo.slug)
     }
 
-    /// `NoMatch` only when GitLab answered: `issue end` deletes a branch on
+    /// `NoMatch` only when GitLab answered: `workspace end` deletes a branch on
     /// that answer.
     fn pr_by_head(&self, repo: &Repo, branch: &str) -> HeadLookup {
         let path = format!(
@@ -1018,7 +1018,7 @@ mod tests {
         );
     }
 
-    /// A lookup GitLab did not answer is not "no MR": `issue end` deletes a
+    /// A lookup GitLab did not answer is not "no MR": `workspace end` deletes a
     /// branch on the latter.
     #[test]
     fn a_head_lookup_that_gets_no_answer_is_unavailable() {

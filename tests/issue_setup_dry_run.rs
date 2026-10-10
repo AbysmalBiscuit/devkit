@@ -1,4 +1,4 @@
-//! `issue setup --dry-run --summary` prints the summary text a real
+//! `workspace setup --dry-run --summary` prints the summary text a real
 //! `--summary` run writes, so a launcher can hand an issue to a cloud session
 //! without creating a worktree to read it from.
 

@@ -231,9 +231,9 @@ fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
 /// Run `f`; on error, remove the just-created worktree at `worktree` (in
 /// `primary`) before propagating, so a failed checkout or record write never
 /// leaves an orphan worktree with no `.devkit/issue.toml`. Without the record,
-/// the worktree is invisible to `issue status`/`issue end` yet blocks a re-run
-/// at the path-exists guard. A failure of the removal itself is ignored — the
-/// original error is what propagates.
+/// the worktree is invisible to `workspace status`/`workspace end` yet blocks a
+/// re-run at the path-exists guard. A failure of the removal itself is ignored
+/// — the original error is what propagates.
 pub(crate) fn with_cleanup<T>(
     worktree: &Path,
     primary: &str,

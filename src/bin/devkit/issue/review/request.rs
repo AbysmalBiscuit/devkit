@@ -111,7 +111,7 @@ pub fn run(args: Args) -> Result<()> {
     let mut vars = tmpls.defaults();
     let given = parse_args(&args.vars, &tmpls.declared())?;
     check_required(
-        "issue review request",
+        "pr review request",
         &loaded.config,
         &[tmpls.review_request()],
         REVIEW_REQUEST_CONTEXT_KEYS,

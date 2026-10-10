@@ -188,7 +188,7 @@ fn report_dry(plan: &IncludePlan, dest: &Path, overwrite: bool, verbose: bool) {
     }
 }
 
-/// The boolean switches `issue sync-includes` accepts, passed as one value
+/// The boolean switches `workspace sync-includes` accepts, passed as one value
 /// so the call site names each of them.
 pub struct Flags {
     pub overwrite: bool,

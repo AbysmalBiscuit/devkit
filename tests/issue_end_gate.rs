@@ -1,6 +1,6 @@
-//! `issue end` without `--clean-worktree`: the finished gate decides what is
-//! removed. The project declares no forge, so a worktree whose commits are on
-//! a remote passes the PR gate with no network involved.
+//! `workspace end` without `--clean-worktree`: the finished gate decides what
+//! is removed. The project declares no forge, so a worktree whose commits are
+//! on a remote passes the PR gate with no network involved.
 
 #[path = "common/baselinetest.rs"]
 mod baselinetest;

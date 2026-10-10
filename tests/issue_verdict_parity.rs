@@ -1,6 +1,7 @@
-//! `issue info`, `issue status` and `issue end` judge a worktree alike when its
-//! PR lookup cannot be made. The project declares no forge and its `origin` is
-//! a local path, so every PR lookup is unknown with no network involved.
+//! `pr status`, `workspace status` and `workspace end` judge a worktree alike
+//! when its PR lookup cannot be made. The project declares no forge and its
+//! `origin` is a local path, so every PR lookup is unknown with no network
+//! involved.
 
 #[path = "common/baselinetest.rs"]
 mod baselinetest;

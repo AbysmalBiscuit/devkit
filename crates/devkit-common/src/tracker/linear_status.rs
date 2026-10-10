@@ -78,7 +78,7 @@ impl LinearWriter {
     }
 
     fn read(&self, id: &str) -> Result<LinearStatus> {
-        let resp = post_graphql(&status_query(id)?, &self.key, "issue status")?;
+        let resp = post_graphql(&status_query(id)?, &self.key, "issue_status")?;
         parse_status(&resp, id)
     }
 }

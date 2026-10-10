@@ -29,7 +29,7 @@ fn pr_label(row: &IssueWorktree) -> String {
 
 /// Branch is secondary — the issue id identifies the worktree — so cap it with
 /// an ellipsis, letting the PR/STATE/VERDICT columns survive a narrow terminal.
-/// `issue setup` fits the branches it creates to this same width.
+/// `workspace setup` fits the branches it creates to this same width.
 const BRANCH_MAX: usize = ui::BRANCH_DISPLAY_MAX;
 
 /// Column headers shared by the final render and the live table.
@@ -117,7 +117,7 @@ pub(crate) fn verdict_cell(row: &IssueWorktree, offline: bool) -> String {
 
 /// Render the worktree triage table. When `offline`, the STATE and VERDICT
 /// columns show `—`: both depend on a tracker fetch that the caller skipped, so
-/// any computed value would be stale (e.g. `issue info --cache-only`).
+/// any computed value would be stale (e.g. `pr status --cache-only`).
 pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
     println!("{}", ui::bold_cyan("ISSUE WORKTREES"));
     if report.worktrees.is_empty() {

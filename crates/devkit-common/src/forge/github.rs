@@ -207,7 +207,7 @@ fn parse_heads(resp: &Value, branches: &[String]) -> HashMap<String, HeadLookup>
             let key = format!("b{i}");
             let conn = &resp["data"]["repository"][&key];
             // A present-but-null or absent alias is a malformed response, not
-            // evidence the branch has no PR: the latter is what `issue end`
+            // evidence the branch has no PR: the latter is what `workspace end`
             // reads before deleting a worktree.
             let lookup = if conn.is_null() {
                 HeadLookup::Unavailable(format!(
@@ -1264,8 +1264,8 @@ mod tests {
     }
 
     /// A malformed or truncated response is a lookup that could not be made,
-    /// not evidence the branch has no PR: the latter is what `issue end` reads
-    /// before deleting a worktree.
+    /// not evidence the branch has no PR: the latter is what `workspace end`
+    /// reads before deleting a worktree.
     #[test]
     fn a_missing_alias_is_unavailable_not_no_match() {
         let resp = json!({"data":{"repository":{"b0":{"totalCount":0,"nodes":[]}}}});

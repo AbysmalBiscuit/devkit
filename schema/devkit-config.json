@@ -27,7 +27,7 @@
         },
         "prep_files": {
           "default": [],
-          "description": "Files written into the app's directory during `issue setup`, before\n`setup` runs. A deeper layer's list replaces this one whole.",
+          "description": "Files written into the app's directory during `workspace setup`, before\n`setup` runs. A deeper layer's list replaces this one whole.",
           "items": {
             "$ref": "#/$defs/PrepFile"
           },
@@ -40,7 +40,7 @@
         },
         "setup": {
           "default": [],
-          "description": "Commands run in the app's directory during `issue setup`, in order. Each\ninner array is one argv (program + args), e.g.\n`[[\"doppler\",\"run\",\"-c\",\"local\",\"--\",\"bun\",\"install\"]]`.",
+          "description": "Commands run in the app's directory during `workspace setup`, in order.\nEach inner array is one argv (program + args), e.g.\n`[[\"doppler\",\"run\",\"-c\",\"local\",\"--\",\"bun\",\"install\"]]`.",
           "items": {
             "items": {
               "type": "string"
@@ -144,7 +144,7 @@
       "type": "object"
     },
     "CommandRule": {
-      "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Parsing the command, unwrapping wrappers and\nrunners, and removing a program's own global options (`git -C`) are\ndevkit's job; a rule that had to restate them would get them wrong. A rule\nsees nested commands (`bash -c '...'`, `subprocess.run([...])`) and ignores\nquoted text that only mentions the program.\n\n```toml\n[harness.commands.git-worktree]\nprograms = [\"git\"]\nargs     = [\"worktree\", \"add\"]\nreason   = \"use `issue setup <id>`, which records the worktree\"\n\n[harness.commands.nitro-dev]\nprograms = [\"bun\", \"node\"]\nargs     = [\"**\", \"*nitro\", \"dev\"] # bun --cwd . nitro dev, node node_modules/.bin/nitro dev\nreason   = \"start the api with `devrun up api`\"\n```\n\n`args` matches the typed arguments after the program's own global options\nare removed, so `git -C /repo worktree add` fires the first rule and\n`git worktree list` does not. In the second rule, `**` skips any flags\nbefore the server and `*nitro` matches the binary at any path, so it\nrefuses `bun --filter=api nitro dev` and allows `bun nitro build`.",
+      "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Parsing the command, unwrapping wrappers and\nrunners, and removing a program's own global options (`git -C`) are\ndevkit's job; a rule that had to restate them would get them wrong. A rule\nsees nested commands (`bash -c '...'`, `subprocess.run([...])`) and ignores\nquoted text that only mentions the program.\n\n```toml\n[harness.commands.git-worktree]\nprograms = [\"git\"]\nargs     = [\"worktree\", \"add\"]\nreason   = \"use `workspace setup <id>`, which records the worktree\"\n\n[harness.commands.nitro-dev]\nprograms = [\"bun\", \"node\"]\nargs     = [\"**\", \"*nitro\", \"dev\"] # bun --cwd . nitro dev, node node_modules/.bin/nitro dev\nreason   = \"start the api with `devrun up api`\"\n```\n\n`args` matches the typed arguments after the program's own global options\nare removed, so `git -C /repo worktree add` fires the first rule and\n`git worktree list` does not. In the second rule, `**` skips any flags\nbefore the server and `*nitro` matches the binary at any path, so it\nrefuses `bun --filter=api nitro dev` and allows `bun nitro build`.",
       "properties": {
         "action": {
           "$ref": "#/$defs/RuleAction",
@@ -343,7 +343,7 @@
         },
         "branch_prefix": {
           "default": "",
-          "description": "Prefix on branches created by `issue setup`, e.g. `you/`. `${VAR}`\nexpands, as in `\"${USER}/\"`, and nothing else does.",
+          "description": "Prefix on branches created by `workspace setup`, e.g. `you/`. `${VAR}`\nexpands, as in `\"${USER}/\"`, and nothing else does.",
           "type": "string"
         },
         "doppler_yaml": {
@@ -361,21 +361,21 @@
         },
         "issue_summary": {
           "default": false,
-          "description": "Write the issue summary file on every `issue setup`, as though\n`--summary` were passed. `--summary` / `--no-summary` still win for one\nrun. Its path and body come from `templates.issue_summary_path` and\n`templates.issue_summary`.",
+          "description": "Write the issue summary file on every `workspace setup`, as though\n`--summary` were passed. `--summary` / `--no-summary` still win for one\nrun. Its path and body come from `templates.issue_summary_path` and\n`templates.issue_summary`.",
           "type": "boolean"
         },
         "pr_base": {
           "default": "main",
-          "description": "Base branch `issue pr create` opens PRs against (e.g. \"main\",\n\"staging\"). `--base` overrides it for one run.",
+          "description": "Base branch `pr create` opens PRs against (e.g. \"main\",\n\"staging\"). `--base` overrides it for one run.",
           "type": "string"
         },
         "pr_create_state": {
           "$ref": "#/$defs/PrCreateState",
           "default": "draft",
-          "description": "State `issue pr create` opens a PR in when neither `--draft` nor\n`--ready` is given. Draft by default, so a new PR never lands in\nanyone's review queue until it is marked ready."
+          "description": "State `pr create` opens a PR in when neither `--draft` nor\n`--ready` is given. Draft by default, so a new PR never lands in\nanyone's review queue until it is marked ready."
         },
         "pr_proof_variable": {
-          "description": "The `[templates.variables]` name whose `--arg` carries a PR's proof.\nWhen set, an agent's `issue pr create` in an issue worktree is refused\nbefore the push unless that proof answers every item of the issue's\n`Done when` or `Acceptance criteria` section, each on a line starting\nwith the item's number (`2. <evidence>`). Unset by default.",
+          "description": "The `[templates.variables]` name whose `--arg` carries a PR's proof.\nWhen set, an agent's `pr create` in an issue worktree is refused\nbefore the push unless that proof answers every item of the issue's\n`Done when` or `Acceptance criteria` section, each on a line starting\nwith the item's number (`2. <evidence>`). Unset by default.",
           "type": [
             "string",
             "null"
@@ -383,7 +383,7 @@
         },
         "require_pr_reviewer": {
           "default": false,
-          "description": "Refuse any run that would leave a PR ready for review with no human\nGitHub reviewer other than its own author: `issue pr create --ready`,\n`issue pr ready`, and the draft-to-ready flip in `issue review request`.\nOff by default.",
+          "description": "Refuse any run that would leave a PR ready for review with no human\nGitHub reviewer other than its own author: `pr create --ready`,\n`pr ready`, and the draft-to-ready flip in `pr review request`.\nOff by default.",
           "type": "boolean"
         },
         "stray_scan_width": {
@@ -396,7 +396,7 @@
         },
         "worktree_include": {
           "default": [],
-          "description": "Glob patterns (relative to the primary checkout's root) for untracked\nlocal files `issue setup` and `issue pr checkout` copy into a new\nworktree, and `issue sync-includes` into existing ones. Existing\ndestinations are left alone, and a failed copy warns. Anchor patterns\n(`apps/*/.env.local`): `**` descends into `node_modules`. `a/**` matches\nevery path below `a`, direct children included; a bare `**` covers the\ncheckout root. A directory match or a trailing `/` copies recursively,\nreading the whole subtree into memory first.\n\nA symlink is reproduced as a link to the same target; on Windows that\nneeds Developer Mode or administrator rights, and a refused link warns\nand is skipped. A symlinked directory that is a pattern's own anchor\n(`linked/**`) is walked through; write `linked/` to get the link.",
+          "description": "Glob patterns (relative to the primary checkout's root) for untracked\nlocal files `workspace setup` and `pr checkout` copy into a new\nworktree, and `workspace sync-includes` into existing ones. Existing\ndestinations are left alone, and a failed copy warns. Anchor patterns\n(`apps/*/.env.local`): `**` descends into `node_modules`. `a/**` matches\nevery path below `a`, direct children included; a bare `**` covers the\ncheckout root. A directory match or a trailing `/` copies recursively,\nreading the whole subtree into memory first.\n\nA symlink is reproduced as a link to the same target; on Windows that\nneeds Developer Mode or administrator rights, and a refused link warns\nand is skipped. A symlinked directory that is a pattern's own anchor\n(`linked/**`) is walked through; write `linked/` to get the link.",
           "items": {
             "type": "string"
           },
@@ -538,11 +538,11 @@
             }
           ],
           "default": null,
-          "description": "Force a forge instead of detecting one. With no forge, commands that\nread or write a pull request fail and say so; worktrees, ports, locks\nand docs keep working. `none` declares that this project has no pull\nrequests, so `issue end` finishes a worktree once its tracker issue is\ndone, its tree is clean and its commits are on a remote. Detection that\nfinds no forge holds that verdict open instead, because `issue end`\ndeletes branches. `devkit doctor`'s `forge` row shows which forge\nresolved and why."
+          "description": "Force a forge instead of detecting one. With no forge, commands that\nread or write a pull request fail and say so; worktrees, ports, locks\nand docs keep working. `none` declares that this project has no pull\nrequests, so `workspace end` finishes a worktree once its tracker issue\nis done, its tree is clean and its commits are on a remote.\nDetection that finds no forge holds that verdict open instead,\nbecause `workspace end` deletes branches. `devkit doctor`'s `forge`\nrow shows which forge resolved and why."
         },
         "repo": {
           "default": null,
-          "description": "Repository pull requests are opened against, e.g. `upstream/app`, or\n`group/subgroup/app` on GitLab. Defaults from an `origin` remote on the\nforge's host (an ssh alias is resolved with `ssh -G`). `issue prs\n--repo` overrides it for one run, and an ambient `GH_REPO` never does.",
+          "description": "Repository pull requests are opened against, e.g. `upstream/app`, or\n`group/subgroup/app` on GitLab. Defaults from an `origin` remote on the\nforge's host (an ssh alias is resolved with `ssh -G`). `pr list\n--repo` overrides it for one run, and an ambient `GH_REPO` never does.",
           "type": [
             "string",
             "null"
@@ -591,7 +591,7 @@
         },
         "no_graphql": {
           "default": false,
-          "description": "Skip GitHub's GraphQL API. A call with a REST path goes straight to\nit, one request per item where GraphQL would batch them; one with\nnone, such as `issue prs`, fails naming this key. Unset, devkit tries\nGraphQL first and uses REST only where GitHub refuses GraphQL outright.\n`DEVKIT_NO_GRAPHQL` (`1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`)\nwins over this.",
+          "description": "Skip GitHub's GraphQL API. A call with a REST path goes straight to\nit, one request per item where GraphQL would batch them; one with\nnone, such as `pr list`, fails naming this key. Unset, devkit tries\nGraphQL first and uses REST only where GitHub refuses GraphQL outright.\n`DEVKIT_NO_GRAPHQL` (`1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`)\nwins over this.",
           "type": "boolean"
         },
         "project": {
@@ -645,7 +645,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/RenderedToolRule"
           },
-          "description": "MCP tools that create or edit issues, whose title and body must come\nfrom `devkit issue render`. Merged across config layers by name.\nEnforces on its own presence, independent of `enforce_commands`.",
+          "description": "MCP tools that create or edit issues, whose title and body must come\nfrom `devkit ticket render`. Merged across config layers by name.\nEnforces on its own presence, independent of `enforce_commands`.",
           "type": "object"
         },
         "log": {
@@ -665,7 +665,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/RenderedToolRule"
           },
-          "description": "MCP tools that open or edit PRs, whose title and body must come from\n`devkit issue pr render`. Merged across config layers by name.\nEnforces on its own presence, independent of `enforce_commands`.",
+          "description": "MCP tools that open or edit PRs, whose title and body must come from\n`devkit pr render`. Merged across config layers by name.\nEnforces on its own presence, independent of `enforce_commands`.",
           "type": "object"
         },
         "script_files": {
@@ -724,11 +724,11 @@
       "description": "What `[todo] hold_stop` accepts: a mode, or a boolean."
     },
     "HooksConfig": {
-      "description": "Commands run on a devkit lifecycle event. Most keys are named\n`{before,after}_<event>` after the state change rather than the command\nthat reached it; `after_end` is the exception and names its run, because a\nrun-level event has exactly one caller and no worktree state to be named\nfor. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and\nglobs are not available. A hook that fails to render, spawn, or exit zero\nwarns on stderr and the remaining hooks still run. Output is captured and\ndiscarded. A `devkit.toml` that fails to load leaves `issue end` with no\nhooks, so none of its keys run.\n\n```toml\n[hooks]\nafter_worktree_create = [[\"zoxide\", \"add\", \"{{ worktree }}\"]]\nafter_worktree_remove = [[\"zoxide\", \"remove\", \"{{ worktree }}\"]]\nafter_end             = [[\"alacritree\", \"project\", \"refresh\"]]\n```\n\nEach key is an array, so a deeper `devkit.toml` replaces the whole list\nrather than appending to it. A project defining a key drops the\nmachine-wide list from `~/.config/devkit/config.toml` entirely.",
+      "description": "Commands run on a devkit lifecycle event. Most keys are named\n`{before,after}_<event>` after the state change rather than the command\nthat reached it; `after_end` is the exception and names its run, because a\nrun-level event has exactly one caller and no worktree state to be named\nfor. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and\nglobs are not available. A hook that fails to render, spawn, or exit zero\nwarns on stderr and the remaining hooks still run. Output is captured and\ndiscarded. A `devkit.toml` that fails to load leaves `workspace end` with no\nhooks, so none of its keys run.\n\n```toml\n[hooks]\nafter_worktree_create = [[\"zoxide\", \"add\", \"{{ worktree }}\"]]\nafter_worktree_remove = [[\"zoxide\", \"remove\", \"{{ worktree }}\"]]\nafter_end             = [[\"alacritree\", \"project\", \"refresh\"]]\n```\n\nEach key is an array, so a deeper `devkit.toml` replaces the whole list\nrather than appending to it. A project defining a key drops the\nmachine-wide list from `~/.config/devkit/config.toml` entirely.",
       "properties": {
         "after_end": {
           "default": [],
-          "description": "Runs once at the end of an `issue end` run that removed at least one\nworktree, after every `after_worktree_remove` hook, in the main\nrepository root. It carries `removed` (the removed paths, in confirmed\norder, rendered as one argv slot), `count`, `prefix`, `worktree_root`,\n`primary`, and `[templates.variables]`, and none of the single-worktree\nkeys. Skipped with a warning, like `after_worktree_remove`, when the\nmain repository root does not resolve.",
+          "description": "Runs once at the end of a `workspace end` run that removed at least one\nworktree, after every `after_worktree_remove` hook, in the main\nrepository root. It carries `removed` (the removed paths, in confirmed\norder, rendered as one argv slot), `count`, `prefix`, `worktree_root`,\n`primary`, and `[templates.variables]`, and none of the single-worktree\nkeys. Skipped with a warning, like `after_worktree_remove`, when the\nmain repository root does not resolve.",
           "items": {
             "items": {
               "type": "string"
@@ -739,7 +739,7 @@
         },
         "after_worktree_create": {
           "default": [],
-          "description": "Runs once in the root of a worktree `issue setup` or\n`issue pr checkout` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `issue`, `slug`,\n`apps`, `prefix`, `role`, and `[templates.variables]`. Output is\ndiscarded, so the command's JSON stays the last line on stdout.",
+          "description": "Runs once in the root of a worktree `workspace setup` or\n`pr checkout` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `issue`, `slug`,\n`apps`, `prefix`, `role`, and `[templates.variables]`. Output is\ndiscarded, so the command's JSON stays the last line on stdout.",
           "items": {
             "items": {
               "type": "string"
@@ -750,7 +750,7 @@
         },
         "after_worktree_remove": {
           "default": [],
-          "description": "Runs once per worktree `issue end` removed, after every removal in the\nrun has finished, in the main repository root. `issue`, `slug` and\n`apps` come from the `.devkit/issue.toml` record read before the\nremoval. Rendered over `worktree`, `branch`, `issue`, `slug`, `apps`,\n`prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A\nworktree kept back or skipped fires nothing. Runs after the run's\nsummary, so a failing hook never un-reports a removal, and is skipped\nwith a warning when the main repository root does not resolve.",
+          "description": "Runs once per worktree `workspace end` removed, after every removal in\nthe run has finished, in the main repository root. `issue`, `slug`\nand `apps` come from the `.devkit/issue.toml` record read before the\nremoval. Rendered over `worktree`, `branch`, `issue`, `slug`, `apps`,\n`prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A\nworktree kept back or skipped fires nothing. Runs after the run's\nsummary, so a failing hook never un-reports a removal, and is skipped\nwith a warning when the main repository root does not resolve.",
           "items": {
             "items": {
               "type": "string"
@@ -761,7 +761,7 @@
         },
         "before_worktree_remove": {
           "default": [],
-          "description": "Runs once in the root of each worktree `issue end` is about to remove,\nafter `[preserve]` has copied its files out and before any removal in\nthe run starts. Worktrees run one at a time, in confirmed order.\nRendered over the same keys as `after_worktree_remove`. A failing hook\nwarns and the worktree is still removed. A worktree kept back or\nskipped fires nothing.",
+          "description": "Runs once in the root of each worktree `workspace end` is about to\nremove, after `[preserve]` has copied its files out and before any\nremoval in the run starts. Worktrees run one at a time, in confirmed\norder. Rendered over the same keys as `after_worktree_remove`. A\nfailing hook warns and the worktree is still removed. A worktree\nkept back or skipped fires nothing.",
           "items": {
             "items": {
               "type": "string"
@@ -803,7 +803,7 @@
             }
           ],
           "default": null,
-          "description": "Fired by `issue pr create`, whether it opened the PR or found one open.\nA failed move warns and the PR stays as it is."
+          "description": "Fired by `pr create`, whether it opened the PR or found one open.\nA failed move warns and the PR stays as it is."
         },
         "setup": {
           "anyOf": [
@@ -815,7 +815,7 @@
             }
           ],
           "default": null,
-          "description": "Fired by `issue setup` as its last step, after the\n`after_worktree_create` hooks. A failed move warns and setup succeeds."
+          "description": "Fired by `workspace setup` as its last step, after the\n`after_worktree_create` hooks. A failed move warns and setup succeeds."
         },
         "start": {
           "anyOf": [
@@ -827,7 +827,7 @@
             }
           ],
           "default": null,
-          "description": "Fired by the first agent session in a worktree `issue setup` created,\nonce per worktree, in the background. `issue pr checkout` worktrees\nnever fire it. List the states work starts from in `from`: `[\"*\"]` lets\na second worktree pull an issue back from review."
+          "description": "Fired by the first agent session in a worktree `workspace setup`\ncreated, once per worktree, in the background. `pr checkout`\nworktrees never fire it. List the states work starts from in `from`:\n`[\"*\"]` lets a second worktree pull an issue back from review."
         }
       },
       "type": "object"
@@ -924,7 +924,7 @@
       "properties": {
         "resolve_pr_links": {
           "default": false,
-          "description": "Query Linear for the issues linked to each PR in `issue prs` and the\n`issue.prs` MCP action, adding every linked id to the ISSUE column. One\nextra batched round trip per 25 PRs. Fail-soft: with no key or on a\nLinear error the column keeps the id derived from the PR text. Linear\nonly; under the GitHub tracker the column carries each PR's closing\nissues regardless.",
+          "description": "Query Linear for the issues linked to each PR in `pr list` and the\n`issue.prs` MCP action, adding every linked id to the ISSUE column. One\nextra batched round trip per 25 PRs. Fail-soft: with no key or on a\nLinear error the column keeps the id derived from the PR text. Linear\nonly; under the GitHub tracker the column carries each PR's closing\nissues regardless.",
           "type": "boolean"
         }
       },
@@ -1036,7 +1036,7 @@
       "properties": {
         "github": {
           "default": null,
-          "description": "GitHub login requested as the PR reviewer when this alias is passed to\n`issue review request --to`. Omit and the alias only gets Slacked.",
+          "description": "GitHub login requested as the PR reviewer when this alias is passed to\n`pr review request --to`. Omit and the alias only gets Slacked.",
           "type": [
             "string",
             "null"
@@ -1109,7 +1109,7 @@
       "type": "object"
     },
     "PrCreateState": {
-      "description": "The state a PR is opened in by `issue pr create` when neither `--draft` nor\n`--ready` is passed.",
+      "description": "The state a PR is opened in by `pr create` when neither `--draft` nor\n`--ready` is passed.",
       "oneOf": [
         {
           "const": "draft",
@@ -1124,7 +1124,7 @@
       ]
     },
     "PrepFile": {
-      "description": "A file written into an app's directory during `issue setup`, before the\napp's `setup` commands run. Parent directories are created. Existing files\nare left untouched unless `overwrite` is set.\n\n```toml\n[apps.web]\nbase_port = 4100\nlaunch    = [\"next\", \"dev\", \"-p\", \"{{ port }}\"]\n\n[[apps.web.prep_files]]\npath    = \".env.local\"\ncontent = \"\"\"\nSOME_FEATURE_FLAG=dummy\n\"\"\"\n```",
+      "description": "A file written into an app's directory during `workspace setup`, before the\napp's `setup` commands run. Parent directories are created. Existing files\nare left untouched unless `overwrite` is set.\n\n```toml\n[apps.web]\nbase_port = 4100\nlaunch    = [\"next\", \"dev\", \"-p\", \"{{ port }}\"]\n\n[[apps.web.prep_files]]\npath    = \".env.local\"\ncontent = \"\"\"\nSOME_FEATURE_FLAG=dummy\n\"\"\"\n```",
       "properties": {
         "content": {
           "description": "File contents, rendered as minijinja over `prefix`, `issue`, `slug`,\n`apps`, `app`, `branch`, `worktree`, `role` and `[templates.variables]`,\nthen written with no newline added. Emit a literal `{{` with\n`{% raw %}...{% endraw %}`.",
@@ -1148,7 +1148,7 @@
     },
     "PreserveConfig": {
       "additionalProperties": false,
-      "description": "Files copied out of a worktree before `issue end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. A failure warns and the worktree goes anyway, unless the\nentry is `required`. Entries run serially in sorted name order, before any\nremoval. Symlinks are followed, the opposite of `worktree_include`, so an\narchive may outlive the link's target.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ issue }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ issue }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
+      "description": "Files copied out of a worktree before `workspace end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. A failure warns and the worktree goes anyway, unless the\nentry is `required`. Entries run serially in sorted name order, before any\nremoval. Symlinks are followed, the opposite of `worktree_include`, so an\narchive may outlive the link's target.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ issue }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ issue }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
       "properties": {
         "from": {
           "description": "Glob patterns for the files to copy, relative to the worktree root and\nrendered as minijinja. Name a directory (`.scratch/`) or write\n`.scratch/**` to archive its whole tree; `dir/*` takes direct children\nonly. A pattern that could reach outside the worktree (absolute, rooted,\nholding `..`, or drive-relative like `C:scratch`) is skipped with a\nwarning; one that matches nothing is not a failure. The default issue\nsummary sits under the worktree's `.devkit/`, where a pattern such as\n`.devkit/ISSUE_SUMMARY_*.md` reaches it; a relative\n`templates.issue_summary_path` puts it outside, where no pattern does.",
@@ -1207,7 +1207,7 @@
       ]
     },
     "RenderedToolRule": {
-      "description": "One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits issues or PRs, whose title and body the\npre-tool-use hook allows only when `devkit issue render` (an issue) or\n`devkit issue pr render` (a PR) produced them in the same agent session.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-create]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\"]\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-update]\nservers = [\"*github*\"]\ntools   = [\"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
+      "description": "One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits issues or PRs, whose title and body the\npre-tool-use hook allows only when `devkit ticket render` (an issue) or\n`devkit pr render` (a PR) produced them in the same agent session.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-create]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\"]\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-update]\nservers = [\"*github*\"]\ntools   = [\"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
       "properties": {
         "absent": {
           "default": [],
@@ -1766,14 +1766,14 @@
       "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context. Rendering is strict: an undefined variable is an\nerror, so a typo surfaces on the first run.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ issue }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ issue }}: {{ input }}\"\npr_body            = \"Closes {{ issue }}.\\n\\n{{ input }}\"\nissue_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`issue_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
       "properties": {
         "branch": {
-          "description": "Branch name created by `issue setup`. Context: `prefix`, `issue`,\n`slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.",
+          "description": "Branch name created by `workspace setup`. Context: `prefix`, `issue`,\n`slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.",
           "type": [
             "string",
             "null"
           ]
         },
         "branch_max": {
-          "description": "Longest branch `issue setup` will render. A derived slug is shortened on\na word boundary to fit. A template whose fixed text already fills this\nyields the shortest slug still worth reading rather than an error, since\na git ref has no hard length limit. `short_slug` is not measured by it.\nDefaults to 46.",
+          "description": "Longest branch `workspace setup` will render. A derived slug is\nshortened on a word boundary to fit. A template whose fixed text\nalready fills this yields the shortest slug still worth reading\nrather than an error, since a git ref has no hard length limit.\n`short_slug` is not measured by it. Defaults to 46.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1782,14 +1782,14 @@
           ]
         },
         "checkout_worktree_dir": {
-          "description": "Worktree directory name created by `issue pr checkout`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title`. Titles are\nslugified, and the `linear_*` names are historical: they carry\nwhichever tracker's id and title resolved, and are empty on the\nPR-only path. Defaults to `{{ pr_number }}-{{ pr_title }}`, plus\n`_[{{ linear_id }}]` when reached through an issue.",
+          "description": "Worktree directory name created by `pr checkout`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title`. Titles are\nslugified, and the `linear_*` names are historical: they carry\nwhichever tracker's id and title resolved, and are empty on the\nPR-only path. Defaults to `{{ pr_number }}-{{ pr_title }}`, plus\n`_[{{ linear_id }}]` when reached through an issue.",
           "type": [
             "string",
             "null"
           ]
         },
         "checkout_worktree_dir_max": {
-          "description": "Longest worktree directory name `issue pr checkout` will render.\n`pr_title` and `linear_title` are shortened to fit, splitting the budget\nwhen a template renders both. A template whose fixed text already fills\nthis is an error. Defaults to 46.",
+          "description": "Longest worktree directory name `pr checkout` will render.\n`pr_title` and `linear_title` are shortened to fit, splitting the budget\nwhen a template renders both. A template whose fixed text already fills\nthis is an error. Defaults to 46.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1813,56 +1813,56 @@
           "type": "object"
         },
         "issue_body": {
-          "description": "Body of an issue rendered by `issue render`, created by `issue create`,\nor written over an existing issue by `issue edit`. `{{ input }}` is the\n`--body` argument and `issue_title` is the rendered title, or the\nissue's current title when `issue edit` runs without `--title`. A\n`[templates.variables]` entry either rendered template reads, marked\n`required`, must be passed as `--arg`; `issue edit` without `--title`\nasks only for the ones this template reads.",
+          "description": "Body of an issue rendered by `ticket render`, created by `ticket\ncreate`, or written over an existing issue by `ticket edit`. `{{\ninput }}` is the `--body` argument and `issue_title` is the rendered\ntitle, or the issue's current title when `ticket edit` runs without\n`--title`. A `[templates.variables]` entry either rendered template\nreads, marked `required`, must be passed as `--arg`; `ticket edit`\nwithout `--title` asks only for the ones this template reads.",
           "type": [
             "string",
             "null"
           ]
         },
         "issue_summary": {
-          "description": "Body of the file `issue setup --summary` writes when the tracker keeps\nno summary of its own; a GitHub issue's non-empty body is written\nverbatim instead. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps`. A field the tracker left empty renders as the empty\nstring, so `{% if parent %}` drops its line.",
+          "description": "Body of the file `workspace setup --summary` writes when the tracker\nkeeps no summary of its own; a GitHub issue's non-empty body is\nwritten verbatim instead. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps`. A field the tracker left empty renders as the empty\nstring, so `{% if parent %}` drops its line.",
           "type": [
             "string",
             "null"
           ]
         },
         "issue_summary_path": {
-          "description": "Where `issue setup --summary` writes the issue summary file. A relative\npath is taken from `defaults.worktree_root`, so the file sits beside\nthe worktree and outlives it, and is refused when there is no\n`worktree_root`. Context: the `issue_summary` context below. Defaults\nto `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md`: inside the\nworktree, or the checkout `issue setup --here` binds, where it stays\nuntracked and goes when `issue end` removes the worktree.",
+          "description": "Where `workspace setup --summary` writes the issue summary file. A\nrelative path is taken from `defaults.worktree_root`, so the file\nsits beside the worktree and outlives it, and is refused when there\nis no `worktree_root`. Context: the `issue_summary` context below.\nDefaults to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ issue }}.md`:\ninside the worktree, or the checkout `workspace setup --here` binds,\nwhere it stays untracked and goes when `workspace end` removes the\nworktree.",
           "type": [
             "string",
             "null"
           ]
         },
         "issue_title": {
-          "description": "Title of an issue rendered by `issue render`, created by `issue\ncreate`, or written by `issue edit --title`. `{{ input }}` is the\n`--title` argument; the rendered title must not be empty. `issue edit`\nwithout `--title` keeps the issue's title and does not render this.",
+          "description": "Title of an issue rendered by `ticket render`, created by `ticket\ncreate`, or written by `ticket edit --title`. `{{ input }}` is the\n`--title` argument; the rendered title must not be empty. `ticket edit`\nwithout `--title` keeps the issue's title and does not render this.",
           "type": [
             "string",
             "null"
           ]
         },
         "pr_body": {
-          "description": "Body of a PR rendered by `issue pr render` or opened by `issue pr\ncreate`. `{{ input }}` is the `--pr-body` argument. `issue pr create`\nrenders it only when it opens a PR, not when it reuses an open one.",
+          "description": "Body of a PR rendered by `pr render` or opened by `pr\ncreate`. `{{ input }}` is the `--pr-body` argument. `pr create`\nrenders it only when it opens a PR, not when it reuses an open one.",
           "type": [
             "string",
             "null"
           ]
         },
         "pr_title": {
-          "description": "Title of a PR rendered by `issue pr render` or opened by `issue pr\ncreate`. `{{ input }}` is the `--pr-title` argument; the rendered title\nmust not be empty.",
+          "description": "Title of a PR rendered by `pr render` or opened by `pr\ncreate`. `{{ input }}` is the `--pr-title` argument; the rendered title\nmust not be empty.",
           "type": [
             "string",
             "null"
           ]
         },
         "review_finish": {
-          "description": "Slack message sent by `issue review finish`. Same context as\n`review_request`, plus `author`.",
+          "description": "Slack message sent by `pr review finish`. Same context as\n`review_request`, plus `author`.",
           "type": [
             "string",
             "null"
           ]
         },
         "review_request": {
-          "description": "Slack message sent by `issue review request`. Rendered once per\nrecipient with `name`, `slack_id` (empty for a channel), `pr_url`,\n`pr_title` (the PR's own title from GitHub), `input`, and `branch`,\n`issue`, `slug`, `apps` from the worktree's `.devkit/issue.toml`.",
+          "description": "Slack message sent by `pr review request`. Rendered once per\nrecipient with `name`, `slack_id` (empty for a channel), `pr_url`,\n`pr_title` (the PR's own title from GitHub), `input`, and `branch`,\n`issue`, `slug`, `apps` from the worktree's `.devkit/issue.toml`.",
           "type": [
             "string",
             "null"
@@ -1877,14 +1877,14 @@
           "type": "object"
         },
         "worktree_dir": {
-          "description": "Worktree directory name created by `issue setup`, relative to\n`defaults.worktree_root`. Same context as `branch`; defaults to\n`{{ slug }}`.",
+          "description": "Worktree directory name created by `workspace setup`, relative to\n`defaults.worktree_root`. Same context as `branch`; defaults to\n`{{ slug }}`.",
           "type": [
             "string",
             "null"
           ]
         },
         "worktree_dir_max": {
-          "description": "Longest worktree directory name `issue setup` will render from\n`{{ short_slug }}`. A template whose fixed text already fills this is an\nerror: a limit on a filesystem path that does not hold is worse than a\nsetup that stops. Has no effect on a `worktree_dir` that does not render\n`{{ short_slug }}`. Defaults to 24.",
+          "description": "Longest worktree directory name `workspace setup` will render from\n`{{ short_slug }}`. A template whose fixed text already fills this is an\nerror: a limit on a filesystem path that does not hold is worse than a\nsetup that stops. Has no effect on a `worktree_dir` that does not render\n`{{ short_slug }}`. Defaults to 24.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -2003,7 +2003,7 @@
       "type": "object"
     },
     "TrackerConfig": {
-      "description": "The `[tracker]` table.\n\n```toml\n[tracker]\nkind = \"github\"\n```\n\nNaming the kind is what stops a `LINEAR_API_KEY` exported machine-wide from\nresolving Linear for a project that does not use it.\n\nEvery tracker question goes through the resolved tracker: `issue setup`'s\nslug and summary, `issue pr checkout`'s bare-number disambiguation,\n`issue dashboard`'s timeline, and the ISSUE column of `issue prs`.",
+      "description": "The `[tracker]` table.\n\n```toml\n[tracker]\nkind = \"github\"\n```\n\nNaming the kind is what stops a `LINEAR_API_KEY` exported machine-wide from\nresolving Linear for a project that does not use it.\n\nEvery tracker question goes through the resolved tracker: `workspace\nsetup`'s slug and summary, `pr checkout`'s bare-number disambiguation,\n`ticket dashboard`'s timeline, and the ISSUE column of `pr list`.",
       "properties": {
         "kind": {
           "anyOf": [
@@ -2015,7 +2015,7 @@
             }
           ],
           "default": null,
-          "description": "Force a tracker instead of detecting one. Detection also decides when\nno config resolves: outside any devkit project, or when the config\nfails to load. Every `issue` command and the `issue.status` MCP action\nread it. `github` authenticates through `gh auth login`, `GH_TOKEN` or\n`GITHUB_TOKEN`; under it a bare number is a PR, since issues and PRs\nshare one numbering, and with no resolvable `[github] issues_repo` the\nproject runs with no tracker. `none` declares no issue states, so a\nmerged PR and a clean tree finish a worktree. Detection that finds\nnothing is different: it holds that verdict open, because `issue end`\ndeletes branches. `devkit doctor`'s `tracker` row shows which tracker\nresolved and why."
+          "description": "Force a tracker instead of detecting one. Detection also decides when\nno config resolves: outside any devkit project, or when the config\nfails to load. Every `ticket`, `workspace` and `pr` command and the\n`issue.status` MCP action read it. `github` authenticates through\n`gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN`; under it a bare\nnumber is a PR, since issues and PRs share one numbering, and with\nno resolvable `[github] issues_repo` the project runs with no\ntracker. `none` declares no issue states, so a merged PR and a clean\ntree finish a worktree. Detection that finds nothing is different:\nit holds that verdict open, because `workspace end`\ndeletes branches. `devkit doctor`'s `tracker` row shows which tracker\nresolved and why."
         }
       },
       "type": "object"
@@ -2044,7 +2044,7 @@
               ]
             },
             "description": {
-              "description": "What to pass for this arg, shown beside it where devkit asks for\nit: a missing-arg error (`issue pr create` and `issue review`\nincluded), a command-guard redirect to a task that reads it,\n`devkit config tasks <name>` and `devkit config variables`.\nExplain an arg here rather than in a guard rule's `reason`.",
+              "description": "What to pass for this arg, shown beside it where devkit asks for\nit: a missing-arg error (`pr create` and `pr review`\nincluded), a command-guard redirect to a task that reads it,\n`devkit config tasks <name>` and `devkit config variables`.\nExplain an arg here rather than in a guard rule's `reason`.",
               "type": [
                 "string",
                 "null"
@@ -2077,7 +2077,7 @@
         "$ref": "#/$defs/AppConfig"
       },
       "default": {},
-      "description": "One table per runnable app, keyed by the app id passed to\n`issue setup --apps` and `devrun up`.",
+      "description": "One table per runnable app, keyed by the app id passed to\n`workspace setup --apps` and `devrun up`.",
       "type": "object"
     },
     "brief": {
@@ -2219,7 +2219,7 @@
         "$ref": "#/$defs/Person"
       },
       "default": {},
-      "description": "Reviewer/recipient aliases, keyed by the short name passed to\n`issue review --to`.",
+      "description": "Reviewer/recipient aliases, keyed by the short name passed to\n`pr review --to`.",
       "type": "object"
     },
     "preserve": {
@@ -2227,7 +2227,7 @@
         "$ref": "#/$defs/PreserveConfig"
       },
       "default": {},
-      "description": "Files copied out of an issue worktree before `issue end` removes it,\nkeyed by the name that labels the entry's progress step and its\nwarnings.",
+      "description": "Files copied out of an issue worktree before `workspace end` removes it,\nkeyed by the name that labels the entry's progress step and its\nwarnings.",
       "type": "object"
     },
     "rules": {
@@ -2286,7 +2286,7 @@
         "worktree_dir": null,
         "worktree_dir_max": null
       },
-      "description": "Minijinja templates for the strings `issue setup` and `issue review`\ngenerate — branch names, worktree directories, PR fields, Slack bodies."
+      "description": "Minijinja templates for the strings `workspace setup` and `pr review`\ngenerate — branch names, worktree directories, PR fields, Slack bodies."
     },
     "todo": {
       "$ref": "#/$defs/TodoConfig",
@@ -2355,7 +2355,7 @@
       "default": {
         "kind": null
       },
-      "description": "Which issue tracker backs `issue`. Detected when the table is absent."
+      "description": "Which issue tracker backs `ticket`, `workspace` and `pr`. Detected when\nthe table is absent."
     }
   },
   "title": "devkit.toml",
