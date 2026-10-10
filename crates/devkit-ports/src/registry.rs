@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    /// A worktree's own servers. `issue` is the name it had before, still
-    /// read from older registry records and accepted on the command line.
+    /// A worktree's own servers. `issue` is accepted as an alias, in
+    /// registry records and on the command line.
     #[serde(alias = "issue")]
     #[value(alias = "issue")]
     Workspace,
