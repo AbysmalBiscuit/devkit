@@ -65,7 +65,7 @@ fn reuse_note(number: u64, pr_is_draft: bool, asked: Option<PrCreateState>) -> O
         return None;
     }
     let (is, flag, way_back) = if pr_is_draft {
-        ("a draft", "--ready", "pr ready")
+        ("a draft", "--ready", "devkit pr ready")
     } else {
         (
             "ready for review",
@@ -398,6 +398,21 @@ mod tests {
         assert!(
             note.contains("convert it to a draft"),
             "names the way out: {note}"
+        );
+    }
+
+    #[test]
+    fn reuse_of_a_draft_names_the_command_that_readies_it() {
+        let note = reuse_note(
+            123,
+            // pr_is_draft
+            true,
+            Some(PrCreateState::Ready),
+        );
+        let note = note.expect("a contradicted flag is reported");
+        assert!(
+            note.contains("To move it: devkit pr ready"),
+            "names a runnable way out: {note}"
         );
     }
 
