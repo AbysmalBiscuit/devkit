@@ -339,7 +339,7 @@ pub fn run(args: Args) -> Result<()> {
         attachments: &args.attach,
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
         steps: &steps,
-        claim_pr_open: tracker_issue.is_some() && loaded.config.issue.events.pr_open.is_some(),
+        claim_pr_open: tracker_issue.is_some() && loaded.config.ticket.events.pr_open.is_some(),
     })?;
 
     println!("{}", resolved.url);

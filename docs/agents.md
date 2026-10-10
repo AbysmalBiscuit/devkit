@@ -53,7 +53,7 @@ Everything a harness sends enters one verb family, `devkit hook <event>`, and th
 | `post-tool-use`, `post-tool-use-failure` | Records the outcome. |
 | `session-end` | Releases the session's claims, records, sweeps the log. |
 | `subagent-stop` | Releases the subagent's claims, records. |
-| `session-start` | In a worktree `workspace setup` created, with `[issue.events.start]` configured, claims `start` once and spawns a background `ticket event start`. Records the frame. |
+| `session-start` | In a worktree `workspace setup` created, with `[ticket.events.start]` configured, claims `start` once and spawns a background `ticket event start`. Records the frame. |
 | `subagent-start` | Records the frame. |
 | `permission-request`, `permission-denied` | Records what the harness asked about, or what its own classifier blocked. |
 | `stop`, `stop-failure`, `pre-compact`, `post-compact`, `cwd-changed` | Records the turn or context boundary. |

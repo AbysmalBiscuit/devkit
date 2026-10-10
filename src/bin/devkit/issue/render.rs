@@ -1,5 +1,5 @@
-//! `ticket render`: an issue's title and body from the `issue_title` and
-//! `issue_body` templates, printed for a tracker MCP call, with a receipt per
+//! `ticket render`: a ticket's title and body from the `ticket_title` and
+//! `ticket_body` templates, printed for a tracker MCP call, with a receipt per
 //! field the pre-tool-use hook checks that call against.
 
 use std::{collections::BTreeMap, path::Path};
@@ -18,7 +18,7 @@ use crate::template::VarArgs;
 /// The names the issue templates' render contexts supply, which no `--arg`
 /// can. `the_issue_context_keys_match_what_render_builds` holds them against
 /// the contexts.
-pub(crate) const ISSUE_CONTEXT_KEYS: &[&str] = &["input", "issue_title"];
+pub(crate) const ISSUE_CONTEXT_KEYS: &[&str] = &["input", "ticket_title", "issue_title"];
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Rendered {
@@ -29,9 +29,9 @@ pub(crate) struct Rendered {
 /// Where the issue's title comes from.
 #[derive(Clone, Copy)]
 pub(crate) enum Title<'a> {
-    /// Rendered from this input through the `issue_title` template.
+    /// Rendered from this input through the `ticket_title` template.
     Input(&'a str),
-    /// The issue's current title, used as is: the `issue_title` template is
+    /// The issue's current title, used as is: the `ticket_title` template is
     /// not rendered and its required args are not asked for.
     Kept(&'a str),
 }
@@ -46,8 +46,8 @@ pub(crate) fn missing(
 ) -> Result<Vec<Missing>> {
     let tmpls = &cfg.templates;
     let rendered: &[&str] = match title {
-        Title::Input(_) => &[tmpls.issue_title(), tmpls.issue_body()],
-        Title::Kept(_) => &[tmpls.issue_body()],
+        Title::Input(_) => &[tmpls.ticket_title(), tmpls.ticket_body()],
+        Title::Kept(_) => &[tmpls.ticket_body()],
     };
     missing_required(cfg, rendered, ISSUE_CONTEXT_KEYS, given, caller)
 }
@@ -62,6 +62,7 @@ fn title_context(title: &str) -> serde_json::Value {
 fn body_context(body: &str, rendered_title: &str) -> serde_json::Value {
     with_fields(&serde_json::json!({}), &[
         ("input", serde_json::json!(body)),
+        ("ticket_title", serde_json::json!(rendered_title)),
         ("issue_title", serde_json::json!(rendered_title)),
     ])
 }
@@ -84,8 +85,8 @@ pub(crate) fn render(
 
     let title = match title {
         Title::Input(input) => render_review(
-            tmpls.issue_title(),
-            "issue_title",
+            tmpls.ticket_title(),
+            "ticket_title",
             &title_context(input),
             &values,
             None,
@@ -93,11 +94,11 @@ pub(crate) fn render(
         Title::Kept(current) => current.to_string(),
     };
     if title.trim().is_empty() {
-        bail!("--title is required: the `issue_title` template rendered empty");
+        bail!("--title is required: the `ticket_title` template rendered empty");
     }
     let body = render_review(
-        tmpls.issue_body(),
-        "issue_body",
+        tmpls.ticket_body(),
+        "ticket_body",
         &body_context(body, &title),
         &values,
         None,

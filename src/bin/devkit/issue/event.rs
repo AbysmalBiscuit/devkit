@@ -61,7 +61,7 @@ pub(crate) fn fire(
         bail!("devkit.toml does not load: {e}");
     }
     let cfg = sel.config.unwrap_or_default();
-    let Some(t) = cfg.issue.events.get(event) else {
+    let Some(t) = cfg.ticket.events.get(event) else {
         return Ok(format!("[issue.events.{event}] is not configured"));
     };
     let writer = writer_for(sel.tracker.tracker.kind(), &cfg.github, &sel.forge.repos)?;

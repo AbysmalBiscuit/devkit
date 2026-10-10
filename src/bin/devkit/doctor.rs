@@ -272,7 +272,7 @@ fn issue_events_row(
     use devkit_config::IssueEvent;
 
     let (cfg, _) = devkit_common::config::resolve(None, start).ok()?;
-    let events = &cfg.issue.events;
+    let events = &cfg.ticket.events;
     if !events.any() {
         return None;
     }
