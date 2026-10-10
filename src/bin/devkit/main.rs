@@ -200,7 +200,7 @@ enum Cmd {
     Install(links::InstallLinksArgs),
     /// Install the old command names as hardlinks beside this binary.
     ///
-    /// Creates hardlinks such as `issue` and `devrun` beside this
+    /// Creates hardlinks such as `ticket` and `devrun` beside this
     /// executable.
     InstallLinks(links::InstallLinksArgs),
 }
