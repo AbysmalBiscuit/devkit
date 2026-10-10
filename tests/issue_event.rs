@@ -236,11 +236,22 @@ fn setup_records_and_fires_its_event_and_warns_without_failing() {
         "../crates/devkit-common/src/tracker/fixtures/github_status_insufficient_scopes.json"
     ));
 
-    let out = gh.issue(&["setup", "65", "--slug", "fix", "--no-gitignore"]);
+    let dir = gh.project().to_str().unwrap();
+    let out = gh.devkit_here(&[
+        "workspace",
+        "setup",
+        "-C",
+        dir,
+        "65",
+        "--slug",
+        "fix",
+        "--no-gitignore",
+    ]);
 
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("warning: issue event setup")
+        stderr(&out).contains("warning: ticket event setup")
+            && !stderr(&out).contains("issue event")
             && stderr(&out).contains("gh auth refresh -s project"),
         "{}",
         stderr(&out)
@@ -319,7 +330,7 @@ fn a_failed_pr_open_warns_and_the_pr_stands() {
 
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("warning: issue event pr_open"),
+        stderr(&out).contains("warning: ticket event pr_open"),
         "{}",
         stderr(&out)
     );
