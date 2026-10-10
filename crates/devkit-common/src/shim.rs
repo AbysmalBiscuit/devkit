@@ -114,34 +114,31 @@ pub fn shim_file_name(name: &str) -> String {
 pub struct OwnBinary {
     exe: Option<PathBuf>,
     search_path: Option<OsString>,
-    cwd: Option<PathBuf>,
 }
 
 impl OwnBinary {
-    pub fn new(exe: PathBuf, search_path: Option<OsString>, cwd: Option<PathBuf>) -> Self {
+    pub fn new(exe: PathBuf, search_path: Option<OsString>) -> Self {
         OwnBinary {
             exe: Some(exe),
             search_path,
-            cwd,
         }
     }
 
-    /// This process's binary and `PATH`, with relative program paths resolved
-    /// against `cwd`. When the running executable cannot be named, no shim
-    /// name resolves to it.
-    pub fn current(cwd: Option<PathBuf>) -> Self {
+    /// This process's binary and `PATH`. When the running executable cannot
+    /// be named, no shim name resolves to it.
+    pub fn current() -> Self {
         OwnBinary {
             exe: std::env::current_exe().ok(),
             search_path: std::env::var_os("PATH"),
-            cwd,
         }
     }
 
-    /// Whether `program` is devkit itself or one of the names it installs,
-    /// resolving to this binary. A shim name is judged by the file it resolves
-    /// to, the same-file check `devkit install-links` uses for its own links;
-    /// one that resolves elsewhere, or nowhere, is not devkit's.
-    pub fn runs(&self, program: &str) -> bool {
+    /// Whether `program`, run from `cwd`, is devkit itself or one of the names
+    /// it installs, resolving to this binary. A shim name is judged by the
+    /// file it resolves to, the same-file check `devkit install-links` uses
+    /// for its own links; one that resolves elsewhere, or nowhere, is not
+    /// devkit's. A relative path with `cwd` unknown resolves nowhere.
+    pub fn runs(&self, program: &str, cwd: Option<&Path>) -> bool {
         let normalized = program.replace('\\', "/");
         let Some(name) = Path::new(&normalized).file_stem().and_then(|s| s.to_str()) else {
             return false;
@@ -155,24 +152,45 @@ impl OwnBinary {
         let Some(exe) = &self.exe else {
             return false;
         };
-        self.resolve(program)
+        self.resolve(program, cwd)
             .is_some_and(|path| same_file(exe, &path))
     }
 
-    /// The file `program` runs: itself when it names a path, else the first
-    /// `PATH` entry holding it.
-    fn resolve(&self, program: &str) -> Option<PathBuf> {
+    /// The file `program` runs: itself when it names a path, or on Windows
+    /// that path with `.exe` when only that exists, else the first `PATH`
+    /// entry holding it.
+    fn resolve(&self, program: &str, cwd: Option<&Path>) -> Option<PathBuf> {
         if program.contains(['/', '\\']) {
             let path = Path::new(program);
-            return Some(match &self.cwd {
-                Some(cwd) => cwd.join(path),
-                None => path.to_path_buf(),
-            });
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                cwd?.join(path)
+            };
+            if cfg!(windows) && !path.is_file() && path.extension().is_none() {
+                return Some(path.with_extension("exe"));
+            }
+            return Some(path);
         }
-        let file = shim_file_name(program);
+        let file = shim_file_name(windows_stem(program));
         std::env::split_paths(self.search_path.as_ref()?)
             .map(|dir| dir.join(&file))
             .find(|candidate| candidate.is_file())
+    }
+}
+
+/// `program` without the `.exe` Windows appends when looking a name up, so
+/// `ticket.exe` and `ticket` find the same file there. Elsewhere the suffix
+/// is part of the name.
+fn windows_stem(program: &str) -> &str {
+    if !cfg!(windows) {
+        return program;
+    }
+    match program.len().checked_sub(4) {
+        Some(at) if program.is_char_boundary(at) && program[at..].eq_ignore_ascii_case(".exe") => {
+            &program[..at]
+        }
+        _ => program,
     }
 }
 
@@ -233,12 +251,12 @@ mod tests {
         for s in Shim::iter() {
             std::fs::hard_link(&exe, dir.path().join(shim_file_name(s.name()))).unwrap();
         }
-        let own = OwnBinary::new(exe, Some(dir.path().as_os_str().to_owned()), None);
-        assert!(own.runs("devkit"));
+        let own = OwnBinary::new(exe, Some(dir.path().as_os_str().to_owned()));
+        assert!(own.runs("devkit", None));
         for s in Shim::iter() {
-            assert!(own.runs(s.name()), "{} is gated", s.name());
+            assert!(own.runs(s.name(), None), "{} is gated", s.name());
         }
-        assert!(!own.runs("some-other-tool"));
+        assert!(!own.runs("some-other-tool", None));
     }
 
     /// A shim name held by another program, by path or on `PATH`, or found
@@ -249,12 +267,41 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let foreign = dir.path().join(shim_file_name("ticket"));
         std::fs::write(&foreign, "foreign").unwrap();
-        let own = OwnBinary::new(exe.clone(), Some(dir.path().as_os_str().to_owned()), None);
-        assert!(!own.runs("ticket"));
-        assert!(!own.runs(foreign.to_str().unwrap()));
+        let own = OwnBinary::new(exe.clone(), Some(dir.path().as_os_str().to_owned()));
+        assert!(!own.runs("ticket", None));
+        assert!(!own.runs(foreign.to_str().unwrap(), None));
         let empty = tempfile::tempdir().unwrap();
-        let nowhere = OwnBinary::new(exe, Some(empty.path().as_os_str().to_owned()), None);
-        assert!(!nowhere.runs("ticket"));
+        let nowhere = OwnBinary::new(exe, Some(empty.path().as_os_str().to_owned()));
+        assert!(!nowhere.runs("ticket", None));
+    }
+
+    /// Windows runs `ticket.exe` and `ticket` alike, so both spellings name
+    /// the linked shim there; elsewhere `ticket.exe` is a different file.
+    #[test]
+    fn an_exe_spelling_of_a_linked_shim_is_devkit_on_windows() {
+        let exe = std::env::current_exe().unwrap();
+        let dir = tempfile::Builder::new()
+            .tempdir_in(exe.parent().unwrap())
+            .unwrap();
+        std::fs::hard_link(&exe, dir.path().join(shim_file_name("ticket"))).unwrap();
+        let own = OwnBinary::new(exe, Some(dir.path().as_os_str().to_owned()));
+        assert_eq!(own.runs("ticket.exe", None), cfg!(windows));
+        assert_eq!(own.runs("ticket.EXE", None), cfg!(windows));
+    }
+
+    /// A relative program path resolves against the directory it runs in, and
+    /// with that directory unknown it is not devkit's.
+    #[test]
+    fn a_relative_shim_path_resolves_against_its_cwd() {
+        let exe = std::env::current_exe().unwrap();
+        let dir = tempfile::Builder::new()
+            .tempdir_in(exe.parent().unwrap())
+            .unwrap();
+        std::fs::hard_link(&exe, dir.path().join(shim_file_name("ticket"))).unwrap();
+        let own = OwnBinary::new(exe, None);
+        let program = format!("./{}", shim_file_name("ticket"));
+        assert!(own.runs(&program, Some(dir.path())));
+        assert!(!own.runs(&program, None));
     }
 
     /// Two shims sharing a name would make `from_argv0` order-dependent, and

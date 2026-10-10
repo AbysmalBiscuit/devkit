@@ -6,7 +6,10 @@ pub mod norm;
 pub mod sig;
 pub mod tasks;
 
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+};
 
 use devkit_command::{Analysis, Invocation, Value};
 use devkit_common::{caller::Caller, shim::OwnBinary};
@@ -139,7 +142,10 @@ pub fn decide(
 ) -> Verdict {
     let mut verdict = Verdict::default();
     for inv in &analysis.invocations {
-        let own_binary = inv.program.known().is_some_and(|p| own.runs(p));
+        let own_binary = inv
+            .program
+            .known()
+            .is_some_and(|p| own.runs(p, inv.cwd.as_deref().map(Path::new)));
         let typed = inv.typed.join(" ");
         let mut undetermined = false;
         for (name, rule) in rules
@@ -232,7 +238,7 @@ pub fn decide_with(
     project: Option<&Project>,
 ) -> Decision {
     let analysis = devkit_command::analyze(command, &bash_context());
-    match decide(&analysis, rules, project, &OwnBinary::current(None))
+    match decide(&analysis, rules, project, &OwnBinary::current())
         .blocks
         .into_iter()
         .next()
@@ -592,7 +598,7 @@ mod tests {
     }
 
     fn verdict(command: &str, rules: &BTreeMap<String, CommandRule>) -> Verdict {
-        verdict_own(command, rules, &OwnBinary::current(None))
+        verdict_own(command, rules, &OwnBinary::current())
     }
 
     fn verdict_own(
@@ -604,7 +610,11 @@ mod tests {
             dialect: devkit_command::Dialect::Bash,
             cwd: None,
             home: None,
-            path_style: devkit_command::PathStyle::Unix,
+            path_style: if cfg!(windows) {
+                devkit_command::PathStyle::Windows
+            } else {
+                devkit_command::PathStyle::Unix
+            },
             limits: devkit_command::Limits::default(),
         };
         decide(&devkit_command::analyze(command, &ctx), rules, None, own)
@@ -620,7 +630,7 @@ mod tests {
         for name in names {
             std::fs::hard_link(&exe, dir.path().join(shim_file_name(name))).unwrap();
         }
-        let own = OwnBinary::new(exe, Some(dir.path().as_os_str().to_owned()), None);
+        let own = OwnBinary::new(exe, Some(dir.path().as_os_str().to_owned()));
         (dir, own)
     }
 
@@ -744,11 +754,34 @@ mod tests {
         let on_path = OwnBinary::new(
             std::env::current_exe().unwrap(),
             Some(foreign_dir.path().as_os_str().to_owned()),
-            None,
         );
         assert_eq!(verdict_own("ticket create", &r, &on_path).blocks.len(), 1);
-        let by_path = format!("{} create", foreign.display());
+        let by_path = format!("'{}' create", slashed(&foreign));
         assert_eq!(verdict_own(&by_path, &r, &own).blocks.len(), 1);
+    }
+
+    /// A relative program path runs from the directory the command has moved
+    /// to, not from where the hook was asked.
+    #[test]
+    fn a_relative_shim_path_resolves_against_the_invocation_cwd() {
+        let r = rules(&["ticket"], "not devkit's ticket");
+        let (own_dir, own) = own_links(&["ticket"]);
+        let into_own = format!("cd '{}' && ./ticket create", slashed(own_dir.path()));
+        assert!(verdict_own(&into_own, &r, &own).blocks.is_empty());
+
+        let foreign_dir = tempfile::tempdir().unwrap();
+        std::fs::write(foreign_dir.path().join(shim_file_name("ticket")), "foreign").unwrap();
+        let into_foreign = format!("cd '{}' && ./ticket create", slashed(foreign_dir.path()));
+        assert_eq!(verdict_own(&into_foreign, &r, &own).blocks.len(), 1);
+
+        let nowhere = "cd \"$UNSET_DIR\" && ./ticket create";
+        assert_eq!(verdict_own(nowhere, &r, &own).blocks.len(), 1);
+    }
+
+    /// `path` with `/` separators, since a Bash-dialect command reads `\` as
+    /// an escape.
+    fn slashed(path: &Path) -> String {
+        path.display().to_string().replace('\\', "/")
     }
 
     #[test]

@@ -299,7 +299,7 @@ fn respond(
     let mut notes: Vec<String> = Vec::new();
     if commands_on {
         let project = load_project(&checkout, &cwd, rules.app_match.clone());
-        let own = devkit_common::shim::OwnBinary::current(Some(cwd.clone()));
+        let own = devkit_common::shim::OwnBinary::current();
         let verdict = guard::decide(&analysis, &rules.commands, project.as_ref(), &own);
         blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
         notes.extend(verdict.warnings.into_iter().map(|f| f.message));
