@@ -77,7 +77,7 @@ fn up(ctx: &ServerCtx, args: Value) -> Result<Value> {
 
     let user = a.env.unwrap_or_default();
     let vars = &loaded.config.templates.defaults();
-    let ports = run::resolve_ports(catalog, &apps, &a.root, Role::Issue, vars)?;
+    let ports = run::resolve_ports(catalog, &apps, &a.root, Role::Workspace, vars)?;
     let provider = catalog
         .iter()
         .find(|(_, ap)| ap.provides_url)
@@ -88,11 +88,11 @@ fn up(ctx: &ServerCtx, args: Value) -> Result<Value> {
         &ports,
         provider.as_deref(),
         Path::new(&a.root),
-        Role::Issue,
+        Role::Workspace,
         &user,
         vars,
     )?;
-    let statuses = run::launch(&plans, &a.root, Role::Issue, run::daemon_running(), false)?;
+    let statuses = run::launch(&plans, &a.root, Role::Workspace, run::daemon_running(), false)?;
     Ok(serde_json::json!({
         "servers": serde_json::to_value(&statuses)?,
         "hint": "poll devrun.status for readiness"
@@ -144,7 +144,7 @@ fn down_schema() -> Value {
         "type": "object",
         "properties": {
             "root": { "type": "string", "description": "Absolute path to the worktree (the ports holder). Must be the worktree this server was started in; another worktree is refused." },
-            "role": { "type": "string", "enum": ["issue", "baseline"], "description": "Only stop this role (default: all roles)." }
+            "role": { "type": "string", "enum": ["workspace", "issue", "baseline"], "description": "Only stop this role (default: all roles)." }
         },
         "required": ["root"],
         "additionalProperties": false
@@ -229,7 +229,7 @@ fn logs_schema() -> Value {
         "properties": {
             "root": { "type": "string", "description": "Absolute path to the worktree." },
             "app": { "type": "string", "description": "App name whose log to read." },
-            "role": { "type": "string", "enum": ["issue", "baseline"], "description": "Role to disambiguate (default: any)." },
+            "role": { "type": "string", "enum": ["workspace", "issue", "baseline"], "description": "Role to disambiguate (default: any)." },
             "lines": { "type": "integer", "minimum": 1, "description": "Tail length (default 200)." }
         },
         "required": ["root", "app"],

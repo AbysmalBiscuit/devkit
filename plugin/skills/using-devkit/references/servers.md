@@ -9,7 +9,7 @@ A port's **holder is the worktree root path**, not a session token. `registry::h
 ## `devrun` — supervised dev servers
 
 ```sh
-devrun up [apps…] [--role issue|baseline|both] [--env K=V] [--env-file F] [--supervise] [--dry-run]
+devrun up [apps…] [--role workspace|baseline|both] [--env K=V] [--env-file F] [--supervise] [--dry-run]
 devrun down [selector] [--role …] [--all|--others|--holder <path>] [--app …] [--older-than 30m]
 devrun status [--all]                                 # tracked servers (this worktree, or all)
 devrun reap [--all]                                   # kill servers running OUTSIDE devrun (needs a TTY)
@@ -24,7 +24,7 @@ devkit config variables [--json]
 
 Apps you don't name are auto-detected by diffing `<baseline ref>...HEAD`, so **on a fresh worktree with no diff yet, name the apps explicitly**. Selecting an app with a `url_env` pulls in the `provides_url` app automatically and wires its URL into that env var.
 
-Default `--role issue`. `--role both` runs the workspace's branch and its baseline side-by-side on separate ports for A/B comparison. The baseline is the worktree at the merge base with the baseline ref, shared by every worktree cut from the same commit and created the first time it is asked for. `--supervise` hands servers to the daemon so they restart on crash within the crash-loop budget. `--dry-run` prints the launch plan without starting; under `--role baseline` it names the directory a real run would use without creating it.
+Default `--role workspace`, the workspace's own servers; `--role issue` is its old name and still accepted. `--role both` runs the workspace's branch and its baseline side-by-side on separate ports for A/B comparison. The baseline is the worktree at the merge base with the baseline ref, shared by every worktree cut from the same commit and created the first time it is asked for. `--supervise` hands servers to the daemon so they restart on crash within the crash-loop budget. `--dry-run` prints the launch plan without starting; under `--role baseline` it names the directory a real run would use without creating it.
 
 Ports are allocated dynamically from the live registry at start time, and `workspace setup` reserves none.
 
@@ -69,7 +69,7 @@ A reservation row is written *before* any process binds, which is what stops two
 
 ```sh
 portm status                                          # reserved/live ports (this project, every worktree)
-portm alloc <apps…> [--holder <path>] [--role issue|baseline]    # alias: reserve
+portm alloc <apps…> [--holder <path>] [--role workspace|baseline]    # alias: reserve
 portm release [apps…] [--holder <path>] [--role …]    # no apps = everything the holder has
 portm prune                                           # drop stale reservations
 ```

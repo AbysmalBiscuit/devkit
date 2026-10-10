@@ -489,7 +489,7 @@ mod tests {
         data.entries.insert(9105, Entry {
             app: "api".into(),
             holder: "/w".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: Some(42),
             logfile: None,
             ts: 0,
@@ -612,7 +612,7 @@ mod tests {
         data.entries.insert(9100, Entry {
             app: "api".into(),
             holder: "/home/u/Git/x/swe-1".into(),
-            role: Role::Issue,
+            role: Role::Workspace,
             pid: Some(300),
             logfile: None,
             ts: 0,

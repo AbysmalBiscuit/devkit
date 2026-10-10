@@ -477,7 +477,7 @@ fn variables(
 }
 
 /// Resolve task `name` for execution in `worktree_root`. Command tasks get
-/// their port references allocated (issue role, pid-less reservations for
+/// their port references allocated (workspace role, pid-less reservations for
 /// apps not yet running) and their templates rendered; sequence tasks
 /// resolve each step. All validation errors fire here, before anything
 /// spawns: what [`view`] refuses, an `--arg` in `args` the task never reads, a
@@ -622,7 +622,7 @@ fn resolve_command(
             .iter()
             .map(|n| (n.clone(), catalog[n].base_port))
             .collect();
-        registry::alloc(holder, &reqs, Role::Issue)?
+        registry::alloc(holder, &reqs, Role::Workspace)?
             .into_iter()
             .collect()
     };
