@@ -81,7 +81,7 @@
   },
   {
     "id": "path-base",
-    "question": "From /home/me you run `devkit pr -C /work/app create --attach shot.png`. Give the absolute path the file must be at.",
+    "question": "From /home/me you run `devkit pr create -C /work/app --attach shot.png`. Give the absolute path the file must be at.",
     "kind": "text",
     "expect": ["/work/app/shot.png"],
     "proof": "tests/pr_create_attach.rs each_attachment_reaches_gh_as_its_own_flag"
