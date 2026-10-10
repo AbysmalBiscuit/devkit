@@ -43,9 +43,68 @@ fn devrun_emits_completions() {
 }
 
 #[test]
+fn ticket_emits_completions() {
+    let (_dir, link) = shimtest::linked("ticket");
+    emits_every_shell("ticket", link.to_str().expect("utf-8 link path"));
+}
+
+#[test]
+fn workspace_emits_completions() {
+    let (_dir, link) = shimtest::linked("workspace");
+    emits_every_shell("workspace", link.to_str().expect("utf-8 link path"));
+}
+
+/// `issue` still answers `completions` for a script installed under that name.
+#[test]
 fn issue_emits_completions() {
     let (_dir, link) = shimtest::linked("issue");
     emits_every_shell("issue", link.to_str().expect("utf-8 link path"));
+}
+
+fn devkit_script(shell: &str) -> String {
+    let (_home, mut cmd) = testenv::isolated(env!("CARGO_BIN_EXE_devkit"));
+    let out = cmd
+        .args(["completions", shell])
+        .output()
+        .expect("spawn completions");
+    assert!(out.status.success(), "devkit completions {shell} failed");
+    String::from_utf8(out.stdout).expect("utf8 completion script")
+}
+
+/// `devkit`'s script offers `ticket`, `workspace` and `pr`, each with its
+/// verbs, and never the hidden `issue`. Each shell declares a subcommand in
+/// its own syntax, so each marker is that shell's spelling of one.
+#[test]
+fn devkit_completes_the_new_commands_and_not_issue() {
+    fn marker(shell: &str, name: &str) -> String {
+        match shell {
+            "zsh" => format!("'{name}:"),
+            "fish" => format!("__fish_devkit_needs_command\" -f -a \"{name}\""),
+            _ => format!("devkit,{name})"),
+        }
+    }
+    for shell in ["zsh", "fish", "bash"] {
+        let script = devkit_script(shell);
+        for name in ["ticket", "workspace", "pr"] {
+            assert!(
+                script.contains(&marker(shell, name)),
+                "{shell} script never declares `{name}`"
+            );
+        }
+        assert!(
+            !script.contains(&marker(shell, "issue")),
+            "{shell} script declares the hidden `issue`"
+        );
+    }
+    let bash = devkit_script("bash");
+    for path in [
+        "devkit__subcmd__ticket,dashboard)",
+        "devkit__subcmd__workspace,sync-includes)",
+        "devkit__subcmd__pr,list)",
+        "devkit__subcmd__pr__subcmd__review,finish)",
+    ] {
+        assert!(bash.contains(path), "bash script never declares `{path}`");
+    }
 }
 
 #[test]
@@ -84,18 +143,38 @@ fn all_shells_script(shell: &str) -> String {
 #[test]
 fn all_emits_a_registration_per_name_for_zsh() {
     let script = all_shells_script("zsh");
-    for name in ["devkit", "issue", "devrun", "portm", "lockm", "docm"] {
+    for name in [
+        "devkit",
+        "ticket",
+        "workspace",
+        "devrun",
+        "portm",
+        "lockm",
+        "docm",
+    ] {
         assert!(
             script.contains(&format!("compdef _{name} {name}")),
             "zsh --all script should register {name}"
         );
     }
+    assert!(
+        !script.contains("compdef _issue issue"),
+        "the hidden `issue` alias gets no script of its own"
+    );
 }
 
 #[test]
 fn all_emits_a_registration_per_name_for_fish() {
     let script = all_shells_script("fish");
-    for name in ["devkit", "issue", "devrun", "portm", "lockm", "docm"] {
+    for name in [
+        "devkit",
+        "ticket",
+        "workspace",
+        "devrun",
+        "portm",
+        "lockm",
+        "docm",
+    ] {
         assert!(
             script.contains(&format!("complete -c {name} ")),
             "fish --all script should register {name}"

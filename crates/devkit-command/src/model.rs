@@ -68,9 +68,23 @@ pub struct Invocation {
     pub wrappers: Vec<Vec<Value>>,
     pub typed: Vec<String>,
     pub cwd: Option<String>,
+    /// The `PATH` the program name is looked up on.
+    pub search_path: SearchPath,
     pub language: Language,
     pub depth: usize,
     pub location: Location,
+}
+
+/// The `PATH` an invocation looks its program up on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SearchPath {
+    /// The analyzing process's own `PATH`: nothing in the command changed it.
+    #[default]
+    Inherited,
+    /// A `PATH` the command sets. [`Value::Unknown`] when the command changes
+    /// it in a way that could not be evaluated, such as appending to it,
+    /// clearing the environment, or running through a wrapper that rewrites it.
+    Set(Value),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

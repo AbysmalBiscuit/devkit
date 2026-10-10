@@ -11,7 +11,7 @@ use crate::{
     embed,
     model::{
         Analysis, FileEffect, FileOp, Invocation, Language, Location, ScriptFileInvocation,
-        TreeEffect, TreeReach, Uncertainty, UncertaintyKind, Value,
+        SearchPath, TreeEffect, TreeReach, Uncertainty, UncertaintyKind, Value,
     },
     normalize, paths,
 };
@@ -34,6 +34,9 @@ pub(crate) struct RawInvocation {
     pub(crate) words: Vec<Word>,
     pub(crate) stdin: Stdin,
     pub(crate) cwd: Option<String>,
+    /// A `PATH` the source language set for this invocation alone, in place
+    /// of the frame's.
+    pub(crate) path: Option<Value>,
     pub(crate) language: Language,
     pub(crate) location: Location,
 }
@@ -44,6 +47,7 @@ pub(crate) struct Frame {
     pub(crate) script_args: Vec<Value>,
     pub(crate) base: Option<Location>,
     pub(crate) cwd: Option<String>,
+    pub(crate) search_path: SearchPath,
 }
 
 impl Frame {
@@ -53,6 +57,7 @@ impl Frame {
             script_args: Vec::new(),
             base: None,
             cwd: None,
+            search_path: SearchPath::Inherited,
         }
     }
 
@@ -145,6 +150,7 @@ impl<'c> Analyzer<'c> {
             words,
             stdin: Stdin::None,
             cwd: self.ctx.cwd.clone(),
+            path: None,
             language: Language::Bash,
             location: Location {
                 outer: 0..0,
@@ -391,6 +397,7 @@ impl<'c> Analyzer<'c> {
                 .collect(),
             typed: raw.words.iter().map(|w| w.typed.clone()).collect(),
             cwd: cwd.clone(),
+            search_path: unwrapped.search_path.clone(),
             language: raw.language,
             depth: frame.depth,
             location: location.clone(),
@@ -421,6 +428,7 @@ impl<'c> Analyzer<'c> {
                         script_args,
                         base: Some(location.clone()),
                         cwd: cwd.clone(),
+                        search_path: unwrapped.search_path.clone(),
                     };
                     self.source(language, text, child);
                 }
@@ -538,6 +546,7 @@ mod tests {
                 words: vec![word("ls"), word("-la")],
                 stdin: Stdin::None,
                 cwd: Some("/repo".into()),
+                path: None,
                 language: Language::Bash,
                 location: at(),
             },
@@ -562,6 +571,7 @@ mod tests {
                 }],
                 stdin: Stdin::None,
                 cwd: None,
+                path: None,
                 language: Language::Bash,
                 location: at(),
             },

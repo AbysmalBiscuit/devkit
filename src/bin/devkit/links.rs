@@ -13,6 +13,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+pub use devkit_common::shim::{same_file, shim_file_name};
 use strum::IntoEnumIterator;
 
 use crate::shim::{PROBE_FLAG, PROBE_MARKER, Shim};
@@ -37,20 +38,6 @@ pub struct InstallLinksArgs {
 /// foreign. Generous enough that a cold-start binary on a loaded CI runner
 /// still answers in time.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Whether two paths name the same file, so an existing correct hardlink is
-/// left alone instead of being deleted and recreated. On Windows that matters
-/// beyond tidiness: deleting a running executable fails.
-///
-/// Delegated to the `same-file` crate rather than hand-rolled per-platform
-/// metadata comparison: the Windows identity check needs
-/// `GetFileInformationByHandle`, which is unsafe FFI on a path whose failure
-/// mode is deleting the wrong file, and `same-file` already wraps it safely
-/// (as it does the Unix `dev`+`ino` pair). An error resolving either path
-/// (e.g. one no longer exists) is "not the same file", not a crash.
-pub fn same_file(a: &Path, b: &Path) -> bool {
-    same_file::is_same_file(a, b).unwrap_or(false)
-}
 
 /// Run `<path> <arg>`, polling for exit against a deadline instead of
 /// blocking forever. `std::process::Output`'s `output()` has no timeout, so a
@@ -245,17 +232,6 @@ pub fn is_devkit_binary(path: &Path, shim: Shim) -> Identity {
     )
 }
 
-/// The file name a shim occupies in a directory: its own name, plus the `.exe`
-/// suffix Windows requires to execute it. Every caller that looks for a shim
-/// name on disk goes through this, so the rule lives in one place.
-pub fn shim_file_name(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
-}
-
 /// Whether something already sits at `dest` — including a broken symlink.
 /// `Path::exists` follows symlinks and reports a broken one as absent, which
 /// would send it down the "create" path below, where `hard_link` then fails
@@ -279,6 +255,8 @@ pub fn link_all(exe: &Path, dir: &Path, force: bool) -> Vec<(&'static str, Outco
 
 fn link_one(exe: &Path, shim: Shim, dest: &Path, force: bool) -> Outcome {
     if dest_occupied(dest) {
+        // A correct link is left alone rather than recreated: on Windows,
+        // deleting a running executable fails.
         if same_file(exe, dest) {
             return Outcome::AlreadyLinked;
         }

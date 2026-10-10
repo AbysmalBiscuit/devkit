@@ -3,7 +3,7 @@
 //!
 //! The hook stays local: it reads the worktree's record and the project's
 //! config, claims the event in the record, and leaves the tracker to a
-//! detached `devkit issue event start`. It writes no stdout and every failure
+//! detached `devkit ticket event start`. It writes no stdout and every failure
 //! is silence, so a SessionStart verdict never depends on it.
 
 use std::{path::Path, process::Command};
@@ -65,7 +65,7 @@ fn spawn(root: &Path) {
         return;
     };
     let mut cmd = Command::new(exe);
-    cmd.args(["issue", "event", "start", "--dir"])
+    cmd.args(["ticket", "event", "start", "--dir"])
         .arg(root)
         .arg("--log-file")
         .arg(log_path(root))

@@ -1,7 +1,7 @@
 use std::{ffi::OsString, path::PathBuf};
 
 use anyhow::Result;
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use devkit::completions::{self, Shell};
 use strum::IntoEnumIterator;
 
@@ -32,7 +32,8 @@ mod todo;
 
 const SHIM_HELP: &str = "\
 Also installed under their own names:
-  issue       = devkit issue
+  ticket      = devkit ticket
+  workspace   = devkit workspace
   devrun      = devkit run
   portm       = devkit ports
   lockm       = devkit locks
@@ -156,9 +157,15 @@ enum Cmd {
     /// Supervised dev servers and canned project tasks.
     #[command(display_name = "devkit run")]
     Run(run::RunCli),
-    /// Set up, track, review and retire issue worktrees
-    #[command(display_name = "devkit issue")]
-    Issue(issue::IssueCli),
+    /// Create, edit and render tracker tickets.
+    #[command(display_name = "devkit ticket")]
+    Ticket(issue::TicketCli),
+    /// Set up, report on and retire branch worktrees.
+    #[command(display_name = "devkit workspace")]
+    Workspace(issue::WorkspaceCli),
+    /// Open, ready, list and review this branch's pull request.
+    #[command(display_name = "devkit pr")]
+    Pr(issue::PrCli),
     /// Serve the devkit MCP tools over stdio.
     #[command(display_name = "devkit mcp")]
     Mcp(mcp::McpCli),
@@ -230,15 +237,26 @@ impl Provider {
     }
 }
 
+/// The name `devkit issue` runs under. `issue` is no `Cli` subcommand, so no
+/// help view or completion script offers it; `main` hands `devkit issue ...`
+/// to the `issue` alias under this name instead.
+const DEVKIT_ISSUE: &str = "devkit issue";
+
 /// Build a tool's `Command` as a root command under `shim_name`, so an
 /// installed hardlink of that name reports its own name and version instead of
 /// `devkit`'s.
 pub(crate) fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::Command {
-    Cli::command()
-        .find_subcommand(subcommand)
-        .unwrap_or_else(|| panic!("no `{subcommand}` subcommand"))
-        .clone()
-        .name(shim_name)
+    let cmd = if subcommand == shim::Shim::Issue.subcommand() {
+        issue::IssueCli::augment_args(clap::Command::new(shim_name))
+            .about("The commands `ticket`, `workspace` and `pr` replace")
+            .propagate_version(true)
+    } else {
+        Cli::command()
+            .find_subcommand(subcommand)
+            .unwrap_or_else(|| panic!("no `{subcommand}` subcommand"))
+            .clone()
+    };
+    cmd.name(shim_name)
         // Overrides the `devkit <sub>` spelling the subcommand carries for its
         // own version line: under this name it *is* the root command.
         .display_name(shim_name)
@@ -262,22 +280,64 @@ fn emit_completions(shell: Shell, subcommand: &str, shim_name: &'static str) -> 
 /// `devkit-mcp` is absent today because `devkit mcp` takes no subcommands.
 fn every_completion_script() -> Vec<(clap::Command, &'static str)> {
     let mut scripts = vec![(Cli::command(), "devkit")];
-    scripts.extend(shim::Shim::iter().filter_map(|s| {
-        let cmd = shim_command(s.subcommand(), s.name());
-        cmd.find_subcommand("completions")?;
-        Some((cmd, s.name()))
-    }));
+    scripts.extend(
+        shim::Shim::iter()
+            .filter(|s| !s.is_alias())
+            .filter_map(|s| {
+                let cmd = shim_command(s.subcommand(), s.name());
+                cmd.find_subcommand("completions")?;
+                Some((cmd, s.name()))
+            }),
+    );
     scripts
 }
 
-fn dispatch_shim(s: shim::Shim, args: Vec<OsString>) -> Result<()> {
-    let matches = shim_command(s.subcommand(), s.name()).get_matches_from(args);
+/// The shim an argument vector runs as, the name it runs under, and the
+/// arguments to parse: `argv[0]`'s shim, else `issue` for `devkit issue ...`
+/// and `devkit help issue ...` with `devkit issue` as its one root, else plain
+/// `devkit`.
+fn route(args: Vec<OsString>) -> (Option<shim::Shim>, &'static str, Vec<OsString>) {
+    let argv0 = args.first().map(|a| a.to_string_lossy().into_owned());
+    if let Some(s) = argv0.as_deref().and_then(shim::Shim::from_argv0) {
+        return (Some(s), s.name(), args);
+    }
+    let word = |i: usize| args.get(i).map(OsString::as_os_str);
+    let issue = Some(std::ffi::OsStr::new("issue"));
+    let (help, skip) = if word(1) == issue {
+        (false, 2)
+    } else if word(1) == Some(std::ffi::OsStr::new("help")) && word(2) == issue {
+        (true, 3)
+    } else {
+        return (None, "devkit", args);
+    };
+    let root = std::iter::once(OsString::from(DEVKIT_ISSUE));
+    let help = help.then(|| OsString::from("help"));
+    let args = root
+        .chain(help)
+        .chain(args.into_iter().skip(skip))
+        .collect();
+    (Some(shim::Shim::Issue), DEVKIT_ISSUE, args)
+}
+
+fn dispatch_shim(s: shim::Shim, name: &'static str, args: Vec<OsString>) -> Result<()> {
+    let matches = shim_command(s.subcommand(), name).get_matches_from(args);
     match s {
         shim::Shim::Ports => ports::run(ports::PortsCli::from_arg_matches(&matches)?),
         shim::Shim::Locks => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
         shim::Shim::Docs => docs::run(docs::DocsCli::from_arg_matches(&matches)?),
         shim::Shim::Run => run::run(run::RunCli::from_arg_matches(&matches)?),
-        shim::Shim::Issue => issue::run(issue::IssueCli::from_arg_matches(&matches)?),
+        shim::Shim::Ticket => issue::run(
+            issue::TicketCli::from_arg_matches(&matches)?.action(),
+            s.name(),
+        ),
+        shim::Shim::Workspace => issue::run(
+            issue::WorkspaceCli::from_arg_matches(&matches)?.action(),
+            s.name(),
+        ),
+        shim::Shim::Issue => issue::run(
+            issue::IssueCli::from_arg_matches(&matches)?.action(),
+            s.name(),
+        ),
         shim::Shim::Mcp => mcp::run(mcp::McpCli::from_arg_matches(&matches)?),
         shim::Shim::Rules => rules::run(rules::RulesCli::from_arg_matches(&matches)?),
     }
@@ -388,8 +448,8 @@ fn main() -> Result<()> {
     // The marker probe `links::answers_probe_marker` uses: answered before
     // any clap parsing, any panic-hook/state-migration/linking setup, and —
     // critically — before `devkit-mcp`'s normal path would start blocking on
-    // stdin. Every shim is this same binary, so this one intercept covers all
-    // six names.
+    // stdin. Every shim is this same binary, so this one intercept covers every
+    // name.
     //
     // The other probe — `--version` — is an ordinary subcommand-shaped arg
     // with no intercept here, so a child spawned with it parses and runs the
@@ -400,9 +460,8 @@ fn main() -> Result<()> {
         println!("{}", shim::PROBE_MARKER);
         return Ok(());
     }
-    let argv0 = args.first().map(|a| a.to_string_lossy().into_owned());
-    let shim = argv0.as_deref().and_then(shim::Shim::from_argv0);
-    devkit_common::report::install_panic_hook(shim.map_or("devkit", |s| s.name()));
+    let (shim, name, args) = route(args);
+    devkit_common::report::install_panic_hook(name);
     devkit_common::paths::migrate_legacy_state();
     // Checked against the raw argv, the same way the probe intercept above
     // is: `Cli::parse()` hasn't run yet, so this can't ask clap which
@@ -425,14 +484,14 @@ fn main() -> Result<()> {
     // that running devkit at all creates the shim hardlinks, and names
     // `devkit --help` as an invocation that does it.
     let root = match shim {
-        Some(s) => shim_command(s.subcommand(), s.name()),
+        Some(s) => shim_command(s.subcommand(), name),
         None => Cli::command(),
     };
     if intercept_help(&root, &args)? {
         return Ok(());
     }
     match shim {
-        Some(s) => dispatch_shim(s, args),
+        Some(s) => dispatch_shim(s, name, args),
         None => {
             let cli = parse_cli(&args);
             match cli.cmd {
@@ -466,7 +525,9 @@ fn main() -> Result<()> {
                 Cmd::Locks(c) => locks::run(c),
                 Cmd::Docs(c) => docs::run(c),
                 Cmd::Run(c) => run::run(c),
-                Cmd::Issue(c) => issue::run(c),
+                Cmd::Ticket(c) => issue::run(c.action(), "ticket"),
+                Cmd::Workspace(c) => issue::run(c.action(), "workspace"),
+                Cmd::Pr(c) => issue::run(c.action(), "pr"),
                 Cmd::Mcp(c) => mcp::run(c),
                 Cmd::Harness(c) => harness::run(c),
                 Cmd::Hook(c) => run_hook_guarded(c),
@@ -490,10 +551,11 @@ mod tests {
     /// with no dispatch arm is a compile error rather than a runtime panic
     /// and needs no test. The other half does: that each variant's
     /// `subcommand()` names one `Cli` registers, so a shim never resolves to
-    /// a subcommand that does not exist.
+    /// a subcommand that does not exist. An alias is the exception, built by
+    /// `shim_command` on its own so that `Cli` never offers it.
     #[test]
     fn every_shim_names_a_real_subcommand() {
-        for s in shim::Shim::iter() {
+        for s in shim::Shim::iter().filter(|s| !s.is_alias()) {
             assert!(
                 Cli::command().find_subcommand(s.subcommand()).is_some(),
                 "shim `{}` selects unknown subcommand `{}`",
@@ -504,13 +566,241 @@ mod tests {
     }
 
     #[test]
-    fn shim_help_names_every_shim() {
+    fn shim_help_names_every_shim_but_the_aliases() {
         for s in shim::Shim::iter() {
-            assert!(
-                SHIM_HELP.contains(s.name()),
-                "SHIM_HELP never names the `{}` shim",
+            assert_eq!(
+                SHIM_HELP.contains(&format!("  {} ", s.name())),
+                !s.is_alias(),
+                "SHIM_HELP should name the `{}` shim exactly when it is no alias",
                 s.name()
             );
+        }
+    }
+
+    /// Which verb each spelling of the `ticket`, `workspace`, `pr` and
+    /// `issue` commands parses to, through the same parse and the same
+    /// `action()` dispatch uses.
+    mod spellings {
+        use super::*;
+        use crate::issue::{Action, Globals, IssueCli, TicketCli, WorkspaceCli};
+
+        fn action(argv: &[&str]) -> (Globals, Action) {
+            if let (Some(s), name, args) = route(argv.iter().map(OsString::from).collect()) {
+                let m = shim_command(s.subcommand(), name)
+                    .try_get_matches_from(args)
+                    .unwrap_or_else(|e| panic!("`{}` did not parse: {e}", argv.join(" ")));
+                return match s {
+                    shim::Shim::Ticket => TicketCli::from_arg_matches(&m).unwrap().action(),
+                    shim::Shim::Workspace => WorkspaceCli::from_arg_matches(&m).unwrap().action(),
+                    shim::Shim::Issue => IssueCli::from_arg_matches(&m).unwrap().action(),
+                    other => panic!("`{}` is not an issue-family shim", other.name()),
+                };
+            }
+            let cli = Cli::try_parse_from(argv)
+                .unwrap_or_else(|e| panic!("`{}` did not parse: {e}", argv.join(" ")));
+            match cli.cmd {
+                Cmd::Ticket(c) => c.action(),
+                Cmd::Workspace(c) => c.action(),
+                Cmd::Pr(c) => c.action(),
+                _ => panic!("`{}` is not an issue-family command", argv.join(" ")),
+            }
+        }
+
+        /// Every spelling in `spellings` parses to one action, and `name`
+        /// says which verb that is.
+        fn same_verb(name: &str, spellings: &[Vec<&str>]) -> Action {
+            let first = action(&spellings[0]);
+            for argv in &spellings[1..] {
+                assert_eq!(
+                    action(argv),
+                    first,
+                    "{name}: `{}` and `{}` disagree",
+                    argv.join(" "),
+                    spellings[0].join(" ")
+                );
+            }
+            assert_ne!(first.0, Globals::default(), "{name}: the -C flag was lost");
+            first.1
+        }
+
+        /// `argv` under `devkit <old...>`, `issue <old...>`, `devkit <new...>`
+        /// and, for `ticket` and `workspace`, under that link's own name, each
+        /// with `-C dir` in front of the verb's own arguments.
+        fn spellings<'a>(old: &[&'a str], new: &[&'a str], args: &[&'a str]) -> Vec<Vec<&'a str>> {
+            let mut out = Vec::new();
+            let with = |prefix: &[&'a str], path: &[&'a str]| {
+                let mut v = prefix.to_vec();
+                v.extend_from_slice(path);
+                v.extend_from_slice(&["-C", "dir"]);
+                v.extend_from_slice(args);
+                v
+            };
+            out.push(with(&["devkit", "issue"], old));
+            out.push(with(&["issue"], old));
+            out.push(with(&["devkit"], new));
+            if matches!(new[0], "ticket" | "workspace") {
+                out.push(with(&[new[0]], &new[1..]));
+            }
+            if new[0] == "pr" {
+                out.push(with(&["devkit", "ticket"], new));
+                out.push(with(&["ticket"], new));
+            }
+            out
+        }
+
+        fn verb(old: &[&str], new: &[&str], args: &[&str]) -> Action {
+            same_verb(&new.join(" "), &spellings(old, new, args))
+        }
+
+        #[test]
+        fn ticket_verbs() {
+            use crate::issue::TicketCmd as T;
+            let ticket = |a| match a {
+                Action::Run(crate::issue::Verb::Ticket(t)) => t,
+                other => panic!("not a ticket verb: {other:?}"),
+            };
+            assert!(matches!(
+                ticket(verb(&["create"], &["ticket", "create"], &["--title", "t"])),
+                T::Create { .. }
+            ));
+            assert!(matches!(
+                ticket(verb(&["edit"], &["ticket", "edit"], &["7", "--body", "b"])),
+                T::Edit { .. }
+            ));
+            assert!(matches!(
+                ticket(verb(&["render"], &["ticket", "render"], &["--title", "t"])),
+                T::Render { .. }
+            ));
+            assert!(matches!(
+                ticket(verb(&["event"], &["ticket", "event"], &["start"])),
+                T::Event { .. }
+            ));
+            assert!(matches!(
+                ticket(verb(&["dashboard"], &["ticket", "dashboard"], &[
+                    "--no-plots"
+                ])),
+                T::Dashboard { .. }
+            ));
+        }
+
+        #[test]
+        fn workspace_verbs() {
+            use crate::issue::WorkspaceCmd as W;
+            let workspace = |a| match a {
+                Action::Run(crate::issue::Verb::Workspace(w)) => w,
+                other => panic!("not a workspace verb: {other:?}"),
+            };
+            assert!(matches!(
+                workspace(verb(&["setup"], &["workspace", "setup"], &[
+                    "7",
+                    "--dry-run"
+                ])),
+                W::Setup { .. }
+            ));
+            assert!(matches!(
+                workspace(verb(&["status"], &["workspace", "status"], &["7"])),
+                W::Status { .. }
+            ));
+            assert!(matches!(
+                workspace(verb(&["end"], &["workspace", "end"], &["7", "--yes"])),
+                W::End { .. }
+            ));
+            assert!(matches!(
+                workspace(verb(
+                    &["sync-includes"],
+                    &["workspace", "sync-includes"],
+                    &["--dry-run"]
+                )),
+                W::SyncIncludes { .. }
+            ));
+        }
+
+        #[test]
+        fn pr_verbs() {
+            use crate::issue::{PrCmd as P, ReviewCmd as R};
+            let pr = |a| match a {
+                Action::Run(crate::issue::Verb::Pr(p)) => p,
+                other => panic!("not a pr verb: {other:?}"),
+            };
+            assert!(matches!(
+                pr(verb(&["pr", "create"], &["pr", "create"], &["--draft"])),
+                P::Create { .. }
+            ));
+            assert!(matches!(
+                pr(verb(&["pr", "render"], &["pr", "render"], &["-t", "t"])),
+                P::Render { .. }
+            ));
+            assert!(matches!(
+                pr(verb(&["pr", "ready"], &["pr", "ready"], &["--no-push"])),
+                P::Ready { .. }
+            ));
+            assert!(matches!(
+                pr(verb(&["pr", "status"], &["pr", "status"], &["--json"])),
+                P::Status(_)
+            ));
+            assert!(matches!(
+                pr(verb(&["pr", "checkout"], &["pr", "checkout"], &["12"])),
+                P::Checkout(_)
+            ));
+            assert!(matches!(
+                pr(verb(&["prs"], &["pr", "list"], &["--mine"])),
+                P::List(_)
+            ));
+            assert!(matches!(
+                pr(verb(
+                    &["review", "request"],
+                    &["pr", "review", "request"],
+                    &["--no-notify"]
+                )),
+                P::Review {
+                    cmd: R::Request { .. }
+                }
+            ));
+            assert!(matches!(
+                pr(verb(&["review", "finish"], &["pr", "review", "finish"], &[
+                    "--pr", "3"
+                ])),
+                P::Review {
+                    cmd: R::Finish { .. }
+                }
+            ));
+        }
+
+        /// The hidden `issue info` and `issue checkout-pr` reach `pr status`
+        /// and `pr checkout`.
+        #[test]
+        fn hidden_old_aliases() {
+            same_verb("pr status", &[
+                vec!["devkit", "pr", "status", "-C", "dir", "x"],
+                vec!["devkit", "issue", "info", "-C", "dir", "x"],
+                vec!["issue", "info", "-C", "dir", "x"],
+            ]);
+            same_verb("pr checkout", &[
+                vec!["devkit", "pr", "checkout", "-C", "dir", "12"],
+                vec!["devkit", "issue", "checkout-pr", "-C", "dir", "12"],
+                vec!["issue", "checkout-pr", "-C", "dir", "12"],
+            ]);
+        }
+
+        /// A group named with no verb runs its default: `pr status` for every
+        /// `pr`, and `workspace status` for `workspace` and `issue`.
+        #[test]
+        fn bare_groups() {
+            same_verb("bare pr", &[
+                vec!["devkit", "pr", "status", "-C", "dir"],
+                vec!["devkit", "pr", "-C", "dir"],
+                vec!["devkit", "ticket", "pr", "-C", "dir"],
+                vec!["ticket", "pr", "-C", "dir"],
+                vec!["devkit", "issue", "pr", "-C", "dir"],
+                vec!["issue", "pr", "-C", "dir"],
+            ]);
+            same_verb("bare workspace", &[
+                vec!["devkit", "workspace", "status", "-C", "dir"],
+                vec!["devkit", "workspace", "-C", "dir"],
+                vec!["workspace", "-C", "dir"],
+                vec!["devkit", "issue", "-C", "dir"],
+                vec!["issue", "-C", "dir"],
+            ]);
         }
     }
 

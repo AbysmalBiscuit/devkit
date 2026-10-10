@@ -24,7 +24,7 @@ mod ts;
 pub use context::{Context, Dialect, Limits, PathStyle};
 pub use model::{
     Analysis, FileEffect, FileOp, Invocation, Language, Limit, Location, ScriptFileInvocation,
-    Target, TempLocation, TreeEffect, TreeReach, Uncertainty, UncertaintyKind, Value,
+    SearchPath, Target, TempLocation, TreeEffect, TreeReach, Uncertainty, UncertaintyKind, Value,
 };
 
 /// The analysis semantics a record was produced under, bumped by hand when

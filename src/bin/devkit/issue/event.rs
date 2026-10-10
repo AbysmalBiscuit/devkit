@@ -17,7 +17,7 @@ use devkit_common::{
 use devkit_config::{Health, IssueEvent};
 
 /// The `issue event` argument, spelled as `[issue.events]` spells it.
-#[derive(Clone, Copy, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
 pub(crate) enum EventArg {
     Setup,
     Start,

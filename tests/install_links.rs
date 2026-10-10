@@ -8,6 +8,17 @@ use std::{
     time::Duration,
 };
 
+const SHIMS: [&str; 8] = [
+    "ticket",
+    "workspace",
+    "issue",
+    "devrun",
+    "portm",
+    "lockm",
+    "docm",
+    "devkit-mcp",
+];
+
 /// Retry `attempt` briefly on a transient `ExecutableFileBusy`. `staged()`
 /// just finished writing the binary `attempt` executes moments earlier, and
 /// `cargo test`'s default parallelism runs several of these tests at once,
@@ -101,7 +112,7 @@ fn creates_every_shim() {
         String::from_utf8_lossy(&out.stderr)
     );
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+    for name in SHIMS {
         assert!(
             shim_path(dir.path(), name).exists(),
             "install-links did not create {name}"
@@ -112,6 +123,60 @@ fn creates_every_shim() {
             "should report {name} created, not preempted by the automatic pass: {text}"
         );
     }
+}
+
+/// `pr` belongs to coreutils, so `devkit pr` gets no link of its own.
+#[test]
+fn creates_no_pr_link() {
+    let (dir, exe) = staged();
+    let out = run(&exe, &["install-links"]);
+    assert!(
+        out.status.success(),
+        "install-links failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !shim_path(dir.path(), "pr").exists(),
+        "install-links must not claim the `pr` name"
+    );
+}
+
+/// `ticket` and `workspace` are common enough names that another tool may
+/// already hold them; that tool stays, and the skip is reported.
+#[cfg(unix)]
+#[test]
+fn leaves_a_foreign_ticket_and_workspace_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, exe) = staged();
+    let script = b"#!/bin/sh\necho not devkit\n";
+    for name in ["ticket", "workspace"] {
+        let foreign = shim_path(dir.path(), name);
+        std::fs::write(&foreign, script).expect("write foreign binary");
+        std::fs::set_permissions(&foreign, std::fs::Permissions::from_mode(0o755))
+            .expect("make foreign script executable");
+    }
+    let out = run(&exe, &["install-links"]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for name in ["ticket", "workspace"] {
+        assert_eq!(
+            std::fs::read(shim_path(dir.path(), name)).expect("foreign still readable"),
+            script,
+            "the foreign `{name}` must not be replaced"
+        );
+        assert!(
+            text.lines()
+                .any(|l| l.contains("skipped") && l.contains(name)),
+            "should report the `{name}` skip: {text}"
+        );
+    }
+    assert!(
+        shim_path(dir.path(), "issue").exists(),
+        "the other names still link: {text}"
+    );
 }
 
 /// The upgrade path: a real devkit binary already sits at a shim name.
@@ -143,7 +208,7 @@ fn replaces_an_existing_devkit_binary() {
 fn replaces_a_real_devkit_binary_at_every_shim_name() {
     let (dir, exe) = staged();
     let mut stale_paths = Vec::new();
-    for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+    for name in SHIMS {
         let stale = shim_path(dir.path(), name);
         std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &stale)
             .unwrap_or_else(|e| panic!("stage a stale {name}: {e}"));
@@ -370,7 +435,7 @@ fn running_twice_is_idempotent() {
         text.contains("current"),
         "second run should report already-linked shims: {text}"
     );
-    for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+    for name in SHIMS {
         assert!(
             shimtest::same_inode(&exe, &shim_path(dir.path(), name)),
             "{name} should still be a hardlink to devkit after the second run"
@@ -897,7 +962,7 @@ fn install_links_falls_open_on_an_unusable_state_dir() {
         out.status.success(),
         "install-links must still run without a usable state dir: {text}"
     );
-    for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+    for name in SHIMS {
         assert!(
             shim_path(dir.path(), name).exists(),
             "{name} should have been linked despite the state dir: {text}"
@@ -1160,7 +1225,7 @@ fn install_creates_every_shim() {
     let home = tempfile::tempdir().expect("home");
     let out = install(&exe, home.path(), None);
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+    for name in SHIMS {
         assert!(
             shimtest::same_inode(&exe, &shim_path(dir.path(), name)),
             "devkit install did not link {name}: {text}"

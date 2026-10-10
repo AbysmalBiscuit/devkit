@@ -461,10 +461,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
     }
 
     fn assign(&mut self, node: Node<'t>, scope: &mut Scope) {
-        let Some(name) = node.child_by_field_name("name") else {
-            return;
-        };
-        let name = ts::text(name, self.source).to_string();
+        if let Some((name, value)) = self.assignment(node, scope) {
+            scope.vars.insert(name, value);
+        }
+    }
+
+    /// The name a `variable_assignment` binds and the value it binds.
+    fn assignment(&mut self, node: Node<'t>, scope: &mut Scope) -> Option<(String, Value)> {
+        let name = ts::text(node.child_by_field_name("name")?, self.source).to_string();
         let appends = ts::text(node, self.source).contains("+=");
         let value = match node.child_by_field_name("value") {
             None => Value::Known(String::new()),
@@ -474,7 +478,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             Some(v) => self.word(v, scope).value,
         };
-        scope.vars.insert(name, value);
+        Some((name, value))
     }
 
     fn for_loop(&mut self, node: Node<'t>, scope: &mut Scope) {
@@ -519,8 +523,16 @@ impl<'t> Walker<'_, '_, '_, 't> {
 
     fn command(&mut self, node: Node<'t>, scope: &mut Scope, stdin: Stdin) {
         let mut words: Vec<Word> = Vec::new();
+        let mut path = scope.vars.get("PATH").cloned();
         for child in ts::named_children(node) {
             match child.kind() {
+                "variable_assignment"
+                    if child
+                        .child_by_field_name("name")
+                        .is_some_and(|name| ts::text(name, self.source) == "PATH") =>
+                {
+                    path = self.assignment(child, scope).map(|(_, value)| value);
+                }
                 "variable_assignment" => self.substitutions(child, scope),
                 "file_redirect" => self.file_redirect(child, scope),
                 _ => words.push(self.word(child, scope)),
@@ -573,6 +585,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             words,
             stdin,
             cwd: scope.cwd.clone(),
+            path,
             language: Language::Bash,
             location: self.frame.locate(node.byte_range()),
         };

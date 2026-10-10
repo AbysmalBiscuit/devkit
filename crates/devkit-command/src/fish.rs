@@ -292,6 +292,7 @@ impl<'t> Walker<'_, '_, '_> {
             words,
             stdin,
             cwd: scope.cwd.clone(),
+            path: None,
             language: Language::Fish,
             location: self.frame.locate(node.byte_range()),
         };

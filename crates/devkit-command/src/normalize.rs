@@ -3,7 +3,7 @@
 use crate::{
     analyzer::{Analyzer, Frame, RawInvocation, Word},
     context::PathStyle,
-    model::Value,
+    model::{SearchPath, Value},
     paths,
 };
 
@@ -32,6 +32,7 @@ pub(crate) struct Unwrapped {
     pub(crate) argv: Vec<Word>,
     pub(crate) wrappers: Vec<Vec<Word>>,
     pub(crate) cwd: CwdChange,
+    pub(crate) search_path: SearchPath,
 }
 
 struct Wrapper {
@@ -238,6 +239,29 @@ fn program_name(word: &Word) -> Option<String> {
     Some(name.strip_suffix(".exe").unwrap_or(name).to_string())
 }
 
+/// Wrappers that run their program on the `PATH` they were given. Every other
+/// wrapper may put its own directories first (`node_modules/.bin`, a
+/// virtualenv) or replace it (`sudo`'s `secure_path`), so the program it runs
+/// is looked up on a `PATH` the analysis cannot know.
+const PATH_PRESERVING: &[&str] = &[
+    "nohup", "setsid", "exec", "time", "command", "builtin", "nice", "stdbuf", "timeout", "env",
+];
+
+/// Whether the environment variable `name` is `PATH`. Windows environment
+/// names ignore case.
+fn is_path_name(name: &str, style: PathStyle) -> bool {
+    match style {
+        PathStyle::Unix => name == "PATH",
+        PathStyle::Windows => name.eq_ignore_ascii_case("PATH"),
+    }
+}
+
+/// The value `word` assigns to `PATH`, when it is a `PATH` assignment.
+fn path_assignment(word: &Word, style: PathStyle) -> Option<Value> {
+    let (name, value) = word.value.known()?.split_once('=')?;
+    is_path_name(name, style).then(|| Value::Known(value.to_string()))
+}
+
 fn is_assignment(word: &Word) -> bool {
     word.value.known().is_some_and(|w| {
         w.split_once('=').is_some_and(|(name, _)| {
@@ -253,9 +277,17 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
     let mut wrappers = Vec::new();
     let mut cwd = CwdChange::Inherit;
     let mut current_cwd = raw.cwd.clone();
+    let style = a.ctx.path_style;
+    let mut search_path = match &raw.path {
+        Some(path) => SearchPath::Set(path.clone()),
+        None => frame.search_path.clone(),
+    };
 
     loop {
         while argv.first().is_some_and(is_assignment) {
+            if let Some(path) = path_assignment(&argv[0], style) {
+                search_path = SearchPath::Set(path);
+            }
             argv.remove(0);
         }
         let Some(first) = argv.first().and_then(program_name) else {
@@ -306,7 +338,7 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
             continue;
         }
         if first == "find" {
-            run_find_exec(a, raw, frame, &argv, current_cwd.clone());
+            run_find_exec(a, raw, frame, &argv, current_cwd.clone(), &search_path);
             break;
         }
         let Some(wrapper) = WRAPPERS.iter().find(|wrapper| {
@@ -332,6 +364,9 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
             }
             if !text.starts_with('-') {
                 if first == "env" && is_assignment(word) {
+                    if let Some(path) = path_assignment(word, style) {
+                        search_path = SearchPath::Set(path);
+                    }
                     i += 1;
                     continue;
                 }
@@ -341,6 +376,9 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
                 Some((flag, value)) => (flag, Some(value.to_string())),
                 None => (text, None),
             };
+            if changes_path(&first, flag, inline.as_deref(), argv.get(i + 1), style) {
+                search_path = SearchPath::Set(Value::Unknown);
+            }
             if wrapper.cwd_flags.contains(&flag) {
                 let value = match inline {
                     Some(value) => Value::Known(value),
@@ -376,6 +414,9 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
         if i >= argv.len() {
             break;
         }
+        if !PATH_PRESERVING.contains(&wrapper.prefix[0]) {
+            search_path = SearchPath::Set(Value::Unknown);
+        }
         wrappers.push(argv[..i].to_vec());
         argv = argv[i..].to_vec();
     }
@@ -383,6 +424,33 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
         argv,
         wrappers,
         cwd,
+        search_path,
+    }
+}
+
+/// Whether option `flag` of a `PATH`-preserving wrapper changes the `PATH` its
+/// program is found on: `env` clearing the environment, unsetting `PATH` or
+/// splitting a command line out of a string, or `command -p` searching the
+/// system default path. `next` is the word after the flag, the value a
+/// separate-word `-u` takes.
+fn changes_path(
+    wrapper: &str,
+    flag: &str,
+    inline: Option<&str>,
+    next: Option<&Word>,
+    style: PathStyle,
+) -> bool {
+    match wrapper {
+        "env" => match flag {
+            "-C" | "--chdir" => false,
+            "-u" | "--unset" => {
+                let name = inline.or_else(|| next.and_then(|w| w.value.known()));
+                name.is_none_or(|name| is_path_name(name, style))
+            }
+            _ => true,
+        },
+        "command" => flag == "-p",
+        _ => false,
     }
 }
 
@@ -479,6 +547,7 @@ fn run_find_exec(
     frame: &Frame,
     argv: &[Word],
     cwd: Option<String>,
+    search_path: &SearchPath,
 ) {
     let found = found_path(argv);
     let mut i = 1;
@@ -511,6 +580,10 @@ fn run_find_exec(
                     words,
                     stdin: crate::analyzer::Stdin::None,
                     cwd: cwd.clone(),
+                    path: match search_path {
+                        SearchPath::Set(path) => Some(path.clone()),
+                        SearchPath::Inherited => None,
+                    },
                     language: raw.language,
                     location: raw.location.clone(),
                 },
