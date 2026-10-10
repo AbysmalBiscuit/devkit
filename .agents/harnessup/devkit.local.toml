@@ -24,7 +24,7 @@ Rebase conflicts: `devrun task rebase-add --arg files='src/a.rs,src/b.rs'`, then
 programs = ["gh"]
 args = ["pr", "create"]
 reason = """Open the PR with devkit, which renders the body from the `pr_body` template:
-  issue pr create --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --attach <media path> --arg agent_model='...' --arg agent_harness='...'
+  devkit pr create --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --attach <media path> --arg agent_model='...' --arg agent_harness='...'
 `--pr-body` is the agent summary and `proof` the evidence for each `Done when` item, one unindented line per item starting with its number (`1. test foo_refuses_gap`); the template adds the TL;DR heading and this worktree's closing line. Pass `--draft` when a draft was asked for.
 `devkit template show pr_body` describes every `--arg`; `devkit template render pr_body --arg input='<markdown>' ...` previews the body."""
 
@@ -32,7 +32,7 @@ reason = """Open the PR with devkit, which renders the body from the `pr_body` t
 programs = ["gh"]
 args = ["issue", "edit", "**", "--body*"]
 reason = """Rewrite the issue with devkit, which renders the body from the `issue_body` template:
-  devkit issue edit <number> --body '<the task>' --arg done_when='- [ ] ...'
+  devkit ticket edit <number> --body '<the task>' --arg done_when='- [ ] ...'
 `--title` also replaces the title; without it the issue keeps its own.
 `devkit template show issue_body` describes every `--arg`."""
 
@@ -41,7 +41,7 @@ reason = """Rewrite the issue with devkit, which renders the body from the `issu
 programs = ["gh"]
 args = ["issue", "edit", "**", "-b*"]
 reason = """Rewrite the issue with devkit, which renders the body from the `issue_body` template:
-  devkit issue edit <number> --body '<the task>' --arg done_when='- [ ] ...'
+  devkit ticket edit <number> --body '<the task>' --arg done_when='- [ ] ...'
 `--title` also replaces the title; without it the issue keeps its own.
 `devkit template show issue_body` describes every `--arg`."""
 
@@ -49,7 +49,7 @@ reason = """Rewrite the issue with devkit, which renders the body from the `issu
 programs = ["gh"]
 args = ["issue", "edit", "**", "-F*"]
 reason = """Rewrite the issue with devkit, which renders the body from the `issue_body` template:
-  devkit issue edit <number> --body '<the task>' --arg done_when='- [ ] ...'
+  devkit ticket edit <number> --body '<the task>' --arg done_when='- [ ] ...'
 `--title` also replaces the title; without it the issue keeps its own.
 `devkit template show issue_body` describes every `--arg`."""
 
@@ -59,7 +59,7 @@ programs = ["gh"]
 args = ["pr", "edit", "**", "--body*"]
 action = "warn"
 reason = """Pass only a body rendered from the `pr_body` template:
-  issue pr render --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...' | jq -r .body > body.md
+  devkit pr render --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...' | jq -r .body > body.md
   gh pr edit <number> --body-file body.md
 `devkit template show pr_body` describes every `--arg`."""
 
@@ -69,7 +69,7 @@ programs = ["gh"]
 args = ["pr", "edit", "**", "-b*"]
 action = "warn"
 reason = """Pass only a body rendered from the `pr_body` template:
-  issue pr render --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...' | jq -r .body > body.md
+  devkit pr render --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...' | jq -r .body > body.md
   gh pr edit <number> --body-file body.md
 `devkit template show pr_body` describes every `--arg`."""
 
@@ -78,12 +78,12 @@ programs = ["gh"]
 args = ["pr", "edit", "**", "-F*"]
 action = "warn"
 reason = """Pass only a body rendered from the `pr_body` template:
-  issue pr render --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...' | jq -r .body > body.md
+  devkit pr render --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --arg agent_model='...' --arg agent_harness='...' | jq -r .body > body.md
   gh pr edit <number> --body-file body.md
 `devkit template show pr_body` describes every `--arg`."""
 
 # The GitHub MCP server a cloud session carries opens and edits PRs; their text
-# must come from `issue pr render` in the same session.
+# must come from `devkit pr render` in the same session.
 [harness.pr_tools.github-create]
 servers = ["*github*"]
 tools = ["create_pull_request"]
