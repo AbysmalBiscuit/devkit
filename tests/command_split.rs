@@ -180,19 +180,15 @@ fn devkit_help_never_names_issue() {
 /// table bare `devkit workspace` does.
 #[test]
 fn bare_issue_still_runs_and_matches_bare_workspace() {
-    let state = tempfile::tempdir().expect("state dir");
     let project = tempfile::tempdir().expect("project dir");
     devkit_git::Git::fixture(project.path())
         .args(["init", "-q"])
         .output()
         .expect("git init");
     let run = |args: &[&str]| {
-        std::process::Command::new(env!("CARGO_BIN_EXE_devkit"))
-            .args(args)
+        let (_home, mut cmd) = testenv::isolated(env!("CARGO_BIN_EXE_devkit"));
+        cmd.args(args)
             .current_dir(project.path())
-            .env("DEVKIT_SKIP_AUTOLINK", "1")
-            .env("HOME", state.path())
-            .env("XDG_STATE_HOME", state.path())
             .output()
             .expect("spawn devkit")
     };
