@@ -29,7 +29,7 @@ irm https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-ins
 
 From a clone instead: `cargo install --path .`
 
-Running `devkit` once installs the old command names (`ticket`, `workspace`, `portm`, `devrun`, `lockm`, `docm`, `devrules`, `devkit-mcp`) as hardlinks beside it, so `docm list` and `devkit docs list` are the same command. See [docs/install.md](docs/install.md) for prebuilt targets, feature flags, the hardlink rules, and where state lives.
+Running `devkit` once installs the short command names (`ticket`, `workspace`, `portm`, `devrun`, `lockm`, `docm`, `devrules`, `devkit-mcp`) as hardlinks beside it, so `docm list` and `devkit docs list` are the same command. See [docs/install.md](docs/install.md) for prebuilt targets, feature flags, the hardlink rules, and where state lives.
 
 ## Commands
 

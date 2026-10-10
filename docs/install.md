@@ -63,7 +63,7 @@ cargo build --release
 
 `devkit` bundles the whole CLI surface as subcommands, and installs short names (`ticket`, `workspace`, `portm`, `devrun`, `lockm`, `docm`, `devrules`, `devkit-mcp`) beside itself as hardlinks, so `docm list` and `devkit docs list` are the same command. `devkit --help` ends with a block mapping every short name to its subcommand. `devkit pr` has no short name, since coreutils owns `pr`. `issue` is still linked as a hidden alias for the verbs `ticket`, `workspace` and `devkit pr` took over, so older scripts keep running.
 
-- Running `devkit` at all is enough: every invocation links the old names beside the executable it ran from. A `target/release` after a source build, or the directory a release archive was unpacked into, gains every name on the first command you run there, `devkit --help` included.
+- Running `devkit` at all is enough: every invocation links the short names beside the executable it ran from. A `target/release` after a source build, or the directory a release archive was unpacked into, gains every name on the first command you run there, `devkit --help` included.
 - `devkit install-links` does the same pass explicitly, next to whichever `devkit` executable you run it from.
 - `devkit install` does that pass too, and also adds devkit's ignore patterns to git's global excludes file. Run it once per machine; rerunning changes nothing already in place.
 - A name already occupied by something devkit cannot identify as itself is reported as skipped and left alone. `--force` claims such a name anyway, deleting whatever holds it, an unrelated tool of the same name included. That is what the flag is for, and the reason it is not the default.
