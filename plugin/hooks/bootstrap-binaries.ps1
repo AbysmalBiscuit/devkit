@@ -54,7 +54,7 @@ function Test-HookVerbs {
     Write-Note "the devkit on PATH is too old for this plugin's hooks: it has no ``devkit hook`` subcommand. Reinstall it (``cargo install --path .``, or see $repoUrl#install)."
 }
 
-$names = @('devkit', 'issue', 'devrun', 'portm', 'lockm', 'docm', 'devkit-mcp')
+$names = @('devkit', 'ticket', 'workspace', 'issue', 'devrun', 'portm', 'lockm', 'docm', 'devkit-mcp')
 $missing = @($names | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
 
 if (Get-Command devkit -ErrorAction SilentlyContinue) {

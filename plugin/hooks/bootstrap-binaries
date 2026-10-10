@@ -47,7 +47,7 @@ probe_hook_verbs() {
 }
 
 missing=""
-for bin in devkit issue devrun portm lockm docm devkit-mcp; do
+for bin in devkit ticket workspace issue devrun portm lockm docm devkit-mcp; do
     command -v "$bin" >/dev/null 2>&1 || missing="${missing} ${bin}"
 done
 
