@@ -1,4 +1,4 @@
-//! `issue setup`, `issue status` and `issue pr checkout` work where GitHub
+//! `workspace setup`, `workspace status` and `pr checkout` work where GitHub
 //! refuses GraphQL, as the Claude Code cloud proxy does.
 //!
 //! Single reads go over REST. Each batched read keeps its one GraphQL request
@@ -226,7 +226,7 @@ fn status_project() -> (ghfake::Fake, tempfile::TempDir) {
     (fake, origin)
 }
 
-/// The GraphQL answer to every batched read `issue status` makes, under the
+/// The GraphQL answer to every batched read `workspace status` makes, under the
 /// aliases each query gives its items.
 fn status_graphql(head: &str) -> String {
     let node = |n: u64, state: &str| {
@@ -276,8 +276,8 @@ fn status_reports_the_same_prs_and_states_when_graphql_is_refused() {
     }
 }
 
-/// Each batched read `issue status` makes is one GraphQL request where GraphQL
-/// answers, sent nowhere else.
+/// Each batched read `workspace status` makes is one GraphQL request where
+/// GraphQL answers, sent nowhere else.
 #[test]
 fn status_makes_one_graphql_request_per_batched_read() {
     let (fake, _origin) = status_project();
@@ -306,7 +306,7 @@ fn status_makes_one_graphql_request_per_batched_read() {
     assert!(!calls.contains("--method GET"), "a REST read: {calls}");
 }
 
-/// The two lines `issue dashboard` sums its assigned issues and authored PRs
+/// The two lines `ticket dashboard` sums its assigned issues and authored PRs
 /// up in.
 fn dashboard_totals(out: &std::process::Output) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout)
@@ -467,7 +467,7 @@ fn dashboard_makes_one_graphql_request_per_batched_read() {
     }
 }
 
-/// `issue review request` finds this branch's PR and asks for its reviewer
+/// `pr review request` finds this branch's PR and asks for its reviewer
 /// the same way whether GitHub answers GraphQL or refuses it.
 #[test]
 fn review_request_finds_the_branch_pr_when_graphql_is_refused() {
@@ -504,8 +504,8 @@ fn review_request_finds_the_branch_pr_when_graphql_is_refused() {
     }
 }
 
-/// With GraphQL switched off, `issue status` reads every batch over REST and
-/// sends no GraphQL request, though GraphQL would answer.
+/// With GraphQL switched off, `workspace status` reads every batch over REST
+/// and sends no GraphQL request, though GraphQL would answer.
 #[test]
 fn status_skips_graphql_when_it_is_switched_off() {
     let (graphql, _graphql_origin) = status_project();
@@ -526,7 +526,7 @@ fn status_skips_graphql_when_it_is_switched_off() {
     assert!(calls.contains("--method GET repos/o/r/pulls/9"), "{calls}");
 }
 
-/// `[github] no_graphql` switches GraphQL off too, and `issue prs`, which has
+/// `[github] no_graphql` switches GraphQL off too, and `pr list`, which has
 /// no REST path, says so instead of sending a GraphQL request.
 #[test]
 fn prs_names_the_switch_when_graphql_is_switched_off() {
@@ -548,8 +548,8 @@ fn prs_names_the_switch_when_graphql_is_switched_off() {
 }
 
 /// GitHub's secondary rate limit answers GraphQL with a 403 too, but that is
-/// not a refusal: `issue status` reports it rather than reading each PR over
-/// REST, which would only spend more of the limit.
+/// not a refusal: `workspace status` reports it rather than reading each PR
+/// over REST, which would only spend more of the limit.
 #[test]
 fn status_does_not_fall_back_to_rest_when_graphql_is_rate_limited() {
     let (fake, _origin) = status_project();
@@ -572,7 +572,7 @@ fn status_does_not_fall_back_to_rest_when_graphql_is_rate_limited() {
 }
 
 /// With a token, GitHub's primary rate limit on GraphQL is a 403 whose body
-/// says so; `issue pr checkout` of an issue reports it rather than reading the
+/// says so; `pr checkout` of an issue reports it rather than reading the
 /// issue's timeline over REST.
 #[test]
 fn pr_checkout_of_an_issue_reports_a_graphql_rate_limit() {

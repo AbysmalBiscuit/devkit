@@ -1,4 +1,4 @@
-//! `issue end` and `[hooks] before_worktree_remove`.
+//! `workspace end` and `[hooks] before_worktree_remove`.
 
 #[path = "common/baselinetest.rs"]
 mod baselinetest;
@@ -29,7 +29,7 @@ fn setup(root: &Path, extra: &str) -> (PathBuf, PathBuf) {
     let body = std::fs::read_to_string(&toml).unwrap();
     std::fs::write(&toml, format!("{body}{extra}")).unwrap();
     git(&repo, &["commit", "-qam", "hooks"]);
-    // The triage `issue end` runs first reads the `origin` remote; the URL
+    // The triage `workspace end` runs first reads the `origin` remote; the URL
     // itself is never fetched here.
     git(&repo, &[
         "remote",

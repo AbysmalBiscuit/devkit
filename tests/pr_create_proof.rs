@@ -1,4 +1,4 @@
-//! `issue pr create` refuses an agent's proof that skips an item the issue is
+//! `pr create` refuses an agent's proof that skips an item the issue is
 //! done when, before anything is pushed.
 
 #[path = "common/ghfake.rs"]

@@ -1,4 +1,4 @@
-//! `devkit issue event` moves an issue's tracker status as `[issue.events]`
+//! `devkit ticket event` moves an issue's tracker status as `[issue.events]`
 //! configures, driven end to end against the fake `gh`.
 
 #[path = "common/ghfake.rs"]
@@ -7,7 +7,7 @@ mod ghfake;
 const GITHUB: &str = "[tracker]\nkind = \"github\"\n";
 
 /// A `[tracker] kind = "github"` project with `events` configured and
-/// `[github] project = 3`, recorded as an `issue setup` worktree for 65.
+/// `[github] project = 3`, recorded as a `workspace setup` worktree for 65.
 fn board(events: &str) -> ghfake::Fake {
     let gh = ghfake::Fake::without_pr(&format!("{GITHUB}{events}"));
     gh.github_keys("project = 3");
@@ -203,8 +203,8 @@ const PR_7: ghfake::Pr = ghfake::Pr {
     author: "LevValle",
 };
 
-/// A bare `origin` holding the project's commit as `main`, which `issue setup`
-/// and `issue pr checkout` fetch and branch from.
+/// A bare `origin` holding the project's commit as `main`, which `workspace
+/// setup` and `pr checkout` fetch and branch from.
 fn push_origin(gh: &ghfake::Fake) -> tempfile::TempDir {
     let origin = tempfile::tempdir().unwrap();
     devkit_git::Git::fixture(origin.path())
@@ -366,7 +366,7 @@ fn checkout_records_its_origin_and_fires_nothing() {
     assert!(graphql_calls(&gh).is_empty(), "{}", gh.calls());
 }
 
-/// The worktree `issue setup` reported creating, from its JSON on stdout.
+/// The worktree `workspace setup` reported creating, from its JSON on stdout.
 fn setup_worktree(out: &std::process::Output) -> std::path::PathBuf {
     let json: serde_json::Value = serde_json::from_slice(&out.stdout)
         .unwrap_or_else(|e| panic!("setup JSON: {e}: {}", String::from_utf8_lossy(&out.stdout)));

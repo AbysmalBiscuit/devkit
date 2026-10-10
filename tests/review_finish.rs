@@ -1,4 +1,4 @@
-//! `issue review finish` finds the PR to report on from the worktree's branch
+//! `pr review finish` finds the PR to report on from the worktree's branch
 //! when neither `--pr` nor the record names one.
 
 #[path = "common/ghfake.rs"]

@@ -1,4 +1,4 @@
-//! `issue end` and the baseline the worktree it removes was pinned to. The
+//! `workspace end` and the baseline the worktree it removes was pinned to. The
 //! removal takes the record with it, and with the record goes `devrun down`'s
 //! sole-referencer exemption — `devrun reap` is terminal-gated with no bypass —
 //! so servers left behind here are unreachable afterwards.
@@ -18,7 +18,7 @@ fn ending_a_worktree_stops_its_baselines_servers() {
     let repo = tmp.path().join("proj");
     project(&repo);
 
-    // The triage `issue end` runs first reads the `origin` remote; the URL
+    // The triage `workspace end` runs first reads the `origin` remote; the URL
     // itself is never fetched here.
     git(&repo, &[
         "remote",

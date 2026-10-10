@@ -1,4 +1,4 @@
-//! `issue review request` resolves who it will notify before it changes the PR.
+//! `pr review request` resolves who it will notify before it changes the PR.
 //!
 //! A run with no `--to` against a PR carrying no reviewers cannot name a
 //! recipient and refuses. Flipping the draft first would leave the PR promoted

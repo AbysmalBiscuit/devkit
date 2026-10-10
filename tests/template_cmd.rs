@@ -298,7 +298,7 @@ fn render_json_carries_the_text() {
 
 /// The built-in `pr_body` renders from the worktree's own record, and the
 /// command's other context keys become args, so the output is the body
-/// `issue pr create` hands `gh`.
+/// `pr create` hands `gh`.
 #[test]
 fn a_built_in_renders_what_its_command_would_send() {
     let fake =

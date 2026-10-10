@@ -1,4 +1,4 @@
-//! `issue setup --here` binds the checkout it runs in to an issue, for a
+//! `workspace setup --here` binds the checkout it runs in to an issue, for a
 //! session that works on a branch it was handed and may create no worktree.
 
 #[path = "common/ghfake.rs"]

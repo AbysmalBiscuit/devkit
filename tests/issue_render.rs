@@ -1,4 +1,4 @@
-//! `devkit issue render`: the issue templates rendered for a tracker MCP call,
+//! `devkit ticket render`: the issue templates rendered for a tracker MCP call,
 //! with a receipt per field the pre-tool-use hook checks the call against.
 
 #[path = "common/testenv.rs"]

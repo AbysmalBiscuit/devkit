@@ -1,4 +1,4 @@
-//! `issue pr create --attach` hands each file to `gh pr create`, and refuses
+//! `pr create --attach` hands each file to `gh pr create`, and refuses
 //! before the push whatever gh could not upload.
 
 #[path = "common/ghfake.rs"]

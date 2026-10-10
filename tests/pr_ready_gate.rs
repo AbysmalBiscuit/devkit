@@ -1,4 +1,4 @@
-//! `issue pr ready` gates the flip, not the run.
+//! `pr ready` gates the flip, not the run.
 //!
 //! The reviewer gate exists to keep a PR from being *made* ready with nobody to
 //! look at it. A PR that is already ready is not made ready by this run, and a
