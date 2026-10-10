@@ -236,7 +236,10 @@ mod tests {
     #[test]
     fn no_pr_names_the_command_that_opens_one() {
         let msg = format!("{}", require_existing_pr(None).unwrap_err());
-        assert!(msg.contains("pr create"), "names the way forward: {msg}");
+        assert!(
+            msg.contains("pr create") && !msg.contains("issue pr"),
+            "names the way forward: {msg}"
+        );
         assert!(require_existing_pr(Some("OPEN")).is_ok());
         assert!(require_existing_pr(Some("MERGED")).is_err());
     }
