@@ -600,6 +600,7 @@ dependencies = [
  "ring",
  "rustls",
  "rustls-native-certs",
+ "same-file",
  "serde",
  "serde_json",
  "strum 0.27.2",

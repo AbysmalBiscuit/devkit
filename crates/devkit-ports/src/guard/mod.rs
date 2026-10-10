@@ -9,7 +9,7 @@ pub mod tasks;
 use std::collections::{BTreeMap, HashMap};
 
 use devkit_command::{Analysis, Invocation, Value};
-use devkit_common::caller::Caller;
+use devkit_common::{caller::Caller, shim::OwnBinary};
 use devkit_config::{
     AppMatch, CommandRule, Config, RuleAction, RunAction, RunArg, Severity, wildcard_matches,
 };
@@ -127,18 +127,19 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
 /// Decide over an analysis. Every invocation is checked, nested ones
 /// included; findings keep invocation order, then rule name order, and each
 /// distinct finding appears once however many times a loop repeats it.
+///
+/// A program `own` says is devkit's own binary skips the rules and the project
+/// check. A shim name that resolves to another program, or to nothing, is
+/// checked like any other program.
 pub fn decide(
     analysis: &Analysis,
     rules: &BTreeMap<String, CommandRule>,
     project: Option<&Project>,
+    own: &OwnBinary,
 ) -> Verdict {
     let mut verdict = Verdict::default();
     for inv in &analysis.invocations {
-        let own_binary = inv
-            .program
-            .known()
-            .map(basename)
-            .is_some_and(devkit_common::shim::is_devkit_command);
+        let own_binary = inv.program.known().is_some_and(|p| own.runs(p));
         let typed = inv.typed.join(" ");
         let mut undetermined = false;
         for (name, rule) in rules
@@ -231,7 +232,11 @@ pub fn decide_with(
     project: Option<&Project>,
 ) -> Decision {
     let analysis = devkit_command::analyze(command, &bash_context());
-    match decide(&analysis, rules, project).blocks.into_iter().next() {
+    match decide(&analysis, rules, project, &OwnBinary::current(None))
+        .blocks
+        .into_iter()
+        .next()
+    {
         Some(finding) => Decision::Deny {
             reason: finding.message,
         },
@@ -557,6 +562,7 @@ fn catalog_message(typed: &[String], app: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use devkit_common::shim::shim_file_name;
     use devkit_config::{AppConfig, AppMatch, CommandRule, RuleAction, Severity, TaskConfig};
 
     use super::*;
@@ -586,6 +592,14 @@ mod tests {
     }
 
     fn verdict(command: &str, rules: &BTreeMap<String, CommandRule>) -> Verdict {
+        verdict_own(command, rules, &OwnBinary::current(None))
+    }
+
+    fn verdict_own(
+        command: &str,
+        rules: &BTreeMap<String, CommandRule>,
+        own: &OwnBinary,
+    ) -> Verdict {
         let ctx = devkit_command::Context {
             dialect: devkit_command::Dialect::Bash,
             cwd: None,
@@ -593,7 +607,21 @@ mod tests {
             path_style: devkit_command::PathStyle::Unix,
             limits: devkit_command::Limits::default(),
         };
-        decide(&devkit_command::analyze(command, &ctx), rules, None)
+        decide(&devkit_command::analyze(command, &ctx), rules, None, own)
+    }
+
+    /// A search path holding `names` hardlinked to this test binary, which
+    /// stands in for devkit's own.
+    fn own_links(names: &[&str]) -> (tempfile::TempDir, OwnBinary) {
+        let exe = std::env::current_exe().unwrap();
+        let dir = tempfile::Builder::new()
+            .tempdir_in(exe.parent().unwrap())
+            .unwrap();
+        for name in names {
+            std::fs::hard_link(&exe, dir.path().join(shim_file_name(name))).unwrap();
+        }
+        let own = OwnBinary::new(exe, Some(dir.path().as_os_str().to_owned()), None);
+        (dir, own)
     }
 
     fn project(build: impl FnOnce(&mut Config)) -> Project {
@@ -697,8 +725,30 @@ mod tests {
     #[test]
     fn a_rule_naming_a_shim_does_not_fire() {
         let r = rules(&["issue", "devkit-mcp"], "unreachable");
-        assert!(!denies(&decide_with("issue setup ENG-1", &r, None)));
-        assert!(!denies(&decide_with("devkit-mcp", &r, None)));
+        let (_dir, own) = own_links(&["issue", "devkit-mcp"]);
+        assert!(verdict_own("issue setup ENG-1", &r, &own).blocks.is_empty());
+        assert!(verdict_own("devkit-mcp", &r, &own).blocks.is_empty());
+    }
+
+    /// `devkit install-links` leaves a foreign `ticket` on PATH in place, so a
+    /// program sharing a shim name is exempt only when it is devkit's own link.
+    #[test]
+    fn a_foreign_binary_with_a_shim_name_is_gated() {
+        let r = rules(&["ticket"], "not devkit's ticket");
+        let (_own_dir, own) = own_links(&["ticket"]);
+        assert!(verdict_own("ticket create", &r, &own).blocks.is_empty());
+
+        let foreign_dir = tempfile::tempdir().unwrap();
+        let foreign = foreign_dir.path().join(shim_file_name("ticket"));
+        std::fs::write(&foreign, "foreign").unwrap();
+        let on_path = OwnBinary::new(
+            std::env::current_exe().unwrap(),
+            Some(foreign_dir.path().as_os_str().to_owned()),
+            None,
+        );
+        assert_eq!(verdict_own("ticket create", &r, &on_path).blocks.len(), 1);
+        let by_path = format!("{} create", foreign.display());
+        assert_eq!(verdict_own(&by_path, &r, &own).blocks.len(), 1);
     }
 
     #[test]

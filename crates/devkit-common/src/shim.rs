@@ -1,6 +1,9 @@
 //! The command names devkit installs beside itself on PATH.
 
-use std::path::Path;
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 
 use strum::{EnumIter, IntoEnumIterator};
 
@@ -84,10 +87,93 @@ impl Shim {
     }
 }
 
-/// Whether `name` is devkit itself or one of the names it installs. The
-/// command guard never gates these: routing work to them is its whole purpose.
-pub fn is_devkit_command(name: &str) -> bool {
-    name == "devkit" || Shim::iter().any(|s| s.name() == name)
+/// Whether two paths name the same file, so a hardlink is recognized as the
+/// file it links. Delegated to the `same-file` crate rather than hand-rolled
+/// per-platform metadata comparison: the Windows identity check needs
+/// `GetFileInformationByHandle`, which is unsafe FFI, and `same-file` already
+/// wraps it safely (as it does the Unix `dev`+`ino` pair). An error resolving
+/// either path (e.g. one no longer exists) is "not the same file".
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    same_file::is_same_file(a, b).unwrap_or(false)
+}
+
+/// The file name a shim occupies in a directory: its own name, plus the `.exe`
+/// suffix Windows requires to execute it.
+pub fn shim_file_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+/// The running devkit binary and the search path a command word resolves
+/// against, for telling devkit's own shim links from a foreign program that
+/// happens to share a shim name. `devkit install-links` leaves such a program
+/// in place, so the name alone says nothing about what runs.
+pub struct OwnBinary {
+    exe: Option<PathBuf>,
+    search_path: Option<OsString>,
+    cwd: Option<PathBuf>,
+}
+
+impl OwnBinary {
+    pub fn new(exe: PathBuf, search_path: Option<OsString>, cwd: Option<PathBuf>) -> Self {
+        OwnBinary {
+            exe: Some(exe),
+            search_path,
+            cwd,
+        }
+    }
+
+    /// This process's binary and `PATH`, with relative program paths resolved
+    /// against `cwd`. When the running executable cannot be named, no shim
+    /// name resolves to it.
+    pub fn current(cwd: Option<PathBuf>) -> Self {
+        OwnBinary {
+            exe: std::env::current_exe().ok(),
+            search_path: std::env::var_os("PATH"),
+            cwd,
+        }
+    }
+
+    /// Whether `program` is devkit itself or one of the names it installs,
+    /// resolving to this binary. A shim name is judged by the file it resolves
+    /// to, the same-file check `devkit install-links` uses for its own links;
+    /// one that resolves elsewhere, or nowhere, is not devkit's.
+    pub fn runs(&self, program: &str) -> bool {
+        let normalized = program.replace('\\', "/");
+        let Some(name) = Path::new(&normalized).file_stem().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        if name == "devkit" {
+            return true;
+        }
+        if Shim::iter().all(|s| s.name() != name) {
+            return false;
+        }
+        let Some(exe) = &self.exe else {
+            return false;
+        };
+        self.resolve(program)
+            .is_some_and(|path| same_file(exe, &path))
+    }
+
+    /// The file `program` runs: itself when it names a path, else the first
+    /// `PATH` entry holding it.
+    fn resolve(&self, program: &str) -> Option<PathBuf> {
+        if program.contains(['/', '\\']) {
+            let path = Path::new(program);
+            return Some(match &self.cwd {
+                Some(cwd) => cwd.join(path),
+                None => path.to_path_buf(),
+            });
+        }
+        let file = shim_file_name(program);
+        std::env::split_paths(self.search_path.as_ref()?)
+            .map(|dir| dir.join(&file))
+            .find(|candidate| candidate.is_file())
+    }
 }
 
 #[cfg(test)]
@@ -136,14 +222,39 @@ mod tests {
         assert!(Shim::from_argv0("").is_none());
     }
 
-    /// The guard's allow-list covers devkit itself as well as every shim.
+    /// Every shim name linked to devkit's binary is devkit's, as is devkit
+    /// itself; an unrelated name never is.
     #[test]
-    fn devkit_and_every_shim_are_devkit_commands() {
-        assert!(is_devkit_command("devkit"));
+    fn devkit_and_every_linked_shim_are_devkit_commands() {
+        let exe = std::env::current_exe().unwrap();
+        let dir = tempfile::Builder::new()
+            .tempdir_in(exe.parent().unwrap())
+            .unwrap();
         for s in Shim::iter() {
-            assert!(is_devkit_command(s.name()), "{} is gated", s.name());
+            std::fs::hard_link(&exe, dir.path().join(shim_file_name(s.name()))).unwrap();
         }
-        assert!(!is_devkit_command("some-other-tool"));
+        let own = OwnBinary::new(exe, Some(dir.path().as_os_str().to_owned()), None);
+        assert!(own.runs("devkit"));
+        for s in Shim::iter() {
+            assert!(own.runs(s.name()), "{} is gated", s.name());
+        }
+        assert!(!own.runs("some-other-tool"));
+    }
+
+    /// A shim name held by another program, by path or on `PATH`, or found
+    /// nowhere, is not devkit's.
+    #[test]
+    fn a_shim_name_that_resolves_elsewhere_is_not_devkit() {
+        let exe = std::env::current_exe().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let foreign = dir.path().join(shim_file_name("ticket"));
+        std::fs::write(&foreign, "foreign").unwrap();
+        let own = OwnBinary::new(exe.clone(), Some(dir.path().as_os_str().to_owned()), None);
+        assert!(!own.runs("ticket"));
+        assert!(!own.runs(foreign.to_str().unwrap()));
+        let empty = tempfile::tempdir().unwrap();
+        let nowhere = OwnBinary::new(exe, Some(empty.path().as_os_str().to_owned()), None);
+        assert!(!nowhere.runs("ticket"));
     }
 
     /// Two shims sharing a name would make `from_argv0` order-dependent, and
