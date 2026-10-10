@@ -1068,7 +1068,7 @@
       "description": "A file written into an app's directory during `workspace setup`, before the\napp's `setup` commands run. Parent directories are created. Existing files\nare left untouched unless `overwrite` is set.\n\n```toml\n[apps.web]\nbase_port = 4100\nlaunch    = [\"next\", \"dev\", \"-p\", \"{{ port }}\"]\n\n[[apps.web.prep_files]]\npath    = \".env.local\"\ncontent = \"\"\"\nSOME_FEATURE_FLAG=dummy\n\"\"\"\n```",
       "properties": {
         "content": {
-          "description": "File contents, rendered as minijinja over `prefix`, `ticket` (also\nnamed `issue`), `slug`, `apps`, `app`, `branch`, `worktree`, `role` and `[templates.variables]`,\nthen written with no newline added. Emit a literal `{{` with\n`{% raw %}...{% endraw %}`.",
+          "description": "File contents, rendered as minijinja over `prefix`, `ticket` (also\nnamed `issue`), `slug`, `apps`, `app`, `branch`, `worktree`, `role` and\n`[templates.variables]`, then written with no newline added. Emit a\nliteral `{{` with `{% raw %}...{% endraw %}`.",
           "type": "string"
         },
         "overwrite": {
@@ -1104,7 +1104,7 @@
           "type": "boolean"
         },
         "to": {
-          "description": "Destination directory, rendered as minijinja over `worktree`, `branch`,\n`ticket` (also named `issue`), `slug`, `apps`, `prefix`,\n`worktree_root`, `primary` and `[templates.variables]`. Issue fields come from the worktree's\n`.devkit/issue.toml` and render empty without one, and `primary` fails\nwhen the primary checkout cannot be resolved. Must render to a\nnon-empty absolute path outside every worktree the run removes; the\nfilesystem decides that, so a symlink, `..` or case difference does not\nslip past. Created when the first file lands. An existing file there is\ntruncated and rewritten, so an interrupted copy leaves a short file.\nTwo worktrees writing one filename into the same `to` collide; render\n`{{ issue }}` into it.",
+          "description": "Destination directory, rendered as minijinja over `worktree`, `branch`,\n`ticket` (also named `issue`), `slug`, `apps`, `prefix`,\n`worktree_root`, `primary` and `[templates.variables]`. Issue fields\ncome from the worktree's `.devkit/issue.toml` and render empty\nwithout one, and `primary` fails when the primary checkout cannot be\nresolved. Must render to a non-empty absolute path outside every\nworktree the run removes; the filesystem decides that, so a symlink,\n`..` or case difference does not slip past. Created when the first\nfile lands. An existing file there is truncated and rewritten, so an\ninterrupted copy leaves a short file. Two worktrees writing one\nfilename into the same `to` collide; render `{{ issue }}` into it.",
           "type": "string"
         }
       },
@@ -1647,7 +1647,7 @@
         },
         "run": {
           "default": [],
-          "description": "The command as one argv (program + args), run in the foreground with\nits exit code propagated. Every entry is a minijinja template over\n`{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `ticket`\n(also named `issue`), `slug`, `branch` from the worktree; any other name read is an arg of\nthe task, required unless a variable supplies a default. Minijinja's\n`default` filter and `is defined` do not make an arg optional. `ticket`,\n`issue`, `slug` and `branch` are undefined outside an issue worktree,\nso a task run in both guards them with `{% if ticket is defined %}`. The program\nmust be a plain string. A Doppler invocation is refused for `prd` the\nsame as an app's `launch`. Mutually exclusive with `steps`.",
+          "description": "The command as one argv (program + args), run in the foreground with\nits exit code propagated. Every entry is a minijinja template over\n`{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `ticket`\n(also named `issue`), `slug`, `branch` from the worktree; any other name\nread is an arg of the task, required unless a variable supplies a\ndefault. Minijinja's `default` filter and `is defined` do not make\nan arg optional. `ticket`, `issue`, `slug` and `branch` are\nundefined outside an issue worktree, so a task run in both guards\nthem with `{% if ticket is defined %}`. The program must be a plain\nstring. A Doppler invocation is refused for `prd` the same as an\napp's `launch`. Mutually exclusive with `steps`.",
           "items": {
             "$ref": "#/$defs/RunArg"
           },
@@ -1707,7 +1707,7 @@
       "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context. Rendering is strict: an undefined variable is an\nerror, so a typo surfaces on the first run.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ issue }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ issue }}: {{ input }}\"\npr_body            = \"Closes {{ issue }}.\\n\\n{{ input }}\"\nissue_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`issue_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
       "properties": {
         "branch": {
-          "description": "Branch name created by `workspace setup`. Context: `prefix`, `ticket` (also\nnamed `issue`), `slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.",
+          "description": "Branch name created by `workspace setup`. Context: `prefix`, `ticket` (also\nnamed `issue`), `slug`, `short_slug`, `apps`. Defaults to `{{ prefix\n}}{{ slug }}`.",
           "type": [
             "string",
             "null"
@@ -1838,7 +1838,7 @@
     },
     "TicketConfig": {
       "additionalProperties": false,
-      "description": "The `[ticket]` table, also read under its old name `[issue]`. Each event\nmoves the ticket's status (a Linear state, or `[github] status_field`) from a `from` status to `to`; an event with no\ntable does nothing. The statuses name one board, so keep the events in the\nrepository's `devkit.toml`: tables merge key by key across layers.\n\n```toml\n[ticket.events.setup]\nto = \"Todo\"\n\n[ticket.events.start]\nfrom = [\"\", \"Todo\", \"Backlog\"]\nto = \"In progress\"\n\n[ticket.events.pr_open]\nto = \"In review\"\n\n[github]\nproject = 3            # or \"some-org/7\"\nstatus_field = \"Status\"\n```",
+      "description": "The `[ticket]` table, also read under its old name `[issue]`. Each event\nmoves the ticket's status (a Linear state, or `[github] status_field`) from\na `from` status to `to`; an event with no table does nothing. The statuses\nname one board, so keep the events in the repository's `devkit.toml`: tables\nmerge key by key across layers.\n\n```toml\n[ticket.events.setup]\nto = \"Todo\"\n\n[ticket.events.start]\nfrom = [\"\", \"Todo\", \"Backlog\"]\nto = \"In progress\"\n\n[ticket.events.pr_open]\nto = \"In review\"\n\n[github]\nproject = 3            # or \"some-org/7\"\nstatus_field = \"Status\"\n```",
       "properties": {
         "events": {
           "$ref": "#/$defs/TicketEventsConfig",

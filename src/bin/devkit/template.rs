@@ -57,9 +57,9 @@ enum TemplateCmd {
     /// Render a template and print exactly the result.
     ///
     /// Every template sees `prefix`, `branch`, and `ticket` (also named
-    /// `issue`), `slug`, `apps` from `.devkit/issue.toml`; every other name it reads, `input` or
-    /// `pr_url` say, is an `--arg`. No length limit such as `branch_max` is
-    /// applied.
+    /// `issue`), `slug`, `apps` from `.devkit/issue.toml`; every other name it
+    /// reads, `input` or `pr_url` say, is an `--arg`. No length limit such
+    /// as `branch_max` is applied.
     ///
     /// `commit_message` takes the message's parts as `devkit commit` does,
     /// by `--subject`, `--body` and `--coauthor`, and refuses them as

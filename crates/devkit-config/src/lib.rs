@@ -716,15 +716,15 @@ pub struct PreserveConfig {
     pub from: Vec<String>,
     /// Destination directory, rendered as minijinja over `worktree`, `branch`,
     /// `ticket` (also named `issue`), `slug`, `apps`, `prefix`,
-    /// `worktree_root`, `primary` and `[templates.variables]`. Issue fields come from the worktree's
-    /// `.devkit/issue.toml` and render empty without one, and `primary` fails
-    /// when the primary checkout cannot be resolved. Must render to a
-    /// non-empty absolute path outside every worktree the run removes; the
-    /// filesystem decides that, so a symlink, `..` or case difference does not
-    /// slip past. Created when the first file lands. An existing file there is
-    /// truncated and rewritten, so an interrupted copy leaves a short file.
-    /// Two worktrees writing one filename into the same `to` collide; render
-    /// `{{ issue }}` into it.
+    /// `worktree_root`, `primary` and `[templates.variables]`. Issue fields
+    /// come from the worktree's `.devkit/issue.toml` and render empty
+    /// without one, and `primary` fails when the primary checkout cannot be
+    /// resolved. Must render to a non-empty absolute path outside every
+    /// worktree the run removes; the filesystem decides that, so a symlink,
+    /// `..` or case difference does not slip past. Created when the first
+    /// file lands. An existing file there is truncated and rewritten, so an
+    /// interrupted copy leaves a short file. Two worktrees writing one
+    /// filename into the same `to` collide; render `{{ issue }}` into it.
     pub to: String,
     /// Keep the worktree, its branch and its summary when this entry warns,
     /// and exit non-zero. Governs errors only, never an empty match.
@@ -1154,9 +1154,10 @@ impl std::fmt::Display for IssueEvent {
 }
 
 /// The `[ticket]` table, also read under its old name `[issue]`. Each event
-/// moves the ticket's status (a Linear state, or `[github] status_field`) from a `from` status to `to`; an event with no
-/// table does nothing. The statuses name one board, so keep the events in the
-/// repository's `devkit.toml`: tables merge key by key across layers.
+/// moves the ticket's status (a Linear state, or `[github] status_field`) from
+/// a `from` status to `to`; an event with no table does nothing. The statuses
+/// name one board, so keep the events in the repository's `devkit.toml`: tables
+/// merge key by key across layers.
 ///
 /// ```
 /// # use devkit_config::{Config, IssueEvent, ProjectRef};
@@ -1635,9 +1636,9 @@ pub struct PrepFile {
     /// Target path, relative to the app's directory.
     pub path: String,
     /// File contents, rendered as minijinja over `prefix`, `ticket` (also
-    /// named `issue`), `slug`, `apps`, `app`, `branch`, `worktree`, `role` and `[templates.variables]`,
-    /// then written with no newline added. Emit a literal `{{` with
-    /// `{% raw %}...{% endraw %}`.
+    /// named `issue`), `slug`, `apps`, `app`, `branch`, `worktree`, `role` and
+    /// `[templates.variables]`, then written with no newline added. Emit a
+    /// literal `{{` with `{% raw %}...{% endraw %}`.
     pub content: String,
     /// Overwrite an existing file rather than skipping it.
     #[serde(default)]
@@ -1784,13 +1785,14 @@ pub struct TaskConfig {
     /// The command as one argv (program + args), run in the foreground with
     /// its exit code propagated. Every entry is a minijinja template over
     /// `{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `ticket`
-    /// (also named `issue`), `slug`, `branch` from the worktree; any other name read is an arg of
-    /// the task, required unless a variable supplies a default. Minijinja's
-    /// `default` filter and `is defined` do not make an arg optional. `ticket`,
-    /// `issue`, `slug` and `branch` are undefined outside an issue worktree,
-    /// so a task run in both guards them with `{% if ticket is defined %}`. The program
-    /// must be a plain string. A Doppler invocation is refused for `prd` the
-    /// same as an app's `launch`. Mutually exclusive with `steps`.
+    /// (also named `issue`), `slug`, `branch` from the worktree; any other name
+    /// read is an arg of the task, required unless a variable supplies a
+    /// default. Minijinja's `default` filter and `is defined` do not make
+    /// an arg optional. `ticket`, `issue`, `slug` and `branch` are
+    /// undefined outside an issue worktree, so a task run in both guards
+    /// them with `{% if ticket is defined %}`. The program must be a plain
+    /// string. A Doppler invocation is refused for `prd` the same as an
+    /// app's `launch`. Mutually exclusive with `steps`.
     #[serde(default)]
     pub run: Vec<RunArg>,
     /// A sequence run in order, stopping at the first failure, each step a
@@ -2034,7 +2036,8 @@ impl From<&str> for VariableDecl {
 #[derive(Debug, JsonSchema, Deserialize, Serialize, Default)]
 pub struct Templates {
     /// Branch name created by `workspace setup`. Context: `prefix`, `ticket` (also
-    /// named `issue`), `slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.
+    /// named `issue`), `slug`, `short_slug`, `apps`. Defaults to `{{ prefix
+    /// }}{{ slug }}`.
     pub branch: Option<String>,
     /// Longest branch `workspace setup` will render. A derived slug is
     /// shortened on a word boundary to fit. A template whose fixed text
@@ -4851,7 +4854,11 @@ steps = [
             )
             .unwrap();
             let events = &cfg.ticket.events;
-            assert_eq!(events.get(IssueEvent::Setup).unwrap().to, "Todo", "[{table}]");
+            assert_eq!(
+                events.get(IssueEvent::Setup).unwrap().to,
+                "Todo",
+                "[{table}]"
+            );
             assert_eq!(
                 events.get(IssueEvent::Start).unwrap().to,
                 "In progress",

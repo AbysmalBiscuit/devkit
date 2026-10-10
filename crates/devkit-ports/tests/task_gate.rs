@@ -102,7 +102,8 @@ fn gate_waiver_scoping_and_lazy_resolution() {
     // port — nothing is cached from the earlier call.
     registry::release_ports(&[my_port]).unwrap();
     registry::release_ports(&[BASE]).unwrap(); // free the foreign row too
-    let moved = registry::with_lock(|d| Ok(d.alloc_one(mine_s, "api", BASE, Role::Workspace))).unwrap();
+    let moved =
+        registry::with_lock(|d| Ok(d.alloc_one(mine_s, "api", BASE, Role::Workspace))).unwrap();
     assert_eq!(moved, BASE);
     registry::record_pid(
         moved,

@@ -258,7 +258,10 @@ fn tickets_render_from_the_ticket_templates() {
          ticket_body = \"{{ ticket_title }} / {{ issue_title }} / {{ input }}\"\n",
         None,
     );
-    assert_eq!(rendered(p.path()), ("T: x".into(), "T: x / T: x / y".into()));
+    assert_eq!(
+        rendered(p.path()),
+        ("T: x".into(), "T: x / T: x / y".into())
+    );
 }
 
 #[test]

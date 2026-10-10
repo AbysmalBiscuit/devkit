@@ -353,9 +353,9 @@ pub fn holder_alive(holder: &str) -> bool {
     std::path::Path::new(holder).exists()
 }
 
-/// Port of `app`'s live reservation under `holder` (workspace role): a row whose
-/// pid is set and alive. The pid probe keeps the answer correct even on an
-/// unpruned view; keep calls outside `with_lock`.
+/// Port of `app`'s live reservation under `holder` (workspace role): a row
+/// whose pid is set and alive. The pid probe keeps the answer correct even on
+/// an unpruned view; keep calls outside `with_lock`.
 pub fn live_port(data: &Data, holder: &str, app: &str) -> Option<u16> {
     data.entries.iter().find_map(|(port, e)| {
         (e.holder == holder
@@ -1014,7 +1014,14 @@ mod ops_tests {
         // record_pid re-inserts the row so `down` can still find and
         // stop it.
         let mut d = Data::default();
-        d.record_pid(9100, "api", "/w", Role::Workspace, 4321, PathBuf::from("/log"));
+        d.record_pid(
+            9100,
+            "api",
+            "/w",
+            Role::Workspace,
+            4321,
+            PathBuf::from("/log"),
+        );
         assert_eq!(d.entries[&9100].pid, Some(4321));
         assert_eq!(d.entries[&9100].app, "api");
         assert_eq!(d.entries[&9100].holder, "/w");
@@ -1023,7 +1030,14 @@ mod ops_tests {
     fn record_pid_updates_existing_reservation() {
         let mut d = Data::default();
         let port = d.alloc_one("/w", "api", 9100, Role::Workspace);
-        d.record_pid(port, "api", "/w", Role::Workspace, 99, PathBuf::from("/log"));
+        d.record_pid(
+            port,
+            "api",
+            "/w",
+            Role::Workspace,
+            99,
+            PathBuf::from("/log"),
+        );
         assert_eq!(d.entries.len(), 1);
         assert_eq!(d.entries[&port].pid, Some(99));
     }
@@ -1177,7 +1191,14 @@ mod ops_tests {
         let mut d = Data::default();
         let p = d.alloc_one("/wt", "api", 47340, Role::Workspace);
         assert_eq!(live_port(&d, "/wt", "api"), None); // pid-less reservation
-        d.record_pid(p, "api", "/wt", Role::Workspace, std::process::id(), "l".into());
+        d.record_pid(
+            p,
+            "api",
+            "/wt",
+            Role::Workspace,
+            std::process::id(),
+            "l".into(),
+        );
         assert_eq!(live_port(&d, "/wt", "api"), Some(p));
         assert_eq!(live_port(&d, "/other", "api"), None); // wrong holder
         assert_eq!(live_port(&d, "/wt", "web"), None); // wrong app
@@ -1188,7 +1209,10 @@ mod ops_tests {
     #[test]
     fn alloc_one_skips_foreign_holder_row() {
         let mut d = Data::default();
-        assert_eq!(d.alloc_one("/foreign", "api", 47350, Role::Workspace), 47350);
+        assert_eq!(
+            d.alloc_one("/foreign", "api", 47350, Role::Workspace),
+            47350
+        );
         // Same app under a different holder never captures the foreign row.
         assert_eq!(d.alloc_one("/mine", "api", 47350, Role::Workspace), 47351);
         // Idempotent per holder.

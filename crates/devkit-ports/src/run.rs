@@ -1210,8 +1210,10 @@ mod tests {
     #[test]
     fn existing_server_ignores_dead_pid() {
         let mut data = Data::default();
-        data.entries
-            .insert(49812, entry("api", "/wt", Role::Workspace, Some(dead_pid())));
+        data.entries.insert(
+            49812,
+            entry("api", "/wt", Role::Workspace, Some(dead_pid())),
+        );
         assert!(existing_server(&data, &plan("api", 49812), "/wt", Role::Workspace).is_none());
     }
 

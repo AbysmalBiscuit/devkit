@@ -466,8 +466,10 @@ fn branch_templates_read_the_ticket_by_either_name() {
     let dir = setup();
     std::fs::write(
         dir.path().join("devkit.toml"),
-        format!("{CONFIG}\n[templates.custom.unused]\nbody = \"x\"\n")
-            .replace("[templates]\n", &format!("[templates]\nbranch = \"{branch}\"\n")),
+        format!("{CONFIG}\n[templates.custom.unused]\nbody = \"x\"\n").replace(
+            "[templates]\n",
+            &format!("[templates]\nbranch = \"{branch}\"\n"),
+        ),
     )
     .unwrap();
     let out = run(dir.path(), &["render", "branch"]);

@@ -92,7 +92,13 @@ fn up(ctx: &ServerCtx, args: Value) -> Result<Value> {
         &user,
         vars,
     )?;
-    let statuses = run::launch(&plans, &a.root, Role::Workspace, run::daemon_running(), false)?;
+    let statuses = run::launch(
+        &plans,
+        &a.root,
+        Role::Workspace,
+        run::daemon_running(),
+        false,
+    )?;
     Ok(serde_json::json!({
         "servers": serde_json::to_value(&statuses)?,
         "hint": "poll devrun.status for readiness"

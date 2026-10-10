@@ -456,9 +456,9 @@ fn check_args(
 }
 
 /// The variables task templates render over, lowest first:
-/// `[templates.variables]`, `ticket`/`issue`/`slug` from `.devkit/issue.toml` and
-/// `branch` from the repository, then `--arg`. An issue field with no source
-/// stays undefined rather than empty.
+/// `[templates.variables]`, `ticket`/`issue`/`slug` from `.devkit/issue.toml`
+/// and `branch` from the repository, then `--arg`. An issue field with no
+/// source stays undefined rather than empty.
 fn variables(
     cfg: &Config,
     worktree_root: &Path,
