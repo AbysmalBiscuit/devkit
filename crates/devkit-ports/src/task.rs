@@ -252,7 +252,7 @@ pub fn args_text(args: &[TaskArg]) -> String {
 const PORT_NAMES: [&str; 2] = ["port", "ports"];
 /// Names [`variables`] fills from the worktree. `--arg` can override them, but
 /// they are never a task's args.
-const ISSUE_FIELDS: [&str; 3] = ["issue", "slug", "branch"];
+const ISSUE_FIELDS: [&str; 4] = ["ticket", "issue", "slug", "branch"];
 
 /// `reads` minus the names the render context supplies itself.
 fn args_among(mut reads: BTreeSet<String>) -> BTreeSet<String> {
@@ -456,7 +456,7 @@ fn check_args(
 }
 
 /// The variables task templates render over, lowest first:
-/// `[templates.variables]`, `issue`/`slug` from `.devkit/issue.toml` and
+/// `[templates.variables]`, `ticket`/`issue`/`slug` from `.devkit/issue.toml` and
 /// `branch` from the repository, then `--arg`. An issue field with no source
 /// stays undefined rather than empty.
 fn variables(
@@ -466,6 +466,7 @@ fn variables(
 ) -> BTreeMap<String, String> {
     let mut vars = cfg.templates.defaults();
     if let Some(r) = record::read(worktree_root) {
+        vars.insert("ticket".into(), r.issue.clone());
         vars.insert("issue".into(), r.issue);
         vars.insert("slug".into(), r.slug);
     }

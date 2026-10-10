@@ -437,6 +437,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     if args.setup {
         let setup_ctx = serde_json::json!({
             "prefix": cfg.defaults.branch_prefix,
+            "ticket": issue,
             "issue": issue,
             "slug": slugify(&meta.title),
             "apps": args.apps,
@@ -456,6 +457,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
 
     let hook_ctx = serde_json::json!({
         "prefix": cfg.defaults.branch_prefix,
+        "ticket": issue,
         "issue": issue,
         "slug": slugify(&meta.title),
         "apps": args.apps,

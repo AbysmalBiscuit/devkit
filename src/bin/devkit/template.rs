@@ -56,8 +56,8 @@ enum TemplateCmd {
     },
     /// Render a template and print exactly the result.
     ///
-    /// Every template sees `prefix`, `branch`, and `issue`, `slug`, `apps`
-    /// from `.devkit/issue.toml`; every other name it reads, `input` or
+    /// Every template sees `prefix`, `branch`, and `ticket` (also named
+    /// `issue`), `slug`, `apps` from `.devkit/issue.toml`; every other name it reads, `input` or
     /// `pr_url` say, is an `--arg`. No length limit such as `branch_max` is
     /// applied.
     ///

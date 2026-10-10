@@ -122,12 +122,12 @@ pub(crate) fn parse_args(
 /// real requirement. `the_context_keys_match_what_each_surface_builds` holds
 /// them against the contexts themselves.
 pub(crate) const PR_CONTEXT_KEYS: &[&str] =
-    &["input", "pr_title", "issue", "slug", "branch", "apps"];
+    &["input", "pr_title", "ticket", "issue", "slug", "branch", "apps"];
 pub(crate) const REVIEW_REQUEST_CONTEXT_KEYS: &[&str] = &[
-    "input", "pr_url", "pr_title", "name", "slack_id", "issue", "slug", "branch", "apps",
+    "input", "pr_url", "pr_title", "name", "slack_id", "ticket", "issue", "slug", "branch", "apps",
 ];
 pub(crate) const REVIEW_FINISH_CONTEXT_KEYS: &[&str] = &[
-    "input", "pr_url", "pr_title", "name", "slack_id", "issue", "slug", "branch", "apps", "author",
+    "input", "pr_url", "pr_title", "name", "slack_id", "ticket", "issue", "slug", "branch", "apps", "author",
 ];
 
 /// Refuse a required `--arg` this run's templates read and the caller did not

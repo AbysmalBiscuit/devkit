@@ -635,8 +635,9 @@ pub struct HooksConfig {
     /// Runs once in the root of a worktree `workspace setup` or
     /// `pr checkout` has just created, after its apps are prepared and
     /// after the command has reported the worktree. Each argv element is
-    /// rendered as minijinja over `worktree`, `branch`, `issue`, `slug`,
-    /// `apps`, `prefix`, `role`, and `[templates.variables]`. Output is
+    /// rendered as minijinja over `worktree`, `branch`, `ticket` (also named
+    /// `issue`), `slug`, `apps`, `prefix`, `role`, and `[templates.variables]`.
+    /// Output is
     /// discarded, so the command's JSON stays the last line on stdout.
     pub after_worktree_create: Vec<Vec<String>>,
 
@@ -648,10 +649,11 @@ pub struct HooksConfig {
     /// kept back or skipped fires nothing.
     pub before_worktree_remove: Vec<Vec<String>>,
 
-    /// Runs once per worktree `workspace end` removed, after every removal in
-    /// the run has finished, in the main repository root. `issue`, `slug`
-    /// and `apps` come from the `.devkit/issue.toml` record read before the
-    /// removal. Rendered over `worktree`, `branch`, `issue`, `slug`, `apps`,
+    /// Runs once per worktree `workspace end` removed, after every removal in the
+    /// run has finished, in the main repository root. `ticket`, `slug` and
+    /// `apps` come from the `.devkit/issue.toml` record read before the
+    /// removal. Rendered over `worktree`, `branch`, `ticket` (also named
+    /// `issue`), `slug`, `apps`,
     /// `prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A
     /// worktree kept back or skipped fires nothing. Runs after the run's
     /// summary, so a failing hook never un-reports a removal, and is skipped
@@ -713,8 +715,8 @@ pub struct PreserveConfig {
     /// `templates.issue_summary_path` puts it outside, where no pattern does.
     pub from: Vec<String>,
     /// Destination directory, rendered as minijinja over `worktree`, `branch`,
-    /// `issue`, `slug`, `apps`, `prefix`, `worktree_root`, `primary` and
-    /// `[templates.variables]`. Issue fields come from the worktree's
+    /// `ticket` (also named `issue`), `slug`, `apps`, `prefix`,
+    /// `worktree_root`, `primary` and `[templates.variables]`. Issue fields come from the worktree's
     /// `.devkit/issue.toml` and render empty without one, and `primary` fails
     /// when the primary checkout cannot be resolved. Must render to a
     /// non-empty absolute path outside every worktree the run removes; the
@@ -1632,8 +1634,8 @@ pub struct Person {
 pub struct PrepFile {
     /// Target path, relative to the app's directory.
     pub path: String,
-    /// File contents, rendered as minijinja over `prefix`, `issue`, `slug`,
-    /// `apps`, `app`, `branch`, `worktree`, `role` and `[templates.variables]`,
+    /// File contents, rendered as minijinja over `prefix`, `ticket` (also
+    /// named `issue`), `slug`, `apps`, `app`, `branch`, `worktree`, `role` and `[templates.variables]`,
     /// then written with no newline added. Emit a literal `{{` with
     /// `{% raw %}...{% endraw %}`.
     pub content: String,
@@ -1781,12 +1783,12 @@ pub struct TaskConfig {
     pub app: Option<String>,
     /// The command as one argv (program + args), run in the foreground with
     /// its exit code propagated. Every entry is a minijinja template over
-    /// `{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `issue`,
-    /// `slug`, `branch` from the worktree; any other name read is an arg of
+    /// `{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `ticket`
+    /// (also named `issue`), `slug`, `branch` from the worktree; any other name read is an arg of
     /// the task, required unless a variable supplies a default. Minijinja's
-    /// `default` filter and `is defined` do not make an arg optional. `issue`,
-    /// `slug` and `branch` are undefined outside an issue worktree, so a task
-    /// run in both guards them with `{% if issue is defined %}`. The program
+    /// `default` filter and `is defined` do not make an arg optional. `ticket`,
+    /// `issue`, `slug` and `branch` are undefined outside an issue worktree,
+    /// so a task run in both guards them with `{% if ticket is defined %}`. The program
     /// must be a plain string. A Doppler invocation is refused for `prd` the
     /// same as an app's `launch`. Mutually exclusive with `steps`.
     #[serde(default)]
@@ -1887,8 +1889,8 @@ pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
 /// underneath the context.
 ///
 /// Only these two. `issue`, `slug`, `branch`, `apps` and `prefix` have been
-/// context keys from the start, so a project may already shadow one on
-/// purpose.
+/// context keys from the start, and `ticket` names the same value as `issue`,
+/// so a project may already shadow one on purpose.
 const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
 
 /// Who must supply an `--arg` even though a default exists. `Never` is the
@@ -1920,13 +1922,13 @@ pub enum Required {
 /// [templates.variables]
 /// team = "platform"                              # a constant, never required
 /// msg = { default = "wip", required = "agents" } # defaulted, but agents must pass it
-/// ticket = { required = "always" }               # declared, no default, always required
+/// reviewer = { required = "always" }             # declared, no default, always required
 /// body = { default = "", description = "why the change was made, if the subject does not say" }
 /// # "#).unwrap();
 /// # let v = &cfg.templates.variables;
 /// # assert_eq!(v["team"].required(), Required::Never);
 /// # assert_eq!(v["msg"].default_value(), Some("wip"));
-/// # assert_eq!(v["ticket"].default_value(), None);
+/// # assert_eq!(v["reviewer"].default_value(), None);
 /// # assert!(v["body"].description().unwrap().starts_with("why"));
 /// ```
 ///
@@ -2031,8 +2033,8 @@ impl From<&str> for VariableDecl {
 /// it is taken from `defaults.worktree_root` instead.
 #[derive(Debug, JsonSchema, Deserialize, Serialize, Default)]
 pub struct Templates {
-    /// Branch name created by `workspace setup`. Context: `prefix`, `issue`,
-    /// `slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.
+    /// Branch name created by `workspace setup`. Context: `prefix`, `ticket` (also
+    /// named `issue`), `slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.
     pub branch: Option<String>,
     /// Longest branch `workspace setup` will render. A derived slug is
     /// shortened on a word boundary to fit. A template whose fixed text
@@ -2088,7 +2090,8 @@ pub struct Templates {
     /// Slack message sent by `pr review request`. Rendered once per
     /// recipient with `name`, `slack_id` (empty for a channel), `pr_url`,
     /// `pr_title` (the PR's own title from GitHub), `input`, and `branch`,
-    /// `issue`, `slug`, `apps` from the worktree's `.devkit/issue.toml`.
+    /// `ticket` (also named `issue`), `slug`, `apps` from the worktree's
+    /// `.devkit/issue.toml`.
     pub review_request: Option<String>,
     /// Slack message sent by `pr review finish`. Same context as
     /// `review_request`, plus `author`.
@@ -2107,9 +2110,9 @@ pub struct Templates {
     /// where it stays untracked and goes when `workspace end` removes the
     /// worktree.
     pub issue_summary_path: Option<String>,
-    /// Body of the file `workspace setup --summary` writes when the tracker
-    /// keeps no summary of its own; a GitHub issue's non-empty body is
-    /// written verbatim instead. Context: `issue`,
+    /// Body of the file `workspace setup --summary` writes when the tracker keeps
+    /// no summary of its own; a GitHub issue's non-empty body is written
+    /// verbatim instead. Context: `ticket` (also named `issue`),
     /// `title`, `url`, `description`, `state`, `assignee`, `priority`,
     /// `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,
     /// `prefix`, `apps`. A field the tracker left empty renders as the empty
@@ -2224,7 +2227,8 @@ impl Templates {
 /// One `[templates.custom]` entry: a template a project writes once and an
 /// agent renders with `devkit template render <name> --arg key=value`. It
 /// reads `[templates.variables]` like every other template, plus `branch`,
-/// and `issue`, `slug` and `apps` from the worktree's `.devkit/issue.toml`.
+/// and `ticket` (also named `issue`), `slug` and `apps` from the worktree's
+/// `.devkit/issue.toml`.
 ///
 /// ```
 /// # use devkit_config::Config;

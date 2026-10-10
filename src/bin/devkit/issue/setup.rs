@@ -384,6 +384,7 @@ fn probe_ctx(
 ) -> serde_json::Value {
     serde_json::json!({
         "prefix": cfg.defaults.branch_prefix,
+        "ticket": issue,
         "issue": issue,
         "slug": slug,
         "short_slug": short_slug,
@@ -755,6 +756,7 @@ fn setup(
     let wt_root = worktree_root(cfg)?;
     let ctx = serde_json::json!({
         "prefix": cfg.defaults.branch_prefix,
+        "ticket": issue,
         "issue": issue,
         "slug": slug,
         "short_slug": dir_slug,
