@@ -26,19 +26,19 @@ enforce_commands = true
 [harness.commands.worktree-add]
 programs = ["git"]
 args = ["worktree", "add"]
-reason = "Use devkit's issue binary to create worktrees: issue setup --summary --slug [branch-name]"
+reason = "Create worktrees with devkit: workspace setup --summary --slug [branch-name]"
 
 [harness.commands.worktree-remove]
 programs = ["git"]
 args = ["worktree", "remove"]
-reason = "Use devkit's issue binary to remove worktrees: issue end [branch-name]"
+reason = "Remove worktrees with devkit: workspace end [branch-name]"
 
 [harness.commands.gh-issue-create]
 programs = ["gh"]
 args = ["issue", "create"]
-reason = "file issues with `devkit issue create` so the issue template applies"
+reason = "file issues with `devkit ticket create` so the issue template applies"
 
-# Issue writes through a tracker's MCP must carry text `devkit issue render`
+# Issue writes through a tracker's MCP must carry text `devkit ticket render`
 # produced. The templates stay at their defaults for now.
 [harness.issue_tools.linear]
 servers = ["*linear*"]
@@ -130,7 +130,7 @@ worktree_dir = '''
 {{ id }}{{ name[:46 - (id | length)] | trim("-") }}
 '''
 
-# PR body for `issue pr create`; `input` comes from `--pr-body`.
+# PR body for `devkit pr create`; `input` comes from `--pr-body`.
 # Only a human supplies `human_tldr`.
 pr_body = '''
 {%- set own = (issue_magic_word ~ " " ~ ("#" if issue and issue[0] in "0123456789" else "") ~ issue) if issue else "" -%}
@@ -170,7 +170,7 @@ Implemented by {{ implemented_by | trim }}
 {%- endif %}
 '''
 
-# Issue body for `devkit issue render`, `issue create` and `issue edit`;
+# Issue body for `devkit ticket render`, `ticket create` and `ticket edit`;
 # `input` comes from `--body`. Laid out as a prompt to the agent that works
 # the issue: the task, its finish line, when to stop, then what it may not
 # touch.
@@ -210,14 +210,14 @@ files = { required = "always", description = "Comma-separated paths to stage, wh
 coauthors = { default = "", required = "agents", description = "`Name <email>` of each `Co-authored-by` trailer, one `--coauthor` apiece. Claude Code: `<full model name, e.g. Claude Opus 5> <noreply@anthropic.com>`. Codex: `Codex <noreply@openai.com>`" }
 
 human_tldr = { default = "", description = "A human's summary, written after the PR opens; agents leave it unset" }
-proof = { default = "", required = "agents", description = "One unindented line per `Done when` item, starting with its number in the order the issue lists them (`1. test foo_refuses_gap`, `2. command X and its output`), or with no issue one line per claim the summary makes; a numbered line indented two columns or more answers nothing. Each numbered line gives the evidence that its item holds: the test that covers it, a command and its output, or a screenshot or video under `.devkit/proof/` referenced by that local path (`![after](./.devkit/proof/after.png)`, a video path alone on its line) and passed to `issue pr create --attach`" }
+proof = { default = "", required = "agents", description = "One unindented line per `Done when` item, starting with its number in the order the issue lists them (`1. test foo_refuses_gap`, `2. command X and its output`), or with no issue one line per claim the summary makes; a numbered line indented two columns or more answers nothing. Each numbered line gives the evidence that its item holds: the test that covers it, a command and its output, or a screenshot or video under `.devkit/proof/` referenced by that local path (`![after](./.devkit/proof/after.png)`, a video path alone on its line) and passed to `devkit pr create --attach`" }
 
 done_when = { default = "", required = "agents", description = "Checkbox list (`- [ ] ...`) of checks that prove the issue is done: a command that passes, behaviour anyone can see. For an investigation, the deliverable and where it goes. End each item with the proof its PR must show: `(proof: test <name>)`, `(proof: command and its output)`, `(proof: screenshot)` or `(proof: video)`. `--body` holds only the task: what to change and why, as behaviour rather than steps" }
 stop_and_ask = { default = "", description = "Situations particular to this issue where the agent working it must stop and ask; being blocked and destructive actions are already covered. Leave unset when there are none" }
 out_of_scope = { default = "", description = "Adjacent work that must not happen under this issue, even when it looks related" }
 context = { default = "", description = "Links, error output, the parent and blocking issues. Attach screenshots rather than retyping them" }
 
-# Supplied by the render context in a worktree `issue setup` created; declared
+# Supplied by the render context in a worktree `workspace setup` created; declared
 # so the templates also render outside one.
 issue = { default = "", description = "The worktree's own issue id, filled in an issue worktree; pass it only outside one" }
 issue_magic_word = { default = "Closes", description = "Keyword on the worktree's own issue line: `Refs` when this branch does not finish the issue" }

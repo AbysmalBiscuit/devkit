@@ -27,7 +27,7 @@ To keep a plugin's skill and hooks without the server's tools, set `[mcp] enable
 
 The `devrun` actions are `devrun.status` (tracked servers for a worktree, or `all`), `devrun.up` (start servers, **non-blocking**: returns each server `starting`, so poll `devrun.status` for readiness), `devrun.down` (stop and release a worktree's servers), and `devrun.logs` (tail a tracked app's log). All take `root` (the worktree); `up` is `issue`-role only and starts servers under a running `devkitd` when present, else detached.
 
-Two read-only `issue` actions round it out. `issue.status` lists the issue worktrees for a directory (`root`, default `.`; optional `ids` filter) with each one's PR state, tracker state, and a finished/not-finished verdict; a draft PR's `pr` object carries `is_draft: true` while its legacy `pr_state` field still reads `OPEN`, so a consumer that needs to distinguish a draft reads the flag rather than the state string. `issue.prs` triages your PRs on the project's forge (`mine`, `reviews`, neither set means both; optional `repo`); a draft's row carries the action `draft` in both sections regardless of any standing review request. Both return structured JSON with the verdicts and next-action labels pre-computed. They never mutate; `issue review`, `issue end`, and `issue pr` stay CLI-only.
+Two read-only `issue` actions round it out. `issue.status` lists the workspaces for a directory (`root`, default `.`; optional `ids` filter) with each one's PR state, tracker state, and a finished/not-finished verdict; a draft PR's `pr` object carries `is_draft: true` while its legacy `pr_state` field still reads `OPEN`, so a consumer that needs to distinguish a draft reads the flag rather than the state string. `issue.prs` triages your PRs on the project's forge (`mine`, `reviews`, neither set means both; optional `repo`); a draft's row carries the action `draft` in both sections regardless of any standing review request. Both return structured JSON with the verdicts and next-action labels pre-computed. They never mutate; `workspace end` and `devkit pr` stay CLI-only.
 
 `templates.list`, `templates.show` and `templates.render` mirror `devkit template`: `render` takes a `name` and an `args` object, plus `subject`, `body` and `coauthor` for `commit_message`, and returns `{"text": ...}`. They read only, and act on the checkout the server started in, so they take no `root`.
 
@@ -53,7 +53,7 @@ Everything a harness sends enters one verb family, `devkit hook <event>`, and th
 | `post-tool-use`, `post-tool-use-failure` | Records the outcome. |
 | `session-end` | Releases the session's claims, records, sweeps the log. |
 | `subagent-stop` | Releases the subagent's claims, records. |
-| `session-start` | In a worktree `issue setup` created, with `[issue.events.start]` configured, claims `start` once and spawns a background `issue event start`. Records the frame. |
+| `session-start` | In a worktree `workspace setup` created, with `[issue.events.start]` configured, claims `start` once and spawns a background `ticket event start`. Records the frame. |
 | `subagent-start` | Records the frame. |
 | `permission-request`, `permission-denied` | Records what the harness asked about, or what its own classifier blocked. |
 | `stop`, `stop-failure`, `pre-compact`, `post-compact`, `cwd-changed` | Records the turn or context boundary. |

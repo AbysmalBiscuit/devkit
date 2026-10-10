@@ -1,6 +1,6 @@
 # devkit
 
-A Rust workspace (edition 2024) that coordinates many concurrent local dev sessions, human and agent, on one machine: port and file-lock registries, a dev-server supervisor, issue worktrees, and the hooks coding agents call. The engine is project-agnostic; everything project-specific lives in `devkit.toml`. User-facing reference: `devkit schema` for config keys, each command's `-h` for flags, and `plugin/skills/using-devkit/references/` for behavior. `docs/configuration.md` covers setup, and `plugin/skills/using-devkit/references/config.md` covers layering.
+A Rust workspace (edition 2024) that coordinates many concurrent local dev sessions, human and agent, on one machine: port and file-lock registries, a dev-server supervisor, per-branch worktrees with their ports and PRs, and the hooks coding agents call. The engine is project-agnostic; everything project-specific lives in `devkit.toml`. User-facing reference: `devkit schema` for config keys, each command's `-h` for flags, and `plugin/skills/using-devkit/references/` for behavior. `docs/configuration.md` covers setup, and `plugin/skills/using-devkit/references/config.md` covers layering.
 
 ## Commands
 
@@ -37,7 +37,7 @@ A scenario under `evals/scenarios/` is a `prompt.md`, an optional `fixture/` cop
 
 ## Layout
 
-The root package is the `devkit` binary (`src/bin/devkit/`, one module per subcommand). `devkitd` (`src/bin/devkitd/`) is the supervisor daemon. `plugin/` is the directory each harness copies on install: its manifests, hooks, skills and `.mcp.json`. Every path a plugin manifest names stays inside it; the marketplace files stay at the repo root. `.agents/harnessup/` is what [harnessup](https://github.com/AbysmalBiscuit/harnessup) places into Claude Code cloud sessions: its manifest, the cloud-only rules, config and context, and cloud-only skills. Local sessions never read it, and its `README.md` records the cloud environment's setup script.
+The root package is the `devkit` binary (`src/bin/devkit/`, one module per subcommand). `ticket`, `workspace` and `pr` share `src/bin/devkit/issue/`, which also serves the hidden `issue` alias that older scripts call. `devkitd` (`src/bin/devkitd/`) is the supervisor daemon. `plugin/` is the directory each harness copies on install: its manifests, hooks, skills and `.mcp.json`. Every path a plugin manifest names stays inside it; the marketplace files stay at the repo root. `.agents/harnessup/` is what [harnessup](https://github.com/AbysmalBiscuit/harnessup) places into Claude Code cloud sessions: its manifest, the cloud-only rules, config and context, and cloud-only skills. Local sessions never read it, and its `README.md` records the cloud environment's setup script.
 
 | Crate | Role |
 |---|---|

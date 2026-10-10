@@ -11,7 +11,7 @@
 devkit is one `devkit` binary, plus an optional `devkitd` daemon, that gives every session on a machine, human or agent, the same view of what they share:
 
 - Registries for what parallel sessions contend for. Allocated ports, advisory file locks over a shared checkout, supervised dev servers, and version-correct library checkouts, each one visible to every other session.
-- `issue`, an issue-to-PR workflow over git worktrees. Tracker-agnostic, from setup through review request to cleanup.
+- An issue-to-PR workflow over workspaces, each a branch's git worktree, its ports and its PR. Tracker-agnostic, from setup through review request to cleanup, split across `workspace`, `devkit pr` and `ticket`.
 - Todo lists that agents and their subagents share and claim, kept locally or in a Postgres database that several machines claim against.
 - Agent wiring for Claude Code, Codex and Cursor: an MCP server and a plugin whose hooks can claim a lock on every write, guard shell commands, and inject the project's rules as files are edited.
 
@@ -29,7 +29,7 @@ irm https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-ins
 
 From a clone instead: `cargo install --path .`
 
-Running `devkit` once installs the old command names (`portm`, `devrun`, `issue`, `lockm`, `docm`, `devkit-mcp`) as hardlinks beside it, so `docm list` and `devkit docs list` are the same command. See [docs/install.md](docs/install.md) for prebuilt targets, feature flags, the hardlink rules, and where state lives.
+Running `devkit` once installs the old command names (`ticket`, `workspace`, `portm`, `devrun`, `lockm`, `docm`, `devrules`, `devkit-mcp`) as hardlinks beside it, so `docm list` and `devkit docs list` are the same command. See [docs/install.md](docs/install.md) for prebuilt targets, feature flags, the hardlink rules, and where state lives.
 
 ## Commands
 
@@ -37,10 +37,12 @@ Running `devkit` once installs the old command names (`portm`, `devrun`, `issue`
 |---|---|
 | `devkit ports` / `portm` | Shared port registry. Reserves before anything binds, so concurrent callers never collide. |
 | `devkit run` / `devrun` | Starts and supervises dev servers, with `--role both` for an issue-vs-baseline A/B. Also runs canned `[tasks]`. |
-| `devkit issue` / `issue` | Issue lifecycle: worktree setup, PR checkout, triage, cleanup, review requests, dashboard. |
+| `devkit workspace` / `workspace` | A branch's worktree, ports and PR as one workspace: setup, triage, cleanup. |
+| `devkit pr` | The workspace's PR: open, mark ready, check out to review, request or finish review, list your PRs. |
+| `devkit ticket` / `ticket` | Tracker tickets: render, create and edit from templates, move their status, dashboard. |
 | `devkit locks` / `lockm` | Advisory file locks, so parallel sessions in one checkout don't edit the same files. |
 | `devkit docs` / `docm` | Version-correct local library checkouts, resolved from your own lockfiles. |
-| `devkit mcp` / `devkit-mcp` | The MCP server exposing ports, locks, devrun, issue triage, and templates to coding agents. |
+| `devkit mcp` / `devkit-mcp` | The MCP server exposing ports, locks, devrun, workspace triage, and templates to coding agents. |
 | `devkit auth` / `devkit doctor` | Store a Linear or Slack credential; report where every credential resolves from. |
 | `devkit brief` | Compact project orientation for a session-start hook. |
 | `devkit rules` / `devrules` | Query the rule index that write-time rule injection reads. |
@@ -86,9 +88,9 @@ bash, zsh, fish, elvish, nushell, and powershell. `--all` emits one file coverin
 `git` and an authenticated `gh` are required. Everything else is optional:
 
 - `doppler`, only if an app's `launch` wraps its command in `doppler run`
-- `$LINEAR_API_KEY` authenticates every Linear lookup: issue titles and summaries, the dashboard's issue timeline, and the issue state `issue status`/`issue end` gate on. It also makes Linear the tracker of any project that does not name one, so a project on GitHub should set `[tracker] kind` rather than rely on detection
-- `$LINEAR_WORKSPACE` enables clickable Linear issue links in `issue status`
-- `$SLACK_TOKEN` lets `issue review` post the reviewer message directly; without it the command emits a `SlackIntent` JSON object
+- `$LINEAR_API_KEY` authenticates every Linear lookup: issue titles and summaries, the dashboard's issue timeline, and the issue state `workspace status`/`workspace end` gate on. It also makes Linear the tracker of any project that does not name one, so a project on GitHub should set `[tracker] kind` rather than rely on detection
+- `$LINEAR_WORKSPACE` enables clickable Linear issue links in `workspace status`
+- `$SLACK_TOKEN` lets `devkit pr review` post the reviewer message directly; without it the command emits a `SlackIntent` JSON object
 
 Each of these resolves env-first, then from `~/.config/devkit/secrets.toml`. Run `devkit auth <linear|slack>` to store them, or `devkit doctor` to check them.
 
