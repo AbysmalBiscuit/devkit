@@ -2,7 +2,7 @@
 name = "devkit"
 description = "Run a fleet of coding agents on one machine without collisions"
 edition.workspace = true
-version = "0.14.16" # x-release-please-version
+version = "0.14.17" # x-release-please-version
 license = "GPL-3.0-or-later"
 repository = "https://github.com/AbysmalBiscuit/devkit"
 

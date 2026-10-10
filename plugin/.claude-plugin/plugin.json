@@ -1,7 +1,7 @@
 {
   "name": "devkit",
   "description": "Run a fleet of coding agents on one machine without collisions: file locks, ports, dev servers, issue worktrees and shared todos",
-  "version": "0.14.16",
+  "version": "0.14.17",
   "author": {
     "name": "Lev Velykoivanenko"
   },

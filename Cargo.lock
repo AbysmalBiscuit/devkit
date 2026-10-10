@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "devkit"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "ambassador",
  "anyhow",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-command"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "serde_json",
  "strum 0.27.2",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-common"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "ambassador",
  "anstyle",
@@ -614,7 +614,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-config"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-docs"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-git"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "devkit-git",
@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-locks"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-mcp"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-ports"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "clap",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-postgres"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -726,7 +726,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-rules"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "ambassador",
  "anyhow",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-supabase"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-ticket"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -777,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-timing"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "serde_json",
  "tracing",
@@ -786,7 +786,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-todo"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "ambassador",
  "anyhow",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-todo-builtin"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-todo-postgres"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-todo-supabase"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-todo-taskchampion"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-vcs"
-version = "0.14.16"
+version = "0.14.17"
 dependencies = [
  "ambassador",
  "anyhow",
