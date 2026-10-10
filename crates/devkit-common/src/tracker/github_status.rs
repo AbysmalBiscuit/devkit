@@ -255,11 +255,11 @@ impl GithubWriter {
             for from in t.from.iter().filter(|f| !matches!(f.trim(), "" | "*")) {
                 board
                     .option_id(from, &self.field)
-                    .with_context(|| format!("[issue.events.{event}] from"))?;
+                    .with_context(|| format!("[ticket.events.{event}] from"))?;
             }
             board
                 .option_id(&t.to, &self.field)
-                .with_context(|| format!("[issue.events.{event}] to"))?;
+                .with_context(|| format!("[ticket.events.{event}] to"))?;
         }
         Ok(())
     }

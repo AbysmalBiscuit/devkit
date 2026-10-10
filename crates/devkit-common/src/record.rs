@@ -43,7 +43,7 @@ pub struct IssueRecord {
     /// it existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<RecordOrigin>,
-    /// The `[issue.events]` already claimed for this worktree, each fired at
+    /// The `[ticket.events]` already claimed for this worktree, each fired at
     /// most once. `None` on a record written before events existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<IssueEvent>>,

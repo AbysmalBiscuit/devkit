@@ -1,4 +1,4 @@
-//! `devkit ticket event` moves an issue's tracker status as `[issue.events]`
+//! `devkit ticket event` moves an issue's tracker status as `[ticket.events]`
 //! configures, driven end to end against the fake `gh`.
 
 #[path = "common/ghfake.rs"]
@@ -57,7 +57,7 @@ fn an_unconfigured_event_does_nothing_and_says_so() {
     let out = gh.issue(&["event", "start"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("[issue.events.start] is not configured"),
+        stderr(&out).contains("[ticket.events.start] is not configured"),
         "{}",
         stderr(&out)
     );
@@ -66,7 +66,7 @@ fn an_unconfigured_event_does_nothing_and_says_so() {
 
 #[test]
 fn an_issue_already_at_the_target_is_not_written() {
-    let gh = board("[issue.events.start]\nto = \"In progress\"\n");
+    let gh = board("[ticket.events.start]\nto = \"In progress\"\n");
     gh.serve_graphql(&status_answer(Some("in PROGRESS ")));
     let out = gh.issue(&["event", "start"]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -79,8 +79,22 @@ fn an_issue_already_at_the_target_is_not_written() {
 }
 
 #[test]
+fn events_under_the_old_issue_table_still_move_the_status() {
+    let gh = board("[issue.events.start]\nfrom = [\"Todo\"]\nto = \"In progress\"\n");
+    gh.serve_graphql(&status_answer(Some("Todo")));
+    gh.serve_mutation("{\"data\":{}}");
+    let out = gh.issue(&["event", "start"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("moved 65: Todo -> In progress"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn an_allowed_status_moves_to_the_target_in_one_read_and_one_write() {
-    let gh = board("[issue.events.start]\nfrom = [\"\", \"Todo\"]\nto = \"In progress\"\n");
+    let gh = board("[ticket.events.start]\nfrom = [\"\", \"Todo\"]\nto = \"In progress\"\n");
     gh.serve_graphql(&status_answer(Some("Todo")));
     gh.serve_mutation("{\"data\":{}}");
     let out = gh.issue(&["event", "start"]);
@@ -102,7 +116,7 @@ fn an_allowed_status_moves_to_the_target_in_one_read_and_one_write() {
 
 #[test]
 fn an_issue_outside_the_project_is_added_then_moved() {
-    let gh = board("[issue.events.start]\nfrom = [\"\"]\nto = \"In progress\"\n");
+    let gh = board("[ticket.events.start]\nfrom = [\"\"]\nto = \"In progress\"\n");
     gh.serve_graphql(&status_answer(None));
     gh.serve_mutation("{\"data\":{\"addProjectV2ItemById\":{\"item\":{\"id\":\"PVTI_new\"}}}}");
     let out = gh.issue(&["event", "start", "65"]);
@@ -124,12 +138,12 @@ fn an_issue_outside_the_project_is_added_then_moved() {
 
 #[test]
 fn a_status_outside_from_is_left_alone() {
-    let gh = board("[issue.events.start]\nfrom = [\"Todo\"]\nto = \"In progress\"\n");
+    let gh = board("[ticket.events.start]\nfrom = [\"Todo\"]\nto = \"In progress\"\n");
     gh.serve_graphql(&status_answer(Some("In review")));
     let out = gh.issue(&["event", "start"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("65 is In review, not in [issue.events.start] from"),
+        stderr(&out).contains("65 is In review, not in [ticket.events.start] from"),
         "{}",
         stderr(&out)
     );
@@ -138,14 +152,14 @@ fn a_status_outside_from_is_left_alone() {
 
 #[test]
 fn an_unknown_target_fails_listing_the_options() {
-    let gh = board("[issue.events.pr_open]\nto = \"Shipping\"\n");
+    let gh = board("[ticket.events.pr_open]\nto = \"Shipping\"\n");
     gh.serve_graphql(&status_answer(Some("Todo")));
     let out = gh.issue(&["event", "pr_open"]);
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("no option `Shipping` in `Status`")
             && stderr(&out).contains("Todo, In progress, In review")
-            && stderr(&out).contains("[issue.events.pr_open] to")
+            && stderr(&out).contains("[ticket.events.pr_open] to")
             && !stderr(&out).contains("[github] status_field"),
         "{}",
         stderr(&out)
@@ -155,7 +169,7 @@ fn an_unknown_target_fails_listing_the_options() {
 #[test]
 fn github_without_a_project_is_an_error_naming_the_key() {
     let gh = ghfake::Fake::without_pr(&format!(
-        "{GITHUB}[issue.events.start]\nto = \"In progress\"\n"
+        "{GITHUB}[ticket.events.start]\nto = \"In progress\"\n"
     ));
     gh.record_issue("65");
     let out = gh.issue(&["event", "start"]);
@@ -171,7 +185,7 @@ fn github_without_a_project_is_an_error_naming_the_key() {
 #[test]
 fn no_tracker_is_an_error_naming_the_key() {
     let gh = ghfake::Fake::without_pr(
-        "[tracker]\nkind = \"none\"\n[issue.events.start]\nto = \"In progress\"\n",
+        "[tracker]\nkind = \"none\"\n[ticket.events.start]\nto = \"In progress\"\n",
     );
     gh.record_issue("65");
     let out = gh.issue(&["event", "start"]);
@@ -182,7 +196,7 @@ fn no_tracker_is_an_error_naming_the_key() {
 #[test]
 fn a_worktree_without_an_issue_id_is_an_error() {
     let gh = ghfake::Fake::without_pr(&format!(
-        "{GITHUB}[issue.events.start]\nto = \"In progress\"\n"
+        "{GITHUB}[ticket.events.start]\nto = \"In progress\"\n"
     ));
     gh.github_keys("project = 3");
     gh.record_issue("UNKNOWN");
@@ -223,13 +237,13 @@ fn push_origin(gh: &ghfake::Fake) -> tempfile::TempDir {
     origin
 }
 
-const ALL_EVENTS: &str = "[issue.events.setup]\nto = \"Todo\"\n\
-                          [issue.events.start]\nto = \"In progress\"\n\
-                          [issue.events.pr_open]\nto = \"In review\"\n";
+const ALL_EVENTS: &str = "[ticket.events.setup]\nto = \"Todo\"\n\
+                          [ticket.events.start]\nto = \"In progress\"\n\
+                          [ticket.events.pr_open]\nto = \"In review\"\n";
 
 #[test]
 fn setup_records_and_fires_its_event_and_warns_without_failing() {
-    let gh = ghfake::Fake::without_pr(&format!("{GITHUB}[issue.events.setup]\nto = \"Todo\"\n"));
+    let gh = ghfake::Fake::without_pr(&format!("{GITHUB}[ticket.events.setup]\nto = \"Todo\"\n"));
     gh.github_keys("project = 3");
     let _origin = push_origin(&gh);
     gh.serve_graphql(include_str!(
@@ -270,7 +284,7 @@ fn setup_records_and_fires_its_event_and_warns_without_failing() {
 #[test]
 fn setup_without_the_event_claims_nothing_and_reads_no_tracker() {
     let gh = ghfake::Fake::without_pr(&format!(
-        "{GITHUB}[issue.events.start]\nto = \"In progress\"\n"
+        "{GITHUB}[ticket.events.start]\nto = \"In progress\"\n"
     ));
     gh.github_keys("project = 3");
     let _origin = push_origin(&gh);
@@ -286,7 +300,7 @@ fn setup_without_the_event_claims_nothing_and_reads_no_tracker() {
 #[test]
 fn pr_create_fires_pr_open_when_it_reuses_a_pr() {
     let gh = ghfake::Fake::new(
-        &format!("{GITHUB}[issue.events.pr_open]\nto = \"In review\"\n"),
+        &format!("{GITHUB}[ticket.events.pr_open]\nto = \"In review\"\n"),
         &PR_7,
     );
     gh.github_keys("project = 3");
@@ -320,7 +334,7 @@ fn pr_create_fires_pr_open_when_it_reuses_a_pr() {
 #[test]
 fn a_failed_pr_open_warns_and_the_pr_stands() {
     let gh = ghfake::Fake::new(
-        &format!("{GITHUB}[issue.events.pr_open]\nto = \"In review\"\n"),
+        &format!("{GITHUB}[ticket.events.pr_open]\nto = \"In review\"\n"),
         &PR_7,
     );
     gh.github_keys("project = 3");
@@ -376,7 +390,7 @@ fn setup_worktree(out: &std::process::Output) -> std::path::PathBuf {
 #[test]
 fn pr_create_fires_pr_open_when_it_opens_the_pr() {
     let gh = ghfake::Fake::without_pr(&format!(
-        "{GITHUB}[issue.events.pr_open]\nto = \"In review\"\n"
+        "{GITHUB}[ticket.events.pr_open]\nto = \"In review\"\n"
     ));
     gh.github_keys("project = 3");
     gh.record_issue("65");

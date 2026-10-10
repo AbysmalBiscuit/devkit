@@ -1,4 +1,4 @@
-//! `devkit ticket event`: move a ticket's tracker status as `[issue.events]`
+//! `devkit ticket event`: move a ticket's tracker status as `[ticket.events]`
 //! configures one event. Every trigger ends here: `workspace setup` and
 //! `pr create` inline, the SessionStart hook in the background, and a
 //! person rerunning one by hand.
@@ -16,7 +16,7 @@ use devkit_common::{
 };
 use devkit_config::{Health, IssueEvent};
 
-/// The `ticket event` argument, spelled as `[issue.events]` spells it.
+/// The `ticket event` argument, spelled as `[ticket.events]` spells it.
 #[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
 pub(crate) enum EventArg {
     Setup,
@@ -46,7 +46,7 @@ fn recorded_issue(dir: &Path) -> Result<String> {
 }
 
 /// Fire `event` for `issue`, or for the issue `dir`'s worktree records:
-/// read its status and move it when `[issue.events.<event>]` allows. Returns
+/// read its status and move it when `[ticket.events.<event>]` allows. Returns
 /// the line that reports what happened. Claiming the event is the trigger's
 /// job, not this one's, so a rerun by hand always runs.
 pub(crate) fn fire(
@@ -62,7 +62,7 @@ pub(crate) fn fire(
     }
     let cfg = sel.config.unwrap_or_default();
     let Some(t) = cfg.ticket.events.get(event) else {
-        return Ok(format!("[issue.events.{event}] is not configured"));
+        return Ok(format!("[ticket.events.{event}] is not configured"));
     };
     let writer = writer_for(sel.tracker.tracker.kind(), &cfg.github, &sel.forge.repos)?;
     let id = match issue {
@@ -74,7 +74,7 @@ pub(crate) fn fire(
         Outcome::Moved { from, to } => format!("moved {id}: {} -> {to}", shown(&from)),
         Outcome::Already(current) => format!("{id} is already {current}"),
         Outcome::NotFrom(current) => format!(
-            "{id} is {}, not in [issue.events.{event}] from",
+            "{id} is {}, not in [ticket.events.{event}] from",
             shown(&current)
         ),
     })

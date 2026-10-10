@@ -148,7 +148,7 @@ pub(crate) struct Ensure<'a> {
     pub require_reviewer: bool,
     pub steps: &'a Steps,
     /// Claim the `pr_open` event in the record, which holds a tracker issue
-    /// and has `[issue.events.pr_open]` configured.
+    /// and has `[ticket.events.pr_open]` configured.
     pub claim_pr_open: bool,
 }
 

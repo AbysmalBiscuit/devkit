@@ -1014,7 +1014,7 @@ pub struct LinearConfig {
 
 /// Which GitHub repository holds this project's issues, for the GitHub
 /// tracker, and which Projects v2 project holds their status for
-/// `[issue.events]`. The repository pull requests go to is `[forge] repo`,
+/// `[ticket.events]`. The repository pull requests go to is `[forge] repo`,
 /// since a project on any forge has one.
 ///
 /// Unknown keys are refused: a misspelled `issue_repo` ignored would default
@@ -1047,7 +1047,7 @@ pub struct GithubConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_repo: Option<String>,
     /// The Projects v2 project whose single-select field holds the issues'
-    /// status, which `[issue.events]` moves under the GitHub tracker:
+    /// status, which `[ticket.events]` moves under the GitHub tracker:
     /// `"owner/N"`, or a bare `N` owned by `issues_repo`'s owner. Without it,
     /// a GitHub tracker's events fail naming this key.
     pub project: Option<ProjectRef>,
