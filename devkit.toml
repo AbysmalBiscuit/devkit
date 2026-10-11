@@ -120,12 +120,14 @@ run = ["git", "--literal-pathspecs", "add", "--", { split = "{{ files }}", on = 
 # is sliced, and `--arg slug=...` is refused for a name it does not see.
 [templates]
 branch = '''
-{%- set id = (issue | lower ~ "-") if issue else "" -%}
+{%- set key = ticket or issue -%}
+{%- set id = (key | lower ~ "-") if key else "" -%}
 {%- set name = slug | trim | lower | replace(" ", "-") -%}
 {{ id }}{{ name[:46 - (id | length)] | trim("-") }}
 '''
 worktree_dir = '''
-{%- set id = (issue | lower ~ "-") if issue else "" -%}
+{%- set key = ticket or issue -%}
+{%- set id = (key | lower ~ "-") if key else "" -%}
 {%- set name = slug | trim | lower | replace(" ", "-") -%}
 {{ id }}{{ name[:46 - (id | length)] | trim("-") }}
 '''
