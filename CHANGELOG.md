@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.18](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.17...v0.14.18) (2026-10-12)
+
+
+### Bug Fixes
+
+* **config:** rank main local over worktree config ([#338](https://github.com/AbysmalBiscuit/devkit/issues/338)) ([8b78a9c](https://github.com/AbysmalBiscuit/devkit/commit/8b78a9c6affd6a1a49ac1d4f24cfa0eb9c4a5c5e))
+* **config:** read ticket in the branch templates ([#336](https://github.com/AbysmalBiscuit/devkit/issues/336)) ([e3aa108](https://github.com/AbysmalBiscuit/devkit/commit/e3aa108e7ba269f8fc3d15162650c9ed4ec69c4b))
+
 ## [0.14.17](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.16...v0.14.17) (2026-10-10)
 
 
