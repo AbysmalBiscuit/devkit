@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.19](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.18...v0.14.19) (2026-10-12)
+
+
+### Features
+
+* **hook:** answer Grok payloads with pabal 0.3 ([#339](https://github.com/AbysmalBiscuit/devkit/issues/339)) ([adba2b9](https://github.com/AbysmalBiscuit/devkit/commit/adba2b9978d1d4b16c1b7b920948aa100e9e68a7))
+
 ## [0.14.18](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.17...v0.14.18) (2026-10-12)
 
 
