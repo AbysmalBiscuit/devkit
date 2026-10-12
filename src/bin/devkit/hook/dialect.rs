@@ -28,7 +28,8 @@ pub fn resolve(
                 AnyHarness::ClaudeCode
                 | AnyHarness::Codex
                 | AnyHarness::Cursor
-                | AnyHarness::Antigravity,
+                | AnyHarness::Antigravity
+                | AnyHarness::Grok,
             ) => Dialect::Bash,
         },
     }

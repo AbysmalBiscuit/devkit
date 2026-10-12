@@ -66,25 +66,25 @@ Each manifest is a translation table with no logic in it. Every command carries 
 
 `pre-tool-use` answers on stdout with a denial, a warning, or nothing, and never runs the command itself. Its write stage fails closed: an unresolved write, a registry error, or a registry that does not answer within 2 seconds is a denial. Its command guard fails open.
 
-| devkit verb | Claude Code | Codex | Cursor | Antigravity |
-|---|---|---|---|---|
-| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `beforeShellExecution` | `PreToolUse` |
-| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` |
-| `post-tool-use-failure` | `PostToolUseFailure` | | `postToolUseFailure` | |
-| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` | |
-| `session-end` | `SessionEnd` | `SessionEnd` | `sessionEnd` | |
-| `subagent-start` | `SubagentStart` | `SubagentStart` | | |
-| `subagent-stop` | `SubagentStop` | `SubagentStop` | `subagentStop` | |
-| `permission-request` | `PermissionRequest` | `PermissionRequest` | | |
-| `permission-denied` | `PermissionDenied` | | | |
-| `stop` | `Stop` | `Stop`, `Interrupt` | `stop` | |
-| `stop-failure` | `StopFailure` | | | |
-| `pre-compact` | `PreCompact` | `PreCompact` | `preCompact` | |
-| `post-compact` | `PostCompact` | `PostCompact` | | |
-| `cwd-changed` | `CwdChanged` | | `workspaceOpen` | |
-| `worktree-create` | `WorktreeCreate` | | | |
-| `worktree-remove` | `WorktreeRemove` | | | |
-| `user-prompt-submit` | `UserPromptSubmit` | `UserPromptSubmit` | | |
+| devkit verb | Claude Code | Codex | Cursor | Antigravity | Grok |
+|---|---|---|---|---|---|
+| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `beforeShellExecution` | `PreToolUse` | `PreToolUse` |
+| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` | `PostToolUse` |
+| `post-tool-use-failure` | `PostToolUseFailure` | | `postToolUseFailure` | | `PostToolUseFailure` |
+| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` | | `SessionStart` |
+| `session-end` | `SessionEnd` | `SessionEnd` | `sessionEnd` | | `SessionEnd` |
+| `subagent-start` | `SubagentStart` | `SubagentStart` | | | `SubagentStart` |
+| `subagent-stop` | `SubagentStop` | `SubagentStop` | `subagentStop` | | `SubagentStop` |
+| `permission-request` | `PermissionRequest` | `PermissionRequest` | | | |
+| `permission-denied` | `PermissionDenied` | | | | `PermissionDenied` |
+| `stop` | `Stop` | `Stop`, `Interrupt` | `stop` | | `Stop` |
+| `stop-failure` | `StopFailure` | | | | `StopFailure` |
+| `pre-compact` | `PreCompact` | `PreCompact` | `preCompact` | | `PreCompact` |
+| `post-compact` | `PostCompact` | `PostCompact` | | | `PostCompact` |
+| `cwd-changed` | `CwdChanged` | | `workspaceOpen` | | |
+| `worktree-create` | `WorktreeCreate` | | | | |
+| `worktree-remove` | `WorktreeRemove` | | | | |
+| `user-prompt-submit` | `UserPromptSubmit` | `UserPromptSubmit` | | | `UserPromptSubmit` |
 
 A blank cell is an event that harness does not send, or one devkit leaves unwired.
 
@@ -94,10 +94,13 @@ Check the vendor before adding a verb rather than recalling it:
 - Codex: <https://developers.openai.com/codex/config-schema.json>, and `codex-rs/protocol/src/protocol.rs` plus `codex-rs/config/src/hook_config.rs` in `openai/codex` behind it.
 - Cursor: <https://cursor.com/docs/hooks>. Not the `cursor-hooks` npm schema, which lags the product.
 - Antigravity: <https://antigravity.google/docs/hooks>.
+- Grok: `crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md` in `xai-org/grok-build`, and the `hook_events!` list in `crates/codegen/xai-grok-hooks/src/event.rs` behind it.
 
 Cursor reads a decision from the stdout of `preToolUse`, `subagentStart` and `beforeSubmitPrompt`, and devkit answers an allow with nothing. Empty stdout is a proven allow only on `beforeShellExecution`, so the guard rides that event, and the other three stay unwired until a captured Cursor payload shows silence is an allow there too. Cursor's `postToolUse` and `postToolUseFailure` match `Shell`, the calls the guard saw. Its Tab completions edit files through `afterTabFileEdit`, which is post-only, so a Tab edit cannot be lock-guarded; that gap is noted rather than solved. Cursor also runs hooks configured for Claude Code and sends them its own camelCase payload, so a Claude Code hook that receives one answers as Cursor.
 
 Antigravity leaves the event out of its payload, so the verb in the command names it. It sends no session-start or session-end event, so its sessions get no bootstrap, no brief, and no write claims, which nothing would release. Its `PreToolUse` and `PostToolUse` match `run_command`, the shell tool the guard reads.
+
+Grok has no manifest of its own. It runs the Claude Code manifest: from devkit's plugin when installed through Grok, and from the plugins and `settings.json` hooks Claude Code installed, matching Claude's tool names against its own (`Bash` covers `run_terminal_command`, `Edit` and `Write` cover `search_replace` and `write`). It sends those hooks its own camelCase payload, so a Claude Code hook that receives one answers as Grok, and its `SessionStart` source is `new`. Grok ignores `SessionStart` stdout and drops an allowing `UserPromptSubmit` hook's context, so the brief, the rules context and the todo context never reach a Grok session, and Grok sessions keep no todo list. A Grok subagent runs as a session of its own and holds its claims under that session's id until its own `SessionEnd`. Edits through `hashline_edit`, Grok's opt-in `hashline` file toolset, are not claimed.
 
 **Exit codes are part of the contract.** No verb in the family ever exits 2. Exit 2 blocks the tool call on Claude Code `PreToolUse` and sets `should_block` on Codex, and clap exits 2 for a usage error, so an unrecognised verb would otherwise deny every command an agent ran. A usage error, an unknown verb and a panic all exit 1 with a message on stderr. And only `pre-tool-use`, `stop` and `subagent-stop` write to stdout, the last two only to refuse a stop while the agent has open todos: `UserPromptSubmit` appends a hook's stdout to the prompt, and `PermissionRequest` honours a JSON decision.
 
@@ -169,6 +172,17 @@ agy plugin install "$(pwd)/plugin"
 ```
 
 Antigravity has no session-start hook to bootstrap from, so install `devkit` on `PATH` first.
+
+## Grok
+
+Grok reads the repository's Claude Code marketplace and the plugin's Claude Code hooks, so it installs the same plugin:
+
+```sh
+grok plugin marketplace add AbysmalBiscuit/devkit   # or a local path to this repo
+grok plugin install devkit --trust
+```
+
+Grok also loads plugins Claude Code installed, so where devkit is installed in Claude Code, Grok runs it with no install of its own; a Grok install of the same name replaces it rather than running beside it. `grok inspect` lists the hooks and MCP servers that loaded.
 
 ## Zed and generic MCP clients
 

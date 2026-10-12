@@ -376,6 +376,87 @@ fn an_antigravity_payload_never_claims() {
     assert!(rows(&e).is_empty());
 }
 
+/// A Grok payload, camelCase with the snake_case copies Grok adds.
+fn grok_payload(e: &Env, event: &str, fields: serde_json::Value) -> String {
+    let cwd = e.project.path().to_string_lossy();
+    let snake = match event {
+        "PreToolUse" => "pre_tool_use",
+        "SessionEnd" => "session_end",
+        other => panic!("no snake_case name for {other}"),
+    };
+    let mut p = serde_json::json!({
+        "hookEventName": snake,
+        "hook_event_name": event,
+        "sessionId": "G1",
+        "session_id": "G1",
+        "cwd": cwd,
+        "workspaceRoot": cwd,
+        "permissionMode": "default",
+    });
+    for (key, value) in fields.as_object().unwrap() {
+        p[key] = value.clone();
+    }
+    p.to_string()
+}
+
+/// Grok runs the Claude Code manifest too, so both flags answer as Grok.
+#[test]
+fn a_grok_sessions_writes_are_claimed_until_its_session_ends() {
+    for harness in ["grok", "claude-code"] {
+        grok_claims_until_session_end(harness);
+    }
+}
+
+fn grok_claims_until_session_end(harness: &str) {
+    let e = env(WRITES);
+    let edit = format!("{}/b.txt", e.project.path().to_string_lossy());
+    for (tool, input) in [
+        (
+            "run_terminal_command",
+            serde_json::json!({"command": "echo x > a.txt"}),
+        ),
+        (
+            "search_replace",
+            serde_json::json!({"file_path": edit, "old_string": "", "new_string": "x"}),
+        ),
+    ] {
+        let p = grok_payload(
+            &e,
+            "PreToolUse",
+            serde_json::json!({"toolName": tool, "toolInput": input, "toolUseId": "call_1_0"}),
+        );
+        let out = devkit(
+            &e,
+            &["hook", "pre-tool-use", "--harness", harness],
+            Some(&p),
+            &[],
+        );
+        assert_eq!(denial(&out), None, "{harness} {tool}");
+    }
+    assert_eq!(
+        rows(&e),
+        [
+            ("a.txt".to_string(), "G1".to_string()),
+            ("b.txt".to_string(), "G1".to_string())
+        ],
+        "{harness}"
+    );
+
+    let end = grok_payload(&e, "SessionEnd", serde_json::json!({"reason": "shutdown"}));
+    let out = devkit(
+        &e,
+        &["hook", "session-end", "--harness", harness],
+        Some(&end),
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(rows(&e).is_empty(), "{harness}");
+}
+
 #[test]
 fn an_unusable_claude_shell_payload_denies_when_writes_are_enabled() {
     let e = env(WRITES);

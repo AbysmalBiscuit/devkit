@@ -25,10 +25,11 @@ use super::{
     print_envelope, record, rules,
 };
 
-/// Tools pabal reads write targets from, the last three being Antigravity's.
-/// One that arrives without a readable target is a harness format change, so
-/// it is a write to deny rather than a tool to ignore.
-const WRITE_TOOLS: [&str; 8] = [
+/// Tools pabal reads write targets from: `write_to_file` and the two after it
+/// are Antigravity's, `search_replace` and `write` Grok's. One that arrives
+/// without a readable target is a harness format change, so it is a write to
+/// deny rather than a tool to ignore.
+const WRITE_TOOLS: [&str; 10] = [
     "Edit",
     "MultiEdit",
     "Write",
@@ -37,6 +38,8 @@ const WRITE_TOOLS: [&str; 8] = [
     "write_to_file",
     "replace_file_content",
     "multi_replace_file_content",
+    "search_replace",
+    "write",
 ];
 
 /// What a `PreToolUse` call asks to write.

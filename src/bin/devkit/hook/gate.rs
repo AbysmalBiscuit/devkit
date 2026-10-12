@@ -46,7 +46,7 @@ const PANIC_REASON: &str =
 /// Whether writes from `harness` at `cwd` go through the gate.
 pub fn enabled(harness: AnyHarness, checkout: &Checkout, cwd: &Path) -> bool {
     let claims = match harness {
-        AnyHarness::ClaudeCode | AnyHarness::Codex => true,
+        AnyHarness::ClaudeCode | AnyHarness::Codex | AnyHarness::Grok => true,
         // Cursor's Tab completions edit through a post-only hook, so its
         // claims would cover a fraction of what it writes.
         AnyHarness::Cursor => false,

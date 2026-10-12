@@ -30,10 +30,16 @@ use super::{
 
 const UNUSABLE_SHELL_REASON: &str =
     "devkit write-harness: shell payload could not be evaluated (fail-closed)";
-/// Tool names that run shell commands, `Shell` being Cursor's and
-/// `run_command` Antigravity's. One that arrives without a readable command
-/// is a harness format change.
-const SHELL_TOOLS: [&str; 4] = ["Bash", "PowerShell", "Shell", "run_command"];
+/// Tool names that run shell commands, `Shell` being Cursor's, `run_command`
+/// Antigravity's and `run_terminal_command` Grok's. One that arrives without a
+/// readable command is a harness format change.
+const SHELL_TOOLS: [&str; 5] = [
+    "Bash",
+    "PowerShell",
+    "Shell",
+    "run_command",
+    "run_terminal_command",
+];
 
 enum Response {
     Silent,

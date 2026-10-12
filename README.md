@@ -60,7 +60,7 @@ claude plugin marketplace add AbysmalBiscuit/devkit
 claude plugin install devkit@devkit
 ```
 
-See [docs/agents.md](docs/agents.md) for the MCP action list and the setup for Claude Code, Codex, Cursor, Antigravity, and Zed.
+See [docs/agents.md](docs/agents.md) for the MCP action list and the setup for Claude Code, Codex, Cursor, Antigravity, Grok, and Zed.
 
 ## Configuration
 
