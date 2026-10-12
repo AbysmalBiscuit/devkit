@@ -45,7 +45,7 @@ pub(crate) fn harness_of(harness: AnyHarness) -> Option<Harness> {
     match harness {
         AnyHarness::ClaudeCode => Some(Harness::Claude),
         AnyHarness::Codex => Some(Harness::Codex),
-        AnyHarness::Cursor | AnyHarness::Antigravity => None,
+        AnyHarness::Cursor | AnyHarness::Antigravity | AnyHarness::Grok => None,
     }
 }
 

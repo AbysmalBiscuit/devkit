@@ -328,6 +328,44 @@ fn an_antigravity_run_command_gets_the_antigravity_envelope() {
     assert!(v["reason"].as_str().unwrap().contains("bun-only"), "{v}");
 }
 
+/// Grok runs hooks configured for Claude Code and sends them its own payload,
+/// so a Claude Code manifest guards a Grok shell call too.
+#[test]
+fn a_grok_run_terminal_command_is_guarded_under_either_manifest() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GUARDED);
+    let cwd = proj.path().to_string_lossy();
+    let input = serde_json::json!({ "command": "node server.js", "description": "serve" });
+    let payload = serde_json::json!({
+        "hookEventName": "pre_tool_use",
+        "hook_event_name": "PreToolUse",
+        "sessionId": "g1",
+        "session_id": "g1",
+        "cwd": cwd,
+        "workspaceRoot": cwd,
+        "permissionMode": "default",
+        "toolName": "run_terminal_command",
+        "tool_name": "run_terminal_command",
+        "toolUseId": "call_3_0",
+        "toolInput": input,
+        "tool_input": input,
+        "toolInputTruncated": false
+    })
+    .to_string();
+    for harness in ["grok", "claude-code"] {
+        let out = run_argv(
+            proj.path(),
+            home.path(),
+            &["hook", "pre-tool-use", "--harness", harness],
+            &payload,
+            &[],
+        );
+        assert!(denied(&out), "{harness}");
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+    }
+}
+
 #[test]
 fn an_unparseable_config_fails_open() {
     // The gate must be forced on: the only layer is unparseable, so no layer

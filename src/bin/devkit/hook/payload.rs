@@ -3,18 +3,22 @@
 
 use std::path::Path;
 
-use pabal::{AddContext, AnyHarness, AnyPayload, AnyView, Fields, Response, Tool};
+use pabal::{AnyHarness, AnyPayload, AnyView, Fields, Response, Tool};
 use serde_json::Value;
 
 use super::HookEvent;
 
 /// The harness that answers a payload. A declared harness beats inferring
-/// it from which fields a vendor happens to send, except that Cursor runs
-/// hooks configured for Claude Code and sends them its own payload.
+/// it from which fields a vendor happens to send, except that Cursor and Grok
+/// run hooks configured for Claude Code and send them their own payload.
 fn resolve(declared: Option<AnyHarness>, raw: &Value) -> AnyHarness {
     let inferred = AnyHarness::infer(raw);
     match declared {
-        Some(AnyHarness::ClaudeCode) if inferred == AnyHarness::Cursor => inferred,
+        Some(AnyHarness::ClaudeCode)
+            if matches!(inferred, AnyHarness::Cursor | AnyHarness::Grok) =>
+        {
+            inferred
+        }
         Some(declared) => declared,
         None => inferred,
     }
@@ -63,7 +67,7 @@ impl Payload {
             AnyHarness::Antigravity => {
                 AnyPayload::parse_named(harness, event.into(), &raw.to_string())
             }
-            AnyHarness::ClaudeCode | AnyHarness::Codex | AnyHarness::Cursor => {
+            AnyHarness::ClaudeCode | AnyHarness::Codex | AnyHarness::Cursor | AnyHarness::Grok => {
                 AnyPayload::from_value(harness, raw)
             }
         };
@@ -177,7 +181,7 @@ impl Payload {
     /// where the harness has no such channel.
     pub fn context_answer(&self, text: &str) -> Option<String> {
         let response = match self.0.view() {
-            AnyView::SessionStart(v) => Some(v.add_context(text)),
+            AnyView::SessionStart(v) => v.add_context(text),
             AnyView::SubagentStart(v) => v.add_context(text),
             AnyView::UserPromptSubmit(v) => v.add_context(text),
             _ => None,

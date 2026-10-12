@@ -134,6 +134,20 @@ fn every_antigravity_tool_hook_matches_the_shell_tool() {
     }
 }
 
+/// Grok reads the plugin root's `plugin.json` before `.claude-plugin/`, and
+/// without a `hooks` path there it runs the Claude Code manifest, matching
+/// Claude's tool names against its own. Its `SessionStart` source is `new`.
+#[test]
+fn grok_runs_the_claude_code_manifest_from_session_start() {
+    let root: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string("plugin/plugin.json").unwrap()).unwrap();
+    assert!(root.get("hooks").is_none(), "{root}");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string("plugin/hooks/hooks.json").unwrap()).unwrap();
+    let matcher = v["hooks"]["SessionStart"][0]["matcher"].as_str().unwrap();
+    assert!(matcher.split('|').any(|m| m == "new"), "{matcher}");
+}
+
 /// The merged `PreToolUse` block needs a matcher covering the tool families it
 /// guards, or it spawns on every Read, Grep, Glob and Agent call as well.
 #[test]

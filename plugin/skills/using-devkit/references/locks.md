@@ -68,7 +68,7 @@ Mechanics:
 
 `devkit hook pre-tool-use` claims the targets of a shell command before it runs, with the same holder, TTL, and release as `Edit`/`Write`. A conflict is refused naming the holder.
 
-- The shell tools are `Bash`, Claude Code's `PowerShell`, Cursor's `Shell`, and Antigravity's `run_command`. devkit parses the command and the scripts it runs.
+- The shell tools are `Bash`, Claude Code's `PowerShell`, Cursor's `Shell`, Antigravity's `run_command`, and Grok's `run_terminal_command`. devkit parses the command and the scripts it runs.
 - Redirects, `tee`, `cp`, `mv`, `rm`, `touch`, `dd`, `sed -i`, `perl -i`, the git verbs that rewrite files, common formatters, inline Python/JavaScript/TypeScript file APIs (a target from `sys.argv`/`process.argv` included) and PowerShell's content and item cmdlets all resolve to targets.
 - A whole-tree writer (`cargo fmt`, `git checkout`, `rm -r dir`) claims nothing and is refused while another session holds any lock under the tree.
 - A permission change (`chmod`, `chown`, `chgrp`, `icacls`, `Set-Acl`, `Set-ItemProperty -Name IsReadOnly`, and the `chmod`/`chown` file APIs in Python and JavaScript) claims nothing. It is refused while another session holds a lock on the path or above it. A recursive one (`-R`, `/T`) or one on a glob is also refused by a lock anywhere under the directory.
