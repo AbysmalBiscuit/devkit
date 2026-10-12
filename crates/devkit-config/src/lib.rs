@@ -3866,6 +3866,41 @@ content = \"key = 1\\n\"\n"
         assert_eq!(cfg.defaults.worktree_root, ABS_W);
     }
 
+    /// Resolve `defaults.branch_prefix` in a linked worktree whose committed
+    /// `devkit.toml` and its main checkout's both carry `tracked`, under the
+    /// main checkout's `devkit.local.toml`.
+    fn branch_prefix_in_a_worktree(tracked: &str) -> (Config, Provenance, PathBuf) {
+        let main = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        let committed = format!("{tracked}[defaults]\nbranch_prefix = 'committed/'\n");
+        std::fs::write(main.path().join("devkit.toml"), &committed).unwrap();
+        std::fs::write(worktree.path().join("devkit.toml"), &committed).unwrap();
+        let local = main.path().join("devkit.local.toml");
+        std::fs::write(&local, "[defaults]\nbranch_prefix = 'mine/'\n").unwrap();
+
+        let (cfg, prov) =
+            resolve_with_home(None, worktree.path(), Some(main.path()), None, None, None).unwrap();
+        (cfg, prov, local)
+    }
+
+    /// The main checkout's untracked overrides apply in every linked
+    /// worktree, above the committed `devkit.toml` the worktree checks out.
+    #[test]
+    fn main_checkout_local_overrides_a_worktrees_tracked_config() {
+        let (cfg, prov, local) = branch_prefix_in_a_worktree("");
+        assert_eq!(cfg.defaults.branch_prefix, "mine/");
+        assert_eq!(prov.origin["defaults.branch_prefix"], local);
+    }
+
+    /// A committed `[config] root = true` cuts off what lies above the
+    /// repository, not the main checkout's overrides of it.
+    #[test]
+    fn a_root_marker_in_the_worktree_keeps_the_main_checkouts_local() {
+        let (cfg, prov, local) = branch_prefix_in_a_worktree("[config]\nroot = true\n");
+        assert_eq!(cfg.defaults.branch_prefix, "mine/");
+        assert_eq!(prov.origin["defaults.branch_prefix"], local);
+    }
+
     #[test]
     fn root_marker_stops_walk() {
         let root = tempfile::tempdir().unwrap();
