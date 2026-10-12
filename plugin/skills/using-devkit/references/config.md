@@ -7,7 +7,8 @@
 - `devkit.toml` at the repository root holds what the project shares. `devkit.local.toml` beside it holds what one machine or checkout needs, overrides its twin, and belongs in `.gitignore`.
 - `~/.config/devkit/config.toml` is the base layer under every project.
 - Every `devkit.toml` from the filesystem root down to the working directory merges. Tables merge key by key. Scalars and arrays replace wholesale, so a deeper `[[context.files]]` or `[hooks]` list replaces the parent's list.
-- `[config] root = true` stops the walk at that directory and drops every shallower layer, the home config included.
+- A linked worktree also reads its main checkout's two files. The order is the main checkout's `devkit.toml`, the worktree's `devkit.toml`, the main checkout's `devkit.local.toml`, then the worktree's `devkit.local.toml`, so the overrides in the main checkout's `devkit.local.toml` apply in every worktree.
+- `[config] root = true` stops the walk at that directory and drops every shallower layer, the home config included. In a linked worktree it keeps the main checkout's files.
 - `--config <path>` or `$DEVKIT_CONFIG` selects one file verbatim, with no layering and no home base.
 - The home config's `[todo]` table is the exception to both: where todos are kept is a fact about the machine, so it stays the base layer under a rooted or explicit config, which can still override it.
 

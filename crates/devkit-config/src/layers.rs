@@ -133,15 +133,14 @@ fn candidates(start: &Path, main_checkout: Option<&Path>) -> Vec<Layer> {
         ordered.extend(files_in(dir, LayerKind::Ancestor));
     }
 
-    // The main checkout sits above every ancestor and below this checkout.
-    if let Some(main) = main_checkout {
-        ordered.extend(files_in(main, LayerKind::MainCheckout));
+    // Above every ancestor: tracked files, then untracked, each with this
+    // checkout's file over the main checkout's.
+    for name in [CONFIG_FILE, LOCAL_CONFIG_FILE] {
+        if let Some(main) = main_checkout {
+            ordered.extend(layer_at(main, name, LayerKind::MainCheckout));
+        }
+        ordered.extend(layer_at(root, name, LayerKind::Checkout));
     }
-
-    // `root` is by construction the nearest config-bearing directory to
-    // `start`, so no directory strictly between it and `start` can hold a
-    // config file — only `root`'s own files ever contribute here.
-    ordered.extend(files_in(root, LayerKind::Checkout));
 
     dedupe(&mut ordered);
     ordered
@@ -152,10 +151,24 @@ fn candidates(start: &Path, main_checkout: Option<&Path>) -> Vec<Layer> {
 fn files_in(dir: &Path, kind: LayerKind) -> Vec<Layer> {
     [CONFIG_FILE, LOCAL_CONFIG_FILE]
         .into_iter()
-        .map(|name| dir.join(name))
-        .filter(|p| p.is_file())
-        .map(|path| Layer { path, kind })
+        .filter_map(|name| layer_at(dir, name, kind))
         .collect()
+}
+
+fn layer_at(dir: &Path, name: &str, kind: LayerKind) -> Option<Layer> {
+    let path = dir.join(name);
+    path.is_file().then_some(Layer { path, kind })
+}
+
+/// Whether two layers fall on the same side of a `[config] root = true`
+/// barrier. An ancestor directory's files stand together; the main checkout
+/// and this checkout are one project, so a barrier in either keeps both.
+fn same_barrier_group(a: &Layer, b: &Layer) -> bool {
+    match (a.kind, b.kind) {
+        (LayerKind::Ancestor, LayerKind::Ancestor) => a.path.parent() == b.path.parent(),
+        (LayerKind::Ancestor, _) | (_, LayerKind::Ancestor) => false,
+        _ => true,
+    }
 }
 
 /// Keep the highest-precedence occurrence of each file. Canonicalizing is
@@ -184,22 +197,13 @@ fn read_table(path: &Path) -> Result<toml::Table> {
     toml::from_str(&body).with_context(|| format!("parsing config layer {}", path.display()))
 }
 
-/// `[config] root = true` drops every layer lower in precedence than the
-/// directory that declares it. A directory can hold two files — the tracked
-/// `devkit.toml` and the untracked `devkit.local.toml` beside it — and the
-/// marker in either one draws the barrier at the directory: both of that
-/// directory's layers survive, and everything above the directory is
-/// dropped. Scans from the nearest-to-`start` layer backward and stops at
-/// the first (i.e. last in precedence order) match, so nothing below the
-/// barrier is ever read, and a malformed or unreadable ancestor layer the
-/// barrier was meant to hide never gets parsed. A layer that will not parse
-/// declares no barrier, and the scan goes on past it; whether it fails the
-/// walk is the caller's call.
+/// `[config] root = true` drops every layer below the [`same_barrier_group`]
+/// that declares it. Scans from the highest precedence down and stops at the
+/// first marker, so a layer the barrier hides is never parsed; one that will
+/// not parse declares no barrier.
 ///
-/// Returns the index of the first surviving layer when a barrier fired, and
-/// what the scan read of each layer, so the caller need not read the
-/// surviving layers a second time; those past the scan's stopping point stay
-/// `None`.
+/// Returns the first surviving index when a barrier fired, and each layer's
+/// body as far as the scan read, `None` past where it stopped.
 fn scan_cutoff(layers: &[Layer]) -> (Option<usize>, Vec<Option<Result<toml::Table>>>) {
     let mut bodies: Vec<_> = layers.iter().map(|_| None).collect();
     for i in (0..layers.len()).rev() {
@@ -208,7 +212,7 @@ fn scan_cutoff(layers: &[Layer]) -> (Option<usize>, Vec<Option<Result<toml::Tabl
         bodies[i] = Some(body);
         if is_root {
             let mut cut = i;
-            while cut > 0 && layers[cut - 1].path.parent() == layers[i].path.parent() {
+            while cut > 0 && same_barrier_group(&layers[cut - 1], &layers[i]) {
                 cut -= 1;
             }
             return (Some(cut), bodies);

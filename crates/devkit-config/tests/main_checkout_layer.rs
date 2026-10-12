@@ -1,6 +1,7 @@
-//! `project_layers` places the main checkout's config below the checkout's
-//! own files and above every ancestor, and never lets a file reachable both
-//! by name and by the ordinary upward walk contribute twice.
+//! `project_layers` places the main checkout's config above every ancestor,
+//! each of its files below the checkout's file of the same kind, and never
+//! lets a file reachable both by name and by the ordinary upward walk
+//! contribute twice.
 
 /// The main checkout's file sits beneath the worktree's own file, and rises
 /// to the front once the worktree gains a config of its own.
