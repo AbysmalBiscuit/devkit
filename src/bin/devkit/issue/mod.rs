@@ -486,7 +486,7 @@ pub(crate) enum PrCmd {
         /// like `![alt](./after.png)`, becomes the uploaded URL; an attachment
         /// the body does not reference is appended. GitHub only; paths are
         /// relative to the working directory (or `-C`). Refused when the PR
-        /// already exists.
+        /// already exists: `pr edit --attach` adds files to one.
         #[arg(long, value_name = "FILE[#ALT]")]
         attach: Vec<String>,
         /// Open or update the PR without pushing the branch first.
@@ -494,6 +494,37 @@ pub(crate) enum PrCmd {
         no_push: bool,
         /// Use this PR for this run: a PR URL on the forge or a bare number
         /// (meaning `[forge] repo`). Replaces a wrong recorded binding.
+        #[arg(long)]
+        pr: Option<String>,
+        #[command(flatten)]
+        vars: VarArgs,
+    },
+    /// Rewrite parts of this branch's open PR.
+    ///
+    /// `--pr-body` replaces the summary and each `--arg` replaces the section
+    /// of the body that template variable renders, found by the `pr_body`
+    /// template's own lines around it. The rest of the body, whatever bots or
+    /// people added, is left as it is. A section the body lacks is inserted
+    /// where the template puts it. Pushes the branch first unless `--no-push`.
+    #[command(after_help = PROOF_HELP)]
+    Edit {
+        /// New PR title, the `input` of the `pr_title` template.
+        #[arg(short = 't', long = "pr-title")]
+        pr_title: Option<String>,
+        /// New summary, the `input` of the `pr_body` template.
+        #[arg(short = 'b', long = "pr-body")]
+        pr_body: Option<String>,
+        /// Image or video to upload into the edited text. Repeatable. Alt text
+        /// follows `#`. The text must embed it by the same path, like
+        /// `![alt](./after.png)`, which becomes the uploaded URL. GitHub only;
+        /// paths are relative to the working directory (or `-C`).
+        #[arg(long, value_name = "FILE[#ALT]")]
+        attach: Vec<String>,
+        /// Edit the PR without pushing the branch first.
+        #[arg(long = "no-push")]
+        no_push: bool,
+        /// Edit this PR: a PR URL on the forge or a bare number (meaning
+        /// `[forge] repo`). Replaces a wrong recorded binding.
         #[arg(long)]
         pr: Option<String>,
         #[command(flatten)]
@@ -845,6 +876,23 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             ready,
             to,
             base,
+            pr_title,
+            pr_body,
+            attach,
+            no_push,
+            pr,
+            vars,
+            dir,
+            config,
+        }),
+        PrCmd::Edit {
+            pr_title,
+            pr_body,
+            attach,
+            no_push,
+            pr,
+            vars,
+        } => pr::edit::run(pr::edit::Args {
             pr_title,
             pr_body,
             attach,

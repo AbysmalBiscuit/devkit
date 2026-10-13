@@ -172,6 +172,20 @@ github = "sweeper[bot]"
         .expect("write REST pr");
     }
 
+    /// [`Fake::serve_pr`] with `body` as the PR's description.
+    pub fn serve_pr_body(&self, pr: &Pr, body: &str) {
+        let mut json: serde_json::Value =
+            serde_json::from_str(&rest_pr_json(pr, &self.head)).expect("REST pr json");
+        json["body"] = body.into();
+        std::fs::write(
+            self.bin
+                .path()
+                .join(format!("rest_pull_{}.json", pr.number)),
+            json.to_string(),
+        )
+        .expect("write REST pr");
+    }
+
     /// Have `gh pr create`, and the REST create, open `pr`, which the REST
     /// read then serves.
     pub fn create_opens(&self, pr: &Pr) {
@@ -289,7 +303,26 @@ github = "sweeper[bot]"
     /// The value that followed `flag` in the last `gh pr create`, byte for
     /// byte.
     pub fn created_pr_arg(&self, flag: &str) -> Option<String> {
-        let args = std::fs::read_to_string(self.bin.path().join("pr_create.args")).ok()?;
+        self.arg_after("pr_create.args", flag)
+    }
+
+    /// The value that followed `flag` in the last `gh pr edit`, byte for
+    /// byte.
+    pub fn edited_pr_arg(&self, flag: &str) -> Option<String> {
+        self.arg_after("pr_edit.args", flag)
+    }
+
+    /// The field `key` the last REST `PATCH` of a PR sent, byte for byte.
+    pub fn patched_pr_field(&self, key: &str) -> Option<String> {
+        let args = std::fs::read_to_string(self.bin.path().join("rest_pull_patch.args")).ok()?;
+        let prefix = format!("{key}=");
+        args.split('\0')
+            .find_map(|a| a.strip_prefix(&prefix))
+            .map(str::to_string)
+    }
+
+    fn arg_after(&self, file: &str, flag: &str) -> Option<String> {
+        let args = std::fs::read_to_string(self.bin.path().join(file)).ok()?;
         let args: Vec<&str> = args.split('\0').collect();
         let at = args.iter().position(|a| *a == flag)?;
         args.get(at + 1).map(|v| v.to_string())

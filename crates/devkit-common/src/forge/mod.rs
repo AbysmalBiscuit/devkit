@@ -315,6 +315,15 @@ pub struct NewPr<'a> {
     pub attachments: &'a [String],
 }
 
+/// A rewrite of an open pull request. A `None` field is left as it is.
+#[derive(Debug, Clone)]
+pub struct PrEdit<'a> {
+    pub title: Option<&'a str>,
+    pub body: Option<&'a str>,
+    /// Uploaded as [`NewPr::attachments`] are, into `body`.
+    pub attachments: &'a [String],
+}
+
 /// A PR's reviewers. A forge drops a login from `requested` once they review,
 /// so "is anyone reviewing this" needs both lists.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -466,6 +475,17 @@ pub trait Forge: Send + Sync {
     }
     /// Open a PR from `pr.head`, run in the checkout at `cwd`. Returns its URL.
     fn create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String>;
+    /// PR `n`'s body as the forge holds it now, empty when it has none.
+    fn pr_body(&self, repo: &Repo, n: u64) -> Result<String> {
+        let _ = (repo, n);
+        anyhow::bail!("reading a PR's body is not supported on {}", self.kind())
+    }
+    /// Rewrite PR `n`, run in the checkout at `cwd`, which attachment paths
+    /// are relative to.
+    fn edit(&self, repo: &Repo, n: u64, edit: &PrEdit<'_>, cwd: &Path) -> Result<()> {
+        let _ = (repo, n, edit, cwd);
+        anyhow::bail!("editing a PR is not supported on {}", self.kind())
+    }
     /// Take PR `n` out of draft.
     fn mark_ready(&self, repo: &Repo, n: u64) -> Result<()>;
     /// Request `logins` as reviewers on PR `n`, keeping those already asked.
