@@ -30,12 +30,12 @@ pr_body = """
 Footer by {{ agent_model }}"""
 
 [templates.variables]
-proof = { default = "" }
+proof = { default = "", required = "agents" }
 agent_model = { default = "" }
 "#;
 
 /// A body `pr create` rendered from [`TEMPLATE`], then edited by bots above
-/// and below it.
+/// and below it. The bot's own `---` repeats the template's separator.
 const LIVE: &str = "\
 > [!NOTE]
 > A bot's banner.
@@ -54,6 +54,10 @@ Footer by Claude
 
 ## Review bot
 Details the bot keeps current.
+
+---
+
+More from the bot.
 ";
 
 /// A project whose branch has PR 7 open, carrying `body`.
@@ -181,6 +185,41 @@ fn a_body_the_template_no_longer_describes_is_refused() {
         stderr.contains("`proof`") && stderr.contains("#7"),
         "names the variable and the PR: {stderr}"
     );
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// Two equally good places for the Proof heading leave its section
+/// ambiguous, and picking one would delete the text between them.
+#[test]
+fn a_template_line_repeated_in_the_body_is_refused_rather_than_guessed() {
+    let live = LIVE.replace(
+        "The old summary.",
+        "The old summary, quoting a template:\n\n## Proof\n\nand more summary.",
+    );
+    let fake = project("", &live);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "proof=1. the new proof"]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("`proof`") && stderr.contains("## Proof"),
+        "names the variable and the repeated line: {stderr}"
+    );
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// A blank value does not satisfy a variable the template requires of the
+/// caller, on an edit as on `pr create`.
+#[test]
+fn an_agent_cannot_blank_a_variable_required_of_agents() {
+    let fake = project("", LIVE);
+
+    let out = fake.issue_as("agent", &["pr", "edit", "--no-push", "--arg", "proof="]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("proof"), "names the variable: {stderr}");
     assert!(!wrote(&fake), "{}", fake.calls());
 }
 

@@ -71,8 +71,8 @@ devkit pr edit --arg-file proof=<scratchpad>/proof.md \
 ```
 
 - A section is found by the `pr_body` template's own lines around the variable, such as the `## Proof` heading and the line after the section. A section the body lacks, such as a Proof section from a `create` that passed none, is inserted where the template puts it.
-- A variable the body has lost the template's lines around is refused by name, before anything is written. So is a variable that shares a line, or a section, with another variable (`**Door:** {{ door }}`). Edit that one on the forge.
-- Pass the whole new text of a section: it replaces the old one.
+- A variable the body has lost the template's lines around is refused by name, before anything is written. So is one whose bounding line fits more than one place in the body, such as a summary quoting a `## Proof` line, and one that shares a line, or a section, with another variable (`**Door:** {{ door }}`). Edit those on the forge.
+- Pass the whole new text of a section: it replaces the old one. A blank value for a variable the template requires of you is refused, as on `create`.
 - `--attach` works as on `create`, but each file must be embedded by the same path in the text this run passes, as in the `create` example above, under the proof line it proves. A file nothing embeds is refused, because gh would append it below everything else in the body. A rerun replaces the section, so it shows each file once.
 - The proof gate below checks a `--arg` for `defaults.pr_proof_variable` as it does on `create`.
 - An edit with no `--attach` goes over REST, so it works where GitHub refuses GraphQL. `--attach` needs `gh pr edit`, so it fails there.

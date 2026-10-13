@@ -3,9 +3,9 @@
 //! the span the variable owns is rewritten.
 //!
 //! The template is rendered once with every variable as its [`slot`]. That
-//! skeleton's lines with no slot are the template's own text: they are found
-//! in the live body, in order, and the ones on either side of a variable's
-//! slot bound the span it owns there.
+//! skeleton's anchors, the lines carrying any of the template's own text, are
+//! found in the live body in order, and the ones on either side of a
+//! variable's slot bound the span it owns there.
 
 use anyhow::{Result, bail};
 
@@ -26,11 +26,27 @@ pub(crate) fn splice(skeleton: &str, live: &str, name: &str, value: &str) -> Res
     let at = slot_line(&sk, &marker, name)?;
     let body = lines(live);
 
-    let literals: Vec<usize> = (0..sk.len()).filter(|&i| is_literal(&sk[i])).collect();
-    let matched = align(&sk, &literals, &body);
-    let found = |i: usize| matched.iter().find(|(s, _)| *s == i).map(|(_, l)| *l);
-    let before = literals.iter().rev().copied().find(|&i| i < at);
-    let after = literals.iter().copied().find(|&i| i > at);
+    let anchors: Vec<usize> = (0..sk.len()).filter(|&i| is_anchor(sk[i].text)).collect();
+    let rows: Vec<usize> = (0..body.len()).collect();
+    let earliest = align(&sk, &anchors, &body, &rows);
+    let reversed = |v: &[usize]| v.iter().rev().copied().collect::<Vec<_>>();
+    let latest = align(&sk, &reversed(&anchors), &body, &reversed(&rows));
+    let row_of =
+        |pairs: &[(usize, usize)], i: usize| pairs.iter().find(|(s, _)| *s == i).map(|(_, l)| *l);
+    let found = |i: usize| row_of(&earliest, i);
+    let before = anchors.iter().rev().copied().find(|&i| i < at);
+    let after = anchors.iter().copied().find(|&i| i > at);
+    if let Some(i) = [before, after]
+        .into_iter()
+        .flatten()
+        .find(|&i| found(i) != row_of(&latest, i))
+    {
+        bail!(
+            "cannot tell where `{name}` goes: the body has the pr_body template's \
+             line `{}` in more than one place that fits",
+            sk[i].text
+        );
+    }
 
     let span_start = before.map_or(0, |i| sk[i].end);
     let span_end = after.map_or(skeleton.len(), |i| sk[i].start);
@@ -102,8 +118,45 @@ fn lines(s: &str) -> Vec<Line<'_>> {
         .collect()
 }
 
-fn is_literal(line: &Line<'_>) -> bool {
-    !line.text.is_empty() && !line.text.contains(OPEN)
+/// The template's own text on a skeleton line, split around each slot.
+fn segments(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find(OPEN) {
+        out.push(&rest[..open]);
+        let after = &rest[open + OPEN.len()..];
+        rest = after
+            .find(CLOSE)
+            .map_or("", |close| &after[close + CLOSE.len()..]);
+    }
+    out.push(rest);
+    out
+}
+
+/// Whether a skeleton line carries any of the template's own text, and so
+/// can be found in the live body. A line that is nothing but slots cannot.
+fn is_anchor(text: &str) -> bool {
+    segments(text).iter().any(|s| !s.trim().is_empty())
+}
+
+/// Whether live line `text` is what skeleton line `pattern` renders to: its
+/// own text in order, with anything where its slots are.
+fn fits(pattern: &str, text: &str) -> bool {
+    let parts = segments(pattern);
+    let (first, after_first) = parts.split_first().expect("a line has a first segment");
+    let Some(mut rest) = text.strip_prefix(first) else {
+        return false;
+    };
+    let Some((last, middle)) = after_first.split_last() else {
+        return rest.is_empty();
+    };
+    for part in middle {
+        match rest.find(part) {
+            Some(i) => rest = &rest[i + part.len()..],
+            None => return false,
+        }
+    }
+    rest.ends_with(last)
 }
 
 fn slot_name(text: &str) -> Option<&str> {
@@ -129,13 +182,18 @@ fn slot_line(sk: &[Line<'_>], marker: &str, name: &str) -> Result<usize> {
     Ok(at)
 }
 
-/// The skeleton's literal lines paired with the live lines they match, as
-/// many as can be matched in order: a longest common subsequence. Matching
-/// greedily would pair a separator the live body lacks with a later one,
-/// and lose every anchor in between.
-fn align(sk: &[Line<'_>], literals: &[usize], body: &[Line<'_>]) -> Vec<(usize, usize)> {
-    let (n, m) = (literals.len(), body.len());
-    let same = |i: usize, j: usize| sk[literals[i]].text == body[j].text;
+/// The skeleton's anchors paired with the live lines they fit, as many as
+/// can be paired in order: a longest common subsequence, taken in the order
+/// `anchors` and `rows` walk. Matching greedily would pair a separator the
+/// live body lacks with a later one, and lose every anchor in between.
+fn align(
+    sk: &[Line<'_>],
+    anchors: &[usize],
+    body: &[Line<'_>],
+    rows: &[usize],
+) -> Vec<(usize, usize)> {
+    let (n, m) = (anchors.len(), rows.len());
+    let same = |i: usize, j: usize| fits(sk[anchors[i]].text, body[rows[j]].text);
     let mut rest = vec![vec![0u32; m + 1]; n + 1];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
@@ -149,7 +207,7 @@ fn align(sk: &[Line<'_>], literals: &[usize], body: &[Line<'_>]) -> Vec<(usize, 
     let (mut i, mut j, mut pairs) = (0, 0, Vec::new());
     while i < n && j < m {
         if same(i, j) && rest[i][j] == rest[i + 1][j + 1] + 1 {
-            pairs.push((literals[i], j));
+            pairs.push((anchors[i], rows[j]));
             i += 1;
             j += 1;
         } else if rest[i + 1][j] >= rest[i][j + 1] {
@@ -171,7 +229,7 @@ fn section_start(sk: &[Line<'_>], heading: usize, matched: impl Fn(usize) -> boo
         if line.text.is_empty() {
             continue;
         }
-        if !is_literal(line) || matched(k) {
+        if !is_anchor(line.text) || matched(k) {
             break;
         }
         opens = k;

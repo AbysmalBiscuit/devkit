@@ -15,7 +15,7 @@ use devkit_config::Templates;
 use super::{
     create::{attached_file, check_attachments},
     proof::gate_proof,
-    render::{Texts, require_pr_title},
+    render::{Texts, missing, require_pr_title},
     require_existing_pr,
     resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
     splice::{slot, splice},
@@ -90,6 +90,12 @@ pub fn run(args: Args) -> Result<()> {
     if edits.is_empty() && args.pr_title.is_none() {
         bail!("nothing to edit: pass --pr-title, --pr-body, or --arg for a part of the body");
     }
+    let caller = devkit_common::caller::caller();
+    let blanked: Vec<_> = missing(&loaded.config, &edits, caller)?
+        .into_iter()
+        .filter(|m| edits.contains_key(&m.name))
+        .collect();
+    devkit_common::required::ensure_supplied("pr edit", &blanked)?;
     require_embedded(here, &args.attach, &edits)?;
 
     let vcs = Vcs::at(here);
@@ -106,7 +112,7 @@ pub fn run(args: Args) -> Result<()> {
             here,
             &forge.repos,
             record.as_ref().and_then(|r| r.tracker_issue()).as_deref(),
-            devkit_common::caller::caller(),
+            caller,
             &edits,
         )?;
     }
