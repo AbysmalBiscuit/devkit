@@ -76,6 +76,7 @@ mod tests {
             project: Some(node.into()),
             entry: None,
             modified: None,
+            blocked_by: Vec::new(),
         }
     }
 

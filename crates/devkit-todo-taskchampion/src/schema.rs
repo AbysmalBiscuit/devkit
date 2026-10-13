@@ -29,6 +29,9 @@ pub struct Exported {
     pub project: Option<String>,
     pub entry: Option<String>,
     pub modified: Option<String>,
+    /// Full ids of the tasks this one waits on.
+    #[serde(default)]
+    pub depends: Vec<String>,
 }
 
 /// Numeric UDAs export as JSON numbers that may carry a fraction.
@@ -67,6 +70,12 @@ impl Exported {
             project,
             entry: self.entry.as_deref().and_then(rfc3339),
             modified: self.modified.as_deref().and_then(rfc3339),
+            blocked_by: {
+                let mut blockers = self.depends;
+                blockers.sort();
+                blockers.dedup();
+                blockers
+            },
         })
     }
 }

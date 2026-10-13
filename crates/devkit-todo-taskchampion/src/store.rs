@@ -294,6 +294,10 @@ impl TaskchampionStore {
             project: value("project"),
             entry: stamp(task.get_entry()),
             modified: stamp(task.get_modified()),
+            depends: task
+                .get_dependencies()
+                .map(|uuid| uuid.to_string())
+                .collect(),
         }
         .into_todo()
     }
@@ -356,6 +360,41 @@ impl TaskchampionStore {
             .max()
             .unwrap_or(0)
             + ORDER_GAP)
+    }
+
+    /// Adds each blocker in `by` to `id` when `add`, and removes them
+    /// otherwise, as one `dep_<uuid>` property apiece. A blocker that does
+    /// not parse as a uuid, or that is already recorded or already absent,
+    /// changes nothing.
+    async fn set_dependencies(
+        &self,
+        replica: &mut Replica,
+        id: &str,
+        by: &[String],
+        add: bool,
+    ) -> Result<()> {
+        let todo = self.resolve(replica, id).await?;
+        let mut deps = Vec::new();
+        for blocker in by {
+            let Ok(uuid) = Uuid::try_parse(blocker) else {
+                continue;
+            };
+            deps.push(uuid);
+        }
+        if deps.is_empty() {
+            return Ok(());
+        }
+        Self::change(replica, &todo, |task, ops| {
+            for dep in deps {
+                if add {
+                    task.add_dependency(dep, ops)?;
+                } else {
+                    task.remove_dependency(dep, ops)?;
+                }
+            }
+            Ok(())
+        })
+        .await
     }
 
     /// Applies `change` to the task behind `todo` and commits it.
@@ -555,6 +594,14 @@ impl TodoStore for TaskchampionStore {
                 }
                 replica.commit_operations(ops).await?;
                 Ok(changes)
+            }
+            Edit::Block { id, by } => {
+                self.set_dependencies(replica, id, by, true).await?;
+                Ok(Vec::new())
+            }
+            Edit::Unblock { id, by } => {
+                self.set_dependencies(replica, id, by, false).await?;
+                Ok(Vec::new())
             }
             Edit::Purge(id) => {
                 let todo = self.resolve(replica, id).await?;

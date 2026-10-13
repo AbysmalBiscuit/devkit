@@ -1,6 +1,6 @@
 use std::{path::Path, time::Duration};
 
-use devkit_todo::{Filter, NewTodo, TodoStore};
+use devkit_todo::{Edit, Filter, NewTodo, TodoStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore};
 use taskchampion::{Operations, Replica, SqliteStorage, Status, Uuid, storage::AccessMode};
 
@@ -88,6 +88,34 @@ fn todos_are_filed_on_bare_nodes() {
     assert_eq!(project(&filed).as_deref(), Some("r.main"));
     assert_eq!(store.get(&global).unwrap().unwrap().project, None);
     assert_eq!(store.get(&filed).unwrap().unwrap().node(), "r.main");
+}
+
+#[test]
+fn blockers_are_taskwarrior_dep_properties() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let blocker = store.add(new(Some("r.main"), "blocker")).unwrap();
+    let blocked = store.add(new(Some("r.main"), "blocked")).unwrap();
+    store
+        .apply(&Edit::Block {
+            id: blocked.clone(),
+            by: vec![blocker.clone()],
+        })
+        .unwrap();
+    let key = format!("dep_{blocker}");
+    let present = with_replica(&data, async |raw| {
+        raw.get_task_data(Uuid::parse_str(&blocked).unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .has(&key)
+    });
+    assert!(present, "no {key} on the raw task");
+    assert_eq!(
+        store.get(&blocked).unwrap().unwrap().blocked_by,
+        vec![blocker]
+    );
 }
 
 #[test]

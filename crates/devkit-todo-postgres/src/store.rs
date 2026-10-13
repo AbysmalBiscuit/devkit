@@ -70,6 +70,7 @@ fn todo_of(row: &Row) -> Result<Todo> {
         order: Some(row.get(6)),
         entry: Some(stamp(row.get(7))),
         modified: Some(stamp(row.get(8))),
+        blocked_by: Vec::new(),
     })
 }
 
@@ -283,6 +284,9 @@ impl TodoStore for PostgresStore {
                     (id, Type::TEXT),
                 ])
                 .await
+            }
+            Edit::Block { .. } | Edit::Unblock { .. } => {
+                anyhow::bail!("blocking edges need `devkit todo schema update`")
             }
         })
     }

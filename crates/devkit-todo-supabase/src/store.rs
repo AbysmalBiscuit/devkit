@@ -95,6 +95,7 @@ fn todo_of(row: Row) -> Result<Todo> {
         description: row.description,
         parent: row.parent,
         order: Some(row.ord),
+        blocked_by: Vec::new(),
     })
 }
 
@@ -275,6 +276,9 @@ impl TodoStore for SupabaseStore {
                 json!({ "p_root": root, "p_holder": holder }),
             ),
             Edit::Purge(id) => self.changes("todo_purge", json!({ "p_root": root, "p_id": id })),
+            Edit::Block { .. } | Edit::Unblock { .. } => {
+                anyhow::bail!("blocking edges need `devkit todo schema update`")
+            }
         }
     }
 }

@@ -192,6 +192,7 @@ mod tests {
             project: Some("r.main".into()),
             entry: None,
             modified: None,
+            blocked_by: Vec::new(),
         }
     }
 

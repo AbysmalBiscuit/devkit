@@ -123,6 +123,7 @@ fn store_scans_require_anchors_for_open_templates() {
         project: Some(node.into()),
         entry: None,
         modified: None,
+        blocked_by: Vec::new(),
     };
     let todos = [
         "r",
