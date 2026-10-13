@@ -234,6 +234,30 @@ fn a_codex_stop_blocks() {
     assert!(reason.contains("write the migration"), "{reason}");
 }
 
+/// Grok runs the Claude Code manifest too, so either flag holds its stop.
+#[test]
+fn a_grok_stop_blocks() {
+    for harness in ["grok", "claude-code"] {
+        let p = always();
+        seed(&p, "proj.main.grok-S", "write the migration");
+        let payload = json!({
+            "hookEventName": "stop",
+            "hook_event_name": "Stop",
+            "sessionId": "S",
+            "session_id": "S",
+            "cwd": p.path,
+            "workspaceRoot": p.path,
+            "reason": "end_turn",
+            "stopHookActive": false,
+        });
+        let reason = blocked(&p.hook("stop", harness, &payload));
+        assert!(
+            reason.contains("write the migration"),
+            "{harness}: {reason}"
+        );
+    }
+}
+
 #[test]
 fn a_codex_stop_listing_background_tasks_still_blocks() {
     let p = always();

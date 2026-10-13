@@ -12,7 +12,7 @@ pub mod todo;
 pub use layers::{
     BrokenLayer, CONFIG_FILE, Layer, LayerKind, ReadLayers, project_layers, read_project_layers,
 };
-pub use todo::{RoleConfig, ScopeConfig};
+pub use todo::{HARNESS_PREFIXES, RoleConfig, ScopeConfig};
 pub mod harness;
 pub use harness::{
     AppMatch, CommandRule, Fidelity, HarnessSection, LogSection, PolicyAction, PromptFidelity,

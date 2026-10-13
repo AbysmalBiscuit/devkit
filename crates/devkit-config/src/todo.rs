@@ -6,6 +6,10 @@ use anyhow::{Context, Result, bail};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// The values `{harness}` takes in a node template: each harness whose
+/// sessions name a todo node.
+pub const HARNESS_PREFIXES: [&str; 3] = ["claude", "codex", "grok"];
+
 /// A named todo node template in the scope tree.
 ///
 /// ```
@@ -188,7 +192,7 @@ impl Template {
                                 !value.is_empty()
                                     && !value.contains(['.', '/', '\\'])
                                     && (name != "harness"
-                                        || matches!(value.as_str(), "claude" | "codex"))
+                                        || HARNESS_PREFIXES.contains(&value.as_str()))
                             })
                             .cloned(),
                     })
@@ -206,7 +210,7 @@ impl Template {
         }
         let mut values = BTreeMap::new();
         for (parts, node) in self.segments.iter().zip(segments) {
-            let segment_values = ["claude", "codex"].into_iter().find_map(|harness| {
+            let segment_values = HARNESS_PREFIXES.into_iter().find_map(|harness| {
                 let mut prefix = String::new();
                 let mut suffix = String::new();
                 let mut open = None;

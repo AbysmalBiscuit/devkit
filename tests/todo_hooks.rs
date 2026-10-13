@@ -502,6 +502,69 @@ fn plan_todowrite_mirrors_into_the_store() {
     assert_eq!(by_text(&p, "three").status, Status::Pending);
 }
 
+const GROK_SESSION: &str = "019a5c1e-7b42-7d3a-9c11-5e2f0a8b6d01";
+
+/// A merging `todo_write` sends only the items it changes, so capture reads
+/// the whole list from the response. Grok runs the Claude Code manifest too,
+/// so either flag mirrors it.
+#[test]
+fn plan_grok_todo_write_mirrors_the_whole_list() {
+    for harness in ["grok", "claude-code"] {
+        let p = Proj::new();
+        post_tool_use(&p, harness, &fixture(&p, "grok-todo-write.jsonl"));
+        let todos = on_node(&p, &format!("proj.main.grok-{GROK_SESSION}"));
+        let got: Vec<_> = todos
+            .iter()
+            .map(|t| (t.description.as_str(), t.status.clone()))
+            .collect();
+        let by = Some(Holder::new(GROK_SESSION));
+        assert_eq!(
+            got,
+            [
+                ("inspect payloads", Status::Completed { by: by.clone() }),
+                ("write capture", in_progress(GROK_SESSION)),
+                ("update docs", Status::Cancelled { by }),
+            ],
+            "{harness}"
+        );
+    }
+}
+
+/// A Grok sub-agent runs as a session of its own: its events carry its id as
+/// the session id, and its stop gate fires `SubagentStop` under the same id.
+#[test]
+fn plan_a_grok_sub_agents_captured_claim_holds_its_stop() {
+    let p = Proj::new();
+    let mut calls = fixture(&p, "grok-todo-write.jsonl");
+    calls.truncate(2);
+    for call in &mut calls {
+        call["subagentType"] = json!("general");
+    }
+    post_tool_use(&p, "claude-code", &calls);
+    let sub = format!("{GROK_SESSION}/{GROK_SESSION}");
+    assert_eq!(by_text(&p, "write capture").status, in_progress(&sub));
+    let stop = json!({
+        "hookEventName": "subagent_stop",
+        "hook_event_name": "SubagentStop",
+        "sessionId": GROK_SESSION,
+        "session_id": GROK_SESSION,
+        "cwd": p.path,
+        "workspaceRoot": p.path,
+        "phase": "gate",
+        "subagentId": GROK_SESSION,
+        "subagentType": "general",
+        "stopHookActive": false,
+    });
+    let out = p.hook("subagent-stop", "claude-code", &stop);
+    let answer: serde_json::Value = serde_json::from_str(stdout(&out).trim())
+        .unwrap_or_else(|e| panic!("{e}: {:?} {}", stdout(&out), todoenv::stderr(&out)));
+    assert_eq!(answer["decision"], "block", "{answer}");
+    assert!(
+        answer["reason"].as_str().unwrap().contains("write capture"),
+        "{answer}"
+    );
+}
+
 #[test]
 fn plan_a_cancel_refused_by_a_claim_is_retried_on_the_next_list() {
     let p = Proj::new();

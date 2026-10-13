@@ -16,6 +16,7 @@ Codex fixtures come from codex-cli 0.160.0 (`codex --version`), run as `codex ex
 | `codex-update-plan.jsonl` | Call `update_plan` three times: `run tests`, `build`, `run tests` all pending; then `run tests` completed, `build` in progress, `run tests` pending; then `run tests` completed and `run tests` in progress. |
 | `codex-subagent-plan.jsonl`, `codex-subagent-start.jsonl` | Spawn one sub-agent that calls `update_plan` once and reports any secret word from its context. The `SubagentStart` hook added `The secret word is PELICAN.` as context. |
 | `codex-subagent-shell.jsonl` | Spawn exactly one sub-agent; it runs `echo hello` once and reports its output. Run no shell command yourself. The file keeps the sub-agent's `Bash` call only. |
+| `grok-todo-write.jsonl` | Not recorded; see below. |
 
 ## Answers
 
@@ -25,6 +26,7 @@ Codex fixtures come from codex-cli 0.160.0 (`codex --version`), run as `codex ex
 - **Codex sub-agent shell call.** `PreToolUse` names it `Bash`, with a `tool_input` holding only `command`, and carries the root `session_id` with the sub-agent's `agent_id` and `agent_type`.
 - **`SubagentStart` context in Codex.** Reaches the sub-agent: it answered `PELICAN`.
 - **`TodoWrite`.** Not offered by Claude Code 2.1.288, with or without `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, nor with `--tools TodoWrite`; the model reported having no such tool each time. `claude-todowrite.jsonl` is written by hand in the input shape earlier Claude Code versions sent, `{"todos": [{"content", "status", "activeForm"}]}`, so capture still handles a harness version that offers it. That shape is unverified against a live harness.
+- **Grok `todo_write`.** `grok-todo-write.jsonl` is written by hand from grok-build's source rather than recorded: headless Grok loads a project's hooks only from a folder recorded as trusted in `~/.grok`. Each line is the stdin `HookEventEnvelope::to_hook_json` builds (`crates/codegen/xai-grok-hooks/src/event.rs`): camelCase keys, their snake_case copies, and `tool_response` copying `toolResult`, the serialized `ToolOutput`. A `todo_write` call's output is `{"type": "Todo", "TodosUpdated": {"summary_for_prompt", "todos", "state"}}`, and `todos` holds the whole list in order, without ids (`crates/codegen/xai-grok-tools/src/implementations/grok_build/todo/mod.rs`). The calls are a replace (`merge: false`) of three items, then two merges, the default, that each send only the items they change: `inspect payloads` completed with `write capture` in progress, then `update docs` cancelled.
 - **Codex `update_plan`.** Off unless `[tools.update_plan] enabled = true`. In code mode the model calls it from inside its `exec` tool, and `PostToolUse` still fires once per `update_plan` call with `tool_name: "update_plan"`.
 
 ## Capture rule

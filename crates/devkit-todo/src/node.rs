@@ -11,13 +11,17 @@ pub const GLOBAL: &str = "global";
 pub enum Harness {
     Claude,
     Codex,
+    Grok,
 }
 
 impl Harness {
+    pub const ALL: [Self; 3] = [Self::Claude, Self::Codex, Self::Grok];
+
     pub fn prefix(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Grok => "grok",
         }
     }
 }
@@ -51,11 +55,13 @@ pub fn sanitize(segment: &str) -> String {
         .collect()
 }
 
-/// The session a CLI call runs in. Codex wins when both variables are set, as
+/// The session a CLI call runs in. Grok's wins over the others, which its shell
+/// inherits from whatever launched it. Codex wins over Claude Code, as
 /// alacritree's `scope::session_from_env` decides, so both tools name the same
 /// node.
 pub fn session_from_env(get: impl Fn(&str) -> Option<String>) -> Option<SessionRef> {
     [
+        ("GROK_SESSION_ID", Harness::Grok),
         ("CODEX_SESSION_ID", Harness::Codex),
         ("CLAUDE_CODE_SESSION_ID", Harness::Claude),
     ]
@@ -218,6 +224,14 @@ mod tests {
     fn claude_session_id_is_read_when_codex_is_absent() {
         let env = |key: &str| (key == "CLAUDE_CODE_SESSION_ID").then(|| "k1".to_string());
         assert_eq!(session_from_env(env), Some(claude("k1")));
+    }
+
+    #[test]
+    fn every_harness_prefix_is_a_template_value() {
+        assert_eq!(
+            Harness::ALL.map(Harness::prefix),
+            devkit_config::HARNESS_PREFIXES
+        );
     }
 
     #[test]
