@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.20](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.19...v0.14.20) (2026-10-13)
+
+
+### Features
+
+* **pr:** add pr edit for open PRs ([#342](https://github.com/AbysmalBiscuit/devkit/issues/342)) ([bdd46aa](https://github.com/AbysmalBiscuit/devkit/commit/bdd46aa9d5b50c0eb0a3acb1cbd1917008c794a3))
+
 ## [0.14.19](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.18...v0.14.19) (2026-10-12)
 
 
