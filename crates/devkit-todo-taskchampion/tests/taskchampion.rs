@@ -112,10 +112,9 @@ fn blockers_are_taskwarrior_dep_properties() {
             .has(&key)
     });
     assert!(present, "no {key} on the raw task");
-    assert_eq!(
-        store.get(&blocked).unwrap().unwrap().blocked_by,
-        vec![blocker]
-    );
+    assert_eq!(store.get(&blocked).unwrap().unwrap().blocked_by, vec![
+        blocker
+    ]);
 }
 
 #[test]

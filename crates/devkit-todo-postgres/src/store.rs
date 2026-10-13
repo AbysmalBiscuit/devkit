@@ -15,8 +15,7 @@ use crate::{
     database::{CLAIMED, UNKNOWN_TODO},
 };
 
-const COLUMNS: &str =
-    "id::text, node, description, status, holder, parent::text, ord, entry, modified, \
+const COLUMNS: &str = "id::text, node, description, status, holder, parent::text, ord, entry, modified, \
      blocked_by::text[]";
 
 /// The columns of a row a todo function returns for each status change.

@@ -6,9 +6,9 @@
 extern crate self as devkit_todo;
 
 pub mod activity;
-pub mod graph;
 #[cfg(feature = "test-support")]
 pub mod contract;
+pub mod graph;
 pub mod holder;
 pub mod layout;
 pub mod node;
@@ -118,10 +118,16 @@ pub enum Edit {
     Purge(String),
     /// Adds each blocker in `by` to `id`. A blocker already recorded is
     /// left as it is. The store does not check that a blocker exists.
-    Block { id: String, by: Vec<String> },
+    Block {
+        id: String,
+        by: Vec<String>,
+    },
     /// Removes each blocker in `by` from `id`. A blocker not recorded is
     /// left as it is.
-    Unblock { id: String, by: Vec<String> },
+    Unblock {
+        id: String,
+        by: Vec<String>,
+    },
 }
 
 /// One todo's status as an edit changed it, seen while the store held the

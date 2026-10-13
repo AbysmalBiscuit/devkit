@@ -50,7 +50,14 @@ fn a_todo_with_one_finished_blocker_is_ready_and_one_with_two_waits() {
 #[test]
 fn in_progress_blockers_block_and_closed_or_missing_ones_do_not() {
     let todos = vec![
-        todo("1", Status::InProgress { by: Holder::new("S") }, &[], None),
+        todo(
+            "1",
+            Status::InProgress {
+                by: Holder::new("S"),
+            },
+            &[],
+            None,
+        ),
         todo("2", Status::Cancelled { by: None }, &[], None),
         todo("3", Status::Completed { by: None }, &[], None),
         pending("4", &["1"]),
@@ -71,7 +78,9 @@ fn in_progress_blockers_block_and_closed_or_missing_ones_do_not() {
 /// F, I, J and K.
 fn sample() -> Vec<Todo> {
     let done = Status::Completed { by: None };
-    let working = Status::InProgress { by: Holder::new("S") };
+    let working = Status::InProgress {
+        by: Holder::new("S"),
+    };
     vec![
         todo("A", done, &[], Some(1)),
         todo("G", working, &[], Some(2)),
@@ -111,7 +120,11 @@ fn a_cap_fills_batches_by_longest_chain() {
 
 #[test]
 fn cycle_members_are_reported_not_dropped() {
-    let todos = vec![pending("1", &["2"]), pending("2", &["1"]), pending("3", &[])];
+    let todos = vec![
+        pending("1", &["2"]),
+        pending("2", &["1"]),
+        pending("3", &[]),
+    ];
     let graph = Graph::new(&todos);
     let plan = graph.plan(|_| true, None);
     assert_eq!(batches(&plan), [vec!["3"]]);

@@ -74,13 +74,18 @@ impl<'a> Graph<'a> {
         false
     }
 
-    /// Ready todos listing any of `closed` as a blocker, each once, in id order.
+    /// Ready todos listing any of `closed` as a blocker, each once, in id
+    /// order.
     pub fn unblocked_by(&self, closed: &[&str]) -> Vec<&'a Todo> {
         let mut ready: Vec<&Todo> = self
             .todos
             .iter()
             .filter(|todo| self.is_ready(todo))
-            .filter(|todo| todo.blocked_by.iter().any(|id| closed.contains(&id.as_str())))
+            .filter(|todo| {
+                todo.blocked_by
+                    .iter()
+                    .any(|id| closed.contains(&id.as_str()))
+            })
             .collect();
         ready.sort_by(|a, b| a.id.cmp(&b.id));
         ready
@@ -102,7 +107,10 @@ impl<'a> Graph<'a> {
                 .into_iter()
                 .filter(|blocker| is_member(&blocker.id))
             {
-                blocked_of.entry(blocker.id.as_str()).or_default().push(todo);
+                blocked_of
+                    .entry(blocker.id.as_str())
+                    .or_default()
+                    .push(todo);
             }
             waits_on.insert(
                 todo.id.as_str(),
@@ -113,7 +121,12 @@ impl<'a> Graph<'a> {
             );
         }
         let waits = |todo: &Todo| waits_on.get(todo.id.as_str()).cloned().unwrap_or_default();
-        let blocked = |todo: &Todo| blocked_of.get(todo.id.as_str()).cloned().unwrap_or_default();
+        let blocked = |todo: &Todo| {
+            blocked_of
+                .get(todo.id.as_str())
+                .cloned()
+                .unwrap_or_default()
+        };
         let mut ranks: HashMap<&str, Rank> = HashMap::new();
         for todo in &members {
             let dependents = members
@@ -382,7 +395,10 @@ pub fn with_blockers(store: &impl TodoStore, mut todos: Vec<Todo>) -> anyhow::Re
         }
     }
     for id in missing {
-        if let Some(blocker) = store.get(&id).with_context(|| format!("reading todo {id}"))? {
+        if let Some(blocker) = store
+            .get(&id)
+            .with_context(|| format!("reading todo {id}"))?
+        {
             todos.push(blocker);
         }
     }

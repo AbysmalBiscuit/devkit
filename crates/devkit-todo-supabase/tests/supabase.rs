@@ -134,10 +134,9 @@ fn reads_without_the_blocking_column_list_todos_without_edges() {
         .build()
         .unwrap()
         .block_on(async {
-            let (client, connection) =
-                tokio_postgres::connect(&direct, tokio_postgres::NoTls)
-                    .await
-                    .unwrap();
+            let (client, connection) = tokio_postgres::connect(&direct, tokio_postgres::NoTls)
+                .await
+                .unwrap();
             tokio::spawn(connection);
             client
                 .batch_execute(
@@ -166,10 +165,9 @@ fn reads_without_the_blocking_column_list_todos_without_edges() {
         .build()
         .unwrap()
         .block_on(async {
-            let (client, connection) =
-                tokio_postgres::connect(&direct, tokio_postgres::NoTls)
-                    .await
-                    .unwrap();
+            let (client, connection) = tokio_postgres::connect(&direct, tokio_postgres::NoTls)
+                .await
+                .unwrap();
             tokio::spawn(connection);
             client
                 .batch_execute(
