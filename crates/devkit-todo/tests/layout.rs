@@ -64,6 +64,53 @@ fn missing_facts_walk_up_to_a_scope_that_fills() {
     );
 }
 
+fn workspace(repo: &str, branch: &str, session: &str, holder: &str) -> Facts {
+    Facts::new(
+        &Place::Workspace {
+            repo: repo.into(),
+            branch: branch.into(),
+        },
+        Some(&SessionRef {
+            harness: Harness::Claude,
+            id: session.into(),
+        }),
+        &Holder::new(holder),
+    )
+}
+
+#[test]
+fn the_ticket_is_the_workspace_node() {
+    let layout = Layout::new(&Config::parse("").unwrap().todo).unwrap();
+    let facts = workspace("proj", "main", "s1", "s1");
+    assert_eq!(
+        layout.ticket_root(&facts, false).as_deref(),
+        Some("proj.main")
+    );
+    assert_eq!(layout.ticket_root(&facts, true).as_deref(), Some("proj"));
+}
+
+#[test]
+fn outside_a_repository_there_is_no_ticket() {
+    let layout = Layout::new(&Config::parse("").unwrap().todo).unwrap();
+    let facts = Facts::new(&Place::Global, None, &Holder::human());
+    assert_eq!(layout.ticket_root(&facts, false), None);
+    assert_eq!(layout.ticket_root(&facts, true), None);
+}
+
+#[test]
+fn offered_covers_the_ticket_and_own_session_only() {
+    let layout = Layout::new(&Config::parse("").unwrap().todo).unwrap();
+    let facts = workspace("proj", "main", "s1", "s1");
+    let root = layout.ticket_root(&facts, false).unwrap();
+    for node in ["proj.main", "proj.main.claude-s1.a1"] {
+        assert!(layout.offered(Some(node), &root, &facts), "{node}");
+    }
+    for node in ["proj.main.claude-s2", "proj", "proj.other", "global"] {
+        assert!(!layout.offered(Some(node), &root, &facts), "{node}");
+    }
+    assert!(!layout.offered(None, &root, &facts));
+}
+
 #[test]
 fn sanitized_values_never_add_a_level() {
     let layout = Layout::new(&Config::parse("").unwrap().todo).unwrap();

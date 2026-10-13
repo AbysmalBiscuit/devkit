@@ -97,6 +97,13 @@ impl<'a> Graph<'a> {
         let mut blocked_of: HashMap<&str, Vec<&Todo>> = HashMap::new();
         let mut waits_on: HashMap<&str, Vec<&Todo>> = HashMap::new();
         for todo in &members {
+            for blocker in self
+                .open_blockers(todo)
+                .into_iter()
+                .filter(|blocker| is_member(&blocker.id))
+            {
+                blocked_of.entry(blocker.id.as_str()).or_default().push(todo);
+            }
             waits_on.insert(
                 todo.id.as_str(),
                 self.open_blockers(todo)
@@ -106,6 +113,7 @@ impl<'a> Graph<'a> {
             );
         }
         let waits = |todo: &Todo| waits_on.get(todo.id.as_str()).cloned().unwrap_or_default();
+        let blocked = |todo: &Todo| blocked_of.get(todo.id.as_str()).cloned().unwrap_or_default();
         let mut ranks: HashMap<&str, Rank> = HashMap::new();
         for todo in &members {
             let dependents = members

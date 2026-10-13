@@ -155,6 +155,11 @@ pub struct Config {
 /// # assert!(format!("{bad:#}").contains(&HoldStop::spellings()), "{bad:#}");
 /// # assert!(!HoldStop::Subagents.holds(false) && HoldStop::Subagents.holds(true));
 /// # assert!(HoldStop::Always.holds(false) && !HoldStop::Never.holds(true));
+/// # let blocking = Config::parse("[todo]\nprint_unblocked = false\nready_outside_ticket = true\n").unwrap();
+/// # assert!(!blocking.todo.print_unblocked);
+/// # assert!(blocking.todo.ready_outside_ticket);
+/// # assert!(empty.todo.print_unblocked);
+/// # assert!(!empty.todo.ready_outside_ticket);
 /// # assert!(Config::parse("[todo]\nbackend = \"jira\"\n").is_err());
 /// # assert!(Config::parse("[todo]\nbackends = \"builtin\"\n").is_err());
 /// # let quoted = Config::parse("[todo]\nproject = \"dev'kit\"\n").unwrap_err();
@@ -191,6 +196,14 @@ pub struct TodoConfig {
     /// `devkit todo hold` overrides both for one session.
     #[schemars(with = "todo::HoldStopSpelling")]
     pub hold_stop: HoldStop,
+    /// Whether `devkit todo done` and `devkit todo cancel` print the todos
+    /// they made ready, as `unblocked: <ids>`.
+    pub print_unblocked: bool,
+    /// Whether `devkit todo ready`, `devkit todo plan` and the injected
+    /// `ready` notes reach every workspace of the caller's repository
+    /// instead of only the caller's ticket. Other sessions' nodes stay out
+    /// either way, and it never reaches another repository.
+    pub ready_outside_ticket: bool,
     /// The `taskchampion` backend's settings.
     pub taskchampion: TaskchampionConfig,
     /// The `postgres` backend's settings.
@@ -206,6 +219,8 @@ impl Default for TodoConfig {
             roles: todo::default_roles(),
             backend: TodoBackend::default(),
             hold_stop: HoldStop::default(),
+            print_unblocked: true,
+            ready_outside_ticket: false,
             taskchampion: TaskchampionConfig::default(),
             postgres: PostgresConfig::default(),
             supabase: SupabaseConfig::default(),

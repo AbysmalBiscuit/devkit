@@ -95,6 +95,25 @@ impl Layout {
         }
     }
 
+    /// The node the caller's ticket starts at: the workspace scope filled,
+    /// or the repository scope when `wide`. `None` when that scope does not
+    /// fill as itself, so walking up to a parent scope does not count.
+    pub fn ticket_root(&self, facts: &Facts, wide: bool) -> Option<String> {
+        let scope = if wide { "repo" } else { "workspace" };
+        let template = self.templates.get(scope)?;
+        template.fill(&facts.values)
+    }
+
+    /// Whether a todo on `project` is inside the ticket rooted at `root`:
+    /// `root` itself or a node below it, and not another session's node.
+    pub fn offered(&self, project: Option<&str>, root: &str, facts: &Facts) -> bool {
+        let Some(project) = project else {
+            return false;
+        };
+        (project == root || project.starts_with(&format!("{root}.")))
+            && !self.is_other_session(project, facts)
+    }
+
     pub fn fill(&self, scope: &str, facts: &Facts) -> Result<String> {
         self.filled_scope(scope, facts).map(|(_, node)| node)
     }
