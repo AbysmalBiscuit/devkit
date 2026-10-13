@@ -16,7 +16,8 @@ use crate::{
 };
 
 const COLUMNS: &str =
-    "id::text, node, description, status, holder, parent::text, ord, entry, modified";
+    "id::text, node, description, status, holder, parent::text, ord, entry, modified, \
+     blocked_by::text[]";
 
 /// The columns of a row a todo function returns for each status change.
 const CHANGE: &str = "todo::text, node, from_status, from_holder, to_status, to_holder, at";
@@ -70,7 +71,7 @@ fn todo_of(row: &Row) -> Result<Todo> {
         order: Some(row.get(6)),
         entry: Some(stamp(row.get(7))),
         modified: Some(stamp(row.get(8))),
-        blocked_by: Vec::new(),
+        blocked_by: row.get(9),
     })
 }
 
@@ -285,8 +286,23 @@ impl TodoStore for PostgresStore {
                 ])
                 .await
             }
-            Edit::Block { .. } | Edit::Unblock { .. } => {
-                anyhow::bail!("blocking edges need `devkit todo schema update`")
+            Edit::Block { id, by } => {
+                call(client, "SELECT devkit.todo_block($1, $2, $3)", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                    (by, Type::TEXT_ARRAY),
+                ])
+                .await?;
+                Ok(Vec::new())
+            }
+            Edit::Unblock { id, by } => {
+                call(client, "SELECT devkit.todo_unblock($1, $2, $3)", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                    (by, Type::TEXT_ARRAY),
+                ])
+                .await?;
+                Ok(Vec::new())
             }
         })
     }

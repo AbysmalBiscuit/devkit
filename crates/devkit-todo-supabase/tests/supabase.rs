@@ -113,6 +113,75 @@ fn of_agents_claiming_one_todo_at_once_exactly_one_gets_it() {
     );
 }
 
+/// A database that has not gained the blocking column still lists, and every
+/// todo reads as having no edges.
+#[test]
+fn reads_without_the_blocking_column_list_todos_without_edges() {
+    let (Some(url), Some(direct)) = (api_url(), testapi::direct_url()) else {
+        return;
+    };
+    let root = fresh_root();
+    let id = open(&url, &root)
+        .add(NewTodo {
+            project: Some("proj".into()),
+            description: "before blocking".into(),
+            parent: None,
+            order: None,
+        })
+        .unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (client, connection) =
+                tokio_postgres::connect(&direct, tokio_postgres::NoTls)
+                    .await
+                    .unwrap();
+            tokio::spawn(connection);
+            client
+                .batch_execute(
+                    "ALTER TABLE devkit.todos DROP COLUMN blocked_by;
+                     NOTIFY pgrst, 'reload schema'",
+                )
+                .await
+                .unwrap();
+        });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let todo = loop {
+        match open(&url, &root).get(&id) {
+            Ok(Some(todo)) => break todo,
+            Ok(None) => panic!("the todo disappeared"),
+            Err(e) if std::time::Instant::now() < deadline => {
+                let _ = e;
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => panic!("PostgREST never served the dropped column: {e:#}"),
+        }
+    };
+    assert!(todo.blocked_by.is_empty(), "{todo:?}");
+    assert_eq!(todo.description, "before blocking");
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (client, connection) =
+                tokio_postgres::connect(&direct, tokio_postgres::NoTls)
+                    .await
+                    .unwrap();
+            tokio::spawn(connection);
+            client
+                .batch_execute(
+                    "ALTER TABLE devkit.todos
+                         ADD COLUMN blocked_by uuid[] NOT NULL DEFAULT '{}';
+                     NOTIFY pgrst, 'reload schema'",
+                )
+                .await
+                .unwrap();
+        });
+}
+
 /// A todo added over the API is the same todo a direct connection reads, so
 /// machines on either backend share one list.
 #[test]
