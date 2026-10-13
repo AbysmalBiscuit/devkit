@@ -16,8 +16,8 @@ use serde_json::Value;
 
 use super::{
     CheckRun, CheckState, Checks, Forge, ForgeKind, HeadLookup, NewPr, OpenPr, OpenPrPage, PrBrief,
-    PrLocator, PrLookup, PrTimeline, Repo, Review, ReviewDecision, ReviewState, Reviewers, Role,
-    Section, locate_on,
+    PrEdit, PrLocator, PrLookup, PrTimeline, Repo, Review, ReviewDecision, ReviewState, Reviewers,
+    Role, Section, locate_on,
 };
 use crate::{
     cmd::{gh_capture, gh_json_in},
@@ -901,6 +901,51 @@ impl Forge for GithubForge {
             .find(|l| l.contains("://"))
             .map(|l| l.trim().to_string())
             .context("could not parse a PR URL from `gh pr create` output")
+    }
+
+    fn edits_prs(&self) -> bool {
+        true
+    }
+
+    fn pr_body(&self, repo: &Repo, n: u64) -> Result<String> {
+        let pr = self.rest_found(&format!("/repos/{}/pulls/{n}", repo.slug))?;
+        Ok(pr["body"].as_str().unwrap_or_default().to_string())
+    }
+
+    /// Over REST, which works where GitHub refuses GraphQL, unless there are
+    /// files to upload: only `gh pr edit` uploads them.
+    fn edit(&self, repo: &Repo, n: u64, edit: &PrEdit<'_>, cwd: &Path) -> Result<()> {
+        if edit.attachments.is_empty() {
+            let mut fields = serde_json::Map::new();
+            if let Some(title) = edit.title {
+                fields.insert("title".into(), title.into());
+            }
+            if let Some(body) = edit.body {
+                fields.insert("body".into(), body.into());
+            }
+            self.api
+                .rest(
+                    Method::PATCH,
+                    &format!("/repos/{}/pulls/{n}", repo.slug),
+                    Some(&Value::Object(fields)),
+                )?
+                .with_context(|| format!("PR #{n} not found in {}", repo.slug))?;
+            return Ok(());
+        }
+        let number = n.to_string();
+        let mut args = vec!["pr", "edit", number.as_str()];
+        if let Some(title) = edit.title {
+            args.extend(["--title", title]);
+        }
+        if let Some(body) = edit.body {
+            args.extend(["--body", body]);
+        }
+        for file in edit.attachments {
+            args.extend(["--attach", file]);
+        }
+        unless_off(|| gh_capture(&args, repo, &cwd.to_string_lossy()))
+            .context("gh pr edit failed")?;
+        Ok(())
     }
 
     fn mark_ready(&self, repo: &Repo, n: u64) -> Result<()> {

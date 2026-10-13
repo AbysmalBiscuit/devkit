@@ -51,12 +51,24 @@
   },
   {
     "id": "reused-pr-command",
-    "question": "Write the command that attaches ./.devkit/proof/after.png to that existing PR #12.",
-    "kind": "command",
-    "expect": [
-      "gh pr edit 12 --attach ./.devkit/proof/after.png",
-      "gh pr edit 12 --attach .devkit/proof/after.png"
-    ]
+    "question": "Your new proof text, which embeds the screenshot as `![after](./.devkit/proof/after.png)`, is in ./proof.md. Write the command that puts it and ./.devkit/proof/after.png into that existing PR #12.",
+    "kind": "tokens",
+    "expect": "devkit pr edit --arg-file proof=./proof.md --attach ./.devkit/proof/after.png",
+    "proof": "tests/pr_edit.rs an_attachment_lands_under_the_proof_line_it_proves"
+  },
+  {
+    "id": "edit-unembedded",
+    "question": "On that existing PR, you run `devkit pr edit --arg proof='1. see the screenshot' --attach ./.devkit/proof/after.png`. Is the screenshot added to the PR?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/pr_edit.rs an_attachment_the_edit_does_not_reference_is_refused"
+  },
+  {
+    "id": "edit-keeps-the-rest",
+    "question": "A review bot appended its own section to the bottom of PR #12's body. Does `devkit pr edit --arg-file proof=./proof.md` remove it?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/pr_edit.rs a_proof_edit_replaces_only_the_proof_section"
   },
   {
     "id": "gitlab-push",

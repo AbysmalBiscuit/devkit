@@ -2,7 +2,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
-    caller::Caller,
     forge::{self, Forge, NewPr, PrLocator},
     progress::Steps,
     vcs::{Vcs, VersionControl},
@@ -11,7 +10,7 @@ use devkit_config::{IssueEvent, PrCreateState};
 
 use super::{
     add_reviewers,
-    proof::require_proof,
+    proof::gate_proof,
     render::{Texts, require_pr_title, values},
     require_reviewer_for_ready,
     resolve::{Existing, assert_belongs, parse_pr_flag, resolve_existing, verify_created},
@@ -79,10 +78,19 @@ fn reuse_note(number: u64, pr_is_draft: bool, asked: Option<PrCreateState>) -> O
     ))
 }
 
+/// The file an `--attach` value names in `dir`, read the way gh reads it: the
+/// whole value when it names a file, else the longest prefix before a `#`
+/// that does, with the rest as alt text.
+pub(super) fn attached_file<'v>(dir: &Path, value: &'v str) -> Option<&'v str> {
+    let prefixes = value.rmatch_indices('#').map(|(i, _)| &value[..i]);
+    std::iter::once(value)
+        .chain(prefixes)
+        .filter(|p| !p.is_empty())
+        .find(|p| dir.join(p).is_file())
+}
+
 /// Refuse `--attach` values gh could not upload, before anything is pushed.
-/// A file is read the way gh reads it: the whole value when it names a file,
-/// else the longest prefix before a `#` that does, with the rest as alt text.
-fn check_attachments(forge: &dyn Forge, dir: &Path, attach: &[String]) -> Result<()> {
+pub(super) fn check_attachments(forge: &dyn Forge, dir: &Path, attach: &[String]) -> Result<()> {
     if attach.is_empty() {
         return Ok(());
     }
@@ -93,12 +101,7 @@ fn check_attachments(forge: &dyn Forge, dir: &Path, attach: &[String]) -> Result
         );
     }
     for value in attach {
-        let prefixes = value.rmatch_indices('#').map(|(i, _)| &value[..i]);
-        let found = std::iter::once(value.as_str())
-            .chain(prefixes)
-            .filter(|p| !p.is_empty())
-            .any(|p| dir.join(p).is_file());
-        if !found {
+        if attached_file(dir, value).is_none() {
             let path = match value.rsplit_once('#') {
                 Some((path, _)) if !path.is_empty() => path,
                 _ => value,
@@ -175,7 +178,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             if !args.attachments.is_empty() {
                 bail!(
                     "PR #{n} already exists, and --attach uploads only into a PR this run opens.\n\
-                     To add files to it: gh pr edit {n} --attach <file>",
+                     To add files to it: devkit pr edit --attach <file>, with the text that embeds them",
                     n = pr.number
                 );
             }
@@ -274,16 +277,14 @@ pub fn run(args: Args) -> Result<()> {
     let record = devkit_common::record::read_on(&toplevel, &branch);
 
     let tracker_issue = record.as_ref().and_then(|r| r.tracker_issue());
-    if let (Some(variable), Some(issue), Caller::Agent) = (
-        &loaded.config.defaults.pr_proof_variable,
+    gate_proof(
+        &loaded.config,
+        here,
+        &forge.repos,
         tracker_issue.as_deref(),
         caller,
-    ) {
-        let tracker =
-            devkit_common::tracker::resolve(loaded.config.tracker.kind, here, &forge.repos);
-        let proof = vars.get(variable).map_or("", String::as_str);
-        require_proof(tracker.tracker.as_ref(), issue, proof, variable)?;
-    }
+        &vars,
+    )?;
 
     let texts = Texts::new(
         &loaded.config.templates,

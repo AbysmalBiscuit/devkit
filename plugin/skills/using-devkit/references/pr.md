@@ -5,6 +5,7 @@
 ```sh
 devkit pr [status] [selector] [--json] [--cache-only]  # also the bare `devkit pr`
 devkit pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title T] [--pr-body B] [--attach <file>[#alt]] [--no-push] [--pr <URL|number>] [--arg k=v] [--arg-file k=path]
+devkit pr edit [--pr-title T] [--pr-body B] [--attach <file>[#alt]] [--no-push] [--pr <URL|number>] [--arg k=v] [--arg-file k=path]
 devkit pr render [--pr-title T] [--pr-body B] [--arg k=v] [--arg-file k=path]
 devkit pr ready [--to <alias>] [--no-push] [--pr <URL|number>]
 devkit pr checkout <target> [<worktree-path>] [--setup] [--apps a,b]
@@ -55,10 +56,28 @@ devkit pr create --pr-title 'feat(login): show the error state' \
 
 - Paths are relative to the working directory, or to `-C` when given. A `#` inside a filename that exists is part of the path, not the start of alt text.
 - A missing file, and any forge but GitHub, are refused before the push.
-- A branch whose PR already exists is refused before that PR is touched, because a rerun would add another copy of each file. Attach to it with `gh pr edit <n> --attach <file>`.
+- A branch whose PR already exists is refused before that PR is touched, because a rerun would add another copy of each file. Attach to it with `pr edit --attach`, below.
 - It needs gh 2.99.0 or later. An older gh fails with its own error after the push, and no PR is opened.
 - gh enforces GitHub's file count, type and size limits. On a private repository only people with access can see the attachments.
 - If some uploads fail, gh still opens the PR with the ones that succeeded but exits non-zero, so the run reports a failure. The next `create` without `--attach` finds that PR and records it.
+
+### `edit`: change an open PR
+
+`edit` rewrites the parts of the branch's open PR that the run passes and leaves the rest of the body as it is, including whatever bots or people added. `--pr-body` replaces the summary, each `--arg` replaces the section that template variable renders, and `--pr-title` replaces the title. It pushes first unless `--no-push`, takes `--pr` like `create`, and refuses a branch with no PR, naming `pr create`.
+
+```sh
+devkit pr edit --arg-file proof=<scratchpad>/proof.md \
+  --attach './.devkit/proof/after.png#The login error state'
+```
+
+- A section is found by the `pr_body` template's own lines around the variable, such as the `## Proof` heading and the line after the section. A section the body lacks, such as a Proof section from a `create` that passed none, is inserted where the template puts it.
+- A variable the body has lost the template's lines around is refused by name, before anything is written. So is one whose bounding line fits more than one place in the body, such as a summary quoting a `## Proof` line, and one that shares a line, or a section, with another variable (`**Door:** {{ door }}`). Edit those on the forge.
+- Pass the whole new text of a section: it replaces the old one. A blank value for a variable the template requires of you is refused, as on `create`.
+- `--attach` works as on `create`, but each file must be embedded by the same path in the text this run passes, as in the `create` example above, under the proof line it proves. A file nothing embeds is refused, because gh would append it below everything else in the body. A rerun replaces the section, so it shows each file once.
+- The proof gate below checks a `--arg` for `defaults.pr_proof_variable` as it does on `create`.
+- An edit with no `--attach` goes over REST, so it works where GitHub refuses GraphQL. `--attach` needs `gh pr edit`, so it fails there.
+- A variable with no template line on one side of it is refused, since its text cannot be told from what was added there. With the built-in `pr_body`, which is `{{ input }}` alone, that is every body edit.
+- GitHub only. Every other forge refuses `edit` before the push.
 
 `defaults.require_pr_reviewer` refuses any run that would leave a PR ready with no human reviewer other than the PR's own author: `create --ready`, `ready`, and `review request`'s draft flip. A pending request, a submitted review, or a `--to` in the same run all count; the author's own review does not. The refusal comes before the flip, so the PR stays a draft. Opening a draft is never gated, and neither is a PR that was already ready.
 

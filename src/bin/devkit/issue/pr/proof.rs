@@ -1,10 +1,35 @@
-//! The proof gate on `pr create`: an agent's proof must answer every
-//! item under the issue's `Done when` (or `Acceptance criteria`) section.
+//! The proof gate on `pr create` and `pr edit`: an agent's proof must answer
+//! every item under the issue's `Done when` (or `Acceptance criteria`) section.
 
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use anyhow::{Context, Result, bail};
-use devkit_common::{progress::Steps, tracker::Tracker};
+use devkit_common::{caller::Caller, forge::Repos, progress::Steps, tracker::Tracker};
+use devkit_config::Config;
+
+/// Refuse an agent's proof in `vars` that skips an item of the worktree's
+/// tracker `issue`, when `defaults.pr_proof_variable` names the variable
+/// carrying it.
+pub(crate) fn gate_proof(
+    cfg: &Config,
+    here: &Path,
+    repos: &Repos,
+    issue: Option<&str>,
+    caller: Caller,
+    vars: &BTreeMap<String, String>,
+) -> Result<()> {
+    let (Some(variable), Some(issue), Caller::Agent) =
+        (&cfg.defaults.pr_proof_variable, issue, caller)
+    else {
+        return Ok(());
+    };
+    let tracker = devkit_common::tracker::resolve(cfg.tracker.kind, here, repos);
+    let proof = vars.get(variable).map_or("", String::as_str);
+    require_proof(tracker.tracker.as_ref(), issue, proof, variable)
+}
 
 /// Refuse `proof` when it skips an item of `issue`, read from the tracker so
 /// the items are the ones the issue carries now. An issue the tracker cannot

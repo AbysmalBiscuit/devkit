@@ -132,7 +132,7 @@ fn a_reused_pr_is_refused_before_it_is_touched() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "{stderr}");
     assert!(
-        stderr.contains("#7") && stderr.contains("gh pr edit 7 --attach"),
+        stderr.contains("#7") && stderr.contains("devkit pr edit --attach"),
         "the refusal names the PR and the way to attach to it: {stderr}"
     );
     let calls = fake.calls();

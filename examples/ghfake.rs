@@ -15,6 +15,10 @@
 //! `create_error.txt` there makes `gh pr create` and the REST create fail with
 //! its contents on stderr, and a `list_error.txt` makes `gh pr list` fail the
 //! same way.
+//!
+//! `pr create`, `pr edit` and a REST `PATCH` of a pull request each keep the
+//! argument vector they were handed in `pr_create.args`, `pr_edit.args` and
+//! `rest_pull_patch.args`, since `gh.log` cannot hold a multi-line body whole.
 
 use std::{
     io::Write,
@@ -100,6 +104,10 @@ fn rest(dir: &Path, args: &[String]) {
             serve_or_404(dir, "rest_pull_create.json")
         }
         ("GET", ["repos", _, _, "pulls", n]) => serve_or_404(dir, &format!("rest_pull_{n}.json")),
+        ("PATCH", ["repos", _, _, "pulls", n]) => {
+            let _ = std::fs::write(dir.join("rest_pull_patch.args"), args.join("\0"));
+            serve_or_404(dir, &format!("rest_pull_{n}.json"))
+        }
         ("GET", ["search", "issues"]) => print!(
             "{}",
             read_or(dir, "rest_search_issues.json", r#"{"items":[]}"#)
@@ -142,9 +150,11 @@ fn main() {
     }
 
     // `gh.log` joins with spaces and newlines, which a multi-line body also
-    // contains, so the argument vector `pr create` was handed is kept whole.
-    if joined.starts_with("pr create") {
-        let _ = std::fs::write(dir.join("pr_create.args"), args.join("\0"));
+    // contains, so the argument vector each PR write was handed is kept whole.
+    for verb in ["create", "edit"] {
+        if joined.starts_with(&format!("pr {verb}")) {
+            let _ = std::fs::write(dir.join(format!("pr_{verb}.args")), args.join("\0"));
+        }
     }
 
     if uses_graphql(&joined)

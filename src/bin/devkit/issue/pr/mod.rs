@@ -7,10 +7,12 @@ use devkit_common::{
 use crate::issue::review::{PrAction, Target, action_for, is_human_login};
 
 pub(crate) mod create;
+pub(crate) mod edit;
 pub(crate) mod proof;
 pub(crate) mod ready;
 pub(crate) mod render;
 pub(crate) mod resolve;
+pub(crate) mod splice;
 
 /// GitHub logins among targets that can be requested as reviewers, plus
 /// warnings for people that have no github handle. Channels are silently
@@ -33,7 +35,7 @@ pub(crate) fn reviewer_logins(targets: &[Target]) -> (Vec<String>, Vec<String>) 
     (logins, warnings)
 }
 
-/// Marking a PR ready acts on one that exists. Opening one is `pr
+/// Readying or editing a PR acts on one that exists. Opening one is `pr
 /// create`'s job, so a branch with no PR is an error naming it rather than a
 /// silent create.
 pub(crate) fn require_existing_pr(pr_state: Option<&str>) -> Result<()> {
