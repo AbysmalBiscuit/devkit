@@ -33,6 +33,19 @@ fn scope_prefers_codex() {
     assert_eq!(stdout(&out), "proj.main.codex-c1\n");
 }
 
+/// Grok's shell inherits the variables of the harness that launched it, so
+/// its own session id wins.
+#[test]
+fn scope_prefers_grok() {
+    let p = Proj::new();
+    let out = p.devkit(&["todo", "scope"], &[
+        ("CLAUDE_CODE_SESSION_ID", "k1"),
+        ("CODEX_SESSION_ID", "c1"),
+        ("GROK_SESSION_ID", "g1"),
+    ]);
+    assert_eq!(stdout(&out), "proj.main.grok-g1\n");
+}
+
 #[test]
 fn outside_a_repository_everything_is_global() {
     let p = Proj::new();

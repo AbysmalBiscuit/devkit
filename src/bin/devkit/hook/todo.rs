@@ -45,7 +45,8 @@ pub(crate) fn harness_of(harness: AnyHarness) -> Option<Harness> {
     match harness {
         AnyHarness::ClaudeCode => Some(Harness::Claude),
         AnyHarness::Codex => Some(Harness::Codex),
-        AnyHarness::Cursor | AnyHarness::Antigravity | AnyHarness::Grok => None,
+        AnyHarness::Grok => Some(Harness::Grok),
+        AnyHarness::Cursor | AnyHarness::Antigravity => None,
     }
 }
 
@@ -420,7 +421,7 @@ fn apply_deferred(dir: &Path, entry: &Deferred) -> Result<()> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Mirror {
     tool: String,
-    /// The harness's node prefix, `claude` or `codex`.
+    /// The harness's node prefix, such as `claude`.
     harness: String,
     session: Holder,
     actor: Holder,
@@ -461,10 +462,11 @@ impl Mirror {
         let Some(tool) = NativeTool::parse(&self.tool) else {
             return Ok(());
         };
-        let harness = match self.harness.as_str() {
-            "claude" => Harness::Claude,
-            "codex" => Harness::Codex,
-            other => anyhow::bail!("queued capture names an unknown harness {other:?}"),
+        let Some(harness) = Harness::ALL
+            .into_iter()
+            .find(|h| h.prefix() == self.harness)
+        else {
+            anyhow::bail!("queued capture names an unknown harness {:?}", self.harness);
         };
         let c = Capture {
             harness,
@@ -480,6 +482,9 @@ impl Mirror {
             NativeTool::TaskUpdate => task_update(&c, input),
             NativeTool::UpdatePlan => list_replace(&c, &input["plan"], "step"),
             NativeTool::TodoWrite => list_replace(&c, &input["todos"], "content"),
+            NativeTool::GrokTodoWrite => {
+                list_replace(&c, &self.response["TodosUpdated"]["todos"], "content")
+            }
         })
     }
 }
@@ -506,6 +511,9 @@ enum NativeTool {
     UpdatePlan,
     /// Claude Code's `TodoWrite`, which resends the whole list.
     TodoWrite,
+    /// Grok's `todo_write`, which by default sends only the items it changes
+    /// and answers with the whole list.
+    GrokTodoWrite,
 }
 
 impl NativeTool {
@@ -515,6 +523,7 @@ impl NativeTool {
             "TaskUpdate" => Some(Self::TaskUpdate),
             "update_plan" => Some(Self::UpdatePlan),
             "TodoWrite" => Some(Self::TodoWrite),
+            "todo_write" => Some(Self::GrokTodoWrite),
             _ => None,
         }
     }
@@ -525,7 +534,10 @@ pub(crate) fn writes_native_todo(payload: &Payload) -> bool {
         .tool_name()
         .and_then(NativeTool::parse)
         .is_some_and(|tool| match tool {
-            NativeTool::TaskCreate | NativeTool::TodoWrite | NativeTool::UpdatePlan => true,
+            NativeTool::TaskCreate
+            | NativeTool::TodoWrite
+            | NativeTool::UpdatePlan
+            | NativeTool::GrokTodoWrite => true,
             NativeTool::TaskUpdate => false,
         })
 }
@@ -695,7 +707,7 @@ fn native_status(status: &str) -> Option<StatusKind> {
         "pending" => Some(StatusKind::Pending),
         "in_progress" => Some(StatusKind::InProgress),
         "completed" => Some(StatusKind::Completed),
-        "deleted" => Some(StatusKind::Cancelled),
+        "deleted" | "cancelled" => Some(StatusKind::Cancelled),
         _ => None,
     }
 }

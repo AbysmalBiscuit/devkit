@@ -9,12 +9,13 @@
 
 use std::{ffi::OsStr, process::Command};
 
-/// Variables that would let an ambient session own a test's locks.
-const IDENTITY_VARS: [&str; 4] = [
+/// Variables that would let an ambient session own a test's locks or todos.
+const IDENTITY_VARS: [&str; 5] = [
     "DEVKIT_SESSION",
     "TMUX_PANE",
     "CLAUDE_CODE_SESSION_ID",
     "CODEX_SESSION_ID",
+    "GROK_SESSION_ID",
 ];
 
 pub fn scrub_identity(cmd: &mut Command) -> &mut Command {
