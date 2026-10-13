@@ -6,6 +6,7 @@
 extern crate self as devkit_todo;
 
 pub mod activity;
+pub mod graph;
 #[cfg(feature = "test-support")]
 pub mod contract;
 pub mod holder;
