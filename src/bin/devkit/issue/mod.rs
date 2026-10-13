@@ -502,10 +502,9 @@ pub(crate) enum PrCmd {
     /// Rewrite parts of this branch's open PR.
     ///
     /// `--pr-body` replaces the summary and each `--arg` replaces the section
-    /// of the body that template variable renders, found by the `pr_body`
-    /// template's own lines around it. The rest of the body, whatever bots or
-    /// people added, is left as it is. A section the body lacks is inserted
-    /// where the template puts it. Pushes the branch first unless `--no-push`.
+    /// of the body that template variable renders. The rest of the body,
+    /// whatever bots or people added, is left as it is. Pushes the branch
+    /// first unless `--no-push`.
     #[command(after_help = PROOF_HELP)]
     Edit {
         /// New PR title, the `input` of the `pr_title` template.

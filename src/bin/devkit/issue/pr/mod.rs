@@ -35,7 +35,7 @@ pub(crate) fn reviewer_logins(targets: &[Target]) -> (Vec<String>, Vec<String>) 
     (logins, warnings)
 }
 
-/// Marking a PR ready acts on one that exists. Opening one is `pr
+/// Readying or editing a PR acts on one that exists. Opening one is `pr
 /// create`'s job, so a branch with no PR is an error naming it rather than a
 /// silent create.
 pub(crate) fn require_existing_pr(pr_state: Option<&str>) -> Result<()> {

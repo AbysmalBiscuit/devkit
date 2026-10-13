@@ -81,6 +81,12 @@ pub fn run(args: Args) -> Result<()> {
     let loaded = devkit_ports::load::load(args.config.as_deref().map(Path::new), here)?;
     let tmpls = &loaded.config.templates;
     let forge = forge::resolve(&loaded.config.forge, &loaded.config.github, &start, None);
+    if !forge.forge.edits_prs() {
+        bail!(
+            "pr edit needs a GitHub forge; this project's forge is {}",
+            forge.forge.kind()
+        );
+    }
     check_attachments(forge.forge.as_ref(), here, &args.attach)?;
 
     let mut edits = parse_args(&args.vars, &tmpls.declared())?;

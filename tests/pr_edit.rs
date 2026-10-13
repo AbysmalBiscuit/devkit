@@ -235,6 +235,69 @@ fn a_new_title_alone_leaves_the_body_unread() {
         Some("feat: a new title")
     );
     assert_eq!(fake.patched_pr_field("body"), None);
+    assert!(
+        !fake.calls().contains("GET repos/o/r/pulls/7"),
+        "the body is never read: {}",
+        fake.calls()
+    );
+}
+
+/// The Claude Code cloud proxy refuses GraphQL; a body edit with nothing to
+/// upload reads and writes the PR over REST.
+#[test]
+fn a_body_edit_works_where_github_refuses_graphql() {
+    let fake = project("", LIVE);
+    fake.refuse_graphql();
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "proof=1. the new proof"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        fake.patched_pr_field("body").as_deref(),
+        Some(
+            LIVE.replace("1. the old proof", "1. the new proof")
+                .as_str()
+        )
+    );
+}
+
+#[test]
+fn a_merged_pr_is_refused() {
+    let fake = ghfake::Fake::new(TEMPLATE, &ghfake::Pr {
+        state: "MERGED",
+        ..PR_7
+    });
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "proof=1. the new proof"]);
+
+    assert!(!out.status.success());
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// A forge `pr edit` cannot write to is refused before the push, so the run
+/// changes nothing it would then have to report.
+#[test]
+fn a_forge_without_pr_edits_refuses_before_the_push() {
+    let origin = tempfile::tempdir().expect("origin dir");
+    devkit_git::Git::fixture(origin.path())
+        .args(["init", "-q", "--bare"])
+        .output()
+        .expect("git init --bare");
+    let fake = ghfake::Fake::with_origin_and(
+        &format!("{TEMPLATE}\n[forge]\nkind = \"gitlab\""),
+        &origin.path().to_string_lossy(),
+    );
+
+    let out = fake.issue(&["pr", "edit", "--arg", "proof=1. the new proof"]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("gitlab"), "names the forge: {stderr}");
+    let refs = devkit_git::Git::fixture(origin.path())
+        .args(["for-each-ref"])
+        .output()
+        .expect("git for-each-ref");
+    assert_eq!(refs, "", "nothing is pushed");
 }
 
 #[test]

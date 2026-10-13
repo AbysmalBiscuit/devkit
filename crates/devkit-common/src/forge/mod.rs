@@ -475,6 +475,11 @@ pub trait Forge: Send + Sync {
     }
     /// Open a PR from `pr.head`, run in the checkout at `cwd`. Returns its URL.
     fn create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String>;
+    /// Whether [`Forge::pr_body`] and [`Forge::edit`] work. A forge that does
+    /// not refuses both, so callers refuse an edit before touching anything.
+    fn edits_prs(&self) -> bool {
+        false
+    }
     /// PR `n`'s body as the forge holds it now, empty when it has none.
     fn pr_body(&self, repo: &Repo, n: u64) -> Result<String> {
         let _ = (repo, n);

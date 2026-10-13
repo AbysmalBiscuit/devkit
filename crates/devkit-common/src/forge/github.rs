@@ -903,6 +903,10 @@ impl Forge for GithubForge {
             .context("could not parse a PR URL from `gh pr create` output")
     }
 
+    fn edits_prs(&self) -> bool {
+        true
+    }
+
     fn pr_body(&self, repo: &Repo, n: u64) -> Result<String> {
         let pr = self.rest_found(&format!("/repos/{}/pulls/{n}", repo.slug))?;
         Ok(pr["body"].as_str().unwrap_or_default().to_string())

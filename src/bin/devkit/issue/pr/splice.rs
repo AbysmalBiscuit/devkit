@@ -34,11 +34,14 @@ pub(crate) fn splice(skeleton: &str, live: &str, name: &str, value: &str) -> Res
     let row_of =
         |pairs: &[(usize, usize)], i: usize| pairs.iter().find(|(s, _)| *s == i).map(|(_, l)| *l);
     let found = |i: usize| row_of(&earliest, i);
-    let before = anchors.iter().rev().copied().find(|&i| i < at);
-    let after = anchors.iter().copied().find(|&i| i > at);
+    let Some(before) = anchors.iter().rev().copied().find(|&i| i < at) else {
+        bail!(unbounded(name, "before"));
+    };
+    let Some(after) = anchors.iter().copied().find(|&i| i > at) else {
+        bail!(unbounded(name, "after"));
+    };
     if let Some(i) = [before, after]
         .into_iter()
-        .flatten()
         .find(|&i| found(i) != row_of(&latest, i))
     {
         bail!(
@@ -48,8 +51,8 @@ pub(crate) fn splice(skeleton: &str, live: &str, name: &str, value: &str) -> Res
         );
     }
 
-    let span_start = before.map_or(0, |i| sk[i].end);
-    let span_end = after.map_or(skeleton.len(), |i| sk[i].start);
+    let span_start = sk[before].end;
+    let span_end = sk[after].start;
     if let Some(other) = sk
         .iter()
         .filter(|l| l.start >= span_start && l.end <= span_end && l.start != sk[at].start)
@@ -61,38 +64,34 @@ pub(crate) fn splice(skeleton: &str, live: &str, name: &str, value: &str) -> Res
         );
     }
 
-    let end = match after {
-        None => live.len(),
-        Some(i) => match found(i) {
-            Some(l) => body[l].start,
-            None => bail!(lost(name)),
-        },
+    let Some(end) = found(after).map(|l| body[l].start) else {
+        bail!(lost(name));
     };
     let value = value.trim();
-    match before {
-        None => {
-            let text = skeleton[..span_end].replace(&marker, value);
-            Ok(format!("{text}{}", &live[end..]))
-        }
-        Some(i) => match found(i) {
-            Some(l) => {
-                let text = skeleton[span_start..span_end].replace(&marker, value);
-                Ok(format!("{}{text}{}", &live[..body[l].end], &live[end..]))
-            }
-            None if after.is_some() => {
-                let opens = section_start(&sk, i, |k| found(k).is_some());
-                let text = skeleton[sk[opens].start..span_end].replace(&marker, value);
-                Ok(format!("{}{text}{}", &live[..end], &live[end..]))
-            }
-            None => bail!(lost(name)),
-        },
-    }
+    let (start, opens) = match found(before) {
+        Some(l) => (body[l].end, span_start),
+        None => (
+            end,
+            sk[section_start(&sk, before, |k| found(k).is_some())].start,
+        ),
+    };
+    let text = skeleton[opens..span_end].replace(&marker, value);
+    Ok(format!("{}{text}{}", &live[..start], &live[end..]))
 }
 
 fn lost(name: &str) -> String {
     format!(
         "cannot find where `{name}` goes: the body no longer has the pr_body \
          template's lines around it"
+    )
+}
+
+/// Text above or below a variable that no template line bounds cannot be
+/// told apart from what bots and people add there.
+fn unbounded(name: &str, side: &str) -> String {
+    format!(
+        "`{name}` has no line of the pr_body template {side} it, so its text \
+         cannot be told from what was added {side} it"
     )
 }
 
@@ -287,6 +286,22 @@ Footer by @@devkit-slot:agent_model@@";
         );
     }
 
+    /// With no template line after it, a variable's text cannot be told from
+    /// what a bot appended below it, and replacing to the end would delete
+    /// that. The same holds above a variable with no template line before it.
+    #[test]
+    fn a_variable_at_either_end_of_the_template_is_refused() {
+        let tail = "## Proof\n\n@@devkit-slot:proof@@";
+        let live = "## Proof\n\np\n\n## Walkthrough\nbot text\n";
+        let err = splice(tail, live, "proof", "new").unwrap_err();
+        assert!(err.to_string().contains("after it"), "{err}");
+
+        let head = "@@devkit-slot:input@@\n\n## Proof\n\n@@devkit-slot:proof@@\n\n---";
+        let live = "> bot banner\n\nsummary\n\n## Proof\n\np\n\n---\n";
+        let err = splice(head, live, "input", "new").unwrap_err();
+        assert!(err.to_string().contains("before it"), "{err}");
+    }
+
     #[test]
     fn an_inline_variable_is_refused() {
         let err = splice(SKELETON, "Footer by X", "agent_model", "Y").unwrap_err();
@@ -295,8 +310,9 @@ Footer by @@devkit-slot:agent_model@@";
 
     #[test]
     fn a_section_holding_two_variables_is_refused() {
-        let skeleton = "## Merge danger\n\n@@devkit-slot:door@@\n\n@@devkit-slot:blast_radius@@\n";
-        let err = splice(skeleton, "## Merge danger\n\na\n\nb\n", "door", "x").unwrap_err();
+        let skeleton =
+            "## Merge danger\n\n@@devkit-slot:door@@\n\n@@devkit-slot:blast_radius@@\n\n---\n";
+        let err = splice(skeleton, "## Merge danger\n\na\n\nb\n\n---\n", "door", "x").unwrap_err();
         assert!(err.to_string().contains("`blast_radius`"), "{err}");
     }
 }

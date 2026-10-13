@@ -76,7 +76,8 @@ devkit pr edit --arg-file proof=<scratchpad>/proof.md \
 - `--attach` works as on `create`, but each file must be embedded by the same path in the text this run passes, as in the `create` example above, under the proof line it proves. A file nothing embeds is refused, because gh would append it below everything else in the body. A rerun replaces the section, so it shows each file once.
 - The proof gate below checks a `--arg` for `defaults.pr_proof_variable` as it does on `create`.
 - An edit with no `--attach` goes over REST, so it works where GitHub refuses GraphQL. `--attach` needs `gh pr edit`, so it fails there.
-- GitHub only. Every other forge refuses `edit`.
+- A variable with no template line on one side of it is refused, since its text cannot be told from what was added there. With the built-in `pr_body`, which is `{{ input }}` alone, that is every body edit.
+- GitHub only. Every other forge refuses `edit` before the push.
 
 `defaults.require_pr_reviewer` refuses any run that would leave a PR ready with no human reviewer other than the PR's own author: `create --ready`, `ready`, and `review request`'s draft flip. A pending request, a submitted review, or a `--to` in the same run all count; the author's own review does not. The refusal comes before the flip, so the PR stays a draft. Opening a draft is never gated, and neither is a PR that was already ready.
 
