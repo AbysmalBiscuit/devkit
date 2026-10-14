@@ -1376,7 +1376,7 @@
         },
         "verify_task": {
           "default": null,
-          "description": "The task the `verify` gate requires a passing run of, as `devrun task`\nnames it.",
+          "description": "The task the `verify` gate requires a passing run of, as `devrun task`\nnames it. A task whose command, or a step's command, renders a port\ncan never satisfy the gate: the gate renders it without allocating\nports, so it cannot match the steps the run recorded.",
           "type": [
             "string",
             "null"

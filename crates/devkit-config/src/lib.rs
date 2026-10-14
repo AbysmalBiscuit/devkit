@@ -1758,7 +1758,9 @@ pub struct PrGates {
     /// being refused. Off while `verify_task` is unset.
     pub verify: GateMode,
     /// The task the `verify` gate requires a passing run of, as `devrun task`
-    /// names it.
+    /// names it. A task whose command, or a step's command, renders a port
+    /// can never satisfy the gate: the gate renders it without allocating
+    /// ports, so it cannot match the steps the run recorded.
     #[serde(deserialize_with = "non_blank_task")]
     pub verify_task: Option<String>,
     /// The template args the `verify` gate's run must have been given with
