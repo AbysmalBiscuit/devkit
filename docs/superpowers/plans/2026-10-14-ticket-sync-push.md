@@ -119,12 +119,13 @@ Rules, from the spec's "The conflict check" and "Status equality":
   - GitHub: `addSubIssue(issueId: parent, subIssueId: child, replaceParent: replace)`, `removeSubIssue`, `addBlockedBy(issueId: blocked, blockingIssueId: blocker)`, `removeBlockedBy`. `other_relation` is always `None`.
   - Linear: `issueUpdate(id: child, input: {parentId})` (null to remove), `issueRelationCreate(type: blocks, issueId: blocker, relatedIssueId: blocked)`, `issueRelationDelete` of that relation, `other_relation` reads the pair's relations of any other type in either direction.
 
-- [ ] **Step 1: Verify Linear's relation behaviour on a real workspace**, with a `LINEAR_API_KEY` and two scratch issues: whether a pair can hold `blocks` and `related` at once, and what type a `blocks` relation reads as after the blocker is completed. Record both answers in `relations.rs`'s module doc and the recorded fixtures. If a resolved `blocks` reads as `related`, `other_relation` must not count it as a conflict for a pair the store already links; add a test for it in Step 2. Delete the scratch issues afterwards.
-- [ ] **Step 2: Write the failing tests:** `set_status_writes_without_a_from_check`, `close_issue_sends_state_reason_not_planned`, `close_issue_needs_no_project`, `add_sub_issue_sends_replace_parent_false`, `remove_sub_issue_names_both_ids`, `blocked_by_add_and_remove_name_the_blocker`, `linear_blocks_runs_from_blocker_to_blocked`, `linear_parent_null_removes_it`, `linear_other_relation_finds_related_in_either_direction`.
-- [ ] **Step 3: Run** `cargo nextest run -p devkit-common relations set_status close_issue`. Expected: FAIL to compile.
-- [ ] **Step 4: Implement.** Confirm `closeIssue`, `removeSubIssue` and `removeBlockedBy` input names with `gh api graphql` introspection before recording fixtures.
-- [ ] **Step 5: Run** the same command. Expected: PASS.
-- [ ] **Step 6: Commit** `feat(tracker): write status, close, parent and blockers for pushes`.
+Linear facts, checked against its API with scratch issues (record them in `relations.rs`'s module doc): a pair holds one relation, and `issueRelationCreate` on a pair that has one succeeds and replaces it, whatever the type or direction; a `blocks` relation still reads as `blocks` after the blocker is completed. So `other_relation` returns the pair's relation, read from both issues' `relations` and `inverseRelations`, when it is anything but `blocks` from the blocker to the blocked, and `set_blocked` never sends a create over a pair `other_relation` reports.
+
+- [ ] **Step 1: Write the failing tests:** `set_status_writes_without_a_from_check`, `close_issue_sends_state_reason_not_planned`, `close_issue_needs_no_project`, `add_sub_issue_sends_replace_parent_false`, `remove_sub_issue_names_both_ids`, `blocked_by_add_and_remove_name_the_blocker`, `linear_blocks_runs_from_blocker_to_blocked`, `linear_parent_null_removes_it`, `linear_other_relation_finds_related_in_either_direction`, `linear_other_relation_counts_a_reversed_blocks`, `linear_resolved_blocks_is_not_another_relation`.
+- [ ] **Step 2: Run** `cargo nextest run -p devkit-common relations set_status close_issue`. Expected: FAIL to compile.
+- [ ] **Step 3: Implement.** Confirm `closeIssue`, `removeSubIssue` and `removeBlockedBy` input names with `gh api graphql` introspection before recording fixtures.
+- [ ] **Step 4: Run** the same command. Expected: PASS.
+- [ ] **Step 5: Commit** `feat(tracker): write status, close, parent and blockers for pushes`.
 
 ---
 
@@ -238,10 +239,3 @@ Promote, from the spec: refuse a todo that already has a ticket. Without `--tick
 - [ ] **Step 4: Update** `todo.md` (when to promote, `--ticket` as the recovery after a create whose response was lost) and `ticket.md` (a created ticket gets its todo).
 - [ ] **Step 5: Run** the gate. Expected: green.
 - [ ] **Step 6: Commit** `feat(todo): promote a todo to a ticket`.
-
----
-
-## Unresolved questions
-
-1. **Linear relation reads** (Task 3 Step 1): whether a pair can hold two relation types, and how a resolved `blocks` reads. The verdict for Linear blocking edges depends on the answer, which needs a real Linear workspace and a `LINEAR_API_KEY`.
-2. **Prerequisite order:** the plan cannot start before #356 and #363 merge; a GitHub-only cut also waits on nothing else.
