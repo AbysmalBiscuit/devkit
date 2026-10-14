@@ -578,3 +578,89 @@ fn a_plain_todo_fires_nothing() {
     settle();
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
 }
+
+/// Makes `s`'s checkout a `workspace setup` worktree for issue `issue`.
+fn record_issue(s: &Synced, issue: &str) {
+    devkit_common::record::write(&s.proj.path, &devkit_common::record::IssueRecord {
+        issue: issue.into(),
+        slug: "fix".into(),
+        origin: Some(devkit_common::record::RecordOrigin::Setup),
+        ..Default::default()
+    })
+    .unwrap();
+}
+
+const AGENT: [(&str, &str); 2] = [("DEVKIT_CALLER", "agent"), ("CLAUDE_CODE_SESSION_ID", "S")];
+
+#[test]
+fn ready_in_a_ticket_workspace_offers_the_ticket() {
+    let s = two_issues();
+    assert!(s.sync(&[]).status.success());
+    record_issue(&s, "66");
+    let out = s.devkit(&["todo", "ready"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let ready = stdout(&out);
+    assert!(ready.contains("#66 Issue 66"), "{ready}");
+    assert!(!ready.contains("#65"), "{ready}");
+}
+
+#[test]
+fn ready_without_a_record_is_unchanged() {
+    let s = two_issues();
+    assert!(s.sync(&[]).status.success());
+    let out = s.devkit(&["todo", "ready"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!stdout(&out).contains("#66"), "{}", stdout(&out));
+}
+
+#[test]
+fn expand_lists_the_workspace_todos_under_the_ticket() {
+    let s = two_issues();
+    assert!(s.sync(&[]).status.success());
+    record_issue(&s, "66");
+    for text in ["write the fix", "already done"] {
+        let out = s.devkit(&["todo", "add", text], &AGENT);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    let done = s
+        .proj
+        .todos()
+        .into_iter()
+        .find(|t| t.description == "already done")
+        .unwrap();
+    assert!(
+        s.devkit(&["todo", "done", &done.id], &AGENT)
+            .status
+            .success()
+    );
+    let ticket = s.todo_for("o/r#66");
+    let summary = format!(
+        "- [ ] #66 Issue 66 ({}, 1 open)",
+        devkit_todo::short_id(&ticket.id)
+    );
+
+    let out = s.devkit(&["todo", "list"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let listed = stdout(&out);
+    assert!(listed.contains(&format!("{summary}\n")), "{listed}");
+
+    let out = s.devkit(&["todo", "list", "--expand"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let expanded = stdout(&out);
+    let lines: Vec<&str> = expanded.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with(&summary))
+        .unwrap_or_else(|| panic!("{expanded}"));
+    assert!(
+        lines[at + 1].starts_with("  - [ ] write the fix (")
+            && lines[at + 1].contains(" on proj.main"),
+        "{expanded}"
+    );
+    assert!(
+        lines
+            .get(at + 2)
+            .is_none_or(|l| !l.contains("already done")),
+        "{expanded}"
+    );
+}

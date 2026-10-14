@@ -14,16 +14,36 @@ use crate::{
     graph::{Graph, Plan},
 };
 
-/// What a listing says about blocking: the graph the lines were drawn from,
-/// and which ready todos earn a `ready` note.
+/// What a listing says beside each todo: blocking, from the graph the lines
+/// were drawn from, which ready todos earn a `ready` note, and the work under
+/// each synced ticket.
 pub struct Notes<'a> {
     pub graph: &'a Graph<'a>,
     pub show_ready: &'a dyn Fn(&Todo) -> bool,
+    pub work: &'a TicketWork,
+}
+
+/// The work a worktree on this machine does for each synced ticket, keyed
+/// by the ticket todo's id: the count of open todos in its workspace, and,
+/// when a listing expands tickets, those todos.
+#[derive(Debug, Default)]
+pub struct TicketWork {
+    pub open: HashMap<String, usize>,
+    pub expanded: HashMap<String, Vec<Todo>>,
+}
+
+impl TicketWork {
+    /// No ticket work at all, for a listing that shows none.
+    pub fn none() -> &'static TicketWork {
+        static NONE: std::sync::LazyLock<TicketWork> =
+            std::sync::LazyLock::new(TicketWork::default);
+        &NONE
+    }
 }
 
 /// The plan as a person reads it: a header, the critical path, then one block
 /// per batch, and a `cycle:` line when some members never placed.
-pub fn render_plan(root: &str, plan: &Plan<'_>) -> String {
+pub fn render_plan(root: &str, plan: &Plan<'_>, work: &TicketWork) -> String {
     let open = plan.batches.iter().flatten().count() + plan.cycle.len();
     let started = plan
         .batches
@@ -52,7 +72,10 @@ pub fn render_plan(root: &str, plan: &Plan<'_>) -> String {
         };
         let _ = writeln!(out, "\nbatch {}{label}", index + 1);
         for todo in batch {
-            let _ = writeln!(out, "  {}", plan_line(todo, plan, index));
+            let _ = writeln!(out, "  {}", plan_line(todo, plan, index, work));
+            for under in work.expanded.get(&todo.id).into_iter().flatten() {
+                let _ = writeln!(out, "    {}", work_line(under, None));
+            }
         }
     }
     if !plan.cycle.is_empty() {
@@ -69,7 +92,7 @@ pub fn render_plan(root: &str, plan: &Plan<'_>) -> String {
 
 /// One plan row: the mark, the short id, the text, the critical mark, and
 /// why the todo sits in this batch.
-fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize) -> String {
+fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize, work: &TicketWork) -> String {
     let mark = match todo.status.kind() {
         StatusKind::InProgress => ">",
         _ => "o",
@@ -98,6 +121,10 @@ fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize) -> String {
                 .join(", ");
             format!("after {after}")
         }
+    };
+    let note = match work.open.get(&todo.id) {
+        Some(open) => format!("{note}, {open} open"),
+        None => note,
     };
     format!(
         "{mark} {}  {}  {critical}  {note}",
@@ -226,6 +253,14 @@ fn section(
     let mut out = format!("## {}\n", printable(node));
     for (todo, depth) in tree(&shown) {
         let _ = writeln!(out, "{}{}", "  ".repeat(depth), line(todo, viewer, notes));
+        for under in notes.work.expanded.get(&todo.id).into_iter().flatten() {
+            let _ = writeln!(
+                out,
+                "{}{}",
+                "  ".repeat(depth + 1),
+                work_line(under, Some(viewer))
+            );
+        }
     }
     let mut finished = Vec::new();
     if !full && count(StatusKind::Completed) > 0 {
@@ -248,16 +283,36 @@ fn line(todo: &Todo, viewer: &Holder, notes: &Notes<'_>) -> String {
         Status::Pending | Status::Cancelled { .. } => (' ', String::new()),
     };
     let blocking = blocking_note(todo, notes);
-    let joined = match (note.is_empty(), blocking.is_empty()) {
+    let mut joined = match (note.is_empty(), blocking.is_empty()) {
         (true, true) => String::new(),
         (false, true) => note,
         (true, false) => format!(", {blocking}"),
         (false, false) => format!("{note}, {blocking}"),
     };
+    if let Some(open) = notes.work.open.get(&todo.id) {
+        let _ = write!(joined, ", {open} open");
+    }
     format!(
         "- [{mark}] {} ({}{joined})",
         printable(&todo.description),
         printable(crate::short_id(&todo.id))
+    )
+}
+
+/// A workspace todo listed under its ticket: its mark, text, id, holder, and
+/// the node it sits on, `viewer` naming whose claim reads as the reader's own.
+fn work_line(todo: &Todo, viewer: Option<&Holder>) -> String {
+    let (mark, note) = match &todo.status {
+        Status::InProgress { by } if Some(by) == viewer => (' ', ", in progress".to_string()),
+        Status::InProgress { by } => (' ', format!(", in progress: {}", printable(by.name()))),
+        Status::Completed { .. } => ('x', String::new()),
+        Status::Pending | Status::Cancelled { .. } => (' ', String::new()),
+    };
+    format!(
+        "- [{mark}] {} ({}{note}) on {}",
+        printable(&todo.description),
+        printable(crate::short_id(&todo.id)),
+        printable(todo.node())
     )
 }
 
@@ -412,6 +467,7 @@ mod tests {
         Notes {
             graph,
             show_ready: &|_| false,
+            work: TicketWork::none(),
         }
     }
 

@@ -228,6 +228,7 @@ pub(crate) fn hold(
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|_| false,
+        work: render::TicketWork::none(),
     };
     let lists = render::render_lists(&nodes, &open, &holder, &notes);
     let reason = format!(

@@ -170,6 +170,9 @@ pub enum TodoCommand {
         action: SchemaAction,
     },
     /// Print the todos that can start now, critical path first.
+    ///
+    /// In a worktree whose `workspace setup` record names a synced ticket,
+    /// the ticket's todo is offered beside the workspace's own.
     Ready,
     /// Print the open todos as batches, and the critical path through them.
     Plan {
@@ -177,8 +180,11 @@ pub enum TodoCommand {
         #[arg(long)]
         agents: Option<std::num::NonZeroUsize>,
         /// Print the batches as Mermaid flowchart source.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "expand")]
         mermaid: bool,
+        /// List each synced ticket's open workspace todos under it.
+        #[arg(long)]
+        expand: bool,
     },
     /// Print the todo block a hook injects.
     ///
@@ -245,6 +251,9 @@ pub struct ListArgs {
     pub json: bool,
     #[arg(long, help = sync::list_sync_help())]
     pub sync: bool,
+    /// List each synced ticket's open workspace todos under it.
+    #[arg(long, conflicts_with = "json")]
+    pub expand: bool,
 }
 
 pub fn run(cli: TodoCli) -> Result<()> {
@@ -309,14 +318,17 @@ pub fn run(cli: TodoCli) -> Result<()> {
     ) {
         refresh_tickets(&store, &cwd, &layout, &facts);
     }
+    let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
-        TodoCommand::List(args) => list(&store, &args, &cwd, &layout, &facts, &role, &actor)?,
-        TodoCommand::Ready => ready(&store, &layout, &facts, &role.name)?,
-        TodoCommand::Plan { agents, mermaid } => {
-            plan(&store, &layout, &facts, &role.name, agents, mermaid)?
-        }
+        TodoCommand::List(args) => list(&fence, &args, &cwd, &role, &actor)?,
+        TodoCommand::Ready => ready(&fence)?,
+        TodoCommand::Plan {
+            agents,
+            mermaid,
+            expand,
+        } => plan(&fence, agents, mermaid, expand)?,
         TodoCommand::Add {
             text,
             parent,
@@ -387,24 +399,8 @@ pub fn run(cli: TodoCli) -> Result<()> {
         TodoCommand::Stop { ids } | TodoCommand::Undone { ids } => {
             let _closed = set_status(&store, ids, StatusKind::Pending, &actor)?;
         }
-        TodoCommand::Done { ids } => finish(
-            &store,
-            &layout,
-            &facts,
-            &role.name,
-            ids,
-            StatusKind::Completed,
-            &actor,
-        )?,
-        TodoCommand::Cancel { ids } => finish(
-            &store,
-            &layout,
-            &facts,
-            &role.name,
-            ids,
-            StatusKind::Cancelled,
-            &actor,
-        )?,
+        TodoCommand::Done { ids } => finish(&fence, ids, StatusKind::Completed, &actor)?,
+        TodoCommand::Cancel { ids } => finish(&fence, ids, StatusKind::Cancelled, &actor)?,
         TodoCommand::Describe { id, text } => {
             store.apply(&Edit::Describe {
                 id,
@@ -607,21 +603,14 @@ fn start(
 }
 
 /// Completes or cancels `ids`, then names the offered todos that became ready.
-fn finish(
-    store: &Store,
-    layout: &Layout,
-    facts: &Facts,
-    role: &str,
-    ids: Vec<String>,
-    to: StatusKind,
-    actor: &Holder,
-) -> Result<()> {
-    let before = offered_ids(store, layout, facts, role)?;
+fn finish(fence: &Fence, ids: Vec<String>, to: StatusKind, actor: &Holder) -> Result<()> {
+    let store = fence.store;
+    let before = offered_ids(fence)?;
     let closed = set_status(store, ids, to, actor)?;
     if !store.config().print_unblocked || closed.is_empty() {
         return Ok(());
     }
-    let offered = offered_todos(store, layout, facts, role)?;
+    let offered = offered_todos(fence)?;
     let graph = Graph::new(&offered);
     let ready = graph.unblocked_by(&closed.iter().map(String::as_str).collect::<Vec<_>>());
     let names = ready
@@ -637,35 +626,30 @@ fn finish(
 }
 
 /// Full ids the ticket fence offers, before a change.
-fn offered_ids(
-    store: &Store,
-    layout: &Layout,
-    facts: &Facts,
-    role: &str,
-) -> Result<BTreeSet<String>> {
-    Ok(layout
-        .fence(store.list(&Filter::all())?)
+fn offered_ids(fence: &Fence) -> Result<BTreeSet<String>> {
+    Ok(offered_todos(fence)?
         .into_iter()
-        .filter(|todo| offered_here(store, layout, facts, role, todo))
+        .filter(|todo| fence.offers(todo))
         .map(|todo| todo.id)
         .collect())
 }
 
 /// The todos the ticket fence offers this caller, with the blockers the
 /// listing itself does not hold.
-fn offered_todos(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<Vec<Todo>> {
-    let offered = layout
-        .fence(store.list(&Filter::all())?)
+fn offered_todos(fence: &Fence) -> Result<Vec<Todo>> {
+    let offered = fence
+        .layout
+        .fence(fence.store.list(&Filter::all())?)
         .into_iter()
-        .filter(|todo| offered_here(store, layout, facts, role, todo))
+        .filter(|todo| fence.offers(todo))
         .collect();
-    graph::with_blockers(store, offered)
+    graph::with_blockers(fence.store, offered)
 }
 
 /// Prints the frontier, critical-path todos first.
-fn ready(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<()> {
-    let offered = offered_todos(store, layout, facts, role)?;
-    let plan = ticket_plan(store, layout, facts, role, &offered, None);
+fn ready(fence: &Fence) -> Result<()> {
+    let offered = offered_todos(fence)?;
+    let plan = ticket_plan(fence, &offered, None);
     for todo in plan.frontier() {
         let mark = if plan.critical.iter().any(|on| on.id == todo.id) {
             "  *"
@@ -683,22 +667,22 @@ fn ready(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<()
 
 /// Prints the ticket's batches, or their Mermaid source.
 fn plan(
-    store: &Store,
-    layout: &Layout,
-    facts: &Facts,
-    role: &str,
+    fence: &Fence,
     agents: Option<std::num::NonZeroUsize>,
     mermaid: bool,
+    expand: bool,
 ) -> Result<()> {
-    let offered = offered_todos(store, layout, facts, role)?;
-    let plan = ticket_plan(store, layout, facts, role, &offered, agents);
-    let root = layout
-        .ticket_root(facts, store.config().ready_outside_ticket)
-        .unwrap_or_else(|| facts.values.get("repo").cloned().unwrap_or_default());
+    let offered = offered_todos(fence)?;
+    let plan = ticket_plan(fence, &offered, agents);
+    let root = fence
+        .layout
+        .ticket_root(fence.facts, fence.store.config().ready_outside_ticket)
+        .unwrap_or_else(|| fence.facts.values.get("repo").cloned().unwrap_or_default());
     let text = if mermaid {
         render::render_mermaid(&plan)
     } else {
-        render::render_plan(&root, &plan)
+        let work = fence.work(&offered, expand)?;
+        render::render_plan(&root, &plan, &work)
     };
     print!("{text}");
     Ok(())
@@ -706,26 +690,89 @@ fn plan(
 
 /// The plan over the todos the ticket fence offers.
 fn ticket_plan<'a>(
-    store: &Store,
-    layout: &Layout,
-    facts: &Facts,
-    role: &str,
+    fence: &Fence,
     offered: &'a [Todo],
     cap: Option<std::num::NonZeroUsize>,
 ) -> devkit_todo::graph::Plan<'a> {
     // Blockers fetched for status sit in `offered` and are not members.
-    Graph::new(offered).plan(|todo| offered_here(store, layout, facts, role, todo), cap)
+    Graph::new(offered).plan(|todo| fence.offers(todo), cap)
 }
 
-/// Whether the ticket fence offers `todo` to this caller: the ticket's nodes,
-/// or the caller's own default listing when there is no ticket.
-fn offered_here(store: &Store, layout: &Layout, facts: &Facts, role: &str, todo: &Todo) -> bool {
-    let wide = store.config().ready_outside_ticket;
-    match layout.ticket_root(facts, wide) {
-        Some(root) => layout.offered(todo.project.as_deref(), &root, facts, role),
-        None => layout
-            .visible(facts, role)
-            .is_ok_and(|filter| filter.matches(todo.project.as_deref())),
+/// What a caller is offered: the ticket's nodes, or the caller's own default
+/// listing when there is no ticket, and the synced ticket the caller's
+/// worktree record names.
+struct Fence<'a> {
+    store: &'a Store,
+    layout: &'a Layout,
+    facts: &'a Facts,
+    role: &'a str,
+    checkout: &'a Checkout,
+    /// The ticket todos worktrees of this repository record, read once.
+    workspaces: std::cell::OnceCell<Vec<tickets::TicketWorkspace>>,
+}
+
+impl<'a> Fence<'a> {
+    fn new(
+        store: &'a Store,
+        layout: &'a Layout,
+        facts: &'a Facts,
+        role: &'a str,
+        checkout: &'a Checkout,
+    ) -> Self {
+        Self {
+            store,
+            layout,
+            facts,
+            role,
+            checkout,
+            workspaces: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// The ticket todos worktrees of this repository record. A store that
+    /// cannot be read has none.
+    fn workspaces(&self) -> &[tickets::TicketWorkspace] {
+        self.workspaces.get_or_init(|| {
+            let todos = self.store.list(&Filter::all()).unwrap_or_default();
+            if !todos.iter().any(|t| t.ticket.is_some()) {
+                return Vec::new();
+            }
+            tickets::ticket_workspaces(self.checkout, self.layout, &todos)
+        })
+    }
+
+    /// Whether the fence offers `todo` to this caller.
+    fn offers(&self, todo: &Todo) -> bool {
+        let wide = self.store.config().ready_outside_ticket;
+        match self.layout.ticket_root(self.facts, wide) {
+            Some(root) => {
+                self.layout
+                    .offered(todo.project.as_deref(), &root, self.facts, self.role)
+                    || self
+                        .workspaces()
+                        .iter()
+                        .any(|w| w.here && w.todo == todo.id)
+            }
+            None => self
+                .layout
+                .visible(self.facts, self.role)
+                .is_ok_and(|filter| filter.matches(todo.project.as_deref())),
+        }
+    }
+
+    /// The work under each synced ticket among `shown`, each ticket's todos
+    /// listed when `expand`.
+    fn work(&self, shown: &[Todo], expand: bool) -> Result<render::TicketWork> {
+        let workspaces: Vec<_> = self
+            .workspaces()
+            .iter()
+            .filter(|w| shown.iter().any(|t| t.id == w.todo))
+            .collect();
+        if workspaces.is_empty() {
+            return Ok(render::TicketWork::default());
+        }
+        let all = self.store.list(&Filter::all())?;
+        Ok(tickets::ticket_work(&workspaces, &all, expand))
     }
 }
 
@@ -850,14 +897,13 @@ fn move_todo(
 }
 
 fn list(
-    store: &Store,
+    fence: &Fence,
     args: &ListArgs,
     cwd: &Path,
-    layout: &Layout,
-    facts: &Facts,
     role: &ResolvedRole,
     viewer: &Holder,
 ) -> Result<()> {
+    let (store, layout, facts) = (fence.store, fence.layout, fence.facts);
     let filter = match (&args.scope, &args.node, &args.subtree, args.all) {
         (Some(scope), ..) => Filter::exact([layout.fill(scope, facts)?]),
         (_, Some(n), ..) => Filter::exact([n.clone()]),
@@ -896,12 +942,11 @@ fn list(
     let nodes = list_nodes(&filter, &todos);
     let graph = Graph::new(&graph_todos);
     let own = &role.node;
+    let work = fence.work(&todos, args.expand)?;
     let notes = render::Notes {
         graph: &graph,
-        show_ready: &|todo| {
-            offered_here(store, layout, facts, &role.name, todo)
-                && (!facts.subagent || todo.node() == own)
-        },
+        show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
+        work: &work,
     };
     print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
     Ok(())
@@ -995,12 +1040,12 @@ fn context(args: &ContextArgs) -> Option<String> {
     });
     let nodes = list_nodes(&visible, &todos);
     let graph = Graph::new(&graph_todos);
+    let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
+    let work = fence.work(&todos, false).ok()?;
     let notes = render::Notes {
         graph: &graph,
-        show_ready: &|todo| {
-            offered_here(&store, &layout, &facts, &role.name, todo)
-                && (!facts.subagent || todo.node() == own)
-        },
+        show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
+        work: &work,
     };
     let mut lists = render::render_lists(&nodes, &todos, &viewer, &notes);
     let own_open = todos.iter().any(|t| {

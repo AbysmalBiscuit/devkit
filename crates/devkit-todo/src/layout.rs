@@ -221,6 +221,9 @@ impl Layout {
         other
     }
 
+    /// The todos a store-wide scan keeps: those on a node a devkit template
+    /// reads, an open template's only once an anchored todo names its repo,
+    /// and every synced ticket's todo, which devkit itself filed.
     pub fn fence(&self, todos: Vec<Todo>) -> Vec<Todo> {
         let mut anchored_repos = BTreeSet::new();
         for todo in &todos {
@@ -239,7 +242,7 @@ impl Layout {
         }
         todos
             .into_iter()
-            .filter(|todo| self.is_devkit(todo.node(), &anchored_repos))
+            .filter(|todo| todo.ticket.is_some() || self.is_devkit(todo.node(), &anchored_repos))
             .collect()
     }
 }

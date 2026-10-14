@@ -3,7 +3,7 @@
 use devkit_todo::{
     Holder, Status, Todo,
     graph::Graph,
-    render::{self, Notes},
+    render::{self, Notes, TicketWork},
 };
 
 fn todo(id: &str, text: &str, status: Status, blocked_by: &[&str]) -> Todo {
@@ -36,7 +36,7 @@ fn plan_text_names_batches_critical_path_and_cycle() {
         todo("4", "back", Status::Pending, &["3"]),
     ];
     let plan = Graph::new(&todos).plan(|_| true, None);
-    let text = render::render_plan("r.main", &plan);
+    let text = render::render_plan("r.main", &plan, TicketWork::none());
     assert_eq!(
         text,
         "\
@@ -84,6 +84,7 @@ fn shown(todos: &[Todo], show: &dyn Fn(&Todo) -> bool) -> String {
     let notes = Notes {
         graph: &graph,
         show_ready: show,
+        work: TicketWork::none(),
     };
     render::render_lists(&["r.main".into()], todos, &Holder::new("S"), &notes)
 }
@@ -109,6 +110,7 @@ fn a_blocker_off_the_listing_is_named_with_its_node() {
     let notes = Notes {
         graph: &graph,
         show_ready: &|_| false,
+        work: TicketWork::none(),
     };
     let text = render::render_lists(&["r.main".into()], &listed, &Holder::new("S"), &notes);
     assert!(
@@ -135,7 +137,7 @@ fn plan_escapes_control_characters_in_the_holder() {
         &[],
     )];
     let plan = Graph::new(&todos).plan(|_| true, None);
-    let text = render::render_plan("r.main", &plan);
+    let text = render::render_plan("r.main", &plan, TicketWork::none());
     assert!(
         text.contains("in progress: S\\u{1b}]0;owned\\u{7}\\u{202e}\n"),
         "{text}"
@@ -168,4 +170,31 @@ flowchart LR
   class t1 critical
 "
     );
+}
+
+#[test]
+fn a_ticket_todo_shows_its_open_work_count() {
+    let todos = vec![
+        todo("1", "#65 Add sync", Status::Pending, &[]),
+        todo("2", "a todo of its own", Status::Pending, &[]),
+    ];
+    let graph = Graph::new(&todos);
+    let work = TicketWork {
+        open: [("1".to_string(), 3)].into(),
+        ..TicketWork::default()
+    };
+    let notes = Notes {
+        graph: &graph,
+        show_ready: &|_| false,
+        work: &work,
+    };
+    let text = render::render_lists(&["r.main".into()], &todos, &Holder::new("S"), &notes);
+    assert_eq!(
+        text,
+        "## r.main\n- [ ] #65 Add sync (1, 3 open)\n- [ ] a todo of its own (2)\n"
+    );
+    let plan = graph.plan(|_| true, None);
+    let text = render::render_plan("r.main", &plan, &work);
+    let line = text.lines().find(|l| l.contains("#65")).unwrap();
+    assert!(line.ends_with("ready, 3 open"), "{text}");
 }

@@ -17,10 +17,13 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use devkit_common::tracker;
+use devkit_common::{record, tracker, vcs::Checkout};
 use devkit_config::TicketSyncConfig;
 use devkit_todo::{
-    Filter, StatusKind, TodoStore,
+    Filter, Holder, StatusKind, Todo, TodoStore,
+    layout::{Facts, Layout},
+    node,
+    render::TicketWork,
     ticket::{self, SyncPlan},
 };
 
@@ -239,5 +242,101 @@ pub(crate) fn sync_in_background(
             state.failed(&format!("{e:#}"));
             Ok(None)
         }
+    }
+}
+
+/// A synced ticket's todo that a worktree of this repository records as its
+/// ticket, the link `workspace setup` makes.
+pub(crate) struct TicketWorkspace {
+    /// The ticket todo's id.
+    pub todo: String,
+    /// The worktree's workspace node, where the ticket's work is filed.
+    pub workspace: String,
+    /// Whether the worktree is the one `checkout` was resolved in.
+    pub here: bool,
+}
+
+/// Whether the ticket key `key` names the tracker issue `issue` a worktree
+/// record holds: `SWE-123` names itself, and `owner/repo#65` is issue `65`.
+fn names_issue(key: &str, issue: &str) -> bool {
+    key.eq_ignore_ascii_case(issue) || key.rsplit_once('#').is_some_and(|(_, n)| n == issue)
+}
+
+/// Each worktree of `checkout`'s repository whose record names the ticket of
+/// a todo in `todos` on the repository node, with that worktree's workspace
+/// node. A worktree on another machine has no record here, so it is absent.
+pub(crate) fn ticket_workspaces(
+    checkout: &Checkout,
+    layout: &Layout,
+    todos: &[Todo],
+) -> Vec<TicketWorkspace> {
+    let worktrees = checkout.worktrees();
+    let here = checkout.here().map(|h| h.path.as_path());
+    worktrees
+        .iter()
+        .filter(|wt| !wt.bare)
+        .filter_map(|wt| {
+            let issue = record::read_on(&wt.path, &wt.branch)?.tracker_issue()?;
+            let place = node::place_from(worktrees.first(), Some(wt));
+            let facts = Facts::new(&place, None, &Holder::human());
+            let repo = layout.fill("repo", &facts).ok()?;
+            let workspace = layout.ticket_root(&facts, false)?;
+            let todo = todos.iter().find(|t| {
+                t.node() == repo
+                    && t.ticket
+                        .as_ref()
+                        .is_some_and(|r| names_issue(&r.key, &issue))
+            })?;
+            Some(TicketWorkspace {
+                todo: todo.id.clone(),
+                workspace,
+                here: here == Some(wt.path.as_path()),
+            })
+        })
+        .collect()
+}
+
+/// The open work under each of `workspaces`' tickets among `todos`: its
+/// count, and with `expand` the todos themselves.
+pub(crate) fn ticket_work(
+    workspaces: &[&TicketWorkspace],
+    todos: &[Todo],
+    expand: bool,
+) -> TicketWork {
+    let mut work = TicketWork::default();
+    for ws in workspaces {
+        let inside = format!("{}.", ws.workspace);
+        let open: Vec<Todo> = todos
+            .iter()
+            .filter(|t| t.node() == ws.workspace || t.node().starts_with(&inside))
+            .filter(|t| {
+                matches!(
+                    t.status.kind(),
+                    StatusKind::Pending | StatusKind::InProgress
+                )
+            })
+            .cloned()
+            .collect();
+        *work.open.entry(ws.todo.clone()).or_default() += open.len();
+        if expand {
+            work.expanded
+                .entry(ws.todo.clone())
+                .or_default()
+                .extend(open);
+        }
+    }
+    work
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_ticket_key_names_its_issue() {
+        assert!(names_issue("SWE-123", "swe-123"));
+        assert!(names_issue("o/r#65", "65"));
+        assert!(!names_issue("o/r#65", "6"));
+        assert!(!names_issue("SWE-123", "SWE-12"));
     }
 }
