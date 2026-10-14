@@ -499,6 +499,16 @@ impl LinearFieldWriter {
             .with_context(|| format!("Linear has no issue {identifier}"))
     }
 
+    /// Read issue `uuid` like [`Self::read`], by the id that survives a move
+    /// to another team, which renames the identifier.
+    pub fn read_by_uuid(&self, uuid: &str) -> Result<LinearIssue> {
+        let id: Uuid = uuid
+            .parse()
+            .with_context(|| format!("`{uuid}` is not a Linear issue id"))?;
+        self.lookup(Lookup::Uuid(id))?
+            .with_context(|| format!("Linear has no issue {uuid}"))
+    }
+
     /// File the ticket `input` describes, which carries its client id. When
     /// the create fails or goes unanswered, the id is looked up: a ticket
     /// that has it was filed by this or an earlier attempt and is returned,

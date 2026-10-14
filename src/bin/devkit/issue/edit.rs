@@ -213,9 +213,9 @@ fn linear(args: EditArgs, sel: &Selected, cfg: &Config) -> Result<()> {
         .map_err(|e| field_write::linear_refused(e, decls, &resolved))
         .with_context(|| format!("Linear refused the edit of {id}; nothing was written"))?;
 
-    let link = field_write::linear_link(&before).to_string();
-    let problems = field_write::linear_finish(&writer, before, decls, &resolved, &refs, true);
-    println!("{link}");
+    let (after, problems) =
+        field_write::linear_finish(&writer, before, decls, &resolved, &refs, true);
+    println!("{}", field_write::linear_link(&after));
     field_write::warn(decls, &report);
     if !problems.is_empty() {
         for p in &problems {

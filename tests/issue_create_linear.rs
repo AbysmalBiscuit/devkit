@@ -42,16 +42,23 @@ const UUID: &str = "0b7c4a52-9d1e-4f3a-8c6b-2e5d7f9a1c30";
 
 /// A read answering ENG-42 with `labels` (ids) and `priority`.
 fn read(labels: &[&str], priority: u8) -> String {
+    read_in(("team-eng", "ENG"), 42, labels, priority)
+}
+
+/// A read answering the ticket `number` of `team` (id, key).
+fn read_in(team: (&str, &str), number: u32, labels: &[&str], priority: u8) -> String {
+    let (team_id, key) = team;
+    let identifier = format!("{key}-{number}");
     let labels: Vec<_> = labels
         .iter()
         .map(|l| serde_json::json!({ "id": l }))
         .collect();
     serde_json::json!({ "data": { "issue": { "nodes": [{
         "id": UUID,
-        "identifier": "ENG-42",
-        "url": "https://linear.app/acme/issue/ENG-42/t",
+        "identifier": identifier,
+        "url": format!("https://linear.app/acme/issue/{identifier}/t"),
         "title": "Old title",
-        "team": { "id": "team-eng", "key": "ENG" },
+        "team": { "id": team_id, "key": key },
         "labels": { "nodes": labels },
         "assignee": null,
         "priority": priority,
@@ -231,6 +238,27 @@ fn edit_on_linear_reads_first_and_writes_only_named_fields() {
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("ENG-42"), "{}", stdout(&out));
+}
+
+#[test]
+fn an_edit_moving_the_ticket_to_another_team_reads_it_back_by_its_id() {
+    let fake = project(FIELDS);
+    let linear = LinearFake::start();
+    linear.answer("id: { eq: ", &read_in(("team-ops", "OPS"), 7, &[], 0));
+    linear.answer("number: { eq: 42 }", &read(&[], 0));
+    linear.answer("issueUpdate(", UPDATED);
+    let out = run(&fake, &linear, &["edit", "ENG-42", "--arg", "team=OPS"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "https://linear.app/acme/issue/OPS-7/t",
+        "the link the ticket has after the move"
+    );
+    let updates = linear.sent("issueUpdate(");
+    assert_eq!(
+        updates[0]["variables"]["input"],
+        serde_json::json!({ "teamId": "team-ops" })
+    );
 }
 
 #[test]

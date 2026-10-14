@@ -171,7 +171,7 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
              `ticket create` filed it; no second ticket was filed"
         );
     }
-    let problems = field_write::linear_finish(&writer, issue, decls, &written, &refs, false);
+    let (_, problems) = field_write::linear_finish(&writer, issue, decls, &written, &refs, false);
     field_write::warn(decls, &report);
     if !problems.is_empty() {
         for p in &problems {

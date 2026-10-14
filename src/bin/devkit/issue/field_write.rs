@@ -162,7 +162,8 @@ pub(crate) fn linear_link(issue: &LinearIssue) -> &str {
 /// Set the blocked-by fields of `resolved` on the Linear ticket that held
 /// `before`, then compare every field of `resolved` with what the ticket
 /// holds. `before` is read again first when `stale`, because writes followed
-/// its read. Returns one line per field that did not take.
+/// its read. Returns the ticket as last read, and one line per field that
+/// did not take.
 pub(crate) fn linear_finish(
     writer: &LinearFieldWriter,
     before: LinearIssue,
@@ -170,7 +171,7 @@ pub(crate) fn linear_finish(
     resolved: &Resolved,
     refs: &BTreeMap<String, String>,
     stale: bool,
-) -> Vec<String> {
+) -> (LinearIssue, Vec<String>) {
     let mut problems = Vec::new();
     let mut failed: BTreeSet<String> = BTreeSet::new();
     let mut related = false;
@@ -190,14 +191,14 @@ pub(crate) fn linear_finish(
         }
     }
     let after = if stale || related {
-        match writer.read(&before.identifier) {
+        match writer.read_by_uuid(&before.uuid) {
             Ok(after) => after,
             Err(e) => {
                 problems.push(format!(
                     "{} could not be read back to confirm its fields: {e:#}",
                     before.identifier
                 ));
-                return problems;
+                return (before, problems);
             }
         }
     } else {
@@ -211,7 +212,7 @@ pub(crate) fn linear_finish(
             ));
         }
     }
-    problems
+    (after, problems)
 }
 
 /// A refused Linear write, with the stale-id hint of each enum field it
