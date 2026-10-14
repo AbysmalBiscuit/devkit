@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "explanation", "findings"],
+  "properties": {
+    "verdict": { "enum": ["correct", "incorrect"] },
+    "explanation": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["priority", "title", "body", "path", "start_line", "line", "suggestion"],
+        "properties": {
+          "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "path": { "type": "string" },
+          "start_line": { "type": "integer" },
+          "line": { "type": "integer" },
+          "suggestion": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

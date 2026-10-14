@@ -1,0 +1,154 @@
+name: Grok review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: grok-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Grok review
+    # Fork PRs get no secrets, so Grok could not authenticate.
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      # The head commit, not the merge commit, so Grok's line numbers match
+      # the lines the review comments attach to.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The installer only adds its bin dir to shell rc files, which later
+      # steps never source.
+      - name: Install Grok CLI
+        run: |
+          curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.52
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+
+      # --trust also applies project harness config (permission rules, hooks,
+      # MCP servers); drop it so the flags below are Grok's whole policy: file
+      # tools only, no shell (headless dontAsk cancels the turn instead).
+      - name: Review
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git ls-files -z -- ':(glob)**/.grok/**' ':(glob)**/.claude/**' \
+            ':(glob)**/.cursor/**' ':(glob)**/.mcp.json' | xargs -0 -r rm -f
+          git diff "${BASE_SHA}...HEAD" > pr.diff
+          cat > "$RUNNER_TEMP/prompt.md" <<EOF
+          Review pull request #${PR_NUMBER} in ${GITHUB_REPOSITORY}: "${PR_TITLE}".
+          Its changes are in pr.diff at the repository root; read the changed
+          files and their callers with your file tools. The author's description:
+
+          ${PR_BODY}
+
+          Apply the AGENTS.md files in the root and in each changed file's
+          directories; the nearest one wins on conflict.
+
+          Flag an issue only when all hold: the PR introduced it; it breaks
+          behaviour (wrong result, crash, data loss, security hole, race, or
+          code that won't build); it is discrete and the author would fix it;
+          it does not rest on guesses about intent; and if it claims to break
+          other code, you have found that code. Read the code to confirm each
+          one before reporting it. Do not flag style, naming, missing tests,
+          linter findings, or pre-existing bugs. If unsure, leave it out.
+
+          Answer in the structured output. The verdict is "correct" when
+          existing code and tests won't break and nothing blocks merge, and
+          the explanation is one sentence on why. Per finding:
+          - priority: 0 breaks for every input and blocks release, 1 must be
+            fixed before merge, 2 should be fixed eventually, 3 is nice to have.
+          - title: imperative, at most 80 characters.
+          - body: one paragraph on the inputs or state that trigger it, what
+            goes wrong, and the fix. Quote the AGENTS.md rule when one applies.
+          - path, start_line, line: the repo-relative file and the lines in
+            the PR's version of it, inside the diff, fewer than ten lines.
+          - suggestion: the exact replacement for those lines with their
+            indentation kept, or null when the fix is not a drop-in edit.
+          EOF
+          grok --no-auto-update --trust --always-approve --no-subagents \
+            --tools read_file,list_dir,grep,glob --disable-web-search \
+            --json-schema "$(cat .github/grok-review-schema.json)" \
+            --debug-file "$RUNNER_TEMP/grok-debug.log" \
+            --prompt-file "$RUNNER_TEMP/prompt.md" > "$RUNNER_TEMP/grok.out"
+          cat "$RUNNER_TEMP/grok.out"
+
+      - name: Show Grok debug log
+        if: failure()
+        run: tail -n 200 "$RUNNER_TEMP/grok-debug.log" || true
+
+      - name: Mint grok-review-bot token
+        id: app
+        if: vars.GROK_REVIEW_APP_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.GROK_REVIEW_APP_ID }}
+          private-key: ${{ secrets.GROK_REVIEW_APP_PRIVATE_KEY }}
+
+      - name: Post review
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          BOT_LOGIN: ${{ steps.app.outputs.app-slug && format('{0}[bot]', steps.app.outputs.app-slug) || 'github-actions[bot]' }}
+        run: |
+          reviews="repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
+          # The review object may sit in the result wrapper as an object or as
+          # a JSON string, so take the first one found at any depth.
+          jq '[.. | (objects, (strings | fromjson? // empty | objects))
+               | select(.findings | type == "array")] | first // empty' \
+            "$RUNNER_TEMP/grok.out" > review.json
+          if [ ! -s review.json ]; then
+            echo "::error::Grok did not reply with a review object"
+            tail -n 200 "$RUNNER_TEMP/grok-debug.log" || true
+            exit 1
+          fi
+
+          jq --arg sha "$HEAD_SHA" '
+            def suggestion:
+              if (.suggestion // "") == "" then ""
+              else "\n\n```suggestion\n\(.suggestion | rtrimstr("\n"))\n```" end;
+            def comment:
+              {path, line, side: "RIGHT",
+               body: "**[P\(.priority // 3)] \(.title)**\n\n\(.body)\(suggestion)"}
+              + if (.start_line // .line) < .line
+                then {start_line, start_side: "RIGHT"} else {} end;
+            {commit_id: $sha,
+             event: (if any(.findings[]; (.priority // 3) <= 1)
+                     then "REQUEST_CHANGES" else "COMMENT" end),
+             body: (if .findings == [] then "No issues found. \(.explanation)"
+                    else "**Verdict:** patch is \(.verdict). \(.explanation)" end),
+             comments: [.findings[] | comment]}
+          ' review.json > payload.json
+
+          gh api "$reviews" --paginate \
+            | jq -r --arg bot "$BOT_LOGIN" \
+                '.[] | select(.user.login == $bot and .state == "CHANGES_REQUESTED") | .id' \
+            | while read -r id; do
+                gh api -X PUT "$reviews/$id/dismissals" \
+                  -f message="Superseded by the review of ${HEAD_SHA}" -f event=DISMISS > /dev/null
+              done
+
+          # GitHub rejects the whole review when one comment's line is outside
+          # the diff, so fall back to listing the findings in the body.
+          if ! gh api "$reviews" --input payload.json > /dev/null; then
+            jq '.body += ([.comments[] | "\n\n---\n\n`\(.path):\(.line)`\n\n\(.body)"] | add // "")
+                | del(.comments)' payload.json \
+              | gh api "$reviews" --input - > /dev/null
+          fi
