@@ -592,32 +592,51 @@ fn task_update(c: &Capture<'_>, input: &Value) -> Result<()> {
     mirror_blockers(c, &id, input)
 }
 
-/// Records `addBlockedBy` as edges on the mirrored todo. An unknown native
-/// id is skipped. An edge that would close a cycle is skipped, and the hook
-/// still exits 0.
+/// Records `addBlockedBy` as edges on the mirrored todo, and `addBlocks` as
+/// the reverse: each listed native id gains a `Block` edge whose `by` is
+/// this todo. An unknown native id is skipped. An edge that would close a
+/// cycle is skipped, and the hook still exits 0.
 fn mirror_blockers(c: &Capture<'_>, id: &str, input: &Value) -> Result<()> {
-    let Some(blockers) = input["addBlockedBy"].as_array() else {
-        return Ok(());
-    };
-    let mut by = Vec::new();
-    for native in blockers {
+    if let Some(blockers) = input["addBlockedBy"].as_array() {
+        let by = native_ids(c, blockers)?;
+        record_block(c, id, &by)?;
+    }
+    if let Some(blocked) = input["addBlocks"].as_array() {
+        for blocked in native_ids(c, blocked)? {
+            record_block(c, &blocked, &[id.to_string()])?;
+        }
+    }
+    Ok(())
+}
+
+/// The mirrored ids of `natives`, skipping entries that are not strings and
+/// native ids this session has not recorded.
+fn native_ids(c: &Capture<'_>, natives: &[Value]) -> Result<Vec<String>> {
+    let mut ids = Vec::new();
+    for native in natives {
         let Some(native) = native.as_str() else {
             continue;
         };
-        if let Some(blocker) = c.map.lookup(c.harness, &c.actor, native)? {
-            by.push(blocker);
+        if let Some(id) = c.map.lookup(c.harness, &c.actor, native)? {
+            ids.push(id);
         }
     }
+    Ok(ids)
+}
+
+/// Records `by` as blockers of `id`. An empty list, or an edge that would
+/// close a cycle, records nothing.
+fn record_block(c: &Capture<'_>, id: &str, by: &[String]) -> Result<()> {
     if by.is_empty() {
         return Ok(());
     }
     let todos = c.store.list(&Filter::all())?;
-    if graph::cycle_through(&todos, id, &by).is_some() {
+    if graph::cycle_through(&todos, id, by).is_some() {
         return Ok(());
     }
     c.store.apply(&Edit::Block {
         id: id.to_string(),
-        by,
+        by: by.to_vec(),
     })?;
     Ok(())
 }

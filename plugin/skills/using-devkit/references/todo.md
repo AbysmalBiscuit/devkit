@@ -46,7 +46,7 @@ Injected lists and `devkit todo list` append `blocked by <ids>` while a blocker 
 
 A blocked pending todo does not hold the stop. Finish or cancel the todos that are actually yours to do.
 
-On the taskchampion backend the edges are the task's `dep_<uuid>` properties, which Taskwarrior reads as dependencies. A Claude Code `TaskUpdate` that carries `addBlockedBy` records the same edges on the mirrored todos. An edge that would close a cycle is skipped, and the hook still succeeds.
+On the taskchampion backend the edges are the task's `dep_<uuid>` properties, which Taskwarrior reads as dependencies. A Claude Code `TaskUpdate` that carries `addBlockedBy` or `addBlocks` records the same edges on the mirrored todos. An edge that would close a cycle is skipped, and the hook still succeeds.
 
 ## Stopping with open todos
 

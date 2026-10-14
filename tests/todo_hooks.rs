@@ -447,6 +447,48 @@ fn task_update_blockers_are_mirrored() {
 }
 
 #[test]
+fn task_update_add_blocks_is_mirrored_without_add_blocked_by() {
+    let p = Proj::new();
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
+    let alpha = by_text(&p, "alpha");
+    let mut update = fixture(&p, "claude-task-update.jsonl")[0].clone();
+    update["tool_input"] = json!({"taskId": "1", "addBlocks": ["2"]});
+    post_tool_use(&p, "claude-code", &[update]);
+    assert_eq!(by_text(&p, "beta").blocked_by, vec![alpha.id]);
+}
+
+#[test]
+fn task_update_add_blocks_skips_an_unknown_native_id() {
+    let p = Proj::new();
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
+    let alpha = by_text(&p, "alpha");
+    let mut update = fixture(&p, "claude-task-update.jsonl")[0].clone();
+    update["tool_input"] = json!({"taskId": "1", "addBlocks": ["9", "2"]});
+    let out = p.hook("post-tool-use", "claude-code", &update);
+    assert_eq!(out.status.code(), Some(0), "{}", todoenv::stderr(&out));
+    assert_eq!(by_text(&p, "beta").blocked_by, vec![alpha.id]);
+    assert!(by_text(&p, "alpha").blocked_by.is_empty());
+}
+
+#[test]
+fn task_update_add_blocks_skips_a_cycle() {
+    let p = Proj::new();
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
+    let mut first = fixture(&p, "claude-task-update.jsonl")[0].clone();
+    first["tool_input"] = json!({"taskId": "1", "addBlocks": ["2"]});
+    post_tool_use(&p, "claude-code", &[first]);
+    let mut reverse = fixture(&p, "claude-task-update.jsonl")[0].clone();
+    reverse["tool_input"] = json!({"taskId": "2", "addBlocks": ["1"]});
+    let out = p.hook("post-tool-use", "claude-code", &reverse);
+    assert_eq!(out.status.code(), Some(0), "{}", todoenv::stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(
+        by_text(&p, "alpha").blocked_by.is_empty(),
+        "the addBlocks edge that closes the cycle is skipped"
+    );
+}
+
+#[test]
 fn a_mirrored_cycle_is_skipped() {
     let p = Proj::new();
     post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
