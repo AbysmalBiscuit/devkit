@@ -311,7 +311,11 @@ fn a_task_redefined_outside_the_committed_config_never_passes() {
     std::fs::create_dir_all(home.parent().unwrap()).unwrap();
     std::fs::write(&home, "[tasks.pass.env]\nGIT_TRACE = \"0\"\n").unwrap();
     assert!(f.task("pass").status.success());
-    assert_eq!(f.runs()[3]["clean"], false, "a home layer adding to the task");
+    assert_eq!(
+        f.runs()[3]["clean"],
+        false,
+        "a home layer adding to the task"
+    );
     assert_eq!(f.passed("pass", Some(&sha)).status.code(), Some(1));
     std::fs::remove_file(&home).unwrap();
 
