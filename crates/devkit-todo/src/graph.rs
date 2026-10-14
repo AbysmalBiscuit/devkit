@@ -99,13 +99,35 @@ impl<'a> Graph<'a> {
             .filter(|todo| is_open(&todo.status.kind()) && offered(todo))
             .collect();
         let is_member = |id: &str| members.iter().any(|todo| todo.id == id);
-        // An open blocker outside the plan counts as finishing in batch 1, so
-        // its dependent is admitted no earlier than batch 2.
-        let outside = |todo: &Todo| {
-            self.open_blockers(todo)
-                .iter()
-                .any(|blocker| !is_member(&blocker.id))
-        };
+        // A member waits outside when an open blocker is not a member, or is
+        // itself waiting outside. Neither is offered, and neither is a cycle.
+        let mut waiting_outside: Vec<&str> = members
+            .iter()
+            .filter(|todo| {
+                self.open_blockers(todo)
+                    .iter()
+                    .any(|blocker| !is_member(&blocker.id))
+            })
+            .map(|todo| todo.id.as_str())
+            .collect();
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for todo in &members {
+                if waiting_outside.contains(&todo.id.as_str()) {
+                    continue;
+                }
+                let waits_outside = self
+                    .open_blockers(todo)
+                    .iter()
+                    .any(|blocker| waiting_outside.contains(&blocker.id.as_str()));
+                if waits_outside {
+                    waiting_outside.push(todo.id.as_str());
+                    grew = true;
+                }
+            }
+        }
+        let outside = |todo: &Todo| waiting_outside.contains(&todo.id.as_str());
         let mut waits_on: HashMap<&str, Vec<&str>> = HashMap::new();
         let mut dependents_of: HashMap<&str, Vec<&str>> = HashMap::new();
         for todo in &members {

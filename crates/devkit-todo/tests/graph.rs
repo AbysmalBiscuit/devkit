@@ -173,6 +173,43 @@ fn an_external_wait_with_no_ready_member_is_not_a_cycle() {
 }
 
 #[test]
+fn a_transitive_external_wait_is_not_a_cycle() {
+    let stalled = vec![
+        pending("side", &[]),
+        pending("a", &["side"]),
+        pending("b", &["a"]),
+    ];
+    let stalled_plan = Graph::new(&stalled).plan(|todo| todo.id != "side", None);
+    assert!(
+        !stalled_plan.cycle.iter().any(|todo| todo.id == "b"),
+        "b waits outside through a, so it is not a cycle: {:?}",
+        ids(&stalled_plan.cycle)
+    );
+
+    let todos = vec![
+        pending("side", &[]),
+        pending("a", &["side"]),
+        pending("b", &["a"]),
+        pending("free", &[]),
+    ];
+    let graph = Graph::new(&todos);
+    let plan = graph.plan(|todo| todo.id != "side", None);
+    assert!(
+        !plan.cycle.iter().any(|todo| todo.id == "b"),
+        "b waits outside through a, so it is not a cycle: {:?}",
+        ids(&plan.cycle)
+    );
+    assert!(plan.batches.iter().flatten().all(|todo| todo.id != "b"));
+    assert!(plan.frontier().iter().all(|todo| todo.id != "b"));
+    assert!(!graph.is_ready(&todos[2]));
+    assert_eq!(batches(&plan)[0], ["free"]);
+
+    let cycled = vec![pending("1", &["2"]), pending("2", &["1"])];
+    let plan = Graph::new(&cycled).plan(|_| true, None);
+    assert_eq!(ids(&plan.cycle), ["1", "2"]);
+}
+
+#[test]
 fn a_forced_start_still_lands_in_batch_one() {
     let todos = vec![
         pending("a", &[]),
