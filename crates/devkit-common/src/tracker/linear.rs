@@ -760,8 +760,8 @@ impl Tracker for LinearTracker {
         self.ticket_reader()?.read(keys)
     }
 
-    fn status_names(&self, tickets: &[SyncedTicket]) -> Result<Vec<String>> {
-        self.ticket_reader()?.status_names(tickets)
+    fn status_names(&self) -> Result<Vec<String>> {
+        self.ticket_reader()?.status_names()
     }
 }
 

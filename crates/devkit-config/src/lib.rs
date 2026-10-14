@@ -1269,8 +1269,8 @@ pub struct TicketSyncConfig {
     /// issue maps by its close reason instead: completed, or cancelled when
     /// closed as not planned or as a duplicate. A synced ticket in a status
     /// this map does not name, two names here that match each other, or a
-    /// name here the tracker does not have, fails the sync naming it, and
-    /// nothing is written.
+    /// name here no tracker status has (on Linear, no team's), fails the
+    /// sync naming it, and nothing is written.
     pub statuses: std::collections::BTreeMap<String, MappedStatus>,
 }
 

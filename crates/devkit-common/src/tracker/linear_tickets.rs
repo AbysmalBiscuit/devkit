@@ -24,9 +24,9 @@ const ISSUES_QUERY: &str = "query($filter: IssueFilter, $after: String) { \
      nodes { identifier title state { name } parent { identifier } \
      inverseRelations(first: 250) { nodes { type issue { identifier } } } } } }";
 
-/// Each team's workflow state names, for one page of `teams(filter:)`.
-const TEAMS_QUERY: &str = "query($filter: TeamFilter, $after: String) { \
-     teams(first: 10, after: $after, filter: $filter) { \
+/// Each team's workflow state names, for one page of `teams`.
+const TEAMS_QUERY: &str = "query($after: String) { \
+     teams(first: 10, after: $after) { \
      pageInfo { hasNextPage endCursor } \
      nodes { key states(first: 250) { nodes { name } } } } }";
 
@@ -203,29 +203,16 @@ pub fn read_with(
     Ok(found)
 }
 
-/// The union of the workflow state names of the teams `tickets` belong to,
-/// a team read from its key, the prefix of each ticket's identifier.
-/// Without tickets there is no team to narrow to, so every team's states
-/// count. `fetch` answers one page of teams for a filter and a cursor.
+/// The union of every team's workflow state names: a status map is shared
+/// by all of a workspace's teams, so a name is known when any team has it.
+/// `fetch` answers one page of teams for a cursor.
 pub fn status_names_with(
-    tickets: &[SyncedTicket],
-    mut fetch: impl FnMut(&Value, Option<&str>) -> Result<Value>,
+    mut fetch: impl FnMut(Option<&str>) -> Result<Value>,
 ) -> Result<Vec<String>> {
-    let mut keys: Vec<String> = tickets
-        .iter()
-        .filter_map(|t| parse_id(&t.key))
-        .map(|(team, _)| team)
-        .collect();
-    keys.sort();
-    keys.dedup();
-    let filter = match keys.is_empty() {
-        true => json!({}),
-        false => json!({ "key": { "in": keys } }),
-    };
     let mut names: Vec<String> = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let resp = fetch(&filter, after.as_deref())?;
+        let resp = fetch(after.as_deref())?;
         let teams = resp
             .pointer("/data/teams")
             .filter(|v| !v.is_null())
@@ -282,9 +269,14 @@ impl LinearTickets<'_> {
         })
     }
 
-    pub fn status_names(&self, tickets: &[SyncedTicket]) -> Result<Vec<String>> {
-        status_names_with(tickets, |filter, after| {
-            self.page(TEAMS_QUERY, filter, after, "sync team states")
+    pub fn status_names(&self) -> Result<Vec<String>> {
+        status_names_with(|after| {
+            post_graphql_with(
+                TEAMS_QUERY,
+                json!({ "after": after }),
+                self.key,
+                "sync team states",
+            )
         })
     }
 }
@@ -527,16 +519,6 @@ mod tests {
         );
     }
 
-    fn ticket(key: &str) -> SyncedTicket {
-        SyncedTicket {
-            key: key.into(),
-            title: String::new(),
-            status: TicketStatus::Named("Todo".into()),
-            blocked_by: Vec::new(),
-            parent: None,
-        }
-    }
-
     fn teams(nodes: Value) -> Value {
         json!({ "data": { "teams": {
             "pageInfo": { "hasNextPage": false, "endCursor": null },
@@ -545,38 +527,25 @@ mod tests {
     }
 
     #[test]
-    fn status_names_are_the_union_of_the_teams_states() {
+    fn status_names_are_every_teams_states() {
         let mut asked = Vec::new();
-        let names = status_names_with(
-            &[ticket("SWE-1"), ticket("OPS-4"), ticket("SWE-2")],
-            |filter, _| {
-                asked.push(filter.clone());
-                Ok(teams(json!([
-                    { "key": "SWE", "states": { "nodes": [
-                        { "name": "Todo" }, { "name": "In Progress" }, { "name": "Done" },
-                    ]}},
-                    { "key": "OPS", "states": { "nodes": [
-                        { "name": "Todo" }, { "name": "Blocked" }, { "name": "Done" },
-                    ]}},
-                ])))
-            },
-        )
-        .unwrap();
-        assert_eq!(names, ["Todo", "In Progress", "Done", "Blocked"]);
-        assert_eq!(asked, [json!({ "key": { "in": ["OPS", "SWE"] } })]);
-    }
-
-    #[test]
-    fn without_tickets_the_status_names_are_every_teams() {
-        let mut asked = Vec::new();
-        let names = status_names_with(&[], |filter, _| {
-            asked.push(filter.clone());
-            Ok(teams(json!([
-                { "key": "SWE", "states": { "nodes": [{ "name": "Todo" }] } },
-            ])))
+        let names = status_names_with(|after| {
+            asked.push(after.map(String::from));
+            Ok(match after {
+                None => json!({ "data": { "teams": {
+                    "pageInfo": { "hasNextPage": true, "endCursor": "c1" },
+                    "nodes": [{ "key": "SWE", "states": { "nodes": [
+                        { "name": "Triage" }, { "name": "Todo" },
+                        { "name": "In Review" }, { "name": "Done" },
+                    ]}}],
+                }}}),
+                Some(_) => teams(json!([{ "key": "OPS", "states": { "nodes": [
+                    { "name": "todo" }, { "name": "Blocked" }, { "name": "Done" },
+                ]}}])),
+            })
         })
         .unwrap();
-        assert_eq!(names, ["Todo"]);
-        assert_eq!(asked, [json!({})]);
+        assert_eq!(names, ["Triage", "Todo", "In Review", "Done", "Blocked"]);
+        assert_eq!(asked, [None, Some("c1".to_string())]);
     }
 }

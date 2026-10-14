@@ -174,8 +174,8 @@ pub trait Tracker: Send + Sync {
     fn tickets(&self, _keys: &[String]) -> Result<Vec<tickets::SyncedTicket>> {
         anyhow::bail!("the {} tracker cannot sync tickets", self.kind())
     }
-    /// Every status name `tickets` could be in, for checking a status map.
-    fn status_names(&self, _tickets: &[tickets::SyncedTicket]) -> Result<Vec<String>> {
+    /// Every status name a ticket could be in, for checking a status map.
+    fn status_names(&self) -> Result<Vec<String>> {
         anyhow::bail!("the {} tracker cannot sync tickets", self.kind())
     }
 }
