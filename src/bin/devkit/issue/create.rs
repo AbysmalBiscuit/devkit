@@ -11,7 +11,7 @@ use devkit_common::{
     tracker::{
         Selected,
         github_fields::{self, GithubFieldWriter},
-        linear_fields::{self, LinearFieldWriter},
+        linear_fields::{self, LinearFieldWriter, Origin},
     },
 };
 use devkit_config::{Config, FieldDecl, Place, TrackerKind};
@@ -199,14 +199,19 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
     let issue = created.issue;
     let ident = issue.identifier.clone();
     println!("{}", field_write::linear_link(&issue));
-    if created.existed {
-        eprintln!(
+    match created.origin {
+        Origin::This => {}
+        Origin::Earlier => eprintln!(
             "note: {ident} already had this create's id, so an earlier run of the same \
              `ticket create` filed it; no second ticket was filed"
-        );
-        if issue.archived {
-            eprintln!("note: {ident} is archived or in the trash");
-        }
+        ),
+        Origin::Unanswered => eprintln!(
+            "note: Linear did not answer the create, but has {ident} under its id: this run or \
+             an earlier run of the same `ticket create` filed it, and no second ticket was filed"
+        ),
+    }
+    if created.origin != Origin::This && issue.archived {
+        eprintln!("note: {ident} is archived or in the trash");
     }
     let (_, problems) = field_write::linear_finish(&writer, issue, decls, &written, &refs, false);
     field_write::warn(decls, &report);

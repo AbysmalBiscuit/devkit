@@ -317,6 +317,38 @@ fn an_unanswered_create_with_no_ticket_says_a_rerun_is_safe() {
 }
 
 #[test]
+fn a_create_answered_with_a_server_error_says_a_rerun_is_safe() {
+    let fake = project(FIELDS);
+    let linear = LinearFake::start();
+    linear.answer_status("issueCreate(", 502, "bad gateway");
+    linear.answer("issue: issues(", NO_ISSUE);
+    let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("may have filed")
+            && err.contains("rerun the same `ticket create`")
+            && err.contains("at most one ticket"),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_unanswered_create_whose_ticket_exists_does_not_blame_an_earlier_run() {
+    let fake = project(FIELDS);
+    let linear = LinearFake::start();
+    linear.hang_up("issueCreate(");
+    linear.answer("issue: issues(", &read(&[], 0));
+    let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("did not answer") && err.contains("this run or an earlier"),
+        "{err}"
+    );
+}
+
+#[test]
 fn edit_on_linear_reads_first_and_writes_only_named_fields() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();

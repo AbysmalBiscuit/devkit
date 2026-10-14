@@ -451,9 +451,34 @@ pub fn blocks_input(blocker: &str, issue: &str) -> Json {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Created {
     pub issue: LinearIssue,
-    /// Whether the ticket existed before this create: an earlier attempt
-    /// filed it.
-    pub existed: bool,
+    pub origin: Origin,
+}
+
+/// Which create filed a [`Created`] ticket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// This create, which Linear confirmed.
+    This,
+    /// An earlier create with the same id, so Linear refused this one.
+    Earlier,
+    /// This create or an earlier one: Linear did not answer this one.
+    Unanswered,
+}
+
+/// Why a create did not file a ticket, as far as devkit can tell.
+enum Unfiled {
+    /// Linear answered with a refusal.
+    Refused(anyhow::Error),
+    /// No answer came, so Linear may have filed it.
+    Unanswered(anyhow::Error),
+}
+
+/// The rerun advice for a create whose outcome devkit cannot tell.
+fn rerun_is_safe(id: Uuid) -> String {
+    format!(
+        "rerun the same `ticket create`: it passes the same id {id}, so it files at most one \
+         ticket"
+    )
 }
 
 /// Posts a GraphQL request body to Linear, labelled for timing.
@@ -487,7 +512,13 @@ impl LinearFieldWriter {
     }
 
     fn mutate(&self, query: &str, variables: Json, op: &str) -> Result<()> {
-        let resp = self.call(query, variables, op)?;
+        let resp = (self.post)(json!({ "query": query, "variables": variables }), op)?;
+        Self::confirmed(resp, op)
+    }
+
+    /// Whether `resp` confirms mutation `op`, else Linear's refusal.
+    fn confirmed(resp: Json, op: &str) -> Result<()> {
+        let resp = graphql_errors(resp)?;
         ensure!(
             resp.pointer(&format!("/data/{op}/success")) == Some(&Json::Bool(true)),
             "Linear did not confirm `{op}`"
@@ -543,41 +574,47 @@ impl LinearFieldWriter {
     }
 
     /// File the ticket `input` describes, which carries its client id. When
-    /// the create fails or goes unanswered, the id is looked up: a ticket
-    /// that has it was filed by this or an earlier attempt and is returned,
-    /// never filed twice.
+    /// the create is refused or goes unanswered, the id is looked up: a
+    /// ticket that has it was filed by this or an earlier attempt and is
+    /// returned, never filed twice.
     pub fn create(&self, input: &Json) -> Result<Created> {
         let id: Uuid = input["id"]
             .as_str()
             .and_then(|s| s.parse().ok())
             .context("a create input without a client id")?;
-        let created = self.mutate(CREATE_MUTATION, json!({ "input": input }), "issueCreate");
+        let body = json!({ "query": CREATE_MUTATION, "variables": { "input": input } });
+        let created = match (self.post)(body, "issueCreate") {
+            Ok(resp) => Self::confirmed(resp, "issueCreate").map_err(Unfiled::Refused),
+            Err(e) => Err(Unfiled::Unanswered(e)),
+        };
         let found = self.lookup(Lookup::Uuid(id));
-        match (created, found) {
-            (Ok(()), Ok(Some(issue))) => Ok(Created {
-                issue,
-                existed: false,
-            }),
-            (Ok(()), Ok(None)) => bail!("Linear confirmed the create, but has no issue {id}"),
-            (Err(_), Ok(Some(issue))) => Ok(Created {
-                issue,
-                existed: true,
-            }),
-            (Err(e), Ok(None)) if crate::http::is_unreachable(&e) => Err(e.context(format!(
-                "Linear did not answer the create and has no ticket under its id {id}; rerun \
-                 the same `ticket create`: it passes the same id, so it files at most one ticket"
-            ))),
-            (Err(e), Ok(None)) => Err(e.context("Linear did not file the ticket")),
-            (created, Err(read)) => Err(read.context(format!(
-                "Linear may have filed the ticket ({}), and reading it back failed; rerun the \
-                 same `ticket create`: it passes the same id {id}, so Linear returns that \
-                 ticket rather than filing a second",
-                match created {
+        let (issue, origin) = match (created, found) {
+            (created, Err(read)) => {
+                let create = match created {
                     Ok(()) => "it confirmed the create".to_string(),
-                    Err(e) => format!("the create failed: {e:#}"),
-                }
-            ))),
-        }
+                    Err(Unfiled::Refused(e)) => format!("it refused the create: {e:#}"),
+                    Err(Unfiled::Unanswered(e)) => format!("the create went unanswered: {e:#}"),
+                };
+                return Err(read.context(format!(
+                    "Linear may have filed the ticket ({create}), and reading it back failed; {}",
+                    rerun_is_safe(id)
+                )));
+            }
+            (Ok(()), Ok(None)) => bail!("Linear confirmed the create, but has no issue {id}"),
+            (Err(Unfiled::Refused(e)), Ok(None)) => {
+                return Err(e.context("Linear refused the create"));
+            }
+            (Err(Unfiled::Unanswered(e)), Ok(None)) => {
+                return Err(e.context(format!(
+                    "Linear did not answer the create, so it may have filed the ticket; {}",
+                    rerun_is_safe(id)
+                )));
+            }
+            (Ok(()), Ok(Some(issue))) => (issue, Origin::This),
+            (Err(Unfiled::Refused(_)), Ok(Some(issue))) => (issue, Origin::Earlier),
+            (Err(Unfiled::Unanswered(_)), Ok(Some(issue))) => (issue, Origin::Unanswered),
+        };
+        Ok(Created { issue, origin })
     }
 
     /// Write `input` onto the issue with id `uuid`. An empty input makes no
@@ -832,7 +869,7 @@ linear = "user-ada"
             Ok(fixture("linear_fields_read.json")),
         ]);
         let created = writer.create(&input).unwrap();
-        assert!(!created.existed);
+        assert_eq!(created.origin, Origin::This);
         assert_eq!(created.issue.identifier, "ENG-42");
         let sent = sent.lock().unwrap();
         assert_eq!(sent[0]["query"], CREATE_MUTATION);
@@ -892,7 +929,7 @@ linear = "user-ada"
             })
         });
         let created = writer.create(&input).unwrap();
-        assert!(created.existed);
+        assert_eq!(created.origin, Origin::Earlier);
         assert_eq!(created.issue.identifier, "ENG-42");
         assert_eq!(created.issue.uuid, id.to_string());
         let sent = sent.lock().unwrap();
