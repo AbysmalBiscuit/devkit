@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use devkit_vcs::{Changes, DETACHED, NewWorktree, Ownership, Selection, VersionControl, Worktree};
+use devkit_vcs::{
+    Changes, DETACHED, FileChange, NewWorktree, Ownership, Selection, VersionControl, Worktree,
+};
 
 use super::{Git, SLOW_TIMEOUT};
 
@@ -135,6 +137,60 @@ impl VersionControl for GitBackend {
             .collect())
     }
 
+    fn merge_base(&self, dir: &Path, a: &str, b: &str) -> Result<String> {
+        let out = Git::at(dir)
+            .args(["merge-base", "--end-of-options", a, b])
+            .output()?;
+        let sha = out.trim();
+        anyhow::ensure!(!sha.is_empty(), "`git merge-base {a} {b}` named no commit");
+        Ok(sha.to_string())
+    }
+
+    fn has_revision(&self, dir: &Path, rev: &str) -> Result<bool> {
+        Git::at(dir)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &format!("{rev}^{{commit}}"),
+            ])
+            .success()
+    }
+
+    fn changed_files(&self, dir: &Path, from: &str, to: &str) -> Result<Vec<FileChange>> {
+        let out = Git::at(dir)
+            .args([
+                "diff",
+                "--name-status",
+                "-z",
+                "-M",
+                "--no-ext-diff",
+                "--end-of-options",
+                from,
+                to,
+            ])
+            .output()?;
+        parse_name_status(&out)
+    }
+
+    fn file_at(&self, dir: &Path, rev: &str, path: &str) -> Result<Option<String>> {
+        let object = format!("{rev}:{path}");
+        if !Git::at(dir)
+            .args(["cat-file", "-e", "--end-of-options", &object])
+            .success()?
+        {
+            return Ok(None);
+        }
+        let out = Git::at(dir).args(["cat-file", "blob", &object]).wait()?;
+        anyhow::ensure!(
+            out.status.success(),
+            "`git cat-file blob {object}` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+    }
+
     fn create_worktree(&self, new: &NewWorktree<'_>) -> Result<()> {
         let path = utf8(new.path)?;
         let mut args = vec!["worktree", "add"];
@@ -251,6 +307,51 @@ impl VersionControl for GitBackend {
     fn commit(&self, dir: &Path, selection: &Selection<'_>, message: &str) -> Result<String> {
         super::commit::commit(dir, selection, message)
     }
+}
+
+/// `git diff --name-status -z` output: a status field, then one path, or two
+/// for a rename or copy.
+fn parse_name_status(out: &str) -> Result<Vec<FileChange>> {
+    let mut fields = out.split('\0').filter(|f| !f.is_empty());
+    let mut changes = Vec::new();
+    while let Some(status) = fields.next() {
+        let mut path = || {
+            fields
+                .next()
+                .map(str::to_string)
+                .with_context(|| format!("`git diff --name-status` status {status} has no path"))
+        };
+        let change = match status.chars().next() {
+            Some('A') => FileChange {
+                old: None,
+                new: Some(path()?),
+            },
+            Some('D') => FileChange {
+                old: Some(path()?),
+                new: None,
+            },
+            Some('R') => FileChange {
+                old: Some(path()?),
+                new: Some(path()?),
+            },
+            Some('C') => {
+                let _source = path()?;
+                FileChange {
+                    old: None,
+                    new: Some(path()?),
+                }
+            }
+            _ => {
+                let p = path()?;
+                FileChange {
+                    old: Some(p.clone()),
+                    new: Some(p),
+                }
+            }
+        };
+        changes.push(change);
+    }
+    Ok(changes)
 }
 
 /// A path handed to git as an argument. A lossy spelling would aim the call,
@@ -424,6 +525,51 @@ mod tests {
         let repo = repo_with_commit();
         run(&["checkout", "-q", "--detach"], repo.path()).unwrap();
         assert_eq!(GitBackend.branch(repo.path()).unwrap(), "DETACHED");
+    }
+
+    #[test]
+    fn changed_files_pairs_a_rename_and_file_at_reads_either_side() {
+        let repo = repo_with_commit();
+        std::fs::write(repo.path().join("keep.txt"), "one\ntwo\nthree\nfour\n").unwrap();
+        std::fs::write(repo.path().join("gone.txt"), "bye").unwrap();
+        run(&["add", "."], repo.path()).unwrap();
+        run(&["commit", "-qm", "base"], repo.path()).unwrap();
+        run(&["checkout", "-qb", "side"], repo.path()).unwrap();
+        run(&["mv", "keep.txt", "moved.txt"], repo.path()).unwrap();
+        run(&["rm", "-q", "gone.txt"], repo.path()).unwrap();
+        std::fs::write(repo.path().join("f.txt"), "y").unwrap();
+        std::fs::write(repo.path().join("new.txt"), "n").unwrap();
+        run(&["add", "."], repo.path()).unwrap();
+        run(&["commit", "-qm", "side"], repo.path()).unwrap();
+
+        let base = GitBackend.merge_base(repo.path(), "main", "HEAD").unwrap();
+        let mut changes = GitBackend
+            .changed_files(repo.path(), &base, "HEAD")
+            .unwrap();
+        changes.sort_by(|a, b| a.new.cmp(&b.new).then(a.old.cmp(&b.old)));
+        let change = |old: Option<&str>, new: Option<&str>| FileChange {
+            old: old.map(String::from),
+            new: new.map(String::from),
+        };
+        assert_eq!(changes, vec![
+            change(Some("gone.txt"), None),
+            change(Some("f.txt"), Some("f.txt")),
+            change(Some("keep.txt"), Some("moved.txt")),
+            change(None, Some("new.txt")),
+        ]);
+        assert_eq!(
+            GitBackend
+                .file_at(repo.path(), &base, "keep.txt")
+                .unwrap()
+                .as_deref(),
+            Some("one\ntwo\nthree\nfour\n")
+        );
+        assert_eq!(
+            GitBackend.file_at(repo.path(), "HEAD", "keep.txt").unwrap(),
+            None
+        );
+        assert!(GitBackend.has_revision(repo.path(), "main").unwrap());
+        assert!(!GitBackend.has_revision(repo.path(), "nope").unwrap());
     }
 
     /// `devrun up` picks apps by the directory a changed path starts with,
