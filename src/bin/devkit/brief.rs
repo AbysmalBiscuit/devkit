@@ -266,6 +266,9 @@ struct Facilities {
     servers: bool,
     locks: bool,
     enforced: bool,
+    /// A PR gate is on: the agent meets it at `pr create` whatever else the
+    /// checkout has.
+    gates: bool,
 }
 
 impl Facilities {
@@ -277,7 +280,7 @@ impl Facilities {
     }
 
     fn any(self) -> bool {
-        self.ports() || self.tasks || self.locks
+        self.ports() || self.tasks || self.locks || self.gates
     }
 }
 
@@ -289,6 +292,7 @@ impl DevrunBrief {
             servers: self.servers.is_some(),
             locks: self.locks,
             enforced: self.enforced,
+            gates: !self.gates.is_empty(),
         }
     }
 }
@@ -455,6 +459,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
         servers: !servers.is_empty(),
         locks,
         enforced,
+        gates: !gates.is_empty(),
     };
     let config_fault = config_fault(cwd, checkout);
     let rules = rules_floor(checkout, cwd, settings);

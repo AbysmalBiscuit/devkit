@@ -62,3 +62,10 @@ fn the_brief_names_no_gate_when_all_are_off() {
     assert!(!body.contains("PR gates"), "{body}");
     assert!(!body.contains("weakened_tests"), "{body}");
 }
+
+#[test]
+fn a_gate_alone_still_makes_a_brief() {
+    let body = brief("[brief]\nlocks = false\n");
+    assert!(body.contains("### PR gates"), "{body}");
+    assert!(body.contains("`weakened_tests` (require)"), "{body}");
+}
