@@ -156,7 +156,7 @@ fn sync_adds_one_todo_per_ticket_with_edges() {
     assert!(stdout(&out).contains("2 added"), "{}", stdout(&out));
     let todos = s.proj.todos();
     assert_eq!(todos.len(), 2, "{todos:?}");
-    let (t65, t66) = (s.todo_for("65"), s.todo_for("66"));
+    let (t65, t66) = (s.todo_for("o/r#65"), s.todo_for("o/r#66"));
     assert_eq!(t65.description, "#65 Issue 65");
     assert_eq!(t65.node(), "proj");
     assert_eq!(t66.node(), "proj");
@@ -190,7 +190,7 @@ fn dry_run_prints_and_writes_nothing() {
         shown.contains("add #65 Issue 65") && shown.contains("add #66 Issue 66"),
         "{shown}"
     );
-    assert!(shown.contains("block 65 by 66"), "{shown}");
+    assert!(shown.contains("block o/r#65 by o/r#66"), "{shown}");
     assert!(s.proj.todos().is_empty(), "{:?}", s.proj.todos());
 }
 
@@ -226,12 +226,12 @@ fn sync_without_rules_queries_no_tickets() {
 fn an_agents_start_survives_a_sync_while_the_ticket_stands_still() {
     let s = two_issues();
     assert!(s.sync(&[]).status.success());
-    let id = s.todo_for("66").id;
+    let id = s.todo_for("o/r#66").id;
     let agent = [("DEVKIT_CALLER", "agent"), ("CLAUDE_CODE_SESSION_ID", "S")];
     let start = s.devkit(&["todo", "start", &id], &agent);
     assert!(start.status.success(), "{}", stderr(&start));
     assert!(s.sync(&[]).status.success());
-    assert_eq!(s.todo_for("66").status, Status::InProgress {
+    assert_eq!(s.todo_for("o/r#66").status, Status::InProgress {
         by: Holder::new("S")
     });
 }
@@ -251,7 +251,7 @@ fn a_closed_ticket_finishes_its_todo_as_the_tracker() {
     );
     let out = s.sync(&[]);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(s.todo_for("65").status, Status::Completed {
+    assert_eq!(s.todo_for("o/r#65").status, Status::Completed {
         by: Some(Holder::tracker())
     });
 }
@@ -281,7 +281,7 @@ fn where_github_refuses_graphql_rest_reads_the_tickets() {
     s.serve("rest_issue_66_parent.json", &rest(65, 1));
     let out = s.sync(&[]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let (t65, t66) = (s.todo_for("65"), s.todo_for("66"));
+    let (t65, t66) = (s.todo_for("o/r#65"), s.todo_for("o/r#66"));
     assert_eq!(t65.blocked_by, std::slice::from_ref(&t66.id));
     assert_eq!(t66.parent.as_deref(), Some(t65.id.as_str()));
     assert!(s.calls().contains("assignee=LevValle"), "{}", s.calls());

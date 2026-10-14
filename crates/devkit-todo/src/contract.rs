@@ -51,6 +51,7 @@ macro_rules! contract_tests {
             the_tracker_finishes_an_agents_claim,
             a_ticket_reference_round_trips,
             adding_a_ticket_twice_returns_one_todo,
+            two_repositories_same_issue_number_are_two_todos,
             record_sync_sets_the_synced_status,
         );
         $crate::contract_tests!(@activity $make, $log;
@@ -316,6 +317,14 @@ pub fn adding_a_ticket_twice_returns_one_todo(s: &impl TodoStore) {
     assert_eq!(listed[0].description, "first");
     let other = s.add(ticket("66", "other")).unwrap();
     assert_ne!(other, first);
+}
+
+pub fn two_repositories_same_issue_number_are_two_todos(s: &impl TodoStore) {
+    let a = s.add(ticket("o/a#65", "#65 in a")).unwrap();
+    let b = s.add(ticket("o/b#65", "#65 in b")).unwrap();
+    assert_ne!(a, b);
+    let listed = s.list(&Filter::all()).unwrap();
+    assert_eq!(listed.len(), 2, "{listed:?}");
 }
 
 pub fn record_sync_sets_the_synced_status(s: &impl TodoStore) {

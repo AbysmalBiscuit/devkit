@@ -105,6 +105,7 @@ fn a_new_ticket_becomes_one_todo_on_the_node() {
 #[test]
 fn todo_text_names_the_ticket_as_its_tracker_does() {
     assert_eq!(todo_text("github", "65", "Add sync"), "#65 Add sync");
+    assert_eq!(todo_text("github", "o/r#65", "Add sync"), "#65 Add sync");
     assert_eq!(
         todo_text("linear", "SWE-123", "Fix the\nplate loader"),
         "SWE-123 Fix the plate loader"

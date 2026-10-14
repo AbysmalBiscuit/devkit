@@ -67,7 +67,7 @@ pub struct Todo {
 pub struct TicketRef {
     /// The tracker's kind: `github` or `linear`.
     pub tracker: String,
-    /// The ticket's id on the tracker: `65`, `SWE-123`.
+    /// The ticket's id on the tracker: `owner/repo#65`, `SWE-123`.
     pub key: String,
     /// The ticket's tracker status as the last sync read it, so a sync
     /// changes the todo's status only when the ticket's has moved.

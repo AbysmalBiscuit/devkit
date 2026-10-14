@@ -20,7 +20,7 @@ use crate::{Edit, Holder, NewTodo, StatusKind, TicketRef, Todo, one_line};
 /// the plate loader` elsewhere.
 pub fn todo_text(tracker: &str, key: &str, title: &str) -> String {
     let key = match tracker {
-        "github" => format!("#{key}"),
+        "github" => format!("#{}", key.rsplit('#').next().unwrap_or(key)),
         _ => key.to_string(),
     };
     one_line(&format!("{key} {title}"))

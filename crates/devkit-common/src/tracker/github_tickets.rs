@@ -118,13 +118,27 @@ pub fn issues_query(slug: &str, numbers: &[u64], board: Option<&BoardRef>) -> St
     )
 }
 
-/// The issue number `v` names when it is an issue of `slug`.
-fn number_in(v: &Value, slug: &str) -> Option<String> {
+/// The key of issue `number` of `slug`: `owner/repo#65`, so two
+/// repositories' issues with one number are two tickets.
+fn ticket_key(slug: &str, number: u64) -> String {
+    format!("{slug}#{number}")
+}
+
+/// The issue number `key` names when it is a [`ticket_key`] of `slug`.
+fn key_number(key: &str, slug: &str) -> Option<u64> {
+    let (repo, number) = key.rsplit_once('#')?;
+    repo.eq_ignore_ascii_case(slug)
+        .then(|| number.parse().ok())
+        .flatten()
+}
+
+/// The key of the issue `v` names when it is an issue of `slug`.
+fn key_in(v: &Value, slug: &str) -> Option<String> {
     let repo = v.pointer("/repository/nameWithOwner")?.as_str()?;
     repo.eq_ignore_ascii_case(slug)
         .then(|| v["number"].as_u64())
         .flatten()
-        .map(|n| n.to_string())
+        .map(|n| ticket_key(slug, n))
 }
 
 /// A closed issue's reason, from GraphQL's `stateReason` or REST's
@@ -163,19 +177,19 @@ pub fn parse_issue(v: &Value, slug: &str, board: Option<&Board>) -> Option<Synce
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|b| number_in(b, slug))
+        .filter_map(|b| key_in(b, slug))
         .collect();
     blocked_by.sort();
     blocked_by.dedup();
     Some(SyncedTicket {
-        key: number.to_string(),
+        key: ticket_key(slug, number),
         title: v["title"].as_str().unwrap_or_default().to_string(),
         status,
         blocked_by,
         parent: v
             .get("parent")
             .filter(|p| !p.is_null())
-            .and_then(|p| number_in(p, slug)),
+            .and_then(|p| key_in(p, slug)),
     })
 }
 
@@ -305,14 +319,14 @@ impl GithubTickets<'_> {
         Ok(found)
     }
 
-    /// The issues numbered `keys`, whatever their state. A key that names no
-    /// issue is left out.
+    /// The issues `keys` name, whatever their state. A key that names no
+    /// issue of this repository is left out.
     pub fn read(&self, keys: &[String]) -> Result<Vec<SyncedTicket>> {
-        let numbers: Vec<u64> = keys.iter().filter_map(|k| k.parse().ok()).collect();
+        let slug = &self.repo.slug;
+        let numbers: Vec<u64> = keys.iter().filter_map(|k| key_number(k, slug)).collect();
         if numbers.is_empty() {
             return Ok(Vec::new());
         }
-        let slug = &self.repo.slug;
         let mut out = Vec::new();
         for chunk in numbers.chunks(50) {
             let query = issues_query(slug, chunk, self.board.as_ref());
@@ -404,9 +418,9 @@ impl GithubTickets<'_> {
             Ok((
                 blockers
                     .iter()
-                    .filter_map(|b| rest_number_in(b, slug))
+                    .filter_map(|b| rest_key_in(b, slug))
                     .collect(),
-                parent.and_then(|p| rest_number_in(&p, slug)),
+                parent.and_then(|p| rest_key_in(&p, slug)),
             ))
         });
         issues
@@ -423,7 +437,7 @@ impl GithubTickets<'_> {
                     _ => TicketStatus::Named(String::new()),
                 };
                 Ok(SyncedTicket {
-                    key: v["number"].as_u64().unwrap_or_default().to_string(),
+                    key: ticket_key(slug, v["number"].as_u64().unwrap_or_default()),
                     title: v["title"].as_str().unwrap_or_default().to_string(),
                     status,
                     blocked_by,
@@ -434,14 +448,14 @@ impl GithubTickets<'_> {
     }
 }
 
-/// The issue number a REST issue names when it is an issue of `slug`.
-fn rest_number_in(v: &Value, slug: &str) -> Option<String> {
+/// The key of a REST issue when it is an issue of `slug`.
+fn rest_key_in(v: &Value, slug: &str) -> Option<String> {
     let repo = v["repository_url"].as_str()?;
     repo.to_ascii_lowercase()
         .ends_with(&format!("/repos/{}", slug.to_ascii_lowercase()))
         .then(|| v["number"].as_u64())
         .flatten()
-        .map(|n| n.to_string())
+        .map(|n| ticket_key(slug, n))
 }
 
 #[cfg(test)]
@@ -552,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn blocked_by_and_parent_are_issue_numbers() {
+    fn keys_name_the_repository_and_issue_number() {
         let linked = json!({
             "parent": { "number": 60, "repository": { "nameWithOwner": "O/R" } },
             "blockedBy": { "nodes": [
@@ -562,8 +576,9 @@ mod tests {
             ]},
         });
         let ticket = only(&search(vec![issue(65, linked)], None));
-        assert_eq!(ticket.blocked_by, ["64", "66"]);
-        assert_eq!(ticket.parent.as_deref(), Some("60"));
+        assert_eq!(ticket.key, "o/r#65");
+        assert_eq!(ticket.blocked_by, ["o/r#64", "o/r#66"]);
+        assert_eq!(ticket.parent.as_deref(), Some("o/r#60"));
         let foreign =
             json!({ "parent": { "number": 1, "repository": { "nameWithOwner": "x/y" } } });
         assert_eq!(only(&search(vec![issue(65, foreign)], None)).parent, None);
@@ -657,7 +672,10 @@ mod tests {
         }});
         let tickets = parse_issues(&resp, SLUG, Some(&board_ref())).unwrap();
         assert_eq!(tickets.len(), 1);
-        assert_eq!(tickets[0].key, "65");
+        assert_eq!(tickets[0].key, "o/r#65");
+        assert_eq!(key_number("O/R#65", SLUG), Some(65));
+        assert_eq!(key_number("x/y#65", SLUG), None);
+        assert_eq!(key_number("65", SLUG), None);
         let query = issues_query(SLUG, &[65, 99], Some(&board_ref()));
         assert!(query.contains("i65: issue(number: 65)"), "{query}");
         assert!(query.contains("projectV2(number: 3)"), "{query}");

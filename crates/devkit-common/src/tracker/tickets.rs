@@ -4,7 +4,8 @@
 /// One ticket as a sync reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncedTicket {
-    /// The tracker's id for it: `65` on GitHub, `SWE-123` on Linear.
+    /// The tracker's id for it: `owner/repo#65` on GitHub, `SWE-123` on
+    /// Linear.
     pub key: String,
     pub title: String,
     pub status: TicketStatus,
