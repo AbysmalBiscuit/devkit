@@ -34,9 +34,12 @@ fn is_me() -> Value {
     json!({ "isMe": { "eq": true } })
 }
 
-/// The `IssueFilter` `rule` stands for, leaving out issues in one of
-/// `closed_names`. Every condition is one clause of an `and`, so a rule's
-/// labels each require their own label.
+/// Linear's workflow state types an issue is closed in.
+const CLOSED_STATE_TYPES: [&str; 3] = ["completed", "canceled", "duplicate"];
+
+/// The `IssueFilter` `rule` stands for, over open issues only and leaving
+/// out issues in one of `closed_names`. Every condition is one clause of an
+/// `and`, so a rule's labels each require their own label.
 pub fn rule_filter(rule: &MatchRule, closed_names: &[String]) -> Result<Value> {
     let mut clauses = Vec::new();
     match &rule.assignee {
@@ -63,13 +66,11 @@ pub fn rule_filter(rule: &MatchRule, closed_names: &[String]) -> Result<Value> {
         }
         clauses.push(json!({ "labels": { "some": { "name": { "eqIgnoreCase": label } } } }));
     }
+    clauses.push(json!({ "state": { "type": { "nin": CLOSED_STATE_TYPES } } }));
     for name in closed_names {
         clauses.push(json!({ "state": { "name": { "neqIgnoreCase": name.trim() } } }));
     }
-    Ok(match clauses.is_empty() {
-        true => json!({}),
-        false => json!({ "and": clauses }),
-    })
+    Ok(json!({ "and": clauses }))
 }
 
 /// The `IssueFilter` selecting the issues `keys` name. Keys that are not
@@ -330,12 +331,16 @@ mod tests {
         tickets.remove(0)
     }
 
+    fn open() -> Value {
+        json!({ "state": { "type": { "nin": ["completed", "canceled", "duplicate"] } } })
+    }
+
     #[test]
     fn rule_filter_is_built_from_conditions() {
         let me = rule(Some(Assignee::Me), None, &[]);
         assert_eq!(
             rule_filter(&me, &[]).unwrap(),
-            json!({ "and": [{ "assignee": { "isMe": { "eq": true } } }] })
+            json!({ "and": [{ "assignee": { "isMe": { "eq": true } } }, open()] })
         );
 
         let unassigned_lead = rule(Some(Assignee::Nobody), Some(ProjectRole::Lead), &[]);
@@ -344,6 +349,7 @@ mod tests {
             json!({ "and": [
                 { "assignee": { "null": true } },
                 { "project": { "lead": { "isMe": { "eq": true } } } },
+                open(),
             ]})
         );
 
@@ -353,7 +359,7 @@ mod tests {
             json!({ "and": [{ "project": { "or": [
                 { "lead": { "isMe": { "eq": true } } },
                 { "members": { "some": { "isMe": { "eq": true } } } },
-            ]}}]})
+            ]}}, open()]})
         );
 
         let labelled = rule(None, None, &["bug", " Backend "]);
@@ -362,6 +368,7 @@ mod tests {
             json!({ "and": [
                 { "labels": { "some": { "name": { "eqIgnoreCase": "bug" } } } },
                 { "labels": { "some": { "name": { "eqIgnoreCase": "Backend" } } } },
+                open(),
             ]})
         );
 
@@ -371,7 +378,7 @@ mod tests {
             json!({ "and": [{ "assignee": { "or": [
                 { "name": { "eqIgnoreCase": "lev" } },
                 { "displayName": { "eqIgnoreCase": "lev" } },
-            ]}}]})
+            ]}}, open()]})
         );
     }
 
@@ -391,6 +398,7 @@ mod tests {
             filter,
             json!({ "and": [
                 { "assignee": { "isMe": { "eq": true } } },
+                open(),
                 { "state": { "name": { "neqIgnoreCase": "Done" } } },
                 { "state": { "name": { "neqIgnoreCase": "canceled" } } },
             ]})
@@ -484,8 +492,13 @@ mod tests {
     }
 
     #[test]
-    fn a_rule_without_conditions_selects_every_issue() {
-        assert_eq!(rule_filter(&MatchRule::default(), &[]).unwrap(), json!({}));
+    fn a_rule_without_conditions_selects_every_open_issue() {
+        assert_eq!(
+            rule_filter(&MatchRule::default(), &[]).unwrap(),
+            json!({ "and": [
+                { "state": { "type": { "nin": ["completed", "canceled", "duplicate"] } } },
+            ]})
+        );
     }
 
     #[test]
