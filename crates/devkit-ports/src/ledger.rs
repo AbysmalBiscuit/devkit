@@ -136,11 +136,15 @@ impl Ledger {
             .collect())
     }
 
-    /// The latest run proving `task` exited 0 on a clean tree at exactly
-    /// `sha`. A run at an ancestor, a prefix of the id, or a dirty tree proves
-    /// nothing.
-    pub fn passed(&self, task: &str, sha: &str) -> Result<Option<Run>> {
-        Ok(self.runs()?.into_iter().rev().find(|r| r.proves(task, sha)))
+    /// The latest run in `repo`'s checkouts proving `task` exited 0 on a
+    /// clean tree at exactly `sha`. A run at an ancestor, a prefix of the id,
+    /// a dirty tree or another repository proves nothing.
+    pub fn passed(&self, repo: &Path, task: &str, sha: &str) -> Result<Option<Run>> {
+        Ok(self
+            .runs_in(repo)?
+            .into_iter()
+            .rev()
+            .find(|r| r.proves(task, sha)))
     }
 
     /// Whether `path` names something inside the ledger, however it is

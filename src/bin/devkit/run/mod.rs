@@ -207,7 +207,8 @@ pub(crate) enum RunsCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Whether TASK exited 0 on a clean tree at exactly one commit.
+    /// Whether TASK exited 0 on a clean tree at exactly one commit, in a
+    /// checkout of this repository.
     ///
     /// Exits 0 and prints the run for yes, exits 1 for no.
     Passed {
@@ -572,10 +573,15 @@ pub fn run(cli: RunCli) -> Result<()> {
     }
 }
 
-fn cmd_runs_list(cwd: &str, task: Option<&str>, limit: usize, json: bool) -> Result<()> {
+/// The repository whose runs `devrun runs` reads: its primary checkout, as
+/// [`devkit_ports::ledger::Start`] records it.
+fn ledger_repo(cwd: &str) -> Result<std::path::PathBuf> {
     let repo = devkit_common::vcs::primary_checkout(Path::new(cwd))?;
-    let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
-    let mut runs = devkit_ports::ledger::Ledger::live().runs_in(&repo)?;
+    Ok(std::fs::canonicalize(&repo).unwrap_or(repo))
+}
+
+fn cmd_runs_list(cwd: &str, task: Option<&str>, limit: usize, json: bool) -> Result<()> {
+    let mut runs = devkit_ports::ledger::Ledger::live().runs_in(&ledger_repo(cwd)?)?;
     runs.retain(|r| task.is_none_or(|t| r.task == t));
     let runs = &runs[runs.len().saturating_sub(limit)..];
     if json {
@@ -614,7 +620,7 @@ fn cmd_runs_passed(cwd: &str, task: &str, sha: Option<&str>, json: bool) -> Resu
         }
     };
     anyhow::ensure!(!sha.is_empty(), "--sha names no commit");
-    let found = devkit_ports::ledger::Ledger::live().passed(task, &sha)?;
+    let found = devkit_ports::ledger::Ledger::live().passed(&ledger_repo(cwd)?, task, &sha)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&found)?);
     } else if let Some(run) = &found {

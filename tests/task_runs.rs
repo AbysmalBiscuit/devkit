@@ -273,6 +273,30 @@ fn passed_answers_yes_only_for_a_clean_zero_exit_at_that_exact_sha() {
 }
 
 #[test]
+fn passed_counts_only_this_repositorys_runs() {
+    let f = Fixture::new();
+    let sha = f.head();
+    assert!(f.task("pass").status.success());
+
+    let other = f.repo.with_file_name("other");
+    devkit_git::Git::fixture(f.repo.parent().unwrap())
+        .args(["clone", "-q", "repo", "other"])
+        .output()
+        .unwrap();
+    let out = f
+        .devkit()
+        .current_dir(&other)
+        .args(["run", "runs", "passed", "pass", "--sha", &sha])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a run in another repository at the same commit proves nothing here: {out:?}"
+    );
+}
+
+#[test]
 fn the_ledger_lives_outside_the_worktree_and_an_edit_tool_cannot_write_it() {
     let f = Fixture::new();
     assert!(f.task("pass").status.success());

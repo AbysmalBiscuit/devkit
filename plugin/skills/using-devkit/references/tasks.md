@@ -29,7 +29,7 @@ devrun runs passed <task>                     # did <task> exit 0 on a clean tre
 devrun runs passed <task> --sha <full-id>     # the same question for another commit
 ```
 
-`passed` answers yes only for a run at exactly that commit id: a run at an ancestor, an abbreviated id, a dirty tree or a non-zero exit is no. `--json` prints the proving run, or `null`. To claim a check passed, cite `devrun runs passed`, not your own reading of the output.
+`passed` answers yes only for a run in one of this repository's checkouts at exactly that commit id: a run at an ancestor, an abbreviated id, a dirty tree or a non-zero exit is no. `--json` prints the proving run, or `null`. To claim a check passed, cite `devrun runs passed`, not your own reading of the output.
 
 ## Args
 
