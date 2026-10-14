@@ -192,7 +192,10 @@ impl Gates {
         let (merge_base, cfg) = match (settings, caller) {
             (Ok(Some(settings)), _) => settings,
             (Ok(None), Caller::Human) => {
-                eprintln!("warning: opening the PR without its gates: {:#}", unresolved());
+                eprintln!(
+                    "warning: opening the PR without its gates: {:#}",
+                    unresolved()
+                );
                 return Ok(ungated);
             }
             (Err(e), Caller::Human) => {
