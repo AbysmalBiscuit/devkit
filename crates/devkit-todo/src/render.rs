@@ -106,24 +106,24 @@ fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize) -> String {
     )
 }
 
-/// The plan as Mermaid `flowchart LR` source, one subgraph per batch.
+/// The plan as Mermaid `flowchart LR` source, one subgraph per batch and
+/// one for the cycle.
 pub fn render_mermaid(plan: &Plan<'_>) -> String {
     let mut out = String::from("flowchart LR\n");
     for (index, batch) in plan.batches.iter().enumerate() {
         let number = index + 1;
-        let _ = writeln!(out, "  subgraph b{number}[\"batch {number}\"]");
-        for todo in batch {
-            let text = printable(&todo.description).replace('"', "#quot;");
-            let _ = writeln!(
-                out,
-                "    t{}[\"{}: {text}\"]",
-                crate::short_id(&todo.id),
-                crate::short_id(&todo.id)
-            );
-        }
-        let _ = writeln!(out, "  end");
+        mermaid_subgraph(&mut out, &format!("b{number}[\"batch {number}\"]"), batch);
     }
-    let members: Vec<&Todo> = plan.batches.iter().flatten().copied().collect();
+    if !plan.cycle.is_empty() {
+        mermaid_subgraph(&mut out, "cycle[\"cycle\"]", &plan.cycle);
+    }
+    let members: Vec<&Todo> = plan
+        .batches
+        .iter()
+        .flatten()
+        .chain(&plan.cycle)
+        .copied()
+        .collect();
     for todo in &members {
         for blocker in &todo.blocked_by {
             if members.iter().any(|member| &member.id == blocker) {
@@ -154,6 +154,16 @@ pub fn render_mermaid(plan: &Plan<'_>) -> String {
         );
     }
     out
+}
+
+fn mermaid_subgraph(out: &mut String, head: &str, todos: &[&Todo]) {
+    let _ = writeln!(out, "  subgraph {head}");
+    for todo in todos {
+        let text = printable(&todo.description).replace('"', "#quot;");
+        let id = crate::short_id(&todo.id);
+        let _ = writeln!(out, "    t{id}[\"{id}: {text}\"]");
+    }
+    let _ = writeln!(out, "  end");
 }
 
 /// The lists for the injected context: each node in `nodes` order, open todos

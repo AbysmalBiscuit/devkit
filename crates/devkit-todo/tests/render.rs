@@ -140,3 +140,31 @@ fn plan_escapes_control_characters_in_the_holder() {
         "{text}"
     );
 }
+
+#[test]
+fn mermaid_draws_cycle_members_and_their_edges() {
+    let todos = vec![
+        todo("1", "free", Status::Pending, &[]),
+        todo("3", "looped", Status::Pending, &["4"]),
+        todo("4", "back", Status::Pending, &["3"]),
+    ];
+    let plan = Graph::new(&todos).plan(|_| true, None);
+    let text = render::render_mermaid(&plan);
+    assert_eq!(
+        text,
+        "\
+flowchart LR
+  subgraph b1[\"batch 1\"]
+    t1[\"1: free\"]
+  end
+  subgraph cycle[\"cycle\"]
+    t3[\"3: looped\"]
+    t4[\"4: back\"]
+  end
+  t4 --> t3
+  t3 --> t4
+  classDef critical stroke-width:3px
+  class t1 critical
+"
+    );
+}
