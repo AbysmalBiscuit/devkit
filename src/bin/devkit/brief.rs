@@ -214,7 +214,7 @@ struct BriefSnapshot {
     enforced: bool,
     pins: Vec<PinKey>,
     rules: Option<Severity>,
-    gates: Vec<(&'static str, config::GateMode)>,
+    gates: Vec<(config::Gate, GateOn)>,
     /// Why the config does not load, so that fixing it is a change
     /// `--if-changed` can see — otherwise the session that was told about the
     /// fault would never be told it is over.
@@ -251,7 +251,7 @@ struct DevrunBrief {
     /// reach for `lockm` before an edit.
     enforced: bool,
     /// The PR gates that are on.
-    gates: Vec<(&'static str, config::GateMode)>,
+    gates: Vec<(config::Gate, GateOn)>,
 }
 
 /// Which devrun facilities a checkout has anything to say about. `render` and
@@ -328,8 +328,8 @@ impl BriefSnapshot {
         if let Some(floor) = self.rules {
             out.push_str(&format!("rules\t{floor}\n"));
         }
-        for (key, mode) in &self.gates {
-            out.push_str(&format!("gate\t{key}\t{}\n", mode.as_str()));
+        for (gate, on) in &self.gates {
+            out.push_str(&format!("gate\t{}\t{}\n", gate.key(), on.mode().as_str()));
         }
         if let Some(fault) = &self.config_fault {
             out.push_str(&format!("config-fault\t{fault}\n"));
@@ -945,22 +945,42 @@ fn devrun_text(sections: &DevrunBrief) -> String {
     out
 }
 
+/// A PR gate's mode when it is on.
+#[derive(Clone, Copy)]
+enum GateOn {
+    Advise,
+    Require,
+}
+
+impl GateOn {
+    fn mode(self) -> config::GateMode {
+        match self {
+            Self::Advise => config::GateMode::Advise,
+            Self::Require => config::GateMode::Require,
+        }
+    }
+}
+
 /// The PR gates set to `advise` or `require`. Read from the working tree's
 /// config: `pr create` reads them at the merge base, which a branch has not
 /// changed yet when its session starts.
-fn gates_on(gates: &config::PrGates) -> Vec<(&'static str, config::GateMode)> {
+fn gates_on(gates: &config::PrGates) -> Vec<(config::Gate, GateOn)> {
     gates
         .all()
         .into_iter()
-        .filter(|(_, mode)| *mode != config::GateMode::Off)
+        .filter_map(|(gate, mode)| match mode {
+            config::GateMode::Off => None,
+            config::GateMode::Advise => Some((gate, GateOn::Advise)),
+            config::GateMode::Require => Some((gate, GateOn::Require)),
+        })
         .collect()
 }
 
 /// One bullet per gate in `gates`, under a line saying when they apply.
-fn gates_text(gates: &[(&'static str, config::GateMode)]) -> String {
+fn gates_text(gates: &[(config::Gate, GateOn)]) -> String {
     let lines: String = gates
         .iter()
-        .filter_map(|&(key, mode)| gate_line(key, mode))
+        .map(|&(gate, on)| gate_line(gate, on))
         .collect();
     format!(
         "{}\n\n{lines}",
@@ -971,28 +991,27 @@ fn gates_text(gates: &[(&'static str, config::GateMode)]) -> String {
     )
 }
 
-fn gate_line(key: &str, mode: config::GateMode) -> Option<String> {
-    let what = match key {
-        "weakened_tests" => {
-            "a deleted test file, fewer tests or assertions in a test file, more skip markers \
-             or a new `.only(` in an existing one, or a new tautological assertion"
-        }
-        _ => return None,
-    };
-    let effect = match mode {
-        config::GateMode::Off => return None,
-        config::GateMode::Advise => format!("lists in the PR body {what}"),
-        config::GateMode::Require => format!(
-            "refuses the PR on {what}, unless a line of its body starting `Test changes:` \
-             explains it"
+/// What the gate flags is left to the help of the command that runs it on its
+/// own, its one home; the bullet says what each mode does with a flag.
+fn gate_line(gate: config::Gate, on: GateOn) -> String {
+    let (finding, help, way_out) = match gate {
+        config::Gate::WeakenedTests => (
+            "weakened test",
+            "devkit pr weakened-tests -h",
+            "a line of its body starting `Test changes:` explains it",
         ),
     };
-    let text = format!("`{key}` ({}): {effect}", mode.as_str());
+    let effect = match on {
+        GateOn::Advise => format!("lists each {finding} in the PR body"),
+        GateOn::Require => format!("refuses the PR on a {finding}, unless {way_out}"),
+    };
+    let text = format!(
+        "`{}` ({}): {effect}. `{help}` says what it flags.",
+        gate.key(),
+        on.mode().as_str()
+    );
     let width = devkit_common::ui::term_width().saturating_sub(2);
-    Some(format!(
-        "- {}\n",
-        wrap_width(&text, width).replace('\n', "\n  ")
-    ))
+    format!("- {}\n", wrap_width(&text, width).replace('\n', "\n  "))
 }
 
 /// Open a blank line before the next block, unless one is already there.

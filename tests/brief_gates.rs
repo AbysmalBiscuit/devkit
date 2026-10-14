@@ -53,6 +53,10 @@ fn the_brief_names_each_gate_that_is_on() {
     }
     let body = brief("[pr.gates]\nweakened_tests = \"require\"\n");
     assert!(body.contains("Test changes:"), "names the way out: {body}");
+    assert!(
+        body.contains("`devkit pr weakened-tests -h` says what it flags"),
+        "points at the gate's one description: {body}"
+    );
 }
 
 #[test]

@@ -1513,9 +1513,25 @@ pub struct PrGates {
 }
 
 impl PrGates {
-    /// Each gate by its key, in a stable order.
-    pub fn all(&self) -> [(&'static str, GateMode); 1] {
-        [("weakened_tests", self.weakened_tests)]
+    /// Each gate with its mode, in a stable order.
+    pub fn all(&self) -> [(Gate, GateMode); 1] {
+        let Self { weakened_tests } = *self;
+        [(Gate::WeakenedTests, weakened_tests)]
+    }
+}
+
+/// One PR gate, named by its `[pr.gates]` key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    WeakenedTests,
+}
+
+impl Gate {
+    /// The gate's `[pr.gates]` key.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::WeakenedTests => "weakened_tests",
+        }
     }
 }
 
