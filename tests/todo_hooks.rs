@@ -1,6 +1,8 @@
 //! The todo store's side of `devkit hook`: release, claim attribution and
 //! native tool capture, each driven with real payloads on stdin.
 
+#[path = "common/shimtest.rs"]
+mod shimtest;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
@@ -759,27 +761,19 @@ fn attribution_a_claim_check_from_outside_any_repository_reads_the_role_checkout
     assert!(reason.contains("in progress by S/a2"), "{reason}");
 }
 
-/// A search path holding `todo` hardlinked to devkit, as `devkit
-/// install-links` leaves it, or to a foreign program when `own` is false.
-fn todo_on_path(own: bool) -> tempfile::TempDir {
-    let exe = std::path::Path::new(env!("CARGO_BIN_EXE_devkit"));
-    let dir = tempfile::Builder::new()
-        .tempdir_in(exe.parent().unwrap())
-        .unwrap();
+/// A search path holding a foreign program named `todo`.
+fn foreign_todo_on_path() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
     let todo = dir
         .path()
         .join(format!("todo{}", std::env::consts::EXE_SUFFIX));
-    if own {
-        std::fs::hard_link(exe, &todo).unwrap();
-    } else {
-        std::fs::write(&todo, "#!/bin/sh\n").unwrap();
-    }
+    std::fs::write(&todo, "#!/bin/sh\n").unwrap();
     dir
 }
 
 /// `dir` ahead of this process's `PATH`.
-fn path_with(dir: &tempfile::TempDir) -> String {
-    let mut dirs = vec![dir.path().to_path_buf()];
+fn path_with(dir: &std::path::Path) -> String {
+    let mut dirs = vec![dir.to_path_buf()];
     dirs.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
@@ -792,22 +786,22 @@ fn attribution_a_siblings_start_through_the_todo_shim_is_denied() {
     let id = seed(&p, "a");
     run_as_sub_agent(&p, CLAUDE_CODE, "a1", &format!("devkit todo start {id}"));
     let start = format!("todo start {id}");
-    let own = todo_on_path(true);
+    let (own, _) = shimtest::linked("todo");
     let out = p.hook_with(
         "pre-tool-use",
         CLAUDE_CODE.harness,
         &bash(&p, Some("a2"), &start),
-        &[("PATH", &path_with(&own))],
+        &[("PATH", &path_with(own.path()))],
     );
     let reason = denial(&out).expect("denied");
     assert!(reason.contains("in progress by S/a1"), "{reason}");
 
-    let foreign = todo_on_path(false);
+    let foreign = foreign_todo_on_path();
     let out = p.hook_with(
         "pre-tool-use",
         CLAUDE_CODE.harness,
         &bash(&p, Some("a2"), &start),
-        &[("PATH", &path_with(&foreign))],
+        &[("PATH", &path_with(foreign.path()))],
     );
     assert_eq!(denial(&out), None, "a foreign todo is not devkit's");
 }
