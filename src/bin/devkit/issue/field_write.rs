@@ -71,6 +71,18 @@ pub(crate) fn warn(decls: &BTreeMap<String, FieldDecl>, report: &Report) {
     }
 }
 
+/// List each of `problems` and fail with `summary`, or succeed when there
+/// are none.
+pub(crate) fn fail_on(problems: &[String], summary: String) -> Result<()> {
+    if problems.is_empty() {
+        return Ok(());
+    }
+    for p in problems {
+        eprintln!("  {p}");
+    }
+    bail!("{summary}")
+}
+
 /// Write the fields of `resolved` other than `skip` onto issue `number`,
 /// which held `before` (or reads it first when `None`), then read it back.
 /// Returns one line per field that did not take.

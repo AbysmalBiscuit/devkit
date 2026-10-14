@@ -2,16 +2,18 @@
 //! issue or a Linear ticket with every declared field it was given, and read
 //! the fields back.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result, bail};
 use devkit_common::{
-    fields::{self, Surface},
+    fields::{self, Report, Resolved, Surface},
     tracker::{
         Selected,
         github_fields::{self, GithubFieldWriter},
         linear_fields::{self, LinearFieldWriter},
     },
 };
-use devkit_config::{Config, Place, TrackerKind};
+use devkit_config::{Config, FieldDecl, Place, TrackerKind};
 
 use super::{TicketTracker, field_write, render};
 use crate::template::{FieldArgs, VarArgs};
@@ -34,15 +36,50 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
     }
 }
 
-fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<()> {
-    let caller = devkit_common::caller::caller();
-    let decls = cfg.ticket.fields.for_tracker(TrackerKind::Github);
+/// A create's arguments split and its fields resolved and checked, refusing
+/// before any write.
+struct Checked<'a> {
+    decls: &'a BTreeMap<String, FieldDecl>,
+    input: render::TicketArgs,
+    resolved: Resolved,
+    report: Report,
+}
+
+fn checked<'a>(
+    args: &CreateArgs,
+    sel: &Selected,
+    cfg: &'a Config,
+    kind: TrackerKind,
+) -> Result<Checked<'a>> {
+    let decls = cfg.ticket.fields.for_tracker(kind);
     let input = render::ticket_args(cfg, &args.vars, &args.fields, decls)?;
     let given = input.fields.with_defaults(decls);
-    let mut resolved = render::resolve_fields(cfg, TrackerKind::Github, decls, &given)?;
+    let mut resolved = render::resolve_fields(cfg, kind, decls, &given)?;
     field_write::number_issue_refs(sel.tracker.tracker.as_ref(), decls, &mut resolved)?;
-    let report = fields::check(decls, Surface::Create, &resolved, None, caller);
+    let report = fields::check(
+        decls,
+        Surface::Create,
+        &resolved,
+        None,
+        devkit_common::caller::caller(),
+    );
     field_write::refuse("ticket create", decls, &report)?;
+    Ok(Checked {
+        decls,
+        input,
+        resolved,
+        report,
+    })
+}
+
+fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<()> {
+    let caller = devkit_common::caller::caller();
+    let Checked {
+        decls,
+        input,
+        resolved,
+        report,
+    } = checked(&args, sel, cfg, TrackerKind::Github)?;
 
     let rendered = render::render(
         cfg,
@@ -97,23 +134,22 @@ fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result
         &github_fields::on_create(decls),
     );
     field_write::warn(decls, &report);
-    if !problems.is_empty() {
-        for p in &problems {
-            eprintln!("  {p}");
-        }
-        bail!(
+    field_write::fail_on(
+        &problems,
+        format!(
             "issue #{number} was created ({url}), but the fields above did not take. Set them \
              with `devkit ticket edit {number} --arg <field>=...`; rerunning `ticket create` \
              would file a second issue"
-        );
-    }
-    Ok(())
+        ),
+    )
 }
 
 fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
     let caller = devkit_common::caller::caller();
-    let decls = cfg.ticket.fields.for_tracker(TrackerKind::Linear);
-    let team_field = decls
+    let team_field = cfg
+        .ticket
+        .fields
+        .for_tracker(TrackerKind::Linear)
         .iter()
         .find(|(_, d)| d.r#where == Some(Place::Team))
         .map(|(name, _)| name.clone())
@@ -122,12 +158,12 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
              as `[ticket.fields.linear.team]` with `type = \"enum\"`, `where = \"team\"` and \
              each team as `values = [{ name = \"ENG\", id = \"<team id>\" }]`",
         )?;
-    let input = render::ticket_args(cfg, &args.vars, &args.fields, decls)?;
-    let given = input.fields.with_defaults(decls);
-    let mut resolved = render::resolve_fields(cfg, TrackerKind::Linear, decls, &given)?;
-    field_write::number_issue_refs(sel.tracker.tracker.as_ref(), decls, &mut resolved)?;
-    let report = fields::check(decls, Surface::Create, &resolved, None, caller);
-    field_write::refuse("ticket create", decls, &report)?;
+    let Checked {
+        decls,
+        input,
+        resolved,
+        report,
+    } = checked(&args, sel, cfg, TrackerKind::Linear)?;
     let team = resolved
         .fields
         .get(&team_field)
@@ -173,14 +209,11 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
     }
     let (_, problems) = field_write::linear_finish(&writer, issue, decls, &written, &refs, false);
     field_write::warn(decls, &report);
-    if !problems.is_empty() {
-        for p in &problems {
-            eprintln!("  {p}");
-        }
-        bail!(
+    field_write::fail_on(
+        &problems,
+        format!(
             "{ident} was created, but the fields above did not take. Set them with `devkit \
              ticket edit {ident} --arg <field>=...`"
-        );
-    }
-    Ok(())
+        ),
+    )
 }

@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use devkit_common::{
     fields::{self, Current, Resolved, Surface},
     tracker::{
@@ -140,16 +140,13 @@ fn github(args: EditArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<(
     };
     println!("{url}");
     field_write::warn(decls, &report);
-    if !problems.is_empty() {
-        for p in &problems {
-            eprintln!("  {p}");
-        }
-        bail!(
+    field_write::fail_on(
+        &problems,
+        format!(
             "issue #{number} was edited, but the fields above did not take. Rerun \
              `devkit ticket edit {number}` with them"
-        );
-    }
-    Ok(())
+        ),
+    )
 }
 
 fn linear(args: EditArgs, sel: &Selected, cfg: &Config) -> Result<()> {
@@ -217,13 +214,11 @@ fn linear(args: EditArgs, sel: &Selected, cfg: &Config) -> Result<()> {
         field_write::linear_finish(&writer, before, decls, &resolved, &refs, true);
     println!("{}", field_write::linear_link(&after));
     field_write::warn(decls, &report);
-    if !problems.is_empty() {
-        for p in &problems {
-            eprintln!("  {p}");
-        }
-        bail!(
-            "{id} was edited, but the fields above did not take. Rerun `devkit ticket edit {id}` with them"
-        );
-    }
-    Ok(())
+    field_write::fail_on(
+        &problems,
+        format!(
+            "{id} was edited, but the fields above did not take. Rerun `devkit ticket edit {id}` \
+             with them"
+        ),
+    )
 }
