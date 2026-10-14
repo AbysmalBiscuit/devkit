@@ -562,6 +562,16 @@ impl Store {
         }
     }
 
+    /// Whether the store holds what its sync target held: false only for a
+    /// synced replica that has never completed a sync. Ticket todos added
+    /// to such a replica would overwrite the server's at its first sync.
+    pub(crate) fn replica_pulled(&self) -> bool {
+        match self.synced_replica() {
+            Ok(Some(replica)) => super::sync::has_pulled(replica.data_dir()),
+            Ok(None) | Err(_) => true,
+        }
+    }
+
     /// After a write: starts a background sync from `cwd` and returns at once.
     pub(crate) fn spawn_sync(&self, cwd: &Path) {
         match self.synced_replica() {

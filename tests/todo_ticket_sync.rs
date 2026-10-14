@@ -449,22 +449,6 @@ fn a_failed_sync_holds_off_the_next() {
 }
 
 #[test]
-fn a_background_sync_needs_no_working_sync_target() {
-    let s = two_issues();
-    let broken = [
-        ("DEVKIT_TODO_BACKEND", "taskchampion"),
-        ("DEVKIT_TODO_SYNC_URL", "x"),
-    ];
-    let out = s.devkit(&["todo", "list"], &broken);
-    assert!(out.status.success(), "{}", stderr(&out));
-    poll("the background sync", || s.sync_state("last").exists());
-    let out = s.devkit(&["todo", "ready"], &broken);
-    assert!(out.status.success(), "{}", stderr(&out));
-    settle();
-    assert_eq!(s.ticket_queries(), 1, "{}", s.calls());
-}
-
-#[test]
 fn a_hook_injection_answers_while_the_tracker_hangs() {
     let s = two_issues();
     assert!(s.sync(&[]).status.success());
@@ -568,6 +552,64 @@ fn a_completed_replica_sync_refreshes_tickets() {
     );
     let s = two_issues_in(Proj::with_home_config(&config));
     let out = s.devkit(&["todo", "list", "--sync"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the background sync", || s.sync_state("last").exists());
+    assert_eq!(s.ticket_queries(), 1, "{}", s.calls());
+}
+
+/// [`two_issues`] on a taskchampion replica at `replica` that syncs to a
+/// directory server the caller keeps alive as `server`.
+fn two_issues_on_a_synced_replica(server: &std::path::Path, replica: &std::path::Path) -> Synced {
+    let config = format!(
+        "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\ndata_dir = {}\nserver_dir = {}\n",
+        toml::Value::String(replica.display().to_string()),
+        toml::Value::String(server.display().to_string())
+    );
+    two_issues_in(Proj::with_home_config(&config))
+}
+
+#[test]
+fn reads_on_a_replica_that_never_pulled_sync_no_tickets() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = two_issues_on_a_synced_replica(&dir.path().join("server"), &dir.path().join("replica"));
+    for read in [&["todo", "list"][..], &["todo", "ready"]] {
+        let out = s.devkit(read, &[]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    let prompt = json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "s1",
+        "cwd": s.proj.path,
+        "prompt": "go",
+    });
+    let out = s.devkit_fed(
+        &[
+            "todo",
+            "context",
+            "--harness",
+            "claude-code",
+            "--guide",
+            "none",
+            "--if-changed",
+        ],
+        &[],
+        &prompt.to_string(),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_no_ticket_sync(&s);
+}
+
+#[test]
+fn a_read_after_the_replica_pulls_syncs_tickets() {
+    let dir = tempfile::tempdir().unwrap();
+    let replica = dir.path().join("replica");
+    let s = two_issues_on_a_synced_replica(&dir.path().join("server"), &replica);
+    let out = s.devkit(&["todo", "add", "plain"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the replica's sync", || {
+        replica.join("sync.pulled").exists()
+    });
+    let out = s.devkit(&["todo", "list"], &[]);
     assert!(out.status.success(), "{}", stderr(&out));
     poll("the background sync", || s.sync_state("last").exists());
     assert_eq!(s.ticket_queries(), 1, "{}", s.calls());

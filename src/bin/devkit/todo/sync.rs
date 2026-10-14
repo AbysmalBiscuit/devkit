@@ -1,7 +1,8 @@
 //! Syncing a taskchampion replica, only ever inside a `devkit todo sync`
 //! process that nothing in devkit kills. `sync.lock` beside the replica is
 //! held by the process syncing, `sync.pending` marks writes the server has
-//! not seen, and `sync.failed` holds the last failure's reason.
+//! not seen, `sync.failed` holds the last failure's reason, and
+//! `sync.pulled` marks a replica that has completed a sync.
 
 use std::{
     ffi::OsStr,
@@ -29,6 +30,16 @@ fn pending_path(data_dir: &Path) -> PathBuf {
 
 fn failed_path(data_dir: &Path) -> PathBuf {
     data_dir.join("sync.failed")
+}
+
+fn pulled_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("sync.pulled")
+}
+
+/// Whether the replica in `data_dir` has completed a sync, and so holds
+/// what the server held then.
+pub(crate) fn has_pulled(data_dir: &Path) -> bool {
+    pulled_path(data_dir).exists()
 }
 
 /// Records that the replica has a write the server has not seen.
@@ -110,6 +121,7 @@ pub(crate) fn run(
                 break false;
             }
             let _ = fs::remove_file(failed_path(dir));
+            let _ = File::create(pulled_path(dir));
             // Hook writes queued behind this sync's lock go out on a rerun.
             if crate::hook::todo::drain(dir) > 0 {
                 mark_pending(dir);
