@@ -64,9 +64,9 @@ Per repository, config names each tracker status and the todo status it maps to:
 
 `[ticket.events]` moves tickets between the same names, so a board's statuses are written in one place. Whether the map lives under `[ticket]`, `[todo]`, or beside the tracker's own table is the builder's call.
 
-**Validation.** Each sync checks the map against the tracker: a fetched ticket in an unmapped status, or a mapped name that no status of the fetched tickets' teams (Linear) or of the status field (GitHub) has, is an error naming it. Nothing is written in that case.
+**Validation.** Each sync checks the map against the tracker: a fetched ticket in an unmapped status, or a mapped name that no team's workflow states (Linear) or no option of the status field (GitHub) has, is an error naming it. Nothing is written in that case.
 
-**Linear**: the statuses are the workflow states of the teams the fetched tickets belong to, checked against their union.
+**Linear**: the map is checked against the workflow states of every team in the workspace, so a mapped name is wrong only if no team has it.
 
 **GitHub**: an issue's open/closed state and its project status field are independent, and an issue outside the project has no field value. So:
 
