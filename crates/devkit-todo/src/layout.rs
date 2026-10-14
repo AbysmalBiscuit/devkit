@@ -104,14 +104,38 @@ impl Layout {
         template.fill(&facts.values)
     }
 
-    /// Whether a todo on `project` is inside the ticket rooted at `root`:
-    /// `root` itself or a node below it, and not another session's node.
+    /// Whether a todo on `project` is inside the ticket rooted at `root`.
     pub fn offered(&self, project: Option<&str>, root: &str, facts: &Facts) -> bool {
         let Some(project) = project else {
             return false;
         };
-        (project == root || project.starts_with(&format!("{root}.")))
-            && !self.is_other_session(project, facts)
+        if project == root {
+            return true;
+        }
+        if !project.starts_with(&format!("{root}.")) || self.is_other_session(project, facts) {
+            return false;
+        }
+        if self.caller_sees(project, facts) {
+            return true;
+        }
+        self.wide_root(facts).as_deref() == Some(root) && self.reads_as(project, "workspace")
+    }
+
+    fn caller_sees(&self, project: &str, facts: &Facts) -> bool {
+        self.config.roles.keys().any(|role| {
+            self.visible(facts, role)
+                .is_ok_and(|filter| filter.matches(Some(project)))
+        })
+    }
+
+    fn wide_root(&self, facts: &Facts) -> Option<String> {
+        self.templates.get("repo")?.fill(&facts.values)
+    }
+
+    fn reads_as(&self, project: &str, scope: &str) -> bool {
+        self.templates
+            .get(scope)
+            .is_some_and(|template| template.read(project).is_some())
     }
 
     pub fn fill(&self, scope: &str, facts: &Facts) -> Result<String> {

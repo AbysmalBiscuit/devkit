@@ -236,6 +236,37 @@ fn an_outside_wait_is_not_printed_as_a_cycle() {
 }
 
 #[test]
+fn a_sessionless_scope_is_offered_in_neither_mode() {
+    let p = Proj::with_home_config(
+        "[todo.scopes.personal]\nnode = \"{repo}.{branch}.personal\"\nparent = \"workspace\"\n[todo.roles.manager]\nscope = \"workspace\"\n",
+    );
+    let selected = p.devkit(&["todo", "role", "manager"], &S1);
+    assert!(selected.status.success(), "{}", stderr(&selected));
+    let added = p.devkit(
+        &["todo", "add", "private", "--node", "proj.main.personal"],
+        &S1,
+    );
+    assert!(added.status.success(), "{}", stderr(&added));
+    let ready = p.devkit(&["todo", "ready"], &S1);
+    assert!(ready.status.success(), "{}", stderr(&ready));
+    assert!(!stdout(&ready).contains("private"), "{}", stdout(&ready));
+
+    let config = p.home_config();
+    let existing = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        config,
+        format!("{existing}\n[todo]\nready_outside_ticket = true\n"),
+    )
+    .unwrap();
+    let elsewhere = p.devkit(&["todo", "add", "elsewhere", "--node", "proj.side"], &S1);
+    assert!(elsewhere.status.success(), "{}", stderr(&elsewhere));
+    let wide = p.devkit(&["todo", "ready"], &S1);
+    assert!(wide.status.success(), "{}", stderr(&wide));
+    assert!(stdout(&wide).contains("elsewhere"), "{}", stdout(&wide));
+    assert!(!stdout(&wide).contains("private"), "{}", stdout(&wide));
+}
+
+#[test]
 fn another_tickets_ready_todo_is_not_offered_by_default() {
     let p = Proj::new();
     add(&p, "mine");

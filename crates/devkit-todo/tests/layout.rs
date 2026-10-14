@@ -112,6 +112,27 @@ fn offered_covers_the_ticket_and_own_session_only() {
 }
 
 #[test]
+fn a_sessionless_child_scope_is_offered_in_neither_mode() {
+    let config = Config::parse(
+        "[todo.scopes.personal]\nnode = '{repo}.{branch}.personal'\nparent = 'workspace'\n[todo.roles.manager]\nscope = 'workspace'\n",
+    )
+    .unwrap();
+    let layout = Layout::new(&config.todo).unwrap();
+    let facts = workspace("proj", "main", "s1", "s1");
+    let narrow = layout.ticket_root(&facts, false).unwrap();
+    let wide = layout.ticket_root(&facts, true).unwrap();
+    assert!(!layout.offered(Some("proj.main.personal"), &narrow, &facts));
+    assert!(!layout.offered(Some("proj.main.personal"), &wide, &facts));
+    assert!(layout.offered(Some("proj.main"), &narrow, &facts));
+    assert!(layout.offered(Some("proj.main.claude-s1"), &narrow, &facts));
+    assert!(!layout.offered(Some("proj.other"), &narrow, &facts));
+    assert!(layout.offered(Some("proj"), &wide, &facts));
+    assert!(layout.offered(Some("proj.other"), &wide, &facts));
+    assert!(layout.offered(Some("proj.main.claude-s1"), &wide, &facts));
+    assert!(!layout.offered(Some("proj.other.claude-s2"), &wide, &facts));
+}
+
+#[test]
 fn sanitized_values_never_add_a_level() {
     let layout = Layout::new(&Config::parse("").unwrap().todo).unwrap();
     let facts = Facts::new(
