@@ -130,10 +130,10 @@ pub enum TodoCommand {
     ///
     /// Only a taskchampion store with a sync target syncs. A failure is
     /// reported on stderr and exits 0: changes stay saved and sync with the
-    /// next write. With `[ticket.sync]` rules, the tickets they select then
-    /// become one todo each on the repository's node, reading the tracker
-    /// and never writing to it; a ticket in a status the map does not name
-    /// fails the sync and changes nothing.
+    /// next write, and no tickets sync that run. With `[ticket.sync]` rules,
+    /// the tickets they select then become one todo each on the repository's
+    /// node, reading the tracker and never writing to it; a ticket in a
+    /// status the map does not name fails the sync and changes nothing.
     #[command(after_help = sync::hold_help())]
     Sync {
         #[arg(long, hide = true, help = sync::background_help())]
@@ -312,10 +312,12 @@ pub fn run(cli: TodoCli) -> Result<()> {
             | TodoCommand::Plan { .. }
             | TodoCommand::Sync { .. }
     );
-    if matches!(
-        cli.command,
-        TodoCommand::List(_) | TodoCommand::Ready | TodoCommand::Plan { .. }
-    ) {
+    let refreshes = match &cli.command {
+        TodoCommand::List(args) => !args.sync,
+        TodoCommand::Ready | TodoCommand::Plan { .. } => true,
+        _ => false,
+    };
+    if refreshes {
         refresh_tickets(&store, &cwd, &layout, &facts);
     }
     let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
@@ -424,14 +426,21 @@ pub fn run(cli: TodoCli) -> Result<()> {
             } else {
                 Store::sync_replica(&cwd)?
             };
-            if let Some(replica) = replica.as_ref().filter(|_| !dry_run) {
-                sync::run(replica, background, result_file.as_deref())?;
-            }
+            let replica_synced = match replica.as_ref().filter(|_| !dry_run) {
+                Some(replica) => sync::run(replica, background, result_file.as_deref())?,
+                None => true,
+            };
             let tickets = match (background, tickets_only, &place) {
                 (_, _, Place::Global) | (true, false, _) => None,
                 (true, true, _) => {
                     let node = layout.fill("repo", &facts)?;
                     tickets::sync_in_background(&store, &cwd, &node, &store.ticket().sync)?
+                }
+                // Tickets merged into a replica that missed the server's
+                // changes would overwrite them at the next sync.
+                (false, ..) if !replica_synced => {
+                    eprintln!("devkit todo: tickets not synced: the store's sync did not complete");
+                    None
                 }
                 (false, ..) => {
                     let node = layout.fill("repo", &facts)?;
@@ -446,7 +455,9 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 Some(report) if !dry_run => {
                     let changed = report.added + report.changed > 0;
                     match replica.as_ref().filter(|_| changed && !background) {
-                        Some(replica) => sync::run(replica, false, result_file.as_deref())?,
+                        Some(replica) => {
+                            sync::run(replica, false, result_file.as_deref())?;
+                        }
                         None => writes = changed,
                     }
                     println!(
@@ -946,7 +957,7 @@ fn list(
                 "devkit todo: sync still running after {} seconds; listing what this machine has",
                 sync::FRESH_WAIT.as_secs()
             ),
-            SyncOutcome::Done | SyncOutcome::NoTarget => {}
+            SyncOutcome::Done | SyncOutcome::NoTarget => refresh_tickets(store, cwd, layout, facts),
         }
     }
     let todos = if args.all || args.subtree.is_some() {
@@ -1034,7 +1045,6 @@ fn context(args: &ContextArgs) -> Option<String> {
     let cwd = checkout.dir().to_path_buf();
     let store = Store::for_hook(&checkout, &cwd);
     let (layout, facts, role) = resolve_role(&payload, &checkout, &store, &viewer)?;
-    refresh_tickets(&store, &cwd, &layout, &facts);
     let visible = layout.visible(&facts, &role.name).ok()?;
     let own = &role.node;
     let workspace = facts
@@ -1047,9 +1057,20 @@ fn context(args: &ContextArgs) -> Option<String> {
         .nodes
         .extend(workspace.iter().map(|w| NodeMatch::Subtree(w.clone())));
     let at_start = payload.event_name().as_deref() == Some("SessionStart");
-    // A new container's replica is empty until it pulls the lists.
-    if at_start && let SyncOutcome::Refused(reason) = store.sync(&cwd, sync::FRESH_WAIT) {
-        eprintln!("devkit todo: {reason}; listing local todos");
+    // A new container's replica is empty until it pulls the lists, and
+    // ticket todos added to a replica that has not pulled would overwrite
+    // the server's at the next sync.
+    let replica_current = !at_start
+        || match store.sync(&cwd, sync::FRESH_WAIT) {
+            SyncOutcome::Done | SyncOutcome::NoTarget => true,
+            SyncOutcome::Refused(reason) => {
+                eprintln!("devkit todo: {reason}; listing local todos");
+                false
+            }
+            SyncOutcome::Failed(_) | SyncOutcome::StillRunning => false,
+        };
+    if replica_current {
+        refresh_tickets(&store, &cwd, &layout, &facts);
     }
     let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
     let all = fence.todos().ok()?;

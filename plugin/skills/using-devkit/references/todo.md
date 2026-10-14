@@ -62,7 +62,7 @@ With `[ticket.sync]` rules in the repository's `devkit.toml`, `devkit todo sync`
 
 Ticket todos stay current without anyone running sync:
 
-- `devkit todo list`, `ready`, `plan` and the injected lists start a background ticket sync when the repository's last one is older than `[ticket.sync] max_age_secs`. They never wait for it: they show what the store holds now, and the next read shows what the sync brought. One sync runs per repository at a time, and a failed one holds off the next for the same age. `devkit todo sync` syncs now.
+- `devkit todo list`, `ready`, `plan` and the injected lists start a background ticket sync when the repository's last one is older than `[ticket.sync] max_age_secs`. They never wait for it: they show what the store holds now, and the next read shows what the sync brought. One sync runs per repository at a time, and a failed one holds off the next for the same age. With a synced taskchampion replica, the session-start injection and `devkit todo list --sync` start it only after their replica sync completes, so tickets never land on a replica that has not pulled the server's lists; the next read tries again. `devkit todo sync` syncs now.
 - In a worktree whose `workspace setup` record names a synced ticket, `ready` and `plan` offer that ticket's todo beside the workspace's own todos.
 - A ticket todo whose worktree is on this machine shows `<n> open` in lists, plans and injected lists: the open todos in its workspace. `devkit todo list --expand` and `devkit todo plan --expand` list those todos under it, each with its node.
 - Starting a ticket todo or finishing it moves the ticket's tracker status as `[ticket.events] todo_start` and `todo_done` configure (`references/ticket.md`), in the background. Run the command from a checkout of the ticket's repository: from anywhere else the todo still changes, the ticket stays where it was, and a warning names it.
@@ -149,7 +149,7 @@ When it syncs:
 - After every write, in a background `devkit todo sync` process. The write is saved locally first, so a failed sync loses nothing, and no hook waits on the network. After a failure, background syncs hold off before the next attempt, for the time `devkit todo sync -h` states, so a server that is down costs an occasional attempt rather than one per write.
 - At session start, before the lists are injected, so a new container sees where the last one stopped. `devkit todo list --sync` does the same. Each waits a bounded time, which `devkit todo list -h` states; past that, the sync carries on by itself and you get what this machine has.
 - A session's end releases its claims locally and leaves the push to a background sync, so a harness that caps the hook's run cannot cut it short.
-- `devkit todo sync` syncs now. It reports a replica sync failure and exits 0. A failed [ticket sync](#tracker-tickets) exits non-zero.
+- `devkit todo sync` syncs now. It reports a replica sync failure and exits 0, syncing no tickets that run. A failed [ticket sync](#tracker-tickets) exits non-zero.
 
 Other injections and plain `devkit todo list` read the local replica, which holds this machine's own writes.
 

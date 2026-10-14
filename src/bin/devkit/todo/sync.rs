@@ -72,22 +72,24 @@ pub(crate) fn failure_text(reason: &str) -> String {
 /// `result`, when given, receives this invocation's own failure reason, so a
 /// caller waiting on this process learns its result even when another sync
 /// fails meanwhile; `sync.failed` only holds off background attempts.
+///
+/// Returns whether this invocation synced the replica.
 pub(crate) fn run(
     store: &TaskchampionStore,
     background: bool,
     result: Option<&Path>,
-) -> Result<()> {
+) -> Result<bool> {
     let dir = store.data_dir();
     sweep_results(dir);
     if background && failed_recently(dir) {
-        return Ok(());
+        return Ok(false);
     }
     loop {
         let mut lock = devkit_common::store::open_lock(&lock_path(dir))?;
         let guard = if background {
             match lock.try_write() {
                 Ok(guard) => guard,
-                Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(()),
+                Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(false),
                 Err(e) => return Err(e.into()),
             }
         } else {
@@ -120,7 +122,7 @@ pub(crate) fn run(
         // A write that landed after the last check could find the lock still
         // held and leave its marker to this process.
         if !(succeeded && pending_path(dir).exists()) {
-            return Ok(());
+            return Ok(succeeded);
         }
     }
 }

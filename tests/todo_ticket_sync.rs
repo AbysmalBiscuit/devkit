@@ -513,6 +513,66 @@ fn a_hook_injection_answers_while_the_tracker_hangs() {
     );
 }
 
+/// A taskchampion replica whose sync server refuses every connection.
+const UNREACHABLE_SERVER: [(&str, &str); 4] = [
+    ("DEVKIT_TODO_BACKEND", "taskchampion"),
+    ("DEVKIT_TODO_SYNC_URL", "http://127.0.0.1:1"),
+    (
+        "DEVKIT_TODO_SYNC_CLIENT_ID",
+        "6a1b3c5e-0000-4000-8000-000000000001",
+    ),
+    ("DEVKIT_TODO_SYNC_SECRET", "secret"),
+];
+
+/// Asserts no ticket sync started: the tracker saw no query and the sync
+/// left no state behind.
+fn assert_no_ticket_sync(s: &Synced) {
+    settle();
+    assert_eq!(s.ticket_queries(), 0, "{}", s.calls());
+    assert!(!s.sync_state("last").exists());
+    assert!(!s.sync_state("failed").exists());
+}
+
+#[test]
+fn list_sync_skips_tickets_when_the_replica_sync_fails() {
+    let s = two_issues();
+    let out = s.devkit(&["todo", "list", "--sync"], &UNREACHABLE_SERVER);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_no_ticket_sync(&s);
+}
+
+#[test]
+fn session_start_skips_tickets_when_the_replica_sync_fails() {
+    let s = two_issues();
+    let payload = json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": s.proj.path,
+        "source": "startup",
+    });
+    let out = s.devkit_fed(
+        &["todo", "context", "--harness", "claude-code"],
+        &UNREACHABLE_SERVER,
+        &payload.to_string(),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_no_ticket_sync(&s);
+}
+
+#[test]
+fn a_completed_replica_sync_refreshes_tickets() {
+    let server = tempfile::tempdir().unwrap();
+    let config = format!(
+        "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\nserver_dir = {}\n",
+        toml::Value::String(server.path().display().to_string())
+    );
+    let s = two_issues_in(Proj::with_home_config(&config));
+    let out = s.devkit(&["todo", "list", "--sync"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the background sync", || s.sync_state("last").exists());
+    assert_eq!(s.ticket_queries(), 1, "{}", s.calls());
+}
+
 const TODO_EVENTS: &str = "
 [ticket.events.todo_start]
 to = \"In progress\"
