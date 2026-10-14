@@ -424,7 +424,11 @@ pub fn run(cli: TodoCli) -> Result<()> {
             };
             match tickets {
                 Some(report) if !dry_run => {
-                    writes = report.added + report.changed > 0;
+                    let changed = report.added + report.changed > 0;
+                    match replica.as_ref().filter(|_| changed) {
+                        Some(replica) => sync::run(replica, false, result_file.as_deref())?,
+                        None => writes = changed,
+                    }
                     println!(
                         "devkit todo: tickets synced: {} added, {} changed",
                         report.added, report.changed

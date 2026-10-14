@@ -8,7 +8,8 @@ mod todoenv;
 
 use std::path::PathBuf;
 
-use devkit_todo::{Holder, Status, Todo};
+use devkit_todo::{Filter, Holder, Status, Todo, TodoStore};
+use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore};
 use todoenv::{Proj, stderr, stdout};
 
 const STATUSES: &str = r#"
@@ -30,7 +31,10 @@ struct Synced {
 
 impl Synced {
     fn new(sync: &str, project: bool) -> Self {
-        let proj = Proj::new();
+        Self::in_proj(Proj::new(), sync, project)
+    }
+
+    fn in_proj(proj: Proj, sync: &str, project: bool) -> Self {
         let project = if project { "project = 3\n" } else { "" };
         std::fs::write(
             proj.path.join("devkit.toml"),
@@ -137,7 +141,12 @@ const OPTIONS: [&str; 3] = ["Todo", "In progress", "Done"];
 
 /// Issue 65, at `Todo` and blocked by 66, and issue 66, outside the project.
 fn two_issues() -> Synced {
-    let s = Synced::new(&format!("{RULES}{STATUSES}"), true);
+    two_issues_in(Proj::new())
+}
+
+/// [`two_issues`] in `proj`.
+fn two_issues_in(proj: Proj) -> Synced {
+    let s = Synced::in_proj(proj, &format!("{RULES}{STATUSES}"), true);
     s.serve(
         "graphql.json",
         &graphql(
@@ -164,6 +173,31 @@ fn sync_adds_one_todo_per_ticket_with_edges() {
     assert_eq!(t65.status, Status::Pending);
     let synced = t65.ticket.and_then(|t| t.synced_status);
     assert_eq!(synced.as_deref(), Some("Todo"));
+}
+
+#[test]
+fn a_foreground_sync_pushes_its_tickets_to_the_sync_target() {
+    let target = tempfile::tempdir().unwrap();
+    let server = target.path().join("server");
+    let config = format!(
+        "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\nserver_dir = {}\n",
+        toml::Value::String(server.display().to_string())
+    );
+    let s = two_issues_in(Proj::with_home_config(&config));
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("2 added"), "{}", stdout(&out));
+    let other =
+        TaskchampionStore::at(target.path().join("other")).with_target(SyncTarget::Dir(server));
+    other.sync_once().unwrap();
+    let mut on_target: Vec<String> = other
+        .list(&Filter::all())
+        .unwrap()
+        .into_iter()
+        .map(|t| t.description)
+        .collect();
+    on_target.sort();
+    assert_eq!(on_target, ["#65 Issue 65", "#66 Issue 66"]);
 }
 
 #[test]
