@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS devkit.seen (
 -- Whether `actor` may act on what `other` holds, as Holder::covers states.
 CREATE OR REPLACE FUNCTION devkit.todo_covers(actor text, other text) RETURNS boolean
 LANGUAGE sql IMMUTABLE AS $$
-    SELECT actor = 'human' OR actor = other OR starts_with(other, actor || '/')
+    SELECT actor IN ('human', 'tracker') OR actor = other OR starts_with(other, actor || '/')
 $$;
 
 -- The status and holder a todo moves to when `actor` asks for `target`, as
@@ -79,6 +79,11 @@ DECLARE
     claimant text;
 BEGIN
     IF status = 'in_progress' THEN
+        IF target = 'in_progress' AND holder = 'tracker' AND actor <> 'tracker' THEN
+            next_status := target;
+            next_holder := actor;
+            RETURN;
+        END IF;
         IF target = 'in_progress' AND devkit.todo_covers(actor, holder) THEN
             RETURN;
         END IF;

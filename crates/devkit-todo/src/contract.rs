@@ -47,6 +47,8 @@ macro_rules! contract_tests {
             unblock_removes_only_named_blockers,
             blockers_survive_status_changes,
             block_on_an_unknown_todo_is_refused,
+            the_tracker_hands_its_claim_to_any_actor,
+            the_tracker_finishes_an_agents_claim,
         );
         $crate::contract_tests!(@activity $make, $log;
             claiming_then_completing_records_one_completed_interval,
@@ -258,6 +260,24 @@ pub fn a_persons_claim_is_never_taken(s: &impl TodoStore) {
     let err = set(s, &id, StatusKind::InProgress, "S").unwrap_err();
     assert_eq!(claimant(&err).as_deref(), Some("human"), "{err:#}");
     assert_eq!(get(s, &id).status, in_progress("human"));
+}
+
+pub fn the_tracker_hands_its_claim_to_any_actor(s: &impl TodoStore) {
+    for actor in ["S", "human"] {
+        let id = add(s, "ticket");
+        set(s, &id, StatusKind::InProgress, "tracker").unwrap();
+        set(s, &id, StatusKind::InProgress, actor).unwrap();
+        assert_eq!(get(s, &id).status, in_progress(actor), "{actor}");
+    }
+}
+
+pub fn the_tracker_finishes_an_agents_claim(s: &impl TodoStore) {
+    let id = add(s, "ticket");
+    set(s, &id, StatusKind::InProgress, "S").unwrap();
+    set(s, &id, StatusKind::Completed, "tracker").unwrap();
+    assert_eq!(get(s, &id).status, Status::Completed {
+        by: Some(Holder::new("S"))
+    });
 }
 
 pub fn undone_drops_the_holder(s: &impl TodoStore) {

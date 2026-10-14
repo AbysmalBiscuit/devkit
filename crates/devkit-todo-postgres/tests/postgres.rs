@@ -336,7 +336,7 @@ fn stored(status: &Status) -> (String, Option<String>) {
 
 /// The claim rule the database applies is the one `transition` states, for
 /// every status, target and actor among a session, its sub-agents, another
-/// session and a person.
+/// session, a person and the tracker.
 #[test]
 fn the_databases_claim_rule_is_transition() {
     let Some(direct) = url(DIRECT) else {
@@ -345,7 +345,7 @@ fn the_databases_claim_rule_is_transition() {
     open(&direct, &fresh_root())
         .add(new_todo(None, "x"))
         .unwrap();
-    let holders = ["S", "S/a1", "S/a2", "S2", "human"].map(Holder::new);
+    let holders = ["S", "S/a1", "S/a2", "S2", "human", "tracker"].map(Holder::new);
     let mut statuses = vec![
         Status::Pending,
         Status::Completed { by: None },
