@@ -82,8 +82,9 @@ pub fn locks_lock() -> PathBuf {
 pub fn logs_dir() -> PathBuf {
     state_dir().join("logs")
 }
-/// The run ledger: one record per `devrun task` run. Only devrun writes here,
-/// and the edit guard refuses an agent's write into it.
+/// The run ledger: one record per `devrun task` run, written by devrun. The
+/// hook refuses an agent's edit-tool write into it, and best-effort a shell
+/// write whose target the guard recognizes.
 pub fn runs_dir() -> PathBuf {
     state_dir().join("runs")
 }
