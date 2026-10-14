@@ -2,7 +2,10 @@
 //! `ticket_body` templates, printed for a tracker MCP call, with a receipt per
 //! field the pre-tool-use hook checks that call against.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, anyhow, bail};
 use devkit_common::{
@@ -70,24 +73,23 @@ fn body_context(body: &str, rendered_title: &str) -> serde_json::Value {
     ])
 }
 
-/// The tracker whose `[ticket.fields]` table applies: `kind` when the caller
-/// resolved one, else `[tracker] kind`, else the one table declared. Both
-/// tables declared with no kind set is refused, since the tracker in use
-/// decides which fields exist.
-pub(crate) fn fields_tracker(cfg: &Config, kind: Option<TrackerKind>) -> Result<TrackerKind> {
-    if let Some(kind) = kind.or(cfg.tracker.kind) {
-        return Ok(kind);
-    }
-    let f = &cfg.ticket.fields;
-    match (f.github.is_empty(), f.linear.is_empty()) {
-        (false, true) => Ok(TrackerKind::Github),
-        (true, false) => Ok(TrackerKind::Linear),
-        (true, true) => Ok(TrackerKind::None),
-        (false, false) => bail!(
-            "[ticket.fields] declares fields for both github and linear; set [tracker] kind so \
-             devkit knows which apply"
-        ),
-    }
+/// The tracker in use, `[tracker] kind` or else the one detected, and its
+/// `[ticket.fields]` table, checked in full. `origin` names the layers for
+/// that check.
+pub(crate) fn tracker_fields<'a>(
+    cfg: &'a Config,
+    origin: &HashMap<String, PathBuf>,
+    config: Option<&str>,
+    start: &str,
+) -> Result<(TrackerKind, &'a BTreeMap<String, FieldDecl>)> {
+    let kind = cfg.tracker.kind.unwrap_or_else(|| {
+        devkit_common::tracker::select(config.map(Path::new), start, None)
+            .tracker
+            .tracker
+            .kind()
+    });
+    devkit_config::check_ticket_fields(cfg, kind, origin)?;
+    Ok((kind, cfg.ticket.fields.for_tracker(kind)))
 }
 
 /// A ticket verb's `--arg`s, split into template variables and ticket fields.
@@ -211,8 +213,12 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
     let loaded =
         devkit_ports::load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
     let cfg = &loaded.config;
-    let kind = fields_tracker(cfg, None)?;
-    let decls = cfg.ticket.fields.for_tracker(kind);
+    let (kind, decls) = tracker_fields(
+        cfg,
+        &loaded.provenance.origin,
+        args.config.as_deref(),
+        &start,
+    )?;
     let input = ticket_args(cfg, &args.vars, &FieldArgs::default(), decls)?;
     let resolved = resolve_fields(cfg, kind, decls, &input.fields)?;
     let rendered = render(

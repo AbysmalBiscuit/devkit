@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use devkit_common::fields::{FieldView, listing};
-use devkit_config::{Cond, TrackerKind};
+use devkit_config::Cond;
 
 use super::render;
 use crate::template::VarArgs;
@@ -19,18 +19,10 @@ pub(crate) struct FieldsArgs {
 
 pub(crate) fn run(args: FieldsArgs) -> Result<()> {
     let start = super::start(&args.dir);
-    let (cfg, _) =
+    let (cfg, prov) =
         devkit_common::config::resolve(args.config.as_deref().map(Path::new), Path::new(&start))?;
-    let kind = match render::fields_tracker(&cfg, None)? {
-        TrackerKind::None if cfg.tracker.kind.is_none() => {
-            devkit_common::tracker::select(args.config.as_deref().map(Path::new), &start, None)
-                .tracker
-                .tracker
-                .kind()
-        }
-        kind => kind,
-    };
-    let decls = cfg.ticket.fields.for_tracker(kind);
+    let (kind, decls) =
+        render::tracker_fields(&cfg, &prov.origin, args.config.as_deref(), &start)?;
     let input = render::ticket_args(&cfg, &args.vars, &Default::default(), decls)?;
     let views = listing(decls, devkit_common::caller::caller(), &input.fields);
     if args.json {

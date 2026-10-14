@@ -89,3 +89,18 @@ fn makes_no_tracker_request() {
     stdout(&fake.issue_as("agent", &["fields"]));
     assert_eq!(fake.calls(), "", "no gh call");
 }
+
+#[test]
+fn both_tables_without_a_kind_use_the_detected_trackers() {
+    let fake = ghfake::Fake::with_origin_and(
+        "[ticket.fields.github.estimate]\ntype = \"number\"\n\
+         where = { project_field = \"PVTF_e\", name = \"Estimate\" }\nlevel = \"warning\"\n\
+         [ticket.fields.linear.team]\nlevel = \"error\"\n",
+        "https://github.com/o/r.git",
+    );
+    let out = stdout(&fake.issue_as("agent", &["fields"]));
+    assert!(out.contains("estimate") && !out.contains("team"), "{out}");
+    assert_eq!(fake.calls(), "", "no gh call");
+    let rendered = stdout(&fake.issue_as("agent", &["render", "--title", "T", "--arg", "estimate=3"]));
+    assert!(rendered.contains("\"title\""), "{rendered}");
+}
