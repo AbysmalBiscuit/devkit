@@ -1,6 +1,6 @@
-//! A Linear GraphQL endpoint in a thread, for `DEVKIT_LINEAR_URL`: it answers
-//! each POST by the first registered substring its body contains, and records
-//! every body it was sent.
+//! A Linear GraphQL endpoint in a thread, for `DEVKIT_TEST_LINEAR_URL`: it
+//! answers each POST by the first registered substring its body contains, and
+//! records every body it was sent.
 #![allow(dead_code)]
 
 use std::{
@@ -63,7 +63,7 @@ impl LinearFake {
     /// The environment that points devkit at this fake with a key.
     pub fn env(&self) -> [(&str, &str); 2] {
         [
-            ("DEVKIT_LINEAR_URL", &self.url),
+            ("DEVKIT_TEST_LINEAR_URL", &self.url),
             ("LINEAR_API_KEY", "lin_test"),
         ]
     }

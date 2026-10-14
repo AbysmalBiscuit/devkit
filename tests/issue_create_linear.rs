@@ -281,7 +281,7 @@ fn a_linear_create_without_a_key_is_refused_before_any_request() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();
     let out = fake.issue_with_env(&["create", "--title", "T"], &[
-        ("DEVKIT_LINEAR_URL", &linear.url),
+        ("DEVKIT_TEST_LINEAR_URL", &linear.url),
         ("LINEAR_API_KEY", ""),
     ]);
     assert!(!out.status.success());

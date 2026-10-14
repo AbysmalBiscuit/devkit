@@ -233,13 +233,16 @@ pub fn issues_by_number(n: u64, key: &str) -> Result<Vec<LinearIssueRef>> {
     Ok(parse_number_candidates(&resp))
 }
 
-/// Linear's GraphQL endpoint: `$DEVKIT_LINEAR_URL` when set, which exists so
-/// tests can point devkit at a local fake, else Linear's own.
+/// Linear's GraphQL endpoint. Debug builds only: `DEVKIT_TEST_LINEAR_URL`
+/// replaces it, so a test can serve the calls from loopback.
 fn endpoint() -> String {
-    std::env::var("DEVKIT_LINEAR_URL")
-        .ok()
-        .filter(|u| !u.trim().is_empty())
-        .unwrap_or_else(|| "https://api.linear.app/graphql".to_string())
+    #[cfg(debug_assertions)]
+    if let Ok(url) = std::env::var("DEVKIT_TEST_LINEAR_URL")
+        && !url.trim().is_empty()
+    {
+        return url.trim().to_string();
+    }
+    "https://api.linear.app/graphql".to_string()
 }
 
 /// The single transport for every Linear GraphQL call: POST the body, decode
