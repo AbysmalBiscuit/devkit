@@ -5718,6 +5718,47 @@ steps = [
     }
 
     #[test]
+    fn a_linear_field_at_a_place_taking_ids_must_give_ids() {
+        for (name, decl, says) in [
+            (
+                "labels",
+                "type = \"string\"\nlist = true\nwhere = \"labels\"",
+                "`enum`",
+            ),
+            ("team", "type = \"string\"\nwhere = \"team\"", "`enum`"),
+            ("cycle", "type = \"number\"\nwhere = \"cycle\"", "`enum`"),
+            ("board", "type = \"string\"\nwhere = \"project\"", "`enum`"),
+            (
+                "stage",
+                "type = \"date\"\nwhere = \"project_milestone\"",
+                "`enum`",
+            ),
+            ("owner", "type = \"string\"\nwhere = \"assignee\"", "`user`"),
+            (
+                "tags",
+                "type = \"user\"\nlist = true\nwhere = \"labels\"",
+                "`enum`",
+            ),
+        ] {
+            let e = field_error(
+                None,
+                &format!("[tracker]\nkind = \"linear\"\n[ticket.fields.linear.{name}]\n{decl}\n"),
+            );
+            assert!(
+                e.contains(&format!("[ticket.fields.linear.{name}]")) && e.contains(says),
+                "{name}: {e}"
+            );
+        }
+        field_load(
+            None,
+            "[tracker]\nkind = \"linear\"\n[ticket.fields.linear.owner]\ntype = \"user\"\n\
+             where = \"assignee\"\n[ticket.fields.linear.due]\ntype = \"string\"\n\
+             where = \"due_date\"\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn a_table_of_another_configured_tracker_is_not_checked() {
         field_load(
             Some("[ticket.fields.linear.team]\nlevel = \"error\"\n"),

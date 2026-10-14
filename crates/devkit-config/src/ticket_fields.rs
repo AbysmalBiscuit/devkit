@@ -594,9 +594,13 @@ pub(crate) fn validate(
                 place.label()
             );
         }
-        if in_use && kind == TrackerKind::Github {
-            github_writable(&key, ty, place, cx)
-                .map_err(|why| anyhow::anyhow!("`{key}`{} {why}", note(cx, kind, name)))?;
+        if in_use {
+            let writable = match kind {
+                TrackerKind::Github => github_writable(&key, ty, place, cx),
+                TrackerKind::Linear => linear_writable(&key, ty, place),
+                TrackerKind::None => Ok(()),
+            };
+            writable.map_err(|why| anyhow::anyhow!("`{key}`{} {why}", note(cx, kind, name)))?;
         }
         if ty == FieldType::Enum && decl.values.is_empty() && decl.max_level() == FieldLevel::Error
         {
@@ -622,6 +626,28 @@ pub(crate) fn validate(
         places.push((name, place));
     }
     Ok(())
+}
+
+/// Why Linear could not take a `ty` value at `place`, whose input takes ids
+/// that only an `enum`'s values, or a `user`'s `[people]` entry, supply.
+fn linear_writable(key: &str, ty: FieldType, place: &Place) -> std::result::Result<(), String> {
+    let wants = match place {
+        Place::Assignee => "a `user` or `enum`",
+        Place::Team | Place::Labels | Place::Cycle | Place::Project | Place::ProjectMilestone => {
+            "an `enum`"
+        }
+        _ => return Ok(()),
+    };
+    let fits = ty == FieldType::Enum || (ty == FieldType::User && *place == Place::Assignee);
+    if fits {
+        return Ok(());
+    }
+    Err(format!(
+        "has `type = \"{}\"`, but Linear's `{}` takes ids, which {wants} supplies. Change \
+         `type` in `{key}`.",
+        ty.as_str(),
+        place.label()
+    ))
 }
 
 /// Why GitHub could not take a `ty` value at `place`, which would otherwise
