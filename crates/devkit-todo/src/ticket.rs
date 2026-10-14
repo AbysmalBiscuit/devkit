@@ -265,14 +265,14 @@ pub fn plan(
             if let Some(parent) = ticket
                 .parent
                 .as_ref()
-                .filter(|p| synced.contains(p.as_str()))
+                .filter(|p| synced.contains(p.as_str()) && **p != ticket.key)
             {
                 relations.push(edit(Change::Move(Some(parent.clone()))));
             }
             let blockers: Vec<String> = ticket
                 .blocked_by
                 .iter()
-                .filter(|b| synced.contains(b.as_str()))
+                .filter(|b| synced.contains(b.as_str()) && **b != ticket.key)
                 .cloned()
                 .collect();
             if !blockers.is_empty() {

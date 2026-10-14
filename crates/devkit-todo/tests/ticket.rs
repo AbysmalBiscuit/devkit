@@ -208,6 +208,18 @@ fn blocking_links_between_synced_tickets_become_edges() {
 }
 
 #[test]
+fn a_new_ticket_naming_itself_gets_no_self_edges() {
+    let own = SyncedTicket {
+        parent: Some("65".into()),
+        blocked_by: vec!["65".into()],
+        ..ticket("65", "Todo")
+    };
+    let out = run(&[], &[own]);
+    assert_eq!(out.adds.len(), 1, "{out:?}");
+    assert!(out.edits.is_empty(), "{:?}", out.edits);
+}
+
+#[test]
 fn a_sub_issue_nests_under_its_parent_ticket() {
     let child = SyncedTicket {
         parent: Some("60".into()),
