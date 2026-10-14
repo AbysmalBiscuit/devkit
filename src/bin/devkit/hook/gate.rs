@@ -20,6 +20,7 @@ use devkit_locks::{
     Live, Registry, WriteResolver,
     model::{Conflict, WriteDecision},
 };
+use devkit_ports::ledger::Ledger;
 use pabal::AnyHarness;
 
 use super::{payload, print_envelope, writes};
@@ -151,6 +152,29 @@ impl Claims {
                 .collect(),
         }
     }
+}
+
+/// A refusal for each of `claims`' targets that lands inside devrun's run
+/// ledger. Only `devrun task` writes the ledger, so this holds whether or not
+/// the project enforces write locks.
+pub fn ledger_blocks(claims: &Claims, ledger: &Ledger, cwd: &Path) -> Vec<String> {
+    let scopes = claims.scopes.iter().map(|check| match check {
+        ScopeCheck::Tree { dir, .. } | ScopeCheck::Fresh { dir } => dir,
+        ScopeCheck::Covering { path } => path,
+    });
+    claims
+        .paths
+        .iter()
+        .chain(&claims.trees)
+        .chain(scopes)
+        .filter(|target| ledger.contains(Path::new(target), cwd))
+        .map(|target| {
+            format!(
+                "{PREFIX} `{target}` is in devrun's run ledger, which only `devrun task` writes. \
+                 Run the task to record a run; `devrun runs list` reads them."
+            )
+        })
+        .collect()
 }
 
 /// What the gate found: blocks deny the call, warnings ride along with it.

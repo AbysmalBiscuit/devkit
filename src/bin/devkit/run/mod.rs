@@ -183,6 +183,45 @@ pub(crate) enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Read the run ledger of `devrun task` runs.
+    ///
+    /// Every run is recorded with its exit code, commit and whether the tree
+    /// was clean.
+    Runs {
+        #[command(subcommand)]
+        cmd: RunsCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum RunsCmd {
+    /// List this repository's recorded runs, oldest first.
+    List {
+        /// Only runs of this task.
+        #[arg(long)]
+        task: Option<String>,
+        /// Show only the last N runs.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Print the runs as a JSON array, output tails included.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Whether TASK exited 0 on a clean tree at exactly one commit.
+    ///
+    /// Only runs in this repository's checkouts count. Exits 0 and prints the
+    /// run for yes, exits 1 for no.
+    Passed {
+        /// Task name, as given to `devrun task`.
+        task: String,
+        /// Full commit id to ask about; defaults to this worktree's HEAD. An
+        /// abbreviated id or an ancestor's run never matches.
+        #[arg(long)]
+        sha: Option<String>,
+        /// Print the proving run as JSON, or `null` for no.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -523,7 +562,79 @@ pub fn run(cli: RunCli) -> Result<()> {
             vars,
             *dry_run,
         ),
+        Cmd::Runs { cmd } => match cmd {
+            RunsCmd::List { task, limit, json } => {
+                cmd_runs_list(&cwd, task.as_deref(), *limit, *json)
+            }
+            RunsCmd::Passed { task, sha, json } => {
+                cmd_runs_passed(&cwd, task, sha.as_deref(), *json)
+            }
+        },
     }
+}
+
+/// The repository whose runs `devrun runs` reads: its primary checkout, as
+/// [`devkit_ports::ledger::Start`] records it.
+fn ledger_repo(cwd: &str) -> Result<std::path::PathBuf> {
+    let repo = devkit_common::vcs::primary_checkout(Path::new(cwd))?;
+    Ok(std::fs::canonicalize(&repo).unwrap_or(repo))
+}
+
+fn cmd_runs_list(cwd: &str, task: Option<&str>, limit: usize, json: bool) -> Result<()> {
+    let mut runs = devkit_ports::ledger::Ledger::live().runs_in(&ledger_repo(cwd)?)?;
+    runs.retain(|r| task.is_none_or(|t| r.task == t));
+    let runs = &runs[runs.len().saturating_sub(limit)..];
+    if json {
+        println!("{}", serde_json::to_string_pretty(runs)?);
+        return Ok(());
+    }
+    if runs.is_empty() {
+        println!("no recorded runs");
+        return Ok(());
+    }
+    let mut t = ui::table(&["STARTED", "TASK", "EXIT", "CLEAN", "HEAD"]);
+    for r in runs {
+        t.add_row(vec![
+            r.started_at.clone(),
+            r.task.clone(),
+            r.exit_code.map_or("-".to_string(), |c| c.to_string()),
+            if r.clean { "yes" } else { "no" }.to_string(),
+            r.head
+                .as_deref()
+                .map_or("-", |h| &h[..h.len().min(12)])
+                .to_string(),
+        ]);
+    }
+    println!("{t}");
+    Ok(())
+}
+
+fn cmd_runs_passed(cwd: &str, task: &str, sha: Option<&str>, json: bool) -> Result<()> {
+    anyhow::ensure!(!task.trim().is_empty(), "name the task to ask about");
+    let sha = match sha {
+        Some(sha) => sha.trim().to_string(),
+        None => {
+            let root = toplevel(cwd)?;
+            let root = Path::new(&root);
+            devkit_common::vcs::Vcs::at(root).revision(root)?
+        }
+    };
+    anyhow::ensure!(!sha.is_empty(), "--sha names no commit");
+    let found = devkit_ports::ledger::Ledger::live().passed(&ledger_repo(cwd)?, task, &sha)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&found)?);
+    } else if let Some(run) = &found {
+        println!(
+            "yes: `{task}` exited 0 on a clean tree at {sha} (run ended {})",
+            run.ended_at
+        );
+    } else {
+        println!("no: no recorded run of `{task}` exited 0 on a clean tree at {sha}");
+    }
+    if found.is_none() {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 /// The baseline directory this project's config names, and the checkout every
@@ -619,7 +730,10 @@ fn cmd_task(
     vars: &crate::template::VarArgs,
     dry_run: bool,
 ) -> Result<()> {
-    use devkit_ports::task::{self, Resolved, SeqItem};
+    use devkit_ports::{
+        ledger,
+        task::{self, Resolved, SeqItem},
+    };
 
     let caller = devkit_common::caller::caller();
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
@@ -643,79 +757,103 @@ fn cmd_task(
         caller,
     )?;
     let root_path = Path::new(&root);
-    match resolved {
-        Resolved::Command(plan) => {
-            if dry_run {
-                return run_task_step(&plan, true);
-            }
-            let fresh = task::resolve_step(
-                &loaded.config,
-                &loaded.catalog,
-                root_path,
-                &root,
-                name,
-                &user,
-                &args,
-            )?;
-            run_task_step(&fresh, false)
-        }
-        Resolved::Sequence(items) => {
-            for item in &items {
-                match item {
-                    SeqItem::Run(plan) => {
-                        if dry_run {
-                            run_task_step(plan, true)?;
-                        } else {
-                            let fresh = task::resolve_step(
-                                &loaded.config,
-                                &loaded.catalog,
-                                root_path,
-                                &root,
-                                &plan.name,
-                                &user,
-                                &args,
-                            )?;
-                            run_task_step(&fresh, false)?;
-                        }
-                    }
-                    SeqItem::Up(app) => {
-                        cmd_up(
-                            cli,
-                            cwd,
-                            std::slice::from_ref(app),
-                            RoleSelector::Workspace,
-                            env_pairs,
-                            env_file,
-                            UpFlags {
-                                dry_run,
-                                supervise: false,
-                            },
-                        )?;
+    let up = |app: &String, dry_run: bool| {
+        cmd_up(
+            cli,
+            cwd,
+            std::slice::from_ref(app),
+            RoleSelector::Workspace,
+            env_pairs,
+            env_file,
+            UpFlags {
+                dry_run,
+                supervise: false,
+            },
+        )
+    };
+    if dry_run {
+        match &resolved {
+            Resolved::Command(plan) => print_plan(plan),
+            Resolved::Sequence(items) => {
+                for item in items {
+                    match item {
+                        SeqItem::Run(plan) => print_plan(plan),
+                        SeqItem::Up(app) => up(app, true)?,
                     }
                 }
             }
-            Ok(())
         }
+        return Ok(());
+    }
+
+    let committed = ledger::committed_config(root_path, Path::new(cwd))
+        .is_ok_and(|c| task::same_definition(&loaded.config, &c, &loaded.catalog, name));
+    let start = ledger::Start::capture(
+        root_path,
+        name,
+        &args,
+        committed,
+        user.keys().cloned().collect(),
+        env_file.map(|f| Path::new(cwd).join(f)),
+    );
+    let tail = ledger::Tail::new();
+    let steps = std::cell::RefCell::new(Vec::new());
+    let step = |step_name: &str| -> Result<Option<i32>> {
+        let fresh = task::resolve_step(
+            &loaded.config,
+            &loaded.catalog,
+            root_path,
+            &root,
+            step_name,
+            &user,
+            &args,
+        )?;
+        eprintln!("-> {}: {}", fresh.name, fresh.argv.join(" "));
+        steps.borrow_mut().push(ledger::Step {
+            task: fresh.name.clone(),
+            argv: fresh.argv.clone(),
+        });
+        Ok(task::exec(&fresh, &tail)?.code())
+    };
+    let outcome = match &resolved {
+        Resolved::Command(_) => step(name),
+        Resolved::Sequence(items) => (|| {
+            for item in items {
+                match item {
+                    SeqItem::Run(plan) => {
+                        let code = step(&plan.name)?;
+                        if code != Some(0) {
+                            return Ok(code);
+                        }
+                    }
+                    SeqItem::Up(app) => up(app, false)?,
+                }
+            }
+            Ok(Some(0))
+        })(),
+    };
+    let run = start.finish(
+        outcome.as_ref().ok().copied().flatten(),
+        &tail,
+        steps.into_inner(),
+    );
+    if let Err(e) = ledger::Ledger::live().record(&run) {
+        eprintln!("devrun: the run was not recorded in the run ledger: {e:#}");
+    }
+    // A non-zero child exits the process with the child's code, so a caller
+    // sees the task's own exit status.
+    match outcome? {
+        Some(0) => Ok(()),
+        code => std::process::exit(code.unwrap_or(1)),
     }
 }
 
-/// Print or execute one command step. A non-zero child exits the process with
-/// the child's code, so a sequence stops at its first failure.
-fn run_task_step(plan: &devkit_ports::task::CommandPlan, dry_run: bool) -> Result<()> {
-    if dry_run {
-        println!("[{}]", plan.name);
-        println!("  cwd:  {}", plan.cwd.display());
-        println!("  argv: {}", plan.argv.join(" "));
-        let envs: Vec<String> = plan.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        println!("  env:  {}", envs.join(" "));
-        return Ok(());
-    }
-    eprintln!("-> {}: {}", plan.name, plan.argv.join(" "));
-    let status = devkit_ports::task::exec(plan)?;
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-    Ok(())
+fn print_plan(plan: &devkit_ports::task::CommandPlan) {
+    println!("[{}]", plan.name);
+    println!("  cwd:  {}", plan.cwd.display());
+    println!("  argv: {}", plan.argv.join(" "));
+    let envs: Vec<String> = plan.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    println!("  env:  {}", envs.join(" "));
 }
 
 fn cmd_up(

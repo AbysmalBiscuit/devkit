@@ -17,6 +17,20 @@ A **command** task runs in the foreground and propagates its exit code. A **sequ
 
 A task `devrun task <name>` would refuse for its shape still lists, with KIND `invalid` and the refusal in place of its description; `devkit config tasks --json` carries it as `error`. Refusals include both or neither of `run` and `steps`, a template that does not compile, an app the catalog lacks, a split on an empty `on`, a sequence setting `app`, `env` or `require_live`, and a step naming an unknown, malformed or sequence task. Port references are found by rendering, so a problem with one surfaces only when the task runs.
 
+## The run ledger
+
+Every `devrun task <name>` that executes is recorded in the run ledger, one record per invocation: the task name and its `--arg` values, the exit code of the program devrun ran (a sequence records its first failing step's code), the argv each command step resolved to, the full HEAD commit id, whether the tree was clean, start and end times, and the last lines of output. A `--dry-run` or a listing records nothing. The tree counts as clean only when it had no modified, staged or untracked files both when the run started and when it ended, and HEAD had not moved, so a run that rewrites files or races another session's edit is not clean. Ignored files do not count. A run is also not clean unless the task ran as the repository's committed config defines it: its entry and each step's, the `[templates.variables]` entries they or their app's `static_env` read, and their app's `path` and `static_env` must match what the tracked `devkit.toml` layers at HEAD alone give. A `devkit.local.toml`, the home config, `--config` or `$DEVKIT_CONFIG` that changes any of them, or a definition devrun cannot compare, records `committed_definition: false` and `clean: false`, so `passed` answers no. A run given `--env` or `--env-file` is not clean either: its record lists the variable names they set under `env` and the file under `env_file`, never the values. devrun's own inherited environment, such as `PATH`, is not compared or recorded, so a run's cleanliness says nothing about it. An output stream attached to a terminal passes straight through uncaptured, so a run from a terminal records no tail for it. Any other stream goes to a file devrun echoes while the task runs; a process the task leaves in the background keeps writing to that file after the run ends, unseen.
+
+The ledger lives in devkit's state directory, outside every worktree, where `devrun task` writes it. The hook refuses an agent's edit-tool write into it, and refuses a shell command whose write targets it recognizes as landing there, whether or not the project enforces write locks. The shell refusal is best-effort: a target the guard cannot name, such as one built from an unset variable, is not refused. Read the ledger with:
+
+```sh
+devrun runs list                              # this repository's runs, oldest first (--task NAME, --limit N, --json with tails)
+devrun runs passed <task>                     # did <task> exit 0 on a clean tree at HEAD? exit 0 = yes, 1 = no
+devrun runs passed <task> --sha <full-id>     # the same question for another commit
+```
+
+`passed` answers yes only for a run in one of this repository's checkouts at exactly that commit id: a run at an ancestor, an abbreviated id, a dirty tree or a non-zero exit is no. `--json` prints the proving run, or `null`. To claim a check passed, cite `devrun runs passed`, not your own reading of the output.
+
 ## Args
 
 A task's templates can read variables as well as ports. The ARGS column of `devrun task` names them: a bare name is required, a bracketed one is optional. The column answers for whoever runs it, since an arg can be required of agents only; `DEVKIT_CALLER=agent devrun task` shows a human the agent's view. Pass each with `--arg`:

@@ -142,6 +142,66 @@ pub fn view<'a>(
     })
 }
 
+/// Whether task `name` is defined in `cfg` as in `committed`: its entry and
+/// each step's, the `[templates.variables]` entries they or their app's
+/// `static_env` read, and their app's `path` and `static_env`. A task [`view`]
+/// refuses is never the same.
+pub fn same_definition(
+    cfg: &Config,
+    committed: &Config,
+    catalog: &HashMap<String, App>,
+    name: &str,
+) -> bool {
+    fn same<T: serde::Serialize>(a: Option<T>, b: Option<T>) -> bool {
+        match (serde_json::to_value(a), serde_json::to_value(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+    let Ok(v) = view(cfg, catalog, name) else {
+        return false;
+    };
+    let Ok(checked) = v.runnable() else {
+        return false;
+    };
+    let steps = v.task.steps.iter().filter_map(|s| match s {
+        Step::Task(t) => Some(t.as_str()),
+        Step::Up(_) => None,
+    });
+    let app = |c: &Config, app: &str| {
+        c.apps
+            .get(app)
+            .map(|a| (a.path.clone(), a.static_env.clone()))
+    };
+    let mut reads = checked.reads.clone();
+    let tasks: Vec<&str> = std::iter::once(name).chain(steps).collect();
+    for t in &tasks {
+        let Some(a) = cfg.tasks.get(*t).and_then(|t| t.app.as_deref()) else {
+            continue;
+        };
+        for c in [cfg, committed] {
+            let Some(app) = c.apps.get(a) else { continue };
+            let templates: Vec<&str> = app.static_env.values().map(String::as_str).collect();
+            match template::undeclared(&templates) {
+                Ok(names) => reads.extend(names),
+                Err(_) => return false,
+            }
+        }
+    }
+    tasks.iter().all(|t| {
+        let task = cfg.tasks.get(*t);
+        same(task, committed.tasks.get(*t))
+            && task
+                .and_then(|t| t.app.as_deref())
+                .is_none_or(|a| same(app(cfg, a), app(committed, a)))
+    }) && reads.iter().all(|r| {
+        same(
+            cfg.templates.variables.get(r),
+            committed.templates.variables.get(r),
+        )
+    })
+}
+
 /// Every configured task's [`view`], sorted by name.
 pub fn views<'a>(cfg: &'a Config, catalog: &HashMap<String, App>) -> Vec<TaskView<'a>> {
     let mut names: Vec<&String> = cfg.tasks.keys().collect();
@@ -735,15 +795,87 @@ fn resolve_command_with_ports(
     })
 }
 
-/// Run a command plan in the foreground with inherited stdio, its env overlaid
-/// on the process environment. Returns the child's exit status.
-pub fn exec(plan: &CommandPlan) -> Result<std::process::ExitStatus> {
-    std::process::Command::new(&plan.argv[0])
-        .args(&plan.argv[1..])
+/// Run a command plan in the foreground, its env overlaid on the process
+/// environment, keeping the tail of its output in `tail`. An output stream
+/// not attached to a terminal is captured into a file under the state
+/// directory, followed while the task runs and echoed to the same stream of
+/// devrun's; a terminal stream is inherited, so the task still sees a
+/// terminal. When stdout and stderr are one file, both streams share one
+/// capture echoed to stdout. Returns the child's exit status.
+///
+/// A file rather than a pipe, so a process the task leaves in the background
+/// keeps a writable output after devrun exits instead of dying on a closed
+/// pipe, and devrun returns as soon as the task itself does.
+pub fn exec(
+    plan: &CommandPlan,
+    tail: &std::sync::Arc<crate::ledger::Tail>,
+) -> Result<std::process::ExitStatus> {
+    use std::{
+        io::IsTerminal,
+        process::Command,
+        sync::{Arc, atomic::AtomicBool},
+    };
+
+    use crate::ledger::Capture;
+
+    let mut cmd = Command::new(&plan.argv[0]);
+    cmd.args(&plan.argv[1..])
         .current_dir(&plan.cwd)
-        .envs(&plan.env)
-        .status()
-        .with_context(|| format!("running task `{}` ({})", plan.name, plan.argv.join(" ")))
+        .envs(&plan.env);
+    let exited = Arc::new(AtomicBool::new(false));
+    let (out_tty, err_tty) = (
+        std::io::stdout().is_terminal(),
+        std::io::stderr().is_terminal(),
+    );
+    let shared = !out_tty && !err_tty && outputs_share_a_file();
+    let out = (!out_tty).then(Capture::open).flatten();
+    let err = (!err_tty && !shared).then(Capture::open).flatten();
+    if let Some(c) = &out {
+        cmd.stdout(c.writer()?);
+        if shared {
+            cmd.stderr(c.writer()?);
+        }
+    }
+    if let Some(c) = &err {
+        cmd.stderr(c.writer()?);
+    }
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("running task `{}` ({})", plan.name, plan.argv.join(" ")))?;
+    let followers = [
+        out.map(|c| c.follow(tail, &exited, std::io::stdout)),
+        err.map(|c| c.follow(tail, &exited, std::io::stderr)),
+    ];
+    let status = child.wait();
+    exited.store(true, std::sync::atomic::Ordering::Release);
+    for follower in followers.into_iter().flatten() {
+        let _ = follower.join();
+    }
+    status.with_context(|| format!("waiting for task `{}`", plan.name))
+}
+
+/// Whether devrun's stdout and stderr are one file, as `2>&1` leaves them.
+/// The task then writes both streams into one capture, so they keep their
+/// order.
+#[cfg(unix)]
+fn outputs_share_a_file() -> bool {
+    use std::os::{
+        fd::{AsFd, BorrowedFd},
+        unix::fs::MetadataExt,
+    };
+    let id = |fd: BorrowedFd<'_>| {
+        let meta = std::fs::File::from(fd.try_clone_to_owned().ok()?)
+            .metadata()
+            .ok()?;
+        Some((meta.dev(), meta.ino()))
+    };
+    let out = id(std::io::stdout().as_fd());
+    out.is_some() && out == id(std::io::stderr().as_fd())
+}
+
+#[cfg(not(unix))]
+fn outputs_share_a_file() -> bool {
+    false
 }
 
 #[cfg(test)]

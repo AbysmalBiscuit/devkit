@@ -16,6 +16,7 @@ use devkit_common::{
 };
 use devkit_config::PolicyAction;
 use devkit_locks::Registry;
+use devkit_ports::ledger::Ledger;
 use pabal::Tool;
 
 use super::{
@@ -112,11 +113,15 @@ fn respond(
     if enabled {
         armed.arm(harness);
     }
-    let blocks = if enabled {
-        blocks(&write, gate, checkout, cwd)
-    } else {
-        Vec::new()
+    let mut blocks = match &write {
+        Write::Targets { paths, .. } => {
+            gate::ledger_blocks(&Claims::paths(paths.clone()), &Ledger::live(), cwd)
+        }
+        Write::Unusable(_) => Vec::new(),
     };
+    if enabled {
+        blocks.extend(self::blocks(&write, gate, checkout, cwd));
+    }
     let targets = match write {
         Write::Targets { paths, holder } => {
             if blocks.is_empty() {
