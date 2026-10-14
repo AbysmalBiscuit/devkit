@@ -316,8 +316,8 @@ pub(crate) enum TicketCmd {
     /// Move the issue's tracker status as [ticket.events] configures EVENT.
     ///
     /// Reads the status and moves it to the event's `to` when it is in the
-    /// event's `from`. setup, start and pr_open already fire on their own;
-    /// this reruns one, to retry a failed move or see its error.
+    /// event's `from`. Every event already fires on its own; this reruns
+    /// one, to retry a failed move or see its error.
     Event {
         /// The event whose transition to apply.
         event: event::EventArg,

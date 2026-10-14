@@ -61,6 +61,16 @@ impl Synced {
     }
 
     fn devkit_fed(&self, args: &[&str], env: &[(&str, &str)], stdin: &str) -> std::process::Output {
+        self.devkit_in(&self.proj.path, args, env, stdin)
+    }
+
+    fn devkit_in(
+        &self,
+        dir: &std::path::Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+        stdin: &str,
+    ) -> std::process::Output {
         let path = std::env::join_paths(std::iter::once(self.bin.path().to_path_buf()).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
@@ -74,7 +84,7 @@ impl Synced {
             ("GITHUB_TOKEN", ""),
         ];
         all.extend_from_slice(env);
-        self.proj.devkit_in(&self.proj.path, args, &all, stdin)
+        self.proj.devkit_in(dir, args, &all, stdin)
     }
 
     fn sync(&self, args: &[&str]) -> std::process::Output {
@@ -85,6 +95,15 @@ impl Synced {
 
     fn calls(&self) -> String {
         std::fs::read_to_string(self.bin.path().join("gh.log")).unwrap_or_default()
+    }
+
+    /// The tracker writes `gh` was asked for.
+    fn mutations(&self) -> Vec<String> {
+        self.calls()
+            .lines()
+            .filter(|l| l.contains("query=mutation"))
+            .map(String::from)
+            .collect()
     }
 
     /// How many rule searches `gh` was asked for: one per ticket sync here.
@@ -151,7 +170,9 @@ fn graphql(issues: &[String], options: &[&str]) -> String {
     format!(
         r#"{{"data":{{
             "search":{{"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[{}]}},
-            "repository":{{{}}},
+            "repository":{{{},"issue":{{"id":"I_65","projectItems":{{"nodes":[
+                {{"id":"PVTI_3","project":{{"id":"PVT_3","number":3}},
+                  "fieldValueByName":{{"name":"Todo","optionId":"o0"}}}}]}}}}}},
             "repositoryOwner":{{"projectV2":{{"id":"PVT_3",
                 "field":{{"id":"PVTSSF_status","options":[{}]}}}}}}
         }}}}"#,
@@ -456,4 +477,104 @@ fn a_hook_injection_answers_while_the_tracker_hangs() {
             .and_then(|m| m.modified())
             .is_ok_and(|at| at > day_old + Duration::from_secs(3600))
     });
+}
+
+const TODO_EVENTS: &str = "
+[ticket.events.todo_start]
+to = \"In progress\"
+
+[ticket.events.todo_done]
+to = \"Done\"
+";
+
+/// [`two_issues`] synced, with `todo_start` and `todo_done` moving tickets
+/// on project 3, whose writes `gh` accepts.
+fn moving() -> Synced {
+    let s = Synced::new(&format!("{RULES}{STATUSES}{TODO_EVENTS}"), true);
+    s.serve(
+        "graphql.json",
+        &graphql(
+            &[issue(65, Some("Todo"), &[66]), issue(66, None, &[])],
+            &OPTIONS,
+        ),
+    );
+    s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    s
+}
+
+/// Whether `gh` was asked to set project 3's status field to option `option`.
+fn moved_to(s: &Synced, option: &str) -> bool {
+    s.mutations().iter().any(|m| {
+        m.contains("updateProjectV2ItemFieldValue") && m.contains(&format!("\"{option}\""))
+    })
+}
+
+#[test]
+fn done_on_a_ticket_todo_moves_the_ticket() {
+    let s = moving();
+    let id = s.todo_for("o/r#65").id;
+    let out = s.devkit(&["todo", "done", &id], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the move to Done", || moved_to(&s, "o2"));
+}
+
+#[test]
+fn start_on_a_ticket_todo_moves_the_ticket() {
+    let s = moving();
+    let id = s.todo_for("o/r#65").id;
+    let agent = [("DEVKIT_CALLER", "agent"), ("CLAUDE_CODE_SESSION_ID", "S")];
+    let out = s.devkit(&["todo", "start", "--force", &id], &agent);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the move to In progress", || moved_to(&s, "o1"));
+}
+
+#[test]
+fn a_sync_completing_a_ticket_fires_nothing() {
+    let s = moving();
+    let closed = issue(65, Some("In progress"), &[66]).replace(
+        r#""state":"OPEN","stateReason":null"#,
+        r#""state":"CLOSED","stateReason":"COMPLETED""#,
+    );
+    s.serve(
+        "graphql.json",
+        &graphql(&[closed, issue(66, None, &[])], &OPTIONS)
+            .replace(r#""nodes":[{"number":65"#, r#""nodes":[{"number":66"#),
+    );
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(s.todo_for("o/r#65").status, Status::Completed {
+        by: Some(Holder::tracker())
+    });
+    settle();
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn done_from_outside_the_repository_warns() {
+    let s = moving();
+    let id = s.todo_for("o/r#65").id;
+    let out = s.devkit_in(s.proj.outside(), &["todo", "done", &id], &[], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("ticket o/r#65 not moved: run from its repository"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(s.proj.todo(&id).status.kind() == devkit_todo::StatusKind::Completed);
+    settle();
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn a_plain_todo_fires_nothing() {
+    let s = moving();
+    let out = s.devkit(&["todo", "add", "plain"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let id = stdout(&out).trim().to_string();
+    let out = s.devkit(&["todo", "done", &id], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    settle();
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
 }

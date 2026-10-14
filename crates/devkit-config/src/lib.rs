@@ -1155,11 +1155,21 @@ pub enum IssueEvent {
     Start,
     /// `pr create` opened the issue's PR or found it open.
     PrOpen,
+    /// The ticket's synced todo became in progress.
+    TodoStart,
+    /// The ticket's synced todo became completed.
+    TodoDone,
 }
 
 impl IssueEvent {
     /// Every event, in the order each fires on an issue.
-    pub const ALL: [IssueEvent; 3] = [IssueEvent::Setup, IssueEvent::Start, IssueEvent::PrOpen];
+    pub const ALL: [IssueEvent; 5] = [
+        IssueEvent::Setup,
+        IssueEvent::Start,
+        IssueEvent::TodoStart,
+        IssueEvent::PrOpen,
+        IssueEvent::TodoDone,
+    ];
 
     /// The `[ticket.events]` spelling, which is also the serialized form.
     pub fn as_str(self) -> &'static str {
@@ -1167,6 +1177,8 @@ impl IssueEvent {
             IssueEvent::Setup => "setup",
             IssueEvent::Start => "start",
             IssueEvent::PrOpen => "pr_open",
+            IssueEvent::TodoStart => "todo_start",
+            IssueEvent::TodoDone => "todo_done",
         }
     }
 }
@@ -1196,6 +1208,9 @@ impl std::fmt::Display for IssueEvent {
 /// [ticket.events.pr_open]
 /// to = "In review"
 ///
+/// [ticket.events.todo_done]
+/// to = "Done"
+///
 /// [github]
 /// project = 3            # or "some-org/7"
 /// status_field = "Status"
@@ -1204,6 +1219,8 @@ impl std::fmt::Display for IssueEvent {
 /// # assert_eq!(events.get(IssueEvent::Setup).unwrap().from, ["*"]);
 /// # assert_eq!(events.get(IssueEvent::Start).unwrap().from, ["", "Todo", "Backlog"]);
 /// # assert_eq!(events.get(IssueEvent::PrOpen).unwrap().to, "In review");
+/// # assert_eq!(events.get(IssueEvent::TodoDone).unwrap().to, "Done");
+/// # assert!(events.get(IssueEvent::TodoStart).is_none());
 /// # assert_eq!(cfg.github.project, Some(ProjectRef { owner: None, number: 3 }));
 /// ```
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
@@ -1415,6 +1432,13 @@ pub struct TicketEventsConfig {
     /// Fired by `pr create`, whether it opened the PR or found one open.
     /// A failed move warns and the PR stays as it is.
     pub pr_open: Option<EventTransition>,
+    /// Fired in the background when a todo `devkit todo sync` brought in for
+    /// the ticket becomes in progress, by `devkit todo start` or a harness's
+    /// task tool, from a checkout of the ticket's repository. Changes sync
+    /// itself makes never fire it. A failed move leaves the todo as it is.
+    pub todo_start: Option<EventTransition>,
+    /// Fired like `todo_start` when the ticket's todo becomes completed.
+    pub todo_done: Option<EventTransition>,
 }
 
 impl TicketEventsConfig {
@@ -1424,6 +1448,8 @@ impl TicketEventsConfig {
             IssueEvent::Setup => self.setup.as_ref(),
             IssueEvent::Start => self.start.as_ref(),
             IssueEvent::PrOpen => self.pr_open.as_ref(),
+            IssueEvent::TodoStart => self.todo_start.as_ref(),
+            IssueEvent::TodoDone => self.todo_done.as_ref(),
         }
     }
 

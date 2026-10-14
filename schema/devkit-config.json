@@ -2174,14 +2174,16 @@
     },
     "TicketConfig": {
       "additionalProperties": false,
-      "description": "The `[ticket]` table, also read under its old name `[issue]`. Each event\nmoves the ticket's status (a Linear state, or `[github] status_field`) from\na `from` status to `to`; an event with no table does nothing. The statuses\nname one board, so keep the events in the repository's `devkit.toml`: tables\nmerge key by key across layers.\n\n```toml\n[ticket.events.setup]\nto = \"Todo\"\n\n[ticket.events.start]\nfrom = [\"\", \"Todo\", \"Backlog\"]\nto = \"In progress\"\n\n[ticket.events.pr_open]\nto = \"In review\"\n\n[github]\nproject = 3            # or \"some-org/7\"\nstatus_field = \"Status\"\n```",
+      "description": "The `[ticket]` table, also read under its old name `[issue]`. Each event\nmoves the ticket's status (a Linear state, or `[github] status_field`) from\na `from` status to `to`; an event with no table does nothing. The statuses\nname one board, so keep the events in the repository's `devkit.toml`: tables\nmerge key by key across layers.\n\n```toml\n[ticket.events.setup]\nto = \"Todo\"\n\n[ticket.events.start]\nfrom = [\"\", \"Todo\", \"Backlog\"]\nto = \"In progress\"\n\n[ticket.events.pr_open]\nto = \"In review\"\n\n[ticket.events.todo_done]\nto = \"Done\"\n\n[github]\nproject = 3            # or \"some-org/7\"\nstatus_field = \"Status\"\n```",
       "properties": {
         "events": {
           "$ref": "#/$defs/TicketEventsConfig",
           "default": {
             "pr_open": null,
             "setup": null,
-            "start": null
+            "start": null,
+            "todo_done": null,
+            "todo_start": null
           },
           "description": "Status moves, keyed by the event that fires them. The event names are\nfixed, so a misspelled one is a parse error."
         },
@@ -2244,6 +2246,30 @@
           ],
           "default": null,
           "description": "Fired by the first agent session in a worktree `workspace setup`\ncreated, once per worktree, in the background. `pr checkout`\nworktrees never fire it. List the states work starts from in `from`:\n`[\"*\"]` lets a second worktree pull an issue back from review."
+        },
+        "todo_done": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fired like `todo_start` when the ticket's todo becomes completed."
+        },
+        "todo_start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fired in the background when a todo `devkit todo sync` brought in for\nthe ticket becomes in progress, by `devkit todo start` or a harness's\ntask tool, from a checkout of the ticket's repository. Changes sync\nitself makes never fire it. A failed move leaves the todo as it is."
         }
       },
       "type": "object"
@@ -2741,7 +2767,9 @@
         "events": {
           "pr_open": null,
           "setup": null,
-          "start": null
+          "start": null,
+          "todo_done": null,
+          "todo_start": null
         },
         "fields": {
           "github": {},

@@ -686,6 +686,16 @@ fn parse_issue_url(s: &str, host: &str) -> Option<(String, u64)> {
     Some((format!("{owner}/{name}"), number))
 }
 
+/// `owner/repo#number`, the key `devkit todo sync` gives a GitHub ticket.
+fn parse_ticket_key(s: &str) -> Option<(String, u64)> {
+    let (repo, number) = s.rsplit_once('#')?;
+    let (owner, name) = repo.split_once('/')?;
+    if owner.is_empty() || name.is_empty() || name.contains('/') {
+        return None;
+    }
+    Some((repo.to_string(), number.parse().ok()?))
+}
+
 // --- the adapter -------------------------------------------------------------
 
 pub struct GithubTracker {
@@ -733,6 +743,7 @@ impl Tracker for GithubTracker {
             });
         }
         let (repo, number) = parse_issue_url(s, &self.repo.host)
+            .or_else(|| parse_ticket_key(s))
             .with_context(|| format!("unrecognized GitHub issue identifier: {s}"))?;
         anyhow::ensure!(
             repo.eq_ignore_ascii_case(&self.repo.slug),
@@ -1229,6 +1240,18 @@ mod tests {
                 .id,
             "9"
         );
+    }
+
+    #[test]
+    fn a_synced_ticket_key_names_its_issue() {
+        let t = GithubTracker::new(repo("acme/widget"));
+        assert_eq!(t.issue_ref("acme/Widget#42").unwrap().id, "42");
+        let err = t.issue_ref("other/thing#9").unwrap_err().to_string();
+        assert!(
+            err.contains("other/thing") && err.contains("acme/widget"),
+            "{err}"
+        );
+        assert!(t.issue_ref("acme/widget#x").is_err());
     }
 
     #[test]

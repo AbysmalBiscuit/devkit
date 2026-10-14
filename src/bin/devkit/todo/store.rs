@@ -18,7 +18,7 @@ use devkit_config::{
     TodoBackend, TodoConfig, expand_tilde,
 };
 use devkit_todo::{
-    TodoStore,
+    Edit, Filter, NewTodo, StatusChange, Todo, TodoStore,
     activity::{ActivityLog, ActivityStore, Recorded, ambassador_impl_ActivityStore},
     ambassador_impl_TodoStore,
 };
@@ -90,13 +90,50 @@ const CLI_DATABASE_WAIT: Duration = Duration::from_secs(15);
 pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(75);
 
 /// The store `[todo] backend` names, its claim changes recorded in the
-/// activity log.
-#[derive(Delegate)]
-#[delegate(TodoStore, target = "store")]
+/// activity log, and a synced ticket's todo moving the ticket as
+/// `[ticket.events]` configures.
 pub(crate) struct Store {
     store: Recorded<Backend, Activity>,
     config: TodoConfig,
     ticket: TicketConfig,
+    /// Where the store was opened from: the checkout a ticket event fires
+    /// in. `None` for a queued hook write, which fires nothing.
+    origin: Option<PathBuf>,
+}
+
+impl TodoStore for Store {
+    fn list(&self, filter: &Filter) -> Result<Vec<Todo>> {
+        self.store.list(filter)
+    }
+
+    fn get(&self, id: &str) -> Result<Option<Todo>> {
+        self.store.get(id)
+    }
+
+    fn add(&self, todo: NewTodo) -> Result<String> {
+        self.store.add(todo)
+    }
+
+    fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
+        let changes = self.store.apply(edit)?;
+        let actor = match edit {
+            Edit::SetStatus { actor, .. } | Edit::TakeOver { actor, .. } => Some(actor),
+            _ => None,
+        };
+        if let (Some(origin), Some(actor)) = (&self.origin, actor)
+            && !changes.is_empty()
+        {
+            super::ticket_event::fire_for(
+                &changes,
+                actor,
+                &self.store,
+                &self.config,
+                &self.ticket,
+                origin,
+            );
+        }
+        Ok(changes)
+    }
 }
 
 #[derive(Delegate)]
@@ -441,6 +478,7 @@ impl Backend {
             store: Recorded::new(self, Activity::Local(ActivityLog::open())),
             config: TodoConfig::default(),
             ticket: TicketConfig::default(),
+            origin: None,
         }
     }
 }
@@ -474,7 +512,7 @@ fn taskchampion(config: &TodoConfig) -> Replica {
 impl Store {
     /// The store `config` names, its claim changes recorded in the activity
     /// log that goes with it.
-    fn open(config: &TodoConfig, ticket: TicketConfig, opener: Opener) -> Self {
+    fn open(config: &TodoConfig, ticket: TicketConfig, opener: Opener, origin: &Path) -> Self {
         let backend = match config.backend {
             TodoBackend::Builtin => Backend::Builtin(BuiltinStore::open()),
             TodoBackend::Taskchampion => {
@@ -495,6 +533,7 @@ impl Store {
             store: Recorded::new(backend, Activity::of(config, opener)),
             config: config.clone(),
             ticket,
+            origin: Some(origin.to_path_buf()),
         }
     }
 
@@ -574,7 +613,7 @@ impl Store {
     /// The store a CLI call in `cwd` uses.
     pub(crate) fn for_cli(cwd: &Path) -> Result<Self> {
         let (config, ticket) = Self::effective_cli_config(cwd)?;
-        Ok(Self::open(&config, ticket, Opener::Cli))
+        Ok(Self::open(&config, ticket, Opener::Cli, cwd))
     }
 
     /// The activity log a CLI call in `cwd` reads.
@@ -679,7 +718,7 @@ impl Store {
     pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Self {
         let backend_var = std::env::var(BACKEND_VAR).ok();
         match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
-            Ok((config, ticket)) => Self::open(&config, ticket, Opener::Hook),
+            Ok((config, ticket)) => Self::open(&config, ticket, Opener::Hook, cwd),
             Err(_) => Backend::Builtin(BuiltinStore::open()).recorded(),
         }
     }
@@ -707,7 +746,7 @@ impl Store {
         holds: impl FnOnce(&TodoConfig) -> bool,
     ) -> Option<Self> {
         let (config, ticket) = Self::hook_config(checkout, cwd, backend_var).ok()?;
-        holds(&config).then(|| Self::open(&config, ticket, Opener::Hook))
+        holds(&config).then(|| Self::open(&config, ticket, Opener::Hook, cwd))
     }
 }
 
