@@ -156,7 +156,8 @@ fn reads_without_the_blocking_column_list_todos_without_edges() {
 }
 
 /// Puts the blocking column back when dropped, a failed assertion included,
-/// and waits until PostgREST accepts an edge again.
+/// and waits until a todo read over PostgREST returns the edge just written
+/// to it, so the next test reads `blocked_by` rather than the fallback.
 struct RestoresBlockingColumn<'a> {
     url: &'a str,
     direct: &'a str,
@@ -187,16 +188,28 @@ impl Drop for RestoresBlockingColumn<'_> {
             return;
         };
         let block = Edit::Block {
-            id: blocked,
-            by: vec![blocker],
+            id: blocked.clone(),
+            by: vec![blocker.clone()],
         };
         let deadline = Instant::now() + Duration::from_secs(10);
         while let Err(e) = store.apply(&block) {
             if Instant::now() >= deadline {
-                eprintln!("PostgREST never served the restored column: {e:#}");
+                eprintln!("blocking the probe todo never succeeded: {e:#}");
                 return;
             }
             thread::sleep(Duration::from_millis(100));
+        }
+        // The block is an RPC, so it succeeds once the column exists. Reads
+        // fall back to no edges until PostgREST's schema cache has it too.
+        loop {
+            match store.get(&blocked) {
+                Ok(Some(todo)) if todo.blocked_by == [blocker.clone()] => return,
+                read if Instant::now() >= deadline => {
+                    eprintln!("PostgREST never served the restored column: {read:?}");
+                    return;
+                }
+                _ => thread::sleep(Duration::from_millis(100)),
+            }
         }
     }
 }
