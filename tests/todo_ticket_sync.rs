@@ -286,3 +286,22 @@ fn where_github_refuses_graphql_rest_reads_the_tickets() {
     assert_eq!(t66.parent.as_deref(), Some(t65.id.as_str()));
     assert!(s.calls().contains("assignee=LevValle"), "{}", s.calls());
 }
+
+#[test]
+fn a_slug_in_another_case_names_the_same_tickets() {
+    let s = two_issues();
+    assert!(s.sync(&[]).status.success());
+    let config = s.proj.path.join("devkit.toml");
+    let upper = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace("\"o/r\"", "\"O/R\"");
+    std::fs::write(&config, upper).unwrap();
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("0 added, 0 changed"),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(s.proj.todos().len(), 2, "{:?}", s.proj.todos());
+}
