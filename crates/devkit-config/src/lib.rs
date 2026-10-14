@@ -5388,8 +5388,8 @@ steps = [
     }
 
     /// Resolve `repo` as a root repository layer under the home layer `home`,
-    /// returning the error text.
-    fn field_load(home: Option<&str>, repo: &str) -> Result<(Config, PathBuf)> {
+    /// with the error flattened to one line of its causes.
+    fn field_load(home: Option<&str>, repo: &str) -> Result<Config> {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("repo");
         std::fs::create_dir_all(&dir).unwrap();
@@ -5400,7 +5400,7 @@ steps = [
         std::fs::write(dir.join("devkit.toml"), repo).unwrap();
         let home_arg = home.map(|_| home_path.as_path());
         resolve_with_home(None, &dir, None, None, home_arg, None)
-            .map(|(cfg, _)| (cfg, home_path.clone()))
+            .map(|(cfg, _)| cfg)
             .map_err(|e| anyhow::anyhow!("{e:#}"))
     }
 
@@ -5518,7 +5518,7 @@ steps = [
 
     #[test]
     fn values_replace_whole_across_layers() {
-        let (cfg, _) = field_load(
+        let cfg = field_load(
             Some(
                 "[ticket.fields.github.priority]\nvalues = [{ name = \"P0\", id = \"a\" }, \
                  { name = \"P1\", id = \"b\" }, { name = \"P2\", id = \"c\" }]\nlevel = \"warning\"\n",
