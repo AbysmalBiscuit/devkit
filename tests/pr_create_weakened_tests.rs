@@ -145,3 +145,23 @@ fn a_branch_turning_the_gate_off_is_still_gated_by_the_merge_base() {
     assert!(stderr.contains("tests/math.rs: fewer-tests"), "{stderr}");
     assert!(!opened(&p), "{}", p.calls());
 }
+
+#[test]
+fn reusing_an_open_pr_does_not_read_the_gate() {
+    let pr = ghfake::Pr {
+        number: 7,
+        state: "OPEN",
+        is_draft: true,
+        author: "LevValle",
+    };
+    let p = ghfake::Fake::new("", &pr);
+    p.serve_pr(&pr);
+    let out = p.issue_as("agent", &["pr", "create", "--no-push", "--base", "nowhere"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("/pull/7"),
+        "{stderr}"
+    );
+    assert!(!opened(&p), "{}", p.calls());
+}

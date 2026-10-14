@@ -128,7 +128,7 @@ type RenderTitle<'a> = Box<dyn FnOnce() -> Result<String> + 'a>;
 /// Renders the PR body on demand, from the title this run resolved.
 type RenderBody<'a> = Box<dyn FnOnce(&str) -> Result<String> + 'a>;
 
-pub(crate) struct Ensure<'a> {
+pub(crate) struct Ensure<'a, G> {
     pub existing: Existing<'a>,
     pub head: &'a str,
     pub state: PrCreateState,
@@ -154,14 +154,18 @@ pub(crate) struct Ensure<'a> {
     /// Claim the `pr_open` event in the record, which holds a tracker issue
     /// and has `[ticket.events.pr_open]` configured.
     pub claim_pr_open: bool,
-    /// The weakened-tests gate a PR this run opens must pass, or `None` for a
-    /// run it does not apply to.
-    pub weakened: Option<&'a weakened::Gate>,
+    /// Reads the weakened-tests gate a PR this run opens must pass, or `None`
+    /// for a run it does not apply to. Deferred like `pr_body`: reading it
+    /// needs the PR base at hand, which a run reusing a PR does not.
+    pub weakened: Option<G>,
 }
 
 /// Resolve this branch's PR and, when there is none, open one. A reused PR
 /// keeps the draft state it already has.
-pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
+pub(crate) fn ensure<G>(args: Ensure<'_, G>) -> Result<Resolved>
+where
+    G: FnOnce() -> Result<weakened::Gate>,
+{
     let found = resolve_existing(&args.existing)?;
     let start = args.existing.start;
     let steps = args.steps;
@@ -212,7 +216,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             require_pr_title(&pr_title)?;
             let pr_body = (args.pr_body)(&pr_title)?;
             let pr_body = match args.weakened {
-                Some(gate) => gate.apply(pr_body)?,
+                Some(read) => read()?.apply(pr_body)?,
                 None => pr_body,
             };
             let new = NewPr {
@@ -298,8 +302,9 @@ pub fn run(args: Args) -> Result<()> {
         .base
         .clone()
         .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
+    let gate_base = base.clone();
     let weakened = match caller {
-        Caller::Agent => Some(weakened::Gate::read(here, &base)?),
+        Caller::Agent => Some(move || weakened::Gate::read(here, &gate_base)),
         Caller::Human => None,
     };
 
@@ -355,7 +360,7 @@ pub fn run(args: Args) -> Result<()> {
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
         steps: &steps,
         claim_pr_open: tracker_issue.is_some() && loaded.config.ticket.events.pr_open.is_some(),
-        weakened: weakened.as_ref(),
+        weakened,
     })?;
 
     println!("{}", resolved.url);
