@@ -740,7 +740,8 @@ fn resolve_command_with_ports(
 /// not attached to a terminal is captured into a file under the state
 /// directory, followed while the task runs and echoed to the same stream of
 /// devrun's; a terminal stream is inherited, so the task still sees a
-/// terminal. Returns the child's exit status.
+/// terminal. When stdout and stderr are one file, both streams share one
+/// capture echoed to stdout. Returns the child's exit status.
 ///
 /// A file rather than a pipe, so a process the task leaves in the background
 /// keeps a writable output after devrun exits instead of dying on a closed
@@ -762,14 +763,18 @@ pub fn exec(
         .current_dir(&plan.cwd)
         .envs(&plan.env);
     let exited = Arc::new(AtomicBool::new(false));
-    let out = (!std::io::stdout().is_terminal())
-        .then(Capture::open)
-        .flatten();
-    let err = (!std::io::stderr().is_terminal())
-        .then(Capture::open)
-        .flatten();
+    let (out_tty, err_tty) = (
+        std::io::stdout().is_terminal(),
+        std::io::stderr().is_terminal(),
+    );
+    let shared = !out_tty && !err_tty && outputs_share_a_file();
+    let out = (!out_tty).then(Capture::open).flatten();
+    let err = (!err_tty && !shared).then(Capture::open).flatten();
     if let Some(c) = &out {
         cmd.stdout(c.writer()?);
+        if shared {
+            cmd.stderr(c.writer()?);
+        }
     }
     if let Some(c) = &err {
         cmd.stderr(c.writer()?);
@@ -787,6 +792,30 @@ pub fn exec(
         let _ = follower.join();
     }
     status.with_context(|| format!("waiting for task `{}`", plan.name))
+}
+
+/// Whether devrun's stdout and stderr are one file, as `2>&1` leaves them.
+/// The task then writes both streams into one capture, so they keep their
+/// order.
+#[cfg(unix)]
+fn outputs_share_a_file() -> bool {
+    use std::os::{
+        fd::{AsFd, BorrowedFd},
+        unix::fs::MetadataExt,
+    };
+    let id = |fd: BorrowedFd<'_>| {
+        let meta = std::fs::File::from(fd.try_clone_to_owned().ok()?)
+            .metadata()
+            .ok()?;
+        Some((meta.dev(), meta.ino()))
+    };
+    let out = id(std::io::stdout().as_fd());
+    out.is_some() && out == id(std::io::stderr().as_fd())
+}
+
+#[cfg(not(unix))]
+fn outputs_share_a_file() -> bool {
+    false
 }
 
 #[cfg(test)]

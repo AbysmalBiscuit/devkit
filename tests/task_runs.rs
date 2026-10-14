@@ -29,6 +29,9 @@ steps = [{ task = "pass" }, { task = "boom" }]
 
 [tasks.bg]
 run = ["git", "-c", "alias.bg=!(sleep 3; echo late; echo x > ../marker) & echo now", "bg"]
+
+[tasks.mix]
+run = ["git", "-c", "alias.mix=!echo out1; echo err1 >&2; echo out2; echo err2 >&2; echo out3", "mix"]
 "#;
 
 /// A repository with one commit, and a state home beside it rather than in it.
@@ -218,6 +221,35 @@ fn a_background_writer_left_by_a_task_survives_and_the_run_returns_at_once() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     assert!(marker.exists(), "the background writer died before writing");
+}
+
+/// With stdout and stderr on one file, as `2>&1` leaves them, the task's
+/// lines reach it in the order the task wrote them.
+#[cfg(unix)]
+#[test]
+fn stdout_and_stderr_on_one_file_keep_their_interleaving() {
+    let f = Fixture::new();
+    let log = f.state.join("mix.log");
+    let file = std::fs::File::create(&log).unwrap();
+    let status = f
+        .devkit()
+        .args(["run", "task", "mix"])
+        .stdout(file.try_clone().unwrap())
+        .stderr(file)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let text = std::fs::read_to_string(&log).unwrap();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("out") || l.starts_with("err"))
+        .collect();
+    assert_eq!(lines, ["out1", "err1", "out2", "err2", "out3"], "{text}");
+    let runs = f.runs();
+    assert_eq!(
+        runs[0]["tail"],
+        serde_json::json!(["out1", "err1", "out2", "err2", "out3"])
+    );
 }
 
 #[test]
