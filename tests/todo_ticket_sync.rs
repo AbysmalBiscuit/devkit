@@ -679,4 +679,26 @@ fn expand_lists_the_workspace_todos_under_the_ticket() {
             .is_none_or(|l| !l.contains("already done")),
         "{expanded}"
     );
+
+    let out = s.devkit(&["todo", "plan", "--expand"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let plan = stdout(&out);
+    let lines: Vec<&str> = plan.lines().collect();
+    let row = format!("o {}  #66 Issue 66", devkit_todo::short_id(&ticket.id));
+    let at = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with(&row))
+        .unwrap_or_else(|| panic!("{plan}"));
+    assert!(lines[at].ends_with(", 1 open"), "{plan}");
+    assert!(
+        lines[at + 1].starts_with("    - [ ] write the fix (")
+            && lines[at + 1].contains(" on proj.main"),
+        "{plan}"
+    );
+    assert!(
+        lines
+            .get(at + 2)
+            .is_none_or(|l| !l.contains("already done")),
+        "{plan}"
+    );
 }
