@@ -3210,6 +3210,7 @@ fn validate_field_table(
     let variables = cfg.templates.declared();
     let cx = ticket_fields::FieldContext {
         status_field: cfg.github.status_field(),
+        github_project: cfg.github.project.is_some(),
         template_variables: &variables,
         origin,
     };
@@ -5583,6 +5584,55 @@ steps = [
             "[defaults]\n",
         );
         assert!(e.contains("nope") && e.contains("not a declared"), "{e}");
+    }
+
+    #[test]
+    fn a_github_field_no_write_could_honour_is_refused_naming_it() {
+        let project = "[github]\nproject = \"o/1\"\n";
+        for (name, decl, extra, says) in [
+            ("board", "type = \"string\"\nwhere = \"project\"", "", "[github] project"),
+            (
+                "size",
+                "type = \"number\"\nwhere = { project_field = \"PVTF_s\", name = \"Size\" }",
+                "",
+                "[github] project",
+            ),
+            (
+                "owner",
+                "type = \"user\"\nwhere = { project_field = \"PVTF_o\", name = \"Owner\" }",
+                project,
+                "type = \"user\"",
+            ),
+            (
+                "epic",
+                "type = \"issue\"\nwhere = { project_field = \"PVTF_e\", name = \"Epic\" }",
+                project,
+                "type = \"issue\"",
+            ),
+            ("parent", "type = \"string\"\nwhere = \"parent\"", "", "`issue`"),
+            ("blockers", "type = \"number\"\nlist = true\nwhere = \"blocked_by\"", "", "`issue`"),
+        ] {
+            let e = field_error(
+                None,
+                &format!(
+                    "[tracker]\nkind = \"github\"\n{extra}[ticket.fields.github.{name}]\n{decl}\n"
+                ),
+            );
+            assert!(
+                e.contains(&format!("[ticket.fields.github.{name}]")) && e.contains(says),
+                "{name}: {e}"
+            );
+        }
+        let (cfg, prov) = field_load(
+            None,
+            "[ticket.fields.github.parent]\ntype = \"string\"\nwhere = \"parent\"\n",
+        )
+        .unwrap();
+        let e = format!(
+            "{:#}",
+            check_ticket_fields(&cfg, TrackerKind::Github, &prov.origin).unwrap_err()
+        );
+        assert!(e.contains("[ticket.fields.github.parent]"), "{e}");
     }
 
     #[test]

@@ -88,8 +88,10 @@ pub struct FieldDecl {
     pub list: bool,
     /// The place on the tracker the value is written. Each place belongs to at
     /// most one field, and the status (`[github] status_field`, Linear's
-    /// workflow state) belongs to `[ticket.events]`. Required once the layers
-    /// are merged.
+    /// workflow state) belongs to `[ticket.events]`. On GitHub, `project` and
+    /// `project_field` need `[github] project`, `parent` and `blocked_by`
+    /// hold `issue` fields, and a `project_field` holds no `user` or `issue`.
+    /// Required once the layers are merged.
     pub r#where: Option<Place>,
     /// For `enum`: each value's `name`, which agents pass and match
     /// case-insensitively, and its tracker `id`, which devkit writes. A higher
@@ -462,6 +464,8 @@ impl Cond {
 /// What the load-time check needs besides the declarations.
 pub(crate) struct FieldContext<'a> {
     pub status_field: &'a str,
+    /// Whether `[github] project` is set.
+    pub github_project: bool,
     pub template_variables: &'a std::collections::BTreeSet<String>,
     pub origin: &'a HashMap<String, PathBuf>,
 }
@@ -555,6 +559,11 @@ pub(crate) fn validate(
                 place.label()
             );
         }
+        if in_use && kind == TrackerKind::Github {
+            github_writable(&key, ty, place, cx).map_err(|why| {
+                anyhow::anyhow!("`{key}`{} {why}", note(cx, kind, name))
+            })?;
+        }
         if ty == FieldType::Enum && decl.values.is_empty() && decl.max_level() == FieldLevel::Error
         {
             bail!(
@@ -579,6 +588,41 @@ pub(crate) fn validate(
         places.push((name, place));
     }
     Ok(())
+}
+
+/// Why GitHub could not take a `ty` value at `place`, which would otherwise
+/// fail only after `ticket create` filed the issue.
+fn github_writable(
+    key: &str,
+    ty: FieldType,
+    place: &Place,
+    cx: &FieldContext<'_>,
+) -> std::result::Result<(), String> {
+    let on_project = matches!(place, Place::Project | Place::ProjectField { .. });
+    if on_project && !cx.github_project {
+        return Err(format!(
+            "is written to `{}`, which needs `[github] project`. Set `[github] project`, or \
+             remove the field.",
+            place.label()
+        ));
+    }
+    let fits = match place {
+        Place::ProjectField { .. } => !matches!(ty, FieldType::User | FieldType::Issue),
+        Place::Parent | Place::BlockedBy => ty == FieldType::Issue,
+        _ => true,
+    };
+    if fits {
+        return Ok(());
+    }
+    let wants = match place {
+        Place::ProjectField { .. } => "a `string`, `number`, `date` or `enum`",
+        _ => "an `issue`",
+    };
+    Err(format!(
+        "has `type = \"{}\"`, but `{}` holds {wants}. Change `type` in `{key}`.",
+        ty.as_str(),
+        place.label()
+    ))
 }
 
 /// ` (declared in <layer>)` for the first layer provenance knows wrote a key

@@ -27,6 +27,13 @@ level  = "none"
 when   = [{ if = { project = "*" }, level = "warning" }]
 "#;
 
+/// A project declaring [`FIELDS`] on `[github] project` 1.
+fn fields_fake() -> ghfake::Fake {
+    let fake = ghfake::Fake::without_pr(FIELDS);
+    fake.github_keys("project = 1");
+    fake
+}
+
 fn stdout(out: &std::process::Output) -> String {
     assert!(
         out.status.success(),
@@ -46,7 +53,7 @@ fn line_of(text: &str, field: &str) -> String {
 
 #[test]
 fn lists_fields_with_their_level_for_this_caller() {
-    let fake = ghfake::Fake::without_pr(FIELDS);
+    let fake = fields_fake();
     let agent = stdout(&fake.issue_as("agent", &["fields"]));
     assert!(line_of(&agent, "estimate").contains("error"), "{agent}");
     assert!(agent.contains("story points"), "{agent}");
@@ -60,7 +67,7 @@ fn lists_fields_with_their_level_for_this_caller() {
 
 #[test]
 fn arg_values_evaluate_conditions() {
-    let fake = ghfake::Fake::without_pr(FIELDS);
+    let fake = fields_fake();
     let bare = stdout(&fake.issue_as("agent", &["fields"]));
     assert!(line_of(&bare, "milestone").contains("none"), "{bare}");
     let with = stdout(&fake.issue_as("agent", &["fields", "--arg", "project=devkit"]));
@@ -69,7 +76,7 @@ fn arg_values_evaluate_conditions() {
 
 #[test]
 fn json_is_the_field_views() {
-    let fake = ghfake::Fake::without_pr(FIELDS);
+    let fake = fields_fake();
     let out = stdout(&fake.issue_as("agent", &["fields", "--json"]));
     let v: serde_json::Value = serde_json::from_str(&out).expect("JSON");
     let items = v.as_array().expect("an array");
@@ -85,7 +92,7 @@ fn json_is_the_field_views() {
 
 #[test]
 fn makes_no_tracker_request() {
-    let fake = ghfake::Fake::without_pr(FIELDS);
+    let fake = fields_fake();
     stdout(&fake.issue_as("agent", &["fields"]));
     assert_eq!(fake.calls(), "", "no gh call");
 }
@@ -93,7 +100,7 @@ fn makes_no_tracker_request() {
 #[test]
 fn both_tables_without_a_kind_use_the_detected_trackers() {
     let fake = ghfake::Fake::with_origin_and(
-        "[ticket.fields.github.estimate]\ntype = \"number\"\n\
+        "[github]\nproject = \"o/1\"\n[ticket.fields.github.estimate]\ntype = \"number\"\n\
          where = { project_field = \"PVTF_e\", name = \"Estimate\" }\nlevel = \"warning\"\n\
          [ticket.fields.linear.team]\nlevel = \"error\"\n",
         "https://github.com/o/r.git",

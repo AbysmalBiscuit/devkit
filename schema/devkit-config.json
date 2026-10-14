@@ -606,7 +606,7 @@
             }
           ],
           "default": null,
-          "description": "The place on the tracker the value is written. Each place belongs to at\nmost one field, and the status (`[github] status_field`, Linear's\nworkflow state) belongs to `[ticket.events]`. Required once the layers\nare merged."
+          "description": "The place on the tracker the value is written. Each place belongs to at\nmost one field, and the status (`[github] status_field`, Linear's\nworkflow state) belongs to `[ticket.events]`. On GitHub, `project` and\n`project_field` need `[github] project`, `parent` and `blocked_by`\nhold `issue` fields, and a `project_field` holds no `user` or `issue`.\nRequired once the layers are merged."
         }
       },
       "type": "object"

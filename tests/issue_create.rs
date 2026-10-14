@@ -153,6 +153,13 @@ values = [{ name = "P0", id = "opt_p0" }, { name = "P1", id = "opt_p1" }]
 level  = "warning"
 "#;
 
+/// A project declaring [`FIELDS`] on `[github] project` 1.
+fn fields_fake() -> ghfake::Fake {
+    let fake = ghfake::Fake::without_pr(FIELDS);
+    fake.github_keys("project = 1");
+    fake
+}
+
 fn json_body(out: &std::process::Output) -> String {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("render prints JSON");
     v["body"].as_str().expect("a body").to_string()
@@ -160,7 +167,7 @@ fn json_body(out: &std::process::Output) -> String {
 
 #[test]
 fn a_field_the_body_reads_is_not_required_by_the_template() {
-    let fake = ghfake::Fake::without_pr(FIELDS);
+    let fake = fields_fake();
     let out = fake.issue_as("agent", &["render", "--title", "T"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
@@ -172,7 +179,7 @@ fn a_field_the_body_reads_is_not_required_by_the_template() {
 
 #[test]
 fn a_given_field_reaches_the_body() {
-    let fake = ghfake::Fake::without_pr(FIELDS);
+    let fake = fields_fake();
     let out = fake.issue_as("agent", &["render", "--title", "T", "--arg", "priority=p1"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
@@ -184,7 +191,7 @@ fn a_given_field_reaches_the_body() {
 
 #[test]
 fn an_undeclared_arg_is_still_refused() {
-    let fake = ghfake::Fake::without_pr(FIELDS);
+    let fake = fields_fake();
     let out = fake.issue_as("agent", &["render", "--title", "T", "--arg", "nope=1"]);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("nope"), "{}", stderr(&out));
@@ -192,7 +199,7 @@ fn an_undeclared_arg_is_still_refused() {
 
 #[test]
 fn none_on_an_undeclared_field_is_refused() {
-    let fake = ghfake::Fake::without_pr(FIELDS);
+    let fake = fields_fake();
     let out = fake.issue_as("agent", &["create", "--title", "T", "--none", "nope"]);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("--none nope"), "{}", stderr(&out));
