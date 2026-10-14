@@ -146,11 +146,39 @@ impl<'a> Graph<'a> {
             waits_on.insert(todo.id.as_str(), waits);
         }
 
+        // Open member-to-member blockers only, so status cannot hide a cycle.
+        let on_member_cycle = |id: &str| {
+            let mut seen = Vec::new();
+            let mut stack = vec![id];
+            while let Some(current) = stack.pop() {
+                if seen.contains(&current) {
+                    continue;
+                }
+                seen.push(current);
+                for blocker in waits_on.get(current).into_iter().flatten() {
+                    if *blocker == id {
+                        return true;
+                    }
+                    stack.push(blocker);
+                }
+            }
+            false
+        };
+        let mut cycled: Vec<&Todo> = members
+            .iter()
+            .copied()
+            .filter(|todo| on_member_cycle(&todo.id))
+            .collect();
+        cycled.sort_by(|a, b| a.id.cmp(&b.id));
+
         // Kahn over members only. In-progress members are placed first, in
         // batch 1, even when a blocker is still open: `start --force` already
         // started them.
         let mut indegree: HashMap<&str, usize> = HashMap::new();
         for todo in &members {
+            if cycled.iter().any(|on| on.id == todo.id) {
+                continue;
+            }
             let waits = waits_on.get(todo.id.as_str()).map_or(0, Vec::len);
             let started = todo.status.kind() == StatusKind::InProgress;
             indegree.insert(todo.id.as_str(), if started { 0 } else { waits });
@@ -164,7 +192,10 @@ impl<'a> Graph<'a> {
                 .filter(|todo| !placed.contains_key(todo.id.as_str()))
                 .filter(|todo| indegree.get(todo.id.as_str()).copied().unwrap_or(1) == 0)
                 .collect();
-            ready.retain(|todo| !outside(todo));
+            ready.retain(|todo| {
+                !outside(todo)
+                    || (batches.is_empty() && todo.status.kind() == StatusKind::InProgress)
+            });
             if ready.is_empty() {
                 break;
             }
@@ -208,12 +239,8 @@ impl<'a> Graph<'a> {
             batches.push(batch);
         }
 
-        let mut cycle: Vec<&Todo> = members
-            .iter()
-            .copied()
-            .filter(|todo| !placed.contains_key(todo.id.as_str()) && !outside(todo))
-            .collect();
-        cycle.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut cycle = cycled;
+        cycle.retain(|todo| !outside(todo));
         let acyclic: Vec<&Todo> = members
             .iter()
             .copied()

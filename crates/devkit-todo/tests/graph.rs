@@ -134,6 +134,44 @@ fn cycle_members_are_reported_not_dropped() {
 }
 
 #[test]
+fn a_cycle_with_an_in_progress_member_is_still_a_cycle() {
+    let todos = vec![
+        pending("1", &["2"]),
+        todo(
+            "2",
+            Status::InProgress {
+                by: Holder::new("S"),
+            },
+            &["1"],
+            None,
+        ),
+    ];
+    let plan = Graph::new(&todos).plan(|_| true, None);
+    assert_eq!(ids(&plan.cycle), ["1", "2"]);
+    assert!(
+        plan.batches
+            .iter()
+            .flatten()
+            .all(|todo| todo.id != "1" && todo.id != "2")
+    );
+}
+
+#[test]
+fn an_in_progress_todo_blocked_by_itself_is_still_a_cycle() {
+    let todos = vec![todo(
+        "1",
+        Status::InProgress {
+            by: Holder::new("S"),
+        },
+        &["1"],
+        None,
+    )];
+    let plan = Graph::new(&todos).plan(|_| true, None);
+    assert_eq!(ids(&plan.cycle), ["1"]);
+    assert!(plan.batches.iter().flatten().all(|todo| todo.id != "1"));
+}
+
+#[test]
 fn cycle_through_names_the_cycle() {
     let todos = vec![pending("1", &[]), pending("2", &["1"])];
     assert_eq!(
@@ -162,6 +200,26 @@ fn an_open_blocker_outside_the_plan_keeps_the_dependent_out_of_batch_one() {
     assert!(plan.batches.iter().flatten().all(|todo| todo.id != "mine"));
     assert!(plan.frontier().iter().all(|todo| todo.id != "mine"));
     assert!(plan.cycle.is_empty());
+}
+
+#[test]
+fn an_in_progress_external_wait_stays_in_batch_one() {
+    let todos = vec![
+        pending("side", &[]),
+        todo(
+            "mine",
+            Status::InProgress {
+                by: Holder::new("S"),
+            },
+            &["side"],
+            None,
+        ),
+        pending("free", &[]),
+    ];
+    let plan = Graph::new(&todos).plan(|todo| todo.id != "side", None);
+    assert!(plan.batches.iter().flatten().all(|todo| todo.id != "side"));
+    assert_eq!(batches(&plan)[0], ["free", "mine"]);
+    assert!(plan.cycle.iter().all(|todo| todo.id != "mine"));
 }
 
 #[test]
