@@ -207,10 +207,10 @@ pub(crate) enum RunsCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Whether TASK exited 0 on a clean tree at exactly one commit, in a
-    /// checkout of this repository.
+    /// Whether TASK exited 0 on a clean tree at exactly one commit.
     ///
-    /// Exits 0 and prints the run for yes, exits 1 for no.
+    /// Only runs in this repository's checkouts count. Exits 0 and prints the
+    /// run for yes, exits 1 for no.
     Passed {
         /// Task name, as given to `devrun task`.
         task: String,
