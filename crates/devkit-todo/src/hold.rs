@@ -69,6 +69,7 @@ mod tests {
 
     fn todo(id: &str, node: &str, order: i64, status: Status) -> Todo {
         Todo {
+            ticket: None,
             id: id.into(),
             description: format!("todo {id}"),
             status,

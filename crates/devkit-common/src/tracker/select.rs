@@ -35,7 +35,8 @@ pub fn select(config: Option<&Path>, start: &str, pr_override: Option<&str>) -> 
         None => (None, Default::default(), Default::default()),
     };
     let forge = forge::resolve(&forge_cfg, &github, start, pr_override);
-    let tracker = super::resolve(kind, dir, &forge.repos);
+    let board = super::github_tickets::BoardRef::of(&github);
+    let tracker = super::resolve_with_board(kind, dir, &forge.repos, board);
     Selected {
         tracker,
         forge,

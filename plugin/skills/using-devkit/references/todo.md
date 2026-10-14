@@ -48,6 +48,18 @@ A blocked pending todo does not hold the stop. Finish or cancel the todos that a
 
 On the taskchampion backend the edges are the task's `dep_<uuid>` properties, which Taskwarrior reads as dependencies. A Claude Code `TaskUpdate` that carries `addBlockedBy` or `addBlocks` records the same edges on the mirrored todos. An edge that would close a cycle is skipped, and the hook still succeeds.
 
+## Tracker tickets
+
+With `[ticket.sync]` rules in the repository's `devkit.toml`, `devkit todo sync` run inside the repository brings the tickets they select onto the `<repo>` node, one todo per ticket, named by the ticket's key and title. It reads the tracker and never writes to it. `devkit schema` describes the rules and `[ticket.sync.statuses]`, the map from each tracker status to a todo status.
+
+- A GitHub issue's status is its option in `[github] project`'s status field, `""` when it has none or no project is configured. A closed issue maps to completed, or to cancelled when closed as not planned or as a duplicate, whatever the map says.
+- A ticket's blockers become blocking edges and its parent ticket becomes its todo's parent, when both tickets are synced.
+- A ticket in a status the map does not name, or a map entry naming a status the tracker lacks, fails the sync naming each, and nothing is written.
+- A ticket todo's status changes only when its ticket's status moved since the last sync, so a todo you started stays yours while its ticket stands still.
+- Sync changes a status as the `tracker` holder, and any agent or person may start a todo the tracker holds. When the ticket closes or moves to a finished status, sync finishes or cancels its todo even while an agent holds it.
+- A ticket keeps one todo, on every backend: a second sync adds nothing.
+- `devkit todo sync --dry-run` prints each change it would make and writes nothing.
+
 ## Stopping with open todos
 
 In Claude Code, Codex and Grok, a sub-agent ending its turn while it has open todos is refused once: the stop hook sends it back with the list. A main agent's stop is refused the same way only when the hold mode is `always`. In Claude Code, a main agent that ends its turn while background work it started is still running (a background sub-agent, a `run_in_background` command, a Monitor) or a session wakeup is scheduled is not refused, so ending the turn to wait for that work is fine; its next stop with nothing in flight is refused as usual. Your own claims on any node count. Pending todos on your role's node count when `hold_pending` is true. By default they count when the effective scope names your deepest identity: session for a main agent, agent for a sub-agent. Built-in main agents count session pending todos; built-in sub-agents count only claims. A worker at agent scope counts its pending list; a manager at workspace scope counts only claims unless its role overrides the flag. Role parents affect suggestions, never claim authority. Finish each open todo, or cancel one that no longer applies (`devkit todo cancel <id>`, or delete it in your task tool).
@@ -129,7 +141,7 @@ When it syncs:
 - After every write, in a background `devkit todo sync` process. The write is saved locally first, so a failed sync loses nothing, and no hook waits on the network. After a failure, background syncs hold off before the next attempt, for the time `devkit todo sync -h` states, so a server that is down costs an occasional attempt rather than one per write.
 - At session start, before the lists are injected, so a new container sees where the last one stopped. `devkit todo list --sync` does the same. Each waits a bounded time, which `devkit todo list -h` states; past that, the sync carries on by itself and you get what this machine has.
 - A session's end releases its claims locally and leaves the push to a background sync, so a harness that caps the hook's run cannot cut it short.
-- `devkit todo sync` syncs now. It reports a failure and exits 0.
+- `devkit todo sync` syncs now. It reports a replica sync failure and exits 0. A failed [ticket sync](#tracker-tickets) exits non-zero.
 
 Other injections and plain `devkit todo list` read the local replica, which holds this machine's own writes.
 

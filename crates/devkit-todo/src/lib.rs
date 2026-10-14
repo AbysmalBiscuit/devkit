@@ -13,6 +13,7 @@ pub mod holder;
 pub mod layout;
 pub mod node;
 pub mod roles;
+pub mod ticket;
 pub mod transition;
 
 use std::path::PathBuf;
@@ -54,6 +55,39 @@ pub struct Todo {
     /// A blocker the listing does not hold still counts.
     #[serde(default)]
     pub blocked_by: Vec<String>,
+    /// The tracker ticket this todo stands for, `None` for a todo of
+    /// devkit's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<TicketRef>,
+}
+
+/// The tracker ticket a todo stands for. A store holds at most one todo per
+/// tracker and key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketRef {
+    /// The tracker's kind: `github` or `linear`.
+    pub tracker: String,
+    /// The ticket's id on the tracker: `owner/repo#65`, `SWE-123`.
+    pub key: String,
+    /// The ticket's tracker status as the last sync read it, so a sync
+    /// changes the todo's status only when the ticket's has moved.
+    #[serde(default)]
+    pub synced_status: Option<String>,
+}
+
+impl TicketRef {
+    /// Whether `other` names the same ticket.
+    pub fn same_ticket(&self, other: &TicketRef) -> bool {
+        self.tracker == other.tracker && self.key == other.key
+    }
+}
+
+/// The id a ticket's todo takes in a store whose ids are uuids: a name-based
+/// uuid over the store's root (`""` for a store without one), the tracker
+/// and the key, so two syncs racing on one ticket create one todo.
+pub fn ticket_todo_uuid(root: &str, tracker: &str, key: &str) -> uuid::Uuid {
+    let name = [root, tracker, key].join("\0");
+    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, name.as_bytes())
 }
 
 impl Todo {
@@ -70,6 +104,9 @@ pub struct NewTodo {
     pub parent: Option<String>,
     /// `None` places the todo after its last sibling.
     pub order: Option<i64>,
+    /// The ticket the todo stands for. Adding a ticket that already has a
+    /// todo returns that todo and changes nothing.
+    pub ticket: Option<TicketRef>,
 }
 
 /// One change to the store. Every edit but `ReleaseAll` names an existing
@@ -127,6 +164,12 @@ pub enum Edit {
     Unblock {
         id: String,
         by: Vec<String>,
+    },
+    /// Records `synced_status` as the ticket status the todo last synced.
+    /// A todo with no ticket is the error `todo <id> has no ticket`.
+    RecordSync {
+        id: String,
+        synced_status: String,
     },
 }
 
@@ -257,7 +300,17 @@ pub mod render;
 
 #[cfg(test)]
 mod tests {
-    use super::{is_uuid_prefix, short_id};
+    use super::{is_uuid_prefix, short_id, ticket_todo_uuid};
+
+    #[test]
+    fn ticket_todo_uuid_is_stable() {
+        let id = ticket_todo_uuid("root", "github", "65");
+        assert_eq!(id, ticket_todo_uuid("root", "github", "65"));
+        assert_eq!(id.get_version_num(), 5);
+        assert_ne!(id, ticket_todo_uuid("other", "github", "65"));
+        assert_ne!(id, ticket_todo_uuid("root", "linear", "65"));
+        assert_ne!(id, ticket_todo_uuid("root", "github", "66"));
+    }
 
     #[test]
     fn only_hex_of_a_short_ids_length_names_a_uuid() {

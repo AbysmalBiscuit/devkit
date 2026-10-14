@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use devkit_common::store::{LockBusy, with_file_lock, with_file_lock_for};
 use devkit_todo::{
     Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore, by_prefix,
-    is_uuid_prefix, one_line, take_over, transition,
+    is_uuid_prefix, one_line, take_over, ticket_todo_uuid, transition,
 };
 use taskchampion::{
     Operations, Server, ServerConfig, SqliteStorage, Task, Uuid, chrono::Utc, storage::AccessMode,
@@ -298,6 +298,9 @@ impl TaskchampionStore {
                 .get_dependencies()
                 .map(|uuid| uuid.to_string())
                 .collect(),
+            ticket_tracker: value("ticket_tracker"),
+            ticket_key: value("ticket_key"),
+            ticket_status: value("ticket_status"),
         }
         .into_todo()
     }
@@ -515,7 +518,18 @@ impl TodoStore for TaskchampionStore {
                         .await?
                 }
             };
-            let uuid = Uuid::new_v4();
+            let uuid = match &todo.ticket {
+                Some(ticket) => {
+                    let uuid = Uuid::from_bytes(
+                        ticket_todo_uuid("", &ticket.tracker, &ticket.key).into_bytes(),
+                    );
+                    if replica.get_task(uuid).await?.is_some() {
+                        return Ok(uuid.to_string());
+                    }
+                    uuid
+                }
+                None => Uuid::new_v4(),
+            };
             let mut ops = Operations::new();
             let mut task = replica.create_task(uuid, &mut ops).await?;
             task.set_description(one_line(&todo.description), &mut ops)?;
@@ -525,6 +539,11 @@ impl TodoStore for TaskchampionStore {
             task.set_value("project", Some(project), &mut ops)?;
             task.set_value("order", Some(order.to_string()), &mut ops)?;
             task.set_value("subof", parent, &mut ops)?;
+            if let Some(ticket) = todo.ticket {
+                task.set_value("ticket_tracker", Some(ticket.tracker), &mut ops)?;
+                task.set_value("ticket_key", Some(ticket.key), &mut ops)?;
+                task.set_value("ticket_status", ticket.synced_status, &mut ops)?;
+            }
             replica.commit_operations(ops).await?;
             Ok(uuid.to_string())
         })
@@ -614,6 +633,17 @@ impl TodoStore for TaskchampionStore {
             }
             Edit::Unblock { id, by } => {
                 self.set_dependencies(replica, id, by, false).await?;
+                Ok(Vec::new())
+            }
+            Edit::RecordSync { id, synced_status } => {
+                let todo = self.resolve(replica, id).await?;
+                if todo.ticket.is_none() {
+                    anyhow::bail!("todo {id} has no ticket");
+                }
+                Self::change(replica, &todo, |task, ops| {
+                    task.set_value("ticket_status", Some(synced_status.clone()), ops)
+                })
+                .await?;
                 Ok(Vec::new())
             }
             Edit::Purge(id) => {

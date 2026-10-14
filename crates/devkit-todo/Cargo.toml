@@ -14,6 +14,7 @@ devkit-common.workspace = true
 devkit-config.workspace = true
 devkit-vcs.workspace = true
 tempfile = { workspace = true, optional = true }
+uuid.workspace = true
 
 [features]
 # The backend contract suite, `contract` and `contract_tests!`.

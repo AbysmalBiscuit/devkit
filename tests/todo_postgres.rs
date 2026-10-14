@@ -809,6 +809,7 @@ fn a_hook_releases_many_claims_in_one_go() {
         .map(|i| {
             let id = s
                 .add(devkit_todo::NewTodo {
+                    ticket: None,
                     project: Some("proj.main.claude-S".into()),
                     description: format!("held {i}"),
                     parent: None,
@@ -1141,6 +1142,7 @@ fn session_end_records_every_claim_it_releases() {
     for i in 0..20 {
         let id = recorded
             .add(devkit_todo::NewTodo {
+                ticket: None,
                 project: Some("proj.main.claude-S".into()),
                 description: format!("held {i}"),
                 parent: None,

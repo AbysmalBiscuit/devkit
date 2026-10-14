@@ -7,6 +7,7 @@ use std::{fmt, ops::Deref};
 use serde::{Deserialize, Serialize};
 
 const HUMAN: &str = "human";
+const TRACKER: &str = "tracker";
 
 /// The variable the pre-tool-use hook sets on a sub-agent's `devkit todo`
 /// invocations, naming the sub-agent's holder.
@@ -29,6 +30,17 @@ impl Holder {
         self.0 == HUMAN
     }
 
+    /// The holder a tracker sync acts as. It covers every holder, as a
+    /// person does, so it can finish a ticket's todo whoever holds it, and
+    /// its own claims pass to any actor that starts the todo.
+    pub fn tracker() -> Self {
+        Self(TRACKER.to_string())
+    }
+
+    pub fn is_tracker(&self) -> bool {
+        self.0 == TRACKER
+    }
+
     /// The session this holder belongs to: `S` for both `S` and `S/a`.
     pub fn session(&self) -> Holder {
         Holder::new(self.0.split('/').next().unwrap_or(&self.0))
@@ -40,9 +52,10 @@ impl Holder {
     }
 
     /// Whether `self` may act on what `other` holds: its own claims, its
-    /// sub-agents' claims, and every claim for a human.
+    /// sub-agents' claims, and every claim for a human or the tracker.
     pub fn covers(&self, other: &Holder) -> bool {
         self.is_human()
+            || self.is_tracker()
             || self.0 == other.0
             || other
                 .0
@@ -86,5 +99,13 @@ mod tests {
         assert!(!covers("S/a1", "S"));
         assert!(!covers("S", "S2"));
         assert!(!covers("S/a1", "S/a2"));
+    }
+
+    #[test]
+    fn tracker_covers_every_holder() {
+        assert!(Holder::tracker().covers(&Holder::new("S/a")));
+        assert!(Holder::tracker().covers(&Holder::human()));
+        assert!(!Holder::tracker().is_human());
+        assert!(!Holder::new("S").covers(&Holder::tracker()));
     }
 }

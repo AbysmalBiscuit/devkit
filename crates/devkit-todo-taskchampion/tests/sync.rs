@@ -11,6 +11,7 @@ fn replica(dir: &Path, name: &str) -> TaskchampionStore {
 fn add(store: &TaskchampionStore, description: &str) -> String {
     store
         .add(NewTodo {
+            ticket: None,
             project: Some("proj.main".into()),
             description: description.into(),
             parent: None,

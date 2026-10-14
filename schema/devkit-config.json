@@ -107,6 +107,10 @@
       },
       "type": "object"
     },
+    "Assignee": {
+      "description": "Whose ticket a rule matches.",
+      "type": "string"
+    },
     "BriefConfig": {
       "description": "What `devkit brief` emits. All default on: the hooks ship enabled and\nconfig decides whether they produce anything, so turning the output off is\none line rather than a hook-wiring task. A section with nothing to report\nis omitted whatever its switch says; a switch turned off suppresses the\nsection, and its bullets, even when the checkout has something to put in\nit. The brief's intro names only the sections that survive. Personal\ndefaults belong in `~/.config/devkit/config.toml`, overridden per project.\n\n```toml\n[brief]\nlocks = false\npins  = false\n```",
       "properties": {
@@ -965,6 +969,55 @@
       },
       "type": "object"
     },
+    "MappedStatus": {
+      "description": "The todo status a tracker status maps to.",
+      "enum": [
+        "pending",
+        "in_progress",
+        "completed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "MatchRule": {
+      "additionalProperties": false,
+      "description": "One `[[ticket.sync.rules]]` table. Every condition it sets must hold; a\ntable that sets none matches every open ticket.",
+      "properties": {
+        "assignee": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Assignee"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whose ticket: `\"me\"` for the account devkit's tracker token belongs\nto, `\"none\"` for an unassigned ticket, or a user's login (GitHub) or\nname (Linear)."
+        },
+        "labels": {
+          "default": [],
+          "description": "Labels the ticket must carry, every one of them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "project_role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Linear only: the ticket's project has the authenticated account as\n`\"lead\"`, or as lead or member (`\"member\"`). GitHub has no project\nroles, so a GitHub sync with one fails naming this key."
+        }
+      },
+      "type": "object"
+    },
     "McpConfig": {
       "description": "The `devkit-mcp` server. The plugins register it unconditionally and a\nharness may re-enable a server the user switched off, so config is where\nit stays off.\n\n```toml\n[mcp]\nenabled = false\n```",
       "properties": {
@@ -1192,6 +1245,21 @@
         }
       ],
       "description": "A GitHub Projects v2 project: its number, and its owner when that is not\nthe issues repository's owner."
+    },
+    "ProjectRole": {
+      "description": "The authenticated account's role on a ticket's project.",
+      "oneOf": [
+        {
+          "const": "lead",
+          "description": "The project's lead.",
+          "type": "string"
+        },
+        {
+          "const": "member",
+          "description": "The project's lead or one of its members.",
+          "type": "string"
+        }
+      ]
     },
     "PromptFidelity": {
       "description": "What a logged prompt carries. Same ordering rule as [`Fidelity`], with an\n`off` below every level of it: a corpus can carry full command text without\ncarrying what the human typed.",
@@ -1912,6 +1980,14 @@
             "start": null
           },
           "description": "Status moves, keyed by the event that fires them. The event names are\nfixed, so a misspelled one is a parse error."
+        },
+        "sync": {
+          "$ref": "#/$defs/TicketSyncConfig",
+          "default": {
+            "rules": [],
+            "statuses": {}
+          },
+          "description": "Which tickets `devkit todo sync` brings into the todo store, and the\ntodo status each tracker status maps to."
         }
       },
       "type": "object"
@@ -1955,6 +2031,29 @@
           ],
           "default": null,
           "description": "Fired by the first agent session in a worktree `workspace setup`\ncreated, once per worktree, in the background. `pr checkout`\nworktrees never fire it. List the states work starts from in `from`:\n`[\"*\"]` lets a second worktree pull an issue back from review."
+        }
+      },
+      "type": "object"
+    },
+    "TicketSyncConfig": {
+      "additionalProperties": false,
+      "description": "`[ticket.sync]`: the tickets `devkit todo sync` brings in as todos on the\nrepository's node, and how their tracker statuses map to todo statuses.\nSync only reads the tracker. With no rules, it brings in nothing.\n\n```toml\n[[ticket.sync.rules]]\nassignee = \"me\"\n\n[[ticket.sync.rules]]\nassignee = \"none\"\nproject_role = \"lead\"\nlabels = [\"devkit\"]\n\n[ticket.sync.statuses]\n\"\" = \"pending\"\n\"Backlog\" = \"pending\"\n\"Todo\" = \"pending\"\n\"In Progress\" = \"in_progress\"\n\"In Review\" = \"in_progress\"\n\"Done\" = \"completed\"\n\"Canceled\" = \"cancelled\"\n```",
+      "properties": {
+        "rules": {
+          "default": [],
+          "description": "Which tickets sync brings in: a ticket syncs when any rule matches\nit, and a rule matches when all its conditions hold. A ticket in a\nstatus `statuses` maps to completed or cancelled is never brought in\nby a rule, so the first sync imports no history.",
+          "items": {
+            "$ref": "#/$defs/MatchRule"
+          },
+          "type": "array"
+        },
+        "statuses": {
+          "additionalProperties": {
+            "$ref": "#/$defs/MappedStatus"
+          },
+          "default": {},
+          "description": "Each tracker status name and the todo status it maps to. Names match\ncase-insensitively, ignoring surrounding whitespace. `\"\"` names an\nopen GitHub issue with no `[github] status_field` value: one outside\n`[github] project`, or every open issue without one. A closed GitHub\nissue maps by its close reason instead: completed, or cancelled when\nclosed as not planned or as a duplicate. A synced ticket in a status\nthis map does not name, two names here that match each other, or a\nname here the tracker does not have, fails the sync naming it, and\nnothing is written.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -2378,6 +2477,10 @@
           "pr_open": null,
           "setup": null,
           "start": null
+        },
+        "sync": {
+          "rules": [],
+          "statuses": {}
         }
       },
       "description": "What devkit does to a ticket's tracker status when it acts on that\nticket. `[issue]`, its old name, is read as this table."

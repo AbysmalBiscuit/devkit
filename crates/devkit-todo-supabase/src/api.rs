@@ -14,6 +14,9 @@ const CLAIMED: &str = "DK001";
 /// The SQLSTATE a todo function raises for an id that names no todo, or
 /// more than one.
 const UNKNOWN_TODO: &str = "DK002";
+/// The SQLSTATE a todo function raises for a ticket edit on a todo that
+/// stands for no ticket.
+const NO_TICKET: &str = "DK003";
 /// The schema devkit's tables and functions live in.
 const SCHEMA: &str = "devkit";
 /// What names the API in errors.
@@ -82,16 +85,8 @@ impl Api {
     }
 
     /// The rows of `table` that `query` selects, and how many it selects
-    /// in all, whatever page of them `query` asks for.
-    pub(crate) fn select_page<T: DeserializeOwned>(
-        &self,
-        table: &str,
-        query: &[(&str, String)],
-    ) -> Result<(Vec<T>, Option<usize>)> {
-        self.select_page_raw(table, query).map_err(with_advice)
-    }
-
-    /// As [`select_page`], leaving a refusal as the API answered it.
+    /// in all, whatever page of them `query` asks for. A refusal stays as the
+    /// API answered it.
     pub(crate) fn select_page_raw<T: DeserializeOwned>(
         &self,
         table: &str,
@@ -101,13 +96,13 @@ impl Api {
     }
 
     /// Whether `e` is PostgREST refusing a select because the database has
-    /// no `blocked_by` column yet. The refusal is read before it is rewritten
-    /// as the advice to update the schema.
-    pub(crate) fn lacks_blocking_column(&self, e: &anyhow::Error) -> bool {
+    /// no `column` yet. The refusal is read before it is rewritten as the
+    /// advice to update the schema.
+    pub(crate) fn lacks_column(&self, e: &anyhow::Error, column: &str) -> bool {
         e.chain().any(|cause| {
             cause
                 .downcast_ref::<Refused>()
-                .is_some_and(|refused| refused.message.contains("blocked_by"))
+                .is_some_and(|refused| refused.message.contains(column))
         })
     }
 
@@ -133,7 +128,7 @@ pub(crate) fn with_advice(e: anyhow::Error) -> anyhow::Error {
             by: Holder::new(refused.details.clone().unwrap_or_default()),
         }
         .into(),
-        Some(UNKNOWN_TODO) => anyhow!("{}", refused.message),
+        Some(UNKNOWN_TODO | NO_TICKET) => anyhow!("{}", refused.message),
         code => match advice(code) {
             Some(advice) => anyhow!("{refused}; {advice}"),
             None => e,

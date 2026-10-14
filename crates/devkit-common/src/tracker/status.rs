@@ -161,6 +161,11 @@ impl Statuses {
             .map(|(id, _)| id.as_str())
     }
 
+    /// Each status's name, in the tracker's order.
+    pub fn each_name(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(|(_, n)| n.as_str())
+    }
+
     /// The names, comma-separated, for an error that lists what a tracker has.
     pub fn names(&self) -> String {
         self.0

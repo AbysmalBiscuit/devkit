@@ -13,6 +13,7 @@ use todoenv::{Proj, stdout};
 fn seed(p: &Proj, text: &str) -> String {
     p.store()
         .add(NewTodo {
+            ticket: None,
             project: Some("proj.main.claude-S".into()),
             description: text.into(),
             parent: None,

@@ -3,19 +3,23 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use devkit_todo::{
-    Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusChange, Todo, TodoStore,
-    activity::stamp, by_prefix, is_uuid_prefix, node::GLOBAL, one_line,
+    Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusChange, TicketRef, Todo, TodoStore,
+    activity::stamp, by_prefix, is_uuid_prefix, node::GLOBAL, one_line, ticket_todo_uuid,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{Api, SupabaseActivity};
+use crate::{Api, SupabaseActivity, api::with_advice};
 
-const COLUMNS: &str = "id,node,description,status,holder,parent,ord,entry,modified,blocked_by";
-
-/// The columns a database from before blocking edges still has.
-const COLUMNS_WITHOUT_BLOCKERS: &str =
-    "id,node,description,status,holder,parent,ord,entry,modified";
+/// The columns a list selects, newest database first: each later set is
+/// what a database from before a column came still has, tried when the API
+/// refuses a column the set before it names and this one lacks.
+const COLUMN_SETS: [&str; 3] = [
+    "id,node,description,status,holder,parent,ord,entry,modified,blocked_by,\
+     ticket_tracker,ticket_key,ticket_status",
+    "id,node,description,status,holder,parent,ord,entry,modified,blocked_by",
+    "id,node,description,status,holder,parent,ord,entry,modified",
+];
 
 /// How many todos one list request asks for. A project whose API answers
 /// fewer per request is read in more requests.
@@ -60,6 +64,12 @@ struct Row {
     modified: String,
     #[serde(default)]
     blocked_by: Vec<String>,
+    #[serde(default)]
+    ticket_tracker: Option<String>,
+    #[serde(default)]
+    ticket_key: Option<String>,
+    #[serde(default)]
+    ticket_status: Option<String>,
 }
 
 /// A row a todo function returns for each status change it made.
@@ -92,7 +102,16 @@ fn time(id: &str, at: &str) -> Result<DateTime<Utc>> {
 }
 
 fn todo_of(row: Row) -> Result<Todo> {
+    let ticket = row
+        .ticket_tracker
+        .zip(row.ticket_key)
+        .map(|(tracker, key)| TicketRef {
+            tracker,
+            key,
+            synced_status: row.ticket_status,
+        });
     Ok(Todo {
+        ticket,
         status: status_of(&row.id, &row.status, row.holder)?,
         entry: Some(stamp(time(&row.id, &row.entry)?)),
         modified: Some(stamp(time(&row.id, &row.modified)?)),
@@ -125,10 +144,15 @@ fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// Whether this page asks for the blocking column.
-fn query_selects_blockers(query: &[(&str, String)]) -> bool {
-    query.iter().any(|(key, value)| {
-        *key == "select" && value.split(',').any(|column| column == "blocked_by")
+/// The first set after `columns` in [`COLUMN_SETS`] that lacks a column the
+/// API refused `columns` over, `None` when the refusal names none of them.
+fn older_columns(api: &Api, e: &anyhow::Error, columns: &str) -> Option<&'static str> {
+    let at = COLUMN_SETS.iter().position(|set| *set == columns)?;
+    COLUMN_SETS[at + 1..].iter().copied().find(|older| {
+        columns
+            .split(',')
+            .filter(|column| !older.split(',').any(|kept| kept == *column))
+            .any(|column| api.lacks_column(e, column))
     })
 }
 
@@ -174,23 +198,24 @@ fn uuid_bounds(prefix: &str) -> Option<(String, String)> {
 impl SupabaseStore {
     fn rows(&self, mut query: Vec<(&str, String)>) -> Result<Vec<Todo>> {
         query.extend([
-            ("select", COLUMNS.to_string()),
             ("root", format!("eq.{}", self.root)),
             ("order", "node,ord,id".to_string()),
             ("limit", PAGE.to_string()),
         ]);
+        let mut columns = COLUMN_SETS[0];
         let mut todos = Vec::new();
         loop {
             let mut page = query.clone();
+            page.push(("select", columns.to_string()));
             page.push(("offset", todos.len().to_string()));
             let (rows, total) = match self.api.select_page_raw::<Row>("todos", &page) {
-                Err(e) if self.api.lacks_blocking_column(&e) && query_selects_blockers(&page) => {
-                    for item in page.iter_mut().filter(|item| item.0 == "select") {
-                        item.1 = COLUMNS_WITHOUT_BLOCKERS.to_string();
+                Err(e) => match older_columns(&self.api, &e, columns) {
+                    Some(older) => {
+                        columns = older;
+                        continue;
                     }
-                    self.api.select_page::<Row>("todos", &page)?
-                }
-                Err(e) => return Err(e),
+                    None => return Err(with_advice(e)),
+                },
                 Ok(page) => page,
             };
             let fetched = rows.len();
@@ -253,16 +278,25 @@ impl TodoStore for SupabaseStore {
     }
 
     fn add(&self, todo: NewTodo) -> Result<String> {
-        let resp = self.api.call(
-            "todo_add",
-            &json!({
-                "p_root": self.root,
-                "p_node": todo.project,
-                "p_description": one_line(&todo.description),
-                "p_parent": todo.parent,
-                "p_ord": todo.order,
-            }),
-        )?;
+        let mut args = json!({
+            "p_root": self.root,
+            "p_node": todo.project,
+            "p_description": one_line(&todo.description),
+            "p_parent": todo.parent,
+            "p_ord": todo.order,
+        });
+        // Only a ticket's todo names the ticket arguments, so a plain add
+        // still works against a database from before them.
+        if let Some(ticket) = &todo.ticket {
+            let id = ticket_todo_uuid(&self.root, &ticket.tracker, &ticket.key);
+            args.as_object_mut().expect("an object").extend([
+                ("p_id".to_string(), json!(id.to_string())),
+                ("p_ticket_tracker".to_string(), json!(ticket.tracker)),
+                ("p_ticket_key".to_string(), json!(ticket.key)),
+                ("p_ticket_status".to_string(), json!(ticket.synced_status)),
+            ]);
+        }
+        let resp = self.api.call("todo_add", &args)?;
         self.api.body(resp)
     }
 
@@ -301,6 +335,10 @@ impl TodoStore for SupabaseStore {
             Edit::Block { id, by } => self.call(
                 "todo_block",
                 json!({ "p_root": root, "p_id": id, "p_by": by }),
+            ),
+            Edit::RecordSync { id, synced_status } => self.call(
+                "todo_record_sync",
+                json!({ "p_root": root, "p_id": id, "p_status": synced_status }),
             ),
             Edit::Unblock { id, by } => self.call(
                 "todo_unblock",

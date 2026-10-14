@@ -573,6 +573,7 @@ fn task_create(c: &Capture<'_>, input: &Value, response: &Value) -> Result<()> {
         return Ok(());
     };
     let id = c.store.add(NewTodo {
+        ticket: None,
         project: Some(c.node.clone()),
         description: subject.to_string(),
         parent: None,
@@ -722,6 +723,7 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
             Change::Add { index } => {
                 let step = &next[index];
                 let id = c.store.add(NewTodo {
+                    ticket: None,
                     project: Some(c.node.clone()),
                     description: step.text.clone(),
                     parent: None,

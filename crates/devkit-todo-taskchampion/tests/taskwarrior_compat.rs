@@ -63,6 +63,7 @@ fn synced(dir: &Path) -> (TaskchampionStore, String, String) {
     let store =
         TaskchampionStore::at(dir.join("replica")).with_target(SyncTarget::Dir(dir.join("server")));
     let new = |description: &str, parent: Option<String>| NewTodo {
+        ticket: None,
         project: Some("proj.main".into()),
         description: description.into(),
         parent,

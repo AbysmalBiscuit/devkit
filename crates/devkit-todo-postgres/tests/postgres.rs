@@ -13,7 +13,8 @@ use std::{
 };
 
 use devkit_todo::{
-    Claimed, Edit, Filter, Holder, NewTodo, Status, StatusChange, StatusKind, TodoStore, transition,
+    Claimed, Edit, Filter, Holder, NewTodo, Status, StatusChange, StatusKind, TicketRef, TodoStore,
+    transition,
 };
 use devkit_todo_postgres::{Database, PostgresStore, Trust};
 use tokio_postgres::types::Type;
@@ -244,6 +245,7 @@ fn open(url: &str, root: &str) -> PostgresStore {
 
 fn new_todo(node: Option<&str>, description: &str) -> NewTodo {
     NewTodo {
+        ticket: None,
         project: node.map(str::to_string),
         description: description.to_string(),
         parent: None,
@@ -316,6 +318,47 @@ fn of_agents_claiming_one_todo_at_once_exactly_one_gets_it() {
     }
 }
 
+/// Two syncs adding one ticket at once, each on a connection of its own,
+/// make one todo, whichever add runs first.
+#[test]
+fn racing_ticket_adds_make_one_todo() {
+    const ADDS: usize = 20;
+    let Some(url) = url(DIRECT) else {
+        return;
+    };
+    let root = fresh_root();
+    let ticket = NewTodo {
+        ticket: Some(TicketRef {
+            tracker: "github".into(),
+            key: "65".into(),
+            synced_status: Some("Todo".into()),
+        }),
+        ..new_todo(Some("r"), "#65 Add sync")
+    };
+    let start = Barrier::new(2);
+    let ids: Vec<String> = thread::scope(|s| {
+        let syncs: Vec<_> = (0..2)
+            .map(|_| {
+                let (store, start, ticket) = (open(&url, &root), &start, &ticket);
+                s.spawn(move || {
+                    store.list(&Filter::all()).unwrap();
+                    start.wait();
+                    (0..ADDS)
+                        .map(|_| store.add(ticket.clone()).unwrap())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        syncs
+            .into_iter()
+            .flat_map(|sync| sync.join().unwrap())
+            .collect()
+    });
+    let todos = open(&url, &root).list(&Filter::all()).unwrap();
+    assert_eq!(todos.len(), 1, "{todos:?}");
+    assert!(ids.iter().all(|id| *id == todos[0].id), "{ids:?}");
+}
+
 fn kind_name(kind: StatusKind) -> &'static str {
     match kind {
         StatusKind::Pending => "pending",
@@ -336,7 +379,7 @@ fn stored(status: &Status) -> (String, Option<String>) {
 
 /// The claim rule the database applies is the one `transition` states, for
 /// every status, target and actor among a session, its sub-agents, another
-/// session and a person.
+/// session, a person and the tracker.
 #[test]
 fn the_databases_claim_rule_is_transition() {
     let Some(direct) = url(DIRECT) else {
@@ -345,7 +388,7 @@ fn the_databases_claim_rule_is_transition() {
     open(&direct, &fresh_root())
         .add(new_todo(None, "x"))
         .unwrap();
-    let holders = ["S", "S/a1", "S/a2", "S2", "human"].map(Holder::new);
+    let holders = ["S", "S/a1", "S/a2", "S2", "human", "tracker"].map(Holder::new);
     let mut statuses = vec![
         Status::Pending,
         Status::Completed { by: None },

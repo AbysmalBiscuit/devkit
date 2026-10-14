@@ -66,7 +66,8 @@ impl std::error::Error for Claimed {}
 /// An actor that covers the claimant repeats a claim without taking it, so a
 /// sub-agent's claim survives its session starting the same todo. A sub-agent
 /// takes over a claim its session holds, so delegating does not lock it out;
-/// a person's claim is never taken over this way.
+/// a person's claim is never taken over this way. The tracker's claim passes
+/// to any other actor that starts the todo, a person included.
 /// Any other change to a todo in progress needs an actor that covers the
 /// claimant.
 pub fn transition(
@@ -76,6 +77,9 @@ pub fn transition(
 ) -> Result<Option<Status>, Claimed> {
     let claimant = match current {
         Status::InProgress { by } => {
+            if to == StatusKind::InProgress && by.is_tracker() && !actor.is_tracker() {
+                return Ok(Some(Status::InProgress { by: actor.clone() }));
+            }
             if to == StatusKind::InProgress && actor.covers(by) {
                 return Ok(None);
             }
@@ -227,6 +231,20 @@ mod tests {
         assert_eq!(
             take_over(&ip("human"), &h("human"), &h("T")),
             Err(Claimed { by: h("human") })
+        );
+    }
+
+    #[test]
+    fn the_trackers_claim_passes_to_a_person_or_an_agent() {
+        for actor in ["human", "S"] {
+            assert_eq!(
+                transition(&ip("tracker"), StatusKind::InProgress, &h(actor)),
+                Ok(Some(ip(actor)))
+            );
+        }
+        assert_eq!(
+            transition(&ip("tracker"), StatusKind::InProgress, &h("tracker")),
+            Ok(None)
         );
     }
 

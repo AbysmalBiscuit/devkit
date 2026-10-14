@@ -32,6 +32,12 @@ pub struct Exported {
     /// Full ids of the tasks this one waits on.
     #[serde(default)]
     pub depends: Vec<String>,
+    /// The tracker of the ticket the task stands for.
+    pub ticket_tracker: Option<String>,
+    /// The ticket's key on that tracker.
+    pub ticket_key: Option<String>,
+    /// The ticket's status as the last sync read it.
+    pub ticket_status: Option<String>,
 }
 
 /// Numeric UDAs export as JSON numbers that may carry a fraction.
@@ -61,7 +67,16 @@ impl Exported {
             "deleted" => Status::Cancelled { by: holder },
             _ => return None,
         };
+        let ticket = match (self.ticket_tracker, self.ticket_key) {
+            (Some(tracker), Some(key)) => Some(devkit_todo::TicketRef {
+                tracker,
+                key,
+                synced_status: self.ticket_status,
+            }),
+            _ => None,
+        };
         Some(Todo {
+            ticket,
             id: self.uuid,
             description: self.description,
             status,

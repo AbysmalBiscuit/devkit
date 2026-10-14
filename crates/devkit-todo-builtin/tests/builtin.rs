@@ -11,6 +11,7 @@ devkit_todo::contract_tests!(|| {
 
 fn new(description: &str) -> NewTodo {
     NewTodo {
+        ticket: None,
         project: Some("r.main".into()),
         description: description.into(),
         parent: None,

@@ -11,6 +11,7 @@ fn pending(id: &str, blocked_by: &[&str]) -> Todo {
 
 fn todo(id: &str, status: Status, blocked_by: &[&str], order: Option<i64>) -> Todo {
     Todo {
+        ticket: None,
         id: id.into(),
         description: id.into(),
         status,

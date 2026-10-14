@@ -391,6 +391,7 @@ mod tests {
 
     fn todo(id: &str, text: &str, parent: Option<&str>, order: i64, status: Status) -> Todo {
         Todo {
+            ticket: None,
             id: id.into(),
             description: text.into(),
             status,

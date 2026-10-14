@@ -16,7 +16,7 @@ use crate::{
 /// The project's status field, read through `repositoryOwner`, which resolves
 /// a user or an organization alike. A bare project number belongs to the
 /// owner of `slug`.
-fn board_fields(slug: &str, project: &ProjectRef, field: &str) -> String {
+pub(super) fn board_fields(slug: &str, project: &ProjectRef, field: &str) -> String {
     let repo_owner = slug.split_once('/').map_or(slug, |(o, _)| o);
     format!(
         r#"repositoryOwner(login: {po}) {{
