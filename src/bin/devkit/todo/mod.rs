@@ -125,8 +125,7 @@ pub enum TodoCommand {
     /// For text that must disappear, such as a pasted secret. Agents cancel
     /// instead, which keeps the record.
     Purge { id: String },
-    /// Sync the todo store with its sync target, then this repository's
-    /// tracker tickets.
+    /// Sync the todo store with its sync target, then the repo's tickets.
     ///
     /// Only a taskchampion store with a sync target syncs. A failure is
     /// reported on stderr and exits 0: changes stay saved and sync with the
