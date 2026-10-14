@@ -934,7 +934,7 @@ impl Tracker for GithubTracker {
         self.ticket_reader().read(keys)
     }
 
-    fn status_names(&self, _tickets: &[SyncedTicket]) -> Result<Vec<String>> {
+    fn status_names(&self) -> Result<Vec<String>> {
         self.ticket_reader().status_names()
     }
 }

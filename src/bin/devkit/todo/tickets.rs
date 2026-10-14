@@ -61,7 +61,7 @@ pub(crate) fn sync_tickets(
                 .with_context(|| format!("reading {kind} tickets"))?,
         );
     }
-    let known = tracker.status_names(&fetched)?;
+    let known = tracker.status_names()?;
     let plan = ticket::plan(&kind, node, &existing, &fetched, &known, sync)?;
     if dry_run {
         match plan.is_empty() {

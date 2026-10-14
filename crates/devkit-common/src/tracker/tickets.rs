@@ -1,6 +1,8 @@
 //! Tickets as `devkit todo sync` reads them: the fields a ticket's todo
 //! follows, from whichever tracker holds them. Every read here is read-only.
 
+use super::status::same_status;
+
 /// One ticket as a sync reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncedTicket {
@@ -13,6 +15,15 @@ pub struct SyncedTicket {
     pub blocked_by: Vec<String>,
     /// The key of the ticket this one is a sub-issue of.
     pub parent: Option<String>,
+}
+
+/// Whether `ticket` is closed, or in one of `closed_names`: a ticket no
+/// sync rule brings in.
+pub(crate) fn in_closed_name(ticket: &SyncedTicket, closed_names: &[String]) -> bool {
+    match &ticket.status {
+        TicketStatus::Named(name) => closed_names.iter().any(|c| same_status(c, name)),
+        TicketStatus::Closed(_) => true,
+    }
 }
 
 /// Where a ticket stands on its tracker.

@@ -54,7 +54,7 @@ With `[ticket.sync]` rules in the repository's `devkit.toml`, `devkit todo sync`
 
 - A GitHub issue's status is its option in `[github] project`'s status field, `""` when it has none or no project is configured. A closed issue maps to completed, or to cancelled when closed as not planned or as a duplicate, whatever the map says.
 - A ticket's blockers become blocking edges and its parent ticket becomes its todo's parent, when both tickets are synced.
-- A ticket in a status the map does not name, or a map entry naming a status the tracker lacks, fails the sync naming each, and nothing is written.
+- A ticket in a status the map does not name, or a map entry naming a status the tracker lacks (on Linear, one no team has), fails the sync naming each, and nothing is written.
 - A ticket todo's status changes only when its ticket's status moved since the last sync, so a todo you started stays yours while its ticket stands still.
 - Sync changes a status as the `tracker` holder, and any agent or person may start a todo the tracker holds. When the ticket closes or moves to a finished status, sync finishes or cancels its todo even while an agent holds it.
 - A ticket keeps one todo, on every backend: a second sync adds nothing.

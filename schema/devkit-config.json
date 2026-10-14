@@ -1140,7 +1140,7 @@
         },
         "labels": {
           "default": [],
-          "description": "Labels the ticket must carry, every one of them.",
+          "description": "Labels the ticket must carry, every one of them. Surrounding\nwhitespace is ignored, and a blank label is a config error.",
           "items": {
             "type": "string"
           },
@@ -2287,7 +2287,7 @@
             "$ref": "#/$defs/MappedStatus"
           },
           "default": {},
-          "description": "Each tracker status name and the todo status it maps to. Names match\ncase-insensitively, ignoring surrounding whitespace. `\"\"` names an\nopen GitHub issue with no `[github] status_field` value: one outside\n`[github] project`, or every open issue without one. A closed GitHub\nissue maps by its close reason instead: completed, or cancelled when\nclosed as not planned or as a duplicate. A synced ticket in a status\nthis map does not name, two names here that match each other, or a\nname here the tracker does not have, fails the sync naming it, and\nnothing is written.",
+          "description": "Each tracker status name and the todo status it maps to. Names match\ncase-insensitively, ignoring surrounding whitespace. `\"\"` names an\nopen GitHub issue with no `[github] status_field` value: one outside\n`[github] project`, or every open issue without one. A closed GitHub\nissue maps by its close reason instead: completed, or cancelled when\nclosed as not planned or as a duplicate. A synced ticket in a status\nthis map does not name, two names here that match each other, or a\nname here no tracker status has (on Linear, no team's), fails the\nsync naming it, and nothing is written.",
           "type": "object"
         }
       },
