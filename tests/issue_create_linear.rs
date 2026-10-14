@@ -135,6 +135,25 @@ fn create_on_linear_writes_fields_and_prints_the_identifier() {
 }
 
 #[test]
+fn a_declared_no_priority_value_reads_back_as_written() {
+    let config = FIELDS.replace(
+        r#"values = [{ name = "urgent", id = "1" }"#,
+        r#"values = [{ name = "none", id = "0" }, { name = "urgent", id = "1" }"#,
+    );
+    let fake = project(&config);
+    let linear = LinearFake::start();
+    linear.answer("issueCreate(", CREATED);
+    linear.answer("issue: issues(", &read(&[], 0));
+    let args = ["create", "--title", "T", "--arg", "priority=none"];
+    let out = run(&fake, &linear, &args);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        linear.sent("issueCreate(")[0]["variables"]["input"]["priority"],
+        0
+    );
+}
+
+#[test]
 fn create_without_a_team_field_names_the_missing_declaration() {
     let config = FIELDS.replace("where   = \"team\"", "where   = \"cycle\"");
     let fake = project(&config);

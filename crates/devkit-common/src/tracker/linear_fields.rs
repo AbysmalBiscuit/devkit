@@ -45,7 +45,7 @@ pub struct LinearIssue {
     pub team: Option<(String, String)>,
     pub labels: Vec<String>,
     pub assignee: Option<String>,
-    /// `None` for Linear's `0`, no priority.
+    /// Linear's priority, whose `0` is no priority.
     pub priority: Option<i64>,
     pub estimate: Option<f64>,
     pub cycle: Option<String>,
@@ -134,7 +134,7 @@ pub fn parse_issue(resp: &Json) -> Result<Option<LinearIssue>> {
             .filter_map(|l| text(l, "/id"))
             .collect(),
         assignee: text(n, "/assignee/id"),
-        priority: n["priority"].as_f64().map(|p| p as i64).filter(|p| *p != 0),
+        priority: n["priority"].as_f64().map(|p| p as i64),
         estimate: n["estimate"].as_f64(),
         cycle: text(n, "/cycle/id"),
         project: text(n, "/project/id"),
@@ -208,6 +208,7 @@ impl LinearIssue {
             let names: Vec<String> = self
                 .ids(place)
                 .into_iter()
+                .filter(|id| !is_no_priority(place, id) || decl.values.iter().any(|v| v.id == *id))
                 .map(|id| match decl.r#type {
                     Some(FieldType::User) => alias_of(people, &id),
                     _ => value_name(decl, &id),
@@ -232,6 +233,19 @@ impl LinearIssue {
             .find(|v| v.id == *id);
         Some(declared.map_or_else(|| key.clone(), |v| v.name.clone()))
     }
+}
+
+/// Whether `id` at `place` is Linear's priority `0`, no priority, which
+/// reads back after a clear as well as after a written `0`.
+fn is_no_priority(place: &Place, id: &str) -> bool {
+    *place == Place::Priority && id == "0"
+}
+
+/// The ids `place` holds, as a set in which no priority is no value.
+fn held(place: &Place, ids: Vec<String>) -> BTreeSet<String> {
+    ids.into_iter()
+        .filter(|id| !is_no_priority(place, id))
+        .collect()
 }
 
 /// The `[people]` alias whose Linear id is `id`, else `id`.
@@ -615,8 +629,8 @@ impl LinearFieldWriter {
                 continue;
             };
             let Some(place) = &decl.r#where else { continue };
-            let want: BTreeSet<String> = written_ids(values).into_iter().collect();
-            let have: BTreeSet<String> = after.ids(place).into_iter().collect();
+            let want = held(place, written_ids(values));
+            let have = held(place, after.ids(place));
             if want != have {
                 let reads: Vec<String> = have.iter().map(|id| value_name(decl, id)).collect();
                 out.push((
