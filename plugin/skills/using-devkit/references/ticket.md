@@ -5,7 +5,7 @@
 ```sh
 ticket render --title T [--body B] [--arg k=v] [--arg-file k=path]
 ticket create --title T [--body B] [--arg k=v] [--arg-file k=path] [--none FIELD]
-ticket edit <number|URL> --body B [--title T] [--arg k=v] [--arg-file k=path] [--none FIELD]
+ticket edit <number|URL> [--body B] [--title T] [--arg k=v] [--arg-file k=path] [--none FIELD]
 ticket fields [--arg k=v] [--json]
 ticket event <setup|start|pr_open> [ID|URL]
 ticket dashboard [--chart bar|line] [--bucket B] [--mode M] [--aggregate cumulative|period] [--all-roles] [--author gh] [--no-plots] [--no-cache]
@@ -18,7 +18,7 @@ ticket dashboard [--chart bar|line] [--bucket B] [--mode M] [--aggregate cumulat
 Ticket titles and bodies come from the `ticket_title` and `ticket_body` templates; `issue_title` and `issue_body`, their old names, still load. `{{ input }}` is `--title` or `--body`, and the body template also sees the rendered title as `ticket_title` and as `issue_title`. A `[templates.variables]` entry either template reads and marks `required` must be passed as `--arg`. A missing one is refused by name, with its description.
 
 - **GitHub:** `ticket create` renders and runs `gh issue create` against `issues_repo`, then prints the issue URL. Under any other tracker it refuses and points at `ticket render`.
-- **GitHub, an existing issue:** `ticket edit <number|URL> --body B` renders the body and runs `gh issue edit` to replace it. `--title T` also renders and replaces the title; without it the issue keeps its title, which the body template sees as `ticket_title`. Under any other tracker it refuses and points at `ticket render`.
+- **GitHub, an existing issue:** `ticket edit <number|URL> --body B` renders the body and runs `gh issue edit` to replace it. `--title T` also renders and replaces the title; without it the issue keeps its title, which the body template sees as `ticket_title`. Field `--arg`s and `--none` write those fields (see Ticket fields), and an edit with only those leaves the title and body alone. Under any other tracker it refuses and points at `ticket render`.
 - **A tracker MCP (Linear's `save_issue`, GitHub's `issue_write`):** run `ticket render`, which prints `{"title": ..., "body": ...}`, and pass both strings unchanged as the MCP call's title and body fields. Line endings and trailing whitespace may differ, but any other edit is denied as text that differs from the render.
 - **Through a tracker MCP, rewriting an existing ticket's title or body** goes through `ticket render` too. An update that only changes state, labels or assignee needs no render. Linear's `patch` edits the body in place, so it is always refused: render the whole new body and pass it as `description`.
 
@@ -39,6 +39,10 @@ Run `ticket fields` before filing a ticket. It lists each field that can matter,
 | `info`, `none` | filed, nothing said | done, nothing said |
 
 A field's `when` entries can raise or lower its level depending on another field of the same ticket or on who is filing (`caller = "agent"`). A value that is not one the field takes is refused at every level, `none` included; the refusal lists the valid values. The body and title templates see each field as text: its values' names joined by `, `, or the empty string when it has none. A field the templates read is never required by the template rule; only its level decides.
+
+`ticket create` writes every field it is given, and every default for a field it is not given, on the issue and on its item in `[github] project`, then reads the issue back and compares each field. It prints the issue URL first. When a field did not take (a write GitHub refused, a token without the `project` scope, a read-back that differs), it names each field after the URL and exits non-zero: the issue exists, so fix it with `ticket edit <number> --arg <field>=...`, never by rerunning `ticket create`, which would file a second issue. When `gh issue create` itself fails, the issue may exist anyway; search for its title before retrying.
+
+`ticket edit` reads the issue first, judges `when` conditions on its current fields with the given ones laid over them, and writes only the fields named, never a default. A list field is set to exactly the values given: `--arg labels=a` on an issue labelled `a, b` removes `b`. It reads the issue back the same way.
 
 `--none <field>` marks a field deliberately empty. On a create it counts as filled and nothing is written; on an edit it clears the field. A field with `allow_none = false` refuses `--none`, so at `error` it needs a real value. An empty value, `--arg milestone=`, is refused and points at `--none`.
 

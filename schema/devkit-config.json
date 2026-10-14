@@ -465,7 +465,7 @@
       "description": "One value of an `enum` field.",
       "properties": {
         "id": {
-          "description": "What devkit writes: a label's name, a milestone's number, a project\noption's id, a Linear id.",
+          "description": "What devkit writes: a label's name, a milestone's title, a project\noption's id, a Linear id.",
           "type": "string"
         },
         "name": {

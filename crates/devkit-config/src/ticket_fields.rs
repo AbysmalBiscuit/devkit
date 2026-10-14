@@ -412,7 +412,7 @@ impl From<Place> for PlaceSpec {
 pub struct EnumValue {
     /// What agents pass, matched case-insensitively.
     pub name: String,
-    /// What devkit writes: a label's name, a milestone's number, a project
+    /// What devkit writes: a label's name, a milestone's title, a project
     /// option's id, a Linear id.
     pub id: String,
     /// The Linear teams the value is valid in; any team when empty.

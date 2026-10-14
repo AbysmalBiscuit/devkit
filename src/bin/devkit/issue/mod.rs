@@ -12,6 +12,7 @@ mod dashboard;
 mod edit;
 mod end;
 mod event;
+mod field_write;
 mod fields;
 mod hooks;
 mod info;
@@ -256,7 +257,13 @@ pub(crate) enum TicketCmd {
         #[command(flatten)]
         vars: VarArgs,
     },
-    /// Create a GitHub issue from the issue templates.
+    /// Create a GitHub issue from the issue templates, with its fields.
+    ///
+    /// Each declared field (`ticket fields` lists them) is passed as
+    /// `--arg <field>=<value>` or marked empty with `--none <field>`. A missing
+    /// `error` field or an invalid value refuses before anything is written.
+    /// Every field written is read back; a field that did not take is named
+    /// after the URL, to fix with `ticket edit`, and the command fails.
     Create {
         /// Issue title, the `input` of the `ticket_title` template.
         #[arg(long)]
@@ -269,10 +276,14 @@ pub(crate) enum TicketCmd {
         #[command(flatten)]
         fields: FieldArgs,
     },
-    /// Rewrite a GitHub issue's body (and title) from the issue templates.
+    /// Rewrite a GitHub issue's body, title or declared fields.
     ///
-    /// Without `--title` the issue keeps its current title, which the
-    /// `ticket_body` template reads as `ticket_title` and `issue_title`.
+    /// `--body` and `--title` render the issue templates. Without `--title`
+    /// the issue keeps its current title, which the `ticket_body` template
+    /// reads as `ticket_title` and `issue_title`. Each field `--arg` sets
+    /// exactly that field (a list to exactly the values given), `--none`
+    /// clears one, and fields not named are left alone. With only field args
+    /// the title and body are left alone.
     Edit {
         /// Issue number or issue URL.
         issue: String,
@@ -281,7 +292,7 @@ pub(crate) enum TicketCmd {
         title: Option<String>,
         /// New issue body, the `input` of the `ticket_body` template.
         #[arg(long)]
-        body: String,
+        body: Option<String>,
         #[command(flatten)]
         vars: VarArgs,
         #[command(flatten)]
