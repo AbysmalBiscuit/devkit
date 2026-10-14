@@ -392,6 +392,40 @@ fn a_static_env_variable_redefined_outside_the_committed_config_never_passes() {
     assert_eq!(f.passed("webs", Some(&sha)).status.code(), Some(1));
 }
 
+/// `--env` and `--env-file` change what the task runs, so a run given either
+/// is not clean, and its record names what they set without the values.
+#[test]
+fn an_env_override_makes_a_run_not_clean_and_records_names_only() {
+    let f = Fixture::new();
+    let sha = f.head();
+    assert!(
+        f.run(&["task", "pass", "--env", "GIT_SECRET_TOKEN=hunter2"])
+            .status
+            .success()
+    );
+    let env_file = f.state.join("task.env");
+    std::fs::write(&env_file, "FROM_FILE=s3cr3t\n").unwrap();
+    assert!(
+        f.run(&["task", "pass", "--env-file", env_file.to_str().unwrap()])
+            .status
+            .success()
+    );
+
+    let runs = f.runs();
+    assert_eq!(runs.len(), 2, "{runs:#?}");
+    assert_eq!(runs[0]["clean"], false, "{:#}", runs[0]);
+    assert_eq!(runs[0]["env"], serde_json::json!(["GIT_SECRET_TOKEN"]));
+    assert_eq!(runs[1]["clean"], false, "{:#}", runs[1]);
+    assert_eq!(runs[1]["env"], serde_json::json!(["FROM_FILE"]));
+    assert_eq!(runs[1]["env_file"], env_file.to_str().unwrap());
+    let text = serde_json::to_string(&runs).unwrap();
+    assert!(
+        !text.contains("hunter2") && !text.contains("s3cr3t"),
+        "{text}"
+    );
+    assert_eq!(f.passed("pass", Some(&sha)).status.code(), Some(1));
+}
+
 #[test]
 fn a_sequence_records_one_run_with_its_failing_steps_code() {
     let f = Fixture::new();

@@ -47,8 +47,9 @@ pub struct Run {
     /// could not be read, as on a repository with no commits.
     pub head: Option<String>,
     /// The tree had no modified, staged or untracked files when the run
-    /// started and when it ended, the head had not moved, and the task ran
-    /// as the committed config defines it ([`Run::committed_definition`]).
+    /// started and when it ended, the head had not moved, the task ran as
+    /// the committed config defines it ([`Run::committed_definition`]), and
+    /// no `--env` or `--env-file` was given.
     pub clean: bool,
     /// The task's definition is the one the repository's committed
     /// `devkit.toml` layers alone give at HEAD: no local, home, `--config`
@@ -56,6 +57,13 @@ pub struct Run {
     /// determined.
     #[serde(default)]
     pub committed_definition: bool,
+    /// The names of the variables `--env` and `--env-file` set. Their values
+    /// may be secrets, so they are never stored.
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// The `--env-file` given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_file: Option<PathBuf>,
     /// Each command step devrun executed, in order, with the argv it ran.
     #[serde(default)]
     pub steps: Vec<Step>,
@@ -241,6 +249,8 @@ pub struct Start {
     head: Option<String>,
     clean: bool,
     committed_definition: bool,
+    env: Vec<String>,
+    env_file: Option<PathBuf>,
     started_at: String,
 }
 
@@ -256,12 +266,15 @@ fn tree_state(root: &Path) -> (Option<String>, bool) {
 impl Start {
     /// Capture the tree state for a run of `task` at worktree `root`.
     /// `committed_definition` says whether the task runs as the committed
-    /// config defines it.
+    /// config defines it; `env` names the variables `--env` and `env_file`
+    /// set.
     pub fn capture(
         root: &Path,
         task: &str,
         args: &BTreeMap<String, String>,
         committed_definition: bool,
+        env: Vec<String>,
+        env_file: Option<PathBuf>,
     ) -> Self {
         let (head, clean) = tree_state(root);
         let repo = vcs::primary_checkout(root).unwrap_or_else(|_| root.to_path_buf());
@@ -273,6 +286,8 @@ impl Start {
             head,
             clean,
             committed_definition,
+            env,
+            env_file,
             started_at: devkit_common::harness_log::now_rfc3339(),
         }
     }
@@ -284,9 +299,13 @@ impl Start {
         Run {
             clean: self.clean
                 && self.committed_definition
+                && self.env.is_empty()
+                && self.env_file.is_none()
                 && clean_after
                 && head_after == self.head,
             committed_definition: self.committed_definition,
+            env: self.env,
+            env_file: self.env_file,
             steps,
             task: self.task,
             args: self.args,
@@ -469,6 +488,8 @@ mod tests {
             head: Some(head.into()),
             clean,
             committed_definition: clean,
+            env: Vec::new(),
+            env_file: None,
             steps: Vec::new(),
             exit_code,
             started_at: "2026-01-01T00:00:00.000Z".into(),

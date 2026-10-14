@@ -788,7 +788,14 @@ fn cmd_task(
 
     let committed = ledger::committed_config(root_path, Path::new(cwd))
         .is_ok_and(|c| task::same_definition(&loaded.config, &c, &loaded.catalog, name));
-    let start = ledger::Start::capture(root_path, name, &args, committed);
+    let start = ledger::Start::capture(
+        root_path,
+        name,
+        &args,
+        committed,
+        user.keys().cloned().collect(),
+        env_file.map(|f| Path::new(cwd).join(f)),
+    );
     let tail = ledger::Tail::new();
     let steps = std::cell::RefCell::new(Vec::new());
     let step = |step_name: &str| -> Result<Option<i32>> {
