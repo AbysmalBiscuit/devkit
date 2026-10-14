@@ -502,14 +502,14 @@ impl LinearFieldWriter {
             .with_context(|| format!("Linear has no issue {identifier}"))
     }
 
-    /// Read issue `uuid` like [`Self::read`], by the id that survives a move
+    /// Read issue `id` like [`Self::read`], by the id that survives a move
     /// to another team, which renames the identifier.
-    pub fn read_by_uuid(&self, uuid: &str) -> Result<LinearIssue> {
-        let id: Uuid = uuid
+    pub fn read_by_id(&self, id: &str) -> Result<LinearIssue> {
+        let parsed: Uuid = id
             .parse()
-            .with_context(|| format!("`{uuid}` is not a Linear issue id"))?;
-        self.lookup(Lookup::Uuid(id))?
-            .with_context(|| format!("Linear has no issue {uuid}"))
+            .with_context(|| format!("`{id}` is not a Linear issue id"))?;
+        self.lookup(Lookup::Uuid(parsed))?
+            .with_context(|| format!("Linear has no issue {id}"))
     }
 
     /// File the ticket `input` describes, which carries its client id. When

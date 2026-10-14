@@ -198,7 +198,7 @@ pub(crate) fn linear_finish(
         }
     }
     let after = if stale || related {
-        match writer.read_by_uuid(&before.uuid) {
+        match writer.read_by_id(&before.uuid) {
             Ok(after) => after,
             Err(e) => {
                 problems.push(format!(
