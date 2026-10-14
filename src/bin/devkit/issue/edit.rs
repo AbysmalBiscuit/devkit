@@ -57,7 +57,7 @@ pub(crate) fn run(args: EditArgs) -> Result<()> {
     } else {
         Some(writer.read(number, decls, Some(&resolved))?)
     };
-    let current = before.as_ref().map(|b| b.current(decls));
+    let current = before.as_ref().map(|b| b.current(decls, &cfg.people));
     let report = fields::check(decls, Surface::Edit, &resolved, current.as_ref(), caller);
     field_write::refuse("ticket edit", decls, &report)?;
 

@@ -624,6 +624,43 @@ fn edit_none_clears_and_refuses_when_not_allowed() {
 }
 
 #[test]
+fn edit_sees_a_current_assignee_as_its_people_alias() {
+    let fake = ghfake::Fake::without_pr(
+        r#"
+[tracker]
+kind = "github"
+
+[templates]
+ticket_body = "{{ input }}\nOwner: {{ assignee }}\n"
+
+[ticket.fields.github.assignee]
+type  = "user"
+where = "assignees"
+
+[ticket.fields.github.milestone]
+type  = "string"
+where = "milestone"
+when  = [{ if = { assignee = "lev" }, level = "warning" }]
+"#,
+    );
+    fake.serve_issue("the old body");
+    fake.serve_graphql(&issue_read(
+        7,
+        serde_json::json!({ "assignees": { "nodes": [{ "login": "LevValle" }] } }),
+        serde_json::json!([]),
+    ));
+    let out = fake.issue_as("agent", &["edit", "7", "--body", "B", "--none", "milestone"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        fake.calls().contains("issue edit 7 --body B\nOwner: lev\n"),
+        "{}",
+        fake.calls()
+    );
+    let err = stderr(&out);
+    assert!(err.contains("warning") && err.contains("milestone"), "{err}");
+}
+
+#[test]
 fn edit_with_nothing_to_write_is_refused() {
     let fake = writes_fake();
     let out = fake.issue_as("agent", &["edit", "7"]);

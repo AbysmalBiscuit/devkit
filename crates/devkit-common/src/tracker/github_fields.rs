@@ -5,10 +5,10 @@
 //! Split like `github_status.rs`: query builders and response parsers, tested
 //! over recorded responses, and a networked [`GithubFieldWriter`] over them.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
-use devkit_config::{FieldDecl, FieldType, Place, ProjectRef};
+use devkit_config::{FieldDecl, FieldType, Person, Place, ProjectRef};
 use serde_json::Value as Json;
 
 use super::github_status::{
@@ -221,15 +221,23 @@ impl IssueFields {
     }
 
     /// The fields' present values by field name, as names: an enum value's
-    /// declared name where its id is declared, else what GitHub holds.
-    pub fn current(&self, decls: &BTreeMap<String, FieldDecl>) -> Current {
+    /// declared name where its id is declared, a `user` login's `[people]`
+    /// alias, else what GitHub holds.
+    pub fn current(
+        &self,
+        decls: &BTreeMap<String, FieldDecl>,
+        people: &HashMap<String, Person>,
+    ) -> Current {
         let mut out = BTreeMap::new();
         for (name, decl) in decls {
             let Some(place) = &decl.r#where else { continue };
             let names: Vec<String> = self
                 .ids(place)
                 .into_iter()
-                .map(|id| decl.value_name(&id))
+                .map(|id| match decl.r#type {
+                    Some(FieldType::User) => alias_of(people, &id),
+                    _ => decl.value_name(&id),
+                })
                 .collect();
             if !names.is_empty() {
                 out.insert(name.clone(), names);
@@ -237,6 +245,20 @@ impl IssueFields {
         }
         Current(out)
     }
+}
+
+/// The `[people]` alias whose GitHub login is `login`, else `login`.
+fn alias_of(people: &HashMap<String, Person>, login: &str) -> String {
+    people
+        .iter()
+        .filter(|(_, p)| {
+            p.github
+                .as_deref()
+                .is_some_and(|g| g.eq_ignore_ascii_case(login))
+        })
+        .map(|(alias, _)| alias)
+        .min()
+        .map_or_else(|| login.to_string(), Clone::clone)
 }
 
 /// The ids a field's resolved values are written as.
@@ -785,7 +807,7 @@ where = { project_field = "PVTF_e", name = "Estimate" }
         assert_eq!(r.blocked_by, [(13, "I_13".into())]);
         assert_eq!(r.refs[&14], "I_14");
         let d = decls();
-        let current = r.current(&d);
+        let current = r.current(&d, &HashMap::new());
         assert_eq!(current.0["priority"], ["P1"]);
         assert_eq!(current.0["type"], ["Bug"]);
         assert_eq!(current.0["milestone"], ["v1.0"]);
