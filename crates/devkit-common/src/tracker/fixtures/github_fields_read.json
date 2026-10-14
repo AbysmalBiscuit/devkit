@@ -1,0 +1,98 @@
+{
+  "data": {
+    "repository": {
+      "issue": {
+        "id": "I_42",
+        "labels": {
+          "nodes": [
+            {
+              "name": "bug"
+            },
+            {
+              "name": "enhancement"
+            }
+          ]
+        },
+        "assignees": {
+          "nodes": [
+            {
+              "login": "LevValle"
+            }
+          ]
+        },
+        "milestone": {
+          "title": "v1.0"
+        },
+        "issueType": {
+          "id": "IT_bug",
+          "name": "Bug"
+        },
+        "parent": {
+          "id": "I_12",
+          "number": 12
+        },
+        "blockedBy": {
+          "nodes": [
+            {
+              "id": "I_13",
+              "number": 13
+            }
+          ]
+        },
+        "projectItems": {
+          "nodes": [
+            {
+              "id": "PVTI_9",
+              "project": {
+                "id": "PVT_9",
+                "number": 9
+              },
+              "fieldValues": {
+                "nodes": [
+                  {
+                    "optionId": "opt_other",
+                    "field": {
+                      "id": "PVTSSF_p"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PVTI_3",
+              "project": {
+                "id": "PVT_3",
+                "number": 3
+              },
+              "fieldValues": {
+                "nodes": [
+                  {
+                    "optionId": "opt_p1",
+                    "field": {
+                      "id": "PVTSSF_p"
+                    }
+                  },
+                  {
+                    "number": 3.0,
+                    "field": {
+                      "id": "PVTF_e"
+                    }
+                  },
+                  {}
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "ref14": {
+        "id": "I_14"
+      }
+    },
+    "repositoryOwner": {
+      "projectV2": {
+        "id": "PVT_3"
+      }
+    }
+  }
+}

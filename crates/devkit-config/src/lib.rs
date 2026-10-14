@@ -14,9 +14,14 @@ pub use layers::{
 };
 pub use todo::{HARNESS_PREFIXES, RoleConfig, ScopeConfig};
 pub mod harness;
+mod ticket_fields;
 pub use harness::{
     AppMatch, CommandRule, Fidelity, HarnessSection, LogSection, PolicyAction, PromptFidelity,
     RenderedToolRule, RuleAction, Severity, ShellSetting, wildcard_matches,
+};
+pub use ticket_fields::{
+    CALLER_CONDITION, Cond, EnumValue, FieldDecl, FieldLevel, FieldType, ISSUE_CONTEXT_KEYS, Place,
+    TicketFieldsConfig, WhenEntry,
 };
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
@@ -1210,6 +1215,8 @@ pub struct TicketConfig {
     /// Which tickets `devkit todo sync` brings into the todo store, and the
     /// todo status each tracker status maps to.
     pub sync: TicketSyncConfig,
+    /// The fields `ticket create` and `ticket edit` write, per tracker.
+    pub fields: TicketFieldsConfig,
 }
 
 /// `[ticket.sync]`: the tickets `devkit todo sync` brings in as todos on the
@@ -1909,17 +1916,23 @@ fn default_stray_scan_width() -> u16 {
 /// slack  = "U0XXXXXXXXX"
 /// github = "alice-gh"
 /// # "#).unwrap();
-/// # assert_eq!(cfg.people["alice"].slack, "U0XXXXXXXXX");
+/// # assert_eq!(cfg.people["alice"].slack.as_deref(), Some("U0XXXXXXXXX"));
 /// # assert_eq!(cfg.people["alice"].github.as_deref(), Some("alice-gh"));
 /// ```
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct Person {
-    /// Slack user or channel id, e.g. `U0XXXXXXXXX`.
-    pub slack: String,
+    /// Slack user or channel id, e.g. `U0XXXXXXXXX`. Omit it for a person
+    /// with tracker accounts only; `pr review` then cannot notify them.
+    #[serde(default)]
+    pub slack: Option<String>,
     /// GitHub login requested as the PR reviewer when this alias is passed to
-    /// `pr review request --to`. Omit and the alias only gets Slacked.
+    /// `pr review request --to`, and written for a `user` ticket field on
+    /// GitHub. Omit and the alias only gets Slacked.
     #[serde(default)]
     pub github: Option<String>,
+    /// Linear user id, written for a `user` ticket field on Linear.
+    #[serde(default)]
+    pub linear: Option<String>,
 }
 
 /// A file written into an app's directory during `workspace setup`, before the
@@ -3097,6 +3110,7 @@ pub(crate) fn resolve_with_home(
         format!("deserializing merged devkit config ({})", layers.join(", "))
     })?;
     reject_reserved_variables(&cfg, &origin)?;
+    reject_invalid_fields(&cfg, &origin)?;
     reject_never_without_default(&cfg, &origin)?;
     resolve_defaults(&mut cfg, &origin, checkout_root, default_worktree_root)?;
     Ok((cfg, Provenance {
@@ -3158,6 +3172,49 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
         );
     }
     Ok(())
+}
+
+/// Refuse a `[ticket.fields]` declaration no write could honour. With
+/// `[tracker] kind` set, its table is checked in full and the other skipped.
+/// Unset, the tracker in use is detected only later, from secrets and
+/// remotes, so either table may be the unused tracker's: both get the checks
+/// that hold whichever tracker is in use, and a field lacking `type` or
+/// `where` waits for [`check_ticket_fields`].
+fn reject_invalid_fields(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
+    if let Some(kind) = cfg.tracker.kind {
+        return check_ticket_fields(cfg, kind, origin);
+    }
+    for kind in [TrackerKind::Github, TrackerKind::Linear] {
+        validate_field_table(cfg, kind, origin, false)?;
+    }
+    Ok(())
+}
+
+/// Refuse a declaration in `kind`'s `[ticket.fields]` table that no write
+/// could honour, once `kind` is known to be the tracker in use. `origin` is
+/// [`Provenance::origin`], which names the layer behind each refusal.
+pub fn check_ticket_fields(
+    cfg: &Config,
+    kind: TrackerKind,
+    origin: &HashMap<String, PathBuf>,
+) -> Result<()> {
+    validate_field_table(cfg, kind, origin, true)
+}
+
+fn validate_field_table(
+    cfg: &Config,
+    kind: TrackerKind,
+    origin: &HashMap<String, PathBuf>,
+    in_use: bool,
+) -> Result<()> {
+    let variables = cfg.templates.declared();
+    let cx = ticket_fields::FieldContext {
+        status_field: cfg.github.status_field(),
+        github_project: cfg.github.project.is_some(),
+        template_variables: &variables,
+        origin,
+    };
+    ticket_fields::validate(kind, cfg.ticket.fields.for_tracker(kind), &cx, in_use)
 }
 
 /// Refuse `required = "never"` on a variable with no default. The derived rule
@@ -3911,7 +3968,7 @@ github = "exampleuser"
         let c = Config::parse(src).unwrap();
         assert_eq!(c.defaults.pr_base, "staging");
         let igor = c.people.get("igor").unwrap();
-        assert_eq!(igor.slack, "U0XXXXXXXXX");
+        assert_eq!(igor.slack.as_deref(), Some("U0XXXXXXXXX"));
         assert_eq!(igor.github.as_deref(), Some("exampleuser"));
     }
     #[test]
@@ -5352,5 +5409,253 @@ steps = [
     fn issue_event_display_matches_the_config_spelling() {
         assert_eq!(IssueEvent::PrOpen.to_string(), "pr_open");
         assert_eq!(IssueEvent::Start.to_string(), "start");
+    }
+
+    /// Resolve `repo` as a root repository layer under the home layer
+    /// `home.toml`, with the error flattened to one line of its causes.
+    fn field_load(home: Option<&str>, repo: &str) -> Result<(Config, Provenance)> {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("repo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let home_path = root.path().join("home.toml");
+        if let Some(h) = home {
+            std::fs::write(&home_path, h).unwrap();
+        }
+        std::fs::write(dir.join("devkit.toml"), repo).unwrap();
+        let home_arg = home.map(|_| home_path.as_path());
+        resolve_with_home(None, &dir, None, None, home_arg, None)
+            .map_err(|e| anyhow::anyhow!("{e:#}"))
+    }
+
+    fn field_error(home: Option<&str>, repo: &str) -> String {
+        field_load(home, repo).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn a_status_place_is_refused_pointing_at_ticket_events() {
+        let linear = field_error(
+            None,
+            "[ticket.fields.linear.status]\ntype = \"enum\"\nwhere = \"state\"\n",
+        );
+        assert!(
+            linear.contains("[ticket.events]") && linear.contains("status"),
+            "{linear}"
+        );
+        let github = field_error(
+            None,
+            "[ticket.fields.github.stage]\ntype = \"enum\"\nvalues = [{ name = \"Todo\", id = \"t\" }]\n\
+             where = { project_field = \"PVTSSF_s\", name = \"status\" }\n",
+        );
+        assert!(
+            github.contains("[ticket.events]") && github.contains("stage"),
+            "{github}"
+        );
+    }
+
+    #[test]
+    fn an_enum_that_can_reach_error_needs_values() {
+        let e = field_error(
+            None,
+            "[ticket.fields.github.size]\ntype = \"enum\"\nlevel = \"info\"\n\
+             where = { project_field = \"PVTSSF_z\", name = \"Size\" }\n\
+             when = [{ if = { caller = \"agent\" }, level = \"error\" }]\n",
+        );
+        assert!(e.contains("size") && e.contains("values"), "{e}");
+    }
+
+    #[test]
+    fn a_merged_declaration_without_type_names_the_layer_of_its_level() {
+        let e = field_error(
+            Some("[ticket.fields.github.priority]\nlevel = \"error\"\n"),
+            "[tracker]\nkind = \"github\"\n",
+        );
+        assert!(
+            e.contains("priority") && e.contains("`type`") && e.contains("home.toml"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn two_fields_with_one_place_are_refused() {
+        let e = field_error(
+            None,
+            "[ticket.fields.github.area]\ntype = \"string\"\nlist = true\nwhere = \"labels\"\n\
+             [ticket.fields.github.kind]\ntype = \"string\"\nlist = true\nwhere = \"labels\"\n",
+        );
+        assert!(
+            e.contains("area") && e.contains("kind") && e.contains("labels"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_condition_on_an_undeclared_field_is_refused() {
+        let e = field_error(
+            None,
+            "[ticket.fields.github.milestone]\ntype = \"string\"\nwhere = \"milestone\"\n\
+             when = [{ if = { project = \"*\" }, level = \"warning\" }]\n",
+        );
+        assert!(e.contains("milestone") && e.contains("`project`"), "{e}");
+    }
+
+    #[test]
+    fn a_place_from_the_other_tracker_is_refused() {
+        let e = field_error(
+            None,
+            "[ticket.fields.github.cycle]\ntype = \"string\"\nwhere = \"cycle\"\n",
+        );
+        assert!(e.contains("cycle") && e.contains("github"), "{e}");
+    }
+
+    #[test]
+    fn a_field_named_like_a_template_variable_or_context_key_is_refused() {
+        let var = field_error(
+            None,
+            "[templates.variables]\npriority = { description = \"p\" }\n\
+             [ticket.fields.github.priority]\ntype = \"string\"\nwhere = \"milestone\"\n",
+        );
+        assert!(
+            var.contains("priority") && var.contains("[templates.variables]"),
+            "{var}"
+        );
+        for reserved in ["issue_title", "caller"] {
+            let e = field_error(
+                None,
+                &format!(
+                    "[ticket.fields.github.{reserved}]\ntype = \"string\"\nwhere = \"milestone\"\n"
+                ),
+            );
+            assert!(e.contains(reserved) && e.contains("Rename"), "{e}");
+        }
+    }
+
+    #[test]
+    fn values_replace_whole_across_layers() {
+        let cfg = field_load(
+            Some(
+                "[ticket.fields.github.priority]\nvalues = [{ name = \"P0\", id = \"a\" }, \
+                 { name = \"P1\", id = \"b\" }, { name = \"P2\", id = \"c\" }]\nlevel = \"warning\"\n",
+            ),
+            "[ticket.fields.github.priority]\ntype = \"enum\"\n\
+             where = { project_field = \"PVTSSF_p\", name = \"Priority\" }\n\
+             values = [{ name = \"High\", id = \"h\" }, { name = \"Low\", id = \"l\" }]\n",
+        )
+        .unwrap()
+        .0;
+        let p = &cfg.ticket.fields.github["priority"];
+        let names: Vec<&str> = p.values.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["High", "Low"]);
+        assert_eq!(p.level, FieldLevel::Warning);
+    }
+
+    #[test]
+    fn a_person_may_omit_slack() {
+        let cfg = Config::parse("[people.lev]\ngithub = \"AbysmalBiscuit\"\n").unwrap();
+        assert_eq!(cfg.people["lev"].slack, None);
+        assert_eq!(cfg.people["lev"].github.as_deref(), Some("AbysmalBiscuit"));
+    }
+
+    #[test]
+    fn levels_for_an_unused_tracker_do_not_fail_load() {
+        let (cfg, prov) = field_load(
+            Some("[ticket.fields.linear.team]\nlevel = \"error\"\n"),
+            "[defaults]\n",
+        )
+        .unwrap();
+        check_ticket_fields(&cfg, TrackerKind::Github, &prov.origin).unwrap();
+        let e = format!(
+            "{:#}",
+            check_ticket_fields(&cfg, TrackerKind::Linear, &prov.origin).unwrap_err()
+        );
+        assert!(
+            e.contains("[ticket.fields.linear.team]")
+                && e.contains("`type` and `where`")
+                && e.contains("home.toml"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn checks_that_hold_for_either_tracker_run_without_a_kind() {
+        let e = field_error(
+            Some(
+                "[ticket.fields.linear.team]\nlevel = \"error\"\nwhen = [{ if = { nope = \"*\" }, level = \"none\" }]\n",
+            ),
+            "[defaults]\n",
+        );
+        assert!(e.contains("nope") && e.contains("not a declared"), "{e}");
+    }
+
+    #[test]
+    fn a_github_field_no_write_could_honour_is_refused_naming_it() {
+        let project = "[github]\nproject = \"o/1\"\n";
+        for (name, decl, extra, says) in [
+            (
+                "board",
+                "type = \"string\"\nwhere = \"project\"",
+                "",
+                "[github] project",
+            ),
+            (
+                "size",
+                "type = \"number\"\nwhere = { project_field = \"PVTF_s\", name = \"Size\" }",
+                "",
+                "[github] project",
+            ),
+            (
+                "owner",
+                "type = \"user\"\nwhere = { project_field = \"PVTF_o\", name = \"Owner\" }",
+                project,
+                "type = \"user\"",
+            ),
+            (
+                "epic",
+                "type = \"issue\"\nwhere = { project_field = \"PVTF_e\", name = \"Epic\" }",
+                project,
+                "type = \"issue\"",
+            ),
+            (
+                "parent",
+                "type = \"string\"\nwhere = \"parent\"",
+                "",
+                "`issue`",
+            ),
+            (
+                "blockers",
+                "type = \"number\"\nlist = true\nwhere = \"blocked_by\"",
+                "",
+                "`issue`",
+            ),
+        ] {
+            let e = field_error(
+                None,
+                &format!(
+                    "[tracker]\nkind = \"github\"\n{extra}[ticket.fields.github.{name}]\n{decl}\n"
+                ),
+            );
+            assert!(
+                e.contains(&format!("[ticket.fields.github.{name}]")) && e.contains(says),
+                "{name}: {e}"
+            );
+        }
+        let (cfg, prov) = field_load(
+            None,
+            "[ticket.fields.github.parent]\ntype = \"string\"\nwhere = \"parent\"\n",
+        )
+        .unwrap();
+        let e = format!(
+            "{:#}",
+            check_ticket_fields(&cfg, TrackerKind::Github, &prov.origin).unwrap_err()
+        );
+        assert!(e.contains("[ticket.fields.github.parent]"), "{e}");
+    }
+
+    #[test]
+    fn a_table_of_another_configured_tracker_is_not_checked() {
+        field_load(
+            Some("[ticket.fields.linear.team]\nlevel = \"error\"\n"),
+            "[tracker]\nkind = \"github\"\n",
+        )
+        .unwrap();
     }
 }

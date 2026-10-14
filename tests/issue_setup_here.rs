@@ -365,3 +365,23 @@ fn setup_with_no_gitignore_leaves_the_global_excludes_alone() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!fake.state().join("git/ignore").exists());
 }
+
+#[test]
+fn pr_status_finds_a_primary_checkout_by_the_issue_setup_here_bound() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let out = fake.devkit_here(&["pr", "status", "--json", "--cache-only", "7"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    let row: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(row["issue_id"], "7", "{row}");
+    assert_eq!(row["branch"], "lev/eng-1-fix", "{row}");
+    assert_eq!(
+        Path::new(row["worktree"].as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        fake.project().canonicalize().unwrap()
+    );
+}

@@ -46,7 +46,10 @@ pub(crate) fn targets_from_logins(
     let mut warnings = Vec::new();
     for login in logins {
         match person_by_login(login, people) {
-            Some((alias, p)) => targets.push(target_from_person(alias, p)),
+            Some((alias, p)) => match target_from_person(alias, p) {
+                Ok(t) => targets.push(t),
+                Err(e) => warnings.push(format!("reviewer `{login}`: {e}; skipped")),
+            },
             None => warnings.push(format!("reviewer `{login}` has no [people] alias; skipped")),
         }
     }
@@ -275,8 +278,9 @@ mod tests {
 
         use devkit_config::Person;
         let people = HashMap::from([("lev".to_string(), Person {
-            slack: "U_LEV".into(),
+            slack: Some("U_LEV".into()),
             github: Some("LevValle".into()),
+            linear: None,
         })]);
         let (targets, warnings) =
             targets_from_logins(&["levvalle".into(), "ghost".into()], &people);

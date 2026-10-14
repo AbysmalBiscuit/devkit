@@ -53,14 +53,19 @@ pub(crate) fn action_for(pr_state: Option<&str>) -> PrAction {
     }
 }
 
-/// Build a `Target` from a `[people]` alias and its entry.
-pub(crate) fn target_from_person(alias: &str, p: &Person) -> Target {
-    Target {
-        channel: p.slack.clone(),
+/// Build a `Target` from a `[people]` alias and its entry, which needs a
+/// Slack id to notify.
+pub(crate) fn target_from_person(alias: &str, p: &Person) -> Result<Target> {
+    let slack = p
+        .slack
+        .clone()
+        .with_context(|| format!("`[people.{alias}]` has no `slack` id to notify"))?;
+    Ok(Target {
+        channel: slack.clone(),
         name: alias.to_string(),
-        slack_id: Some(p.slack.clone()),
+        slack_id: Some(slack),
         github: p.github.clone(),
-    }
+    })
 }
 
 /// Classify one `--to` value. `#…` is a channel (Slack-only); anything else
@@ -77,7 +82,7 @@ pub(crate) fn resolve_target(value: &str, people: &HashMap<String, Person>) -> R
     let p = people.get(value).with_context(|| {
         format!("unknown person alias `{value}` — add it under [people] in devkit.toml, or use `#channel`")
     })?;
-    Ok(target_from_person(value, p))
+    target_from_person(value, p)
 }
 
 /// Find the `[people]` alias + entry whose github login matches
@@ -257,8 +262,9 @@ mod tests {
 
     fn person(slack: &str, gh: Option<&str>) -> Person {
         Person {
-            slack: slack.into(),
+            slack: Some(slack.into()),
             github: gh.map(String::from),
+            linear: None,
         }
     }
     fn people() -> HashMap<String, Person> {
@@ -312,6 +318,18 @@ mod tests {
         assert_eq!(lev.github.as_deref(), Some("LevValle"));
 
         assert!(resolve_target("nobody", &p).is_err());
+
+        let mut p = p;
+        p.insert("tracker_only".into(), Person {
+            slack: None,
+            github: Some("t".into()),
+            linear: None,
+        });
+        let e = resolve_target("tracker_only", &p).unwrap_err().to_string();
+        assert!(
+            e.contains("[people.tracker_only]") && e.contains("slack"),
+            "{e}"
+        );
     }
 
     #[test]

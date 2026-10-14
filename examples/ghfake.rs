@@ -12,9 +12,13 @@
 //! A `refuse_graphql` file there makes every GraphQL-backed verb fail with
 //! HTTP 403, as the Claude Code cloud proxy does, while `gh api` REST calls
 //! still answer. A non-empty file is the stderr that failure prints. A
-//! `create_error.txt` there makes `gh pr create` and the REST create fail with
-//! its contents on stderr, and a `list_error.txt` makes `gh pr list` fail the
-//! same way.
+//! `create_error.txt` there makes `gh pr create`, `gh issue create` and the
+//! REST create fail with its contents on stderr, and a `list_error.txt` makes
+//! `gh pr list` fail the same way.
+//!
+//! A query answers from `graphql.json` and a mutation from
+//! `graphql_mutation.json`, unless a `graphql_<n>.json` or
+//! `graphql_mutation_<n>.json` answers the n-th call of its kind.
 //!
 //! `pr create`, `pr edit` and a REST `PATCH` of a pull request each keep the
 //! argument vector they were handed in `pr_create.args`, `pr_edit.args` and
@@ -54,6 +58,19 @@ fn succeeds_silently(args: &str) -> bool {
 
 fn read_or(dir: &Path, file: &str, fallback: &str) -> String {
     std::fs::read_to_string(dir.join(file)).unwrap_or_else(|_| fallback.to_string())
+}
+
+/// The 1-based number of this `kind` of GraphQL call, counted in a file
+/// beside the answers.
+fn next_count(dir: &Path, kind: &str) -> u64 {
+    let counter = dir.join(format!("{kind}.count"));
+    let n = read_or(dir, &format!("{kind}.count"), "0")
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(0)
+        + 1;
+    let _ = std::fs::write(counter, n.to_string());
+    n
 }
 
 fn uses_graphql(args: &str) -> bool {
@@ -178,7 +195,7 @@ fn main() {
         }
         std::process::exit(1);
     }
-    if joined.starts_with("pr create") {
+    if joined.starts_with("pr create") || joined.starts_with("issue create") {
         fail_create(&dir);
     }
     if joined.starts_with("pr list")
@@ -192,12 +209,18 @@ fn main() {
         return;
     }
     if joined.starts_with("api graphql") {
-        let file = if joined.contains("query=mutation") {
-            "graphql_mutation.json"
+        let kind = if joined.contains("query=mutation") {
+            "graphql_mutation"
         } else {
-            "graphql.json"
+            "graphql"
         };
-        match std::fs::read_to_string(dir.join(file)) {
+        let nth = dir.join(format!("{kind}_{}.json", next_count(&dir, kind)));
+        let file = if nth.exists() {
+            nth
+        } else {
+            dir.join(format!("{kind}.json"))
+        };
+        match std::fs::read_to_string(file) {
             Ok(answer) => print!("{answer}"),
             Err(_) => std::process::exit(1),
         }

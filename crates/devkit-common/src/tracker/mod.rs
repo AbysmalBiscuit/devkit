@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;
 pub mod github;
+pub mod github_fields;
 pub mod github_status;
 pub mod github_tickets;
 pub mod linear;

@@ -36,9 +36,9 @@ pub(crate) fn resolve_pr(branch_pr: Option<u64>) -> Result<u64> {
 
 /// Build the PR-author Slack target via reverse lookup.
 pub(crate) fn author_target(login: &str, people: &HashMap<String, Person>) -> Result<Target> {
-    person_by_login(login, people)
-        .map(|(alias, p)| target_from_person(alias, p))
-        .with_context(|| format!("PR author `{login}` has no [people] alias; pass --to"))
+    let (alias, p) = person_by_login(login, people)
+        .with_context(|| format!("PR author `{login}` has no [people] alias; pass --to"))?;
+    target_from_person(alias, p)
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -153,8 +153,9 @@ mod tests {
     #[test]
     fn author_target_reverse_looks_up_or_errors() {
         let people = HashMap::from([("lev".to_string(), Person {
-            slack: "U_LEV".into(),
+            slack: Some("U_LEV".into()),
             github: Some("LevValle".into()),
+            linear: None,
         })]);
         let t = author_target("levvalle", &people).unwrap();
         assert_eq!(t.name, "lev");

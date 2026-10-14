@@ -150,20 +150,25 @@ pub fn parse_status(resp: &Value, field: &str) -> Result<StatusRead> {
 }
 
 /// The error for a token without Projects access, naming the remedy for
-/// where the token came from. `None` when `resp` reports no such error.
-pub fn scope_error(resp: &Value, source: TokenSource) -> Option<anyhow::Error> {
-    let insufficient = resp["errors"]
-        .as_array()?
-        .iter()
-        .any(|e| e["type"].as_str() == Some("INSUFFICIENT_SCOPES"));
-    insufficient.then(|| match source {
+/// where the token came from.
+pub fn scope_remedy(source: TokenSource) -> anyhow::Error {
+    match source {
         TokenSource::Env(var) => anyhow!(
             "the GitHub token in {var} lacks the `project` scope; reissue {var} with `project`"
         ),
         TokenSource::Gh | TokenSource::None => {
             anyhow!("the GitHub token lacks the `project` scope; run `gh auth refresh -s project`")
         }
-    })
+    }
+}
+
+/// [`scope_remedy`] when `resp` reports missing scopes, else `None`.
+pub fn scope_error(resp: &Value, source: TokenSource) -> Option<anyhow::Error> {
+    let insufficient = resp["errors"]
+        .as_array()?
+        .iter()
+        .any(|e| e["type"].as_str() == Some("INSUFFICIENT_SCOPES"));
+    insufficient.then(|| scope_remedy(source))
 }
 
 /// Fail on a response's errors: a scope error with its remedy, or any error

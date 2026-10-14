@@ -207,7 +207,8 @@ github = "sweeper[bot]"
         self.serve_pr(pr);
     }
 
-    /// Make `gh pr create` and the REST create fail with `stderr`.
+    /// Make `gh pr create`, `gh issue create` and the REST create fail with
+    /// `stderr`.
     pub fn create_fails(&self, stderr: &str) {
         std::fs::write(self.bin.path().join("create_error.txt"), stderr)
             .expect("write create error");
@@ -273,6 +274,23 @@ github = "sweeper[bot]"
     /// fails the call.
     pub fn serve_graphql(&self, body: &str) {
         std::fs::write(self.bin.path().join("graphql.json"), body).expect("write graphql answer");
+    }
+
+    /// Answer the `n`-th `gh api graphql` query (from 1) with `body`, ahead of
+    /// [`Fake::serve_graphql`].
+    pub fn serve_graphql_nth(&self, n: u64, body: &str) {
+        std::fs::write(self.bin.path().join(format!("graphql_{n}.json")), body)
+            .expect("write graphql answer");
+    }
+
+    /// Answer the `n`-th `gh api graphql` mutation (from 1) with `body`, ahead
+    /// of [`Fake::serve_mutation`].
+    pub fn serve_mutation_nth(&self, n: u64, body: &str) {
+        std::fs::write(
+            self.bin.path().join(format!("graphql_mutation_{n}.json")),
+            body,
+        )
+        .expect("write mutation answer");
     }
 
     /// Answer every `gh api graphql` mutation with `body`. Without one the

@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use devkit::completions::Shell;
 
-use crate::template::VarArgs;
+use crate::template::{FieldArgs, VarArgs};
 
 pub(crate) mod checkout;
 mod create;
@@ -12,6 +12,8 @@ mod dashboard;
 mod edit;
 mod end;
 mod event;
+mod field_write;
+mod fields;
 mod hooks;
 mod info;
 mod info_cache;
@@ -255,7 +257,13 @@ pub(crate) enum TicketCmd {
         #[command(flatten)]
         vars: VarArgs,
     },
-    /// Create a GitHub issue from the issue templates.
+    /// Create a GitHub issue from the issue templates, with its fields.
+    ///
+    /// Each declared field (`ticket fields` lists them) is passed as
+    /// `--arg <field>=<value>` or marked empty with `--none <field>`. A missing
+    /// `error` field or an invalid value refuses before anything is written.
+    /// Every field written is read back; a field that did not take is named
+    /// after the URL, to fix with `ticket edit`, and the command fails.
     Create {
         /// Issue title, the `input` of the `ticket_title` template.
         #[arg(long)]
@@ -265,11 +273,17 @@ pub(crate) enum TicketCmd {
         body: Option<String>,
         #[command(flatten)]
         vars: VarArgs,
+        #[command(flatten)]
+        fields: FieldArgs,
     },
-    /// Rewrite a GitHub issue's body (and title) from the issue templates.
+    /// Rewrite a GitHub issue's body, title or declared fields.
     ///
-    /// Without `--title` the issue keeps its current title, which the
-    /// `ticket_body` template reads as `ticket_title` and `issue_title`.
+    /// `--body` and `--title` render the issue templates. Without `--title`
+    /// the issue keeps its current title, which the `ticket_body` template
+    /// reads as `ticket_title` and `issue_title`. Each field `--arg` sets
+    /// exactly that field (a list to exactly the values given), `--none`
+    /// clears one, and fields not named are left alone. With only field args
+    /// the title and body are left alone.
     Edit {
         /// Issue number or issue URL.
         issue: String,
@@ -278,7 +292,22 @@ pub(crate) enum TicketCmd {
         title: Option<String>,
         /// New issue body, the `input` of the `ticket_body` template.
         #[arg(long)]
-        body: String,
+        body: Option<String>,
+        #[command(flatten)]
+        vars: VarArgs,
+        #[command(flatten)]
+        fields: FieldArgs,
+    },
+    /// List the ticket fields this repository declares for its tracker.
+    ///
+    /// Each field shows its type, its level for this caller and the --arg
+    /// values given (error refuses a ticket without it, warning reports it),
+    /// its values, default and description. A field whose level and every
+    /// `when` entry are `none` is left out. Reads config only.
+    Fields {
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
         #[command(flatten)]
         vars: VarArgs,
     },
@@ -726,6 +755,7 @@ fn github_only(
             kind.as_str()
         );
     }
+    devkit_config::check_ticket_fields(&cfg, kind, &sel.origin)?;
     Ok((sel, cfg))
 }
 
@@ -759,10 +789,16 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             dir,
             config,
         }),
-        TicketCmd::Create { title, body, vars } => create::run(create::CreateArgs {
+        TicketCmd::Create {
             title,
             body,
             vars,
+            fields,
+        } => create::run(create::CreateArgs {
+            title,
+            body,
+            vars,
+            fields,
             dir,
             config,
         }),
@@ -771,10 +807,18 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             title,
             body,
             vars,
+            fields,
         } => edit::run(edit::EditArgs {
             issue,
             title,
             body,
+            vars,
+            fields,
+            dir,
+            config,
+        }),
+        TicketCmd::Fields { json, vars } => fields::run(fields::FieldsArgs {
+            json,
             vars,
             dir,
             config,

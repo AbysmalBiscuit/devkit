@@ -2,23 +2,29 @@
 //! `ticket_body` templates, printed for a tracker MCP call, with a receipt per
 //! field the pre-tool-use hook checks that call against.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    path::{Path, PathBuf},
+};
 
-use anyhow::{Result, bail};
-use devkit_common::{caller::Caller, required::Missing};
-use devkit_config::Config;
+use anyhow::{Result, anyhow, bail};
+use devkit_common::{
+    caller::Caller,
+    fields::{self, Given, Resolved},
+    required::Missing,
+};
+/// The names the issue templates' render contexts supply, which no `--arg`
+/// can. `the_issue_context_keys_match_what_render_builds` holds them against
+/// the contexts.
+pub(crate) use devkit_config::ISSUE_CONTEXT_KEYS;
+use devkit_config::{Config, FieldDecl, TrackerKind};
 use serde::Serialize;
 
 use super::{
     receipt,
-    review::{missing_required, parse_args, render_review, with_fields},
+    review::{missing_required, render_review, with_fields},
 };
-use crate::template::VarArgs;
-
-/// The names the issue templates' render contexts supply, which no `--arg`
-/// can. `the_issue_context_keys_match_what_render_builds` holds them against
-/// the contexts.
-pub(crate) const ISSUE_CONTEXT_KEYS: &[&str] = &["input", "ticket_title", "issue_title"];
+use crate::template::{FieldArgs, VarArgs};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Rendered {
@@ -36,20 +42,40 @@ pub(crate) enum Title<'a> {
     Kept(&'a str),
 }
 
-/// The required args the issue templates rendered for `title` read that
-/// `given` does not supply.
+/// The required args the issue templates rendered for `title`, and for the
+/// body when `body`, read that `given` does not supply.
 pub(crate) fn missing(
     cfg: &Config,
     title: Title<'_>,
+    body: bool,
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<Vec<Missing>> {
+    missing_required(
+        cfg,
+        &rendered_templates(cfg, matches!(title, Title::Input(_)), body),
+        ISSUE_CONTEXT_KEYS,
+        given,
+        caller,
+    )
+}
+
+/// The names the issue templates read: the title template when `title`, and
+/// the body template when `body`.
+pub(crate) fn reads(cfg: &Config, title: bool, body: bool) -> Result<BTreeSet<String>> {
+    devkit_common::template::undeclared(&rendered_templates(cfg, title, body))
+}
+
+fn rendered_templates(cfg: &Config, title: bool, body: bool) -> Vec<&str> {
     let tmpls = &cfg.templates;
-    let rendered: &[&str] = match title {
-        Title::Input(_) => &[tmpls.ticket_title(), tmpls.ticket_body()],
-        Title::Kept(_) => &[tmpls.ticket_body()],
-    };
-    missing_required(cfg, rendered, ISSUE_CONTEXT_KEYS, given, caller)
+    let mut rendered = Vec::new();
+    if title {
+        rendered.push(tmpls.ticket_title());
+    }
+    if body {
+        rendered.push(tmpls.ticket_body());
+    }
+    rendered
 }
 
 fn title_context(title: &str) -> serde_json::Value {
@@ -67,21 +93,114 @@ fn body_context(body: &str, rendered_title: &str) -> serde_json::Value {
     ])
 }
 
+/// The tracker in use, `[tracker] kind` or else the one detected, and its
+/// `[ticket.fields]` table, checked in full. `origin` names the layers for
+/// that check.
+pub(crate) fn tracker_fields<'a>(
+    cfg: &'a Config,
+    origin: &HashMap<String, PathBuf>,
+    config: Option<&str>,
+    start: &str,
+) -> Result<(TrackerKind, &'a BTreeMap<String, FieldDecl>)> {
+    let kind = cfg.tracker.kind.unwrap_or_else(|| {
+        devkit_common::tracker::select(config.map(Path::new), start, None)
+            .tracker
+            .tracker
+            .kind()
+    });
+    devkit_config::check_ticket_fields(cfg, kind, origin)?;
+    Ok((kind, cfg.ticket.fields.for_tracker(kind)))
+}
+
+/// A ticket verb's `--arg`s, split into template variables and ticket fields.
+pub(crate) struct TicketArgs {
+    pub template: BTreeMap<String, String>,
+    pub fields: Given,
+}
+
+/// Split `--arg`s between `[templates.variables]` and the declared fields,
+/// refusing a name that is neither and a `--none` naming no field.
+pub(crate) fn ticket_args(
+    cfg: &Config,
+    vars: &VarArgs,
+    nones: &FieldArgs,
+    decls: &BTreeMap<String, FieldDecl>,
+) -> Result<TicketArgs> {
+    let declared = cfg.templates.declared();
+    let mut out = TicketArgs {
+        template: BTreeMap::new(),
+        fields: Given::default(),
+    };
+    for (k, v) in vars.parse()? {
+        if decls.contains_key(&k) {
+            out.fields.values.insert(k, v);
+        } else if declared.contains(&k) {
+            out.template.insert(k, v);
+        } else {
+            bail!("--arg `{k}` is not declared in [templates.variables] or [ticket.fields]");
+        }
+    }
+    for name in &nones.none {
+        if !decls.contains_key(name) {
+            bail!("`--none {name}` names no declared ticket field in [ticket.fields]");
+        }
+        out.fields.nones.insert(name.clone());
+    }
+    Ok(out)
+}
+
+/// Validate `given` against the declarations, refusing with every problem.
+pub(crate) fn resolve_fields(
+    cfg: &Config,
+    kind: TrackerKind,
+    decls: &BTreeMap<String, FieldDecl>,
+    given: &Given,
+) -> Result<Resolved> {
+    let team = fields::team(decls, given);
+    fields::resolve(decls, kind, given, &cfg.people, team.as_deref())
+        .map_err(|problems| anyhow!("{}", fields::message(decls, &problems)))
+}
+
+/// Each declared field as the templates read it: its values' names joined
+/// by `, `, or the empty string when it has none.
+pub(crate) fn shown(
+    decls: &BTreeMap<String, FieldDecl>,
+    resolved: &Resolved,
+) -> BTreeMap<String, String> {
+    decls
+        .keys()
+        .map(|name| {
+            let text = resolved
+                .fields
+                .get(name)
+                .map(|vs| vs.iter().map(|v| v.name()).collect::<Vec<_>>().join(", "))
+                .unwrap_or_default();
+            (name.clone(), text)
+        })
+        .collect()
+}
+
 /// Refuse on a missing required arg, naming `surface`, then render the title
-/// and the body.
+/// and, unless `body` is `None`, the body; with `None` the body template is
+/// neither rendered nor asked for, and the body comes back empty. `fields` is
+/// what [`shown`] gives the templates.
 pub(crate) fn render(
     cfg: &Config,
     surface: &str,
     title: Title<'_>,
-    body: &str,
-    vars: &VarArgs,
+    body: Option<&str>,
+    given: &BTreeMap<String, String>,
+    fields: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<Rendered> {
     let tmpls = &cfg.templates;
-    let given = parse_args(vars, &tmpls.declared())?;
-    devkit_common::required::ensure_supplied(surface, &missing(cfg, title, &given, caller)?)?;
+    devkit_common::required::ensure_supplied(
+        surface,
+        &missing(cfg, title, body.is_some(), given, caller)?,
+    )?;
     let mut values = tmpls.defaults();
-    values.extend(given);
+    values.extend(fields.clone());
+    values.extend(given.clone());
 
     let title = match title {
         Title::Input(input) => render_review(
@@ -96,13 +215,16 @@ pub(crate) fn render(
     if title.trim().is_empty() {
         bail!("--title is required: the `ticket_title` template rendered empty");
     }
-    let body = render_review(
-        tmpls.ticket_body(),
-        "ticket_body",
-        &body_context(body, &title),
-        &values,
-        None,
-    )?;
+    let body = match body {
+        Some(body) => render_review(
+            tmpls.ticket_body(),
+            "ticket_body",
+            &body_context(body, &title),
+            &values,
+            None,
+        )?,
+        None => String::new(),
+    };
     Ok(Rendered { title, body })
 }
 
@@ -118,12 +240,22 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
     let start = super::start(&args.dir);
     let loaded =
         devkit_ports::load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
+    let cfg = &loaded.config;
+    let (kind, decls) = tracker_fields(
+        cfg,
+        &loaded.provenance.origin,
+        args.config.as_deref(),
+        &start,
+    )?;
+    let input = ticket_args(cfg, &args.vars, &FieldArgs::default(), decls)?;
+    let resolved = resolve_fields(cfg, kind, decls, &input.fields)?;
     let rendered = render(
-        &loaded.config,
+        cfg,
         "ticket render",
         Title::Input(&args.title),
-        args.body.as_deref().unwrap_or_default(),
-        &args.vars,
+        Some(args.body.as_deref().unwrap_or_default()),
+        &input.template,
+        &shown(decls, &resolved),
         devkit_common::caller::caller(),
     )?;
 
