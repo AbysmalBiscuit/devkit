@@ -3,7 +3,7 @@
 //! field the pre-tool-use hook checks that call against.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -51,15 +51,31 @@ pub(crate) fn missing(
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<Vec<Missing>> {
+    missing_required(
+        cfg,
+        &rendered_templates(cfg, matches!(title, Title::Input(_)), body),
+        ISSUE_CONTEXT_KEYS,
+        given,
+        caller,
+    )
+}
+
+/// The names the issue templates read: the title template when `title`, and
+/// the body template when `body`.
+pub(crate) fn reads(cfg: &Config, title: bool, body: bool) -> Result<BTreeSet<String>> {
+    devkit_common::template::undeclared(&rendered_templates(cfg, title, body))
+}
+
+fn rendered_templates(cfg: &Config, title: bool, body: bool) -> Vec<&str> {
     let tmpls = &cfg.templates;
     let mut rendered = Vec::new();
-    if let Title::Input(_) = title {
+    if title {
         rendered.push(tmpls.ticket_title());
     }
     if body {
         rendered.push(tmpls.ticket_body());
     }
-    missing_required(cfg, &rendered, ISSUE_CONTEXT_KEYS, given, caller)
+    rendered
 }
 
 fn title_context(title: &str) -> serde_json::Value {

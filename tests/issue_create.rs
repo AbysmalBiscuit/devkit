@@ -664,6 +664,18 @@ when  = [{ if = { assignee = "lev" }, level = "warning" }]
 }
 
 #[test]
+fn a_text_only_edit_needs_no_field_read() {
+    let fake = writes_fake();
+    fake.serve_issue("the old body");
+    fake.refuse_graphql();
+    let out = fake.issue_as("agent", &["edit", "7", "--body", "B"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let calls = fake.calls();
+    assert!(calls.contains("issue edit 7 --body B"), "{calls}");
+    assert!(!calls.contains("api graphql"), "{calls}");
+}
+
+#[test]
 fn edit_with_nothing_to_write_is_refused() {
     let fake = writes_fake();
     let out = fake.issue_as("agent", &["edit", "7"]);

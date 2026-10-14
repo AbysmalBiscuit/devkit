@@ -52,10 +52,14 @@ pub(crate) fn run(args: EditArgs) -> Result<()> {
         .parse()
         .with_context(|| format!("`{id}` is not a GitHub issue number"))?;
     let writer = GithubFieldWriter::new(repo.clone(), cfg.github.project.clone(), &start);
-    let before = if decls.is_empty() {
-        None
-    } else {
+    let templates_read_a_field = rewrites_text
+        && render::reads(&cfg, args.title.is_some(), args.body.is_some())?
+            .iter()
+            .any(|n| decls.contains_key(n));
+    let before = if has_fields || templates_read_a_field {
         Some(writer.read(number, decls, Some(&resolved))?)
+    } else {
+        None
     };
     let current = before.as_ref().map(|b| b.current(decls, &cfg.people));
     let report = fields::check(decls, Surface::Edit, &resolved, current.as_ref(), caller);
