@@ -143,8 +143,9 @@ pub fn view<'a>(
 }
 
 /// Whether task `name` is defined in `cfg` as in `committed`: its entry and
-/// each step's, the `[templates.variables]` entries they read, and their
-/// app's `path` and `static_env`. A task [`view`] refuses is never the same.
+/// each step's, the `[templates.variables]` entries they or their app's
+/// `static_env` read, and their app's `path` and `static_env`. A task [`view`]
+/// refuses is never the same.
 pub fn same_definition(
     cfg: &Config,
     committed: &Config,
@@ -172,13 +173,28 @@ pub fn same_definition(
             .get(app)
             .map(|a| (a.path.clone(), a.static_env.clone()))
     };
-    std::iter::once(name).chain(steps).all(|t| {
-        let task = cfg.tasks.get(t);
-        same(task, committed.tasks.get(t))
+    let mut reads = checked.reads.clone();
+    let tasks: Vec<&str> = std::iter::once(name).chain(steps).collect();
+    for t in &tasks {
+        let Some(a) = cfg.tasks.get(*t).and_then(|t| t.app.as_deref()) else {
+            continue;
+        };
+        for c in [cfg, committed] {
+            let Some(app) = c.apps.get(a) else { continue };
+            let templates: Vec<&str> = app.static_env.values().map(String::as_str).collect();
+            match template::undeclared(&templates) {
+                Ok(names) => reads.extend(names),
+                Err(_) => return false,
+            }
+        }
+    }
+    tasks.iter().all(|t| {
+        let task = cfg.tasks.get(*t);
+        same(task, committed.tasks.get(*t))
             && task
                 .and_then(|t| t.app.as_deref())
                 .is_none_or(|a| same(app(cfg, a), app(committed, a)))
-    }) && checked.reads.iter().all(|r| {
+    }) && reads.iter().all(|r| {
         same(
             cfg.templates.variables.get(r),
             committed.templates.variables.get(r),

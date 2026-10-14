@@ -32,6 +32,22 @@ run = ["git", "-c", "alias.bg=!(sleep 3; echo late; echo x > ../marker) & echo n
 
 [tasks.mix]
 run = ["git", "-c", "alias.mix=!echo out1; echo err1 >&2; echo out2; echo err2 >&2; echo out3", "mix"]
+
+[apps.web]
+base_port = 39181
+path = "."
+launch = ["git", "version"]
+static_env = { WEB_TARGET = "{{ target }}" }
+
+[tasks.web]
+app = "web"
+run = ["git", "version"]
+
+[tasks.webs]
+steps = [{ task = "web" }]
+
+[templates.variables]
+target = "staging"
 "#;
 
 /// A repository with one commit, and a state home beside it rather than in it.
@@ -330,6 +346,31 @@ fn a_task_redefined_outside_the_committed_config_never_passes() {
         Some(0),
         "a local layer that leaves the task alone keeps the run clean"
     );
+}
+
+/// A variable default read only by the app's `static_env` still shapes what
+/// the task runs, so a layer outside the committed config that changes it
+/// leaves the run not clean, for the task and for a sequence running it.
+#[test]
+fn a_static_env_variable_redefined_outside_the_committed_config_never_passes() {
+    let f = Fixture::new();
+    let sha = f.head();
+    assert!(f.task("web").status.success());
+    assert_eq!(f.runs()[0]["clean"], true, "{:#}", f.runs()[0]);
+
+    std::fs::write(
+        f.repo.join("devkit.local.toml"),
+        "[templates.variables]\ntarget = \"prod\"\n",
+    )
+    .unwrap();
+    assert!(f.task("web").status.success());
+    assert!(f.task("webs").status.success());
+    let runs = f.runs();
+    assert_eq!(runs.len(), 3, "{runs:#?}");
+    for run in &runs[1..] {
+        assert_eq!(run["clean"], false, "{run:#}");
+    }
+    assert_eq!(f.passed("webs", Some(&sha)).status.code(), Some(1));
 }
 
 #[test]
