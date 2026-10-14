@@ -539,6 +539,33 @@ fn edit_lists_replace() {
 }
 
 #[test]
+fn edit_lists_compare_labels_case_insensitively() {
+    let fake = writes_fake();
+    let labels = issue_read(
+        7,
+        serde_json::json!({ "labels": { "nodes": [{ "name": "Bug" }, { "name": "old" }] } }),
+        serde_json::json!([]),
+    );
+    fake.serve_graphql_nth(1, &labels);
+    fake.serve_graphql_nth(
+        2,
+        &issue_read(
+            7,
+            serde_json::json!({ "labels": { "nodes": [{ "name": "Bug" }] } }),
+            serde_json::json!([]),
+        ),
+    );
+    let out = fake.issue_as("agent", &["edit", "7", "--arg", "labels=bug"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let calls = fake.calls();
+    assert!(calls.contains("issue edit 7 --remove-label old"), "{calls}");
+    assert!(
+        !calls.contains("--add-label") && !calls.contains("--remove-label Bug"),
+        "{calls}"
+    );
+}
+
+#[test]
 fn edit_none_clears_and_refuses_when_not_allowed() {
     let fake = writes_fake();
     let with_milestone = issue_read(

@@ -525,8 +525,18 @@ impl GithubFieldWriter {
         item: &mut Option<String>,
     ) -> Result<()> {
         let have = before.ids(place);
-        let added: Vec<&String> = want.iter().filter(|w| !have.contains(w)).collect();
-        let removed: Vec<&String> = have.iter().filter(|h| !want.contains(h)).collect();
+        let same = |a: &str, b: &str| match place {
+            Place::Labels | Place::Assignees => a.eq_ignore_ascii_case(b),
+            _ => a == b,
+        };
+        let added: Vec<&String> = want
+            .iter()
+            .filter(|w| !have.iter().any(|h| same(h, w)))
+            .collect();
+        let removed: Vec<&String> = have
+            .iter()
+            .filter(|h| !want.iter().any(|w| same(h, w)))
+            .collect();
         match place {
             Place::Labels | Place::Assignees => {
                 let (add, remove) = if *place == Place::Labels {
