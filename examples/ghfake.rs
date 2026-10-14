@@ -146,7 +146,9 @@ fn main() {
         .append(true)
         .open(dir.join("gh.log"))
     {
-        let _ = writeln!(log, "{joined}");
+        // One write per line: concurrent fakes append to the same log, and
+        // `writeln!` on an unbuffered `File` writes the newline separately.
+        let _ = log.write_all(format!("{joined}\n").as_bytes());
     }
 
     // `gh.log` joins with spaces and newlines, which a multi-line body also

@@ -303,9 +303,9 @@ fn respond(
 
     let mut blocks: Vec<String> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
+    let own = devkit_common::shim::OwnBinary::current();
     if commands_on {
         let project = load_project(&checkout, &cwd, rules.app_match.clone());
-        let own = devkit_common::shim::OwnBinary::current();
         let verdict = guard::decide(&analysis, &rules.commands, project.as_ref(), &own);
         blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
         notes.extend(verdict.warnings.into_iter().map(|f| f.message));
@@ -345,7 +345,7 @@ fn respond(
     // A sub-agent's command that would change a todo another holder has in
     // progress is denied, naming the holder.
     if blocks.is_empty()
-        && let Some(reason) = super::todo::check_claims(payload, &analysis, &checkout, &cwd)
+        && let Some(reason) = super::todo::check_claims(payload, &analysis, &own, &checkout, &cwd)
     {
         blocks.push(reason);
     }
@@ -353,7 +353,7 @@ fn respond(
         let rec = shell_record(Decision::Deny, &blocks, &notes);
         return deny(which, &blocks).with(rec);
     }
-    if super::todo::writes_todo(&analysis)
+    if super::todo::writes_todo(&analysis, &own)
         && let Some(text) = super::todo::nudge(payload, &checkout)
     {
         notes.push(text);

@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-const SHIMS: [&str; 8] = [
+const SHIMS: [&str; 9] = [
     "ticket",
     "workspace",
     "issue",
@@ -17,6 +17,7 @@ const SHIMS: [&str; 8] = [
     "lockm",
     "docm",
     "devkit-mcp",
+    "todo",
 ];
 
 /// Retry `attempt` briefly on a transient `ExecutableFileBusy`. `staged()`
@@ -141,15 +142,15 @@ fn creates_no_pr_link() {
     );
 }
 
-/// `ticket` and `workspace` are common enough names that another tool may
-/// already hold them; that tool stays, and the skip is reported.
+/// `ticket`, `workspace` and `todo` are common enough names that another tool
+/// may already hold them; that tool stays, and the skip is reported.
 #[cfg(unix)]
 #[test]
-fn leaves_a_foreign_ticket_and_workspace_alone() {
+fn leaves_a_foreign_ticket_workspace_and_todo_alone() {
     use std::os::unix::fs::PermissionsExt;
     let (dir, exe) = staged();
     let script = b"#!/bin/sh\necho not devkit\n";
-    for name in ["ticket", "workspace"] {
+    for name in ["ticket", "workspace", "todo"] {
         let foreign = shim_path(dir.path(), name);
         std::fs::write(&foreign, script).expect("write foreign binary");
         std::fs::set_permissions(&foreign, std::fs::Permissions::from_mode(0o755))
@@ -161,7 +162,7 @@ fn leaves_a_foreign_ticket_and_workspace_alone() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    for name in ["ticket", "workspace"] {
+    for name in ["ticket", "workspace", "todo"] {
         assert_eq!(
             std::fs::read(shim_path(dir.path(), name)).expect("foreign still readable"),
             script,

@@ -1,6 +1,8 @@
 //! The todo store's side of `devkit hook`: release, claim attribution and
 //! native tool capture, each driven with real payloads on stdin.
 
+#[path = "common/shimtest.rs"]
+mod shimtest;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
@@ -757,4 +759,49 @@ fn attribution_a_claim_check_from_outside_any_repository_reads_the_role_checkout
     let out = p.hook("pre-tool-use", CLAUDE_CODE.harness, &payload);
     let reason = denial(&out).expect("denied");
     assert!(reason.contains("in progress by S/a2"), "{reason}");
+}
+
+/// A search path holding a foreign program named `todo`.
+fn foreign_todo_on_path() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let todo = dir
+        .path()
+        .join(format!("todo{}", std::env::consts::EXE_SUFFIX));
+    std::fs::write(&todo, "#!/bin/sh\n").unwrap();
+    dir
+}
+
+/// `dir` ahead of this process's `PATH`.
+fn path_with(dir: &std::path::Path) -> String {
+    let mut dirs = vec![dir.to_path_buf()];
+    dirs.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(dirs).unwrap().into_string().unwrap()
+}
+
+#[test]
+fn attribution_a_siblings_start_through_the_todo_shim_is_denied() {
+    let p = Proj::new();
+    let id = seed(&p, "a");
+    run_as_sub_agent(&p, CLAUDE_CODE, "a1", &format!("devkit todo start {id}"));
+    let start = format!("todo start {id}");
+    let (own, _) = shimtest::linked("todo");
+    let out = p.hook_with(
+        "pre-tool-use",
+        CLAUDE_CODE.harness,
+        &bash(&p, Some("a2"), &start),
+        &[("PATH", &path_with(own.path()))],
+    );
+    let reason = denial(&out).expect("denied");
+    assert!(reason.contains("in progress by S/a1"), "{reason}");
+
+    let foreign = foreign_todo_on_path();
+    let out = p.hook_with(
+        "pre-tool-use",
+        CLAUDE_CODE.harness,
+        &bash(&p, Some("a2"), &start),
+        &[("PATH", &path_with(foreign.path()))],
+    );
+    assert_eq!(denial(&out), None, "a foreign todo is not devkit's");
 }

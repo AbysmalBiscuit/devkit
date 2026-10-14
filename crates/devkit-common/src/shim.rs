@@ -26,6 +26,7 @@ pub enum Shim {
     Docs,
     Mcp,
     Rules,
+    Todo,
 }
 
 impl Shim {
@@ -41,6 +42,7 @@ impl Shim {
             Shim::Docs => "docm",
             Shim::Mcp => "devkit-mcp",
             Shim::Rules => "devrules",
+            Shim::Todo => "todo",
         }
     }
 
@@ -56,6 +58,7 @@ impl Shim {
             Shim::Docs => "docs",
             Shim::Mcp => "mcp",
             Shim::Rules => "rules",
+            Shim::Todo => "todo",
         }
     }
 
@@ -71,7 +74,8 @@ impl Shim {
             | Shim::Locks
             | Shim::Docs
             | Shim::Mcp
-            | Shim::Rules => false,
+            | Shim::Rules
+            | Shim::Todo => false,
         }
     }
 
