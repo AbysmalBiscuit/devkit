@@ -68,6 +68,7 @@ fn git(p: &Proj, args: &[&str]) {
 fn seed(p: &Proj, node: &str, text: &str) -> String {
     p.store()
         .add(NewTodo {
+            ticket: None,
             project: Some(node.into()),
             description: text.into(),
             parent: None,

@@ -149,6 +149,14 @@ impl TodoStore for BuiltinStore {
 
     fn add(&self, todo: NewTodo) -> Result<String> {
         self.with_doc(|doc| {
+            if let Some(ticket) = &todo.ticket
+                && let Some(existing) = doc
+                    .todos
+                    .values()
+                    .find(|t| t.ticket.as_ref().is_some_and(|t| t.same_ticket(ticket)))
+            {
+                return Ok(existing.id.clone());
+            }
             if let Some(parent) = &todo.parent {
                 doc.todo_mut(parent)?;
             }
@@ -169,6 +177,7 @@ impl TodoStore for BuiltinStore {
                 entry: Some(stamp.clone()),
                 modified: Some(stamp),
                 blocked_by: Vec::new(),
+                ticket: todo.ticket,
             });
             Ok(id)
         })
@@ -236,6 +245,15 @@ impl TodoStore for BuiltinStore {
                 }
                 Edit::Block { id, by } => set_blockers(doc, id, by, true)?,
                 Edit::Unblock { id, by } => set_blockers(doc, id, by, false)?,
+                Edit::RecordSync { id, synced_status } => {
+                    let todo = doc.todo_mut(id)?;
+                    let ticket = todo
+                        .ticket
+                        .as_mut()
+                        .ok_or_else(|| anyhow!("todo {id} has no ticket"))?;
+                    ticket.synced_status = Some(synced_status.clone());
+                    todo.modified = Some(now());
+                }
             }
             Ok(changes)
         })

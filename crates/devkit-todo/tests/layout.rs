@@ -197,6 +197,7 @@ fn manager_visibility_includes_ancestors_and_only_own_session_descendants() {
 fn store_scans_require_anchors_for_open_templates() {
     let layout = Layout::new(&Config::parse("").unwrap().todo).unwrap();
     let todo = |node: &str| devkit_todo::Todo {
+        ticket: None,
         id: node.into(),
         description: node.into(),
         status: devkit_todo::Status::Pending,

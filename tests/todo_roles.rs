@@ -98,6 +98,7 @@ fn manager_listing_includes_only_its_session_descendants() {
     ] {
         p.store()
             .add(NewTodo {
+                ticket: None,
                 project: Some(node.into()),
                 description: text.into(),
                 parent: None,
@@ -168,6 +169,7 @@ parent = "global"
         {
             p.store()
                 .add(NewTodo {
+                    ticket: None,
                     project: Some(node.into()),
                     description: text.into(),
                     parent: None,
@@ -241,6 +243,7 @@ fn scans_use_anchors_outside_the_requested_subtree() {
     ] {
         p.store()
             .add(NewTodo {
+                ticket: None,
                 project: Some(node.into()),
                 description: text.into(),
                 parent: None,
@@ -333,6 +336,7 @@ fn default_sections_follow_scope_ancestry_even_for_a_deep_literal_root() {
     ] {
         p.store()
             .add(NewTodo {
+                ticket: None,
                 project: Some(node.into()),
                 description: text.into(),
                 parent: None,

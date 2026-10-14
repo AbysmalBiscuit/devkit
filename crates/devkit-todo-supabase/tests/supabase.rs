@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use devkit_todo::{Claimed, Edit, Holder, NewTodo, Status, StatusKind, TodoStore};
+use devkit_todo::{Claimed, Edit, Holder, NewTodo, Status, StatusKind, TicketRef, TodoStore};
 use devkit_todo_supabase::{Api, SupabaseStore};
 use testapi::api_url;
 
@@ -68,6 +68,7 @@ fn of_agents_claiming_one_todo_at_once_exactly_one_gets_it() {
     let root = fresh_root();
     let id = open(&url, &root)
         .add(NewTodo {
+            ticket: None,
             project: None,
             description: "contested".into(),
             parent: None,
@@ -125,6 +126,7 @@ fn reads_without_the_blocking_column_list_todos_without_edges() {
     let root = fresh_root();
     let id = open(&url, &root)
         .add(NewTodo {
+            ticket: None,
             project: Some("proj".into()),
             description: "before blocking".into(),
             parent: None,
@@ -177,6 +179,7 @@ impl Drop for RestoresBlockingColumn<'_> {
         }
         let store = open(self.url, self.root);
         let new = |description: &str| NewTodo {
+            ticket: None,
             project: Some("proj".into()),
             description: description.into(),
             parent: None,
@@ -214,6 +217,107 @@ impl Drop for RestoresBlockingColumn<'_> {
     }
 }
 
+/// A database that has not gained the ticket columns still lists, and every
+/// todo reads as standing for no ticket; adding a ticket's todo there fails
+/// naming the schema update. Like the blocking column test, it alters the
+/// shared table, so `.config/nextest.toml` runs it alone.
+#[test]
+fn reads_without_the_ticket_columns_list_todos_without_tickets() {
+    let (Some(url), Some(direct)) = (api_url(), testapi::direct_url()) else {
+        return;
+    };
+    let root = fresh_root();
+    let id = open(&url, &root)
+        .add(NewTodo {
+            ticket: None,
+            project: Some("proj".into()),
+            description: "before tickets".into(),
+            parent: None,
+            order: None,
+        })
+        .unwrap();
+    let _restore = RestoresTicketColumns {
+        url: &url,
+        direct: &direct,
+        root: &root,
+    };
+    execute(
+        &direct,
+        "ALTER TABLE devkit.todos DROP COLUMN ticket_tracker, DROP COLUMN ticket_key,
+             DROP COLUMN ticket_status;
+         NOTIFY pgrst, 'reload schema'",
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let todo = loop {
+        match open(&url, &root).get(&id) {
+            Ok(Some(todo)) => break todo,
+            Ok(None) => panic!("the todo disappeared"),
+            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
+            Err(e) => panic!("PostgREST never served the dropped columns: {e:#}"),
+        }
+    };
+    assert_eq!(todo.ticket, None);
+    assert_eq!(todo.description, "before tickets");
+    let err = open(&url, &root).add(ticket_todo("65")).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("devkit todo schema update"),
+        "{err:#}"
+    );
+}
+
+fn ticket_todo(key: &str) -> NewTodo {
+    NewTodo {
+        project: Some("proj".into()),
+        description: format!("#{key}"),
+        parent: None,
+        order: None,
+        ticket: Some(TicketRef {
+            tracker: "github".into(),
+            key: key.into(),
+            synced_status: None,
+        }),
+    }
+}
+
+/// Puts the ticket columns back, a failed assertion included, and waits
+/// until PostgREST reads a ticket's todo with its ticket.
+struct RestoresTicketColumns<'a> {
+    url: &'a str,
+    direct: &'a str,
+    root: &'a str,
+}
+
+impl Drop for RestoresTicketColumns<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = execute(
+            self.direct,
+            "ALTER TABLE devkit.todos ADD COLUMN IF NOT EXISTS ticket_tracker text,
+                 ADD COLUMN IF NOT EXISTS ticket_key text,
+                 ADD COLUMN IF NOT EXISTS ticket_status text;
+             NOTIFY pgrst, 'reload schema'",
+        ) {
+            eprintln!("restoring the ticket columns: {e:#}");
+            return;
+        }
+        let store = open(self.url, self.root);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let read = store
+                .add(ticket_todo("restored"))
+                .and_then(|id| store.get(&id));
+            match read {
+                Ok(Some(todo)) if todo.ticket.is_some() => return,
+                read if Instant::now() >= deadline => {
+                    eprintln!("PostgREST never served the restored columns: {read:?}");
+                    return;
+                }
+                _ => thread::sleep(Duration::from_millis(100)),
+            }
+        }
+    }
+}
+
 fn execute(direct: &str, sql: &str) -> anyhow::Result<()> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -237,6 +341,7 @@ fn the_api_and_a_direct_connection_share_the_todos() {
     let root = fresh_root();
     let id = open(&url, &root)
         .add(NewTodo {
+            ticket: None,
             project: Some("proj".into()),
             description: "shared".into(),
             parent: None,

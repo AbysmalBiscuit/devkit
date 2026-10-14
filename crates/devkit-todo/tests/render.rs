@@ -8,6 +8,7 @@ use devkit_todo::{
 
 fn todo(id: &str, text: &str, status: Status, blocked_by: &[&str]) -> Todo {
     Todo {
+        ticket: None,
         id: id.into(),
         description: text.into(),
         status,

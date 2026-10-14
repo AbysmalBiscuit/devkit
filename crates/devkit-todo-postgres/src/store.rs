@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use devkit_todo::{
-    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusChange, StatusKind, Todo,
-    TodoStore, activity::stamp, by_prefix, is_uuid_prefix, node::GLOBAL, one_line,
+    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusChange, StatusKind, TicketRef,
+    Todo, TodoStore, activity::stamp, by_prefix, is_uuid_prefix, node::GLOBAL, one_line,
+    ticket_todo_uuid,
 };
 use tokio_postgres::{
     Client, Row,
@@ -12,11 +13,11 @@ use tokio_postgres::{
 
 use crate::{
     Database, PostgresActivity,
-    database::{CLAIMED, UNKNOWN_TODO},
+    database::{CLAIMED, NO_TICKET, UNKNOWN_TODO},
 };
 
 const COLUMNS: &str = "id::text, node, description, status, holder, parent::text, ord, entry, modified, \
-     blocked_by::text[]";
+     blocked_by::text[], ticket_tracker, ticket_key, ticket_status";
 
 /// The columns of a row a todo function returns for each status change.
 const CHANGE: &str = "todo::text, node, from_status, from_holder, to_status, to_holder, at";
@@ -71,6 +72,14 @@ fn todo_of(row: &Row) -> Result<Todo> {
         entry: Some(stamp(row.get(7))),
         modified: Some(stamp(row.get(8))),
         blocked_by: row.get(9),
+        ticket: row
+            .get::<_, Option<String>>(10)
+            .zip(row.get::<_, Option<String>>(11))
+            .map(|(tracker, key)| TicketRef {
+                tracker,
+                key,
+                synced_status: row.get(12),
+            }),
     })
 }
 
@@ -122,7 +131,7 @@ async fn call(db: &Client, sql: &str, params: &Params<'_>) -> Result<Vec<Row>> {
                 by: Holder::new(db.detail().unwrap_or_default()),
             }
             .into(),
-            Some((UNKNOWN_TODO, db)) => anyhow!("{}", db.message()),
+            Some((UNKNOWN_TODO | NO_TICKET, db)) => anyhow!("{}", db.message()),
             _ => e.into(),
         }
     })
@@ -192,16 +201,27 @@ impl TodoStore for PostgresStore {
 
     fn add(&self, todo: NewTodo) -> Result<String> {
         let description = one_line(&todo.description);
+        let ticket = todo.ticket.as_ref();
+        let id = ticket.map(|t| ticket_todo_uuid(&self.root, &t.tracker, &t.key).to_string());
+        let (tracker, key, synced) = (
+            ticket.map(|t| t.tracker.as_str()),
+            ticket.map(|t| t.key.as_str()),
+            ticket.and_then(|t| t.synced_status.as_deref()),
+        );
         self.db.run(async |client| {
             let rows = call(
                 client,
-                "SELECT devkit.todo_add($1, $2, $3, $4, $5)::text",
+                "SELECT devkit.todo_add($1, $2, $3, $4, $5, $6::uuid, $7, $8, $9)::text",
                 &[
                     (&self.root, Type::TEXT),
                     (&todo.project, Type::TEXT),
                     (&description, Type::TEXT),
                     (&todo.parent, Type::TEXT),
                     (&todo.order, Type::INT8),
+                    (&id, Type::TEXT),
+                    (&tracker, Type::TEXT),
+                    (&key, Type::TEXT),
+                    (&synced, Type::TEXT),
                 ],
             )
             .await?;
@@ -290,6 +310,15 @@ impl TodoStore for PostgresStore {
                     (&root, Type::TEXT),
                     (id, Type::TEXT),
                     (by, Type::TEXT_ARRAY),
+                ])
+                .await?;
+                Ok(Vec::new())
+            }
+            Edit::RecordSync { id, synced_status } => {
+                call(client, "SELECT devkit.todo_record_sync($1, $2, $3)", &[
+                    (&root, Type::TEXT),
+                    (id, Type::TEXT),
+                    (synced_status, Type::TEXT),
                 ])
                 .await?;
                 Ok(Vec::new())

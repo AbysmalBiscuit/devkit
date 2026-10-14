@@ -304,6 +304,7 @@ fn an_interrupted_sync_rolls_back() {
     for text in ["one", "two"] {
         other
             .add(NewTodo {
+                ticket: None,
                 project: Some("proj.main".into()),
                 description: text.into(),
                 parent: None,
@@ -401,6 +402,7 @@ impl Shared {
 fn add_on(store: &TaskchampionStore, node: &str, text: &str) -> String {
     store
         .add(NewTodo {
+            ticket: None,
             project: Some(node.into()),
             description: text.into(),
             parent: None,

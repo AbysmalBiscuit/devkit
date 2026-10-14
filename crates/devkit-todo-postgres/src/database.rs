@@ -15,6 +15,9 @@ pub(crate) const CLAIMED: &str = "DK001";
 /// The SQLSTATE a todo function raises for an id that names no todo, or
 /// more than one.
 pub(crate) const UNKNOWN_TODO: &str = "DK002";
+/// The SQLSTATE a todo function raises for a ticket edit on a todo that
+/// stands for no ticket.
+pub(crate) const NO_TICKET: &str = "DK003";
 
 /// Everything devkit keeps, in a schema of its own so it stays out of the
 /// tables an application, or Supabase's HTTP API, exposes. It runs as one
@@ -48,6 +51,9 @@ CREATE TABLE IF NOT EXISTS devkit.todos (
 );
 CREATE INDEX IF NOT EXISTS todos_root_node ON devkit.todos (root, node);
 ALTER TABLE devkit.todos ADD COLUMN IF NOT EXISTS blocked_by uuid[] NOT NULL DEFAULT '{{}}';
+ALTER TABLE devkit.todos ADD COLUMN IF NOT EXISTS ticket_tracker text;
+ALTER TABLE devkit.todos ADD COLUMN IF NOT EXISTS ticket_key text;
+ALTER TABLE devkit.todos ADD COLUMN IF NOT EXISTS ticket_status text;
 CREATE TABLE IF NOT EXISTS devkit.activity (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     root text NOT NULL,
@@ -157,8 +163,17 @@ LANGUAGE sql STABLE AS $$
       AND parent IS NOT DISTINCT FROM p_parent AND id IS DISTINCT FROM p_skip
 $$;
 
+-- The ticket columns came with `p_id`; the overload without them would make
+-- every call that leaves them out ambiguous.
+DROP FUNCTION IF EXISTS devkit.todo_add(text, text, text, text, bigint);
+
+-- Adds a todo, at `p_id` when given. A ticket's todo takes an id derived
+-- from its ticket, so when that id exists already, the add changes nothing
+-- and returns it: two adds of one ticket racing make one todo.
 CREATE OR REPLACE FUNCTION devkit.todo_add(
-    p_root text, p_node text, p_description text, p_parent text, p_ord bigint
+    p_root text, p_node text, p_description text, p_parent text, p_ord bigint,
+    p_id uuid DEFAULT NULL, p_ticket_tracker text DEFAULT NULL,
+    p_ticket_key text DEFAULT NULL, p_ticket_status text DEFAULT NULL
 ) RETURNS uuid
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -168,11 +183,31 @@ BEGIN
     IF p_parent IS NOT NULL THEN
         parent_id := devkit.todo_find(p_root, p_parent);
     END IF;
-    INSERT INTO devkit.todos (root, node, description, status, parent, ord)
-    VALUES (p_root, p_node, p_description, 'pending', parent_id,
-            coalesce(p_ord, devkit.todo_after_last(p_root, p_node, parent_id, NULL)))
+    INSERT INTO devkit.todos (
+        id, root, node, description, status, parent, ord,
+        ticket_tracker, ticket_key, ticket_status
+    )
+    VALUES (coalesce(p_id, gen_random_uuid()), p_root, p_node, p_description, 'pending',
+            parent_id, coalesce(p_ord, devkit.todo_after_last(p_root, p_node, parent_id, NULL)),
+            p_ticket_tracker, p_ticket_key, p_ticket_status)
+    ON CONFLICT (id) DO NOTHING
     RETURNING id INTO added;
-    RETURN added;
+    RETURN coalesce(added, p_id);
+END
+$$;
+
+-- Records `p_status` as the ticket status the todo last synced.
+CREATE OR REPLACE FUNCTION devkit.todo_record_sync(p_root text, p_id text, p_status text)
+RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    locked devkit.todos := devkit.todo_lock(p_root, p_id);
+BEGIN
+    IF locked.ticket_key IS NULL THEN
+        RAISE EXCEPTION 'todo % has no ticket', p_id USING ERRCODE = '{NO_TICKET}';
+    END IF;
+    UPDATE devkit.todos SET ticket_status = p_status, modified = clock_timestamp()
+    WHERE id = locked.id;
 END
 $$;
 

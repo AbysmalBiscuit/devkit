@@ -323,6 +323,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
             let blockers = resolve_ids(&store, &blocked_by)?;
             refuse_cycle(&store, None, &blockers)?;
             let id = store.add(NewTodo {
+                ticket: None,
                 project: project_of(node),
                 description: text,
                 parent,

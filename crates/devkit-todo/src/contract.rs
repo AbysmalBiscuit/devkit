@@ -3,8 +3,8 @@
 //! starts from an empty store and uses only the ids `add` returns.
 
 use crate::{
-    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusChange, StatusKind, Todo,
-    TodoStore,
+    Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusChange, StatusKind, TicketRef,
+    Todo, TodoStore,
     activity::{
         Activity, ActivityLog, ActivityStore, ClaimEnd, Interval, Recorded,
         ambassador_impl_ActivityStore,
@@ -49,6 +49,9 @@ macro_rules! contract_tests {
             block_on_an_unknown_todo_is_refused,
             the_tracker_hands_its_claim_to_any_actor,
             the_tracker_finishes_an_agents_claim,
+            a_ticket_reference_round_trips,
+            adding_a_ticket_twice_returns_one_todo,
+            record_sync_sets_the_synced_status,
         );
         $crate::contract_tests!(@activity $make, $log;
             claiming_then_completing_records_one_completed_interval,
@@ -115,6 +118,20 @@ fn new(description: &str) -> NewTodo {
         description: description.into(),
         parent: None,
         order: None,
+        ticket: None,
+    }
+}
+
+/// A todo on `r` standing for GitHub ticket `key`, last synced as `Todo`.
+fn ticket(key: &str, description: &str) -> NewTodo {
+    NewTodo {
+        project: Some("r".into()),
+        ticket: Some(TicketRef {
+            tracker: "github".into(),
+            key: key.into(),
+            synced_status: Some("Todo".into()),
+        }),
+        ..new(description)
     }
 }
 
@@ -278,6 +295,50 @@ pub fn the_tracker_finishes_an_agents_claim(s: &impl TodoStore) {
     assert_eq!(get(s, &id).status, Status::Completed {
         by: Some(Holder::new("S"))
     });
+}
+
+pub fn a_ticket_reference_round_trips(s: &impl TodoStore) {
+    let id = s.add(ticket("65", "#65 Add sync")).unwrap();
+    let want = ticket("65", "").ticket;
+    assert_eq!(get(s, &id).ticket, want);
+    let listed = s.list(&Filter::all()).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].ticket, want);
+    assert_eq!(get(s, &add(s, "plain")).ticket, None);
+}
+
+pub fn adding_a_ticket_twice_returns_one_todo(s: &impl TodoStore) {
+    let first = s.add(ticket("65", "first")).unwrap();
+    let second = s.add(ticket("65", "second")).unwrap();
+    assert_eq!(first, second);
+    let listed = s.list(&Filter::all()).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].description, "first");
+    let other = s.add(ticket("66", "other")).unwrap();
+    assert_ne!(other, first);
+}
+
+pub fn record_sync_sets_the_synced_status(s: &impl TodoStore) {
+    let id = s.add(ticket("65", "#65")).unwrap();
+    s.apply(&Edit::RecordSync {
+        id: id.clone(),
+        synced_status: "Done".into(),
+    })
+    .unwrap();
+    let synced = get(s, &id).ticket.and_then(|t| t.synced_status);
+    assert_eq!(synced.as_deref(), Some("Done"));
+    let plain = add(s, "plain");
+    let err = s
+        .apply(&Edit::RecordSync {
+            id: plain.clone(),
+            synced_status: "Done".into(),
+        })
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains(&format!("todo {plain} has no ticket")),
+        "{err:#}"
+    );
 }
 
 pub fn undone_drops_the_holder(s: &impl TodoStore) {

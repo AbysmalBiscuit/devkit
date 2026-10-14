@@ -177,7 +177,7 @@ tempfile = "3"
 # already links, bundled the same way, so the binary carries one SQLite.
 rusqlite = { version = "0.39", features = ["bundled"] }
 # Storage keys for rules and sources added to a SQLite rule store.
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 frizbee = "0.13"
 
 [profile.dev]
