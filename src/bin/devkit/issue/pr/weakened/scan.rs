@@ -2,6 +2,7 @@
 //! assertions, skip markers, focus markers and tautological assertions.
 //! Comments and string contents are masked out first, so a commented-out
 //! test does not count and a test's fixture text is not read as code.
+//! The rules are inspired by no_human's tamper guard.
 
 use std::collections::BTreeMap;
 
