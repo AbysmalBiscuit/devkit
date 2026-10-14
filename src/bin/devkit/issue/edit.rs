@@ -5,13 +5,14 @@
 use anyhow::{Context, Result};
 
 use super::render::{self, Title};
-use crate::template::VarArgs;
+use crate::template::{FieldArgs, VarArgs};
 
 pub(crate) struct EditArgs {
     pub issue: String,
     pub title: Option<String>,
     pub body: String,
     pub vars: VarArgs,
+    pub fields: FieldArgs,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -22,6 +23,10 @@ pub(crate) fn run(args: EditArgs) -> Result<()> {
     let tracker = &sel.tracker.tracker;
     let repo = sel.forge.repos.issues()?;
     let id = tracker.issue_ref(&args.issue)?.id;
+    let kind = devkit_config::TrackerKind::Github;
+    let decls = cfg.ticket.fields.for_tracker(kind);
+    let input = render::ticket_args(&cfg, &args.vars, &args.fields, decls)?;
+    let resolved = render::resolve_fields(&cfg, kind, decls, &input.fields)?;
 
     let current;
     let title = match &args.title {
@@ -38,7 +43,8 @@ pub(crate) fn run(args: EditArgs) -> Result<()> {
         "ticket edit",
         title,
         &args.body,
-        &args.vars,
+        &input.template,
+        &render::shown(decls, &resolved),
         devkit_common::caller::caller(),
     )?;
 

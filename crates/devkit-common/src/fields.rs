@@ -358,6 +358,19 @@ pub fn resolve(
     }
 }
 
+/// The team a ticket is filed in: the name of the value given for the
+/// `team`-placed field, which scopes team-bound values.
+pub fn team(decls: &BTreeMap<String, FieldDecl>, given: &Given) -> Option<String> {
+    let (name, decl) = decls
+        .iter()
+        .find(|(_, d)| d.r#where == Some(devkit_config::Place::Team))?;
+    let raw = given.values.get(name)?;
+    Some(
+        decl.enum_value(raw)
+            .map_or_else(|| raw.trim().to_string(), |v| v.name.clone()),
+    )
+}
+
 /// What a condition sees on `surface`.
 fn seen_on(
     decls: &BTreeMap<String, FieldDecl>,

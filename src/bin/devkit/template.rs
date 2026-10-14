@@ -16,6 +16,16 @@ pub(crate) struct VarArgs {
     pub arg_files: Vec<String>,
 }
 
+/// `--none`, the ticket verbs' mark for a field left deliberately empty.
+#[derive(clap::Args, Debug, Default, PartialEq)]
+pub(crate) struct FieldArgs {
+    /// Leave a declared ticket field deliberately empty: on a create it
+    /// counts as filled and nothing is written, on an edit it clears the
+    /// field. Repeatable.
+    #[arg(long = "none", value_name = "FIELD")]
+    pub none: Vec<String>,
+}
+
 impl VarArgs {
     pub(crate) fn parse(&self) -> Result<BTreeMap<String, String>> {
         devkit_common::args::parse(&self.args, &self.arg_files)

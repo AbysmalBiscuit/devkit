@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use devkit::completions::Shell;
 
-use crate::template::VarArgs;
+use crate::template::{FieldArgs, VarArgs};
 
 pub(crate) mod checkout;
 mod create;
@@ -265,6 +265,8 @@ pub(crate) enum TicketCmd {
         body: Option<String>,
         #[command(flatten)]
         vars: VarArgs,
+        #[command(flatten)]
+        fields: FieldArgs,
     },
     /// Rewrite a GitHub issue's body (and title) from the issue templates.
     ///
@@ -281,6 +283,8 @@ pub(crate) enum TicketCmd {
         body: String,
         #[command(flatten)]
         vars: VarArgs,
+        #[command(flatten)]
+        fields: FieldArgs,
     },
     /// Move the issue's tracker status as [ticket.events] configures EVENT.
     ///
@@ -759,10 +763,16 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             dir,
             config,
         }),
-        TicketCmd::Create { title, body, vars } => create::run(create::CreateArgs {
+        TicketCmd::Create {
             title,
             body,
             vars,
+            fields,
+        } => create::run(create::CreateArgs {
+            title,
+            body,
+            vars,
+            fields,
             dir,
             config,
         }),
@@ -771,11 +781,13 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             title,
             body,
             vars,
+            fields,
         } => edit::run(edit::EditArgs {
             issue,
             title,
             body,
             vars,
+            fields,
             dir,
             config,
         }),
