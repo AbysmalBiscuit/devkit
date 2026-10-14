@@ -115,7 +115,6 @@ pub(crate) fn run(args: EditArgs) -> Result<()> {
             &resolved,
             before,
             &BTreeSet::new(),
-            true,
         )
     } else {
         Vec::new()

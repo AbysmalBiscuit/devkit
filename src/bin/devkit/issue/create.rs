@@ -74,14 +74,17 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
 
     let number = field_write::number_of(&url)?;
     let writer = GithubFieldWriter::new(repo.clone(), cfg.github.project.clone(), &start);
+    let written = fields::Resolved {
+        nones: Default::default(),
+        ..resolved
+    };
     let problems = field_write::write_and_verify(
         &writer,
         number,
         decls,
-        &resolved,
+        &written,
         None,
         &github_fields::on_create(decls),
-        false,
     );
     field_write::warn(decls, &report);
     if !problems.is_empty() {

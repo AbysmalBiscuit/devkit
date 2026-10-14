@@ -80,20 +80,9 @@ pub(crate) fn write_and_verify(
     resolved: &Resolved,
     before: Option<IssueFields>,
     skip: &BTreeSet<String>,
-    include_nones: bool,
 ) -> Vec<String> {
     let mut problems = Vec::new();
     let mut failed: BTreeSet<String> = BTreeSet::new();
-    let without_nones;
-    let resolved = if include_nones {
-        resolved
-    } else {
-        without_nones = Resolved {
-            fields: resolved.fields.clone(),
-            nones: BTreeSet::new(),
-        };
-        &without_nones
-    };
     let to_write: Vec<&String> = resolved
         .fields
         .keys()
