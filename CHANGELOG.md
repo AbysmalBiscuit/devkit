@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.22](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.21...v0.14.22) (2026-10-14)
+
+
+### Features
+
+* **todo:** record blocking edges and offer ready work ([#350](https://github.com/AbysmalBiscuit/devkit/issues/350)) ([dc974fd](https://github.com/AbysmalBiscuit/devkit/commit/dc974fdf9db2f01aa3cb37a75eae3a56f9cc924d))
+
 ## [0.14.21](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.20...v0.14.21) (2026-10-13)
 
 
