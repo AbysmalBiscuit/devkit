@@ -176,14 +176,15 @@ pub fn level_of(
 }
 
 /// The highest level `name` could take when only the fields in `known` are
-/// known: an entry whose conditions name an unknown field counts as holding.
+/// known: an entry whose conditions name an unknown field counts as holding,
+/// and the fallback `level` counts only when no fully known entry holds.
 fn level_upper_bound(
     decl: &FieldDecl,
     known: &BTreeSet<&str>,
     seen: &BTreeMap<String, Vec<String>>,
     caller: Caller,
 ) -> FieldLevel {
-    let mut level = decl.level;
+    let mut level = FieldLevel::None;
     for w in &decl.when {
         let all_known = w
             .r#if
@@ -196,11 +197,11 @@ fn level_upper_bound(
         if could_hold {
             level = level.max(w.level);
             if all_known {
-                break;
+                return level;
             }
         }
     }
-    level
+    level.max(decl.level)
 }
 
 /// The list items of `raw`: split on commas for a list field, trimmed, with
@@ -778,6 +779,22 @@ when       = [{ if = { project = "*" }, level = "error" }]
         let report = check(&d, Surface::McpUpdate, &r, None, Caller::Agent);
         assert_eq!(report.warned, [Problem::Clear {
             field: "milestone".into()
+        }]);
+    }
+
+    #[test]
+    fn mcp_update_falls_back_only_when_no_known_entry_holds() {
+        let d = decls(
+            "[ticket.fields.github.size]\ntype = \"string\"\nlevel = \"warning\"\n\
+             where = { project_field = \"F\", name = \"Size\" }\n\
+             when = [{ if = { caller = \"agent\" }, level = \"none\" }]\n",
+        );
+        let r = ok(&d, &given(&[], &["size"]));
+        let agent = check(&d, Surface::McpUpdate, &r, None, Caller::Agent);
+        assert_eq!(agent, Report::default(), "the agent entry holds: none");
+        let human = check(&d, Surface::McpUpdate, &r, None, Caller::Human);
+        assert_eq!(human.warned, [Problem::Clear {
+            field: "size".into()
         }]);
     }
 
