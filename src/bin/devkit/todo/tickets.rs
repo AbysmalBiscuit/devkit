@@ -179,7 +179,9 @@ impl State {
     fn succeeded(&self) {
         let _ = fs::create_dir_all(&self.dir);
         let _ = fs::remove_file(self.path("failed"));
-        let _ = fs::write(self.path("last"), "");
+        // Rewriting an empty file leaves its mtime alone on NTFS, so stamp it.
+        let _ = fs::File::create(self.path("last"))
+            .and_then(|last| last.set_modified(std::time::SystemTime::now()));
     }
 
     fn failed(&self, reason: &str) {

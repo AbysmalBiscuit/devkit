@@ -387,9 +387,18 @@ fn a_slug_in_another_case_names_the_same_tickets() {
 
 /// Polls `done` until it holds, failing with `what` after 30 seconds.
 fn poll(what: &str, done: impl Fn() -> bool) {
+    poll_or(what, done, String::new);
+}
+
+/// [`poll`], adding `detail` to the failure.
+fn poll_or(what: &str, done: impl Fn() -> bool, detail: impl Fn() -> String) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {what}{}",
+            detail()
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -488,11 +497,19 @@ fn a_hook_injection_answers_while_the_tracker_hangs() {
         s.calls().lines().count() > before
     });
     std::fs::remove_file(&hang).unwrap();
-    poll("the background sync to finish", || {
-        std::fs::metadata(s.sync_state("last"))
-            .and_then(|m| m.modified())
-            .is_ok_and(|at| at > day_old + Duration::from_secs(3600))
-    });
+    poll_or(
+        "the background sync to finish",
+        || {
+            std::fs::metadata(s.sync_state("last"))
+                .and_then(|m| m.modified())
+                .is_ok_and(|at| at > day_old + Duration::from_secs(3600))
+        },
+        || {
+            std::fs::read_to_string(s.sync_state("failed"))
+                .map(|reason| format!("; the sync failed: {reason}"))
+                .unwrap_or_default()
+        },
+    );
 }
 
 const TODO_EVENTS: &str = "
