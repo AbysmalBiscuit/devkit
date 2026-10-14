@@ -542,15 +542,20 @@ struct Capture<'a> {
 }
 
 impl Capture<'_> {
-    /// The open ticket todo on the repository node that `text` names, which
-    /// a new native task or step maps to instead of adding a todo.
-    fn ticket_named(&self, text: &str) -> Result<Option<String>> {
-        let Some(repo) = &self.repo else {
-            return Ok(None);
-        };
-        let todos = self.store.list(&Filter::exact([repo.clone()]))?;
-        Ok(tickets::named_ticket(&todos, text).map(|t| t.id.clone()))
+    /// The todos on the repository node, among which a new native task or
+    /// step finds the ticket todo it names.
+    fn repo_todos(&self) -> Result<Vec<Todo>> {
+        match &self.repo {
+            Some(repo) => self.store.list(&Filter::exact([repo.clone()])),
+            None => Ok(Vec::new()),
+        }
     }
+}
+
+/// The open ticket todo among `repo_todos` that `text` names, which a new
+/// native task or step maps to instead of adding a todo.
+fn ticket_named(repo_todos: &[Todo], text: &str) -> Option<String> {
+    tickets::named_ticket(repo_todos, text).map(|t| t.id.clone())
 }
 
 /// The harness tools capture mirrors.
@@ -603,7 +608,7 @@ fn task_create(c: &Capture<'_>, input: &Value, response: &Value) -> Result<()> {
     else {
         return Ok(());
     };
-    let id = match c.ticket_named(subject)? {
+    let id = match ticket_named(&c.repo_todos()?, subject) {
         Some(ticket) => ticket,
         None => c.store.add(NewTodo {
             ticket: None,
@@ -765,11 +770,15 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
     // A step whose cancel was refused stays in the snapshot, so the next call
     // retries it instead of forgetting the todo while it is still open.
     let mut uncancelled = Vec::new();
+    let mut repo_todos = None;
     for change in changes {
         match change {
             Change::Add { index } => {
                 let step = &next[index];
-                let ticket = c.ticket_named(&step.text)?;
+                if repo_todos.is_none() {
+                    repo_todos = Some(c.repo_todos()?);
+                }
+                let ticket = ticket_named(repo_todos.as_deref().unwrap_or_default(), &step.text);
                 let id = match &ticket {
                     Some(ticket) => ticket.clone(),
                     None => c.store.add(NewTodo {
