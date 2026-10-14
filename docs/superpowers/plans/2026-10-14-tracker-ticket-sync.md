@@ -62,7 +62,7 @@
 
 **Interfaces:**
 - Produces:
-  - `pub struct TicketRef { pub tracker: String, pub key: String, pub synced_status: Option<String> }` (serde; `Clone, Debug, PartialEq, Eq`). `tracker` is `"github"` or `"linear"`; `key` is the tracker's id (`"65"`, `"SWE-123"`); `synced_status` is the status name as last synced (Task 7 defines its spelling).
+  - `pub struct TicketRef { pub tracker: String, pub key: String, pub synced_status: Option<String> }` (serde; `Clone, Debug, PartialEq, Eq`). `tracker` is `"github"` or `"linear"`; `key` is the tracker's id (`"owner/repo#65"`, `"SWE-123"`); `synced_status` is the status name as last synced (Task 7 defines its spelling).
   - `Todo.ticket: Option<TicketRef>` (`#[serde(default)]`); `NewTodo.ticket: Option<TicketRef>`.
   - `Edit::RecordSync { id: String, synced_status: String }`: sets `ticket.synced_status`. On a todo with no ticket it is the error `todo <id> has no ticket`.
   - `pub fn ticket_todo_uuid(root: &str, tracker: &str, key: &str) -> uuid::Uuid`: v5 over `Uuid::NAMESPACE_OID` and the bytes `root \0 tracker \0 key`; `root` is `""` for stores without one.
