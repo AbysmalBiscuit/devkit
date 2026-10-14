@@ -115,7 +115,7 @@ fn setup_here_refuses_the_default_branch_by_name() {
             "upstream",
             "https://github.com/o/r.git",
         ]);
-        git(fake.project(), &["checkout", "-q", "-b", "main"]);
+        git(fake.project(), &["checkout", "-q", "-B", "main"]);
 
         let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
 
@@ -186,7 +186,7 @@ fn setup_here_finds_the_default_branch_through_origin_head() {
         "refs/remotes/origin/HEAD",
         "refs/remotes/origin/main",
     ]);
-    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+    git(fake.project(), &["checkout", "-q", "-B", "main"]);
 
     let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
 

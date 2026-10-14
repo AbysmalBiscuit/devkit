@@ -93,7 +93,7 @@ fn pr_checkout_checks_out_the_pr_when_graphql_is_refused() {
     fake.refuse_graphql();
     fake.serve_pr(&pr(7, "OPEN"));
     let _origin = with_origin(&fake);
-    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+    git(fake.project(), &["checkout", "-q", "-B", "main"]);
     let scratch = tempfile::tempdir().unwrap();
     let worktree = scratch.path().join("pr-7");
 
@@ -135,7 +135,7 @@ fn pr_checkout_of_an_issue_checks_out_its_closing_pr_when_graphql_is_refused() {
     let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
     fake.refuse_graphql();
     let _origin = with_origin(&fake);
-    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+    git(fake.project(), &["checkout", "-q", "-B", "main"]);
     let timeline = serde_json::json!([
         { "event": "labeled" },
         cross_reference(5, false, "Fixes #3"),
@@ -191,7 +191,7 @@ fn pr_checkout_of_an_issue_checks_out_its_closing_pr_when_graphql_is_refused() {
 fn status_project() -> (ghfake::Fake, tempfile::TempDir) {
     let fake = ghfake::Fake::new(GITHUB_TRACKER, &pr(7, "OPEN"));
     let origin = with_origin(&fake);
-    git(fake.project(), &["checkout", "-q", "-b", "main"]);
+    git(fake.project(), &["checkout", "-q", "-B", "main"]);
     let a = fake.project().join("wts").join("a");
     let b = fake.project().join("wts").join("b");
     git(fake.project(), &[

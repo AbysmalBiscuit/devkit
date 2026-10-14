@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
+    caller::Caller,
     forge::{self, Forge, NewPr, PrLocator},
     progress::Steps,
     vcs::{Vcs, VersionControl},
@@ -14,7 +15,7 @@ use super::{
     render::{Texts, require_pr_title, values},
     require_reviewer_for_ready,
     resolve::{Existing, assert_belongs, parse_pr_flag, resolve_existing, verify_created},
-    reviewer_logins,
+    reviewer_logins, weakened,
 };
 use crate::{
     issue::review::{PrAction, Target, action_for, guard_branch, resolve_target},
@@ -153,6 +154,9 @@ pub(crate) struct Ensure<'a> {
     /// Claim the `pr_open` event in the record, which holds a tracker issue
     /// and has `[ticket.events.pr_open]` configured.
     pub claim_pr_open: bool,
+    /// The weakened-tests gate a PR this run opens must pass, or `None` for a
+    /// run it does not apply to.
+    pub weakened: Option<&'a weakened::Gate>,
 }
 
 /// Resolve this branch's PR and, when there is none, open one. A reused PR
@@ -207,6 +211,10 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             let pr_title = (args.pr_title)()?;
             require_pr_title(&pr_title)?;
             let pr_body = (args.pr_body)(&pr_title)?;
+            let pr_body = match args.weakened {
+                Some(gate) => gate.apply(pr_body)?,
+                None => pr_body,
+            };
             let new = NewPr {
                 base: &args.base,
                 head: args.existing.branch,
@@ -286,6 +294,15 @@ pub fn run(args: Args) -> Result<()> {
         &vars,
     )?;
 
+    let base = args
+        .base
+        .clone()
+        .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
+    let weakened = match caller {
+        Caller::Agent => Some(weakened::Gate::read(here, &base)?),
+        Caller::Human => None,
+    };
+
     let texts = Texts::new(
         &loaded.config.templates,
         record.as_ref(),
@@ -330,10 +347,7 @@ pub fn run(args: Args) -> Result<()> {
             loaded.config.defaults.pr_create_state,
         ),
         asked,
-        base: args
-            .base
-            .clone()
-            .unwrap_or_else(|| loaded.config.defaults.pr_base.clone()),
+        base,
         pr_title: Box::new(|| texts.title()),
         pr_body: Box::new(|title| texts.body(title)),
         reviewers,
@@ -341,6 +355,7 @@ pub fn run(args: Args) -> Result<()> {
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
         steps: &steps,
         claim_pr_open: tracker_issue.is_some() && loaded.config.ticket.events.pr_open.is_some(),
+        weakened: weakened.as_ref(),
     })?;
 
     println!("{}", resolved.url);

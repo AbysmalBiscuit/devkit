@@ -12,6 +12,7 @@ devkit pr checkout <target> [<worktree-path>] [--setup] [--apps a,b]
 devkit pr list [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size N] [--retries N]
 devkit pr review request ["<message>"] [--to <alias|#channel>] [--pr <URL|number>] [--no-push] [--no-notify] [--arg k=v] [--arg-file k=path]
 devkit pr review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg k=v] [--arg-file k=path]
+devkit pr weakened-tests <base> [<head>] [--body-file <file|->]
 ```
 
 ## `checkout`: review someone else's work
@@ -34,6 +35,19 @@ Where GitHub refuses GraphQL, as in a Claude Code cloud session, the PR's head i
 - Whichever PR the run ends on, its head commit must be this worktree's `HEAD`. A reused PR is checked before it is touched, a new one straight after it opens and before any reviewer is requested on it; a failure there leaves the new PR open and says so.
 - `ready` on a branch with no PR is an error naming `devkit pr create`; a merged or closed PR is refused.
 - Where GitHub refuses GraphQL, as in a Claude Code cloud session, `create` still finds the branch's PR and opens one over REST, ready or draft as asked, but finds no PR on a fork's branch, refuses to open one when `origin` is another repository than the PR repository, and cannot `--attach`. `ready` and `review request`'s draft flip need GraphQL, so open the PR ready there.
+
+### Weakened tests: the gate on an agent's new PR
+
+When an agent's `create` opens a PR, it first compares each test file at the branch's merge base with the PR base (`origin/<base>`, else `<base>`) against `HEAD`, and flags:
+
+- a test file the branch deletes, or moves outside the test patterns;
+- a test file with fewer test declarations or fewer assertions than before; a commented-out test counts as gone;
+- an existing test file with more skip markers (`#[ignore]`, `.skip(`, `.skipIf(`, `.todo(`, `xit(`, `@pytest.mark.skip`, `@pytest.mark.xfail`, `pytest.skip(`) or a new `.only(`, which stops every other test in the file;
+- a new assertion that always passes, such as `assert!(true)`, `assert_eq!(x, x)`, `expect(true).toBe(true)` or `assert True`.
+
+Rust, JS/TS and Python files are read. `[pr.gates] weakened_tests` sets the strength: `require` refuses the PR, listing each flag as `file: rule: detail`; `advise` appends the flags to the body under `### Weakened tests` and opens it; `off` skips the check. A line of the PR body starting `Test changes:` that explains the change clears every flag. Both the gate and `[pr] test_files`, the patterns that say which files are tests, are read from the `devkit.toml` committed at the merge base, so changing them on the branch has no effect on its own PR. The branch is pushed before the check refuses.
+
+`devkit pr weakened-tests <base> [<head>]` runs the same check on its own and exits nonzero on a flag; `--body-file` passes a PR body whose `Test changes:` line clears them. It needs only git, so a CI job can run it on any PR.
 
 ### `render`: the PR text without opening it
 
