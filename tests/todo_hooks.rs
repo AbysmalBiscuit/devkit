@@ -503,6 +503,32 @@ fn a_mirrored_cycle_is_skipped() {
     assert!(by_text(&p, "alpha").blocked_by.is_empty());
 }
 
+#[test]
+fn task_update_keeps_the_safe_blocker_when_another_would_cycle() {
+    let p = Proj::new();
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
+    let mut gamma = fixture(&p, "claude-task-create.jsonl")[0].clone();
+    gamma["tool_input"] = json!({"subject": "gamma", "description": "gamma"});
+    gamma["tool_response"]["task"] = json!({"id": "3", "subject": "gamma"});
+    post_tool_use(&p, "claude-code", &[gamma]);
+    let alpha = by_text(&p, "alpha");
+    let gamma = by_text(&p, "gamma");
+    let mut first = fixture(&p, "claude-task-update.jsonl")[0].clone();
+    first["tool_input"] = json!({"taskId": "1", "addBlockedBy": ["2"]});
+    post_tool_use(&p, "claude-code", &[first]);
+    let mut mixed = fixture(&p, "claude-task-update.jsonl")[0].clone();
+    mixed["tool_input"] = json!({"taskId": "2", "addBlockedBy": ["1", "3"]});
+    let out = p.hook("post-tool-use", "claude-code", &mixed);
+    assert_eq!(out.status.code(), Some(0), "{}", todoenv::stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert_eq!(
+        by_text(&p, "beta").blocked_by,
+        vec![gamma.id],
+        "the cyclic member is skipped and the safe blocker is kept"
+    );
+    assert!(!by_text(&p, "beta").blocked_by.contains(&alpha.id));
+}
+
 const PLAN_SESSION: &str = "01a10214-8027-70e1-b13f-0bb35d607bed";
 
 fn on_node(p: &Proj, node: &str) -> Vec<devkit_todo::Todo> {
