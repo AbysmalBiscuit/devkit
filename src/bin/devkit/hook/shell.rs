@@ -3,7 +3,9 @@
 //! One analysis of the command feeds two stages. The command guard fails
 //! open: its own failures allow the command. The write stage fails closed: a
 //! write it cannot evaluate is a denial, and the claims it can evaluate go
-//! through the write gate, which denies on the registry's failures too.
+//! through the write gate, which denies on the registry's failures too. A
+//! write the analysis names inside devrun's run ledger is refused whatever
+//! the gates say.
 //!
 //! The payload arrives already read and parsed: the verb dispatch owns the
 //! stdin read, because it is what decides between this path and the edit one.
@@ -286,7 +288,18 @@ fn respond(
         && payload.subagent_holder().is_none()
         && !command.contains("todo")
     {
-        return Outcome::silent();
+        let dialect = dialect::resolve(
+            HarnessPolicy::default().shell,
+            which,
+            shell.as_ref(),
+            cfg!(windows),
+        );
+        let analysis = devkit_command::analyze(command, &context(dialect, shell_cwd));
+        let blocks = ledger_blocks(&analysis, &cwd);
+        return match blocks.is_empty() {
+            true => Outcome::silent(),
+            false => deny(which, &blocks),
+        };
     }
     if writes_on {
         armed.arm(which);
@@ -301,7 +314,7 @@ fn respond(
     let analysis = devkit_command::analyze(command, &context(dialect, shell_cwd));
     let analyze_micros = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
 
-    let mut blocks: Vec<String> = Vec::new();
+    let mut blocks = ledger_blocks(&analysis, &cwd);
     let mut notes: Vec<String> = Vec::new();
     let own = devkit_common::shim::OwnBinary::current();
     if commands_on {
@@ -392,6 +405,14 @@ fn context(dialect: Dialect, cwd: Option<&Path>) -> Context {
         },
         limits: Limits::default(),
     }
+}
+
+/// A refusal for each write the analysis names inside devrun's run ledger,
+/// whatever the project's gates and policy say. A target the analysis cannot
+/// name is not refused here: the guard fails open.
+fn ledger_blocks(analysis: &Analysis, cwd: &Path) -> Vec<String> {
+    let claims = writes::evaluate(analysis, &HarnessPolicy::default()).claims;
+    gate::ledger_blocks(&claims, &devkit_ports::ledger::Ledger::live(), cwd)
 }
 
 /// The write stage: the evaluation's own findings, then, when nothing has

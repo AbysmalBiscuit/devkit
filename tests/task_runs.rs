@@ -113,6 +113,48 @@ impl Fixture {
     }
 }
 
+impl Fixture {
+    /// Send a pre-tool-use payload carrying `call` and assert the hook denies
+    /// it for writing into the run ledger.
+    fn assert_ledger_denied(&self, call: Value) {
+        let mut payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "S",
+            "cwd": self.repo.to_string_lossy(),
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(call.as_object().unwrap().clone());
+        let mut child = self
+            .devkit()
+            .args(["hook", "pre-tool-use", "--harness", "claude-code"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        let v: Value = serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|e| panic!("no denial envelope for {call}: {e}: {out:?}"));
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{v:#}"
+        );
+        let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap();
+        assert!(reason.contains("run ledger"), "{reason}");
+    }
+}
+
 fn by_task<'a>(runs: &'a [Value], task: &str) -> Vec<&'a Value> {
     runs.iter().filter(|r| r["task"] == task).collect()
 }
@@ -321,38 +363,28 @@ fn the_ledger_lives_outside_the_worktree_and_an_edit_tool_cannot_write_it() {
             .to_string_lossy()
             .into_owned(),
     ] {
-        let payload = serde_json::json!({
-            "hook_event_name": "PreToolUse",
+        f.assert_ledger_denied(serde_json::json!({
             "tool_name": "Write",
-            "session_id": "S",
-            "cwd": f.repo.to_string_lossy(),
             "tool_input": { "file_path": target, "content": "{}" }
-        })
-        .to_string();
-        let mut child = f
-            .devkit()
-            .args(["hook", "pre-tool-use", "--harness", "claude-code"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.as_bytes())
-            .unwrap();
-        let out = child.wait_with_output().unwrap();
-        assert_eq!(out.status.code(), Some(0), "{out:?}");
-        let v: Value = serde_json::from_slice(&out.stdout).expect("a denial envelope");
-        assert_eq!(
-            v["hookSpecificOutput"]["permissionDecision"], "deny",
-            "{v:#}"
-        );
-        let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
-            .as_str()
-            .unwrap();
-        assert!(reason.contains("run ledger"), "{reason}");
+        }));
+    }
+}
+
+#[test]
+fn a_shell_redirect_into_the_ledger_is_denied() {
+    let f = Fixture::new();
+    assert!(f.task("pass").status.success());
+    let runs = f.runs();
+    let record = Path::new(runs[0]["path"].as_str().unwrap());
+    let forged = record.with_file_name("forged.json");
+    let relative = Path::new("..")
+        .join(forged.strip_prefix(f.repo.parent().unwrap()).unwrap())
+        .to_string_lossy()
+        .into_owned();
+    for target in [forged.to_string_lossy().into_owned(), relative] {
+        f.assert_ledger_denied(serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": { "command": format!("echo '{{}}' > '{target}'") }
+        }));
     }
 }
