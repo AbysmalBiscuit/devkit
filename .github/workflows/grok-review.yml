@@ -1,0 +1,58 @@
+name: Grok review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: grok-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Grok review
+    # Fork PRs get no secrets, so Grok could not authenticate.
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The installer only adds its bin dir to shell rc files, which later
+      # steps never source.
+      - name: Install Grok CLI
+        run: |
+          curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.52
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+
+      - name: Review
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          prompt=$(cat <<EOF
+          Review pull request #${PR_NUMBER} in ${GITHUB_REPOSITORY}. Its changes are
+          \`git diff ${BASE_SHA}...HEAD\`; AGENTS.md describes the codebase.
+
+          Look for bugs: wrong logic, crashes, regressions, races, security holes,
+          and broken edge cases. Skip style and naming. Verify each finding
+          against the code before reporting it.
+
+          Post exactly one review with
+          \`gh pr review ${PR_NUMBER} --comment --body-file <file>\`. For each
+          finding give file:line, the input or state that breaks, and the fix.
+          If you find nothing, say so in one line. Do not edit, commit or push.
+          EOF
+          )
+          grok --no-auto-update --always-approve -p "$prompt"
