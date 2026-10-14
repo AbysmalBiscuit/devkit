@@ -126,6 +126,20 @@ pub trait VersionControl {
     /// The full id of the commit checked out at `dir`.
     fn revision(&self, dir: &::std::path::Path) -> ::anyhow::Result<::std::string::String>;
 
+    /// The contents of `path`, `/`-separated and relative to the repository
+    /// root, in the commit checked out at `dir`. `Ok(None)` when that commit
+    /// holds no such file.
+    ///
+    /// The default refuses, naming the backend.
+    fn committed_file(
+        &self,
+        dir: &::std::path::Path,
+        path: &str,
+    ) -> ::anyhow::Result<::std::option::Option<::std::vec::Vec<u8>>> {
+        let _ = (dir, path);
+        ::anyhow::bail!("the {} backend cannot read committed files", self.name())
+    }
+
     /// How many commits at `dir`'s head `base` does not reach. `Err` when
     /// `base` is not a commit the local repository has.
     fn ahead(&self, dir: &::std::path::Path, base: &str) -> ::anyhow::Result<u32>;

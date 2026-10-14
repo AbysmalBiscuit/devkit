@@ -786,8 +786,11 @@ fn cmd_task(
         return Ok(());
     }
 
-    let start = ledger::Start::capture(root_path, name, &args);
+    let committed = ledger::committed_config(root_path, Path::new(cwd))
+        .is_ok_and(|c| task::same_definition(&loaded.config, &c, &loaded.catalog, name));
+    let start = ledger::Start::capture(root_path, name, &args, committed);
     let tail = ledger::Tail::new();
+    let steps = std::cell::RefCell::new(Vec::new());
     let step = |step_name: &str| -> Result<Option<i32>> {
         let fresh = task::resolve_step(
             &loaded.config,
@@ -799,6 +802,10 @@ fn cmd_task(
             &args,
         )?;
         eprintln!("-> {}: {}", fresh.name, fresh.argv.join(" "));
+        steps.borrow_mut().push(ledger::Step {
+            task: fresh.name.clone(),
+            argv: fresh.argv.clone(),
+        });
         Ok(task::exec(&fresh, &tail)?.code())
     };
     let outcome = match &resolved {
@@ -818,7 +825,11 @@ fn cmd_task(
             Ok(Some(0))
         })(),
     };
-    let run = start.finish(outcome.as_ref().ok().copied().flatten(), &tail);
+    let run = start.finish(
+        outcome.as_ref().ok().copied().flatten(),
+        &tail,
+        steps.into_inner(),
+    );
     if let Err(e) = ledger::Ledger::live().record(&run) {
         eprintln!("devrun: the run was not recorded in the run ledger: {e:#}");
     }

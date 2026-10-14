@@ -70,6 +70,13 @@ impl VersionControl for GitBackend {
             .to_string())
     }
 
+    fn committed_file(&self, dir: &Path, path: &str) -> Result<Option<Vec<u8>>> {
+        let out = Git::at(dir)
+            .args(["cat-file", "blob", &format!("HEAD:{path}")])
+            .wait()?;
+        Ok(out.status.success().then_some(out.stdout))
+    }
+
     fn ahead(&self, dir: &Path, base: &str) -> Result<u32> {
         let range = format!("{base}..HEAD");
         let out = Git::at(dir)

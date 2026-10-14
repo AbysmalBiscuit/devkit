@@ -55,7 +55,11 @@ impl Fixture {
         };
         f.git(&["init", "-q", "-b", "main"]);
         std::fs::write(f.repo.join("devkit.toml"), CONFIG).unwrap();
-        std::fs::write(f.repo.join(".gitignore"), "CLAUDE.local.md\n").unwrap();
+        std::fs::write(
+            f.repo.join(".gitignore"),
+            "CLAUDE.local.md\ndevkit.local.toml\n",
+        )
+        .unwrap();
         f.commit("init");
         f
     }
@@ -249,6 +253,78 @@ fn stdout_and_stderr_on_one_file_keep_their_interleaving() {
     assert_eq!(
         runs[0]["tail"],
         serde_json::json!(["out1", "err1", "out2", "err2", "out3"])
+    );
+}
+
+/// A task redefined by anything but the repository's committed config can
+/// exit 0 on a clean tree without having run what the repository names, so
+/// such a run is not clean.
+#[test]
+fn a_task_redefined_outside_the_committed_config_never_passes() {
+    let f = Fixture::new();
+    let sha = f.head();
+    let forged = format!("{CONFIG}\n[tasks.pass]\nrun = [\"git\", \"--version\"]\n")
+        .replace("[tasks.pass]\nrun = [\"git\", \"version\"]\n", "");
+    let forged_file = f.state.join("forged.toml");
+    std::fs::write(&forged_file, &forged).unwrap();
+
+    std::fs::write(
+        f.repo.join("devkit.local.toml"),
+        "[tasks.pass]\nrun = [\"git\", \"--version\"]\n",
+    )
+    .unwrap();
+    assert!(f.task("pass").status.success());
+    std::fs::remove_file(f.repo.join("devkit.local.toml")).unwrap();
+
+    let explicit = f
+        .devkit()
+        .arg("run")
+        .arg("--config")
+        .arg(&forged_file)
+        .args(["task", "pass"])
+        .output()
+        .unwrap();
+    assert!(explicit.status.success(), "{explicit:?}");
+    let env = f
+        .devkit()
+        .env("DEVKIT_CONFIG", &forged_file)
+        .args(["run", "task", "pass"])
+        .output()
+        .unwrap();
+    assert!(env.status.success(), "{env:?}");
+
+    let runs = f.runs();
+    assert_eq!(runs.len(), 3, "{runs:#?}");
+    for run in &runs {
+        assert_eq!(run["exit_code"], 0, "{run:#}");
+        assert_eq!(run["clean"], false, "{run:#}");
+        assert_eq!(
+            run["steps"][0]["argv"],
+            serde_json::json!(["git", "--version"]),
+            "{run:#}"
+        );
+    }
+    let no = f.passed("pass", Some(&sha));
+    assert_eq!(no.status.code(), Some(1), "{no:?}");
+
+    let home = f.state.join(".config/devkit/config.toml");
+    std::fs::create_dir_all(home.parent().unwrap()).unwrap();
+    std::fs::write(&home, "[tasks.pass.env]\nGIT_TRACE = \"0\"\n").unwrap();
+    assert!(f.task("pass").status.success());
+    assert_eq!(f.runs()[3]["clean"], false, "a home layer adding to the task");
+    assert_eq!(f.passed("pass", Some(&sha)).status.code(), Some(1));
+    std::fs::remove_file(&home).unwrap();
+
+    std::fs::write(
+        f.repo.join("devkit.local.toml"),
+        "[tasks.extra]\nrun = [\"git\", \"version\"]\n",
+    )
+    .unwrap();
+    assert!(f.task("pass").status.success());
+    assert_eq!(
+        f.passed("pass", Some(&sha)).status.code(),
+        Some(0),
+        "a local layer that leaves the task alone keeps the run clean"
     );
 }
 

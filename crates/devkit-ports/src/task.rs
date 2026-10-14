@@ -142,6 +142,50 @@ pub fn view<'a>(
     })
 }
 
+/// Whether task `name` is defined in `cfg` as in `committed`: its entry and
+/// each step's, the `[templates.variables]` entries they read, and their
+/// app's `path` and `static_env`. A task [`view`] refuses is never the same.
+pub fn same_definition(
+    cfg: &Config,
+    committed: &Config,
+    catalog: &HashMap<String, App>,
+    name: &str,
+) -> bool {
+    fn same<T: serde::Serialize>(a: Option<T>, b: Option<T>) -> bool {
+        match (serde_json::to_value(a), serde_json::to_value(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+    let Ok(v) = view(cfg, catalog, name) else {
+        return false;
+    };
+    let Ok(checked) = v.runnable() else {
+        return false;
+    };
+    let steps = v.task.steps.iter().filter_map(|s| match s {
+        Step::Task(t) => Some(t.as_str()),
+        Step::Up(_) => None,
+    });
+    let app = |c: &Config, app: &str| {
+        c.apps
+            .get(app)
+            .map(|a| (a.path.clone(), a.static_env.clone()))
+    };
+    std::iter::once(name).chain(steps).all(|t| {
+        let task = cfg.tasks.get(t);
+        same(task, committed.tasks.get(t))
+            && task
+                .and_then(|t| t.app.as_deref())
+                .is_none_or(|a| same(app(cfg, a), app(committed, a)))
+    }) && checked.reads.iter().all(|r| {
+        same(
+            cfg.templates.variables.get(r),
+            committed.templates.variables.get(r),
+        )
+    })
+}
+
 /// Every configured task's [`view`], sorted by name.
 pub fn views<'a>(cfg: &'a Config, catalog: &HashMap<String, App>) -> Vec<TaskView<'a>> {
     let mut names: Vec<&String> = cfg.tasks.keys().collect();
