@@ -1305,7 +1305,7 @@ pub struct MatchRule {
 
 /// Whose ticket a rule matches.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
-#[serde(from = "String", into = "String")]
+#[serde(try_from = "String", into = "String")]
 pub enum Assignee {
     /// `"me"`: the authenticated account.
     Me,
@@ -1315,13 +1315,16 @@ pub enum Assignee {
     User(String),
 }
 
-impl From<String> for Assignee {
-    fn from(name: String) -> Self {
-        match name.as_str() {
+impl TryFrom<String> for Assignee {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, String> {
+        Ok(match name.trim() {
+            "" => return Err("assignee is blank: name a user, \"me\" or \"none\"".into()),
             "me" => Assignee::Me,
             "none" => Assignee::Nobody,
-            _ => Assignee::User(name),
-        }
+            user => Assignee::User(user.to_string()),
+        })
     }
 }
 
@@ -5193,6 +5196,8 @@ steps = [
     fn an_unknown_rule_key_is_a_parse_error() {
         let err = Config::parse("[[ticket.sync.rules]]\nasignee = \"me\"\n").unwrap_err();
         assert!(format!("{err:#}").contains("asignee"), "{err:#}");
+        let err = Config::parse("[[ticket.sync.rules]]\nassignee = \"  \"\n").unwrap_err();
+        assert!(format!("{err:#}").contains("assignee is blank"), "{err:#}");
         let err = Config::parse("[ticket.sync.statuses]\nTodo = \"open\"\n").unwrap_err();
         assert!(format!("{err:#}").contains("open"), "{err:#}");
         assert!(Config::parse("[[ticket.sync.rules]]\nassignee = \"me\"\n").is_ok());

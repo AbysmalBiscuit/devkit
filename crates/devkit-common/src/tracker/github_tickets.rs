@@ -73,7 +73,10 @@ pub fn search_terms(slug: &str, rule: &MatchRule) -> Result<String> {
         None => {}
     }
     for label in &rule.labels {
-        terms.push(format!("label:{}", Value::from(label.as_str())));
+        if label.trim().is_empty() {
+            bail!("[ticket.sync.rules] labels: a label is blank");
+        }
+        terms.push(format!("label:{}", Value::from(label.trim())));
     }
     Ok(terms.join(" "))
 }
@@ -349,7 +352,8 @@ impl GithubTickets<'_> {
             None => {}
         }
         if !rule.labels.is_empty() {
-            path.push_str(&format!("&labels={}", encode(&rule.labels.join(","))));
+            let labels: Vec<&str> = rule.labels.iter().map(|l| l.trim()).collect();
+            path.push_str(&format!("&labels={}", encode(&labels.join(","))));
         }
         let listed = super::github::rest_pages(self.api, &path)?;
         let issues: Vec<&Value> = listed
@@ -604,6 +608,16 @@ mod tests {
             query.contains(r#"search(query: "repo:o/r is:issue is:open label:\"area:todo\" label:\"needs review\"", type: ISSUE, first: 100, after: "c1")"#),
             "{query}"
         );
+    }
+
+    #[test]
+    fn a_blank_label_is_refused() {
+        let rule = MatchRule {
+            labels: vec!["  ".into()],
+            ..Default::default()
+        };
+        let err = search_terms(SLUG, &rule).unwrap_err();
+        assert!(err.to_string().contains("blank"), "{err:#}");
     }
 
     #[test]
