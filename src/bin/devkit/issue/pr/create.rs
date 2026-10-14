@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use devkit_common::{
     caller::Caller,
     forge::{self, Forge, NewPr, PrLocator},
@@ -172,7 +172,7 @@ impl Gates {
     /// PR base branch `base` sets for a PR opened at `head`. The
     /// weakened-tests gate applies to an agent's PR only. A human's PR whose
     /// settings cannot be read, for want of a merge base or a merge-base
-    /// `devkit.toml` that parses, is opened ungated.
+    /// `devkit.toml` that parses, is opened ungated, with a warning.
     pub(crate) fn read(dir: &Path, base: &str, head: &str, caller: Caller) -> Result<Self> {
         let ungated = Self {
             weakened: None,
@@ -183,17 +183,23 @@ impl Gates {
                 .map(|mb| weakened::config_at(dir, &mb).map(|cfg| (mb, cfg)))
                 .transpose()
         });
+        let unresolved = || {
+            anyhow!(
+                "the PR gates read their settings from the merge base with `{base}`, and \
+                 neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
+            )
+        };
         let (merge_base, cfg) = match (settings, caller) {
             (Ok(Some(settings)), _) => settings,
-            (Ok(None), Caller::Human) => return Ok(ungated),
+            (Ok(None), Caller::Human) => {
+                eprintln!("warning: opening the PR without its gates: {:#}", unresolved());
+                return Ok(ungated);
+            }
             (Err(e), Caller::Human) => {
                 eprintln!("warning: opening the PR without its gates: {e:#}");
                 return Ok(ungated);
             }
-            (Ok(None), Caller::Agent) => bail!(
-                "the PR gates read their settings from the merge base with `{base}`, and \
-                 neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
-            ),
+            (Ok(None), Caller::Agent) => return Err(unresolved()),
             (Err(e), Caller::Agent) => return Err(e),
         };
         let weakened = match caller {

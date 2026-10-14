@@ -307,6 +307,33 @@ fn a_merge_base_whose_pr_table_does_not_parse_opens_a_humans_pr_ungated() {
 }
 
 #[test]
+fn a_base_that_resolves_nowhere_opens_a_humans_pr_ungated_with_a_warning() {
+    let p = project(GATE);
+    let out = p.issue_as("human", &[
+        "pr",
+        "create",
+        "--no-push",
+        "--base",
+        "nowhere",
+        "--pr-title",
+        "feat: a thing",
+        "--pr-body",
+        "Adds a thing.",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("warning: opening the PR without its gates"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("`origin/nowhere`") && stderr.contains("`nowhere`"),
+        "names the base that does not resolve: {stderr}"
+    );
+    assert_eq!(body(&p), "Adds a thing.");
+}
+
+#[test]
 fn a_merge_base_whose_pr_table_does_not_parse_refuses_an_agents_pr() {
     let p = project("\n[pr]\ntest_files = 3\n");
     let config = p.project().join("devkit.toml");
