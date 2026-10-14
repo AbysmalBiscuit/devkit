@@ -5410,9 +5410,9 @@ steps = [
         assert_eq!(IssueEvent::Start.to_string(), "start");
     }
 
-    /// Resolve `repo` as a root repository layer under the home layer `home`,
-    /// with the error flattened to one line of its causes.
-    fn field_load(home: Option<&str>, repo: &str) -> Result<Config> {
+    /// Resolve `repo` as a root repository layer under the home layer
+    /// `home.toml`, with the error flattened to one line of its causes.
+    fn field_load(home: Option<&str>, repo: &str) -> Result<(Config, Provenance)> {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("repo");
         std::fs::create_dir_all(&dir).unwrap();
@@ -5423,7 +5423,6 @@ steps = [
         std::fs::write(dir.join("devkit.toml"), repo).unwrap();
         let home_arg = home.map(|_| home_path.as_path());
         resolve_with_home(None, &dir, None, None, home_arg, None)
-            .map(|(cfg, _)| cfg)
             .map_err(|e| anyhow::anyhow!("{e:#}"))
     }
 
@@ -5465,22 +5464,12 @@ steps = [
 
     #[test]
     fn a_merged_declaration_without_type_names_the_layer_of_its_level() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("repo");
-        std::fs::create_dir_all(&dir).unwrap();
-        let home = root.path().join("home.toml");
-        std::fs::write(
-            &home,
-            "[ticket.fields.github.priority]\nlevel = \"error\"\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("devkit.toml"), "[tracker]\nkind = \"github\"\n").unwrap();
-        let e = resolve_with_home(None, &dir, None, None, Some(&home), None).unwrap_err();
-        let e = format!("{e:#}");
+        let e = field_error(
+            Some("[ticket.fields.github.priority]\nlevel = \"error\"\n"),
+            "[tracker]\nkind = \"github\"\n",
+        );
         assert!(
-            e.contains("priority")
-                && e.contains("`type`")
-                && e.contains(&home.display().to_string()),
+            e.contains("priority") && e.contains("`type`") && e.contains("home.toml"),
             "{e}"
         );
     }
@@ -5550,7 +5539,8 @@ steps = [
              where = { project_field = \"PVTSSF_p\", name = \"Priority\" }\n\
              values = [{ name = \"High\", id = \"h\" }, { name = \"Low\", id = \"l\" }]\n",
         )
-        .unwrap();
+        .unwrap()
+        .0;
         let p = &cfg.ticket.fields.github["priority"];
         let names: Vec<&str> = p.values.iter().map(|v| v.name.as_str()).collect();
         assert_eq!(names, ["High", "Low"]);
@@ -5566,15 +5556,11 @@ steps = [
 
     #[test]
     fn levels_for_an_unused_tracker_do_not_fail_load() {
-        let home = "[ticket.fields.linear.team]\nlevel = \"error\"\n";
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("repo");
-        std::fs::create_dir_all(&dir).unwrap();
-        let home_path = root.path().join("home.toml");
-        std::fs::write(&home_path, home).unwrap();
-        std::fs::write(dir.join("devkit.toml"), "[defaults]\n").unwrap();
-        let (cfg, prov) =
-            resolve_with_home(None, &dir, None, None, Some(&home_path), None).unwrap();
+        let (cfg, prov) = field_load(
+            Some("[ticket.fields.linear.team]\nlevel = \"error\"\n"),
+            "[defaults]\n",
+        )
+        .unwrap();
         check_ticket_fields(&cfg, TrackerKind::Github, &prov.origin).unwrap();
         let e = format!(
             "{:#}",
@@ -5583,7 +5569,7 @@ steps = [
         assert!(
             e.contains("[ticket.fields.linear.team]")
                 && e.contains("`type` and `where`")
-                && e.contains(&home_path.display().to_string()),
+                && e.contains("home.toml"),
             "{e}"
         );
     }
