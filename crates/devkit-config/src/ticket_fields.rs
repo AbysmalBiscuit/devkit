@@ -85,6 +85,7 @@ pub struct FieldDecl {
     pub r#type: Option<FieldType>,
     /// Whether the field takes several values, passed comma-separated
     /// (`--arg labels=bug,enhancement`). A write sets exactly the values given.
+    /// Only `labels`, `assignees` and `blocked_by` hold several values.
     pub list: bool,
     /// The place on the tracker the value is written. Each place belongs to at
     /// most one field, and the status (`[github] status_field`, Linear's
@@ -273,6 +274,27 @@ impl Place {
                     | State
             ),
             TrackerKind::None => false,
+        }
+    }
+
+    /// Whether the place holds several values, so a `list` field may write it.
+    pub fn takes_several(&self) -> bool {
+        use Place::*;
+        match self {
+            Labels | Assignees | BlockedBy => true,
+            Assignee
+            | Milestone
+            | IssueType
+            | Parent
+            | Project
+            | ProjectField { .. }
+            | Team
+            | Priority
+            | Estimate
+            | Cycle
+            | ProjectMilestone
+            | DueDate
+            | State => false,
         }
     }
 
@@ -547,6 +569,27 @@ pub(crate) fn validate(
         if !place.valid_for(kind) {
             bail!(
                 "`{key}`{}: `where = {}` is not a place on {kind} tickets.",
+                note(cx, kind, name),
+                place.label()
+            );
+        }
+        if decl.list && !place.takes_several() {
+            let prefix = format!("ticket.fields.{kind}.{name}.");
+            let mut layers = cx.origin.iter().filter(|(k, _)| k.starts_with(&prefix));
+            let list_from = cx
+                .origin
+                .get(&format!("{prefix}list"))
+                .filter(|from| layers.any(|(_, p)| p != *from))
+                .map(|from| format!(" `list` is set in {}.", from.display()))
+                .unwrap_or_default();
+            let several = match kind {
+                TrackerKind::Github => "`labels`, `assignees` or `blocked_by`",
+                _ => "`labels` or `blocked_by`",
+            };
+            bail!(
+                "`{key}`{} has `list = true`, but `{}` holds one value, so a write would \
+                 keep only the first.{list_from} Remove `list`, or write the field to \
+                 {several}.",
                 note(cx, kind, name),
                 place.label()
             );

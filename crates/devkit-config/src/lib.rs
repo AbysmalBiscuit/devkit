@@ -5515,6 +5515,47 @@ steps = [
     }
 
     #[test]
+    fn a_list_on_a_single_valued_place_is_refused_naming_its_layer() {
+        for (kind, name, place) in [
+            ("github", "milestone", "\"milestone\""),
+            ("github", "kind", "\"issue_type\""),
+            ("github", "up", "\"parent\""),
+            (
+                "github",
+                "size",
+                "{ project_field = \"PVTF_s\", name = \"Size\" }",
+            ),
+            ("linear", "team", "\"team\""),
+            ("linear", "owner", "\"assignee\""),
+            ("linear", "due", "\"due_date\""),
+            ("linear", "up", "\"parent\""),
+        ] {
+            let e = field_error(
+                Some(&format!("[ticket.fields.{kind}.{name}]\nlist = true\n")),
+                &format!(
+                    "[github]\nproject = \"o/1\"\n\
+                     [ticket.fields.{kind}.{name}]\ntype = \"string\"\nwhere = {place}\n"
+                ),
+            );
+            assert!(
+                e.contains(&format!("[ticket.fields.{kind}.{name}]"))
+                    && e.contains("`list = true`")
+                    && e.contains("home.toml"),
+                "{kind}.{name}: {e}"
+            );
+        }
+        field_load(
+            None,
+            "[ticket.fields.github.area]\ntype = \"string\"\nlist = true\nwhere = \"labels\"\n\
+             [ticket.fields.github.owners]\ntype = \"user\"\nlist = true\nwhere = \"assignees\"\n\
+             [ticket.fields.github.blockers]\ntype = \"issue\"\nlist = true\nwhere = \"blocked_by\"\n\
+             [ticket.fields.linear.area]\ntype = \"string\"\nlist = true\nwhere = \"labels\"\n\
+             [ticket.fields.linear.blockers]\ntype = \"issue\"\nlist = true\nwhere = \"blocked_by\"\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn a_condition_on_an_undeclared_field_is_refused() {
         let e = field_error(
             None,

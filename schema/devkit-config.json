@@ -565,7 +565,7 @@
         },
         "list": {
           "default": false,
-          "description": "Whether the field takes several values, passed comma-separated\n(`--arg labels=bug,enhancement`). A write sets exactly the values given.",
+          "description": "Whether the field takes several values, passed comma-separated\n(`--arg labels=bug,enhancement`). A write sets exactly the values given.\nOnly `labels`, `assignees` and `blocked_by` hold several values.",
           "type": "boolean"
         },
         "type": {
