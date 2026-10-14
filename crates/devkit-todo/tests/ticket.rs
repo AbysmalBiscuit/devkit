@@ -149,6 +149,28 @@ fn a_mapped_name_the_tracker_lacks_fails() {
 }
 
 #[test]
+fn statuses_equal_but_for_case_fail_naming_both() {
+    let mut config = config();
+    config
+        .statuses
+        .insert(" todo".into(), devkit_config::MappedStatus::Completed);
+    let err = plan(
+        "github",
+        NODE,
+        &[],
+        &[ticket("65", "Todo")],
+        &known(),
+        &config,
+    )
+    .unwrap_err();
+    let shown = format!("{err:#}");
+    assert!(
+        shown.contains("\"Todo\"") && shown.contains("\" todo\""),
+        "{shown}"
+    );
+}
+
+#[test]
 fn an_agents_start_survives_an_unmoved_ticket() {
     let started = todo("65", "Todo", Status::InProgress {
         by: Holder::new("S"),

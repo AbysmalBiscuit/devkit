@@ -169,7 +169,8 @@ fn target(status: &TicketStatus, config: &TicketSyncConfig) -> Option<StatusKind
 }
 
 /// Fails, naming every fault, when a fetched ticket is in a status the map
-/// lacks or the map names a status `known_names` lacks.
+/// lacks, the map names one status twice, or the map names a status
+/// `known_names` lacks.
 fn validate(
     fetched: &[SyncedTicket],
     known_names: &[String],
@@ -192,6 +193,20 @@ fn validate(
             )
         })
         .collect();
+    let mut spellings: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for name in config.statuses.keys() {
+        spellings
+            .entry(name.trim().to_lowercase())
+            .or_default()
+            .push(name);
+    }
+    for names in spellings.values().filter(|names| names.len() > 1) {
+        let names: Vec<String> = names.iter().map(|n| format!("{n:?}")).collect();
+        faults.push(format!(
+            "[ticket.sync.statuses] maps {} as separate names, but status names match ignoring case and surrounding whitespace",
+            names.join(", ")
+        ));
+    }
     for name in config.statuses.keys() {
         if !known_names.iter().any(|known| same_status(known, name)) {
             let known: Vec<String> = known_names.iter().map(|n| format!("{n:?}")).collect();
