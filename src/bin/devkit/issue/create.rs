@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
+    caller::Caller,
     fields::{self, Report, Resolved, Surface},
     tracker::{
         Selected,
@@ -43,6 +44,7 @@ struct Checked<'a> {
     input: render::TicketArgs,
     resolved: Resolved,
     report: Report,
+    caller: Caller,
 }
 
 fn checked<'a>(
@@ -56,29 +58,25 @@ fn checked<'a>(
     let given = input.fields.with_defaults(decls);
     let mut resolved = render::resolve_fields(cfg, kind, decls, &given)?;
     field_write::number_issue_refs(sel.tracker.tracker.as_ref(), decls, &mut resolved)?;
-    let report = fields::check(
-        decls,
-        Surface::Create,
-        &resolved,
-        None,
-        devkit_common::caller::caller(),
-    );
+    let caller = devkit_common::caller::caller();
+    let report = fields::check(decls, Surface::Create, &resolved, None, caller);
     field_write::refuse("ticket create", decls, &report)?;
     Ok(Checked {
         decls,
         input,
         resolved,
         report,
+        caller,
     })
 }
 
 fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<()> {
-    let caller = devkit_common::caller::caller();
     let Checked {
         decls,
         input,
         resolved,
         report,
+        caller,
     } = checked(&args, sel, cfg, TrackerKind::Github)?;
 
     let rendered = render::render(
@@ -145,7 +143,6 @@ fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result
 }
 
 fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
-    let caller = devkit_common::caller::caller();
     let team_field = cfg
         .ticket
         .fields
@@ -163,6 +160,7 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
         input,
         resolved,
         report,
+        caller,
     } = checked(&args, sel, cfg, TrackerKind::Linear)?;
     let team = resolved
         .fields
