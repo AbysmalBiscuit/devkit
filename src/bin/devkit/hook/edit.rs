@@ -16,6 +16,7 @@ use devkit_common::{
 };
 use devkit_config::PolicyAction;
 use devkit_locks::Registry;
+use devkit_ports::ledger::Ledger;
 use pabal::Tool;
 
 use super::{
@@ -112,11 +113,10 @@ fn respond(
     if enabled {
         armed.arm(harness);
     }
-    let blocks = if enabled {
-        blocks(&write, gate, checkout, cwd)
-    } else {
-        Vec::new()
-    };
+    let mut blocks = ledger_blocks(&write, &Ledger::live(), cwd);
+    if enabled {
+        blocks.extend(self::blocks(&write, gate, checkout, cwd));
+    }
     let targets = match write {
         Write::Targets { paths, holder } => {
             if blocks.is_empty() {
@@ -156,6 +156,25 @@ fn respond(
         );
         harness_log::record(&settings, &rec);
     }
+}
+
+/// A refusal for each target inside devrun's run ledger. Only devrun writes
+/// the ledger, so this holds whether or not the project enforces write locks.
+fn ledger_blocks(write: &Write, ledger: &Ledger, cwd: &Path) -> Vec<String> {
+    let Write::Targets { paths, .. } = write else {
+        return Vec::new();
+    };
+    paths
+        .iter()
+        .filter(|p| ledger.contains(Path::new(p), cwd))
+        .map(|p| {
+            format!(
+                "{} `{p}` is in devrun's run ledger, which only `devrun task` writes. Run the \
+                 task to record a run; `devrun runs list` reads them.",
+                gate::PREFIX
+            )
+        })
+        .collect()
 }
 
 /// Why the gate refuses `write`, or nothing when it may proceed.

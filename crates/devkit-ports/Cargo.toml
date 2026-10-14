@@ -5,6 +5,7 @@ version = "0.14.22" # x-release-please-version
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json.workspace = true
@@ -17,12 +18,10 @@ devkit-common.workspace = true
 devkit-config.workspace = true
 devkit-command.workspace = true
 frizbee.workspace = true
+tempfile.workspace = true
 
 [features]
 daemon = ["dep:interprocess", "devkit-common/daemon"]
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

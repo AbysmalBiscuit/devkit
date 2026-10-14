@@ -82,6 +82,11 @@ pub fn locks_lock() -> PathBuf {
 pub fn logs_dir() -> PathBuf {
     state_dir().join("logs")
 }
+/// The run ledger: one record per `devrun task` run. Only devrun writes here,
+/// and the edit guard refuses an agent's write into it.
+pub fn runs_dir() -> PathBuf {
+    state_dir().join("runs")
+}
 /// Unix socket the daemon binds; clients connect here.
 pub fn port_socket_file() -> PathBuf {
     state_dir().join("ports.sock")
