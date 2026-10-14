@@ -142,66 +142,6 @@ pub fn view<'a>(
     })
 }
 
-/// Whether task `name` is defined in `cfg` as in `committed`: its entry and
-/// each step's, the `[templates.variables]` entries they or their app's
-/// `static_env` read, and their app's `path` and `static_env`. A task [`view`]
-/// refuses is never the same.
-pub fn same_definition(
-    cfg: &Config,
-    committed: &Config,
-    catalog: &HashMap<String, App>,
-    name: &str,
-) -> bool {
-    fn same<T: serde::Serialize>(a: Option<T>, b: Option<T>) -> bool {
-        match (serde_json::to_value(a), serde_json::to_value(b)) {
-            (Ok(a), Ok(b)) => a == b,
-            _ => false,
-        }
-    }
-    let Ok(v) = view(cfg, catalog, name) else {
-        return false;
-    };
-    let Ok(checked) = v.runnable() else {
-        return false;
-    };
-    let steps = v.task.steps.iter().filter_map(|s| match s {
-        Step::Task(t) => Some(t.as_str()),
-        Step::Up(_) => None,
-    });
-    let app = |c: &Config, app: &str| {
-        c.apps
-            .get(app)
-            .map(|a| (a.path.clone(), a.static_env.clone()))
-    };
-    let mut reads = checked.reads.clone();
-    let tasks: Vec<&str> = std::iter::once(name).chain(steps).collect();
-    for t in &tasks {
-        let Some(a) = cfg.tasks.get(*t).and_then(|t| t.app.as_deref()) else {
-            continue;
-        };
-        for c in [cfg, committed] {
-            let Some(app) = c.apps.get(a) else { continue };
-            let templates: Vec<&str> = app.static_env.values().map(String::as_str).collect();
-            match template::undeclared(&templates) {
-                Ok(names) => reads.extend(names),
-                Err(_) => return false,
-            }
-        }
-    }
-    tasks.iter().all(|t| {
-        let task = cfg.tasks.get(*t);
-        same(task, committed.tasks.get(*t))
-            && task
-                .and_then(|t| t.app.as_deref())
-                .is_none_or(|a| same(app(cfg, a), app(committed, a)))
-    }) && reads.iter().all(|r| {
-        same(
-            cfg.templates.variables.get(r),
-            committed.templates.variables.get(r),
-        )
-    })
-}
-
 /// Every configured task's [`view`], sorted by name.
 pub fn views<'a>(cfg: &'a Config, catalog: &HashMap<String, App>) -> Vec<TaskView<'a>> {
     let mut names: Vec<&String> = cfg.tasks.keys().collect();
@@ -563,11 +503,13 @@ pub fn resolve(
             &vars,
             catalog,
             worktree_root,
-            holder,
+            &Ports::Registry {
+                holder,
+                live: false,
+            },
             name,
             t,
             user_env,
-            false,
         )
     };
     match checked.kind {
@@ -605,6 +547,30 @@ fn effective_env<'a>(
     m
 }
 
+/// Where a command task's port references take their ports from.
+enum Ports<'a> {
+    /// Reserved in the registry for `holder`, with `require_live` enforced
+    /// when `live` is set.
+    Registry { holder: &'a str, live: bool },
+    /// Each app's base port, with no registry touched: what an
+    /// [`ExecutionPlan`] renders, since the ports a run binds are not part
+    /// of what the task is.
+    Base,
+}
+
+impl Ports<'_> {
+    fn take(&self, wanted: &[(String, u16)]) -> Result<BTreeMap<String, u16>> {
+        match self {
+            Ports::Registry { holder, .. } if !wanted.is_empty() => {
+                Ok(registry::alloc(holder, wanted, Role::Workspace)?
+                    .into_iter()
+                    .collect())
+            }
+            Ports::Registry { .. } | Ports::Base => Ok(wanted.iter().cloned().collect()),
+        }
+    }
+}
+
 /// Discovery + allocation for one command task [`view`] accepted, then
 /// delegate to the pure renderer. `ports[...]` references and (if `{{ port }}`
 /// is used) the task's own app are allocated in one `registry::alloc` call.
@@ -613,11 +579,10 @@ fn resolve_command(
     vars: &BTreeMap<String, String>,
     catalog: &HashMap<String, App>,
     worktree_root: &Path,
-    holder: &str,
+    ports: &Ports<'_>,
     name: &str,
     t: &TaskConfig,
     user_env: &BTreeMap<String, String>,
-    enforce_live: bool,
 ) -> Result<CommandPlan> {
     let app = t.app.as_deref().map(|a| &catalog[a]);
     let static_env = app.map(|a| a.static_env.clone()).unwrap_or_default();
@@ -659,7 +624,7 @@ fn resolve_command(
         }
     }
 
-    if enforce_live {
+    if let Ports::Registry { holder, live: true } = ports {
         let gated: Vec<&String> = t
             .require_live
             .iter()
@@ -676,17 +641,11 @@ fn resolve_command(
         }
     }
 
-    let ports: BTreeMap<String, u16> = if names.is_empty() {
-        BTreeMap::new()
-    } else {
-        let reqs: Vec<(String, u16)> = names
-            .iter()
-            .map(|n| (n.clone(), catalog[n].base_port))
-            .collect();
-        registry::alloc(holder, &reqs, Role::Workspace)?
-            .into_iter()
-            .collect()
-    };
+    let reqs: Vec<(String, u16)> = names
+        .iter()
+        .map(|n| (n.clone(), catalog[n].base_port))
+        .collect();
+    let ports = ports.take(&reqs)?;
     let own_port = refs
         .own_port
         .then(|| ports[&app.expect("checked above").name]);
@@ -728,12 +687,148 @@ pub fn resolve_step(
         &vars,
         catalog,
         worktree_root,
-        holder,
+        &Ports::Registry { holder, live: true },
         name,
         v.task,
         user_env,
-        true,
     )
+}
+
+/// What a run of a task executes once every config layer has merged and
+/// every template rendered: per step, the command task's app, argv, cwd and
+/// env, or the servers an `up` step launches. Ports render as each app's
+/// base port, so no registry is touched. Rendered env values may be
+/// secrets, so a plan is only compared, never printed, and has no `Debug`.
+#[derive(PartialEq, Eq)]
+pub struct ExecutionPlan(Vec<PlannedStep>);
+
+#[derive(PartialEq, Eq)]
+enum PlannedStep {
+    Run {
+        task: String,
+        app: Option<String>,
+        argv: Vec<String>,
+        cwd: PathBuf,
+        env: BTreeMap<String, String>,
+    },
+    Up(Vec<PlannedLaunch>),
+}
+
+#[derive(PartialEq, Eq)]
+struct PlannedLaunch {
+    app: String,
+    port: u16,
+    argv: Vec<String>,
+    cwd: PathBuf,
+    env: BTreeMap<String, String>,
+    url: String,
+}
+
+/// The [`ExecutionPlan`] of task `name` given `args` at `worktree_root`,
+/// rendered by the code `devrun task` and `devrun up` run it through.
+pub fn execution_plan(
+    cfg: &Config,
+    catalog: &HashMap<String, App>,
+    worktree_root: &Path,
+    name: &str,
+    args: &BTreeMap<String, String>,
+) -> Result<ExecutionPlan> {
+    let v = view(cfg, catalog, name)?;
+    let checked = v.runnable()?;
+    let vars = variables(cfg, worktree_root, args);
+    let command = |step: &str, t: &TaskConfig| -> Result<PlannedStep> {
+        let plan = resolve_command(
+            &vars,
+            catalog,
+            worktree_root,
+            &Ports::Base,
+            step,
+            t,
+            &BTreeMap::new(),
+        )?;
+        Ok(PlannedStep::Run {
+            task: plan.name,
+            app: t.app.clone(),
+            argv: plan.argv,
+            cwd: plan.cwd,
+            env: plan.env,
+        })
+    };
+    let steps = match checked.kind {
+        TaskKind::Command => vec![command(name, v.task)?],
+        TaskKind::Sequence => v
+            .task
+            .steps
+            .iter()
+            .map(|step| match step {
+                Step::Task(r) => command(r, &cfg.tasks[r]),
+                Step::Up(app) => planned_up(cfg, catalog, worktree_root, app),
+            })
+            .collect::<Result<_>>()?,
+    };
+    Ok(ExecutionPlan(steps))
+}
+
+/// The launches an `up` step of `app` makes, as `devrun up` plans them for
+/// the workspace role.
+fn planned_up(
+    cfg: &Config,
+    catalog: &HashMap<String, App>,
+    worktree_root: &Path,
+    app: &str,
+) -> Result<PlannedStep> {
+    let mut apps = vec![app.to_string()];
+    run::ensure_provider(catalog, &mut apps);
+    let vars = cfg.templates.defaults();
+    let ports: BTreeMap<String, u16> = run::wanted_ports(catalog, &apps, &vars)?
+        .into_iter()
+        .collect();
+    let provider = catalog
+        .iter()
+        .find(|(_, a)| a.provides_url)
+        .map(|(n, _)| n.as_str());
+    let launches = run::plan_group(
+        catalog,
+        &apps,
+        &ports,
+        provider,
+        worktree_root,
+        Role::Workspace,
+        &BTreeMap::new(),
+        &vars,
+    )?;
+    Ok(PlannedStep::Up(
+        launches
+            .into_iter()
+            .map(|p| PlannedLaunch {
+                app: p.app,
+                port: p.port,
+                argv: p.argv,
+                cwd: p.cwd,
+                env: p.env,
+                url: p.url,
+            })
+            .collect(),
+    ))
+}
+
+/// The [`ExecutionPlan`] of task `name` given `args` at `worktree_root`, as
+/// the tracked `devkit.toml` layers committed at `rev` define it for a run
+/// started in `dir` ([`crate::ledger::committed_config`]). `checkout` is
+/// any checkout of the repository, and `path_to_project` the doppler map
+/// app paths are inferred from.
+pub fn committed_plan(
+    checkout: &Path,
+    rev: &str,
+    dir: &str,
+    path_to_project: &HashMap<String, String>,
+    worktree_root: &Path,
+    name: &str,
+    args: &BTreeMap<String, String>,
+) -> Result<ExecutionPlan> {
+    let cfg = crate::ledger::committed_config(checkout, rev, dir)?;
+    let (catalog, _) = crate::apps::catalog(&cfg, path_to_project)?;
+    execution_plan(&cfg, &catalog, worktree_root, name, args)
 }
 
 /// The argv `run` of command task `name` renders to.
@@ -764,51 +859,6 @@ fn render_argv(
         "task `{name}` has an empty program"
     );
     Ok(argv)
-}
-
-/// The command steps a successful run of task `name` with `args` at
-/// `worktree_root` executes, each with the argv devrun renders for it, in
-/// the shape the run ledger records them. Rendered without touching the port
-/// registry, so a step whose `run` references a port is an error.
-pub fn planned_steps(
-    cfg: &Config,
-    catalog: &HashMap<String, App>,
-    worktree_root: &Path,
-    name: &str,
-    args: &BTreeMap<String, String>,
-) -> Result<Vec<crate::ledger::Step>> {
-    let v = view(cfg, catalog, name)?;
-    let checked = v.runnable()?;
-    let vars = variables(cfg, worktree_root, args);
-    let names: Vec<&str> = match checked.kind {
-        TaskKind::Command => vec![name],
-        TaskKind::Sequence => v
-            .task
-            .steps
-            .iter()
-            .filter_map(|step| match step {
-                Step::Task(r) => Some(r.as_str()),
-                Step::Up(_) => None,
-            })
-            .collect(),
-    };
-    names
-        .into_iter()
-        .map(|step| {
-            let t = &cfg.tasks[step];
-            let templates: Vec<&str> = t.run.iter().map(RunArg::template).collect();
-            let refs = template::referenced_ports(&templates, &vars)
-                .with_context(|| format!("scanning templates of task `{step}`"))?;
-            ensure!(
-                refs.apps.is_empty() && !refs.own_port,
-                "task `{step}` renders a port into its command, which only a run allocates"
-            );
-            Ok(crate::ledger::Step {
-                task: step.to_string(),
-                argv: render_argv(step, t, None, &BTreeMap::new(), &vars)?,
-            })
-        })
-        .collect()
 }
 
 /// Render one command task against an already-resolved port map. Registry-free

@@ -13,6 +13,9 @@ pub struct Loaded {
     pub config: Config,
     pub catalog: HashMap<String, App>,
     pub provenance: Provenance,
+    /// The doppler map app paths are inferred from, read from the
+    /// config's `defaults.doppler_yaml`; empty without one.
+    pub path_to_project: HashMap<String, String>,
     /// Apps the config named that the catalog could not resolve a path for.
     pub skipped: Vec<String>,
 }
@@ -61,6 +64,7 @@ pub fn load_quiet_in(checkout: &Checkout, explicit: Option<&Path>, start: &Path)
         config: cfg,
         catalog,
         provenance,
+        path_to_project: p2p,
         skipped,
     })
 }

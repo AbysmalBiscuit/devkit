@@ -2,24 +2,14 @@
 //! recorded passing on. Only `devrun task` writes the run ledger, so the
 //! record is evidence an agent cannot type into the PR body itself.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    path::Path,
-};
+use std::path::Path;
 
-use anyhow::{Context, Result, bail};
-use devkit_common::{
-    caller::Caller,
-    vcs::{Vcs, VersionControl},
-};
-use devkit_config::{
-    CONFIG_FILE, Config, Gate as GateKey, GateMode, PrGates, RequiredTask, Step, TaskConfig,
-};
+use anyhow::{Result, bail};
+use devkit_common::caller::Caller;
+use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask};
 use devkit_ports::{
-    apps::{self, App},
-    doppler,
     ledger::{Ledger, Run},
-    task,
+    load, task,
 };
 
 /// The verify gate for one `pr create`: the required run and the run that
@@ -38,9 +28,9 @@ pub(crate) struct Gate {
 impl Gate {
     /// The gate `gates` configures for a PR opened at `head` from the
     /// checkout at `dir`, or `None` when it is off or names no task. A run
-    /// qualifies only when the steps it ran are the ones the required task
-    /// renders to as `merge_base` defines it, so a branch cannot redefine
-    /// the task it is checked by.
+    /// qualifies only when the required task runs at `head` exactly as it
+    /// would at `merge_base`, so a branch cannot redefine the task it is
+    /// checked by.
     pub(crate) fn read(
         dir: &Path,
         merge_base: &str,
@@ -154,12 +144,11 @@ impl Gate {
     }
 }
 
-/// The latest of `passes`, all runs at `head`, whose steps are the ones
-/// `required` renders to, at the run's own worktree, as the merge base
-/// defines the task; or, when none is, why the latest one is not. None
-/// qualifies when `head` defines the task, a task its sequence runs, or an
-/// app those run in or bring up differently from the merge base, since the
-/// rendered argv does not show a change to a step's env, cwd or `up`.
+/// The latest of `passes`, all runs at `head`, whose task runs at `head` as
+/// it would at the merge base: the [`task::ExecutionPlan`] the committed
+/// config layers give at each, in the directory the run started in, is the
+/// same. Or, when none qualifies, why the latest one does not. The run's
+/// ledger record already says it ran the plan committed at `head`.
 fn qualifying(
     dir: &Path,
     merge_base: &str,
@@ -167,119 +156,62 @@ fn qualifying(
     required: &RequiredTask,
     passes: Vec<Run>,
 ) -> (Option<Run>, Option<String>) {
-    let unreadable = |e: anyhow::Error| {
-        Some(format!(
-            "A run at that commit passed, but the task's definition at the merge base \
-             cannot be read: {e:#}"
-        ))
-    };
-    let changed = || {
-        Some(format!(
-            "A run at that commit passed, but it ran other steps than `{task}` has at the \
-             merge base {base}: the task's definition changed from the merge base.",
-            task = required.task,
-            base = short(merge_base),
-        ))
-    };
-    let (cfg, catalog) = match tasks_at(dir, merge_base) {
-        Ok(found) => found,
-        Err(e) => return (None, unreadable(e)),
-    };
-    match config_at(dir, head) {
-        Ok(at_head) if definition(&at_head, &required.task) == definition(&cfg, &required.task) => {
-        }
-        Ok(_) => return (None, changed()),
+    let path_to_project = match load::load_quiet(None, dir) {
+        Ok(loaded) => loaded.path_to_project,
         Err(e) => {
             return (
                 None,
                 Some(format!(
-                    "A run at that commit passed, but the task's definition there cannot be \
-                     read: {e:#}"
+                    "A run at that commit passed, but this checkout's config does not load: {e:#}"
                 )),
             );
         }
-    }
+    };
+    let task = &required.task;
+    let base = short(merge_base);
     let mut rejected = None;
     for pass in passes {
-        let planned = task::planned_steps(
-            &cfg,
-            &catalog,
-            &pass.worktree,
-            &required.task,
-            &required.args,
-        );
-        let why = match planned {
-            Ok(steps) if steps == pass.steps => return (Some(pass), None),
-            Ok(_) => changed(),
-            Err(e) => Some(format!(
-                "A run at that commit passed, but `{task}` as the merge base {base} defines it \
-                 does not render: {e:#}",
-                task = required.task,
-                base = short(merge_base),
-            )),
-        };
-        if rejected.is_none() {
-            rejected = why;
-        }
-    }
-    (None, rejected)
-}
-
-/// The config and app catalog the required task renders from, as the
-/// `devkit.toml` committed at `rev` defines them.
-fn tasks_at(dir: &Path, rev: &str) -> Result<(Config, HashMap<String, App>)> {
-    let cfg = config_at(dir, rev)?;
-    let yaml = devkit_config::expand_tilde(&cfg.defaults.doppler_yaml);
-    let p2p = match std::fs::read_to_string(&yaml) {
-        Ok(y) => doppler::path_to_project(&y)?,
-        Err(_) => HashMap::new(),
-    };
-    let (catalog, _) = apps::catalog(&cfg, &p2p)?;
-    Ok((cfg, catalog))
-}
-
-/// The tasks and apps of the `devkit.toml` committed at `rev`.
-fn config_at(dir: &Path, rev: &str) -> Result<Config> {
-    Ok(match Vcs::at(dir).file_at(dir, rev, CONFIG_FILE)? {
-        Some(text) => Config::tasks_layer(&text)
-            .with_context(|| format!("reading {CONFIG_FILE} at {}", short(rev)))?,
-        None => Config::default(),
-    })
-}
-
-/// What a run of `task` executes, as `cfg` defines it: the task, each task
-/// its sequence runs, and each app those run in or bring up. Descriptions
-/// are left out, since they change nothing a run does.
-fn definition(cfg: &Config, task: &str) -> serde_json::Value {
-    let mut tasks = BTreeMap::new();
-    let mut apps = BTreeMap::new();
-    let mut names = vec![task];
-    if let Some(t) = cfg.tasks.get(task) {
-        for step in &t.steps {
-            match step {
-                Step::Task(name) => names.push(name),
-                Step::Up(app) => {
-                    apps.insert(app.as_str(), json(cfg.apps.get(app)));
+        let why = match pass.dir.as_deref() {
+            None => format!(
+                "A run at that commit passed, but its record does not say which directory it \
+                 started in, so what it ran cannot be rebuilt: run `{}` again.",
+                required.command()
+            ),
+            Some(run_dir) => {
+                let plan = |rev: &str| {
+                    task::committed_plan(
+                        dir,
+                        rev,
+                        run_dir,
+                        &path_to_project,
+                        &pass.worktree,
+                        task,
+                        &required.args,
+                    )
+                };
+                match (plan(head), plan(merge_base)) {
+                    (Ok(at_head), Ok(at_base)) if at_head == at_base => {
+                        return (Some(pass), None);
+                    }
+                    (Ok(_), Ok(_)) => format!(
+                        "A run at that commit passed, but `{task}` there does not run what it \
+                         runs at the merge base {base}: the task's definition changed from the \
+                         merge base."
+                    ),
+                    (Err(e), _) => format!(
+                        "A run at that commit passed, but `{task}` as that commit defines it \
+                         does not render: {e:#}"
+                    ),
+                    (_, Err(e)) => format!(
+                        "A run at that commit passed, but `{task}` as the merge base {base} \
+                         defines it does not render: {e:#}"
+                    ),
                 }
             }
-        }
+        };
+        rejected.get_or_insert(why);
     }
-    for name in names {
-        let t = cfg.tasks.get(name);
-        if let Some(app) = t.and_then(|t| t.app.as_deref()) {
-            apps.insert(app, json(cfg.apps.get(app)));
-        }
-        let undescribed = t.map(|t| TaskConfig {
-            description: None,
-            ..t.clone()
-        });
-        tasks.insert(name, json(undescribed.as_ref()));
-    }
-    serde_json::json!({ "tasks": tasks, "apps": apps })
-}
-
-fn json(value: Option<&impl serde::Serialize>) -> serde_json::Value {
-    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+    (None, rejected)
 }
 
 fn short(rev: &str) -> &str {

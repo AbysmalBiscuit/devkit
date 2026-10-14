@@ -404,3 +404,139 @@ fn a_passing_sequence_unchanged_from_the_merge_base_satisfies_the_gate() {
     assert!(ok, "{stderr}");
     assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
 }
+
+/// `project(gates)` with `layer` committed on `main` as `sub/devkit.toml`.
+fn project_with_nested_layer(gates: &str, layer: &str) -> ghfake::Fake {
+    let p = project(gates);
+    git(&p, &["checkout", "-q", "main"]);
+    let sub = p.project().join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("devkit.toml"), layer).unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "a nested layer"]);
+    git(&p, &["checkout", "-q", "-"]);
+    git(&p, &["rebase", "-q", "main"]);
+    serve_head(&p);
+    p
+}
+
+fn verify_in_sub(p: &ghfake::Fake) {
+    let sub = p.project().join("sub");
+    let out = p.devkit_here(&[
+        "run",
+        "-C",
+        sub.to_str().unwrap(),
+        "task",
+        "verify",
+        "--arg",
+        "scope=all",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn assert_redefined(p: &ghfake::Fake) {
+    assert_refused(p);
+    let (_, stderr) = create(p, "agent");
+    assert!(
+        stderr.contains("definition changed from the merge base"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_run_under_an_unchanged_nested_layer_qualifies() {
+    let p = project_with_nested_layer(GATE, "[tasks.verify.env]\nGIT_TRACE = \"0\"\n");
+    verify_in_sub(&p);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+    assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
+}
+
+#[test]
+fn a_branch_changing_the_tasks_env_in_a_nested_layer_is_refused() {
+    let p = project_with_nested_layer(GATE, "[tasks.verify.env]\nGIT_TRACE = \"0\"\n");
+    std::fs::write(
+        p.project().join("sub/devkit.toml"),
+        "[tasks.verify.env]\nGIT_TRACE = \"0\"\nGIT_CONFIG_NOSYSTEM = \"1\"\n",
+    )
+    .unwrap();
+    git(&p, &[
+        "commit",
+        "-q",
+        "-am",
+        "set an env on verify under sub",
+    ]);
+    serve_head(&p);
+    verify_in_sub(&p);
+    assert_redefined(&p);
+}
+
+/// Tasks reading the template variable `mode`, through their own `env` and
+/// through their app's `static_env`.
+const MODE_READERS: [&str; 2] = [
+    "[tasks.envy]\nrun = [\"git\", \"version\"]\nenv = { GIT_MODE = \"{{ mode }}\" }\n",
+    "[tasks.envy]\napp = \"tool\"\nrun = [\"git\", \"version\"]\n\
+     [apps.tool]\nbase_port = 39201\npath = \".\"\nlaunch = [\"git\", \"version\"]\n\
+     static_env = { GIT_MODE = \"{{ mode }}\" }\n",
+];
+
+fn project_reading_mode(reader: &str) -> ghfake::Fake {
+    project(&format!(
+        "{reader}\n[templates.variables]\nmode = \"full\"\n\n[pr.gates]\nverify_task = \"envy\"\n"
+    ))
+}
+
+#[test]
+fn a_task_reading_an_unchanged_template_variable_qualifies() {
+    for reader in MODE_READERS {
+        let p = project_reading_mode(reader);
+        task(&p, &["envy"]);
+        let (ok, stderr) = create(&p, "agent");
+        assert!(ok, "{reader}: {stderr}");
+        assert!(body(&p).contains("Exit code: 0"), "{reader}: {}", body(&p));
+    }
+}
+
+/// A variable read by the task's `env` or its app's `static_env` shapes
+/// what it runs, so a branch changing its default is refused.
+#[test]
+fn a_branch_changing_a_template_variable_the_task_reads_is_refused() {
+    for reader in MODE_READERS {
+        let p = project_reading_mode(reader);
+        let file = p.project().join("devkit.toml");
+        let toml = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, toml.replace("mode = \"full\"", "mode = \"none\"")).unwrap();
+        git(&p, &["commit", "-q", "-am", "change the variable"]);
+        serve_head(&p);
+        task(&p, &["envy"]);
+        let (ok, stderr) = create(&p, "agent");
+        assert!(!ok, "{reader}: {stderr}");
+        assert!(
+            stderr.contains("definition changed from the merge base"),
+            "{reader}: {stderr}"
+        );
+        assert!(!opened(&p), "{reader}: {}", p.calls());
+    }
+}
+
+#[test]
+fn a_pass_recorded_without_its_directory_does_not_satisfy_the_gate() {
+    let p = project(GATE);
+    verify(&p);
+    let runs = p.state().join("devkit/runs");
+    for entry in std::fs::read_dir(&runs).unwrap() {
+        let path = entry.unwrap().path();
+        let mut run: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(run["dir"].is_string(), "{run:#}");
+        run.as_object_mut().unwrap().remove("dir");
+        std::fs::write(&path, run.to_string()).unwrap();
+    }
+    assert_refused(&p);
+    let (_, stderr) = create(&p, "agent");
+    assert!(stderr.contains("which directory it started in"), "{stderr}");
+}

@@ -43,6 +43,12 @@ pub struct Run {
     pub repo: PathBuf,
     /// The worktree the run started in.
     pub worktree: PathBuf,
+    /// The directory the run started in, relative to `worktree`, with `/`
+    /// between components and empty at its root: where the config layers
+    /// it ran under apply. `None` when it could not be read, and such a run
+    /// satisfies no PR gate.
+    #[serde(default)]
+    pub dir: Option<String>,
     /// The full commit id checked out when the run started; `None` when it
     /// could not be read, as on a repository with no commits.
     pub head: Option<String>,
@@ -51,10 +57,10 @@ pub struct Run {
     /// the committed config defines it ([`Run::committed_definition`]), and
     /// no `--env` or `--env-file` was given.
     pub clean: bool,
-    /// The task's definition is the one the repository's committed
-    /// `devkit.toml` layers alone give at HEAD: no local, home, `--config`
-    /// or `$DEVKIT_CONFIG` layer changed it. `false` when that could not be
-    /// determined.
+    /// The task's execution plan ([`crate::task::ExecutionPlan`]) is the
+    /// one the repository's committed `devkit.toml` layers alone give at
+    /// HEAD: no local, home, `--config` or `$DEVKIT_CONFIG` layer changed
+    /// it. `false` when that could not be determined.
     #[serde(default)]
     pub committed_definition: bool,
     /// The names of the variables `--env` and `--env-file` set. Their values
@@ -211,39 +217,35 @@ fn resolve_existing(path: &Path) -> PathBuf {
     }
 }
 
-/// The config the repository's committed `devkit.toml` layers alone give at
-/// `start`: each tracked `devkit.toml` inside `worktree_root` that applies
-/// there, read as HEAD holds it. Local, home, ignored, explicit and
-/// out-of-tree layers are left out.
-pub fn committed_config(worktree_root: &Path, start: &Path) -> Result<devkit_config::Config> {
-    let root = std::fs::canonicalize(worktree_root)
-        .with_context(|| format!("resolving {}", worktree_root.display()))?;
-    let vcs = vcs::Vcs::at(&root);
-    let mut tables = Vec::new();
-    for layer in devkit_config::project_layers(start, None)? {
-        if layer.path.file_name() != Some(std::ffi::OsStr::new(devkit_config::CONFIG_FILE)) {
-            continue;
-        }
-        let Ok(path) = std::fs::canonicalize(&layer.path) else {
-            continue;
-        };
-        let Ok(rel) = path.strip_prefix(&root) else {
-            continue;
-        };
-        let rel: Vec<_> = rel.iter().map(|c| c.to_string_lossy()).collect();
-        let Some(body) = vcs.committed_file(&root, &rel.join("/"))? else {
-            continue;
-        };
-        let body = String::from_utf8(body)
-            .with_context(|| format!("reading the committed {}", path.display()))?;
-        let table: toml::Table = toml::from_str(&body)
-            .with_context(|| format!("parsing the committed {}", path.display()))?;
-        tables.push((path, table));
+/// The tasks the tracked `devkit.toml` layers committed at `rev` give in
+/// `dir`, relative to the repository root with `/` between components: the
+/// root's file and each one in a directory on the way down to `dir`, read
+/// from `rev` through `checkout`, any checkout of the repository. Local,
+/// home, explicit and out-of-tree layers are left out.
+pub fn committed_config(checkout: &Path, rev: &str, dir: &str) -> Result<devkit_config::Config> {
+    let vcs = vcs::Vcs::at(checkout);
+    let mut dirs = vec![String::new()];
+    for part in dir.split('/').filter(|p| !p.is_empty()) {
+        let parent = dirs.last().expect("the root");
+        dirs.push(if parent.is_empty() {
+            part.to_string()
+        } else {
+            format!("{parent}/{part}")
+        });
     }
-    let (merged, ..) = devkit_config::merge_layers(&tables);
-    toml::Value::Table(merged)
-        .try_into()
-        .context("deserializing the committed config")
+    let mut layers = Vec::new();
+    for d in dirs {
+        let path = if d.is_empty() {
+            devkit_config::CONFIG_FILE.to_string()
+        } else {
+            format!("{d}/{}", devkit_config::CONFIG_FILE)
+        };
+        if let Some(text) = vcs.file_at(checkout, rev, &path)? {
+            layers.push((PathBuf::from(path), text));
+        }
+    }
+    devkit_config::Config::tasks_layers(&layers)
+        .with_context(|| format!("reading the devkit.toml layers committed at {rev}"))
 }
 
 /// What the start of a run captured about the tree it ran on.
@@ -252,6 +254,7 @@ pub struct Start {
     args: BTreeMap<String, String>,
     repo: PathBuf,
     worktree: PathBuf,
+    dir: Option<String>,
     head: Option<String>,
     clean: bool,
     committed_definition: bool,
@@ -270,31 +273,58 @@ fn tree_state(root: &Path) -> (Option<String>, bool) {
 }
 
 impl Start {
-    /// Capture the tree state for a run of `task` at worktree `root`.
-    /// `committed_definition` says whether the task runs as the committed
-    /// config defines it; `env` names the variables `--env` and `env_file`
-    /// set.
+    /// Capture the tree state for a run of `task` started in `cwd`, inside
+    /// worktree `root`. `env` names the variables `--env` and `env_file`
+    /// set. The run counts as committed only once
+    /// [`Start::committed_definition`] says so.
     pub fn capture(
         root: &Path,
+        cwd: &Path,
         task: &str,
         args: &BTreeMap<String, String>,
-        committed_definition: bool,
         env: Vec<String>,
         env_file: Option<PathBuf>,
     ) -> Self {
         let (head, clean) = tree_state(root);
         let repo = vcs::primary_checkout(root).unwrap_or_else(|_| root.to_path_buf());
+        let worktree = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let dir = std::fs::canonicalize(cwd).ok().and_then(|cwd| {
+            let rel = cwd.strip_prefix(&worktree).ok()?;
+            rel.iter()
+                .map(|c| c.to_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+                .map(|parts| parts.join("/"))
+        });
         Self {
             task: task.to_string(),
             args: args.clone(),
             repo: std::fs::canonicalize(&repo).unwrap_or(repo),
-            worktree: std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
+            worktree,
+            dir,
             head,
             clean,
-            committed_definition,
+            committed_definition: false,
             env,
             env_file,
             started_at: devkit_common::harness_log::now_rfc3339(),
+        }
+    }
+
+    /// The commit checked out when the run started.
+    pub fn head(&self) -> Option<&str> {
+        self.head.as_deref()
+    }
+
+    /// See [`Run::dir`].
+    pub fn dir(&self) -> Option<&str> {
+        self.dir.as_deref()
+    }
+
+    /// Record whether the task runs as the committed config defines it.
+    pub fn committed_definition(self, committed: bool) -> Self {
+        Self {
+            committed_definition: committed,
+            ..self
         }
     }
 
@@ -317,6 +347,7 @@ impl Start {
             args: self.args,
             repo: self.repo,
             worktree: self.worktree,
+            dir: self.dir,
             head: self.head,
             exit_code,
             started_at: self.started_at,
@@ -491,6 +522,7 @@ mod tests {
             args: BTreeMap::new(),
             repo: "/r".into(),
             worktree: "/r".into(),
+            dir: Some(String::new()),
             head: Some(head.into()),
             clean,
             committed_definition: clean,

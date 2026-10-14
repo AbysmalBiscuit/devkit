@@ -2865,6 +2865,28 @@ impl Config {
             .try_into()
             .context("parsing devkit.toml's tasks")
     }
+
+    /// [`Config::tasks_layer`] across a stack of layer texts, lowest
+    /// precedence first, each its own directory's `devkit.toml`: the layers
+    /// a `[config] root = true` marker cuts off are dropped, and the rest
+    /// merge as [`merge_layers`] merges them.
+    pub fn tasks_layers(layers: &[(PathBuf, String)]) -> Result<Self> {
+        let mut tables = Vec::with_capacity(layers.len());
+        for (path, text) in layers {
+            let mut table: toml::Table =
+                toml::from_str(text).with_context(|| format!("parsing {}", path.display()))?;
+            if is_root_layer(&table) {
+                tables.clear();
+            }
+            read_renamed_keys(&mut table).with_context(|| format!("parsing {}", path.display()))?;
+            table.retain(|key, _| matches!(key, "tasks" | "apps" | "templates" | "defaults"));
+            tables.push((path.clone(), table));
+        }
+        let (merged, ..) = merge_layers(&tables);
+        toml::Value::Table(merged)
+            .try_into()
+            .context("parsing devkit.toml's tasks")
+    }
 }
 
 /// Templates renamed from their `issue_` spelling, old name first. A layer
@@ -3677,6 +3699,30 @@ launch = ["doppler", "run", "-c", "dev_local", "--", "nitro", "dev", "--port", "
 url_env = "FOUNDRY_API_BASE_URL"
 static_env = { SUPABASE_JWT_SECRET = "s" }
 "#;
+
+    #[test]
+    fn tasks_layers_merge_deeper_over_shallower_and_stop_at_a_root_marker() {
+        let layer = |path: &str, text: &str| (PathBuf::from(path), text.to_string());
+        let outer = layer(
+            "devkit.toml",
+            "[tasks.a]\nrun = [\"x\"]\n[tasks.b]\nrun = [\"b\"]\n",
+        );
+        let inner = layer("in/devkit.toml", "[tasks.a]\nrun = [\"y\"]\n");
+        let cfg = Config::tasks_layers(&[outer.clone(), inner.clone()]).unwrap();
+        assert_eq!(cfg.tasks["a"].run[0].template(), "y");
+        assert!(cfg.tasks.contains_key("b"));
+
+        let rooted = layer(
+            "in/devkit.toml",
+            "[config]\nroot = true\n[tasks.a]\nrun = [\"y\"]\n",
+        );
+        let cfg = Config::tasks_layers(&[outer, rooted]).unwrap();
+        assert!(
+            !cfg.tasks.contains_key("b"),
+            "the marker cuts off the outer layer"
+        );
+    }
+
     #[test]
     fn worktree_include_parses_and_defaults_empty() {
         let cfg: Config = toml::from_str(

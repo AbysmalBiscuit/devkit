@@ -247,6 +247,17 @@ pub fn resolve_ports(
     role: Role,
     variables: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, u16>> {
+    let reqs = wanted_ports(catalog, apps, variables)?;
+    Ok(registry::alloc(holder, &reqs, role)?.into_iter().collect())
+}
+
+/// What [`resolve_ports`] asks the registry for: each app it covers, with
+/// that app's base port.
+pub fn wanted_ports(
+    catalog: &HashMap<String, App>,
+    apps: &[String],
+    variables: &BTreeMap<String, String>,
+) -> Result<Vec<(String, u16)>> {
     let mut names: Vec<String> = apps.to_vec();
     for a in apps {
         let app = &catalog[a];
@@ -265,11 +276,10 @@ pub fn resolve_ports(
             }
         }
     }
-    let reqs: Vec<(String, u16)> = names
+    Ok(names
         .iter()
         .map(|n| (n.clone(), catalog[n].base_port))
-        .collect();
-    Ok(registry::alloc(holder, &reqs, role)?.into_iter().collect())
+        .collect())
 }
 
 /// Build a launch plan per app for one (role, holder) group. `ports` maps each
