@@ -59,7 +59,7 @@ pub struct Run {
     /// captured.
     pub tail: Option<Vec<String>>,
     /// The record's file. Filled when read, never stored.
-    #[serde(skip_deserializing)]
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
 }
 
