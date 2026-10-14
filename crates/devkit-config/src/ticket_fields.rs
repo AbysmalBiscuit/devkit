@@ -141,14 +141,6 @@ impl FieldDecl {
             .find(|v| v.name.eq_ignore_ascii_case(raw))
             .or_else(|| self.values.iter().find(|v| v.id == raw))
     }
-
-    /// The declared name of the value whose id is `id`, else `id` itself.
-    pub fn value_name(&self, id: &str) -> String {
-        self.values
-            .iter()
-            .find(|v| v.id == id)
-            .map_or_else(|| id.to_string(), |v| v.name.clone())
-    }
 }
 
 /// What a field's value is.

@@ -236,7 +236,7 @@ impl IssueFields {
                 .into_iter()
                 .map(|id| match decl.r#type {
                     Some(FieldType::User) => alias_of(people, &id),
-                    _ => decl.value_name(&id),
+                    _ => value_name(decl, place, &id),
                 })
                 .collect();
             if !names.is_empty() {
@@ -268,6 +268,14 @@ fn same_id(place: &Place, a: &str, b: &str) -> bool {
         Place::Labels | Place::Assignees => a.eq_ignore_ascii_case(b),
         _ => a == b,
     }
+}
+
+/// The declared name of the value whose id is `id` at `place`, else `id`.
+fn value_name(decl: &FieldDecl, place: &Place, id: &str) -> String {
+    decl.values
+        .iter()
+        .find(|v| same_id(place, &v.id, id))
+        .map_or_else(|| id.to_string(), |v| v.name.clone())
 }
 
 /// The ids a field's resolved values are written as.
@@ -710,7 +718,8 @@ impl GithubFieldWriter {
                 a.iter().all(|x| b.iter().any(|y| same_id(place, x, y)))
             };
             if !(covers(&want, &have) && covers(&have, &want)) {
-                let reads: Vec<String> = have.iter().map(|id| decl.value_name(id)).collect();
+                let reads: Vec<String> =
+                    have.iter().map(|id| value_name(decl, place, id)).collect();
                 let reads = if reads.is_empty() {
                     "nothing".to_string()
                 } else {
@@ -891,5 +900,38 @@ where = { project_field = "PVTF_e", name = "Estimate" }
             ("priority".to_string(), "P1".to_string()),
             ("milestone".to_string(), "v1.0".to_string())
         ]);
+    }
+
+    #[test]
+    fn a_label_reads_as_its_declared_name_ignoring_case() {
+        let d = Config::parse(
+            r#"
+[ticket.fields.github.kind]
+type = "enum"
+list = true
+where = "labels"
+values = [{ name = "Defect", id = "bug" }, { name = "Feature", id = "enhancement" }]
+"#,
+        )
+        .unwrap()
+        .ticket
+        .fields
+        .github;
+        let after = IssueFields {
+            labels: vec!["Bug".into()],
+            ..IssueFields::default()
+        };
+        assert_eq!(after.current(&d, &HashMap::new()).0["kind"], ["Defect"]);
+        let resolved = Resolved {
+            fields: BTreeMap::from([("kind".to_string(), vec![Value::Enum {
+                name: "Feature".into(),
+                id: "enhancement".into(),
+            }])]),
+            nones: BTreeSet::new(),
+        };
+        assert_eq!(GithubFieldWriter::verify(&d, &resolved, &after), [(
+            "kind".to_string(),
+            "Defect".to_string()
+        )]);
     }
 }
