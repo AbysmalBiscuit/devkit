@@ -99,8 +99,8 @@ impl<'a> Graph<'a> {
             .filter(|todo| is_open(&todo.status.kind()) && offered(todo))
             .collect();
         let is_member = |id: &str| members.iter().any(|todo| todo.id == id);
-        // A member waits outside when an open blocker is not a member, or is
-        // itself waiting outside. Neither is offered, and neither is a cycle.
+        // An open blocker outside the plan never finishes here, so a member
+        // waiting on it, directly or through another member, is not offered.
         let mut waiting_outside: Vec<&str> = members
             .iter()
             .filter(|todo| {
@@ -164,9 +164,7 @@ impl<'a> Graph<'a> {
                 .filter(|todo| !placed.contains_key(todo.id.as_str()))
                 .filter(|todo| indegree.get(todo.id.as_str()).copied().unwrap_or(1) == 0)
                 .collect();
-            if batches.is_empty() {
-                ready.retain(|todo| !outside(todo));
-            }
+            ready.retain(|todo| !outside(todo));
             if ready.is_empty() {
                 break;
             }
