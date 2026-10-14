@@ -221,15 +221,6 @@ fn items(decl: &FieldDecl, raw: &str) -> Vec<String> {
     out
 }
 
-/// The tracker identity key a `user` value needs on `kind`.
-fn identity_key(kind: TrackerKind) -> &'static str {
-    match kind {
-        TrackerKind::Github => "github",
-        TrackerKind::Linear => "linear",
-        TrackerKind::None => "none",
-    }
-}
-
 fn person_id(p: &Person, kind: TrackerKind) -> Option<&str> {
     match kind {
         TrackerKind::Github => p.github.as_deref(),
@@ -284,7 +275,7 @@ fn one(
             let id = person_id(p, kind).ok_or_else(|| {
                 format!(
                     "has no `{key}` identity; add `{key} = \"...\"` to `[people.{item}]`",
-                    key = identity_key(kind)
+                    key = kind.as_str()
                 )
             })?;
             Ok(Value::User {
