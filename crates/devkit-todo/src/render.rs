@@ -9,7 +9,17 @@ use std::{
 
 use devkit_common::ui::printable;
 
-use crate::{Holder, Status, StatusKind, Todo, graph::Plan};
+use crate::{
+    Holder, Status, StatusKind, Todo,
+    graph::{Graph, Plan},
+};
+
+/// What a listing says about blocking: the graph the lines were drawn from,
+/// and which ready todos earn a `ready` note.
+pub struct Notes<'a> {
+    pub graph: &'a Graph<'a>,
+    pub show_ready: &'a dyn Fn(&Todo) -> bool,
+}
 
 /// The plan as a person reads it: a header, the critical path, then one block
 /// per batch, and a `cycle:` line when some members never placed.
@@ -142,28 +152,45 @@ pub fn render_mermaid(plan: &Plan<'_>) -> String {
 /// The lists for the injected context: each node in `nodes` order, open todos
 /// in tree order, finished todos as one count line. A node with nothing open
 /// is left out.
-pub fn render_lists(nodes: &[String], todos: &[Todo], viewer: &Holder) -> String {
-    render(nodes, todos, viewer, false)
+pub fn render_lists(
+    nodes: &[String],
+    todos: &[Todo],
+    viewer: &Holder,
+    notes: &Notes<'_>,
+) -> String {
+    render(nodes, todos, viewer, false, notes)
 }
 
 /// As [`render_lists`], with completed todos shown in full as `- [x]`, for a
 /// person or agent asking for the listing.
-pub fn render_full(nodes: &[String], todos: &[Todo], viewer: &Holder) -> String {
-    render(nodes, todos, viewer, true)
+pub fn render_full(nodes: &[String], todos: &[Todo], viewer: &Holder, notes: &Notes<'_>) -> String {
+    render(nodes, todos, viewer, true, notes)
 }
 
-fn render(nodes: &[String], todos: &[Todo], viewer: &Holder, full: bool) -> String {
+fn render(
+    nodes: &[String],
+    todos: &[Todo],
+    viewer: &Holder,
+    full: bool,
+    notes: &Notes<'_>,
+) -> String {
     let sections: Vec<String> = nodes
         .iter()
         .filter_map(|node| {
             let here: Vec<&Todo> = todos.iter().filter(|t| t.node() == node).collect();
-            section(node, &here, viewer, full)
+            section(node, &here, viewer, full, notes)
         })
         .collect();
     sections.join("\n")
 }
 
-fn section(node: &str, todos: &[&Todo], viewer: &Holder, full: bool) -> Option<String> {
+fn section(
+    node: &str,
+    todos: &[&Todo],
+    viewer: &Holder,
+    full: bool,
+    notes: &Notes<'_>,
+) -> Option<String> {
     let shown: Vec<&Todo> = todos
         .iter()
         .copied()
@@ -181,7 +208,7 @@ fn section(node: &str, todos: &[&Todo], viewer: &Holder, full: bool) -> Option<S
     }
     let mut out = format!("## {}\n", printable(node));
     for (todo, depth) in tree(&shown) {
-        let _ = writeln!(out, "{}{}", "  ".repeat(depth), line(todo, viewer));
+        let _ = writeln!(out, "{}{}", "  ".repeat(depth), line(todo, viewer, notes));
     }
     let mut finished = Vec::new();
     if !full && count(StatusKind::Completed) > 0 {
@@ -196,18 +223,53 @@ fn section(node: &str, todos: &[&Todo], viewer: &Holder, full: bool) -> Option<S
     Some(out)
 }
 
-fn line(todo: &Todo, viewer: &Holder) -> String {
+fn line(todo: &Todo, viewer: &Holder, notes: &Notes<'_>) -> String {
     let (mark, note) = match &todo.status {
         Status::InProgress { by } if by == viewer => (' ', ", in progress".to_string()),
         Status::InProgress { by } => (' ', format!(", in progress: {}", printable(by.name()))),
         Status::Completed { .. } => ('x', String::new()),
         Status::Pending | Status::Cancelled { .. } => (' ', String::new()),
     };
+    let blocking = blocking_note(todo, notes);
+    let joined = match (note.is_empty(), blocking.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => note,
+        (true, false) => format!(", {blocking}"),
+        (false, false) => format!("{note}, {blocking}"),
+    };
     format!(
-        "- [{mark}] {} ({}{note})",
+        "- [{mark}] {} ({}{joined})",
         printable(&todo.description),
         printable(crate::short_id(&todo.id))
     )
+}
+
+/// `blocked by` while a blocker is open, `ready` once the last one closes
+/// and the caller is offered the todo, and nothing for a todo with no edges.
+fn blocking_note(todo: &Todo, notes: &Notes<'_>) -> String {
+    if todo.blocked_by.is_empty() {
+        return String::new();
+    }
+    let open = notes.graph.open_blockers(todo);
+    if !open.is_empty() {
+        let names = open
+            .iter()
+            .map(|blocker| {
+                let id = crate::short_id(&blocker.id);
+                if blocker.node() == todo.node() {
+                    id.to_string()
+                } else {
+                    format!("{id} on {}", blocker.node())
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!("blocked by {names}");
+    }
+    if notes.graph.is_ready(todo) && (notes.show_ready)(todo) {
+        return "ready".to_string();
+    }
+    String::new()
 }
 
 /// Todos without an order follow the ordered ones, oldest first; the id
@@ -328,6 +390,13 @@ mod tests {
         vec!["r.main".to_string()]
     }
 
+    fn quiet<'a>(graph: &'a Graph<'a>) -> Notes<'a> {
+        Notes {
+            graph,
+            show_ready: &|_| false,
+        }
+    }
+
     fn ip(by: &str) -> Status {
         Status::InProgress {
             by: Holder::new(by),
@@ -341,7 +410,12 @@ mod tests {
             todo("1", "one", None, 1024, Status::Pending),
         ];
         assert_eq!(
-            render_lists(&nodes(), &todos, &Holder::new("S")),
+            render_lists(
+                &nodes(),
+                &todos,
+                &Holder::new("S"),
+                &quiet(&Graph::new(&todos))
+            ),
             "## r.main\n- [ ] one (1)\n  - [ ] two (2)\n"
         );
     }
@@ -349,14 +423,24 @@ mod tests {
     #[test]
     fn another_holders_claim_is_named() {
         let todos = [todo("3", "x", None, 1024, ip("S/a1"))];
-        let out = render_lists(&nodes(), &todos, &Holder::new("S/a2"));
+        let out = render_lists(
+            &nodes(),
+            &todos,
+            &Holder::new("S/a2"),
+            &quiet(&Graph::new(&todos)),
+        );
         assert!(out.contains("- [ ] x (3, in progress: a1)\n"), "{out}");
     }
 
     #[test]
     fn own_claim_reads_in_progress() {
         let todos = [todo("3", "x", None, 1024, ip("S/a1"))];
-        let out = render_lists(&nodes(), &todos, &Holder::new("S/a1"));
+        let out = render_lists(
+            &nodes(),
+            &todos,
+            &Holder::new("S/a1"),
+            &quiet(&Graph::new(&todos)),
+        );
         assert!(out.contains("- [ ] x (3, in progress)\n"), "{out}");
     }
 
@@ -369,7 +453,12 @@ mod tests {
             todo("4", "d", None, 4096, Status::Pending),
         ];
         assert_eq!(
-            render_lists(&nodes(), &todos, &Holder::new("S")),
+            render_lists(
+                &nodes(),
+                &todos,
+                &Holder::new("S"),
+                &quiet(&Graph::new(&todos))
+            ),
             "## r.main\n- [ ] d (4)\n2 done, 1 cancelled\n"
         );
     }
@@ -377,7 +466,15 @@ mod tests {
     #[test]
     fn a_node_with_nothing_open_is_left_out() {
         let todos = [todo("1", "a", None, 1024, Status::Completed { by: None })];
-        assert_eq!(render_lists(&nodes(), &todos, &Holder::new("S")), "");
+        assert_eq!(
+            render_lists(
+                &nodes(),
+                &todos,
+                &Holder::new("S"),
+                &quiet(&Graph::new(&todos))
+            ),
+            ""
+        );
     }
 
     #[test]
@@ -387,8 +484,14 @@ mod tests {
         let mut global = todo("2", "wide", None, 1024, Status::Pending);
         global.project = None;
         let nodes = ["r.main.claude-s", "r.main", "r", "global"].map(String::from);
+        let listed = [global, deep];
         assert_eq!(
-            render_lists(&nodes, &[global, deep], &Holder::new("S")),
+            render_lists(
+                &nodes,
+                &listed,
+                &Holder::new("S"),
+                &quiet(&Graph::new(&listed))
+            ),
             "## r.main.claude-s\n- [ ] deep (1)\n\n## global\n- [ ] wide (2)\n"
         );
     }
@@ -400,7 +503,12 @@ mod tests {
             todo("2", "b", None, 2048, Status::Cancelled { by: None }),
         ];
         assert_eq!(
-            render_full(&nodes(), &todos, &Holder::new("S")),
+            render_full(
+                &nodes(),
+                &todos,
+                &Holder::new("S"),
+                &quiet(&Graph::new(&todos))
+            ),
             "## r.main\n- [x] a (1)\n1 cancelled\n"
         );
     }
@@ -409,10 +517,23 @@ mod tests {
     fn a_full_listing_counts_a_node_holding_only_cancelled_todos() {
         let todos = [todo("1", "a", None, 1024, Status::Cancelled { by: None })];
         assert_eq!(
-            render_full(&nodes(), &todos, &Holder::new("S")),
+            render_full(
+                &nodes(),
+                &todos,
+                &Holder::new("S"),
+                &quiet(&Graph::new(&todos))
+            ),
             "## r.main\n1 cancelled\n"
         );
-        assert_eq!(render_lists(&nodes(), &todos, &Holder::new("S")), "");
+        assert_eq!(
+            render_lists(
+                &nodes(),
+                &todos,
+                &Holder::new("S"),
+                &quiet(&Graph::new(&todos))
+            ),
+            ""
+        );
     }
 
     #[test]
@@ -425,7 +546,12 @@ mod tests {
             Status::Pending,
         )];
         assert_eq!(
-            render_lists(&nodes(), &todos, &Holder::new("S")),
+            render_lists(
+                &nodes(),
+                &todos,
+                &Holder::new("S"),
+                &quiet(&Graph::new(&todos))
+            ),
             "## r.main\n- [ ] x (96432cd6)\n"
         );
     }

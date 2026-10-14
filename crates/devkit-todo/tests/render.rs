@@ -1,6 +1,10 @@
 //! Plan and Mermaid text, rendered from todos built directly.
 
-use devkit_todo::{Holder, Status, Todo, graph::Graph, render};
+use devkit_todo::{
+    Holder, Status, Todo,
+    graph::Graph,
+    render::{self, Notes},
+};
 
 fn todo(id: &str, text: &str, status: Status, blocked_by: &[&str]) -> Todo {
     Todo {
@@ -72,4 +76,49 @@ flowchart LR
   class t1,t2 critical
 "
     );
+}
+
+fn shown(todos: &[Todo], show: &dyn Fn(&Todo) -> bool) -> String {
+    let graph = Graph::new(todos);
+    let notes = Notes {
+        graph: &graph,
+        show_ready: show,
+    };
+    render::render_lists(&["r.main".into()], todos, &Holder::new("S"), &notes)
+}
+
+#[test]
+fn blocked_and_ready_notes_render_in_the_parentheses() {
+    let todos = vec![
+        todo("1", "first", Status::Pending, &[]),
+        todo("2", "second", Status::Pending, &["1"]),
+    ];
+    let text = shown(&todos, &|_| true);
+    assert!(text.contains("- [ ] first (1)\n"), "{text}");
+    assert!(text.contains("- [ ] second (2, blocked by 1)"), "{text}");
+}
+
+#[test]
+fn a_blocker_off_the_listing_is_named_with_its_node() {
+    let mut blocker = todo("9", "elsewhere", Status::Pending, &[]);
+    blocker.project = Some("r.other".into());
+    let listed = vec![todo("2", "second", Status::Pending, &["9"])];
+    let all = vec![listed[0].clone(), blocker];
+    let graph = Graph::new(&all);
+    let notes = Notes {
+        graph: &graph,
+        show_ready: &|_| false,
+    };
+    let text = render::render_lists(&["r.main".into()], &listed, &Holder::new("S"), &notes);
+    assert!(
+        text.contains("- [ ] second (2, blocked by 9 on r.other)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn todos_without_blockers_render_unchanged() {
+    let todos = vec![todo("1", "first", Status::Pending, &[])];
+    let text = shown(&todos, &|_| false);
+    assert_eq!(text, "## r.main\n- [ ] first (1)\n");
 }

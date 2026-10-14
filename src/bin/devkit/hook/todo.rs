@@ -19,6 +19,7 @@ use devkit_common::{store::LockBusy, ui::printable, vcs::Checkout};
 use devkit_todo::{
     Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
+    graph::Graph,
     hold,
     holder::HOLDER_VAR,
     layout::{Facts, Layout},
@@ -204,7 +205,8 @@ pub(crate) fn hold(
     let (_, _, role) = resolve_role(payload, checkout, &store, &holder)?;
     let pending_node = role.hold_pending.then_some(role.node);
     let todos = store.list(&Filter::all()).ok()?;
-    let open = hold::open_for(&todos, &holder, pending_node.as_deref());
+    let graph = Graph::new(&todos);
+    let open = hold::open_for(&todos, &holder, pending_node.as_deref(), &graph);
     if open.is_empty() {
         return None;
     }
@@ -216,7 +218,12 @@ pub(crate) fn hold(
     let mut nodes: Vec<String> = open.iter().map(|t| t.node().to_string()).collect();
     nodes.dedup();
     let open: Vec<Todo> = open.into_iter().cloned().collect();
-    let lists = render::render_lists(&nodes, &open, &holder);
+    let graph = Graph::new(&open);
+    let notes = render::Notes {
+        graph: &graph,
+        show_ready: &|_| false,
+    };
+    let lists = render::render_lists(&nodes, &open, &holder, &notes);
     let reason = format!(
         "devkit todo: you have open todos.\n\n{}\n\n{HOLD_ADVICE}",
         lists.trim_end()

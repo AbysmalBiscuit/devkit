@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use crate::{Holder, Status, StatusKind, Todo, render, state_dir};
+use crate::{Holder, Status, StatusKind, Todo, graph::Graph, render, state_dir};
 
 /// The todos `holder` still owes: those it has in progress itself, on any
 /// node, plus the pending todos on `pending_node`. A claim a sub-agent of
@@ -13,12 +13,13 @@ pub fn open_for<'a>(
     todos: &'a [Todo],
     holder: &Holder,
     pending_node: Option<&str>,
+    graph: &Graph<'a>,
 ) -> Vec<&'a Todo> {
     let mut open: Vec<&Todo> = todos
         .iter()
         .filter(|t| match &t.status {
             Status::InProgress { by } => by == holder,
-            Status::Pending => pending_node == Some(t.node()),
+            Status::Pending => pending_node == Some(t.node()) && !graph.is_blocked(t),
             Status::Completed { .. } | Status::Cancelled { .. } => false,
         })
         .collect();
@@ -103,21 +104,21 @@ mod tests {
     #[test]
     fn counts_own_claims_on_any_node_and_pending_on_its_node() {
         let todos = todos();
-        let open = open_for(&todos, &Holder::new("S"), Some("N"));
+        let open = open_for(&todos, &Holder::new("S"), Some("N"), &Graph::new(&todos));
         assert_eq!(ids(&open), ["ip-s-other", "p-n"]);
     }
 
     #[test]
     fn a_sub_agent_counts_only_its_claims() {
         let todos = todos();
-        let open = open_for(&todos, &Holder::new("S/a1"), None);
+        let open = open_for(&todos, &Holder::new("S/a1"), None, &Graph::new(&todos));
         assert_eq!(ids(&open), ["ip-a1"]);
     }
 
     #[test]
     fn no_pending_node_counts_no_pending() {
         let todos = todos();
-        let open = open_for(&todos, &Holder::new("S"), None);
+        let open = open_for(&todos, &Holder::new("S"), None, &Graph::new(&todos));
         assert_eq!(ids(&open), ["ip-s-other"]);
     }
 
@@ -128,7 +129,7 @@ mod tests {
             todo("m", "M", 9, by("S")),
             todo("n1", "N", 1, Status::Pending),
         ];
-        let open = open_for(&todos, &Holder::new("S"), Some("N"));
+        let open = open_for(&todos, &Holder::new("S"), Some("N"), &Graph::new(&todos));
         assert_eq!(ids(&open), ["m", "n1", "n2"]);
     }
 

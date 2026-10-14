@@ -607,6 +607,15 @@ fn ticket_plan<'a>(
     )
 }
 
+/// Whether the ticket fence offers `todo` to this caller.
+fn offered_here(store: &Store, layout: &Layout, facts: &Facts, todo: &Todo) -> bool {
+    let wide = store.config().ready_outside_ticket;
+    match layout.ticket_root(facts, wide) {
+        Some(root) => layout.offered(todo.project.as_deref(), &root, facts),
+        None => true,
+    }
+}
+
 /// The todo `id` names, its full id included, or the error `no todo <id>`.
 fn resolve_id(store: &impl TodoStore, id: &str) -> Result<Todo> {
     store
@@ -752,7 +761,12 @@ fn list(
         return Ok(());
     }
     let nodes = list_nodes(&filter, &todos);
-    print!("{}", render::render_full(&nodes, &todos, viewer));
+    let graph = Graph::new(&todos);
+    let notes = render::Notes {
+        graph: &graph,
+        show_ready: &|todo| offered_here(store, layout, facts, todo),
+    };
+    print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
     Ok(())
 }
 
@@ -841,7 +855,14 @@ fn context(args: &ContextArgs) -> Option<String> {
             && layout.is_other_session(t.node(), &facts)
     });
     let nodes = list_nodes(&visible, &todos);
-    let mut lists = render::render_lists(&nodes, &todos, &viewer);
+    let graph = Graph::new(&todos);
+    let notes = render::Notes {
+        graph: &graph,
+        show_ready: &|todo| {
+            offered_here(&store, &layout, &facts, todo) && (!facts.subagent || todo.node() == own)
+        },
+    };
+    let mut lists = render::render_lists(&nodes, &todos, &viewer, &notes);
     let own_open = todos.iter().any(|t| {
         t.node() == own
             && matches!(
