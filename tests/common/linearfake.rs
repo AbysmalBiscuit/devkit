@@ -1,6 +1,6 @@
 //! A Linear GraphQL endpoint in a thread, for `DEVKIT_TEST_LINEAR_URL`: it
-//! answers each POST by the first registered substring its body contains, and
-//! records every body it was sent.
+//! answers each POST by the first registered substring its body contains, or
+//! hangs up without answering, and records every body it was sent.
 #![allow(dead_code)]
 
 use std::{
@@ -11,7 +11,7 @@ use std::{
 
 #[derive(Default)]
 struct Shared {
-    answers: Mutex<Vec<(String, String)>>,
+    answers: Mutex<Vec<(String, Option<String>)>>,
     bodies: Mutex<Vec<serde_json::Value>>,
 }
 
@@ -40,10 +40,20 @@ impl LinearFake {
     /// Answer a request whose body contains `needle` with `body`, replacing
     /// an earlier answer for the same `needle`.
     pub fn answer(&self, needle: &str, body: &str) {
+        self.register(needle, Some(body.to_string()));
+    }
+
+    /// Read a request whose body contains `needle`, then close the
+    /// connection without answering, replacing an earlier answer for it.
+    pub fn hang_up(&self, needle: &str) {
+        self.register(needle, None);
+    }
+
+    fn register(&self, needle: &str, reply: Option<String>) {
         let mut answers = self.shared.answers.lock().unwrap();
         match answers.iter_mut().find(|(n, _)| n == needle) {
-            Some(entry) => entry.1 = body.to_string(),
-            None => answers.push((needle.to_string(), body.to_string())),
+            Some(entry) => entry.1 = reply,
+            None => answers.push((needle.to_string(), reply)),
         }
     }
 
@@ -106,7 +116,10 @@ fn serve(shared: &Shared, stream: TcpStream) -> std::io::Result<()> {
             .iter()
             .find(|(needle, _)| text.contains(needle.as_str()))
             .map(|(_, a)| a.clone())
-            .unwrap_or_else(|| r#"{"errors":[{"message":"linearfake: no answer"}]}"#.into());
+            .unwrap_or_else(|| Some(r#"{"errors":[{"message":"linearfake: no answer"}]}"#.into()));
+        let Some(reply) = reply else {
+            return Ok(());
+        };
         write!(
             stream,
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}",

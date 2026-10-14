@@ -538,6 +538,10 @@ impl LinearFieldWriter {
                 issue,
                 existed: true,
             }),
+            (Err(e), Ok(None)) if crate::http::is_unreachable(&e) => Err(e.context(format!(
+                "Linear did not answer the create and has no ticket under its id {id}; rerun \
+                 the same `ticket create`: it passes the same id, so it files at most one ticket"
+            ))),
             (Err(e), Ok(None)) => Err(e.context("Linear did not file the ticket")),
             (created, Err(read)) => Err(read.context(format!(
                 "Linear may have filed the ticket ({}), and reading it back failed; rerun the \

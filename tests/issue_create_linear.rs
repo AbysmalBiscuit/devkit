@@ -229,6 +229,21 @@ fn a_refused_create_shows_linears_explanation() {
 }
 
 #[test]
+fn an_unanswered_create_with_no_ticket_says_a_rerun_is_safe() {
+    let fake = project(FIELDS);
+    let linear = LinearFake::start();
+    linear.hang_up("issueCreate(");
+    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
+    let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("rerun the same `ticket create`") && err.contains("at most one ticket"),
+        "{err}"
+    );
+}
+
+#[test]
 fn edit_on_linear_reads_first_and_writes_only_named_fields() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();
