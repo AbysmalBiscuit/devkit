@@ -229,7 +229,10 @@ fn an_outside_wait_is_not_printed_as_a_cycle() {
     assert!(plan.status.success(), "{}", stderr(&plan));
     let text = stdout(&plan);
     assert!(!text.contains("cycle:"), "{text}");
-    assert!(text.contains("mine"), "{text}");
+    assert!(!text.contains("mine"), "{text}");
+    let ready = p.devkit(&["todo", "ready"], &S1);
+    assert!(ready.status.success(), "{}", stderr(&ready));
+    assert!(!stdout(&ready).contains("mine"), "{}", stdout(&ready));
 }
 
 #[test]

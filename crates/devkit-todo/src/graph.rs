@@ -142,14 +142,11 @@ impl<'a> Graph<'a> {
                 .filter(|todo| !placed.contains_key(todo.id.as_str()))
                 .filter(|todo| indegree.get(todo.id.as_str()).copied().unwrap_or(1) == 0)
                 .collect();
+            if batches.is_empty() {
+                ready.retain(|todo| !outside(todo));
+            }
             if ready.is_empty() {
                 break;
-            }
-            if batches.is_empty() && !ready.iter().all(|todo| outside(todo)) {
-                ready.retain(|todo| !outside(todo));
-                if ready.is_empty() {
-                    break;
-                }
             }
             // Ranks come from the members still unplaced, so a later batch
             // prefers the longest chain that remains.
@@ -194,7 +191,7 @@ impl<'a> Graph<'a> {
         let mut cycle: Vec<&Todo> = members
             .iter()
             .copied()
-            .filter(|todo| !placed.contains_key(todo.id.as_str()))
+            .filter(|todo| !placed.contains_key(todo.id.as_str()) && !outside(todo))
             .collect();
         cycle.sort_by(|a, b| a.id.cmp(&b.id));
         let acyclic: Vec<&Todo> = members
