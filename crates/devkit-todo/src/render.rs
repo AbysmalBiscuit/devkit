@@ -275,13 +275,19 @@ fn section(
     Some(out)
 }
 
-fn line(todo: &Todo, viewer: &Holder, notes: &Notes<'_>) -> String {
-    let (mark, note) = match &todo.status {
-        Status::InProgress { by } if by == viewer => (' ', ", in progress".to_string()),
+/// A todo's checkbox mark and its holder note, `viewer` naming whose claim
+/// reads as the reader's own.
+fn mark_and_note(todo: &Todo, viewer: Option<&Holder>) -> (char, String) {
+    match &todo.status {
+        Status::InProgress { by } if Some(by) == viewer => (' ', ", in progress".to_string()),
         Status::InProgress { by } => (' ', format!(", in progress: {}", printable(by.name()))),
         Status::Completed { .. } => ('x', String::new()),
         Status::Pending | Status::Cancelled { .. } => (' ', String::new()),
-    };
+    }
+}
+
+fn line(todo: &Todo, viewer: &Holder, notes: &Notes<'_>) -> String {
+    let (mark, note) = mark_and_note(todo, Some(viewer));
     let blocking = blocking_note(todo, notes);
     let mut joined = match (note.is_empty(), blocking.is_empty()) {
         (true, true) => String::new(),
@@ -302,12 +308,7 @@ fn line(todo: &Todo, viewer: &Holder, notes: &Notes<'_>) -> String {
 /// A workspace todo listed under its ticket: its mark, text, id, holder, and
 /// the node it sits on, `viewer` naming whose claim reads as the reader's own.
 fn work_line(todo: &Todo, viewer: Option<&Holder>) -> String {
-    let (mark, note) = match &todo.status {
-        Status::InProgress { by } if Some(by) == viewer => (' ', ", in progress".to_string()),
-        Status::InProgress { by } => (' ', format!(", in progress: {}", printable(by.name()))),
-        Status::Completed { .. } => ('x', String::new()),
-        Status::Pending | Status::Cancelled { .. } => (' ', String::new()),
-    };
+    let (mark, note) = mark_and_note(todo, viewer);
     format!(
         "- [{mark}] {} ({}{note}) on {}",
         printable(&todo.description),
