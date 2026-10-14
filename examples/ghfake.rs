@@ -114,6 +114,13 @@ fn rest(dir: &Path, args: &[String]) {
         ),
         ("GET", ["repos", _, _, "issues"]) => print!("{}", read_or(dir, "rest_issues.json", "[]")),
         ("GET", ["repos", _, _, "issues", n]) => serve_or_404(dir, &format!("rest_issue_{n}.json")),
+        ("GET", ["repos", _, _, "issues", n, "dependencies", "blocked_by"]) => print!(
+            "{}",
+            read_or(dir, &format!("rest_issue_{n}_blocked_by.json"), "[]")
+        ),
+        ("GET", ["repos", _, _, "issues", n, "parent"]) => {
+            serve_or_404(dir, &format!("rest_issue_{n}_parent.json"))
+        }
         ("GET", ["repos", _, _, "issues", n, "events"]) => {
             print!(
                 "{}",

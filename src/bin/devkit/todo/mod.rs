@@ -5,6 +5,7 @@ pub(crate) mod hold;
 pub(crate) mod queue;
 pub(crate) mod store;
 pub(crate) mod sync;
+mod tickets;
 
 use std::{cell::LazyCell, collections::BTreeSet, path::Path};
 
@@ -124,15 +125,22 @@ pub enum TodoCommand {
     /// For text that must disappear, such as a pasted secret. Agents cancel
     /// instead, which keeps the record.
     Purge { id: String },
-    /// Sync the todo store with its sync target.
+    /// Sync the todo store with its sync target, then this repository's
+    /// tracker tickets.
     ///
     /// Only a taskchampion store with a sync target syncs. A failure is
     /// reported on stderr and exits 0: changes stay saved and sync with the
-    /// next write.
+    /// next write. With `[ticket.sync]` rules, the tickets they select then
+    /// become one todo each on the repository's node, reading the tracker
+    /// and never writing to it; a ticket in a status the map does not name
+    /// fails the sync and changes nothing.
     #[command(after_help = sync::hold_help())]
     Sync {
         #[arg(long, hide = true, help = sync::background_help())]
         background: bool,
+        /// Print the ticket changes a sync would make, and sync nothing.
+        #[arg(long, conflicts_with = "background")]
+        dry_run: bool,
         /// Write this sync's failure reason here. What a caller waiting on
         /// the sync passes, to learn its own result.
         #[arg(long, hide = true)]
@@ -282,7 +290,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     if let Some(warning) = &role.warning {
         eprintln!("devkit todo: {warning}");
     }
-    let writes = !matches!(
+    let mut writes = !matches!(
         cli.command,
         TodoCommand::Scope
             | TodoCommand::Role { .. }
@@ -401,12 +409,35 @@ pub fn run(cli: TodoCli) -> Result<()> {
         } => move_todo(&store, id, parent, top, order)?,
         TodoCommand::Sync {
             background,
+            dry_run,
             result_file,
-        } => match Store::sync_replica(&cwd)? {
-            Some(replica) => sync::run(&replica, background, result_file.as_deref())?,
-            None if !background => eprintln!("devkit todo: this todo store has no sync target"),
-            None => {}
-        },
+        } => {
+            let replica = Store::sync_replica(&cwd)?;
+            if let Some(replica) = replica.as_ref().filter(|_| !dry_run) {
+                sync::run(replica, background, result_file.as_deref())?;
+            }
+            let tickets = match (background, &place) {
+                (true, _) | (false, Place::Global) => None,
+                (false, _) => {
+                    let node = layout.fill("repo", &facts)?;
+                    tickets::sync_tickets(&store, &cwd, &node, dry_run)?
+                }
+            };
+            match tickets {
+                Some(report) if !dry_run => {
+                    writes = report.added + report.changed > 0;
+                    println!(
+                        "devkit todo: tickets synced: {} added, {} changed",
+                        report.added, report.changed
+                    );
+                }
+                Some(_) => {}
+                None if replica.is_none() && !background => {
+                    eprintln!("devkit todo: this todo store has no sync target")
+                }
+                None => {}
+            }
+        }
         TodoCommand::Context(_)
         | TodoCommand::Hold { .. }
         | TodoCommand::Schema { .. }
