@@ -652,7 +652,14 @@ when  = [{ if = { assignee = "lev" }, level = "warning" }]
         serde_json::json!({ "assignees": { "nodes": [{ "login": "LevValle" }] } }),
         serde_json::json!([]),
     ));
-    let out = fake.issue_as("agent", &["edit", "7", "--body", "B", "--none", "milestone"]);
+    let out = fake.issue_as("agent", &[
+        "edit",
+        "7",
+        "--body",
+        "B",
+        "--none",
+        "milestone",
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
         fake.calls().contains("issue edit 7 --body B\nOwner: lev\n"),
@@ -660,7 +667,10 @@ when  = [{ if = { assignee = "lev" }, level = "warning" }]
         fake.calls()
     );
     let err = stderr(&out);
-    assert!(err.contains("warning") && err.contains("milestone"), "{err}");
+    assert!(
+        err.contains("warning") && err.contains("milestone"),
+        "{err}"
+    );
 }
 
 #[test]

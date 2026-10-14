@@ -112,14 +112,7 @@ pub(crate) fn run(args: EditArgs) -> Result<()> {
     }
 
     let problems = if has_fields {
-        field_write::write_and_verify(
-            &writer,
-            number,
-            decls,
-            &resolved,
-            before,
-            &BTreeSet::new(),
-        )
+        field_write::write_and_verify(&writer, number, decls, &resolved, before, &BTreeSet::new())
     } else {
         Vec::new()
     };

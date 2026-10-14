@@ -560,9 +560,8 @@ pub(crate) fn validate(
             );
         }
         if in_use && kind == TrackerKind::Github {
-            github_writable(&key, ty, place, cx).map_err(|why| {
-                anyhow::anyhow!("`{key}`{} {why}", note(cx, kind, name))
-            })?;
+            github_writable(&key, ty, place, cx)
+                .map_err(|why| anyhow::anyhow!("`{key}`{} {why}", note(cx, kind, name)))?;
         }
         if ty == FieldType::Enum && decl.values.is_empty() && decl.max_level() == FieldLevel::Error
         {

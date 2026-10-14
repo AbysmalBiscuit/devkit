@@ -5590,7 +5590,12 @@ steps = [
     fn a_github_field_no_write_could_honour_is_refused_naming_it() {
         let project = "[github]\nproject = \"o/1\"\n";
         for (name, decl, extra, says) in [
-            ("board", "type = \"string\"\nwhere = \"project\"", "", "[github] project"),
+            (
+                "board",
+                "type = \"string\"\nwhere = \"project\"",
+                "",
+                "[github] project",
+            ),
             (
                 "size",
                 "type = \"number\"\nwhere = { project_field = \"PVTF_s\", name = \"Size\" }",
@@ -5609,8 +5614,18 @@ steps = [
                 project,
                 "type = \"issue\"",
             ),
-            ("parent", "type = \"string\"\nwhere = \"parent\"", "", "`issue`"),
-            ("blockers", "type = \"number\"\nlist = true\nwhere = \"blocked_by\"", "", "`issue`"),
+            (
+                "parent",
+                "type = \"string\"\nwhere = \"parent\"",
+                "",
+                "`issue`",
+            ),
+            (
+                "blockers",
+                "type = \"number\"\nlist = true\nwhere = \"blocked_by\"",
+                "",
+                "`issue`",
+            ),
         ] {
             let e = field_error(
                 None,
