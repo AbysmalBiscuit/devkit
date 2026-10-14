@@ -245,6 +245,8 @@ fn devkit_help_names_every_shim() {
         "lockm       = devkit locks",
         "docm        = devkit docs",
         "devkit-mcp  = devkit mcp",
+        "devrules    = devkit rules",
+        "todo        = devkit todo",
     ] {
         assert!(
             text.contains(line),
