@@ -120,6 +120,16 @@ pub struct Resolved {
     pub nones: BTreeSet<String>,
 }
 
+impl Resolved {
+    /// Each field a write sets, with its values: a `--none` clear has none.
+    pub fn written(&self) -> impl Iterator<Item = (&String, &[Value])> {
+        self.fields
+            .iter()
+            .map(|(name, values)| (name, values.as_slice()))
+            .chain(self.nones.iter().map(|name| (name, &[][..])))
+    }
+}
+
 /// A ticket's present field values by field name, as names (an enum value's
 /// name, a user's alias), for [`Surface::Edit`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -175,15 +175,10 @@ pub(crate) fn linear_finish(
     let mut problems = Vec::new();
     let mut failed: BTreeSet<String> = BTreeSet::new();
     let mut related = false;
-    for name in resolved.fields.keys().chain(&resolved.nones) {
+    for (name, values) in resolved.written() {
         if decls.get(name).and_then(|d| d.r#where.as_ref()) != Some(&Place::BlockedBy) {
             continue;
         }
-        let values = resolved
-            .fields
-            .get(name)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
         related = true;
         if let Err(e) = writer.set_blocked_by(&before, &written_ids(values), refs) {
             problems.push(format!("`{name}`{}: {e:#}", given_text(resolved, name)));

@@ -347,15 +347,10 @@ fn field_inputs(
     refs: &BTreeMap<String, String>,
 ) -> Result<Map<String, Json>> {
     let mut out = Map::new();
-    for name in resolved.fields.keys().chain(&resolved.nones) {
+    for (name, values) in resolved.written() {
         let Some(place) = decls.get(name).and_then(|d| d.r#where.as_ref()) else {
             continue;
         };
-        let values = resolved
-            .fields
-            .get(name)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
         if let Some((key, value)) =
             input_entry(place, &written_ids(values), refs).with_context(|| format!("`{name}`"))?
         {
@@ -606,16 +601,11 @@ impl LinearFieldWriter {
         after: &LinearIssue,
     ) -> Vec<(String, String)> {
         let mut out = Vec::new();
-        for name in resolved.fields.keys().chain(&resolved.nones) {
+        for (name, values) in resolved.written() {
             let Some(decl) = decls.get(name) else {
                 continue;
             };
             let Some(place) = &decl.r#where else { continue };
-            let values = resolved
-                .fields
-                .get(name)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
             let want: BTreeSet<String> = written_ids(values).into_iter().collect();
             let have: BTreeSet<String> = after.ids(place).into_iter().collect();
             if want != have {
