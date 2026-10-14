@@ -10,7 +10,12 @@ use std::{
     collections::{BTreeMap, VecDeque},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::JoinHandle,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -296,6 +301,72 @@ impl Tail {
         }
         if !partial.is_empty() {
             self.push(&partial);
+        }
+    }
+}
+
+/// A file a task's output stream is pointed at, followed by devrun while the
+/// task runs. The file is removed once followed; a writer the task left behind
+/// keeps writing to it unseen.
+pub struct Capture {
+    file: tempfile::NamedTempFile,
+}
+
+/// How long a follower waits for more output when it has read all there is.
+const FOLLOW_POLL: Duration = Duration::from_millis(20);
+
+impl Capture {
+    /// A fresh capture file, or `None` when the state directory cannot hold
+    /// one: the task then inherits devrun's stream and nothing is captured.
+    pub fn open() -> Option<Self> {
+        let dir = paths::task_output_dir();
+        std::fs::create_dir_all(&dir).ok()?;
+        let file = tempfile::NamedTempFile::new_in(&dir).ok()?;
+        Some(Self { file })
+    }
+
+    /// A handle for the task's stream to write through.
+    pub fn writer(&self) -> Result<std::fs::File> {
+        self.file
+            .as_file()
+            .try_clone()
+            .context("sharing the output capture file")
+    }
+
+    /// Echo the file to the stream `to` makes, keeping its lines in `tail`,
+    /// until `exited` is set and the file is read to its end.
+    pub fn follow<W: Write>(
+        self,
+        tail: &Arc<Tail>,
+        exited: &Arc<AtomicBool>,
+        to: impl FnOnce() -> W + Send + 'static,
+    ) -> JoinHandle<()> {
+        let (tail, exited) = (Arc::clone(tail), Arc::clone(exited));
+        std::thread::spawn(move || {
+            let Ok(reader) = self.file.reopen() else {
+                return;
+            };
+            tail.pump(Follow { reader, exited }, to());
+        })
+    }
+}
+
+/// A reader that waits at the end of a growing file until the writer is done.
+struct Follow {
+    reader: std::fs::File,
+    exited: Arc<AtomicBool>,
+}
+
+impl Read for Follow {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            // Read the flag before the file, so an empty read after the task
+            // exited means everything it wrote has been seen.
+            let done = self.exited.load(Ordering::Acquire);
+            match self.reader.read(buf)? {
+                0 if !done => std::thread::sleep(FOLLOW_POLL),
+                n => return Ok(n),
+            }
         }
     }
 }

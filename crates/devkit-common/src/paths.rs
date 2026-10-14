@@ -87,6 +87,10 @@ pub fn logs_dir() -> PathBuf {
 pub fn runs_dir() -> PathBuf {
     state_dir().join("runs")
 }
+/// Where `devrun task` captures a task's output while it runs.
+pub fn task_output_dir() -> PathBuf {
+    state_dir().join("output")
+}
 /// Unix socket the daemon binds; clients connect here.
 pub fn port_socket_file() -> PathBuf {
     state_dir().join("ports.sock")

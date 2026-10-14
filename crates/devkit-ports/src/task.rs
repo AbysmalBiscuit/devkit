@@ -735,67 +735,58 @@ fn resolve_command_with_ports(
     })
 }
 
-/// How long output still arriving after the task exits is copied before
-/// devrun stops waiting for it. A process the task left in the background can
-/// hold the pipe open indefinitely.
-const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
-
 /// Run a command plan in the foreground, its env overlaid on the process
 /// environment, keeping the tail of its output in `tail`. An output stream
-/// not attached to a terminal is piped through devrun and copied on
-/// unchanged; a terminal stream is inherited, so the task still sees a
+/// not attached to a terminal is captured into a file under the state
+/// directory, followed while the task runs and echoed to the same stream of
+/// devrun's; a terminal stream is inherited, so the task still sees a
 /// terminal. Returns the child's exit status.
+///
+/// A file rather than a pipe, so a process the task leaves in the background
+/// keeps a writable output after devrun exits instead of dying on a closed
+/// pipe, and devrun returns as soon as the task itself does.
 pub fn exec(
     plan: &CommandPlan,
     tail: &std::sync::Arc<crate::ledger::Tail>,
 ) -> Result<std::process::ExitStatus> {
     use std::{
         io::IsTerminal,
-        process::{Command, Stdio},
+        process::Command,
+        sync::{Arc, atomic::AtomicBool},
     };
+
+    use crate::ledger::Capture;
 
     let mut cmd = Command::new(&plan.argv[0]);
     cmd.args(&plan.argv[1..])
         .current_dir(&plan.cwd)
         .envs(&plan.env);
-    if !std::io::stdout().is_terminal() {
-        cmd.stdout(Stdio::piped());
+    let exited = Arc::new(AtomicBool::new(false));
+    let out = (!std::io::stdout().is_terminal())
+        .then(Capture::open)
+        .flatten();
+    let err = (!std::io::stderr().is_terminal())
+        .then(Capture::open)
+        .flatten();
+    if let Some(c) = &out {
+        cmd.stdout(c.writer()?);
     }
-    if !std::io::stderr().is_terminal() {
-        cmd.stderr(Stdio::piped());
+    if let Some(c) = &err {
+        cmd.stderr(c.writer()?);
     }
     let mut child = cmd
         .spawn()
         .with_context(|| format!("running task `{}` ({})", plan.name, plan.argv.join(" ")))?;
-    let (done, drained) = std::sync::mpsc::channel();
-    let mut pumps = 0;
-    if let Some(out) = child.stdout.take() {
-        let (tail, done) = (std::sync::Arc::clone(tail), done.clone());
-        std::thread::spawn(move || {
-            tail.pump(out, std::io::stdout());
-            let _ = done.send(());
-        });
-        pumps += 1;
+    let followers = [
+        out.map(|c| c.follow(tail, &exited, std::io::stdout)),
+        err.map(|c| c.follow(tail, &exited, std::io::stderr)),
+    ];
+    let status = child.wait();
+    exited.store(true, std::sync::atomic::Ordering::Release);
+    for follower in followers.into_iter().flatten() {
+        let _ = follower.join();
     }
-    if let Some(err) = child.stderr.take() {
-        let (tail, done) = (std::sync::Arc::clone(tail), done.clone());
-        std::thread::spawn(move || {
-            tail.pump(err, std::io::stderr());
-            let _ = done.send(());
-        });
-        pumps += 1;
-    }
-    let status = child
-        .wait()
-        .with_context(|| format!("waiting for task `{}`", plan.name))?;
-    let deadline = std::time::Instant::now() + DRAIN_GRACE;
-    for _ in 0..pumps {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        if drained.recv_timeout(left).is_err() {
-            break;
-        }
-    }
-    Ok(status)
+    status.with_context(|| format!("waiting for task `{}`", plan.name))
 }
 
 #[cfg(test)]

@@ -26,6 +26,9 @@ run = ["git", "-c", "x.msg={{ msg }}", "version"]
 
 [tasks.both]
 steps = [{ task = "pass" }, { task = "boom" }]
+
+[tasks.bg]
+run = ["git", "-c", "alias.bg=!(sleep 3; echo late; echo x > ../marker) & echo now", "bg"]
 "#;
 
 /// A repository with one commit, and a state home beside it rather than in it.
@@ -141,6 +144,35 @@ fn a_passing_then_a_failing_task_records_two_runs_with_real_exit_codes() {
         .map(|l| l.as_str().unwrap())
         .collect();
     assert!(tail.contains(&"going down"), "{tail:?}");
+}
+
+/// A writer a task leaves in the background outlives the run: its output goes
+/// to a capture file rather than a pipe devrun abandons, so it never meets a
+/// closed reader, and devrun returns as soon as the task itself exits.
+#[cfg(unix)]
+#[test]
+fn a_background_writer_left_by_a_task_survives_and_the_run_returns_at_once() {
+    let f = Fixture::new();
+    let started = std::time::Instant::now();
+    assert!(f.task("pass").status.success());
+    let baseline = started.elapsed();
+
+    let started = std::time::Instant::now();
+    let bg = f.task("bg");
+    let elapsed = started.elapsed();
+    assert!(bg.status.success(), "{bg:?}");
+    assert!(String::from_utf8_lossy(&bg.stdout).contains("now"), "{bg:?}");
+    assert!(
+        elapsed < baseline + std::time::Duration::from_millis(1500),
+        "devrun waited on the background writer: {elapsed:?} against {baseline:?}"
+    );
+
+    let marker = f.repo.parent().unwrap().join("marker");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !marker.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(marker.exists(), "the background writer died before writing");
 }
 
 #[test]
