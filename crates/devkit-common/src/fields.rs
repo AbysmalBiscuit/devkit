@@ -522,6 +522,25 @@ fn valid_values(decl: &FieldDecl) -> Option<String> {
     }
 }
 
+/// Why a write to `kind`'s tracker may have failed on a stale declared id.
+pub fn stale_hint(
+    kind: TrackerKind,
+    field: &str,
+    decl: &FieldDecl,
+    e: &anyhow::Error,
+) -> Option<String> {
+    let text = format!("{e:#}");
+    let names_an_id = decl.r#type == Some(FieldType::Enum)
+        && (text.contains("Could not resolve")
+            || text.contains("NOT_FOUND")
+            || text.contains("not found"));
+    names_an_id.then(|| {
+        format!(
+            "the declared id may be stale: check `values` under [ticket.fields.{kind}.{field}] against the tracker"
+        )
+    })
+}
+
 /// One block per problem: the field, what is wrong, how to set it (`--arg`,
 /// and `--none` when the field allows it), its description, its valid values
 /// and its default.

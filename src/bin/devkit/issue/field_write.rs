@@ -6,10 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
-    fields::{Problem, Report, Resolved, Value, message},
+    fields::{Problem, Report, Resolved, Value, message, stale_hint},
     tracker::{
         Tracker,
-        github_fields::{GithubFieldWriter, IssueFields, stale_hint},
+        github_fields::{GithubFieldWriter, IssueFields},
         linear_fields::{LinearFieldWriter, LinearIssue, written_ids},
     },
 };
