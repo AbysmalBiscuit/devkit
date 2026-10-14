@@ -435,6 +435,32 @@ fn capture_a_parent_updates_a_task_its_sub_agent_created() {
     assert_eq!(by_text(&p, "gamma").status.kind(), StatusKind::Completed);
 }
 
+#[test]
+fn task_update_blockers_are_mirrored() {
+    let p = Proj::new();
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
+    let alpha = by_text(&p, "alpha");
+    let mut update = fixture(&p, "claude-task-update.jsonl")[0].clone();
+    update["tool_input"] = json!({"taskId": "2", "addBlockedBy": ["1"]});
+    post_tool_use(&p, "claude-code", &[update]);
+    assert_eq!(by_text(&p, "beta").blocked_by, vec![alpha.id]);
+}
+
+#[test]
+fn a_mirrored_cycle_is_skipped() {
+    let p = Proj::new();
+    post_tool_use(&p, "claude-code", &fixture(&p, "claude-task-create.jsonl"));
+    let mut first = fixture(&p, "claude-task-update.jsonl")[0].clone();
+    first["tool_input"] = json!({"taskId": "2", "addBlockedBy": ["1"]});
+    post_tool_use(&p, "claude-code", &[first]);
+    let mut reverse = fixture(&p, "claude-task-update.jsonl")[0].clone();
+    reverse["tool_input"] = json!({"taskId": "1", "addBlockedBy": ["2"]});
+    let out = p.hook("post-tool-use", "claude-code", &reverse);
+    assert_eq!(out.status.code(), Some(0), "{}", todoenv::stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(by_text(&p, "alpha").blocked_by.is_empty());
+}
+
 const PLAN_SESSION: &str = "01a10214-8027-70e1-b13f-0bb35d607bed";
 
 fn on_node(p: &Proj, node: &str) -> Vec<devkit_todo::Todo> {

@@ -32,5 +32,26 @@
     "kind": "bool",
     "expect": true,
     "proof": "tests/todo_hooks.rs capture_task_create_and_update_mirror_into_the_store"
+  },
+  {
+    "id": "ready-after-done",
+    "question": "Todo 4 is blocked by 1. Todo 5 is blocked by 1 and 2. You run `devkit todo done 1`. Which todo is ready?",
+    "kind": "text",
+    "expect": ["4"],
+    "proof": "tests/todo_blocking.rs done_prints_what_it_unblocked_once"
+  },
+  {
+    "id": "subagent-unblocked",
+    "question": "You are a sub-agent. `devkit todo done` printed `unblocked: 3` for a todo on your manager's list. Should you start that todo?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/todo_context.rs a_subagent_sees_no_ready_note_on_its_managers_list"
+  },
+  {
+    "id": "ready-other-ticket",
+    "question": "Does `devkit todo ready` show a todo that belongs to another ticket?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/todo_blocking.rs another_tickets_ready_todo_is_not_offered_by_default"
   }
 ]

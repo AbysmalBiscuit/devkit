@@ -19,7 +19,7 @@ use devkit_common::{store::LockBusy, ui::printable, vcs::Checkout};
 use devkit_todo::{
     Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
-    graph::Graph,
+    graph::{self, Graph},
     hold,
     holder::HOLDER_VAR,
     layout::{Facts, Layout},
@@ -218,7 +218,7 @@ pub(crate) fn hold(
     let mut nodes: Vec<String> = open.iter().map(|t| t.node().to_string()).collect();
     nodes.dedup();
     let open: Vec<Todo> = open.into_iter().cloned().collect();
-    let graph = Graph::new(&open);
+    let graph = Graph::new(&todos);
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|_| false,
@@ -584,11 +584,41 @@ fn task_update(c: &Capture<'_>, input: &Value) -> Result<()> {
     }
     if let Some(to) = input["status"].as_str().and_then(native_status) {
         c.store.apply(&Edit::SetStatus {
-            id,
+            id: id.clone(),
             to,
             actor: c.actor.clone(),
         })?;
     }
+    mirror_blockers(c, &id, input)
+}
+
+/// Records `addBlockedBy` as edges on the mirrored todo. An unknown native
+/// id is skipped. An edge that would close a cycle is skipped, and the hook
+/// still exits 0.
+fn mirror_blockers(c: &Capture<'_>, id: &str, input: &Value) -> Result<()> {
+    let Some(blockers) = input["addBlockedBy"].as_array() else {
+        return Ok(());
+    };
+    let mut by = Vec::new();
+    for native in blockers {
+        let Some(native) = native.as_str() else {
+            continue;
+        };
+        if let Some(blocker) = c.map.lookup(c.harness, &c.actor, native)? {
+            by.push(blocker);
+        }
+    }
+    if by.is_empty() {
+        return Ok(());
+    }
+    let todos = c.store.list(&Filter::all())?;
+    if graph::cycle_through(&todos, id, &by).is_some() {
+        return Ok(());
+    }
+    c.store.apply(&Edit::Block {
+        id: id.to_string(),
+        by,
+    })?;
     Ok(())
 }
 
