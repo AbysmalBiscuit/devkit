@@ -38,7 +38,7 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
         &cfg,
         "ticket create",
         render::Title::Input(&args.title),
-        args.body.as_deref().unwrap_or_default(),
+        Some(args.body.as_deref().unwrap_or_default()),
         &input.template,
         &render::shown(decls, &resolved),
         caller,

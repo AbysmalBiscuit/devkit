@@ -89,7 +89,7 @@ pub(crate) fn run(args: EditArgs) -> Result<()> {
             &cfg,
             "ticket edit",
             title,
-            body.unwrap_or_default(),
+            body,
             &input.template,
             &shown,
             caller,

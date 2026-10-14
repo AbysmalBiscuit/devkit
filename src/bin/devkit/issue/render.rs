@@ -42,20 +42,24 @@ pub(crate) enum Title<'a> {
     Kept(&'a str),
 }
 
-/// The required args the issue templates rendered for `title` read that
-/// `given` does not supply.
+/// The required args the issue templates rendered for `title`, and for the
+/// body when `body`, read that `given` does not supply.
 pub(crate) fn missing(
     cfg: &Config,
     title: Title<'_>,
+    body: bool,
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<Vec<Missing>> {
     let tmpls = &cfg.templates;
-    let rendered: &[&str] = match title {
-        Title::Input(_) => &[tmpls.ticket_title(), tmpls.ticket_body()],
-        Title::Kept(_) => &[tmpls.ticket_body()],
-    };
-    missing_required(cfg, rendered, ISSUE_CONTEXT_KEYS, given, caller)
+    let mut rendered = Vec::new();
+    if let Title::Input(_) = title {
+        rendered.push(tmpls.ticket_title());
+    }
+    if body {
+        rendered.push(tmpls.ticket_body());
+    }
+    missing_required(cfg, &rendered, ISSUE_CONTEXT_KEYS, given, caller)
 }
 
 fn title_context(title: &str) -> serde_json::Value {
@@ -161,18 +165,23 @@ pub(crate) fn shown(
 }
 
 /// Refuse on a missing required arg, naming `surface`, then render the title
-/// and the body. `fields` is what [`shown`] gives the templates.
+/// and, unless `body` is `None`, the body; with `None` the body template is
+/// neither rendered nor asked for, and the body comes back empty. `fields` is
+/// what [`shown`] gives the templates.
 pub(crate) fn render(
     cfg: &Config,
     surface: &str,
     title: Title<'_>,
-    body: &str,
+    body: Option<&str>,
     given: &BTreeMap<String, String>,
     fields: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<Rendered> {
     let tmpls = &cfg.templates;
-    devkit_common::required::ensure_supplied(surface, &missing(cfg, title, given, caller)?)?;
+    devkit_common::required::ensure_supplied(
+        surface,
+        &missing(cfg, title, body.is_some(), given, caller)?,
+    )?;
     let mut values = tmpls.defaults();
     values.extend(fields.clone());
     values.extend(given.clone());
@@ -190,13 +199,16 @@ pub(crate) fn render(
     if title.trim().is_empty() {
         bail!("--title is required: the `ticket_title` template rendered empty");
     }
-    let body = render_review(
-        tmpls.ticket_body(),
-        "ticket_body",
-        &body_context(body, &title),
-        &values,
-        None,
-    )?;
+    let body = match body {
+        Some(body) => render_review(
+            tmpls.ticket_body(),
+            "ticket_body",
+            &body_context(body, &title),
+            &values,
+            None,
+        )?,
+        None => String::new(),
+    };
     Ok(Rendered { title, body })
 }
 
@@ -225,7 +237,7 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
         cfg,
         "ticket render",
         Title::Input(&args.title),
-        args.body.as_deref().unwrap_or_default(),
+        Some(args.body.as_deref().unwrap_or_default()),
         &input.template,
         &shown(decls, &resolved),
         devkit_common::caller::caller(),

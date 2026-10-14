@@ -159,6 +159,7 @@ fn required_hint(checkout: &Checkout, cwd: &Path, kind: Kind) -> String {
         Kind::Issue => render::missing(
             &cfg,
             render::Title::Input(""),
+            true,
             &BTreeMap::new(),
             Caller::Agent,
         ),

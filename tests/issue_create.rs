@@ -104,6 +104,16 @@ fn edit_with_a_title_replaces_it_with_the_rendered_title() {
 }
 
 #[test]
+fn a_title_only_edit_asks_only_for_what_the_title_reads() {
+    let fake = fake("github");
+    let out = fake.issue(&["edit", "7", "--title", "T"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let calls = fake.calls();
+    assert!(calls.contains("issue edit 7 --title T"), "{calls}");
+    assert!(!calls.contains("--body"), "{calls}");
+}
+
+#[test]
 fn edit_refuses_a_missing_required_arg_before_gh_runs() {
     let fake = fake("github");
     fake.serve_issue("the old body");
