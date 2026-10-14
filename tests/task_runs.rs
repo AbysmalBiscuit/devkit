@@ -33,6 +33,9 @@ run = ["git", "-c", "alias.bg=!(sleep 3; echo late; echo x > ../marker) & echo n
 [tasks.mix]
 run = ["git", "-c", "alias.mix=!echo out1; echo err1 >&2; echo out2; echo err2 >&2; echo out3", "mix"]
 
+[tasks.peek]
+run = ["git", "-c", "alias.peek=!ls -A \"$XDG_STATE_HOME/devkit/output\"; echo end", "peek"]
+
 [apps.web]
 base_port = 39181
 path = "."
@@ -241,6 +244,22 @@ fn a_background_writer_left_by_a_task_survives_and_the_run_returns_at_once() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     assert!(marker.exists(), "the background writer died before writing");
+}
+
+/// A capture file has no name while the task runs, so a devrun killed before
+/// it cleans up leaves nothing behind in the state directory.
+#[cfg(unix)]
+#[test]
+fn a_capture_file_is_unlinked_while_the_task_runs() {
+    let f = Fixture::new();
+    let out = f.task("peek");
+    assert!(out.status.success(), "{out:?}");
+    assert!(f.state.join("devkit/output").is_dir(), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "end",
+        "the capture directory held a file while the task ran"
+    );
 }
 
 /// With stdout and stderr on one file, as `2>&1` leaves them, the task's

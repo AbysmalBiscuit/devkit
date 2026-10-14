@@ -378,10 +378,16 @@ impl Tail {
 }
 
 /// A file a task's output stream is pointed at, followed by devrun while the
-/// task runs. The file is removed once followed; a writer the task left behind
-/// keeps writing to it unseen.
+/// task runs. A writer the task left behind keeps writing to it unseen.
+///
+/// On Unix the file is unlinked as soon as both handles are open, so a devrun
+/// killed mid-run leaves no file behind. Elsewhere an open file cannot be
+/// removed, so it is removed once followed.
 pub struct Capture {
-    file: tempfile::NamedTempFile,
+    writer: std::fs::File,
+    reader: std::fs::File,
+    #[cfg(not(unix))]
+    _named: tempfile::NamedTempFile,
 }
 
 /// How long a follower waits for more output when it has read all there is.
@@ -393,14 +399,23 @@ impl Capture {
     pub fn open() -> Option<Self> {
         let dir = paths::task_output_dir();
         std::fs::create_dir_all(&dir).ok()?;
-        let file = tempfile::NamedTempFile::new_in(&dir).ok()?;
-        Some(Self { file })
+        let named = tempfile::NamedTempFile::new_in(&dir).ok()?;
+        // Separate opens, so the reader keeps its own offset.
+        let writer = named.as_file().try_clone().ok()?;
+        let reader = named.reopen().ok()?;
+        #[cfg(unix)]
+        named.close().ok()?;
+        Some(Self {
+            writer,
+            reader,
+            #[cfg(not(unix))]
+            _named: named,
+        })
     }
 
     /// A handle for the task's stream to write through.
     pub fn writer(&self) -> Result<std::fs::File> {
-        self.file
-            .as_file()
+        self.writer
             .try_clone()
             .context("sharing the output capture file")
     }
@@ -415,9 +430,7 @@ impl Capture {
     ) -> JoinHandle<()> {
         let (tail, exited) = (Arc::clone(tail), Arc::clone(exited));
         std::thread::spawn(move || {
-            let Ok(reader) = self.file.reopen() else {
-                return;
-            };
+            let Self { reader, .. } = self;
             tail.pump(Follow { reader, exited }, to());
         })
     }
