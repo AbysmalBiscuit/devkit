@@ -127,6 +127,20 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
     here.min(args_match(patterns, args))
 }
 
+/// Whether `inv` runs devkit's own binary, judging its program against the
+/// search path it runs with. A search path the analysis cannot name runs
+/// nothing of devkit's.
+pub fn runs_own(inv: &Invocation, own: &OwnBinary) -> bool {
+    inv.program.known().is_some_and(|p| {
+        let cwd = inv.cwd.as_deref().map(Path::new);
+        match &inv.search_path {
+            SearchPath::Inherited => own.runs(p, cwd),
+            SearchPath::Set(Value::Known(path)) => own.on_path(path.into()).runs(p, cwd),
+            SearchPath::Set(Value::Unknown | Value::Ephemeral(_) | Value::Within(_)) => false,
+        }
+    })
+}
+
 /// Decide over an analysis. Every invocation is checked, nested ones
 /// included; findings keep invocation order, then rule name order, and each
 /// distinct finding appears once however many times a loop repeats it.
@@ -142,14 +156,7 @@ pub fn decide(
 ) -> Verdict {
     let mut verdict = Verdict::default();
     for inv in &analysis.invocations {
-        let own_binary = inv.program.known().is_some_and(|p| {
-            let cwd = inv.cwd.as_deref().map(Path::new);
-            match &inv.search_path {
-                SearchPath::Inherited => own.runs(p, cwd),
-                SearchPath::Set(Value::Known(path)) => own.on_path(path.into()).runs(p, cwd),
-                SearchPath::Set(Value::Unknown | Value::Ephemeral(_) | Value::Within(_)) => false,
-            }
-        });
+        let own_binary = runs_own(inv, own);
         let typed = inv.typed.join(" ");
         let mut undetermined = false;
         for (name, rule) in rules

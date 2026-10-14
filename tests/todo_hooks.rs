@@ -758,3 +758,56 @@ fn attribution_a_claim_check_from_outside_any_repository_reads_the_role_checkout
     let reason = denial(&out).expect("denied");
     assert!(reason.contains("in progress by S/a2"), "{reason}");
 }
+
+/// A search path holding `todo` hardlinked to devkit, as `devkit
+/// install-links` leaves it, or to a foreign program when `own` is false.
+fn todo_on_path(own: bool) -> tempfile::TempDir {
+    let exe = std::path::Path::new(env!("CARGO_BIN_EXE_devkit"));
+    let dir = tempfile::Builder::new()
+        .tempdir_in(exe.parent().unwrap())
+        .unwrap();
+    let todo = dir
+        .path()
+        .join(format!("todo{}", std::env::consts::EXE_SUFFIX));
+    if own {
+        std::fs::hard_link(exe, &todo).unwrap();
+    } else {
+        std::fs::write(&todo, "#!/bin/sh\n").unwrap();
+    }
+    dir
+}
+
+/// `dir` ahead of this process's `PATH`.
+fn path_with(dir: &tempfile::TempDir) -> String {
+    let mut dirs = vec![dir.path().to_path_buf()];
+    dirs.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(dirs).unwrap().into_string().unwrap()
+}
+
+#[test]
+fn attribution_a_siblings_start_through_the_todo_shim_is_denied() {
+    let p = Proj::new();
+    let id = seed(&p, "a");
+    run_as_sub_agent(&p, CLAUDE_CODE, "a1", &format!("devkit todo start {id}"));
+    let start = format!("todo start {id}");
+    let own = todo_on_path(true);
+    let out = p.hook_with(
+        "pre-tool-use",
+        CLAUDE_CODE.harness,
+        &bash(&p, Some("a2"), &start),
+        &[("PATH", &path_with(&own))],
+    );
+    let reason = denial(&out).expect("denied");
+    assert!(reason.contains("in progress by S/a1"), "{reason}");
+
+    let foreign = todo_on_path(false);
+    let out = p.hook_with(
+        "pre-tool-use",
+        CLAUDE_CODE.harness,
+        &bash(&p, Some("a2"), &start),
+        &[("PATH", &path_with(&foreign))],
+    );
+    assert_eq!(denial(&out), None, "a foreign todo is not devkit's");
+}

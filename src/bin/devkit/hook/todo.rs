@@ -15,7 +15,13 @@ use std::{path::Path, time::Duration};
 
 use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
-use devkit_common::{store::LockBusy, ui::printable, vcs::Checkout};
+use devkit_common::{
+    shim::{OwnBinary, Shim},
+    store::LockBusy,
+    ui::printable,
+    vcs::Checkout,
+};
+use devkit_ports::guard::runs_own;
 use devkit_todo::{
     Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
@@ -263,31 +269,39 @@ fn record_write(
     queued
 }
 
-/// The arguments after `todo` when `inv` runs `devkit todo`.
-fn todo_args(inv: &Invocation) -> Option<impl Iterator<Item = Option<&str>>> {
+/// The arguments after `todo` when `inv` runs `devkit todo`, or through the
+/// `todo` shim when that name resolves to `own`.
+fn todo_args<'a>(
+    inv: &'a Invocation,
+    own: &OwnBinary,
+) -> Option<impl Iterator<Item = Option<&'a str>>> {
     let program = inv.program.known().unwrap_or_default();
     let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    if name.strip_suffix(".exe").unwrap_or(name) != "devkit" {
-        return None;
-    }
     let mut args = inv.args.iter().map(|a| a.known());
-    (args.next().flatten() == Some("todo")).then_some(args)
+    if name.strip_suffix(".exe").unwrap_or(name) == "devkit" {
+        return (args.next().flatten() == Some("todo")).then_some(args);
+    }
+    (Shim::from_argv0(program) == Some(Shim::Todo) && runs_own(inv, own)).then_some(args)
 }
 
-pub(crate) fn writes_todo(analysis: &Analysis) -> bool {
+pub(crate) fn writes_todo(analysis: &Analysis, own: &OwnBinary) -> bool {
     analysis
         .invocations
         .iter()
-        .filter_map(todo_args)
+        .filter_map(|inv| todo_args(inv, own))
         .any(|mut args| args.next().flatten() == Some("add"))
 }
 
 /// Every `devkit todo start|stop|done|undone|cancel <id>...` in a command,
 /// as the status each asks for and the id it names. Ids the analysis could
 /// not resolve are skipped.
-pub(crate) fn status_edits(analysis: &Analysis) -> Vec<(StatusKind, String)> {
+pub(crate) fn status_edits(analysis: &Analysis, own: &OwnBinary) -> Vec<(StatusKind, String)> {
     let mut out = Vec::new();
-    for mut args in analysis.invocations.iter().filter_map(todo_args) {
+    for mut args in analysis
+        .invocations
+        .iter()
+        .filter_map(|inv| todo_args(inv, own))
+    {
         let kind = match args.next().flatten() {
             Some("start") => StatusKind::InProgress,
             Some("stop" | "undone") => StatusKind::Pending,
@@ -311,11 +325,12 @@ pub(crate) fn status_edits(analysis: &Analysis) -> Vec<(StatusKind, String)> {
 pub(crate) fn check_claims(
     payload: &Payload,
     analysis: &Analysis,
+    own: &OwnBinary,
     checkout: &Checkout,
     cwd: &Path,
 ) -> Option<String> {
     let actor = to_todo_holder(&payload.subagent_holder()?);
-    let edits = status_edits(analysis);
+    let edits = status_edits(analysis, own);
     if edits.is_empty() {
         return None;
     }
@@ -786,7 +801,10 @@ mod tests {
             path_style: PathStyle::Unix,
             limits: Limits::default(),
         };
-        status_edits(&devkit_command::analyze(command, &ctx))
+        status_edits(
+            &devkit_command::analyze(command, &ctx),
+            &OwnBinary::current(),
+        )
     }
 
     #[test]
