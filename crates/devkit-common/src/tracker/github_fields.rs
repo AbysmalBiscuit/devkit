@@ -261,6 +261,15 @@ fn alias_of(people: &HashMap<String, Person>, login: &str) -> String {
         .map_or_else(|| login.to_string(), Clone::clone)
 }
 
+/// Whether ids `a` and `b` name the same thing at `place`: GitHub matches
+/// label names and logins ignoring case.
+fn same_id(place: &Place, a: &str, b: &str) -> bool {
+    match place {
+        Place::Labels | Place::Assignees => a.eq_ignore_ascii_case(b),
+        _ => a == b,
+    }
+}
+
 /// The ids a field's resolved values are written as.
 pub fn written_ids(place: &Place, values: &[Value]) -> Vec<String> {
     values
@@ -540,17 +549,13 @@ impl GithubFieldWriter {
         item: &mut Option<String>,
     ) -> Result<()> {
         let have = before.ids(place);
-        let same = |a: &str, b: &str| match place {
-            Place::Labels | Place::Assignees => a.eq_ignore_ascii_case(b),
-            _ => a == b,
-        };
         let added: Vec<&String> = want
             .iter()
-            .filter(|w| !have.iter().any(|h| same(h, w)))
+            .filter(|w| !have.iter().any(|h| same_id(place, h, w)))
             .collect();
         let removed: Vec<&String> = have
             .iter()
-            .filter(|h| !want.iter().any(|w| same(h, w)))
+            .filter(|h| !want.iter().any(|w| same_id(place, h, w)))
             .collect();
         match place {
             Place::Labels | Place::Assignees => {
@@ -667,18 +672,12 @@ impl GithubFieldWriter {
                 .get(name)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            let want: BTreeSet<String> = written_ids(place, values).into_iter().collect();
-            let have: BTreeSet<String> = after.ids(place).into_iter().collect();
-            let same = match place {
-                Place::Labels | Place::Assignees => {
-                    want.iter()
-                        .map(|w| w.to_ascii_lowercase())
-                        .collect::<BTreeSet<_>>()
-                        == have.iter().map(|h| h.to_ascii_lowercase()).collect()
-                }
-                _ => want == have,
+            let want = written_ids(place, values);
+            let have = after.ids(place);
+            let covers = |a: &[String], b: &[String]| {
+                a.iter().all(|x| b.iter().any(|y| same_id(place, x, y)))
             };
-            if !same {
+            if !(covers(&want, &have) && covers(&have, &want)) {
                 let reads: Vec<String> = have.iter().map(|id| decl.value_name(id)).collect();
                 let reads = if reads.is_empty() {
                     "nothing".to_string()
