@@ -12,6 +12,7 @@ devkit-timing.workspace = true
 ambassador.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
+uuid.workspace = true
 toml.workspace = true
 fd-lock.workspace = true
 glob.workspace = true

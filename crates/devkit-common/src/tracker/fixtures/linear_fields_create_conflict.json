@@ -1,0 +1,12 @@
+{
+  "errors": [
+    {
+      "message": "Argument Validation Error",
+      "extensions": {
+        "code": "INVALID_INPUT",
+        "userPresentableMessage": "An issue with this id already exists."
+      }
+    }
+  ],
+  "data": null
+}

@@ -233,16 +233,25 @@ pub fn issues_by_number(n: u64, key: &str) -> Result<Vec<LinearIssueRef>> {
     Ok(parse_number_candidates(&resp))
 }
 
+/// Linear's GraphQL endpoint: `$DEVKIT_LINEAR_URL` when set, which exists so
+/// tests can point devkit at a local fake, else Linear's own.
+fn endpoint() -> String {
+    std::env::var("DEVKIT_LINEAR_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "https://api.linear.app/graphql".to_string())
+}
+
 /// The single transport for every Linear GraphQL call: POST the body, decode
 /// the JSON envelope. `detail` labels the call for timing (see
 /// [`devkit_timing`]). GraphQL-level error interpretation stays with each
 /// caller — this preserves the raw `reqwest` error so `validate` can downcast
 /// to distinguish an unreachable host from a rejected key.
-fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value> {
+pub(crate) fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value> {
     let _span = devkit_timing::io_span("linear graphql", detail).entered();
     Ok(crate::http::send(
         crate::http::client()
-            .post("https://api.linear.app/graphql")
+            .post(endpoint())
             .header("Authorization", key)
             .json(&body),
     )?
@@ -264,7 +273,11 @@ pub(crate) fn post_graphql_with(
         serde_json::Value::Null => serde_json::json!({ "query": query }),
         variables => serde_json::json!({ "query": query, "variables": variables }),
     };
-    let v = send(body, key, detail)?;
+    graphql_errors(send(body, key, detail)?)
+}
+
+/// `v`, or an error carrying the first GraphQL error's message.
+pub(crate) fn graphql_errors(v: serde_json::Value) -> Result<serde_json::Value> {
     if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
         && !errors.is_empty()
     {
