@@ -265,3 +265,34 @@ fn a_blank_required_task_is_a_config_error() {
     assert!(stderr.contains("verify_task"), "{stderr}");
     assert!(!opened(&p), "{}", p.calls());
 }
+
+#[test]
+fn a_merge_base_whose_pr_table_does_not_parse_opens_a_humans_pr_ungated() {
+    let p = project("\n[pr]\ntest_files = 3\n");
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, toml.replace("test_files = 3\n", "")).unwrap();
+    git(&p, &["commit", "-q", "-am", "repair [pr]"]);
+    serve_head(&p);
+
+    let (ok, stderr) = create(&p, "human");
+    assert!(ok, "{stderr}");
+    assert!(stderr.contains("warning"), "{stderr}");
+    assert!(stderr.contains("[pr]"), "says what failed: {stderr}");
+    assert_eq!(body(&p), "Adds a thing.");
+}
+
+#[test]
+fn a_merge_base_whose_pr_table_does_not_parse_refuses_an_agents_pr() {
+    let p = project("\n[pr]\ntest_files = 3\n");
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, toml.replace("test_files = 3\n", "")).unwrap();
+    git(&p, &["commit", "-q", "-am", "repair [pr]"]);
+    serve_head(&p);
+
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(stderr.contains("[pr]"), "{stderr}");
+    assert!(!opened(&p), "{}", p.calls());
+}

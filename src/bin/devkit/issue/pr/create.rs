@@ -170,23 +170,32 @@ pub(crate) struct Gates {
 impl Gates {
     /// The gates the `devkit.toml` committed at the merge base of HEAD with
     /// PR base branch `base` sets for a PR opened at `head`. The
-    /// weakened-tests gate applies to an agent's PR only. A human's PR with
-    /// no merge base to read the settings from is opened ungated.
+    /// weakened-tests gate applies to an agent's PR only. A human's PR whose
+    /// settings cannot be read, for want of a merge base or a merge-base
+    /// `devkit.toml` that parses, is opened ungated.
     pub(crate) fn read(dir: &Path, base: &str, head: &str, caller: Caller) -> Result<Self> {
-        let merge_base = match (weakened::merge_base(dir, base)?, caller) {
-            (Some(merge_base), _) => merge_base,
-            (None, Caller::Human) => {
-                return Ok(Self {
-                    weakened: None,
-                    verify: None,
-                });
+        let ungated = Self {
+            weakened: None,
+            verify: None,
+        };
+        let settings = weakened::merge_base(dir, base).and_then(|merge_base| {
+            merge_base
+                .map(|mb| weakened::config_at(dir, &mb).map(|cfg| (mb, cfg)))
+                .transpose()
+        });
+        let (merge_base, cfg) = match (settings, caller) {
+            (Ok(Some(settings)), _) => settings,
+            (Ok(None), Caller::Human) => return Ok(ungated),
+            (Err(e), Caller::Human) => {
+                eprintln!("warning: opening the PR without its gates: {e:#}");
+                return Ok(ungated);
             }
-            (None, Caller::Agent) => bail!(
+            (Ok(None), Caller::Agent) => bail!(
                 "the PR gates read their settings from the merge base with `{base}`, and \
                  neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
             ),
+            (Err(e), Caller::Agent) => return Err(e),
         };
-        let cfg = weakened::config_at(dir, &merge_base)?;
         let weakened = match caller {
             Caller::Agent => Some(weakened::Gate::check(dir, &merge_base, &cfg)?),
             Caller::Human => None,
