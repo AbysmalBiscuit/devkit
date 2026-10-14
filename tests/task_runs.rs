@@ -203,7 +203,10 @@ fn a_background_writer_left_by_a_task_survives_and_the_run_returns_at_once() {
     let bg = f.task("bg");
     let elapsed = started.elapsed();
     assert!(bg.status.success(), "{bg:?}");
-    assert!(String::from_utf8_lossy(&bg.stdout).contains("now"), "{bg:?}");
+    assert!(
+        String::from_utf8_lossy(&bg.stdout).contains("now"),
+        "{bg:?}"
+    );
     assert!(
         elapsed < baseline + std::time::Duration::from_millis(1500),
         "devrun waited on the background writer: {elapsed:?} against {baseline:?}"
