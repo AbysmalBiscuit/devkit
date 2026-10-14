@@ -123,6 +123,77 @@ fn undone_blocks_the_dependent_again() {
 }
 
 #[test]
+fn ready_lists_the_frontier_critical_first() {
+    let p = Proj::new();
+    let (a, b, c) = (add(&p, "a"), add(&p, "b"), add(&p, "c"));
+    p.devkit(&["todo", "block", &b, "--by", &a], &S1);
+    p.devkit(&["todo", "block", &c, "--by", &b], &S1);
+    let ready = p.devkit(&["todo", "ready"], &S1);
+    assert!(ready.status.success(), "{}", stderr(&ready));
+    assert_eq!(stdout(&ready), "1  a  *\n");
+}
+
+#[test]
+fn plan_with_agents_caps_batches() {
+    let p = Proj::new();
+    let (a, b) = (add(&p, "a"), add(&p, "b"));
+    let plan = p.devkit(&["todo", "plan", "--agents", "1"], &S1);
+    assert!(plan.status.success(), "{}", stderr(&plan));
+    let text = stdout(&plan);
+    assert!(text.contains("batch 1  ready now"), "{text}");
+    assert!(text.contains(&format!("o {a}  a")), "{text}");
+    assert!(text.contains("batch 2"), "{text}");
+    assert!(text.contains(&format!("o {b}  b")), "{text}");
+}
+
+#[test]
+fn plan_mermaid_prints_flowchart_source() {
+    let p = Proj::new();
+    add(&p, "a");
+    let out = p.devkit(&["todo", "plan", "--mermaid"], &S1);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with("flowchart LR\n"), "{text}");
+    assert!(text.contains("subgraph b1[\"batch 1\"]"), "{text}");
+}
+
+#[test]
+fn another_sessions_steps_are_not_offered() {
+    let p = Proj::with_home_config(
+        "[todo.roles.manager]\nscope = \"workspace\"\n[todo.roles.implementer]\nscope = \"agent\"\nparent = \"manager\"\n",
+    );
+    add(&p, "mine");
+    let other = [("CLAUDE_CODE_SESSION_ID", "s2")];
+    let added = p.devkit(&["todo", "add", "theirs"], &other);
+    assert!(added.status.success(), "{}", stderr(&added));
+    let selected = p.devkit(&["todo", "role", "manager"], &S1);
+    assert!(selected.status.success(), "{}", stderr(&selected));
+    let manager = S1;
+    for verb in ["ready", "plan"] {
+        let out = p.devkit(&["todo", verb], &manager);
+        assert!(out.status.success(), "{verb}: {}", stderr(&out));
+        assert!(!stdout(&out).contains("theirs"), "{verb}: {}", stdout(&out));
+    }
+}
+
+#[test]
+fn another_tickets_ready_todo_is_not_offered_by_default() {
+    let p = Proj::new();
+    add(&p, "mine");
+    let added = p.devkit(&["todo", "add", "elsewhere", "--node", "proj.side"], &S1);
+    assert!(added.status.success(), "{}", stderr(&added));
+    let ready = p.devkit(&["todo", "ready"], &S1);
+    assert!(!stdout(&ready).contains("elsewhere"), "{}", stdout(&ready));
+
+    let config = p.home_config();
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(config, "[todo]\nready_outside_ticket = true\n").unwrap();
+    let wide = p.devkit(&["todo", "ready"], &S1);
+    assert!(wide.status.success(), "{}", stderr(&wide));
+    assert!(stdout(&wide).contains("elsewhere"), "{}", stdout(&wide));
+}
+
+#[test]
 fn print_unblocked_false_silences_the_line() {
     let p = Proj::new();
     std::fs::write(

@@ -183,13 +183,18 @@ impl<'a> Graph<'a> {
             batches.push(batch);
         }
 
-        let critical = longest_chain(&members, &blocked, rank);
         let mut cycle: Vec<&Todo> = members
             .iter()
             .copied()
             .filter(|todo| !placed.contains_key(todo.id.as_str()))
             .collect();
         cycle.sort_by(|a, b| a.id.cmp(&b.id));
+        let acyclic: Vec<&Todo> = members
+            .iter()
+            .copied()
+            .filter(|todo| placed.contains_key(todo.id.as_str()))
+            .collect();
+        let critical = longest_chain(&acyclic, &blocked, rank);
         Plan {
             batches,
             critical,

@@ -156,6 +156,17 @@ pub enum TodoCommand {
         #[command(subcommand)]
         action: SchemaAction,
     },
+    /// Print the todos that can start now, critical path first.
+    Ready,
+    /// Print the open todos as batches, and the critical path through them.
+    Plan {
+        /// Cap each batch at this many todos.
+        #[arg(long)]
+        agents: Option<std::num::NonZeroUsize>,
+        /// Print the batches as Mermaid flowchart source.
+        #[arg(long)]
+        mermaid: bool,
+    },
     /// Print the todo block a hook injects.
     ///
     /// Reads the hook payload on stdin, and prints nothing on any failure.
@@ -267,12 +278,16 @@ pub fn run(cli: TodoCli) -> Result<()> {
         TodoCommand::Scope
             | TodoCommand::Role { .. }
             | TodoCommand::List(_)
+            | TodoCommand::Ready
+            | TodoCommand::Plan { .. }
             | TodoCommand::Sync { .. }
     );
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
         TodoCommand::List(args) => list(&store, &args, &cwd, &layout, &facts, &role.name, &actor)?,
+        TodoCommand::Ready => ready(&store, &layout, &facts)?,
+        TodoCommand::Plan { agents, mermaid } => plan(&store, &layout, &facts, agents, mermaid)?,
         TodoCommand::Add {
             text,
             parent,
@@ -530,6 +545,66 @@ fn offered_todos(store: &Store, layout: &Layout, facts: &Facts) -> Result<Vec<To
         None => listed,
     };
     graph::with_blockers(store, offered)
+}
+
+/// Prints the frontier, critical-path todos first.
+fn ready(store: &Store, layout: &Layout, facts: &Facts) -> Result<()> {
+    let offered = offered_todos(store, layout, facts)?;
+    let plan = ticket_plan(store, layout, facts, &offered, None);
+    for todo in plan.frontier() {
+        let mark = if plan.critical.iter().any(|on| on.id == todo.id) {
+            "  *"
+        } else {
+            ""
+        };
+        println!(
+            "{}  {}{mark}",
+            devkit_todo::short_id(&todo.id),
+            devkit_common::ui::printable(&todo.description)
+        );
+    }
+    Ok(())
+}
+
+/// Prints the ticket's batches, or their Mermaid source.
+fn plan(
+    store: &Store,
+    layout: &Layout,
+    facts: &Facts,
+    agents: Option<std::num::NonZeroUsize>,
+    mermaid: bool,
+) -> Result<()> {
+    let offered = offered_todos(store, layout, facts)?;
+    let plan = ticket_plan(store, layout, facts, &offered, agents);
+    let root = layout
+        .ticket_root(facts, store.config().ready_outside_ticket)
+        .unwrap_or_else(|| facts.values.get("repo").cloned().unwrap_or_default());
+    let text = if mermaid {
+        render::render_mermaid(&plan)
+    } else {
+        render::render_plan(&root, &plan)
+    };
+    print!("{text}");
+    Ok(())
+}
+
+/// The plan over the todos the ticket fence offers.
+fn ticket_plan<'a>(
+    store: &Store,
+    layout: &Layout,
+    facts: &Facts,
+    offered: &'a [Todo],
+    cap: Option<std::num::NonZeroUsize>,
+) -> devkit_todo::graph::Plan<'a> {
+    let wide = store.config().ready_outside_ticket;
+    let root = layout.ticket_root(facts, wide);
+    Graph::new(offered).plan(
+        |todo| match &root {
+            Some(root) => layout.offered(todo.project.as_deref(), root, facts),
+            None => true,
+        },
+        cap,
+    )
 }
 
 /// The todo `id` names, its full id included, or the error `no todo <id>`.

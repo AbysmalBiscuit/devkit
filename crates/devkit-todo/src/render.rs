@@ -9,7 +9,135 @@ use std::{
 
 use devkit_common::ui::printable;
 
-use crate::{Holder, Status, StatusKind, Todo};
+use crate::{Holder, Status, StatusKind, Todo, graph::Plan};
+
+/// The plan as a person reads it: a header, the critical path, then one block
+/// per batch, and a `cycle:` line when some members never placed.
+pub fn render_plan(root: &str, plan: &Plan<'_>) -> String {
+    let open = plan.batches.iter().flatten().count() + plan.cycle.len();
+    let started = plan
+        .batches
+        .iter()
+        .flatten()
+        .filter(|todo| todo.status.kind() == StatusKind::InProgress)
+        .count();
+    let mut out = format!("{root}: {open} open, {started} in progress\n");
+    if !plan.critical.is_empty() {
+        let path = plan
+            .critical
+            .iter()
+            .map(|todo| crate::short_id(&todo.id))
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        let _ = writeln!(
+            out,
+            "critical path: {path} ({} batches minimum)",
+            plan.critical.len()
+        );
+    }
+    for (index, batch) in plan.batches.iter().enumerate() {
+        let label = match index {
+            0 => "  ready now",
+            _ => "",
+        };
+        let _ = writeln!(out, "\nbatch {}{label}", index + 1);
+        for todo in batch {
+            let _ = writeln!(out, "  {}", plan_line(todo, plan, index));
+        }
+    }
+    if !plan.cycle.is_empty() {
+        let ids = plan
+            .cycle
+            .iter()
+            .map(|todo| crate::short_id(&todo.id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "\ncycle: {ids}");
+    }
+    out
+}
+
+/// One plan row: the mark, the short id, the text, the critical mark, and
+/// why the todo sits in this batch.
+fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize) -> String {
+    let mark = match todo.status.kind() {
+        StatusKind::InProgress => ">",
+        _ => "o",
+    };
+    let critical = if plan.critical.iter().any(|on| on.id == todo.id) {
+        "*"
+    } else {
+        ""
+    };
+    let note = match &todo.status {
+        Status::InProgress { by } => format!("in progress: {by}"),
+        Status::Pending if batch == 0 => "ready".to_string(),
+        _ => {
+            let after = todo
+                .blocked_by
+                .iter()
+                .map(|id| crate::short_id(id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("after {after}")
+        }
+    };
+    format!(
+        "{mark} {}  {}  {critical}  {note}",
+        crate::short_id(&todo.id),
+        printable(&todo.description)
+    )
+}
+
+/// The plan as Mermaid `flowchart LR` source, one subgraph per batch.
+pub fn render_mermaid(plan: &Plan<'_>) -> String {
+    let mut out = String::from("flowchart LR\n");
+    for (index, batch) in plan.batches.iter().enumerate() {
+        let number = index + 1;
+        let _ = writeln!(out, "  subgraph b{number}[\"batch {number}\"]");
+        for todo in batch {
+            let text = printable(&todo.description).replace('"', "#quot;");
+            let _ = writeln!(
+                out,
+                "    t{}[\"{}: {text}\"]",
+                crate::short_id(&todo.id),
+                crate::short_id(&todo.id)
+            );
+        }
+        let _ = writeln!(out, "  end");
+    }
+    let members: Vec<&Todo> = plan.batches.iter().flatten().copied().collect();
+    for todo in &members {
+        for blocker in &todo.blocked_by {
+            if members.iter().any(|member| &member.id == blocker) {
+                let _ = writeln!(
+                    out,
+                    "  t{} --> t{}",
+                    crate::short_id(blocker),
+                    crate::short_id(&todo.id)
+                );
+            }
+        }
+    }
+    let critical: Vec<&str> = plan
+        .critical
+        .iter()
+        .map(|todo| crate::short_id(&todo.id))
+        .collect();
+    if !critical.is_empty() {
+        let _ = writeln!(out, "  classDef critical stroke-width:3px");
+        let _ = writeln!(
+            out,
+            "  class {} critical",
+            critical
+                .iter()
+                .map(|id| format!("t{id}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    }
+    out
+}
 
 /// The lists for the injected context: each node in `nodes` order, open todos
 /// in tree order, finished todos as one count line. A node with nothing open
