@@ -41,17 +41,17 @@ jobs:
           curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.52
           echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
 
-      # --trust loads AGENTS.md, but it also applies the permission rules and
-      # hooks in project .grok/ and .claude/ dirs. Drop those so the flags
-      # below are Grok's whole policy: read-only tools, no web.
+      # --trust also applies project harness config (permission rules, hooks,
+      # MCP servers); drop it so the flags below are Grok's whole policy.
       - name: Review
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          git ls-files -z -- ':(glob)**/.grok/**' ':(glob)**/.claude/**' | xargs -0 -r rm -f
-          prompt=$(cat <<EOF
+          git ls-files -z -- ':(glob)**/.grok/**' ':(glob)**/.claude/**' \
+            ':(glob)**/.cursor/**' ':(glob)**/.mcp.json' | xargs -0 -r rm -f
+          cat > "$RUNNER_TEMP/prompt.md" <<EOF
           Review pull request #${PR_NUMBER} in ${GITHUB_REPOSITORY}: "${PR_TITLE}".
           Its changes are \`git diff ${BASE_SHA}...HEAD\`. The author's description:
 
@@ -68,27 +68,28 @@ jobs:
           one before reporting it. Do not flag style, naming, missing tests,
           linter findings, or pre-existing bugs. If unsure, leave it out.
 
-          Reply with only this JSON object, no prose and no code fence:
-          {"verdict": "correct" | "incorrect",
-           "explanation": "<one sentence on why>",
-           "findings": [{
-             "priority": <0-3>,
-             "title": "<imperative, at most 80 chars>",
-             "body": "<one paragraph: the inputs or state that trigger it, what goes wrong, and the fix; quote the AGENTS.md rule when one applies>",
-             "path": "<repo-relative path>",
-             "start_line": <int>,
-             "line": <int>,
-             "suggestion": "<exact replacement for lines start_line..line, indentation kept, or null when the fix is not a drop-in edit>"}]}
-
-          Priority 0 breaks for every input and blocks release, 1 must be
-          fixed before merge, 2 should be fixed eventually, 3 is nice to have.
-          Lines are in the PR's version of the file, inside the diff, and span
-          fewer than ten lines.
+          Answer in the structured output. The verdict is "correct" when
+          existing code and tests won't break and nothing blocks merge, and
+          the explanation is one sentence on why. Per finding:
+          - priority: 0 breaks for every input and blocks release, 1 must be
+            fixed before merge, 2 should be fixed eventually, 3 is nice to have.
+          - title: imperative, at most 80 characters.
+          - body: one paragraph on the inputs or state that trigger it, what
+            goes wrong, and the fix. Quote the AGENTS.md rule when one applies.
+          - path, start_line, line: the repo-relative file and the lines in
+            the PR's version of it, inside the diff, fewer than ten lines.
+          - suggestion: the exact replacement for those lines with their
+            indentation kept, or null when the fix is not a drop-in edit.
           EOF
-          )
-          grok --no-auto-update --trust --permission-mode dontAsk --deny WebSearch \
-            -p "$prompt" > "$RUNNER_TEMP/grok.out"
+          grok --no-auto-update --trust --permission-mode dontAsk --disable-web-search \
+            --json-schema "$(cat .github/grok-review-schema.json)" \
+            --debug-file "$RUNNER_TEMP/grok-debug.log" \
+            --prompt-file "$RUNNER_TEMP/prompt.md" > "$RUNNER_TEMP/grok.out"
           cat "$RUNNER_TEMP/grok.out"
+
+      - name: Show Grok debug log
+        if: failure()
+        run: tail -n 200 "$RUNNER_TEMP/grok-debug.log" || true
 
       - name: Mint grok-review-bot token
         id: app
@@ -104,9 +105,14 @@ jobs:
           BOT_LOGIN: ${{ steps.app.outputs.app-slug && format('{0}[bot]', steps.app.outputs.app-slug) || 'github-actions[bot]' }}
         run: |
           reviews="repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
-          perl -0777 -ne 'print $1 if /(\{.*\})/s' "$RUNNER_TEMP/grok.out" > review.json
-          if ! jq -e '.findings | type == "array"' review.json > /dev/null; then
+          # The review object may sit in the result wrapper as an object or as
+          # a JSON string, so take the first one found at any depth.
+          jq '[.. | (objects, (strings | fromjson? // empty | objects))
+               | select(.findings | type == "array")] | first // empty' \
+            "$RUNNER_TEMP/grok.out" > review.json
+          if [ ! -s review.json ]; then
             echo "::error::Grok did not reply with a review object"
+            tail -n 200 "$RUNNER_TEMP/grok-debug.log" || true
             exit 1
           fi
 
