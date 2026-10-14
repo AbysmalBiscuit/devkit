@@ -439,6 +439,12 @@ pub fn check(
                 if !none {
                     continue;
                 }
+                if !decl.allows_none() {
+                    report
+                        .refused
+                        .push(Problem::NoneNotAllowed { field: field() });
+                    continue;
+                }
                 let level = if surface == Surface::McpUpdate {
                     let known: BTreeSet<&str> = resolved
                         .fields
@@ -450,12 +456,8 @@ pub fn check(
                 } else {
                     level_of(decls, name, &seen, caller)
                 };
-                match level {
-                    FieldLevel::Error if !decl.allows_none() => report
-                        .refused
-                        .push(Problem::NoneNotAllowed { field: field() }),
-                    FieldLevel::Warning => report.warned.push(Problem::Clear { field: field() }),
-                    _ => {}
+                if level == FieldLevel::Warning {
+                    report.warned.push(Problem::Clear { field: field() });
                 }
             }
         }
@@ -721,34 +723,60 @@ when       = [{ if = { project = "*" }, level = "error" }]
 
     #[test]
     fn edit_conditions_see_current_overlaid_with_given() {
-        let d = decls(MILESTONE);
-        let refused = |current: &[(&str, &str)], g: &Given| {
+        let mut d = decls(MILESTONE);
+        let milestone = d.get_mut("milestone").unwrap();
+        milestone.allow_none = None;
+        milestone.when[0].level = FieldLevel::Warning;
+        let warned = |current: &[(&str, &str)], g: &Given| {
             let current = Current(
                 current
                     .iter()
                     .map(|(k, v)| (k.to_string(), vec![v.to_string()]))
                     .collect(),
             );
-            check(&d, Surface::Edit, &ok(&d, g), Some(&current), Caller::Agent).refused
+            check(&d, Surface::Edit, &ok(&d, g), Some(&current), Caller::Agent).warned
         };
         let clear = given(&[], &["milestone"]);
-        let none_allowed = [Problem::NoneNotAllowed {
+        let cleared = [Problem::Clear {
             field: "milestone".into(),
         }];
-        assert_eq!(refused(&[("project", "devkit")], &clear), none_allowed);
-        assert!(refused(&[], &clear).is_empty(), "no project, level none");
+        assert_eq!(warned(&[("project", "devkit")], &clear), cleared);
+        assert!(warned(&[], &clear).is_empty(), "no project, level none");
         let set_project = given(&[("project", "devkit")], &["milestone"]);
-        assert_eq!(refused(&[], &set_project), none_allowed);
+        assert_eq!(warned(&[], &set_project), cleared);
         let clear_both = given(&[], &["milestone", "project"]);
-        assert!(refused(&[("project", "devkit")], &clear_both).is_empty());
+        assert!(warned(&[("project", "devkit")], &clear_both).is_empty());
+    }
+
+    #[test]
+    fn allow_none_false_refuses_a_clear_at_every_level() {
+        for level in ["error", "warning", "info", "none"] {
+            let d = decls(&format!(
+                "[ticket.fields.github.size]\ntype = \"string\"\nwhere = {{ project_field = \"F\", name = \"Size\" }}\n\
+                 level = \"{level}\"\nallow_none = false\n"
+            ));
+            let r = ok(&d, &given(&[], &["size"]));
+            for surface in [Surface::Edit, Surface::McpUpdate] {
+                let report = check(&d, surface, &r, Some(&Current::default()), Caller::Agent);
+                assert_eq!(
+                    report.refused,
+                    [Problem::NoneNotAllowed {
+                        field: "size".into()
+                    }],
+                    "{level} on {surface:?}"
+                );
+            }
+        }
     }
 
     #[test]
     fn mcp_update_judges_a_clear_at_the_highest_possible_level() {
-        let d = decls(MILESTONE);
+        let mut d = decls(MILESTONE);
+        d.get_mut("milestone").unwrap().allow_none = None;
+        d.get_mut("milestone").unwrap().when[0].level = FieldLevel::Warning;
         let r = ok(&d, &given(&[], &["milestone"]));
         let report = check(&d, Surface::McpUpdate, &r, None, Caller::Agent);
-        assert_eq!(report.refused, [Problem::NoneNotAllowed {
+        assert_eq!(report.warned, [Problem::Clear {
             field: "milestone".into()
         }]);
     }
