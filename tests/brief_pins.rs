@@ -662,7 +662,7 @@ fn brief_tasks_false_drops_the_task_lines_that_are_configured() {
 fn every_devrun_section_switched_off_drops_the_devrun_half() {
     let project = Project::docs_only();
     project.set_config(&format!(
-        "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\napps = false\ntasks = false\nlocks = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
+        "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\napps = false\ntasks = false\nlocks = false\n\n[pr.gates]\nweakened_tests = \"off\"\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
     let out = project.brief(&[]);
     let text = unwrapped(&String::from_utf8_lossy(&out.stdout));
