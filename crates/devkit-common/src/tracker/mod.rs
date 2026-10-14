@@ -10,11 +10,13 @@ use serde::{Deserialize, Serialize};
 pub mod fake;
 pub mod github;
 pub mod github_status;
+pub mod github_tickets;
 pub mod linear;
 pub mod linear_status;
 pub mod none;
 mod select;
 pub mod status;
+pub mod tickets;
 
 pub use select::{Selected, select};
 
@@ -156,6 +158,34 @@ pub trait Tracker: Send + Sync {
     fn issue_url(&self, id: &str) -> Option<String>;
     /// A one-line identity for `devkit doctor`.
     fn check(&self) -> Result<String>;
+    /// Every open ticket a rule in `rules` selects, each once, but those in
+    /// a status named in `closed_names`. `github` is the `[github]` table,
+    /// whose project holds a GitHub issue's status.
+    fn find_tickets(
+        &self,
+        _rules: &[devkit_config::MatchRule],
+        _closed_names: &[String],
+        _github: &devkit_config::GithubConfig,
+    ) -> Result<Vec<tickets::SyncedTicket>> {
+        anyhow::bail!("the {} tracker cannot sync tickets", self.kind())
+    }
+    /// The tickets `keys` name, whatever their status. A key that names no
+    /// ticket is left out.
+    fn tickets(
+        &self,
+        _keys: &[String],
+        _github: &devkit_config::GithubConfig,
+    ) -> Result<Vec<tickets::SyncedTicket>> {
+        anyhow::bail!("the {} tracker cannot sync tickets", self.kind())
+    }
+    /// Every status name `tickets` could be in, for checking a status map.
+    fn status_names(
+        &self,
+        _tickets: &[tickets::SyncedTicket],
+        _github: &devkit_config::GithubConfig,
+    ) -> Result<Vec<String>> {
+        anyhow::bail!("the {} tracker cannot sync tickets", self.kind())
+    }
 }
 
 /// A tracker and how devkit arrived at it.

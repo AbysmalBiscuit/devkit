@@ -9,7 +9,11 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 
-use super::{AssignedIssue, IssueDetails, IssueRef, PrRef, State, StateKind, Tracker, TrackerKind};
+use super::{
+    AssignedIssue, IssueDetails, IssueRef, PrRef, State, StateKind, Tracker, TrackerKind,
+    github_tickets::{BoardRef, GithubTickets},
+    tickets::SyncedTicket,
+};
 use crate::{
     forge::{Repo, remote::same_host, rest::encode},
     github::{Api, Method, each, graphql_refused},
@@ -315,7 +319,7 @@ fn timeline_events(api: &Api, slug: &str, number: u64) -> Result<Vec<serde_json:
 
 /// Every item of the REST list at `path`, fetched a full page at a time until
 /// a short page ends it.
-fn rest_pages(api: &Api, path: &str) -> Result<Vec<serde_json::Value>> {
+pub(super) fn rest_pages(api: &Api, path: &str) -> Result<Vec<serde_json::Value>> {
     const PER_PAGE: usize = 100;
     let sep = if path.contains('?') { '&' } else { '?' };
     let mut out = Vec::new();
@@ -548,7 +552,7 @@ fn fill_remaining_timeline(
 ///
 /// GraphQL first, since GitHub App installation tokens cannot read REST
 /// `/user`; REST only where GitHub refuses GraphQL.
-fn viewer_login(api: &Api) -> Result<String> {
+pub(super) fn viewer_login(api: &Api) -> Result<String> {
     let user = match api.graphql_or_gh("query { viewer { login } }", Api::graphql) {
         Ok(resp) => resp["data"]["viewer"].clone(),
         Err(e) if graphql_refused(&e) => api
@@ -905,6 +909,41 @@ impl Tracker for GithubTracker {
         let login = viewer_login(&self.api)
             .with_context(|| format!("no GitHub access ({})", self.api.token_hint()))?;
         Ok(format!("github: {login} ({})", self.repo.slug))
+    }
+
+    fn find_tickets(
+        &self,
+        rules: &[devkit_config::MatchRule],
+        closed_names: &[String],
+        github: &devkit_config::GithubConfig,
+    ) -> Result<Vec<SyncedTicket>> {
+        self.ticket_reader(github).find(rules, closed_names)
+    }
+
+    fn tickets(
+        &self,
+        keys: &[String],
+        github: &devkit_config::GithubConfig,
+    ) -> Result<Vec<SyncedTicket>> {
+        self.ticket_reader(github).read(keys)
+    }
+
+    fn status_names(
+        &self,
+        _tickets: &[SyncedTicket],
+        github: &devkit_config::GithubConfig,
+    ) -> Result<Vec<String>> {
+        self.ticket_reader(github).status_names()
+    }
+}
+
+impl GithubTracker {
+    fn ticket_reader(&self, github: &devkit_config::GithubConfig) -> GithubTickets<'_> {
+        GithubTickets {
+            repo: &self.repo,
+            api: &self.api,
+            board: BoardRef::of(github),
+        }
     }
 }
 
