@@ -354,9 +354,33 @@ fn pr_status_of(lookup: &HeadLookup) -> PrStatus {
 /// can drive it with a progress bar.
 pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
     let (_main, others) = worktree::discover(start)?;
+    let rows = others
+        .iter()
+        .map(|wt| IssueWorktree::at(&wt.path, &wt.branch));
+    Ok(discovered(rows, ids))
+}
+
+/// [`discover`] over every worktree, with the main checkout first when an
+/// issue record binds its branch, as `workspace setup --here` does.
+pub fn discover_with_bound_main(start: &str) -> Result<Discovered> {
+    let (main, others) = worktree::discover(start)?;
+    let bound_main = Vcs::at(&main)
+        .branch(&main)
+        .ok()
+        .filter(|branch| record::read_on(&main, branch).is_some())
+        .map(|branch| IssueWorktree::at(&main, &branch));
+    let rows = bound_main.into_iter().chain(
+        others
+            .iter()
+            .map(|wt| IssueWorktree::at(&wt.path, &wt.branch)),
+    );
+    Ok(discovered(rows, &[]))
+}
+
+/// `rows` as a [`Discovered`], filtered to `ids` when non-empty.
+fn discovered(all: impl Iterator<Item = IssueWorktree>, ids: &[String]) -> Discovered {
     let mut rows = Vec::new();
-    for wt in &others {
-        let row = IssueWorktree::at(&wt.path, &wt.branch);
+    for row in all {
         // An issue id is case-insensitive in every tracker that has one, and
         // the record holds whichever spelling the tracker was given.
         let id = row.issue_id.to_string();
@@ -369,7 +393,7 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
         .iter()
         .filter_map(|r| r.issue_id.tracker().map(str::to_owned))
         .collect();
-    Ok(Discovered { rows, issue_ids })
+    Discovered { rows, issue_ids }
 }
 
 /// Whether a worktree has uncommitted changes, untracked files included. The

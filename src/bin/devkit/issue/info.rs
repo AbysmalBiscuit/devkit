@@ -58,7 +58,7 @@ pub fn run(
     // and the tracker state run for the target alone. The PR lookup stays
     // whole-set — `st::fetch_prs` aliases every discovered branch into one
     // batch, so narrowing it would not save a round trip.
-    let d = st::discover(start, &[])?;
+    let d = st::discover_with_bound_main(start)?;
     let top = current_top(start);
     let devkit_common::tracker::Selected {
         tracker: resolved,
@@ -74,8 +74,8 @@ pub fn run(
             r.tree = st::tree_of(Path::new(&r.worktree));
             (r, true)
         }
-        // No selector and the current worktree isn't in the triage rows (the
-        // main clone is omitted from those): report on it directly anyway.
+        // No selector and the current worktree isn't in the rows (an unbound
+        // main clone): report on it directly anyway.
         None => match (selector, top.as_deref()) {
             (None, Some(top)) => (local_row(top)?, false),
             (Some(sel), _) => anyhow::bail!("no worktree matches '{sel}'"),
