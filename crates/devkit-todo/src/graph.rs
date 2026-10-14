@@ -99,12 +99,24 @@ impl<'a> Graph<'a> {
             .filter(|todo| is_open(&todo.status.kind()) && offered(todo))
             .collect();
         let is_member = |id: &str| members.iter().any(|todo| todo.id == id);
+        // A started todo is already running, so its own blockers no longer
+        // gate it anywhere in the plan. Its dependents still wait on it.
+        let waits: HashMap<&str, Vec<&Todo>> = members
+            .iter()
+            .map(|todo| {
+                let waits = match todo.status.kind() {
+                    StatusKind::InProgress => Vec::new(),
+                    _ => self.open_blockers(todo),
+                };
+                (todo.id.as_str(), waits)
+            })
+            .collect();
         // An open blocker outside the plan never finishes here, so a member
         // waiting on it, directly or through another member, is not offered.
         let mut waiting_outside: Vec<&str> = members
             .iter()
             .filter(|todo| {
-                self.open_blockers(todo)
+                waits[todo.id.as_str()]
                     .iter()
                     .any(|blocker| !is_member(&blocker.id))
             })
@@ -117,8 +129,7 @@ impl<'a> Graph<'a> {
                 if waiting_outside.contains(&todo.id.as_str()) {
                     continue;
                 }
-                let waits_outside = self
-                    .open_blockers(todo)
+                let waits_outside = waits[todo.id.as_str()]
                     .iter()
                     .any(|blocker| waiting_outside.contains(&blocker.id.as_str()));
                 if waits_outside {
@@ -131,22 +142,22 @@ impl<'a> Graph<'a> {
         let mut waits_on: HashMap<&str, Vec<&str>> = HashMap::new();
         let mut dependents_of: HashMap<&str, Vec<&str>> = HashMap::new();
         for todo in &members {
-            let waits: Vec<&str> = self
-                .open_blockers(todo)
-                .into_iter()
+            let member_waits: Vec<&str> = waits[todo.id.as_str()]
+                .iter()
                 .filter(|blocker| is_member(&blocker.id))
                 .map(|blocker| blocker.id.as_str())
                 .collect();
-            for blocker in &waits {
+            for blocker in &member_waits {
                 dependents_of
                     .entry(blocker)
                     .or_default()
                     .push(todo.id.as_str());
             }
-            waits_on.insert(todo.id.as_str(), waits);
+            waits_on.insert(todo.id.as_str(), member_waits);
         }
 
-        // Open member-to-member blockers only, so status cannot hide a cycle.
+        // Stored member-to-member edges, so starting a todo cannot hide a
+        // cycle it sits on.
         let on_member_cycle = |id: &str| {
             let mut seen = Vec::new();
             let mut stack = vec![id];
@@ -155,11 +166,17 @@ impl<'a> Graph<'a> {
                     continue;
                 }
                 seen.push(current);
-                for blocker in waits_on.get(current).into_iter().flatten() {
-                    if *blocker == id {
+                let Some(todo) = self.get(current) else {
+                    continue;
+                };
+                for blocker in self.open_blockers(todo) {
+                    if !is_member(&blocker.id) {
+                        continue;
+                    }
+                    if blocker.id == id {
                         return true;
                     }
-                    stack.push(blocker);
+                    stack.push(&blocker.id);
                 }
             }
             false
@@ -171,17 +188,12 @@ impl<'a> Graph<'a> {
             .collect();
         cycled.sort_by(|a, b| a.id.cmp(&b.id));
 
-        // Kahn over members only. In-progress members are placed first, in
-        // batch 1, even when a blocker is still open: `start --force` already
-        // started them.
         let mut indegree: HashMap<&str, usize> = HashMap::new();
         for todo in &members {
             if cycled.iter().any(|on| on.id == todo.id) {
                 continue;
             }
-            let waits = waits_on.get(todo.id.as_str()).map_or(0, Vec::len);
-            let started = todo.status.kind() == StatusKind::InProgress;
-            indegree.insert(todo.id.as_str(), if started { 0 } else { waits });
+            indegree.insert(todo.id.as_str(), waits_on[todo.id.as_str()].len());
         }
         let mut placed: HashMap<&str, usize> = HashMap::new();
         let mut batches: Vec<Vec<&Todo>> = Vec::new();
@@ -189,13 +201,9 @@ impl<'a> Graph<'a> {
             let mut ready: Vec<&Todo> = members
                 .iter()
                 .copied()
-                .filter(|todo| !placed.contains_key(todo.id.as_str()))
+                .filter(|todo| !placed.contains_key(todo.id.as_str()) && !outside(todo))
                 .filter(|todo| indegree.get(todo.id.as_str()).copied().unwrap_or(1) == 0)
                 .collect();
-            ready.retain(|todo| {
-                !outside(todo)
-                    || (batches.is_empty() && todo.status.kind() == StatusKind::InProgress)
-            });
             if ready.is_empty() {
                 break;
             }
@@ -208,26 +216,17 @@ impl<'a> Graph<'a> {
                 .collect();
             let ranks = ranks_of(&left, &dependents_of);
             ready.sort_by(|a, b| ranks[a.id.as_str()].cmp(&ranks[b.id.as_str()]));
-            let batch_index = batches.len();
-            let mut batch = Vec::new();
-            if batch_index == 0 {
-                let started: Vec<&Todo> = ready
-                    .iter()
-                    .copied()
-                    .filter(|todo| todo.status.kind() == StatusKind::InProgress)
-                    .collect();
-                batch.extend(started);
-            }
+            // Started todos wait on nothing, so they all land in batch 1 and
+            // count against its cap without being moved out of it.
+            let (mut batch, rest): (Vec<&Todo>, Vec<&Todo>) = ready
+                .into_iter()
+                .partition(|todo| todo.status.kind() == StatusKind::InProgress);
             let room = cap.map_or(usize::MAX, |cap| cap.get().saturating_sub(batch.len()));
-            batch.extend(
-                ready
-                    .into_iter()
-                    .filter(|todo| todo.status.kind() != StatusKind::InProgress)
-                    .take(room),
-            );
+            batch.extend(rest.into_iter().take(room));
             if batch.is_empty() {
                 break;
             }
+            let batch_index = batches.len();
             for todo in &batch {
                 placed.insert(todo.id.as_str(), batch_index);
                 for dependent in dependents_of.get(todo.id.as_str()).into_iter().flatten() {

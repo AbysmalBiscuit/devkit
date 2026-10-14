@@ -300,3 +300,40 @@ fn frontier_puts_the_critical_path_first() {
     assert_eq!(ids(&frontier), ["B", "H"]);
     assert_eq!(frontier[0].id, "B");
 }
+
+#[test]
+fn a_started_todo_waiting_outside_keeps_its_dependents_in_the_plan() {
+    let todos = vec![
+        pending("side", &[]),
+        todo(
+            "B",
+            Status::InProgress {
+                by: Holder::new("S"),
+            },
+            &["side"],
+            None,
+        ),
+        pending("C", &["B"]),
+    ];
+    let plan = Graph::new(&todos).plan(|todo| todo.id != "side", None);
+    assert_eq!(batches(&plan), [vec!["B"], vec!["C"]]);
+    assert!(plan.cycle.is_empty());
+}
+
+#[test]
+fn the_critical_path_ignores_the_blockers_of_started_work() {
+    let todos = vec![
+        pending("A", &[]),
+        todo(
+            "B",
+            Status::InProgress {
+                by: Holder::new("S"),
+            },
+            &["A"],
+            None,
+        ),
+    ];
+    let plan = Graph::new(&todos).plan(|_| true, None);
+    assert_eq!(batches(&plan), [vec!["A", "B"]]);
+    assert_eq!(plan.critical.len(), 1);
+}
