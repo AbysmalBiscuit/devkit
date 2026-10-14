@@ -591,6 +591,22 @@ fn a_sync_completing_a_ticket_fires_nothing() {
 }
 
 #[test]
+fn a_ticket_event_whose_status_the_todo_left_moves_nothing() {
+    let s = moving();
+    let id = s.todo_for("o/r#65").id;
+    let out = s.devkit(&["todo", "done", &id], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the move to Done", || moved_to(&s, "o2"));
+    let out = s.devkit(
+        &["ticket", "event", "todo_start", "o/r#65", "--todo", &id],
+        &[],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).contains("skipped"), "{}", stderr(&out));
+    assert!(!moved_to(&s, "o1"), "{:?}", s.mutations());
+}
+
+#[test]
 fn done_from_outside_the_repository_warns() {
     let s = moving();
     let id = s.todo_for("o/r#65").id;

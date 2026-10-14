@@ -5,7 +5,7 @@ pub(crate) mod hold;
 pub(crate) mod queue;
 pub(crate) mod store;
 pub(crate) mod sync;
-mod ticket_event;
+pub(crate) mod ticket_event;
 pub(crate) mod tickets;
 
 use std::{cell::LazyCell, collections::BTreeSet, path::Path};

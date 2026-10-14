@@ -101,9 +101,16 @@ pub(crate) fn run(
     event: EventArg,
     issue: Option<&str>,
     log_file: Option<&Path>,
+    todo: Option<&str>,
 ) -> Result<()> {
     let event = IssueEvent::from(event);
-    let fired = fire(dir, config, event, issue).with_context(|| format!("ticket event {event}"));
+    let fired = match (todo, issue) {
+        (Some(todo), Some(issue)) => {
+            crate::todo::ticket_event::fire_current(dir, config, event, issue, todo)
+        }
+        _ => fire(dir, config, event, issue),
+    }
+    .with_context(|| format!("ticket event {event}"));
     if let Some(path) = log_file {
         let line = match &fired {
             Ok(line) => line.clone(),
