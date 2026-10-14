@@ -6,7 +6,10 @@ mod ghfake;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant, SystemTime},
+};
 
 use devkit_todo::{Filter, Holder, Status, Todo, TodoStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore};
@@ -54,6 +57,10 @@ impl Synced {
     }
 
     fn devkit(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+        self.devkit_fed(args, env, "")
+    }
+
+    fn devkit_fed(&self, args: &[&str], env: &[(&str, &str)], stdin: &str) -> std::process::Output {
         let path = std::env::join_paths(std::iter::once(self.bin.path().to_path_buf()).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
@@ -67,7 +74,7 @@ impl Synced {
             ("GITHUB_TOKEN", ""),
         ];
         all.extend_from_slice(env);
-        self.proj.devkit(args, &all)
+        self.proj.devkit_in(&self.proj.path, args, &all, stdin)
     }
 
     fn sync(&self, args: &[&str]) -> std::process::Output {
@@ -78,6 +85,23 @@ impl Synced {
 
     fn calls(&self) -> String {
         std::fs::read_to_string(self.bin.path().join("gh.log")).unwrap_or_default()
+    }
+
+    /// How many rule searches `gh` was asked for: one per ticket sync here.
+    fn ticket_queries(&self) -> usize {
+        self.calls()
+            .lines()
+            .filter(|l| l.contains("search(query"))
+            .count()
+    }
+
+    /// The ticket sync's state file for this checkout's repository with
+    /// extension `ext`: `last`, `failed` or `lock`.
+    fn sync_state(&self, ext: &str) -> PathBuf {
+        self.proj
+            .state()
+            .join("ticket-sync")
+            .join(format!("proj.{ext}"))
     }
 
     fn todo_for(&self, key: &str) -> Todo {
@@ -338,4 +362,98 @@ fn a_slug_in_another_case_names_the_same_tickets() {
         stdout(&out)
     );
     assert_eq!(s.proj.todos().len(), 2, "{:?}", s.proj.todos());
+}
+
+/// Polls `done` until it holds, failing with `what` after 30 seconds.
+fn poll(what: &str, done: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Waits long enough for a background sync a call may have started to reach
+/// `gh`, for a test that asserts none did.
+fn settle() {
+    std::thread::sleep(Duration::from_secs(1));
+}
+
+#[test]
+fn a_stale_store_starts_one_background_sync() {
+    let s = two_issues();
+    for _ in 0..2 {
+        let out = s.devkit(&["todo", "list"], &[]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    poll("the background sync", || s.sync_state("last").exists());
+    assert_eq!(s.ticket_queries(), 1, "{}", s.calls());
+    assert_eq!(s.proj.todos().len(), 2, "{:?}", s.proj.todos());
+}
+
+#[test]
+fn a_fresh_store_starts_none() {
+    let s = two_issues();
+    assert!(s.sync(&[]).status.success());
+    assert!(s.sync_state("last").exists());
+    let before = s.ticket_queries();
+    let out = s.devkit(&["todo", "list"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    settle();
+    assert_eq!(s.ticket_queries(), before, "{}", s.calls());
+}
+
+#[test]
+fn a_failed_sync_holds_off_the_next() {
+    let s = Synced::new(&format!("{RULES}{STATUSES}"), true);
+    let out = s.devkit(&["todo", "list"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the failed sync", || s.sync_state("failed").exists());
+    assert_eq!(s.ticket_queries(), 1, "{}", s.calls());
+    let out = s.devkit(&["todo", "ready"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    settle();
+    assert_eq!(s.ticket_queries(), 1, "{}", s.calls());
+    assert!(!s.sync_state("last").exists());
+}
+
+#[test]
+fn a_hook_injection_answers_while_the_tracker_hangs() {
+    let s = two_issues();
+    assert!(s.sync(&[]).status.success());
+    let day_old = SystemTime::now() - Duration::from_secs(24 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(s.sync_state("last"))
+        .unwrap()
+        .set_modified(day_old)
+        .unwrap();
+    let hang = s.bin.path().join("hang");
+    std::fs::write(&hang, "").unwrap();
+    let before = s.calls().lines().count();
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": s.proj.path,
+        "source": "startup",
+    });
+    let started = Instant::now();
+    let out = s.devkit_fed(
+        &["todo", "context", "--harness", "claude-code"],
+        &[],
+        &payload.to_string(),
+    );
+    let took = started.elapsed();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(took < Duration::from_secs(3), "the injection took {took:?}");
+    assert!(stdout(&out).contains("#65 Issue 65"), "{}", stdout(&out));
+    poll("the background sync to reach the tracker", || {
+        s.calls().lines().count() > before
+    });
+    std::fs::remove_file(&hang).unwrap();
+    poll("the background sync to finish", || {
+        std::fs::metadata(s.sync_state("last"))
+            .and_then(|m| m.modified())
+            .is_ok_and(|at| at > day_old + Duration::from_secs(3600))
+    });
 }

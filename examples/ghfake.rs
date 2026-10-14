@@ -20,6 +20,10 @@
 //! `graphql_mutation.json`, unless a `graphql_<n>.json` or
 //! `graphql_mutation_<n>.json` answers the n-th call of its kind.
 //!
+//! A `hang` file there makes every call, once logged, wait until the file is
+//! removed, as a tracker that stops answering would; it gives up after a
+//! minute so a test that forgets it leaves no process behind for long.
+//!
 //! `pr create`, `pr edit` and a REST `PATCH` of a pull request each keep the
 //! argument vector they were handed in `pr_create.args`, `pr_edit.args` and
 //! `rest_pull_patch.args`, since `gh.log` cannot hold a multi-line body whole.
@@ -173,6 +177,12 @@ fn main() {
         // One write per line: concurrent fakes append to the same log, and
         // `writeln!` on an unbuffered `File` writes the newline separately.
         let _ = log.write_all(format!("{joined}\n").as_bytes());
+    }
+
+    let hang = dir.join("hang");
+    let hung_at = std::time::Instant::now();
+    while hang.exists() && hung_at.elapsed() < std::time::Duration::from_secs(60) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
     // `gh.log` joins with spaces and newlines, which a multi-line body also

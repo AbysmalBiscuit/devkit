@@ -144,6 +144,10 @@ pub enum TodoCommand {
         /// the sync passes, to learn its own result.
         #[arg(long, hide = true)]
         result_file: Option<std::path::PathBuf>,
+        /// Sync only the repo's tickets, not the store. With `--background`,
+        /// what a read starts when the last ticket sync is stale.
+        #[arg(long, hide = true, conflicts_with = "dry_run")]
+        tickets_only: bool,
     },
     /// Set whose stop this session's open todos hold, or print the mode.
     ///
@@ -298,6 +302,12 @@ pub fn run(cli: TodoCli) -> Result<()> {
             | TodoCommand::Plan { .. }
             | TodoCommand::Sync { .. }
     );
+    if matches!(
+        cli.command,
+        TodoCommand::List(_) | TodoCommand::Ready | TodoCommand::Plan { .. }
+    ) {
+        refresh_tickets(&store, &cwd, &layout, &facts);
+    }
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
@@ -410,22 +420,31 @@ pub fn run(cli: TodoCli) -> Result<()> {
             background,
             dry_run,
             result_file,
+            tickets_only,
         } => {
             let replica = Store::sync_replica(&cwd)?;
-            if let Some(replica) = replica.as_ref().filter(|_| !dry_run) {
+            if let Some(replica) = replica.as_ref().filter(|_| !dry_run && !tickets_only) {
                 sync::run(replica, background, result_file.as_deref())?;
             }
-            let tickets = match (background, &place) {
-                (true, _) | (false, Place::Global) => None,
-                (false, _) => {
+            let tickets = match (background, tickets_only, &place) {
+                (_, _, Place::Global) | (true, false, _) => None,
+                (true, true, _) => {
                     let node = layout.fill("repo", &facts)?;
-                    tickets::sync_tickets(&store, &cwd, &node, dry_run)?
+                    tickets::sync_in_background(&store, &cwd, &node, &store.ticket().sync)?
+                }
+                (false, ..) => {
+                    let node = layout.fill("repo", &facts)?;
+                    let report = tickets::sync_tickets(&store, &cwd, &node, dry_run)?;
+                    if report.is_some() && !dry_run {
+                        tickets::record_success(&node);
+                    }
+                    report
                 }
             };
             match tickets {
                 Some(report) if !dry_run => {
                     let changed = report.added + report.changed > 0;
-                    match replica.as_ref().filter(|_| changed) {
+                    match replica.as_ref().filter(|_| changed && !background) {
                         Some(replica) => sync::run(replica, false, result_file.as_deref())?,
                         None => writes = changed,
                     }
@@ -468,6 +487,14 @@ pub fn run(cli: TodoCli) -> Result<()> {
         store.spawn_sync(&cwd);
     }
     Ok(())
+}
+
+/// Starts a background ticket sync from `cwd` when the repository's last one
+/// is older than `[ticket.sync] max_age_secs`, without waiting for it.
+fn refresh_tickets(store: &Store, cwd: &Path, layout: &Layout, facts: &Facts) {
+    if let Ok(node) = layout.fill("repo", facts) {
+        tickets::spawn_if_stale(cwd, &node, &store.ticket().sync);
+    }
 }
 
 /// The hold modes by name, `true` and `false` left to the config.
@@ -936,6 +963,7 @@ fn context(args: &ContextArgs) -> Option<String> {
     let cwd = checkout.dir().to_path_buf();
     let store = Store::for_hook(&checkout, &cwd);
     let (layout, facts, role) = resolve_role(&payload, &checkout, &store, &viewer)?;
+    refresh_tickets(&store, &cwd, &layout, &facts);
     let visible = layout.visible(&facts, &role.name).ok()?;
     let own = &role.node;
     let workspace = facts

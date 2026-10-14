@@ -1,11 +1,24 @@
 //! `devkit todo sync`'s ticket half: the tickets a repository's
 //! `[ticket.sync]` rules select, brought into the todo store as one todo per
 //! ticket on the repository's node. It only reads the tracker.
+//!
+//! Under `<state dir>/ticket-sync/`, each repository node has `<node>.last`,
+//! touched by every successful sync, `<node>.failed`, holding the last
+//! background failure's reason, and `<node>.lock`, held by the background
+//! sync running for it.
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use devkit_common::tracker;
+use devkit_config::TicketSyncConfig;
 use devkit_todo::{
     Filter, StatusKind, TodoStore,
     ticket::{self, SyncPlan},
@@ -117,4 +130,114 @@ fn apply(
             })
             .count(),
     })
+}
+
+/// The ticket sync's state files for one repository node.
+struct State {
+    dir: PathBuf,
+    name: String,
+}
+
+impl State {
+    fn of(node: &str) -> Self {
+        let name = node
+            .chars()
+            .map(|c| match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => c,
+                _ => '_',
+            })
+            .collect();
+        Self {
+            dir: devkit_common::paths::state_dir().join("ticket-sync"),
+            name,
+        }
+    }
+
+    fn path(&self, ext: &str) -> PathBuf {
+        self.dir.join(format!("{}.{ext}", self.name))
+    }
+
+    /// Whether the file `ext` was written within `age`.
+    fn within(&self, ext: &str, age: Duration) -> bool {
+        fs::metadata(self.path(ext))
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|elapsed| elapsed < age)
+    }
+
+    /// Whether a background sync is due: the last one is older than
+    /// `max_age_secs` or never ran, and none failed within that age.
+    fn due(&self, config: &TicketSyncConfig) -> bool {
+        let age = Duration::from_secs(config.max_age_secs);
+        !config.rules.is_empty() && !self.within("last", age) && !self.within("failed", age)
+    }
+
+    fn succeeded(&self) {
+        let _ = fs::create_dir_all(&self.dir);
+        let _ = fs::remove_file(self.path("failed"));
+        let _ = fs::write(self.path("last"), "");
+    }
+
+    fn failed(&self, reason: &str) {
+        let _ = fs::create_dir_all(&self.dir);
+        let _ = fs::write(self.path("failed"), reason);
+    }
+}
+
+/// Records a successful sync of `node`'s tickets, so reads leave it be for
+/// `[ticket.sync] max_age_secs`.
+pub(crate) fn record_success(node: &str) {
+    State::of(node).succeeded();
+}
+
+/// Starts a background ticket sync from `cwd` when `node`'s is due, and
+/// returns at once: a read never waits on the tracker.
+pub(crate) fn spawn_if_stale(cwd: &Path, node: &str, config: &TicketSyncConfig) {
+    if !State::of(node).due(config) {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.args(["todo", "sync", "--tickets-only", "--background"])
+        .current_dir(cwd);
+    let _ = devkit_common::sys::spawn_background(&mut cmd);
+}
+
+/// The background ticket sync [`spawn_if_stale`] starts. It gives up at once
+/// when another holds `node`'s lock or the sync is no longer due, and a
+/// failure is recorded, holding off the next attempt, rather than returned.
+pub(crate) fn sync_in_background(
+    store: &impl TodoStore,
+    cwd: &Path,
+    node: &str,
+    config: &TicketSyncConfig,
+) -> Result<Option<SyncReport>> {
+    let state = State::of(node);
+    if !state.due(config) {
+        return Ok(None);
+    }
+    fs::create_dir_all(&state.dir)?;
+    let mut lock = devkit_common::store::open_lock(&state.path("lock"))?;
+    let _guard = match lock.try_write() {
+        Ok(guard) => guard,
+        Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    // Another run may have finished between the check above and the lock.
+    if !state.due(config) {
+        return Ok(None);
+    }
+    match sync_tickets(store, cwd, node, false) {
+        Ok(report) => {
+            state.succeeded();
+            Ok(report)
+        }
+        Err(e) => {
+            state.failed(&format!("{e:#}"));
+            Ok(None)
+        }
+    }
 }

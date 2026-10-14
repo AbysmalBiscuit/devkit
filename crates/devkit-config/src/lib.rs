@@ -1253,8 +1253,9 @@ pub struct TicketConfig {
 /// # assert_eq!(sync.lookup(""), Some(MappedStatus::Pending));
 /// # assert_eq!(sync.lookup("Blocked"), None);
 /// # assert_eq!(sync.closed_names(), ["Canceled", "Done"]);
+/// # assert_eq!(sync.max_age_secs, 600);
 /// ```
-#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TicketSyncConfig {
     /// Which tickets sync brings in: a ticket syncs when any rule matches
@@ -1272,6 +1273,21 @@ pub struct TicketSyncConfig {
     /// name here no tracker status has (on Linear, no team's), fails the
     /// sync naming it, and nothing is written.
     pub statuses: std::collections::BTreeMap<String, MappedStatus>,
+    /// How old, in seconds, the repository's last ticket sync may be before
+    /// `devkit todo list`, `plan`, `ready` or a hook's todo injection starts
+    /// one in the background. The read never waits for it, and a failed
+    /// background sync holds off the next for as long.
+    pub max_age_secs: u64,
+}
+
+impl Default for TicketSyncConfig {
+    fn default() -> Self {
+        Self {
+            rules: Vec::new(),
+            statuses: std::collections::BTreeMap::new(),
+            max_age_secs: 600,
+        }
+    }
 }
 
 impl TicketSyncConfig {

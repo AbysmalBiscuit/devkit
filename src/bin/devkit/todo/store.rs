@@ -14,8 +14,8 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_config::{
-    NoConfig, PostgresConfig, Provenance, SupabaseConfig, TaskchampionConfig, TodoBackend,
-    TodoConfig, expand_tilde,
+    Config, NoConfig, PostgresConfig, Provenance, SupabaseConfig, TaskchampionConfig, TicketConfig,
+    TodoBackend, TodoConfig, expand_tilde,
 };
 use devkit_todo::{
     TodoStore,
@@ -96,6 +96,7 @@ pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(75);
 pub(crate) struct Store {
     store: Recorded<Backend, Activity>,
     config: TodoConfig,
+    ticket: TicketConfig,
 }
 
 #[derive(Delegate)]
@@ -439,6 +440,7 @@ impl Backend {
         Store {
             store: Recorded::new(self, Activity::Local(ActivityLog::open())),
             config: TodoConfig::default(),
+            ticket: TicketConfig::default(),
         }
     }
 }
@@ -472,7 +474,7 @@ fn taskchampion(config: &TodoConfig) -> Replica {
 impl Store {
     /// The store `config` names, its claim changes recorded in the activity
     /// log that goes with it.
-    fn open(config: &TodoConfig, opener: Opener) -> Self {
+    fn open(config: &TodoConfig, ticket: TicketConfig, opener: Opener) -> Self {
         let backend = match config.backend {
             TodoBackend::Builtin => Backend::Builtin(BuiltinStore::open()),
             TodoBackend::Taskchampion => {
@@ -492,6 +494,7 @@ impl Store {
         Self {
             store: Recorded::new(backend, Activity::of(config, opener)),
             config: config.clone(),
+            ticket,
         }
     }
 
@@ -501,6 +504,11 @@ impl Store {
 
     pub(crate) fn config(&self) -> &TodoConfig {
         &self.config
+    }
+
+    /// The `[ticket]` config of the repository the store was opened from.
+    pub(crate) fn ticket(&self) -> &TicketConfig {
+        &self.ticket
     }
 
     /// The taskchampion replica this store syncs: `None` for another backend
@@ -550,27 +558,31 @@ impl Store {
         }
     }
 
-    /// The todo config a CLI call in `cwd` reads, its backend the effective
-    /// one. No config anywhere is the default config; a config that fails to
-    /// load or an unknown `DEVKIT_TODO_BACKEND` is an error.
-    fn effective_cli_config(cwd: &Path) -> Result<TodoConfig> {
-        let config = Self::cli_config(cwd)?;
-        let env = std::env::var(BACKEND_VAR).ok();
-        let (backend, _) = effective_backend(config.as_ref(), env.as_deref())?;
-        Ok(TodoConfig {
-            backend,
-            ..config.unwrap_or_default()
-        })
+    /// The todo and ticket config a CLI call in `cwd` reads, the todo
+    /// backend the effective one. No config anywhere is the default config; a
+    /// config that fails to load or an unknown `DEVKIT_TODO_BACKEND` is an
+    /// error.
+    fn effective_cli_config(cwd: &Path) -> Result<(TodoConfig, TicketConfig)> {
+        let config = match devkit_common::config::resolve(None, cwd) {
+            Ok((config, _)) => Some(config),
+            Err(e) if e.downcast_ref::<NoConfig>().is_some() => None,
+            Err(e) => return Err(e),
+        };
+        with_effective_backend(config, std::env::var(BACKEND_VAR).ok().as_deref())
     }
 
     /// The store a CLI call in `cwd` uses.
     pub(crate) fn for_cli(cwd: &Path) -> Result<Self> {
-        Ok(Self::open(&Self::effective_cli_config(cwd)?, Opener::Cli))
+        let (config, ticket) = Self::effective_cli_config(cwd)?;
+        Ok(Self::open(&config, ticket, Opener::Cli))
     }
 
     /// The activity log a CLI call in `cwd` reads.
     pub(crate) fn activity_for_cli(cwd: &Path) -> Result<Activity> {
-        Ok(Activity::of(&Self::effective_cli_config(cwd)?, Opener::Cli))
+        Ok(Activity::of(
+            &Self::effective_cli_config(cwd)?.0,
+            Opener::Cli,
+        ))
     }
 
     /// Runs devkit's schema on the todo database a CLI call in `cwd` names,
@@ -578,7 +590,7 @@ impl Store {
     /// functions it created. Only the postgres backend reaches the database
     /// directly; every other backend is refused.
     pub(crate) fn update_schema(cwd: &Path) -> Result<(String, Vec<String>)> {
-        let config = Self::effective_cli_config(cwd)?;
+        let (config, _) = Self::effective_cli_config(cwd)?;
         match config.backend {
             TodoBackend::Postgres => {
                 let db = database(&config.postgres, Opener::Cli);
@@ -652,17 +664,13 @@ impl Store {
         checkout: &Checkout,
         cwd: &Path,
         backend_var: Option<&str>,
-    ) -> Result<TodoConfig> {
+    ) -> Result<(TodoConfig, TicketConfig)> {
         let config = match devkit_common::config::resolve_in(checkout, None, cwd) {
-            Ok((config, _)) => Some(config.todo),
+            Ok((config, _)) => Some(config),
             Err(e) if e.downcast_ref::<NoConfig>().is_some() => None,
             Err(e) => return Err(e),
         };
-        let (backend, _) = effective_backend(config.as_ref(), backend_var)?;
-        Ok(TodoConfig {
-            backend,
-            ..config.unwrap_or_default()
-        })
+        with_effective_backend(config, backend_var)
     }
 
     /// The store a hook in `cwd` uses. A hook never fails on the store's
@@ -671,7 +679,7 @@ impl Store {
     pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Self {
         let backend_var = std::env::var(BACKEND_VAR).ok();
         match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
-            Ok(config) => Self::open(&config, Opener::Hook),
+            Ok((config, ticket)) => Self::open(&config, ticket, Opener::Hook),
             Err(_) => Backend::Builtin(BuiltinStore::open()).recorded(),
         }
     }
@@ -681,7 +689,7 @@ impl Store {
     pub(crate) fn activity_for_hook(checkout: &Checkout, cwd: &Path) -> Activity {
         let backend_var = std::env::var(BACKEND_VAR).ok();
         match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
-            Ok(config) => Activity::of(&config, Opener::Hook),
+            Ok((config, _)) => Activity::of(&config, Opener::Hook),
             Err(_) => Activity::Local(ActivityLog::open()),
         }
     }
@@ -698,9 +706,21 @@ impl Store {
         backend_var: Option<&str>,
         holds: impl FnOnce(&TodoConfig) -> bool,
     ) -> Option<Self> {
-        let config = Self::hook_config(checkout, cwd, backend_var).ok()?;
-        holds(&config).then(|| Self::open(&config, Opener::Hook))
+        let (config, ticket) = Self::hook_config(checkout, cwd, backend_var).ok()?;
+        holds(&config).then(|| Self::open(&config, ticket, Opener::Hook))
     }
+}
+
+/// `config`'s todo and ticket tables, the todo backend the one `backend_var`,
+/// the value of `DEVKIT_TODO_BACKEND`, picks; the defaults when there is no
+/// config.
+fn with_effective_backend(
+    config: Option<Config>,
+    backend_var: Option<&str>,
+) -> Result<(TodoConfig, TicketConfig)> {
+    let (backend, _) = effective_backend(config.as_ref().map(|c| &c.todo), backend_var)?;
+    let (todo, ticket) = config.map(|c| (c.todo, c.ticket)).unwrap_or_default();
+    Ok((TodoConfig { backend, ..todo }, ticket))
 }
 
 #[cfg(test)]

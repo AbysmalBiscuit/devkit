@@ -2196,6 +2196,7 @@
         "sync": {
           "$ref": "#/$defs/TicketSyncConfig",
           "default": {
+            "max_age_secs": 600,
             "rules": [],
             "statuses": {}
           },
@@ -2274,6 +2275,13 @@
       "additionalProperties": false,
       "description": "`[ticket.sync]`: the tickets `devkit todo sync` brings in as todos on the\nrepository's node, and how their tracker statuses map to todo statuses.\nSync only reads the tracker. With no rules, it brings in nothing.\n\n```toml\n[[ticket.sync.rules]]\nassignee = \"me\"\n\n[[ticket.sync.rules]]\nassignee = \"none\"\nproject_role = \"lead\"\nlabels = [\"devkit\"]\n\n[ticket.sync.statuses]\n\"\" = \"pending\"\n\"Backlog\" = \"pending\"\n\"Todo\" = \"pending\"\n\"In Progress\" = \"in_progress\"\n\"In Review\" = \"in_progress\"\n\"Done\" = \"completed\"\n\"Canceled\" = \"cancelled\"\n```",
       "properties": {
+        "max_age_secs": {
+          "default": 600,
+          "description": "How old, in seconds, the repository's last ticket sync may be before\n`devkit todo list`, `plan`, `ready` or a hook's todo injection starts\none in the background. The read never waits for it, and a failed\nbackground sync holds off the next for as long.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "rules": {
           "default": [],
           "description": "Which tickets sync brings in: a ticket syncs when any rule matches\nit, and a rule matches when all its conditions hold. A ticket in a\nstatus `statuses` maps to completed or cancelled is never brought in\nby a rule, so the first sync imports no history.",
@@ -2740,6 +2748,7 @@
           "linear": {}
         },
         "sync": {
+          "max_age_secs": 600,
           "rules": [],
           "statuses": {}
         }
