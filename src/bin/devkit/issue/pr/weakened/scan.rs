@@ -415,6 +415,13 @@ fn mask(lang: Lang, text: &str) -> String {
                 blank(&mut out, i, end);
                 i = end;
             }
+            (Lang::Js, b'/') if regex_may_start(&out[..i]) => match regex_end(b, i + 1) {
+                Some(end) => {
+                    blank(&mut out, i + 1, end - 1);
+                    i = end;
+                }
+                None => i += 1,
+            },
             (Lang::Python, b'"' | b'\'') => {
                 let quote = b[i];
                 let triple = rest.len() >= 3 && rest[1] == quote && rest[2] == quote;
@@ -456,6 +463,44 @@ fn is_line_comment(lang: Lang, rest: &[u8]) -> bool {
         Lang::Python => true,
         Lang::Rust | Lang::Js => rest.starts_with(b"//"),
     }
+}
+
+/// Whether a JS `/` after the masked text `before` opens a regex literal
+/// rather than dividing: it does at the start of the file, after an operator
+/// or opening punctuation, and after a keyword that takes an expression.
+fn regex_may_start(before: &[u8]) -> bool {
+    let code = before.trim_ascii_end();
+    let Some(&last) = code.last() else {
+        return true;
+    };
+    if b"(,=:[!&|?{};~+-*%<>".contains(&last) {
+        return true;
+    }
+    let word_start = code
+        .iter()
+        .rposition(|&c| !is_ident(c))
+        .map_or(0, |p| p + 1);
+    matches!(&code[word_start..], b"return" | b"typeof" | b"case")
+}
+
+/// The offset just past the `/` closing the regex literal whose body starts
+/// at `from`, `None` when the line ends first. A backslash escapes the next
+/// byte, and a `/` inside a `[...]` class does not close it.
+fn regex_end(b: &[u8], from: usize) -> Option<usize> {
+    let mut in_class = false;
+    let mut i = from;
+    while i < b.len() {
+        match b[i] {
+            b'\\' if b.get(i + 1).is_some_and(|&c| c != b'\n') => i += 1,
+            b'\n' => return None,
+            b'[' => in_class = true,
+            b']' => in_class = false,
+            b'/' if !in_class => return Some(i + 1),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// The offset just past the `*/` closing the block comment at `start`.
@@ -579,6 +624,15 @@ describe("suite", () => {
         assert_eq!(c.skips, 4);
         assert_eq!(c.focused, 1);
         assert_eq!(c.assertions, 3);
+    }
+
+    #[test]
+    fn js_regex_bodies_are_masked_and_division_is_not() {
+        let text = "/x(/; a = b / c / d; f(x) / 2; r = /a\\/[/]b/g; return /it(/.test(s); q = [1] / 2;\nh = /unclosed\n";
+        assert_eq!(
+            mask(Lang::Js, text),
+            "/  /; a = b / c / d; f(x) / 2; r = /       /g; return /   /.test(s); q = [1] / 2;\nh = /unclosed\n"
+        );
     }
 
     #[test]

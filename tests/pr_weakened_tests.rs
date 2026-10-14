@@ -383,3 +383,30 @@ fn a_deleted_test_file_is_flagged_in_a_language_the_scanner_does_not_read() {
         "renamed out of the patterns: {out}"
     );
 }
+
+#[test]
+fn an_added_js_regex_literal_is_not_read_as_an_assertion() {
+    let (ok, out) = Repo::new(&suite(), &[(
+        "web/add.test.ts",
+        Some(&format!(
+            "{JS}it(\"names\", () => {{\n  expect(x).toMatch(/assert(true)/);\n}});\n"
+        )),
+    )])
+    .check(&[]);
+    assert!(ok, "an added regex is not a tautology: {out}");
+    assert!(out.contains("no weakened tests"), "{out}");
+}
+
+#[test]
+fn a_removed_js_regex_literal_is_not_read_as_a_test() {
+    let (ok, out) = Repo::new(
+        &[(
+            "web/add.test.ts",
+            &*format!("{JS}const pattern = /test(foo)/;\n"),
+        )],
+        &[("web/add.test.ts", Some(JS))],
+    )
+    .check(&[]);
+    assert!(ok, "a removed regex is not a removed test: {out}");
+    assert!(out.contains("no weakened tests"), "{out}");
+}
