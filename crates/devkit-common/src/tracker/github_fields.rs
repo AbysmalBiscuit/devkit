@@ -408,9 +408,41 @@ pub struct GithubFieldWriter {
     cwd: String,
 }
 
-/// The places `gh issue create` writes itself.
-pub fn on_create(place: &Place) -> bool {
-    matches!(place, Place::Labels | Place::Assignees | Place::Milestone)
+/// The `gh issue create` flag writing `place`, for the places it writes
+/// itself.
+pub fn create_flag(place: &Place) -> Option<&'static str> {
+    match place {
+        Place::Labels => Some("--label"),
+        Place::Assignees => Some("--assignee"),
+        Place::Milestone => Some("--milestone"),
+        _ => None,
+    }
+}
+
+/// The fields `gh issue create` writes itself.
+pub fn on_create(decls: &BTreeMap<String, FieldDecl>) -> BTreeSet<String> {
+    decls
+        .iter()
+        .filter(|(_, d)| d.r#where.as_ref().and_then(create_flag).is_some())
+        .map(|(n, _)| n.clone())
+        .collect()
+}
+
+/// The `gh issue create` flags for the fields it writes itself.
+pub fn create_flags(decls: &BTreeMap<String, FieldDecl>, resolved: &Resolved) -> Vec<String> {
+    let mut out = Vec::new();
+    for (name, values) in &resolved.fields {
+        let Some(place) = decls.get(name).and_then(|d| d.r#where.as_ref()) else {
+            continue;
+        };
+        let Some(flag) = create_flag(place) else {
+            continue;
+        };
+        for id in written_ids(place, values) {
+            out.extend([flag.to_string(), id]);
+        }
+    }
+    out
 }
 
 impl GithubFieldWriter {

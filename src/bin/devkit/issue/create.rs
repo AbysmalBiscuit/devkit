@@ -6,7 +6,7 @@
 use anyhow::{Context, Result, bail};
 use devkit_common::{
     fields::{self, Surface},
-    tracker::github_fields::GithubFieldWriter,
+    tracker::github_fields::{self, GithubFieldWriter},
 };
 use devkit_config::TrackerKind;
 
@@ -54,7 +54,7 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
     ]
     .map(String::from)
     .into();
-    gh.extend(field_write::create_flags(decls, &resolved));
+    gh.extend(github_fields::create_flags(decls, &resolved));
     let refs: Vec<&str> = gh.iter().map(String::as_str).collect();
     let out = devkit_common::cmd::gh_capture(&refs, repo, &start).with_context(|| {
         format!(
@@ -80,7 +80,7 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
         decls,
         &resolved,
         None,
-        &field_write::on_create(decls),
+        &github_fields::on_create(decls),
         false,
     );
     field_write::warn(decls, &report);

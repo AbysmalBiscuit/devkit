@@ -12,7 +12,7 @@ use devkit_common::{
         github_fields::{GithubFieldWriter, IssueFields, stale_hint},
     },
 };
-use devkit_config::{FieldDecl, Place};
+use devkit_config::FieldDecl;
 
 /// Turn each `issue` value into the issue number the tracker's own parser
 /// reads from it, refusing one it rejects before anything is written.
@@ -158,48 +158,6 @@ fn given_text(resolved: &Resolved, field: &str) -> String {
         ),
         None => " (--none)".to_string(),
     }
-}
-
-/// The fields `gh issue create` writes itself.
-pub(crate) fn on_create(decls: &BTreeMap<String, FieldDecl>) -> BTreeSet<String> {
-    decls
-        .iter()
-        .filter(|(_, d)| {
-            d.r#where
-                .as_ref()
-                .is_some_and(devkit_common::tracker::github_fields::on_create)
-        })
-        .map(|(n, _)| n.clone())
-        .collect()
-}
-
-/// The `gh issue create` flags for the fields it writes itself.
-pub(crate) fn create_flags(
-    decls: &BTreeMap<String, FieldDecl>,
-    resolved: &Resolved,
-) -> Vec<String> {
-    let mut out = Vec::new();
-    for (place, flag) in [
-        (Place::Labels, "--label"),
-        (Place::Assignees, "--assignee"),
-        (Place::Milestone, "--milestone"),
-    ] {
-        for (name, decl) in decls {
-            if decl.r#where.as_ref() != Some(&place) {
-                continue;
-            }
-            let values = resolved
-                .fields
-                .get(name)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            for id in devkit_common::tracker::github_fields::written_ids(&place, values) {
-                out.push(flag.to_string());
-                out.push(id);
-            }
-        }
-    }
-    out
 }
 
 /// The issue number at the end of a GitHub issue URL.

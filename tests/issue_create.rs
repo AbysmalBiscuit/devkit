@@ -359,10 +359,13 @@ fn create_writes_every_field_and_reads_it_back() {
         "{stdout}"
     );
     let calls = fake.calls();
-    assert!(
-        calls.contains("--label bug --label enhancement --assignee LevValle --milestone v1.0"),
-        "{calls}"
-    );
+    for flag in [
+        "--label bug --label enhancement",
+        "--assignee LevValle",
+        "--milestone v1.0",
+    ] {
+        assert!(calls.contains(flag), "{flag}: {calls}");
+    }
     for written in [
         "addProjectV2ItemById(input: {projectId: \"PVT_3\", contentId: \"I_42\"})",
         "singleSelectOptionId: \"opt_p1\"",
