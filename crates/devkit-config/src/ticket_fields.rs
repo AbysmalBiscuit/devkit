@@ -502,8 +502,7 @@ pub(crate) fn validate(
                 .unwrap_or_default();
             bail!(
                 "`{key}`{} has no {missing}, so devkit cannot write it.{level_from} Declare \
-                 {missing} in the repository's devkit.toml (`devkit ticket fields discover` \
-                 writes them), or remove the field.",
+                 {missing} in the repository's devkit.toml, or remove the field.",
                 note(cx, kind, name)
             );
         };
@@ -530,8 +529,8 @@ pub(crate) fn validate(
         {
             bail!(
                 "`{key}`{} is an `enum` with no `values` that can reach `error`, so no value \
-                 could satisfy it. List its `values` (`devkit ticket fields discover` reads \
-                 them), or lower its level.",
+                 could satisfy it. List the tracker's values under `values` in `{key}`, or \
+                 lower its level.",
                 note(cx, kind, name)
             );
         }
