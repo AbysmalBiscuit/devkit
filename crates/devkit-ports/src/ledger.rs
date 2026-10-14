@@ -89,6 +89,12 @@ impl Run {
             && self.clean
             && self.head.as_deref() == Some(sha)
     }
+
+    /// Whether this run proves `task` exited 0 on a clean tree at `sha`,
+    /// given exactly `args`.
+    pub fn proves_with(&self, task: &str, args: &BTreeMap<String, String>, sha: &str) -> bool {
+        self.proves(task, sha) && &self.args == args
+    }
 }
 
 /// One command step of a run.
@@ -172,6 +178,21 @@ impl Ledger {
             .into_iter()
             .rev()
             .find(|r| r.proves(task, sha)))
+    }
+
+    /// [`Ledger::passed`], counting only a run given exactly `args`.
+    pub fn passed_with(
+        &self,
+        repo: &Path,
+        task: &str,
+        args: &BTreeMap<String, String>,
+        sha: &str,
+    ) -> Result<Option<Run>> {
+        Ok(self
+            .runs_in(repo)?
+            .into_iter()
+            .rev()
+            .find(|r| r.proves_with(task, args, sha)))
     }
 
     /// Whether `path` names something inside the ledger, however it is
@@ -508,6 +529,20 @@ mod tests {
         assert!(!run("test", sha, true, None).proves("test", sha));
         assert!(!run("lint", sha, true, Some(0)).proves("test", sha));
         assert!(!run("test", sha, true, Some(0)).proves("test", &sha[..12]));
+    }
+
+    #[test]
+    fn a_pass_proves_only_the_args_it_was_given() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let all = BTreeMap::from([("scope".to_string(), "all".to_string())]);
+        let mut given = run("test", sha, true, Some(0));
+        assert!(given.proves_with("test", &BTreeMap::new(), sha));
+        assert!(!given.proves_with("test", &all, sha));
+        given.args = all.clone();
+        assert!(given.proves_with("test", &all, sha));
+        assert!(!given.proves_with("test", &BTreeMap::new(), sha));
+        given.args.insert("extra".into(), "1".into());
+        assert!(!given.proves_with("test", &all, sha));
     }
 
     #[test]
