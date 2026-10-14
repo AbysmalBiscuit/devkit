@@ -719,10 +719,17 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
     for step in &snapshot {
         todos.extend(c.store.get(&step.todo)?);
     }
+    // A ticket todo's status also moves with its tracker, so a step naming
+    // one changes it only when the tool's own status for the step changed:
+    // resending a plan never undoes what a sync did.
     let previous: Vec<Mirrored> = snapshot
         .into_iter()
-        .filter_map(|MirroredStep { text, todo }| {
-            let status = todos.iter().find(|t| t.id == todo)?.status.kind();
+        .filter_map(|MirroredStep { text, todo, status }| {
+            let current = todos.iter().find(|t| t.id == todo)?;
+            let status = match status {
+                Some(sent) if current.ticket.is_some() => sent,
+                _ => current.status.kind(),
+            };
             Some(Mirrored { text, todo, status })
         })
         .collect();
@@ -808,6 +815,7 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
                     uncancelled.push(MirroredStep {
                         text: prev.text.clone(),
                         todo,
+                        status: Some(prev.status),
                     });
                 }
             }
@@ -824,6 +832,7 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
             Some(MirroredStep {
                 text: step.text,
                 todo: id?,
+                status: Some(step.status),
             })
         })
         .chain(uncancelled)

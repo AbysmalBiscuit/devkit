@@ -717,6 +717,41 @@ fn a_plan_step_naming_a_ticket_moves_it_and_dropping_it_keeps_it() {
     assert_eq!(ticket.node(), "proj");
 }
 
+#[test]
+fn a_plan_resent_after_a_sync_closes_its_ticket_moves_nothing() {
+    let s = moving();
+    let plan =
+        json!([{"content": "#65 Issue 65", "status": "in_progress", "activeForm": "Fixing"}]);
+    let write = || {
+        native(
+            &s,
+            "TodoWrite",
+            json!({"todos": plan}),
+            json!({"oldTodos": [], "newTodos": plan}),
+        )
+    };
+    write();
+    poll("the move to In progress", || moved_to(&s, "o1"));
+    let closed = issue(65, Some("In progress"), &[66]).replace(
+        r#""state":"OPEN","stateReason":null"#,
+        r#""state":"CLOSED","stateReason":"COMPLETED""#,
+    );
+    s.serve(
+        "graphql.json",
+        &graphql(&[closed, issue(66, None, &[])], &OPTIONS)
+            .replace(r#""nodes":[{"number":65"#, r#""nodes":[{"number":66"#),
+    );
+    assert!(s.sync(&[]).status.success());
+    let before = s.mutations();
+    write();
+    assert_eq!(
+        s.todo_for("o/r#65").status.kind(),
+        devkit_todo::StatusKind::Completed
+    );
+    settle();
+    assert_eq!(s.mutations(), before);
+}
+
 /// Makes `s`'s checkout a `workspace setup` worktree for issue `issue`.
 fn record_issue(s: &Synced, issue: &str) {
     devkit_common::record::write(&s.proj.path, &devkit_common::record::IssueRecord {
