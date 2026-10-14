@@ -327,10 +327,10 @@ pub fn run(cli: TodoCli) -> Result<()> {
             {
                 // The todo is already stored. Drop it so a retry does not
                 // leave an unblocked copy beside the one the edges attach to.
-                return Err(match store.apply(&Edit::Purge(id)) {
-                    Ok(_) => err,
-                    Err(purge) => anyhow::Error::from(err).context(purge),
-                });
+                return match store.apply(&Edit::Purge(id)) {
+                    Ok(_) => Err(err),
+                    Err(purge) => Err(err.context(purge)),
+                };
             }
             println!("{}", devkit_todo::short_id(&id));
         }
