@@ -80,7 +80,7 @@ fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize) -> String {
         ""
     };
     let note = match &todo.status {
-        Status::InProgress { by } => format!("in progress: {by}"),
+        Status::InProgress { by } => format!("in progress: {}", printable(by.name())),
         Status::Pending if batch == 0 => "ready".to_string(),
         _ => {
             let members: std::collections::BTreeSet<&str> = plan

@@ -122,3 +122,21 @@ fn todos_without_blockers_render_unchanged() {
     let text = shown(&todos, &|_| false);
     assert_eq!(text, "## r.main\n- [ ] first (1)\n");
 }
+
+#[test]
+fn plan_escapes_control_characters_in_the_holder() {
+    let todos = vec![todo(
+        "1",
+        "first",
+        Status::InProgress {
+            by: Holder::new("S\u{1b}]0;owned\u{7}\u{202e}"),
+        },
+        &[],
+    )];
+    let plan = Graph::new(&todos).plan(|_| true, None);
+    let text = render::render_plan("r.main", &plan);
+    assert!(
+        text.contains("in progress: S\\u{1b}]0;owned\\u{7}\\u{202e}\n"),
+        "{text}"
+    );
+}
