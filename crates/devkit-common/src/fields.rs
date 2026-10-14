@@ -604,7 +604,7 @@ where = "project"
 [ticket.fields.github.milestone]
 type       = "enum"
 where      = "milestone"
-values     = [{ name = "v1", id = "3" }]
+values     = [{ name = "v1", id = "v1" }]
 level      = "none"
 allow_none = false
 when       = [{ if = { project = "*" }, level = "error" }]
