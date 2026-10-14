@@ -10,8 +10,7 @@ use serde_json::Value;
 
 use super::{
     github_status::{Board, board_fields, check, parse_board},
-    status::same_status,
-    tickets::{CloseReason, SyncedTicket, TicketStatus},
+    tickets::{CloseReason, SyncedTicket, TicketStatus, in_closed_name},
 };
 use crate::{
     forge::{Repo, rest::encode},
@@ -252,15 +251,6 @@ pub fn status_names(board: Option<&Board>) -> Vec<String> {
         names.extend(board.options.each_name().map(String::from));
     }
     names
-}
-
-/// Whether `ticket` is in one of `closed_names`, which a rule never brings
-/// in.
-fn in_closed_name(ticket: &SyncedTicket, closed_names: &[String]) -> bool {
-    match &ticket.status {
-        TicketStatus::Named(name) => closed_names.iter().any(|c| same_status(c, name)),
-        TicketStatus::Closed(_) => true,
-    }
 }
 
 /// The GitHub issues of one repository, read for a sync.

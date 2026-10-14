@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{
     linear::{parse_id, post_graphql_with},
     status::same_status,
-    tickets::{SyncedTicket, TicketStatus},
+    tickets::{SyncedTicket, TicketStatus, in_closed_name},
 };
 
 /// The issue fields a sync reads, for one page of `issues(filter:)`.
@@ -180,10 +180,7 @@ pub fn find_with(
     for rule in rules {
         read_all(&rule_filter(rule, closed_names)?, &mut found, &mut fetch)?;
     }
-    found.retain(|t| match &t.status {
-        TicketStatus::Named(name) => !closed_names.iter().any(|c| same_status(c, name)),
-        TicketStatus::Closed(_) => false,
-    });
+    found.retain(|t| !in_closed_name(t, closed_names));
     Ok(found)
 }
 
