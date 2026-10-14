@@ -73,6 +73,27 @@ fn read_in(team: (&str, &str), number: u32, labels: &[&str], priority: u8) -> St
     .to_string()
 }
 
+/// The query part reading ENG-42 by its identifier.
+const ENG_42: &str = r#"issue: issue(id: "ENG-42")"#;
+
+/// A [`read`] or [`read_in`] answer as Linear gives it to a read by
+/// identifier: the issue itself rather than a list.
+fn by_identifier(read: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(read).unwrap();
+    let issue = v["data"]["issue"]["nodes"][0].take();
+    v["data"]["issue"] = issue;
+    v.to_string()
+}
+
+/// A [`read`] answer for an archived ticket.
+fn archived(read: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(read).unwrap();
+    v["data"]["issue"]["nodes"][0]["archivedAt"] = "2026-10-01T00:00:00.000Z".into();
+    v.to_string()
+}
+
+const NO_ISSUE: &str = r#"{"data":{"issue":{"nodes":[]}}}"#;
+
 const CREATED: &str = r#"{"data":{"issueCreate":{"success":true}}}"#;
 const UPDATED: &str = r#"{"data":{"issueUpdate":{"success":true}}}"#;
 /// Linear's answer, sent with HTTP 400, to a create whose id an issue has.
@@ -207,7 +228,7 @@ fn a_retried_create_returns_the_first_ticket() {
     let linear = LinearFake::start();
     linear.answer_status("issueCreate(", 400, ID_TAKEN);
     linear.answer(&format!("id: {{ eq: \"{id}\" }}"), &read(&[], 0));
-    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
+    linear.answer("issue: issues(", NO_ISSUE);
     let retry = run(&fake, &linear, &args);
     assert!(retry.status.success(), "{}", stderr(&retry));
     assert_eq!(stdout(&retry), stdout(&first), "the same ticket");
@@ -233,7 +254,7 @@ fn a_retried_create_returns_the_first_ticket_after_it_was_archived() {
     let mut archived: serde_json::Value = serde_json::from_str(&read(&[], 0)).unwrap();
     archived["data"]["issue"]["nodes"][0]["archivedAt"] = "2026-10-01T00:00:00.000Z".into();
     linear.answer("includeArchived: true", &archived.to_string());
-    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
+    linear.answer("issue: issues(", NO_ISSUE);
     linear.answer_status("issueCreate(", 400, ID_TAKEN);
     let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -249,7 +270,7 @@ fn a_refused_create_shows_linears_explanation() {
         "issueCreate(",
         r#"{"data":null,"errors":[{"message":"Argument Validation Error","extensions":{"code":"INVALID_INPUT","userPresentableMessage":"Team ENG is archived."}}]}"#,
     );
-    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
+    linear.answer("issue: issues(", NO_ISSUE);
     let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
     assert!(!out.status.success());
     let err = stderr(&out);
@@ -269,7 +290,7 @@ fn a_create_refused_with_a_client_error_status_shows_linears_explanation() {
         400,
         r#"{"errors":[{"message":"Argument Validation Error","extensions":{"code":"INVALID_INPUT","userPresentableMessage":"Title is too long."}}]}"#,
     );
-    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
+    linear.answer("issue: issues(", NO_ISSUE);
     let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
     assert!(!out.status.success());
     let err = stderr(&out);
@@ -285,7 +306,7 @@ fn an_unanswered_create_with_no_ticket_says_a_rerun_is_safe() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();
     linear.hang_up("issueCreate(");
-    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
+    linear.answer("issue: issues(", NO_ISSUE);
     let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
     assert!(!out.status.success());
     let err = stderr(&out);
@@ -299,6 +320,7 @@ fn an_unanswered_create_with_no_ticket_says_a_rerun_is_safe() {
 fn edit_on_linear_reads_first_and_writes_only_named_fields() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();
+    linear.answer(ENG_42, &by_identifier(&read(&["lbl-bug"], 2)));
     linear.answer("issue: issues(", &read(&["lbl-bug"], 2));
     linear.answer("issueUpdate(", UPDATED);
     let out = run(&fake, &linear, &[
@@ -318,7 +340,7 @@ fn edit_on_linear_reads_first_and_writes_only_named_fields() {
     let bodies = linear.bodies();
     let first = bodies[0]["query"].as_str().unwrap();
     assert!(
-        first.starts_with("query") && first.contains("number: { eq: 42 }"),
+        first.starts_with("query") && first.contains(ENG_42),
         "the read comes first: {first}"
     );
     let updates = linear.sent("issueUpdate(");
@@ -330,6 +352,7 @@ fn edit_on_linear_reads_first_and_writes_only_named_fields() {
         "only the named field, no title, body or labels"
     );
 
+    linear.answer(ENG_42, &by_identifier(&read(&["lbl-bug"], 1)));
     linear.answer("issue: issues(", &read(&["lbl-bug"], 1));
     let out = run(&fake, &linear, &[
         "edit",
@@ -346,7 +369,7 @@ fn an_edit_moving_the_ticket_to_another_team_reads_it_back_by_its_id() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();
     linear.answer("id: { eq: ", &read_in(("team-ops", "OPS"), 7, &[], 0));
-    linear.answer("number: { eq: 42 }", &read(&[], 0));
+    linear.answer(ENG_42, &by_identifier(&read(&[], 0)));
     linear.answer("issueUpdate(", UPDATED);
     let out = run(&fake, &linear, &["edit", "ENG-42", "--arg", "team=OPS"]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -363,9 +386,63 @@ fn an_edit_moving_the_ticket_to_another_team_reads_it_back_by_its_id() {
 }
 
 #[test]
+fn an_edit_finds_the_ticket_by_its_identifier_from_before_a_team_move() {
+    let fake = project(FIELDS);
+    let linear = LinearFake::start();
+    linear.answer(
+        ENG_42,
+        &by_identifier(&read_in(("team-ops", "OPS"), 7, &[], 2)),
+    );
+    linear.answer("number: { eq: 42 }", NO_ISSUE);
+    linear.answer("issue: issues(", &read_in(("team-ops", "OPS"), 7, &[], 1));
+    linear.answer("issueUpdate(", UPDATED);
+    let out = run(&fake, &linear, &[
+        "edit",
+        "ENG-42",
+        "--arg",
+        "priority=urgent",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "https://linear.app/acme/issue/OPS-7/t");
+    assert_eq!(linear.sent("issueUpdate(")[0]["variables"]["id"], UUID);
+}
+
+#[test]
+fn the_edit_a_create_points_to_reaches_an_archived_ticket() {
+    let fake = project(FIELDS);
+    let linear = LinearFake::start();
+    linear.answer(ENG_42, &by_identifier(&archived(&read(&[], 2))));
+    linear.answer("includeArchived: true", &archived(&read(&[], 2)));
+    linear.answer("issue: issues(", NO_ISSUE);
+    linear.answer_status("issueCreate(", 400, ID_TAKEN);
+    let out = run(&fake, &linear, &[
+        "create",
+        "--title",
+        "T",
+        "--arg",
+        "priority=urgent",
+    ]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("`devkit ticket edit ENG-42"), "{err}");
+
+    linear.answer("includeArchived: true", &archived(&read(&[], 1)));
+    linear.answer("issueUpdate(", UPDATED);
+    let out = run(&fake, &linear, &[
+        "edit",
+        "ENG-42",
+        "--arg",
+        "priority=urgent",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(linear.sent("issueUpdate(")[0]["variables"]["id"], UUID);
+}
+
+#[test]
 fn edit_on_linear_rewrites_the_body_keeping_the_title() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();
+    linear.answer(ENG_42, &by_identifier(&read(&[], 0)));
     linear.answer("issue: issues(", &read(&[], 0));
     linear.answer("issueUpdate(", UPDATED);
     let out = run(&fake, &linear, &["edit", "ENG-42", "--body", "New body"]);

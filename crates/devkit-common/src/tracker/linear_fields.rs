@@ -69,7 +69,8 @@ const ISSUE_FIELDS: &str = "id identifier url title team { id key } labels(first
 /// Which issue a [`read_query`] reads.
 #[derive(Debug, Clone, Copy)]
 pub enum Lookup<'a> {
-    /// A `TEAM-NUMBER` identifier.
+    /// A `TEAM-NUMBER` identifier, current or from before a move to another
+    /// team, archived or trashed issues included.
     Identifier(&'a str),
     /// The issue's own id, as [`create_id`] gives it, archived or trashed
     /// issues included.
@@ -90,10 +91,13 @@ fn by_identifier(id: &str) -> Result<String> {
 pub fn read_query(lookup: Lookup<'_>, refs: &BTreeSet<String>) -> Result<String> {
     let mut parts = Vec::new();
     match lookup {
-        Lookup::Identifier(id) => parts.push(format!(
-            "issue: issues({}) {{ nodes {{ {ISSUE_FIELDS} }} }}",
-            by_identifier(id)?
-        )),
+        Lookup::Identifier(id) => {
+            let (team, num) =
+                parse_id(id).with_context(|| format!("`{id}` is not a Linear issue id"))?;
+            parts.push(format!(
+                "issue: issue(id: \"{team}-{num}\") {{ {ISSUE_FIELDS} }}"
+            ))
+        }
         Lookup::Uuid(u) => parts.push(format!(
             "issue: issues(filter: {{ id: {{ eq: \"{u}\" }} }}, includeArchived: true) {{ nodes {{ {ISSUE_FIELDS} }} }}"
         )),
@@ -115,9 +119,14 @@ fn text(v: &Json, pointer: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// The issue a [`read_query`] response read, `None` when Linear has none.
+/// The issue a [`read_query`] response read, `None` when Linear has none: a
+/// read by id answers a list, a read by identifier the issue itself.
 pub fn parse_issue(resp: &Json) -> Result<Option<LinearIssue>> {
-    let Some(n) = resp.pointer("/data/issue/nodes/0") else {
+    let read = resp.pointer("/data/issue").filter(|v| !v.is_null());
+    let Some(n) = read.and_then(|v| match v.get("nodes") {
+        Some(nodes) => nodes.get(0),
+        None => Some(v),
+    }) else {
         return Ok(None);
     };
     Ok(Some(LinearIssue {
@@ -515,9 +524,11 @@ impl LinearFieldWriter {
         )?)
     }
 
-    /// Read what issue `identifier` holds at every place devkit writes.
+    /// Read what issue `identifier` holds at every place devkit writes. The
+    /// identifier may be one the issue had before a move to another team.
     pub fn read(&self, identifier: &str) -> Result<LinearIssue> {
-        self.lookup(Lookup::Identifier(identifier))?
+        self.lookup(Lookup::Identifier(identifier))
+            .with_context(|| format!("reading Linear issue {identifier}"))?
             .with_context(|| format!("Linear has no issue {identifier}"))
     }
 
