@@ -1,6 +1,7 @@
 //! A Linear GraphQL endpoint in a thread, for `DEVKIT_TEST_LINEAR_URL`: it
-//! answers each POST by the first registered substring its body contains, or
-//! hangs up without answering, and records every body it was sent.
+//! answers each POST by the first registered substring its body contains,
+//! with a status and body or by hanging up, and records every body it was
+//! sent.
 #![allow(dead_code)]
 
 use std::{
@@ -9,9 +10,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// An HTTP status and body, or `None` to hang up without answering.
+type Reply = Option<(u16, String)>;
+
 #[derive(Default)]
 struct Shared {
-    answers: Mutex<Vec<(String, Option<String>)>>,
+    answers: Mutex<Vec<(String, Reply)>>,
     bodies: Mutex<Vec<serde_json::Value>>,
 }
 
@@ -40,7 +44,13 @@ impl LinearFake {
     /// Answer a request whose body contains `needle` with `body`, replacing
     /// an earlier answer for the same `needle`.
     pub fn answer(&self, needle: &str, body: &str) {
-        self.register(needle, Some(body.to_string()));
+        self.register(needle, Some((200, body.to_string())));
+    }
+
+    /// Answer a request whose body contains `needle` with HTTP `status` and
+    /// `body`, replacing an earlier answer for the same `needle`.
+    pub fn answer_status(&self, needle: &str, status: u16, body: &str) {
+        self.register(needle, Some((status, body.to_string())));
     }
 
     /// Read a request whose body contains `needle`, then close the
@@ -49,7 +59,7 @@ impl LinearFake {
         self.register(needle, None);
     }
 
-    fn register(&self, needle: &str, reply: Option<String>) {
+    fn register(&self, needle: &str, reply: Reply) {
         let mut answers = self.shared.answers.lock().unwrap();
         match answers.iter_mut().find(|(n, _)| n == needle) {
             Some(entry) => entry.1 = reply,
@@ -116,13 +126,18 @@ fn serve(shared: &Shared, stream: TcpStream) -> std::io::Result<()> {
             .iter()
             .find(|(needle, _)| text.contains(needle.as_str()))
             .map(|(_, a)| a.clone())
-            .unwrap_or_else(|| Some(r#"{"errors":[{"message":"linearfake: no answer"}]}"#.into()));
-        let Some(reply) = reply else {
+            .unwrap_or_else(|| {
+                Some((
+                    200,
+                    r#"{"errors":[{"message":"linearfake: no answer"}]}"#.into(),
+                ))
+            });
+        let Some((status, reply)) = reply else {
             return Ok(());
         };
         write!(
             stream,
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}",
+            "HTTP/1.1 {status} Reply\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}",
             reply.len()
         )?;
         stream.flush()?;

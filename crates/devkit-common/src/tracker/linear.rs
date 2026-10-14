@@ -252,13 +252,36 @@ fn endpoint() -> String {
 /// to distinguish an unreachable host from a rejected key.
 pub(crate) fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value> {
     let _span = devkit_timing::io_span("linear graphql", detail).entered();
-    Ok(crate::http::send(
-        crate::http::client()
-            .post(endpoint())
-            .header("Authorization", key)
-            .json(&body),
-    )?
-    .json()?)
+    Ok(crate::http::send(request(&body, key))?.json()?)
+}
+
+/// [`send`], except that a 4xx reply carrying GraphQL `errors` is returned as
+/// the envelope, so [`graphql_errors`] reports Linear's explanation of the
+/// refusal instead of the bare status.
+pub(crate) fn send_graphql(
+    body: serde_json::Value,
+    key: &str,
+    detail: &str,
+) -> Result<serde_json::Value> {
+    let _span = devkit_timing::io_span("linear graphql", detail).entered();
+    let resp = request(&body, key).send().map_err(crate::http::explain)?;
+    let Err(status_error) = resp.error_for_status_ref() else {
+        return Ok(resp.json()?);
+    };
+    if resp.status().is_client_error()
+        && let Ok(envelope) = resp.json::<serde_json::Value>()
+        && envelope["errors"].as_array().is_some_and(|e| !e.is_empty())
+    {
+        return Ok(envelope);
+    }
+    Err(crate::http::explain(status_error))
+}
+
+fn request(body: &serde_json::Value, key: &str) -> reqwest::blocking::RequestBuilder {
+    crate::http::client()
+        .post(endpoint())
+        .header("Authorization", key)
+        .json(body)
 }
 
 pub(crate) fn post_graphql(query: &str, key: &str, detail: &str) -> Result<serde_json::Value> {
@@ -276,7 +299,7 @@ pub(crate) fn post_graphql_with(
         serde_json::Value::Null => serde_json::json!({ "query": query }),
         variables => serde_json::json!({ "query": query, "variables": variables }),
     };
-    graphql_errors(send(body, key, detail)?)
+    graphql_errors(send_graphql(body, key, detail)?)
 }
 
 /// `v`, or an error carrying the first GraphQL error's message, led by

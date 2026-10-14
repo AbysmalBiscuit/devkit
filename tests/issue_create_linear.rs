@@ -229,6 +229,26 @@ fn a_refused_create_shows_linears_explanation() {
 }
 
 #[test]
+fn a_create_refused_with_a_client_error_status_shows_linears_explanation() {
+    let fake = project(FIELDS);
+    let linear = LinearFake::start();
+    linear.answer_status(
+        "issueCreate(",
+        400,
+        r#"{"errors":[{"message":"Argument Validation Error","extensions":{"code":"INVALID_INPUT","userPresentableMessage":"Title is too long."}}]}"#,
+    );
+    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
+    let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("Title is too long."), "{err}");
+    assert!(
+        !err.contains("rerun"),
+        "a refusal is not a lost answer: {err}"
+    );
+}
+
+#[test]
 fn an_unanswered_create_with_no_ticket_says_a_rerun_is_safe() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();

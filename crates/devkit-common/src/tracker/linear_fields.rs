@@ -444,7 +444,7 @@ pub struct LinearFieldWriter {
 impl LinearFieldWriter {
     /// Through Linear's API with the key `key`.
     pub fn new(key: String) -> Self {
-        Self::with_transport(move |body, detail| super::linear::send(body, &key, detail))
+        Self::with_transport(move |body, detail| super::linear::send_graphql(body, &key, detail))
     }
 
     /// Through `post`, which a test answers from recorded responses.
