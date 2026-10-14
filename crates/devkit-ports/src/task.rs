@@ -31,6 +31,10 @@ pub struct CommandPlan {
     pub argv: Vec<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
+    /// The apps that must have a live server in the worktree before it
+    /// runs. Enforced against the registry when the ports are reserved
+    /// there for execution; an [`ExecutionPlan`] carries them unchecked.
+    pub require_live: Vec<String>,
 }
 
 /// A resolved sequence step.
@@ -554,7 +558,8 @@ enum Ports<'a> {
     Registry { holder: &'a str, live: bool },
     /// Each app's base port, with no registry touched: what an
     /// [`ExecutionPlan`] renders, since the ports a run binds are not part
-    /// of what the task is.
+    /// of what the task is. `require_live` is left unchecked and carried
+    /// in the plan.
     Base,
 }
 
@@ -624,20 +629,21 @@ fn resolve_command(
         }
     }
 
-    if let Ports::Registry { holder, live: true } = ports {
-        let gated: Vec<&String> = t
-            .require_live
-            .iter()
-            .filter(|r| refs.apps.contains(*r))
-            .collect();
-        if !gated.is_empty() {
-            let data = registry::snapshot()?;
-            for r in gated {
-                ensure!(
-                    registry::live_port(&data, holder, r).is_some(),
-                    "require_live: `{r}` has no live server in this worktree (devrun up {r})"
-                );
-            }
+    let gated: Vec<String> = t
+        .require_live
+        .iter()
+        .filter(|r| refs.apps.contains(*r))
+        .cloned()
+        .collect();
+    if let Ports::Registry { holder, live: true } = ports
+        && !gated.is_empty()
+    {
+        let data = registry::snapshot()?;
+        for r in &gated {
+            ensure!(
+                registry::live_port(&data, holder, r).is_some(),
+                "require_live: `{r}` has no live server in this worktree (devrun up {r})"
+            );
         }
     }
 
@@ -650,7 +656,7 @@ fn resolve_command(
         .own_port
         .then(|| ports[&app.expect("checked above").name]);
 
-    resolve_command_with_ports(
+    let plan = resolve_command_with_ports(
         name,
         t,
         &env_templates,
@@ -660,7 +666,11 @@ fn resolve_command(
         own_port,
         vars,
         user_env,
-    )
+    )?;
+    Ok(CommandPlan {
+        require_live: gated,
+        ..plan
+    })
 }
 
 /// Resolve command task `name` for immediate execution: fresh allocation,
@@ -695,12 +705,19 @@ pub fn resolve_step(
 }
 
 /// What a run of a task executes once every config layer has merged and
-/// every template rendered: per step, the command task's app, argv, cwd and
-/// env, or the servers an `up` step launches. Ports render as each app's
+/// every template rendered: per step, the command task's app, argv, cwd,
+/// env and the servers it requires live, or the servers an `up` step
+/// launches; and which callers its args satisfy, since a run's arg check
+/// depends on who runs it. Ports render as each app's
 /// base port, so no registry is touched. Rendered env values may be
 /// secrets, so a plan is only compared, never printed, and has no `Debug`.
 #[derive(PartialEq, Eq)]
-pub struct ExecutionPlan(Vec<PlannedStep>);
+pub struct ExecutionPlan {
+    /// Whether the args pass the check `devrun task` makes of a human
+    /// caller and of an agent caller, in that order.
+    accepts: [bool; 2],
+    steps: Vec<PlannedStep>,
+}
 
 #[derive(PartialEq, Eq)]
 enum PlannedStep {
@@ -710,6 +727,7 @@ enum PlannedStep {
         argv: Vec<String>,
         cwd: PathBuf,
         env: BTreeMap<String, String>,
+        require_live: Vec<String>,
     },
     Up(Vec<PlannedLaunch>),
 }
@@ -735,6 +753,8 @@ pub fn execution_plan(
 ) -> Result<ExecutionPlan> {
     let v = view(cfg, catalog, name)?;
     let checked = v.runnable()?;
+    let accepts = [Caller::Human, Caller::Agent]
+        .map(|caller| check_args(cfg, name, &checked.reads, args, caller).is_ok());
     let vars = variables(cfg, worktree_root, args);
     let command = |step: &str, t: &TaskConfig| -> Result<PlannedStep> {
         let plan = resolve_command(
@@ -752,6 +772,7 @@ pub fn execution_plan(
             argv: plan.argv,
             cwd: plan.cwd,
             env: plan.env,
+            require_live: plan.require_live,
         })
     };
     let steps = match checked.kind {
@@ -766,7 +787,7 @@ pub fn execution_plan(
             })
             .collect::<Result<_>>()?,
     };
-    Ok(ExecutionPlan(steps))
+    Ok(ExecutionPlan { accepts, steps })
 }
 
 /// The launches an `up` step of `app` makes, as `devrun up` plans them for
@@ -899,6 +920,7 @@ fn resolve_command_with_ports(
         argv,
         cwd,
         env,
+        require_live: Vec::new(),
     })
 }
 

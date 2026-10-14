@@ -540,3 +540,55 @@ fn a_pass_recorded_without_its_directory_does_not_satisfy_the_gate() {
     let (_, stderr) = create(&p, "agent");
     assert!(stderr.contains("which directory it started in"), "{stderr}");
 }
+
+/// A task that needs `api` live, through `require_live`.
+const LIVE_READER: &str = "[tasks.live]\nrun = [\"git\", \"-c\", \"x.api={{ ports['api'] }}\", \"version\"]\n\
+     require_live = [\"api\"]\n\
+     [apps.api]\nbase_port = 39202\npath = \".\"\nlaunch = [\"git\", \"version\"]\n";
+
+/// `require_live` is a precondition of the run, so a branch dropping it
+/// runs the task where the merge base would refuse to.
+#[test]
+fn a_branch_dropping_a_require_live_entry_is_refused() {
+    let p = project(&format!(
+        "{LIVE_READER}\n[pr.gates]\nverify_task = \"live\"\n"
+    ));
+    let file = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, toml.replace("require_live = [\"api\"]\n", "")).unwrap();
+    git(&p, &["commit", "-q", "-am", "drop require_live"]);
+    serve_head(&p);
+    task(&p, &["live"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(
+        stderr.contains("definition changed from the merge base"),
+        "{stderr}"
+    );
+    assert!(!opened(&p), "{}", p.calls());
+}
+
+const AGENTS_NAME_SCOPE: &str = "[tasks.verify.required_args]\nscope = \"agents\"\n";
+
+/// An arg the merge base requires of agents is a precondition of the run,
+/// so a branch dropping the requirement runs the task where the merge base
+/// would refuse an agent.
+#[test]
+fn a_branch_dropping_a_required_arg_is_refused() {
+    let p = project(&format!(
+        "\n{AGENTS_NAME_SCOPE}\n[templates.variables]\nscope = \"all\"\n\n[pr.gates]\nverify_task = \"verify\"\n"
+    ));
+    let file = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, toml.replace(AGENTS_NAME_SCOPE, "")).unwrap();
+    git(&p, &["commit", "-q", "-am", "drop required_args"]);
+    serve_head(&p);
+    task(&p, &["verify"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(
+        stderr.contains("definition changed from the merge base"),
+        "{stderr}"
+    );
+    assert!(!opened(&p), "{}", p.calls());
+}
