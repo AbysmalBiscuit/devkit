@@ -18,12 +18,13 @@ use devkit_config::HoldStop;
 use devkit_todo::{
     Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
     activity::{ActivityStore as _, SessionState},
+    graph::{self, Graph},
     holder::HOLDER_VAR,
     layout::{Facts, Layout},
     native::NativeMap,
     node::{self, GLOBAL, Place},
     render,
-    roles::Roles,
+    roles::{ResolvedRole, Roles},
     transition,
 };
 use pabal::AnyHarness;
@@ -68,9 +69,31 @@ pub enum TodoCommand {
         /// needed.
         #[arg(long)]
         scope: Option<String>,
+        /// Todos this one waits on, comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        blocked_by: Vec<String>,
+    },
+    /// Record that a todo waits on others.
+    Block {
+        id: String,
+        /// The todos it waits on, comma-separated.
+        #[arg(long, value_delimiter = ',', required = true)]
+        by: Vec<String>,
+    },
+    /// Remove blockers from a todo.
+    Unblock {
+        id: String,
+        /// The blockers to remove, comma-separated.
+        #[arg(long, value_delimiter = ',', required = true)]
+        by: Vec<String>,
     },
     /// Mark todos in progress, claiming them for this caller.
-    Start { ids: Vec<String> },
+    Start {
+        ids: Vec<String>,
+        /// Start a todo even while a blocker is still open.
+        #[arg(long)]
+        force: bool,
+    },
     /// Return todos in progress to pending.
     Stop { ids: Vec<String> },
     /// Mark todos completed.
@@ -132,6 +155,17 @@ pub enum TodoCommand {
     Schema {
         #[command(subcommand)]
         action: SchemaAction,
+    },
+    /// Print the todos that can start now, critical path first.
+    Ready,
+    /// Print the open todos as batches, and the critical path through them.
+    Plan {
+        /// Cap each batch at this many todos.
+        #[arg(long)]
+        agents: Option<std::num::NonZeroUsize>,
+        /// Print the batches as Mermaid flowchart source.
+        #[arg(long)]
+        mermaid: bool,
     },
     /// Print the todo block a hook injects.
     ///
@@ -244,18 +278,25 @@ pub fn run(cli: TodoCli) -> Result<()> {
         TodoCommand::Scope
             | TodoCommand::Role { .. }
             | TodoCommand::List(_)
+            | TodoCommand::Ready
+            | TodoCommand::Plan { .. }
             | TodoCommand::Sync { .. }
     );
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
-        TodoCommand::List(args) => list(&store, &args, &cwd, &layout, &facts, &role.name, &actor)?,
+        TodoCommand::List(args) => list(&store, &args, &cwd, &layout, &facts, &role, &actor)?,
+        TodoCommand::Ready => ready(&store, &layout, &facts, &role.name)?,
+        TodoCommand::Plan { agents, mermaid } => {
+            plan(&store, &layout, &facts, &role.name, agents, mermaid)?
+        }
         TodoCommand::Add {
             text,
             parent,
             order,
             node,
             scope,
+            blocked_by,
         } => {
             let node = match node {
                 Some(node) => node,
@@ -270,15 +311,36 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     node
                 }
             };
+            let blockers = resolve_ids(&store, &blocked_by)?;
+            refuse_cycle(&store, None, &blockers)?;
             let id = store.add(NewTodo {
                 project: project_of(node),
                 description: text,
                 parent,
                 order,
             })?;
+            if !blockers.is_empty()
+                && let Err(err) = store.apply(&Edit::Block {
+                    id: id.clone(),
+                    by: blockers,
+                })
+            {
+                // The todo is already stored. Drop it so a retry does not
+                // leave an unblocked copy beside the one the edges attach to.
+                return match store.apply(&Edit::Purge(id)) {
+                    Ok(_) => Err(err),
+                    Err(purge) => Err(err.context(purge)),
+                };
+            }
             println!("{}", devkit_todo::short_id(&id));
         }
-        TodoCommand::Start { ids } => {
+        TodoCommand::Block { id, by } => block(&store, &id, &by)?,
+        TodoCommand::Unblock { id, by } => {
+            let id = resolve_id(&store, &id)?.id;
+            let by = resolve_ids(&store, &by)?;
+            store.apply(&Edit::Unblock { id, by })?;
+        }
+        TodoCommand::Start { ids, force } => {
             let activity = LazyCell::new(|| {
                 Store::activity_for_cli(&cwd)
                     .and_then(|log| log.read_now())
@@ -292,13 +354,29 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     )
                 })
             };
-            start(&store, ids, &actor, gone)?
+            start(&store, ids, &actor, gone, force)?
         }
         TodoCommand::Stop { ids } | TodoCommand::Undone { ids } => {
-            set_status(&store, ids, StatusKind::Pending, &actor)?
+            let _closed = set_status(&store, ids, StatusKind::Pending, &actor)?;
         }
-        TodoCommand::Done { ids } => set_status(&store, ids, StatusKind::Completed, &actor)?,
-        TodoCommand::Cancel { ids } => set_status(&store, ids, StatusKind::Cancelled, &actor)?,
+        TodoCommand::Done { ids } => finish(
+            &store,
+            &layout,
+            &facts,
+            &role.name,
+            ids,
+            StatusKind::Completed,
+            &actor,
+        )?,
+        TodoCommand::Cancel { ids } => finish(
+            &store,
+            &layout,
+            &facts,
+            &role.name,
+            ids,
+            StatusKind::Cancelled,
+            &actor,
+        )?,
         TodoCommand::Describe { id, text } => {
             store.apply(&Edit::Describe {
                 id,
@@ -409,9 +487,32 @@ fn start(
     ids: Vec<String>,
     actor: &Holder,
     gone: impl Fn(&Holder) -> bool,
+    force: bool,
 ) -> Result<()> {
+    if !force {
+        let listed = graph::with_blockers(store, store.list(&Filter::all())?)?;
+        let graph = Graph::new(&listed);
+        for id in &ids {
+            let Some(todo) = store.get(id)? else {
+                continue;
+            };
+            let open = graph.open_blockers(&todo);
+            if !open.is_empty() {
+                let names = open
+                    .iter()
+                    .map(|blocker| devkit_todo::short_id(&blocker.id))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "todo {} is blocked by {names}",
+                    devkit_todo::short_id(&todo.id)
+                );
+            }
+        }
+    }
     apply_checked(store, ids, |todo| {
-        Ok(
+        Ok((
+            false,
             match transition(&todo.status, StatusKind::InProgress, actor) {
                 Err(Claimed { by }) if !by.is_human() && gone(&by) => Edit::TakeOver {
                     id: todo.id,
@@ -425,33 +526,214 @@ fn start(
                     actor: actor.clone(),
                 },
             },
-        )
+        ))
     })
+    .map(drop)
 }
 
+/// Completes or cancels `ids`, then names the offered todos that became ready.
+fn finish(
+    store: &Store,
+    layout: &Layout,
+    facts: &Facts,
+    role: &str,
+    ids: Vec<String>,
+    to: StatusKind,
+    actor: &Holder,
+) -> Result<()> {
+    let before = offered_ids(store, layout, facts, role)?;
+    let closed = set_status(store, ids, to, actor)?;
+    if !store.config().print_unblocked || closed.is_empty() {
+        return Ok(());
+    }
+    let offered = offered_todos(store, layout, facts, role)?;
+    let graph = Graph::new(&offered);
+    let ready = graph.unblocked_by(&closed.iter().map(String::as_str).collect::<Vec<_>>());
+    let names = ready
+        .iter()
+        .filter(|todo| before.contains(&todo.id))
+        .map(|todo| devkit_todo::short_id(&todo.id))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !names.is_empty() {
+        println!("unblocked: {names}");
+    }
+    Ok(())
+}
+
+/// Full ids the ticket fence offers, before a change.
+fn offered_ids(
+    store: &Store,
+    layout: &Layout,
+    facts: &Facts,
+    role: &str,
+) -> Result<BTreeSet<String>> {
+    Ok(layout
+        .fence(store.list(&Filter::all())?)
+        .into_iter()
+        .filter(|todo| offered_here(store, layout, facts, role, todo))
+        .map(|todo| todo.id)
+        .collect())
+}
+
+/// The todos the ticket fence offers this caller, with the blockers the
+/// listing itself does not hold.
+fn offered_todos(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<Vec<Todo>> {
+    let offered = layout
+        .fence(store.list(&Filter::all())?)
+        .into_iter()
+        .filter(|todo| offered_here(store, layout, facts, role, todo))
+        .collect();
+    graph::with_blockers(store, offered)
+}
+
+/// Prints the frontier, critical-path todos first.
+fn ready(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<()> {
+    let offered = offered_todos(store, layout, facts, role)?;
+    let plan = ticket_plan(store, layout, facts, role, &offered, None);
+    for todo in plan.frontier() {
+        let mark = if plan.critical.iter().any(|on| on.id == todo.id) {
+            "  *"
+        } else {
+            ""
+        };
+        println!(
+            "{}  {}{mark}",
+            devkit_todo::short_id(&todo.id),
+            devkit_common::ui::printable(&todo.description)
+        );
+    }
+    Ok(())
+}
+
+/// Prints the ticket's batches, or their Mermaid source.
+fn plan(
+    store: &Store,
+    layout: &Layout,
+    facts: &Facts,
+    role: &str,
+    agents: Option<std::num::NonZeroUsize>,
+    mermaid: bool,
+) -> Result<()> {
+    let offered = offered_todos(store, layout, facts, role)?;
+    let plan = ticket_plan(store, layout, facts, role, &offered, agents);
+    let root = layout
+        .ticket_root(facts, store.config().ready_outside_ticket)
+        .unwrap_or_else(|| facts.values.get("repo").cloned().unwrap_or_default());
+    let text = if mermaid {
+        render::render_mermaid(&plan)
+    } else {
+        render::render_plan(&root, &plan)
+    };
+    print!("{text}");
+    Ok(())
+}
+
+/// The plan over the todos the ticket fence offers.
+fn ticket_plan<'a>(
+    store: &Store,
+    layout: &Layout,
+    facts: &Facts,
+    role: &str,
+    offered: &'a [Todo],
+    cap: Option<std::num::NonZeroUsize>,
+) -> devkit_todo::graph::Plan<'a> {
+    // Blockers fetched for status sit in `offered` and are not members.
+    Graph::new(offered).plan(|todo| offered_here(store, layout, facts, role, todo), cap)
+}
+
+/// Whether the ticket fence offers `todo` to this caller: the ticket's nodes,
+/// or the caller's own default listing when there is no ticket.
+fn offered_here(store: &Store, layout: &Layout, facts: &Facts, role: &str, todo: &Todo) -> bool {
+    let wide = store.config().ready_outside_ticket;
+    match layout.ticket_root(facts, wide) {
+        Some(root) => layout.offered(todo.project.as_deref(), &root, facts, role),
+        None => layout
+            .visible(facts, role)
+            .is_ok_and(|filter| filter.matches(todo.project.as_deref())),
+    }
+}
+
+/// The todo `id` names, its full id included, or the error `no todo <id>`.
+fn resolve_id(store: &impl TodoStore, id: &str) -> Result<Todo> {
+    store
+        .get(id)?
+        .ok_or_else(|| anyhow::anyhow!("no todo {id}"))
+}
+
+/// Each id resolved to the full id the store holds.
+fn resolve_ids(store: &impl TodoStore, ids: &[String]) -> Result<Vec<String>> {
+    ids.iter()
+        .map(|id| resolve_id(store, id).map(|todo| todo.id))
+        .collect()
+}
+
+/// Records `by` as blockers of `id`, refusing an edge that would close a cycle.
+fn block(store: &impl TodoStore, id: &str, by: &[String]) -> Result<()> {
+    let id = resolve_id(store, id)?.id;
+    let by = resolve_ids(store, by)?;
+    refuse_cycle(store, Some(&id), &by)?;
+    store.apply(&Edit::Block { id, by })?;
+    Ok(())
+}
+
+/// Refuses when adding `by` to `id` would close a cycle. `id` absent is a
+/// todo not added yet, so only a blocker naming itself can cycle.
+fn refuse_cycle(store: &impl TodoStore, id: Option<&str>, by: &[String]) -> Result<()> {
+    let Some(id) = id else {
+        return Ok(());
+    };
+    let todos = store.list(&Filter::all())?;
+    let Some(cycle) = graph::cycle_through(&todos, id, by) else {
+        return Ok(());
+    };
+    let names = cycle
+        .iter()
+        .map(|id| devkit_todo::short_id(id))
+        .collect::<Vec<_>>()
+        .join(" -> ");
+    let blockers = by
+        .iter()
+        .map(|id| devkit_todo::short_id(id))
+        .collect::<Vec<_>>()
+        .join(", ");
+    bail!(
+        "blocking {} on {blockers} would close the cycle {names}",
+        devkit_todo::short_id(id)
+    );
+}
+
+/// Applies the status change and returns the full ids that moved from open
+/// to closed. A todo already closed is not among them.
 fn set_status(
     store: &impl TodoStore,
     ids: Vec<String>,
     to: StatusKind,
     actor: &Holder,
-) -> Result<()> {
+) -> Result<Vec<String>> {
+    let closing = matches!(to, StatusKind::Completed | StatusKind::Cancelled);
     apply_checked(store, ids, |todo| {
+        let was_open = matches!(
+            todo.status.kind(),
+            StatusKind::Pending | StatusKind::InProgress
+        );
         transition(&todo.status, to, actor)?;
-        Ok(Edit::SetStatus {
+        Ok((was_open && closing, Edit::SetStatus {
             id: todo.id,
             to,
             actor: actor.clone(),
-        })
+        }))
     })
 }
 
 /// Applies the edit `edit_for` makes of each todo, after checking every id,
-/// so a batch with one unknown or refused todo changes nothing.
+/// so a batch with one unknown or refused todo changes nothing. Returns the
+/// full ids whose pair was marked.
 fn apply_checked(
     store: &impl TodoStore,
     ids: Vec<String>,
-    edit_for: impl Fn(Todo) -> Result<Edit>,
-) -> Result<()> {
+    edit_for: impl Fn(Todo) -> Result<(bool, Edit)>,
+) -> Result<Vec<String>> {
     if ids.is_empty() {
         bail!("name at least one todo id");
     }
@@ -462,10 +744,18 @@ fn apply_checked(
         };
         edits.push(edit_for(todo)?);
     }
-    for edit in edits {
+    let mut marked = Vec::new();
+    for (keep, edit) in edits {
+        let id = match &edit {
+            Edit::SetStatus { id, .. } => id.clone(),
+            _ => String::new(),
+        };
         store.apply(&edit)?;
+        if keep {
+            marked.push(id);
+        }
     }
-    Ok(())
+    Ok(marked)
 }
 
 fn move_todo(
@@ -490,7 +780,7 @@ fn list(
     cwd: &Path,
     layout: &Layout,
     facts: &Facts,
-    role: &str,
+    role: &ResolvedRole,
     viewer: &Holder,
 ) -> Result<()> {
     let filter = match (&args.scope, &args.node, &args.subtree, args.all) {
@@ -500,7 +790,7 @@ fn list(
             nodes: vec![NodeMatch::Subtree(n.clone())],
         },
         (_, _, _, true) => Filter::all(),
-        _ => layout.visible(facts, role)?,
+        _ => layout.visible(facts, &role.name)?,
     };
     if args.sync {
         match store.sync(cwd, sync::FRESH_WAIT) {
@@ -522,13 +812,23 @@ fn list(
     } else {
         store.list(&filter)?
     };
+    let graph_todos = graph::with_blockers(store, todos.clone())?;
     if args.json {
         let rows: Vec<Value> = todos.iter().filter_map(alacritree_json).collect();
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
     let nodes = list_nodes(&filter, &todos);
-    print!("{}", render::render_full(&nodes, &todos, viewer));
+    let graph = Graph::new(&graph_todos);
+    let own = &role.node;
+    let notes = render::Notes {
+        graph: &graph,
+        show_ready: &|todo| {
+            offered_here(store, layout, facts, &role.name, todo)
+                && (!facts.subagent || todo.node() == own)
+        },
+    };
+    print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
     Ok(())
 }
 
@@ -611,13 +911,22 @@ fn context(args: &ContextArgs) -> Option<String> {
         .filter(|t| visible.matches(t.project.as_deref()))
         .cloned()
         .collect();
+    let graph_todos = graph::with_blockers(&store, todos.clone()).ok()?;
     let siblings = layout.fence(all).into_iter().filter(|t| {
         filter.matches(t.project.as_deref())
             && !visible.matches(t.project.as_deref())
             && layout.is_other_session(t.node(), &facts)
     });
     let nodes = list_nodes(&visible, &todos);
-    let mut lists = render::render_lists(&nodes, &todos, &viewer);
+    let graph = Graph::new(&graph_todos);
+    let notes = render::Notes {
+        graph: &graph,
+        show_ready: &|todo| {
+            offered_here(&store, &layout, &facts, &role.name, todo)
+                && (!facts.subagent || todo.node() == own)
+        },
+    };
+    let mut lists = render::render_lists(&nodes, &todos, &viewer, &notes);
     let own_open = todos.iter().any(|t| {
         t.node() == own
             && matches!(

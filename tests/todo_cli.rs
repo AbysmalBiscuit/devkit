@@ -234,6 +234,27 @@ fn a_broken_config_is_an_error_in_the_cli() {
 }
 
 #[test]
+fn list_escapes_a_blocker_node_name() {
+    let p = Proj::new();
+    let hostile = "proj.side\u{1b}]52;c;aGk=\u{7}";
+    let blocker = p.devkit(&["todo", "add", "blocker", "--node", hostile], &S1);
+    assert!(blocker.status.success(), "{}", stderr(&blocker));
+    let mine = p.devkit(&["todo", "add", "mine"], &S1);
+    assert!(mine.status.success(), "{}", stderr(&mine));
+    let blocked = p.devkit(
+        &["todo", "block", "2", "--by", stdout(&blocker).trim()],
+        &S1,
+    );
+    assert!(blocked.status.success(), "{}", stderr(&blocked));
+    let list = stdout(&p.devkit(&["todo", "list"], &S1));
+    assert!(
+        !list.contains('\u{1b}') && !list.contains('\u{7}'),
+        "{list:?}"
+    );
+    assert!(list.contains("on proj.side\\u{1b}]52"), "{list}");
+}
+
+#[test]
 fn list_escapes_terminal_control_sequences() {
     let p = Proj::new();
     let add = p.devkit(&["todo", "add", "a\u{1b}[2Jb\u{2066}c"], &S1);

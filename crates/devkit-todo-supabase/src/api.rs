@@ -78,7 +78,7 @@ impl Api {
         table: &str,
         query: &[(&str, String)],
     ) -> Result<Vec<T>> {
-        self.inner.select(table, query).map_err(todo_error)
+        self.inner.select(table, query).map_err(with_advice)
     }
 
     /// The rows of `table` that `query` selects, and how many it selects
@@ -88,12 +88,32 @@ impl Api {
         table: &str,
         query: &[(&str, String)],
     ) -> Result<(Vec<T>, Option<usize>)> {
-        self.inner.select_page(table, query).map_err(todo_error)
+        self.select_page_raw(table, query).map_err(with_advice)
+    }
+
+    /// As [`select_page`], leaving a refusal as the API answered it.
+    pub(crate) fn select_page_raw<T: DeserializeOwned>(
+        &self,
+        table: &str,
+        query: &[(&str, String)],
+    ) -> Result<(Vec<T>, Option<usize>)> {
+        self.inner.select_page(table, query)
+    }
+
+    /// Whether `e` is PostgREST refusing a select because the database has
+    /// no `blocked_by` column yet. The refusal is read before it is rewritten
+    /// as the advice to update the schema.
+    pub(crate) fn lacks_blocking_column(&self, e: &anyhow::Error) -> bool {
+        e.chain().any(|cause| {
+            cause
+                .downcast_ref::<Refused>()
+                .is_some_and(|refused| refused.message.contains("blocked_by"))
+        })
     }
 
     /// Calls the function `function` with the named `args`.
     pub(crate) fn call(&self, function: &str, args: &serde_json::Value) -> Result<Response> {
-        self.inner.call(function, args).map_err(todo_error)
+        self.inner.call(function, args).map_err(with_advice)
     }
 
     /// The JSON `resp` carries.
@@ -102,10 +122,9 @@ impl Api {
     }
 }
 
-/// `e` as every todo store returns it: the store's own refusals as such,
-/// and a refusal whose code says the database is not set up for devkit with
-/// what to do about it.
-fn todo_error(e: anyhow::Error) -> anyhow::Error {
+/// `e` as every todo store returns it, with setup advice on a refusal whose
+/// code says the database is not set up.
+pub(crate) fn with_advice(e: anyhow::Error) -> anyhow::Error {
     let Some(refused) = e.downcast_ref::<Refused>() else {
         return e;
     };
@@ -127,7 +146,7 @@ fn todo_error(e: anyhow::Error) -> anyhow::Error {
 fn advice(code: Option<&str>) -> Option<&'static str> {
     Some(match code? {
         "PGRST106" => "expose the `devkit` schema to the Data API",
-        "PGRST202" | "PGRST205" | "42P01" | "42883" | "3F000" => {
+        "PGRST202" | "PGRST204" | "PGRST205" | "42P01" | "42703" | "42883" | "3F000" => {
             "create or update devkit's schema with \
              `DEVKIT_TODO_BACKEND=postgres devkit todo schema update`"
         }

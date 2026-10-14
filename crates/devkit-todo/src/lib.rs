@@ -8,6 +8,7 @@ extern crate self as devkit_todo;
 pub mod activity;
 #[cfg(feature = "test-support")]
 pub mod contract;
+pub mod graph;
 pub mod holder;
 pub mod layout;
 pub mod node;
@@ -49,6 +50,10 @@ pub struct Todo {
     /// RFC 3339 UTC, so it sorts as text.
     #[serde(default)]
     pub modified: Option<String>,
+    /// Full ids of the todos this one waits on, sorted, with no duplicates.
+    /// A blocker the listing does not hold still counts.
+    #[serde(default)]
+    pub blocked_by: Vec<String>,
 }
 
 impl Todo {
@@ -111,6 +116,18 @@ pub enum Edit {
     },
     /// Removes the record for good, for a description that must disappear.
     Purge(String),
+    /// Adds each blocker in `by` to `id`. A blocker already recorded is
+    /// left as it is. The store does not check that a blocker exists.
+    Block {
+        id: String,
+        by: Vec<String>,
+    },
+    /// Removes each blocker in `by` from `id`. A blocker not recorded is
+    /// left as it is.
+    Unblock {
+        id: String,
+        by: Vec<String>,
+    },
 }
 
 /// One todo's status as an edit changed it, seen while the store held the

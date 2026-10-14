@@ -502,3 +502,36 @@ fn a_database_from_before_the_functions_gains_them_and_keeps_its_todos() {
         assert!(functions.iter().any(|f| f == name), "{name}: {functions:?}");
     }
 }
+
+/// A database created before blocking edges gains the column the first time
+/// an edge is written, and the todo it already held keeps its fields.
+#[test]
+fn a_database_from_before_blocking_gains_the_column() {
+    let Some(direct) = url(DIRECT) else {
+        return;
+    };
+    let scratch = Scratch::new(&direct);
+    admin(&scratch.url, EARLIER_SCHEMA);
+    let kept = "0123abcd-0000-4000-8000-000000000002";
+    admin(
+        &scratch.url,
+        &format!(
+            "INSERT INTO devkit.todos (id, root, node, description, status, ord)
+             VALUES ('{kept}', 'r', 'n', 'kept', 'pending', 1024)"
+        ),
+    );
+    let store = open(&scratch.url, "r");
+    let blocker = store.add(new_todo(Some("n"), "blocker")).unwrap();
+    store
+        .apply(&Edit::Block {
+            id: kept.into(),
+            by: vec![blocker.clone()],
+        })
+        .unwrap();
+    let todo = store.get(kept).unwrap().unwrap();
+    assert_eq!(todo.blocked_by, vec![blocker]);
+    assert_eq!(todo.description, "kept");
+    assert_eq!(todo.project.as_deref(), Some("n"));
+    assert_eq!(todo.status, Status::Pending);
+    assert_eq!(todo.order, Some(1024));
+}

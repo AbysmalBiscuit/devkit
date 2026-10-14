@@ -158,3 +158,49 @@ fn another_branchs_sessions_are_not_counted() {
     let text = injected(&context(&p, &[], event(&p, "SessionStart")));
     assert!(!text.contains("Other sessions"), "{text}");
 }
+
+#[test]
+fn injected_lists_show_blocking_notes() {
+    let p = Proj::new();
+    let blocker = add_text(&p, "blocker");
+    p.devkit(&["todo", "add", "waiting", "--blocked-by", &blocker], &S1);
+    let text = injected(&context(&p, &[], event(&p, "SessionStart")));
+    assert!(text.contains("blocked by 1"), "{text}");
+    p.devkit(&["todo", "done", &blocker], &S1);
+    let ready = injected(&context(&p, &[], event(&p, "SessionStart")));
+    assert!(ready.contains("ready"), "{ready}");
+}
+
+#[test]
+fn a_subagent_sees_no_ready_note_on_its_managers_list() {
+    let p = Proj::with_home_config(
+        "[todo.roles.manager]\nscope = \"workspace\"\n[todo.roles.implementer]\nscope = \"agent\"\nparent = \"manager\"\n",
+    );
+    p.devkit(&["todo", "role", "manager"], &S1);
+    let blocker = add_text(&p, "blocker");
+    p.devkit(&["todo", "done", &blocker], &S1);
+    p.devkit(&["todo", "add", "waiting", "--blocked-by", &blocker], &S1);
+    let mut sub = event(&p, "SubagentStart");
+    sub["agent_id"] = json!("a1");
+    sub["agent_type"] = json!("implementer");
+    let text = injected(&context(&p, &[], sub));
+    assert!(text.contains("waiting"), "{text}");
+    assert!(!text.contains("ready"), "{text}");
+}
+
+#[test]
+fn a_purged_blocker_leaves_its_dependent_ready() {
+    let p = Proj::new();
+    let blocker = add_text(&p, "blocker");
+    p.devkit(&["todo", "add", "waiting", "--blocked-by", &blocker], &S1);
+    let purged = p.devkit(&["todo", "purge", &blocker], &[("DEVKIT_CALLER", "human")]);
+    assert!(purged.status.success(), "{}", stderr(&purged));
+    let text = injected(&context(&p, &[], event(&p, "SessionStart")));
+    assert!(text.contains("ready"), "{text}");
+}
+
+fn add_text(p: &Proj, text: &str) -> String {
+    let out = p.devkit(&["todo", "add", text], &S1);
+    assert!(out.status.success(), "{}", stderr(&out));
+    stdout(&out).trim().to_string()
+}

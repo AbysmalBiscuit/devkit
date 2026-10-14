@@ -95,6 +95,48 @@ impl Layout {
         }
     }
 
+    /// The node the caller's ticket starts at: the workspace scope filled,
+    /// or the repository scope when `wide`. `None` when that scope does not
+    /// fill as itself, so walking up to a parent scope does not count.
+    pub fn ticket_root(&self, facts: &Facts, wide: bool) -> Option<String> {
+        let scope = if wide { "repo" } else { "workspace" };
+        let template = self.templates.get(scope)?;
+        template.fill(&facts.values)
+    }
+
+    /// Whether a todo on `project` is inside the ticket rooted at `root`
+    /// for the caller's resolved `role`.
+    pub fn offered(&self, project: Option<&str>, root: &str, facts: &Facts, role: &str) -> bool {
+        let Some(project) = project else {
+            return false;
+        };
+        if project == root {
+            return true;
+        }
+        if !project.starts_with(&format!("{root}.")) || self.is_other_session(project, facts) {
+            return false;
+        }
+        if self.caller_sees(project, facts, role) {
+            return true;
+        }
+        self.wide_root(facts).as_deref() == Some(root) && self.reads_as(project, "workspace")
+    }
+
+    fn caller_sees(&self, project: &str, facts: &Facts, role: &str) -> bool {
+        self.visible(facts, role)
+            .is_ok_and(|filter| filter.matches(Some(project)))
+    }
+
+    fn wide_root(&self, facts: &Facts) -> Option<String> {
+        self.templates.get("repo")?.fill(&facts.values)
+    }
+
+    fn reads_as(&self, project: &str, scope: &str) -> bool {
+        self.templates
+            .get(scope)
+            .is_some_and(|template| template.read(project).is_some())
+    }
+
     pub fn fill(&self, scope: &str, facts: &Facts) -> Result<String> {
         self.filled_scope(scope, facts).map(|(_, node)| node)
     }

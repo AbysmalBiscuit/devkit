@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS devkit.todos (
     modified timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX IF NOT EXISTS todos_root_node ON devkit.todos (root, node);
+ALTER TABLE devkit.todos ADD COLUMN IF NOT EXISTS blocked_by uuid[] NOT NULL DEFAULT '{{}}';
 CREATE TABLE IF NOT EXISTS devkit.activity (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     root text NOT NULL,
@@ -310,6 +311,60 @@ LANGUAGE sql AS $$
         t.modified
 $$;
 
+-- A blocker that is not a uuid names no todo, so the uuid[] overload is
+-- dropped and the text[] function ignores it.
+DROP FUNCTION IF EXISTS devkit.todo_block(text, text, uuid[]);
+DROP FUNCTION IF EXISTS devkit.todo_unblock(text, text, uuid[]);
+
+-- The uuids among `p_by`. A blocker that is not one names no todo, so it
+-- changes nothing, as removing an edge that was never recorded does.
+CREATE OR REPLACE FUNCTION devkit.todo_uuids(p_by text[]) RETURNS uuid[]
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT coalesce(array_agg(blocker::uuid), '{{}}')
+    FROM unnest(p_by) AS blocker
+    WHERE blocker ~ '^[0-9A-Fa-f]{{8}}(-[0-9A-Fa-f]{{4}}){{3}}-[0-9A-Fa-f]{{12}}$'
+$$;
+
+-- Adds each blocker in `p_by` to the todo, keeping the array sorted and
+-- distinct. A blocker already recorded, or one that is not a uuid, changes
+-- nothing.
+CREATE OR REPLACE FUNCTION devkit.todo_block(p_root text, p_id text, p_by text[])
+RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    locked devkit.todos := devkit.todo_lock(p_root, p_id);
+    next_blockers uuid[];
+BEGIN
+    SELECT coalesce(array_agg(DISTINCT blocker ORDER BY blocker), '{{}}') INTO next_blockers
+    FROM unnest(locked.blocked_by || devkit.todo_uuids(p_by)) AS blocker;
+    IF next_blockers = locked.blocked_by THEN
+        RETURN;
+    END IF;
+    UPDATE devkit.todos SET blocked_by = next_blockers, modified = clock_timestamp()
+    WHERE id = locked.id;
+END
+$$;
+
+-- Removes each blocker in `p_by` from the todo. A blocker not recorded, or
+-- one that is not a uuid, changes nothing.
+CREATE OR REPLACE FUNCTION devkit.todo_unblock(p_root text, p_id text, p_by text[])
+RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    locked devkit.todos := devkit.todo_lock(p_root, p_id);
+    next_blockers uuid[];
+BEGIN
+    SELECT coalesce(array_agg(blocker ORDER BY blocker), '{{}}') INTO next_blockers
+    FROM unnest(locked.blocked_by) AS blocker
+    WHERE blocker <> ALL (devkit.todo_uuids(p_by));
+    IF next_blockers = locked.blocked_by THEN
+        RETURN;
+    END IF;
+    UPDATE devkit.todos SET blocked_by = next_blockers, modified = clock_timestamp()
+    WHERE id = locked.id;
+END
+$$;
+
 -- Removes the todo's record for good.
 CREATE OR REPLACE FUNCTION devkit.todo_purge(p_root text, p_id text)
 RETURNS TABLE (
@@ -507,6 +562,7 @@ fn missing_schema(e: &anyhow::Error) -> bool {
                 [
                     SqlState::UNDEFINED_TABLE,
                     SqlState::UNDEFINED_FUNCTION,
+                    SqlState::UNDEFINED_COLUMN,
                     SqlState::INVALID_SCHEMA_NAME,
                 ]
                 .contains(code)

@@ -91,6 +91,20 @@ fn a_broken_config_never_holds() {
 }
 
 #[test]
+fn a_blocked_pending_todo_does_not_hold_the_stop() {
+    let p = always();
+    let blocker = seed(&p, "elsewhere", "first");
+    let waiting = seed(&p, MAIN, "second");
+    p.store()
+        .apply(&devkit_todo::Edit::Block {
+            id: waiting,
+            by: vec![blocker],
+        })
+        .unwrap();
+    silent(&p.hook("stop", "claude-code", &stop(&p, "S")));
+}
+
+#[test]
 fn open_todos_block_and_list_their_ids() {
     let p = always();
     let id = seed(&p, MAIN, "write the migration");

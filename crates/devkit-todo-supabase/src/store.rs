@@ -11,7 +11,11 @@ use serde_json::{Value, json};
 
 use crate::{Api, SupabaseActivity};
 
-const COLUMNS: &str = "id,node,description,status,holder,parent,ord,entry,modified";
+const COLUMNS: &str = "id,node,description,status,holder,parent,ord,entry,modified,blocked_by";
+
+/// The columns a database from before blocking edges still has.
+const COLUMNS_WITHOUT_BLOCKERS: &str =
+    "id,node,description,status,holder,parent,ord,entry,modified";
 
 /// How many todos one list request asks for. A project whose API answers
 /// fewer per request is read in more requests.
@@ -54,6 +58,8 @@ struct Row {
     ord: i64,
     entry: String,
     modified: String,
+    #[serde(default)]
+    blocked_by: Vec<String>,
 }
 
 /// A row a todo function returns for each status change it made.
@@ -95,6 +101,7 @@ fn todo_of(row: Row) -> Result<Todo> {
         description: row.description,
         parent: row.parent,
         order: Some(row.ord),
+        blocked_by: row.blocked_by,
     })
 }
 
@@ -116,6 +123,13 @@ fn change_of(row: Change) -> Result<StatusChange> {
 /// as syntax.
 fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Whether this page asks for the blocking column.
+fn query_selects_blockers(query: &[(&str, String)]) -> bool {
+    query.iter().any(|(key, value)| {
+        *key == "select" && value.split(',').any(|column| column == "blocked_by")
+    })
 }
 
 /// A PostgREST `or` filter selecting at least the nodes `filter` covers,
@@ -169,7 +183,16 @@ impl SupabaseStore {
         loop {
             let mut page = query.clone();
             page.push(("offset", todos.len().to_string()));
-            let (rows, total) = self.api.select_page::<Row>("todos", &page)?;
+            let (rows, total) = match self.api.select_page_raw::<Row>("todos", &page) {
+                Err(e) if self.api.lacks_blocking_column(&e) && query_selects_blockers(&page) => {
+                    for item in page.iter_mut().filter(|item| item.0 == "select") {
+                        item.1 = COLUMNS_WITHOUT_BLOCKERS.to_string();
+                    }
+                    self.api.select_page::<Row>("todos", &page)?
+                }
+                Err(e) => return Err(e),
+                Ok(page) => page,
+            };
             let fetched = rows.len();
             for row in rows {
                 todos.push(todo_of(row)?);
@@ -275,6 +298,14 @@ impl TodoStore for SupabaseStore {
                 json!({ "p_root": root, "p_holder": holder }),
             ),
             Edit::Purge(id) => self.changes("todo_purge", json!({ "p_root": root, "p_id": id })),
+            Edit::Block { id, by } => self.call(
+                "todo_block",
+                json!({ "p_root": root, "p_id": id, "p_by": by }),
+            ),
+            Edit::Unblock { id, by } => self.call(
+                "todo_unblock",
+                json!({ "p_root": root, "p_id": id, "p_by": by }),
+            ),
         }
     }
 }

@@ -1929,6 +1929,16 @@
           },
           "description": "The `postgres` backend's settings."
         },
+        "print_unblocked": {
+          "default": true,
+          "description": "Whether `devkit todo done` and `devkit todo cancel` print the todos\nthey made ready, as `unblocked: <ids>`.",
+          "type": "boolean"
+        },
+        "ready_outside_ticket": {
+          "default": false,
+          "description": "Whether `devkit todo ready`, `devkit todo plan` and the injected\n`ready` notes reach every workspace of the caller's repository\ninstead of only the caller's ticket. Other sessions' nodes stay out\neither way, and it never reaches another repository.",
+          "type": "boolean"
+        },
         "roles": {
           "additionalProperties": {
             "$ref": "#/$defs/RoleConfig"
@@ -2299,6 +2309,8 @@
           "doppler_project": null,
           "root": "devkit"
         },
+        "print_unblocked": true,
+        "ready_outside_ticket": false,
         "roles": {
           "main": {
             "agent_types": [],

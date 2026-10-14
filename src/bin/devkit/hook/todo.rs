@@ -19,6 +19,7 @@ use devkit_common::{store::LockBusy, ui::printable, vcs::Checkout};
 use devkit_todo::{
     Claimed, Edit, Filter, Holder, NewTodo, ORDER_GAP, StatusKind, Todo, TodoStore,
     diff::{Change, Mirrored, Step, diff, pair},
+    graph::{self, Graph},
     hold,
     holder::HOLDER_VAR,
     layout::{Facts, Layout},
@@ -204,7 +205,8 @@ pub(crate) fn hold(
     let (_, _, role) = resolve_role(payload, checkout, &store, &holder)?;
     let pending_node = role.hold_pending.then_some(role.node);
     let todos = store.list(&Filter::all()).ok()?;
-    let open = hold::open_for(&todos, &holder, pending_node.as_deref());
+    let graph = Graph::new(&todos);
+    let open = hold::open_for(&todos, &holder, pending_node.as_deref(), &graph);
     if open.is_empty() {
         return None;
     }
@@ -216,7 +218,12 @@ pub(crate) fn hold(
     let mut nodes: Vec<String> = open.iter().map(|t| t.node().to_string()).collect();
     nodes.dedup();
     let open: Vec<Todo> = open.into_iter().cloned().collect();
-    let lists = render::render_lists(&nodes, &open, &holder);
+    let graph = Graph::new(&todos);
+    let notes = render::Notes {
+        graph: &graph,
+        show_ready: &|_| false,
+    };
+    let lists = render::render_lists(&nodes, &open, &holder, &notes);
     let reason = format!(
         "devkit todo: you have open todos.\n\n{}\n\n{HOLD_ADVICE}",
         lists.trim_end()
@@ -577,11 +584,63 @@ fn task_update(c: &Capture<'_>, input: &Value) -> Result<()> {
     }
     if let Some(to) = input["status"].as_str().and_then(native_status) {
         c.store.apply(&Edit::SetStatus {
-            id,
+            id: id.clone(),
             to,
             actor: c.actor.clone(),
         })?;
     }
+    mirror_blockers(c, &id, input)
+}
+
+/// Records `addBlockedBy` and `addBlocks` as edges, skipping unknown native
+/// ids and any single edge that would close a cycle. The hook still exits 0.
+fn mirror_blockers(c: &Capture<'_>, id: &str, input: &Value) -> Result<()> {
+    if let Some(blockers) = input["addBlockedBy"].as_array() {
+        let by = native_ids(c, blockers)?;
+        record_block(c, id, &by)?;
+    }
+    if let Some(blocked) = input["addBlocks"].as_array() {
+        for blocked in native_ids(c, blocked)? {
+            record_block(c, &blocked, &[id.to_string()])?;
+        }
+    }
+    Ok(())
+}
+
+/// The mirrored ids of `natives`, skipping entries that are not strings and
+/// native ids this session has not recorded.
+fn native_ids(c: &Capture<'_>, natives: &[Value]) -> Result<Vec<String>> {
+    let mut ids = Vec::new();
+    for native in natives {
+        let Some(native) = native.as_str() else {
+            continue;
+        };
+        if let Some(id) = c.map.lookup(c.harness, &c.actor, native)? {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+/// Records each member of `by` as a blocker of `id`. A member that would
+/// close a cycle on its own is skipped; the rest are recorded.
+fn record_block(c: &Capture<'_>, id: &str, by: &[String]) -> Result<()> {
+    if by.is_empty() {
+        return Ok(());
+    }
+    let todos = c.store.list(&Filter::all())?;
+    let safe: Vec<String> = by
+        .iter()
+        .filter(|blocker| graph::cycle_through(&todos, id, &[(*blocker).clone()]).is_none())
+        .cloned()
+        .collect();
+    if safe.is_empty() {
+        return Ok(());
+    }
+    c.store.apply(&Edit::Block {
+        id: id.to_string(),
+        by: safe,
+    })?;
     Ok(())
 }
 

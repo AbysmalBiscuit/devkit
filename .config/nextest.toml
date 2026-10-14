@@ -1,0 +1,5 @@
+# A test group bounds only its own members, so a test that alters the shared
+# `devkit.todos` table takes every thread instead: nothing else runs beside it.
+[[profile.default.overrides]]
+filter = 'package(devkit-todo-supabase) & test(=reads_without_the_blocking_column_list_todos_without_edges)'
+threads-required = "num-test-threads"

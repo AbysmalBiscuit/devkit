@@ -76,6 +76,25 @@ fn no_todo(id: &str) -> anyhow::Error {
     anyhow!("no todo {id}")
 }
 
+/// Adds `by` to `id`'s blockers when `add`, and removes them otherwise.
+/// Blockers stay sorted, with no duplicates. An id already present, or
+/// absent on a removal, changes nothing.
+fn set_blockers(doc: &mut Doc, id: &str, by: &[String], add: bool) -> Result<()> {
+    let todo = doc.todo_mut(id)?;
+    let before = todo.blocked_by.clone();
+    if add {
+        todo.blocked_by.extend(by.iter().cloned());
+    } else {
+        todo.blocked_by.retain(|blocker| !by.contains(blocker));
+    }
+    todo.blocked_by.sort();
+    todo.blocked_by.dedup();
+    if todo.blocked_by != before {
+        todo.modified = Some(now());
+    }
+    Ok(())
+}
+
 /// Moves `todo` to `next`, when there is one, and returns the change.
 fn move_to(todo: &mut Todo, next: Option<Status>) -> Option<StatusChange> {
     let next = next?;
@@ -149,6 +168,7 @@ impl TodoStore for BuiltinStore {
                 project: todo.project,
                 entry: Some(stamp.clone()),
                 modified: Some(stamp),
+                blocked_by: Vec::new(),
             });
             Ok(id)
         })
@@ -214,6 +234,8 @@ impl TodoStore for BuiltinStore {
                     let todo = doc.todos.remove(&key).ok_or_else(|| no_todo(id))?;
                     changes.push(StatusChange::of(&todo, None));
                 }
+                Edit::Block { id, by } => set_blockers(doc, id, by, true)?,
+                Edit::Unblock { id, by } => set_blockers(doc, id, by, false)?,
             }
             Ok(changes)
         })

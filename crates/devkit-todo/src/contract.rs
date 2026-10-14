@@ -43,6 +43,10 @@ macro_rules! contract_tests {
             move_reorder_and_relocate,
             filters_match_exact_and_subtree,
             apply_reports_each_status_change_it_made,
+            block_adds_blockers_once,
+            unblock_removes_only_named_blockers,
+            blockers_survive_status_changes,
+            block_on_an_unknown_todo_is_refused,
         );
         $crate::contract_tests!(@activity $make, $log;
             claiming_then_completing_records_one_completed_interval,
@@ -449,6 +453,79 @@ fn claim_edit(id: &str, by: &str) -> Edit {
         to: StatusKind::InProgress,
         actor: Holder::new(by),
     }
+}
+
+/// The blockers stored on `id`, in the order the store returns them.
+fn blockers(s: &impl TodoStore, id: &str) -> Vec<String> {
+    get(s, id).blocked_by
+}
+
+pub fn block_adds_blockers_once(s: &impl TodoStore) {
+    let (a, b, c) = (add(s, "a"), add(s, "b"), add(s, "c"));
+    s.apply(&Edit::Block {
+        id: c.clone(),
+        by: vec![a.clone(), b.clone()],
+    })
+    .unwrap();
+    s.apply(&Edit::Block {
+        id: c.clone(),
+        by: vec![a.clone()],
+    })
+    .unwrap();
+    let mut stored = blockers(s, &c);
+    stored.sort();
+    let mut want = vec![a, b];
+    want.sort();
+    assert_eq!(stored, want);
+    let listed = s
+        .list(&Filter::all())
+        .unwrap()
+        .into_iter()
+        .find(|t| t.id == c)
+        .unwrap()
+        .blocked_by;
+    let mut listed = listed;
+    listed.sort();
+    assert_eq!(listed, want);
+}
+
+pub fn unblock_removes_only_named_blockers(s: &impl TodoStore) {
+    let (a, b, c) = (add(s, "a"), add(s, "b"), add(s, "c"));
+    s.apply(&Edit::Block {
+        id: c.clone(),
+        by: vec![a.clone(), b.clone()],
+    })
+    .unwrap();
+    s.apply(&Edit::Unblock {
+        id: c.clone(),
+        by: vec![a, "zz".into()],
+    })
+    .unwrap();
+    assert_eq!(blockers(s, &c), vec![b]);
+}
+
+pub fn blockers_survive_status_changes(s: &impl TodoStore) {
+    let (a, c) = (add(s, "a"), add(s, "c"));
+    s.apply(&Edit::Block {
+        id: c.clone(),
+        by: vec![a.clone()],
+    })
+    .unwrap();
+    set(s, &c, StatusKind::InProgress, "S").unwrap();
+    set(s, &c, StatusKind::Completed, "S").unwrap();
+    set(s, &c, StatusKind::Pending, "S").unwrap();
+    assert_eq!(blockers(s, &c), vec![a]);
+}
+
+pub fn block_on_an_unknown_todo_is_refused(s: &impl TodoStore) {
+    let a = add(s, "a");
+    let err = s
+        .apply(&Edit::Block {
+            id: "99999999".into(),
+            by: vec![a],
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("no todo 99999999"), "{err:#}");
 }
 
 pub fn apply_reports_each_status_change_it_made(s: &impl TodoStore) {
