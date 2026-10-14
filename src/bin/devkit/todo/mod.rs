@@ -614,7 +614,7 @@ fn finish(fence: &Fence, ids: Vec<String>, to: StatusKind, actor: &Holder) -> Re
     if !store.config().print_unblocked || closed.is_empty() {
         return Ok(());
     }
-    let offered = offered_todos(fence)?;
+    let offered = offered_todos(&fence.reread())?;
     let graph = Graph::new(&offered);
     let ready = graph.unblocked_by(&closed.iter().map(String::as_str).collect::<Vec<_>>());
     let names = ready
@@ -643,7 +643,7 @@ fn offered_ids(fence: &Fence) -> Result<BTreeSet<String>> {
 fn offered_todos(fence: &Fence) -> Result<Vec<Todo>> {
     let offered = fence
         .layout
-        .fence(fence.store.list(&Filter::all())?)
+        .fence(fence.todos()?.to_vec())
         .into_iter()
         .filter(|todo| fence.offers(todo))
         .collect();
@@ -711,6 +711,8 @@ struct Fence<'a> {
     facts: &'a Facts,
     role: &'a str,
     checkout: &'a Checkout,
+    /// Every todo in the store, read once.
+    todos: std::cell::OnceCell<Vec<Todo>>,
     /// The ticket todos worktrees of this repository record, read once.
     workspaces: std::cell::OnceCell<Vec<tickets::TicketWorkspace>>,
 }
@@ -729,19 +731,39 @@ impl<'a> Fence<'a> {
             facts,
             role,
             checkout,
+            todos: std::cell::OnceCell::new(),
             workspaces: std::cell::OnceCell::new(),
         }
+    }
+
+    /// This fence over the store as it stands now, for a caller that changed
+    /// it. A todo's status leaves the ticket workspaces as they were.
+    fn reread(&self) -> Self {
+        Self {
+            todos: std::cell::OnceCell::new(),
+            workspaces: self.workspaces.clone(),
+            ..*self
+        }
+    }
+
+    /// Every todo in the store.
+    fn todos(&self) -> Result<&[Todo]> {
+        if let Some(todos) = self.todos.get() {
+            return Ok(todos);
+        }
+        let todos = self.store.list(&Filter::all())?;
+        Ok(self.todos.get_or_init(|| todos))
     }
 
     /// The ticket todos worktrees of this repository record. A store that
     /// cannot be read has none.
     fn workspaces(&self) -> &[tickets::TicketWorkspace] {
         self.workspaces.get_or_init(|| {
-            let todos = self.store.list(&Filter::all()).unwrap_or_default();
+            let todos = self.todos().unwrap_or_default();
             if !todos.iter().any(|t| t.ticket.is_some()) {
                 return Vec::new();
             }
-            tickets::ticket_workspaces(self.checkout, self.layout, &todos)
+            tickets::ticket_workspaces(self.checkout, self.layout, todos)
         })
     }
 
@@ -775,8 +797,7 @@ impl<'a> Fence<'a> {
         if workspaces.is_empty() {
             return Ok(render::TicketWork::default());
         }
-        let all = self.store.list(&Filter::all())?;
-        Ok(tickets::ticket_work(&workspaces, &all, expand))
+        Ok(tickets::ticket_work(&workspaces, self.todos()?, expand))
     }
 }
 
@@ -930,7 +951,7 @@ fn list(
     }
     let todos = if args.all || args.subtree.is_some() {
         layout
-            .fence(store.list(&Filter::all())?)
+            .fence(fence.todos()?.to_vec())
             .into_iter()
             .filter(|todo| filter.matches(todo.project.as_deref()))
             .collect()
@@ -1030,21 +1051,21 @@ fn context(args: &ContextArgs) -> Option<String> {
     if at_start && let SyncOutcome::Refused(reason) = store.sync(&cwd, sync::FRESH_WAIT) {
         eprintln!("devkit todo: {reason}; listing local todos");
     }
-    let all = store.list(&Filter::all()).ok()?;
+    let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
+    let all = fence.todos().ok()?;
     let todos: Vec<Todo> = all
         .iter()
         .filter(|t| visible.matches(t.project.as_deref()))
         .cloned()
         .collect();
     let graph_todos = graph::with_blockers(&store, todos.clone()).ok()?;
-    let siblings = layout.fence(all).into_iter().filter(|t| {
+    let siblings = layout.fence(all.to_vec()).into_iter().filter(|t| {
         filter.matches(t.project.as_deref())
             && !visible.matches(t.project.as_deref())
             && layout.is_other_session(t.node(), &facts)
     });
     let nodes = list_nodes(&visible, &todos);
     let graph = Graph::new(&graph_todos);
-    let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
     let work = fence.work(&todos, false).ok()?;
     let notes = render::Notes {
         graph: &graph,

@@ -247,6 +247,7 @@ pub(crate) fn sync_in_background(
 
 /// A synced ticket's todo that a worktree of this repository records as its
 /// ticket, the link `workspace setup` makes.
+#[derive(Clone)]
 pub(crate) struct TicketWorkspace {
     /// The ticket todo's id.
     pub todo: String,
