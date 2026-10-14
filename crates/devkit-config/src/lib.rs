@@ -1450,7 +1450,9 @@ pub struct PrConfig {
     /// unset, the usual Rust, JS/TS and Python layouts: `tests/` and `test/`
     /// directories, `__tests__/`, `*.test.*` and `*.spec.*`, `*_test.rs`,
     /// `test_*.py` and `*_test.py`. Unit tests inline in a Rust source file
-    /// are outside the defaults.
+    /// are outside the defaults. Deleting a matching file is flagged in any
+    /// language; the other weakened-test rules read only Rust, JS/TS and
+    /// Python files.
     pub test_files: Vec<String>,
     /// One key per PR gate.
     pub gates: PrGates,

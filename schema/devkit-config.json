@@ -1092,7 +1092,7 @@
             "**/test_*.py",
             "**/*_test.py"
           ],
-          "description": "Glob patterns, relative to the repository root, for the files that\ncount as tests. `**` spans directories and `*` stays within one. When\nunset, the usual Rust, JS/TS and Python layouts: `tests/` and `test/`\ndirectories, `__tests__/`, `*.test.*` and `*.spec.*`, `*_test.rs`,\n`test_*.py` and `*_test.py`. Unit tests inline in a Rust source file\nare outside the defaults.",
+          "description": "Glob patterns, relative to the repository root, for the files that\ncount as tests. `**` spans directories and `*` stays within one. When\nunset, the usual Rust, JS/TS and Python layouts: `tests/` and `test/`\ndirectories, `__tests__/`, `*.test.*` and `*.spec.*`, `*_test.rs`,\n`test_*.py` and `*_test.py`. Unit tests inline in a Rust source file\nare outside the defaults. Deleting a matching file is flagged in any\nlanguage; the other weakened-test rules read only Rust, JS/TS and\nPython files.",
           "items": {
             "type": "string"
           },

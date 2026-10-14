@@ -53,8 +53,9 @@ impl fmt::Display for Flag {
 }
 
 /// The flags for one test file, read at the merge base (`base`) and at the
-/// head (`head`). `None` is a side with no such file.
-fn compare(path: &str, lang: Lang, base: Option<&str>, head: Option<&str>) -> Vec<Flag> {
+/// head (`head`). `None` is a side with no such file. A deleted test file is
+/// flagged in any language; the other rules need one the scanner reads.
+fn compare(path: &str, lang: Option<Lang>, base: Option<&str>, head: Option<&str>) -> Vec<Flag> {
     let flag = |rule, detail: String| Flag {
         path: path.to_string(),
         rule,
@@ -62,6 +63,9 @@ fn compare(path: &str, lang: Lang, base: Option<&str>, head: Option<&str>) -> Ve
     };
     let Some(head) = head else {
         return vec![flag(Rule::DeletedFile, "the branch deletes it".into())];
+    };
+    let Some(lang) = lang else {
+        return Vec::new();
     };
     let now = scan::counts(lang, head);
     let Some(base) = base else {
@@ -119,9 +123,10 @@ pub(crate) fn check(dir: &Path, base: &str, head: &str, tests: &TestFiles) -> Re
         let Some(path) = new.as_deref().or(old.as_deref()) else {
             continue;
         };
-        let Some(lang) = Lang::of(path) else {
+        let lang = Lang::of(path);
+        if lang.is_none() && new.is_some() {
             continue;
-        };
+        }
         let read = |rev: &str, p: Option<&str>| -> Result<Option<String>> {
             match p {
                 Some(p) => vcs.file_at(dir, rev, p),

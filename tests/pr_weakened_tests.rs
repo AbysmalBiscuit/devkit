@@ -350,3 +350,36 @@ fn an_unterminated_string_ending_in_a_multibyte_character_is_read() {
     assert!(ok, "{out}");
     assert!(out.contains("no weakened tests"), "{out}");
 }
+
+#[test]
+fn a_deleted_test_file_is_flagged_in_a_language_the_scanner_does_not_read() {
+    let files = [
+        (
+            "devkit.toml",
+            "[pr]\ntest_files = [\"spec/**/*_spec.rb\"]\n",
+        ),
+        (
+            "spec/models/add_spec.rb",
+            "it { expect(add(1, 2)).to eq(3) }\n",
+        ),
+        (
+            "spec/models/sub_spec.rb",
+            "it { expect(sub(3, 2)).to eq(1) }\n",
+        ),
+    ];
+    let (ok, out) = Repo::new(&files, &[
+        ("spec/models/add_spec.rb", None),
+        ("spec/models/sub_spec.rb", None),
+        ("lib/sub.rb", Some("it { expect(sub(3, 2)).to eq(1) }\n")),
+    ])
+    .check(&[]);
+    assert!(!ok, "{out}");
+    assert!(
+        out.contains("spec/models/add_spec.rb: deleted-test-file"),
+        "{out}"
+    );
+    assert!(
+        out.contains("spec/models/sub_spec.rb: deleted-test-file"),
+        "renamed out of the patterns: {out}"
+    );
+}
