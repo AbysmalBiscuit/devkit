@@ -11,7 +11,9 @@ use anyhow::{Context, Result, bail};
 use devkit_config::{FieldDecl, FieldType, Place, ProjectRef};
 use serde_json::Value as Json;
 
-use super::github_status::{add_item_mutation, parse_added_item, scope_error, set_field_mutation};
+use super::github_status::{
+    add_item_mutation, parse_added_item, scope_error, scope_remedy, set_field_mutation,
+};
 use crate::{
     fields::{Current, Resolved, Value},
     forge::Repo,
@@ -364,11 +366,7 @@ fn with_scope_remedy(e: anyhow::Error, source: TokenSource) -> anyhow::Error {
     if !(text.contains("INSUFFICIENT_SCOPES") || text.contains("required scopes")) {
         return e;
     }
-    let fake = serde_json::json!({ "errors": [{ "type": "INSUFFICIENT_SCOPES" }] });
-    match scope_error(&fake, source) {
-        Some(remedy) => e.context(remedy),
-        None => e,
-    }
+    e.context(scope_remedy(source))
 }
 
 /// The ticket fields of issues in `repo`, with project fields on `project`.
