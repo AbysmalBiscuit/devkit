@@ -387,7 +387,11 @@ fn mask(lang: Lang, text: &str) -> String {
     let b = text.as_bytes();
     let mut out = b.to_vec();
     let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
-        for byte in &mut out[from..to.min(b.len())] {
+        let mut to = to.min(b.len());
+        while !text.is_char_boundary(to) {
+            to += 1;
+        }
+        for byte in &mut out[from..to] {
             if *byte != b'\n' {
                 *byte = b' ';
             }

@@ -339,3 +339,14 @@ fn a_branch_cannot_redefine_its_test_files() {
     assert!(!ok, "{out}");
     assert!(out.contains("tests/math.rs: deleted-test-file"), "{out}");
 }
+
+#[test]
+fn an_unterminated_string_ending_in_a_multibyte_character_is_read() {
+    let (ok, out) = Repo::new(&suite(), &[(
+        "pkg/test_models.py",
+        Some(&format!("{PY}x = \"\"\"\u{e9}a\n")),
+    )])
+    .check(&[]);
+    assert!(ok, "{out}");
+    assert!(out.contains("no weakened tests"), "{out}");
+}
