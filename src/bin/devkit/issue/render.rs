@@ -7,6 +7,10 @@ use std::{collections::BTreeMap, path::Path};
 use anyhow::{Result, bail};
 use devkit_common::{caller::Caller, required::Missing};
 use devkit_config::Config;
+/// The names the issue templates' render contexts supply, which no `--arg`
+/// can. `the_issue_context_keys_match_what_render_builds` holds them against
+/// the contexts.
+pub(crate) use devkit_config::ISSUE_CONTEXT_KEYS;
 use serde::Serialize;
 
 use super::{
@@ -14,11 +18,6 @@ use super::{
     review::{missing_required, parse_args, render_review, with_fields},
 };
 use crate::template::VarArgs;
-
-/// The names the issue templates' render contexts supply, which no `--arg`
-/// can. `the_issue_context_keys_match_what_render_builds` holds them against
-/// the contexts.
-pub(crate) const ISSUE_CONTEXT_KEYS: &[&str] = &["input", "ticket_title", "issue_title"];
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Rendered {

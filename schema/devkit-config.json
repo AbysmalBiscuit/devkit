@@ -189,6 +189,20 @@
       },
       "type": "object"
     },
+    "Cond": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "A condition's accepted values."
+    },
     "ContextConfig": {
       "description": "Files injected into an agent's context when the condition on them holds.\n\n```toml\n[[context.files]]\npath = \"crates/devkit-ports/AGENTS.md\"\n\n[[context.files]]\npath = \"docs/deploy.md\"\nwhen = { harness = [\"codex\"], env = { DEPLOY_TARGET = \"staging\" } }\n```\n\nAn entry is an array element, so a deeper `devkit.toml` replaces the whole\nlist rather than appending to it, the same as `[hooks]`. Repeat the\nparent's entries you still want.",
       "properties": {
@@ -446,6 +460,32 @@
         }
       ]
     },
+    "EnumValue": {
+      "additionalProperties": false,
+      "description": "One value of an `enum` field.",
+      "properties": {
+        "id": {
+          "description": "What devkit writes: a label's name, a milestone's number, a project\noption's id, a Linear id.",
+          "type": "string"
+        },
+        "name": {
+          "description": "What agents pass, matched case-insensitively.",
+          "type": "string"
+        },
+        "teams": {
+          "description": "The Linear teams the value is valid in; any team when empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "id"
+      ],
+      "type": "object"
+    },
     "EventTransition": {
       "additionalProperties": false,
       "description": "A status move: from any status in `from` to `to`.",
@@ -489,6 +529,109 @@
           "type": "string"
         }
       ]
+    },
+    "FieldDecl": {
+      "additionalProperties": false,
+      "description": "One ticket field: what it holds, where on the tracker it is written, and\nhow strongly a ticket must carry it.",
+      "properties": {
+        "allow_none": {
+          "default": null,
+          "description": "Whether `--none <field>` may mark the field deliberately empty, which\nsatisfies `error` on a create and clears the field on an edit. True\nwhen unset; a Linear `team` field never allows it.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "default": {
+          "default": null,
+          "description": "The value `ticket create` writes when none is given. `ticket edit`\nnever applies it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "default": null,
+          "description": "Shown to agents with the field, in `ticket fields` and in every message\nabout it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/FieldLevel",
+          "default": "none",
+          "description": "How a ticket missing this field is treated: `error` refuses it,\n`warning` reports it after the write, `info` and `none` say nothing.\n`none` also hides the field from `ticket fields` unless a `when` entry\ncan raise it. `none` when unset."
+        },
+        "list": {
+          "default": false,
+          "description": "Whether the field takes several values, passed comma-separated\n(`--arg labels=bug,enhancement`). A write sets exactly the values given.",
+          "type": "boolean"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What a value is: `string`, `number`, `date` (`YYYY-MM-DD`), `enum` (one\nof `values`), `user` (a `[people]` alias) or `issue` (a ticket\nreference). Required once the layers are merged."
+        },
+        "values": {
+          "default": [],
+          "description": "For `enum`: each value's `name`, which agents pass and match\ncase-insensitively, and its tracker `id`, which devkit writes. A higher\nlayer replaces the list whole.",
+          "items": {
+            "$ref": "#/$defs/EnumValue"
+          },
+          "type": "array"
+        },
+        "when": {
+          "default": [],
+          "description": "Conditional levels: the first entry whose `if` conditions all hold sets\nthe level, and `level` is the fallback.",
+          "items": {
+            "$ref": "#/$defs/WhenEntry"
+          },
+          "type": "array"
+        },
+        "where": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Place"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The place on the tracker the value is written. Each place belongs to at\nmost one field, and the status (`[github] status_field`, Linear's\nworkflow state) belongs to `[ticket.events]`. Required once the layers\nare merged."
+        }
+      },
+      "type": "object"
+    },
+    "FieldLevel": {
+      "description": "How strongly a ticket must carry a field: `devkit_config::Severity` with\n`none` below it.",
+      "enum": [
+        "none",
+        "info",
+        "warning",
+        "error"
+      ],
+      "type": "string"
+    },
+    "FieldType": {
+      "description": "What a field's value is.",
+      "enum": [
+        "string",
+        "number",
+        "date",
+        "enum",
+        "user",
+        "issue"
+      ],
+      "type": "string"
     },
     "FileCondition": {
       "description": "Conditions on an injected file. Every condition present must hold.",
@@ -1050,21 +1193,63 @@
       "properties": {
         "github": {
           "default": null,
-          "description": "GitHub login requested as the PR reviewer when this alias is passed to\n`pr review request --to`. Omit and the alias only gets Slacked.",
+          "description": "GitHub login requested as the PR reviewer when this alias is passed to\n`pr review request --to`, and written for a `user` ticket field on\nGitHub. Omit and the alias only gets Slacked.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "linear": {
+          "default": null,
+          "description": "Linear user id, written for a `user` ticket field on Linear.",
           "type": [
             "string",
             "null"
           ]
         },
         "slack": {
-          "description": "Slack user or channel id, e.g. `U0XXXXXXXXX`.",
-          "type": "string"
+          "default": null,
+          "description": "Slack user or channel id, e.g. `U0XXXXXXXXX`. Omit it for a person\nwith tracker accounts only; `pr review` then cannot notify them.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
-      "required": [
-        "slack"
-      ],
       "type": "object"
+    },
+    "Place": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlaceName",
+          "description": "A place on the issue itself."
+        },
+        {
+          "$ref": "#/$defs/ProjectFieldSpec",
+          "description": "A field of `[github] project`'s items."
+        }
+      ],
+      "description": "A place on a tracker a field is written to."
+    },
+    "PlaceName": {
+      "enum": [
+        "labels",
+        "assignees",
+        "assignee",
+        "milestone",
+        "issue_type",
+        "parent",
+        "blocked_by",
+        "project",
+        "team",
+        "priority",
+        "estimate",
+        "cycle",
+        "project_milestone",
+        "due_date",
+        "state"
+      ],
+      "type": "string"
     },
     "PolicyAction": {
       "description": "What a policy finding does to the tool call. A warning never overrides a\nlock conflict on a target devkit did resolve.",
@@ -1228,6 +1413,25 @@
       "required": [
         "from",
         "to"
+      ],
+      "type": "object"
+    },
+    "ProjectFieldSpec": {
+      "additionalProperties": false,
+      "description": "`{ project_field = \"<field id>\", name = \"<field name>\" }`.",
+      "properties": {
+        "name": {
+          "description": "The field's name on the project, as it reads there.",
+          "type": "string"
+        },
+        "project_field": {
+          "description": "The project field's node id (`PVTSSF_...`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_field",
+        "name"
       ],
       "type": "object"
     },
@@ -1981,6 +2185,14 @@
           },
           "description": "Status moves, keyed by the event that fires them. The event names are\nfixed, so a misspelled one is a parse error."
         },
+        "fields": {
+          "$ref": "#/$defs/TicketFieldsConfig",
+          "default": {
+            "github": {},
+            "linear": {}
+          },
+          "description": "The fields `ticket create` and `ticket edit` write, per tracker."
+        },
         "sync": {
           "$ref": "#/$defs/TicketSyncConfig",
           "default": {
@@ -2031,6 +2243,29 @@
           ],
           "default": null,
           "description": "Fired by the first agent session in a worktree `workspace setup`\ncreated, once per worktree, in the background. `pr checkout`\nworktrees never fire it. List the states work starts from in `from`:\n`[\"*\"]` lets a second worktree pull an issue back from review."
+        }
+      },
+      "type": "object"
+    },
+    "TicketFieldsConfig": {
+      "additionalProperties": false,
+      "description": "The ticket fields of each tracker, keyed by the field name agents pass as\n`--arg <name>=<value>` to `ticket create` and `ticket edit`. Only the table\nof the tracker the repository uses applies. A global config may set\n`level`, `when`, `default` and `description` for a field across every\nrepository; `type`, `where` and `values` belong in the repository's\n`devkit.toml`, and `values` is replaced whole by a higher layer.\n\n```toml\n[ticket.fields.github.priority]\ntype        = \"enum\"\nwhere       = { project_field = \"PVTSSF_x\", name = \"Priority\" }\nvalues      = [{ name = \"P0\", id = \"f75ad846\" }, { name = \"P1\", id = \"47fc9ee4\" }]\ndefault     = \"P1\"\nlevel       = \"error\"\ndescription = \"P0 drop everything, P1 this cycle\"\n\n[ticket.fields.github.milestone]\ntype   = \"enum\"\nwhere  = \"milestone\"\nvalues = [{ name = \"v1\", id = \"3\" }]\nlevel  = \"none\"\nwhen   = [{ if = { project = \"*\" }, level = \"warning\" }]\n```",
+      "properties": {
+        "github": {
+          "additionalProperties": {
+            "$ref": "#/$defs/FieldDecl"
+          },
+          "default": {},
+          "description": "Fields of GitHub issues: their labels, assignees, milestone, type,\nparent and blocked-by, membership of `[github] project`, and that\nproject's item fields.",
+          "type": "object"
+        },
+        "linear": {
+          "additionalProperties": {
+            "$ref": "#/$defs/FieldDecl"
+          },
+          "default": {},
+          "description": "Fields of Linear issues: team, labels, assignee, priority, estimate,\ncycle, project, project milestone, due date, parent and blocked-by.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -2239,6 +2474,28 @@
         }
       ],
       "description": "One `[templates.variables]` entry: a bare string, or a table carrying a\n`default`, a `required` marking and a `description`.\n\n`deny_unknown_fields` for the reason `RunAction` documents: under untagged\nmatching a misspelled key beside a well-formed pair deserializes silently,\nand the author sees no diagnostic while their guard does nothing.\n\n```toml\n[templates.variables]\nteam = \"platform\"                              # a constant, never required\nmsg = { default = \"wip\", required = \"agents\" } # defaulted, but agents must pass it\nreviewer = { required = \"always\" }             # declared, no default, always required\nbody = { default = \"\", description = \"why the change was made, if the subject does not say\" }\n```\n\n`default` is the fallback used when nothing else supplies the name, which\nis what these entries have always been: `template::render` merges them\nunderneath the context, and `--arg` overwrites them. Note that minijinja's\nown `default` filter is a different thing and does not affect whether an\narg is required."
+    },
+    "WhenEntry": {
+      "additionalProperties": false,
+      "description": "One conditional level.",
+      "properties": {
+        "if": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Cond"
+          },
+          "description": "Conditions that must all hold, keyed by another declared field's name,\nor `caller` for who is filing (`\"agent\"` or `\"human\"`). A field's\ncondition is `\"*\"` for set, `\"\"` for unset, or one value or a list of\nvalues it must be one of.",
+          "type": "object"
+        },
+        "level": {
+          "$ref": "#/$defs/FieldLevel",
+          "description": "The level when every condition holds."
+        }
+      },
+      "required": [
+        "if",
+        "level"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json",
@@ -2477,6 +2734,10 @@
           "pr_open": null,
           "setup": null,
           "start": null
+        },
+        "fields": {
+          "github": {},
+          "linear": {}
         },
         "sync": {
           "rules": [],
