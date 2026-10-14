@@ -10,6 +10,7 @@ use std::{cell::LazyCell, collections::BTreeSet, path::Path};
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand, ValueEnum, builder::TypedValueParser as _};
+use devkit::completions::Shell;
 use devkit_common::{
     caller::{self, Caller},
     vcs::Checkout,
@@ -171,6 +172,11 @@ pub enum TodoCommand {
     ///
     /// Reads the hook payload on stdin, and prints nothing on any failure.
     Context(ContextArgs),
+    /// Print a shell-completion script (bash, zsh, fish, ...) to stdout.
+    Completions {
+        /// Shell to emit the script for.
+        shell: Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -230,6 +236,9 @@ pub struct ListArgs {
 }
 
 pub fn run(cli: TodoCli) -> Result<()> {
+    if let TodoCommand::Completions { shell } = cli.command {
+        return crate::emit_completions(shell, "todo", "todo");
+    }
     if let TodoCommand::Context(args) = cli.command {
         if let Some(text) = context(&args) {
             print!("{text}");
@@ -397,7 +406,10 @@ pub fn run(cli: TodoCli) -> Result<()> {
             None if !background => eprintln!("devkit todo: this todo store has no sync target"),
             None => {}
         },
-        TodoCommand::Context(_) | TodoCommand::Hold { .. } | TodoCommand::Schema { .. } => {
+        TodoCommand::Context(_)
+        | TodoCommand::Hold { .. }
+        | TodoCommand::Schema { .. }
+        | TodoCommand::Completions { .. } => {
             unreachable!("answered before the store is opened")
         }
         TodoCommand::Purge { id } => {

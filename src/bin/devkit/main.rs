@@ -40,6 +40,7 @@ Also installed under their own names:
   docm        = devkit docs
   devrules    = devkit rules
   devkit-mcp  = devkit mcp
+  todo        = devkit todo
 
 Run `devkit install-links` if any of them are missing.";
 
@@ -340,6 +341,7 @@ fn dispatch_shim(s: shim::Shim, name: &'static str, args: Vec<OsString>) -> Resu
         ),
         shim::Shim::Mcp => mcp::run(mcp::McpCli::from_arg_matches(&matches)?),
         shim::Shim::Rules => rules::run(rules::RulesCli::from_arg_matches(&matches)?),
+        shim::Shim::Todo => todo::run(todo::TodoCli::from_arg_matches(&matches)?),
     }
 }
 

@@ -288,3 +288,22 @@ fn no_generated_script_declares_a_help_path() {
         );
     }
 }
+
+/// A script installed for `todo` completes under that name and offers the
+/// todo verbs, so `todo re<TAB>` reaches `ready`.
+#[test]
+fn todo_completes_the_todo_verbs() {
+    let (_dir, link) = shimtest::linked("todo");
+    let exe = link.to_str().expect("utf-8 link path");
+    emits_every_shell("todo", exe);
+    let (_home, mut cmd) = testenv::isolated(exe);
+    let out = cmd
+        .args(["completions", "bash"])
+        .output()
+        .expect("spawn completions");
+    let script = String::from_utf8(out.stdout).expect("utf8 completion script");
+    assert!(script.contains("complete -F _todo"), "{script}");
+    for verb in ["todo,ready)", "todo,plan)", "todo,add)", "todo,start)"] {
+        assert!(script.contains(verb), "bash script never declares `{verb}`");
+    }
+}
