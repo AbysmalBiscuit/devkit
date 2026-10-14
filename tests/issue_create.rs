@@ -715,3 +715,75 @@ fn without_a_kind_only_the_detected_trackers_table_is_checked() {
     );
     assert!(!fake.calls().contains("issue create"), "{}", fake.calls());
 }
+
+const MEMBERSHIP: &str = r#"
+[tracker]
+kind = "github"
+
+[ticket.fields.github.project]
+type  = "string"
+where = "project"
+
+[ticket.fields.github.priority]
+type    = "enum"
+where   = { project_field = "PVTSSF_p", name = "Priority" }
+values  = [{ name = "P0", id = "opt_p0" }, { name = "P1", id = "opt_p1" }]
+default = "P1"
+"#;
+
+fn membership_fake() -> ghfake::Fake {
+    let fake = ghfake::Fake::without_pr(MEMBERSHIP);
+    fake.github_keys("project = 3");
+    fake.serve_graphql(&issue_read(
+        42,
+        serde_json::json!({}),
+        serde_json::json!([]),
+    ));
+    fake.serve_mutation(MUTATED);
+    fake
+}
+
+#[test]
+fn none_project_drops_defaulted_project_fields_on_create() {
+    let fake = membership_fake();
+    let out = fake.issue_as("agent", &["create", "--title", "T", "--none", "project"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let calls = fake.calls();
+    assert!(calls.contains("issue create"), "{calls}");
+    assert!(
+        !calls.contains("addProjectV2ItemById") && !calls.contains("updateProjectV2ItemFieldValue"),
+        "the issue stays out of the project: {calls}"
+    );
+}
+
+#[test]
+fn none_project_refuses_a_given_project_field_on_create_and_edit() {
+    for args in [
+        &[
+            "create",
+            "--title",
+            "T",
+            "--none",
+            "project",
+            "--arg",
+            "priority=P0",
+        ][..],
+        &["edit", "42", "--none", "project", "--arg", "priority=P0"][..],
+    ] {
+        let fake = membership_fake();
+        let out = fake.issue_as("agent", args);
+        assert!(!out.status.success(), "{args:?}");
+        let err = stderr(&out);
+        assert!(
+            err.contains("`priority`") && err.contains("--none project"),
+            "{args:?}: {err}"
+        );
+        let calls = fake.calls();
+        assert!(
+            !calls.contains("issue create")
+                && !calls.contains("issue edit")
+                && !calls.contains("query=mutation"),
+            "{args:?}: nothing written: {calls}"
+        );
+    }
+}

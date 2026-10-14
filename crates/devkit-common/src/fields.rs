@@ -4,7 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use devkit_config::{CALLER_CONDITION, FieldDecl, FieldLevel, FieldType, Person, TrackerKind};
+use devkit_config::{
+    CALLER_CONDITION, FieldDecl, FieldLevel, FieldType, Person, Place, TrackerKind,
+};
 use serde::Serialize;
 
 use crate::caller::Caller;
@@ -33,20 +35,48 @@ pub struct Given {
 }
 
 impl Given {
-    /// `self` with each field's `default` for every field given neither a
-    /// value nor `--none`.
+    /// `self` with each field's [`default_of`] for every field given no
+    /// value.
     pub fn with_defaults(&self, decls: &BTreeMap<String, FieldDecl>) -> Given {
         let mut out = self.clone();
         for (name, decl) in decls {
-            if let Some(d) = &decl.default
+            if let Some(d) = default_of(decls, name, decl, &self.nones)
                 && !out.values.contains_key(name)
-                && !out.nones.contains(name)
             {
                 out.values.insert(name.clone(), d.clone());
             }
         }
         out
     }
+}
+
+/// The field holding project membership when `nones` keeps the ticket out
+/// of the project.
+fn outside_project<'a>(
+    decls: &'a BTreeMap<String, FieldDecl>,
+    nones: &BTreeSet<String>,
+) -> Option<&'a str> {
+    decls
+        .iter()
+        .find(|(name, d)| d.r#where == Some(Place::Project) && nones.contains(*name))
+        .map(|(name, _)| name.as_str())
+}
+
+/// The default a create gives field `name`: none for a field marked
+/// `--none`, nor for a project field of a ticket kept out of the project.
+fn default_of<'a>(
+    decls: &BTreeMap<String, FieldDecl>,
+    name: &str,
+    decl: &'a FieldDecl,
+    nones: &BTreeSet<String>,
+) -> Option<&'a String> {
+    let in_project = || {
+        !matches!(decl.r#where, Some(Place::ProjectField { .. }))
+            || outside_project(decls, nones).is_none()
+    };
+    decl.default
+        .as_ref()
+        .filter(|_| !nones.contains(name) && in_project())
 }
 
 /// One validated value, ready to write.
@@ -110,6 +140,9 @@ pub enum Problem {
     Clear { field: String },
     /// `--none` names a field that may not be left empty.
     NoneNotAllowed { field: String },
+    /// A value is given for a field of the project while `--none <project>`
+    /// keeps the ticket out of it.
+    OutsideProject { field: String, project: String },
 }
 
 impl Problem {
@@ -118,7 +151,8 @@ impl Problem {
             Problem::Missing { field }
             | Problem::Invalid { field, .. }
             | Problem::Clear { field }
-            | Problem::NoneNotAllowed { field } => field,
+            | Problem::NoneNotAllowed { field }
+            | Problem::OutsideProject { field, .. } => field,
         }
     }
 }
@@ -376,9 +410,7 @@ fn seen_on(
     };
     if surface == Surface::Create {
         for (name, decl) in decls {
-            if let Some(d) = &decl.default
-                && !resolved.nones.contains(name)
-            {
+            if let Some(d) = default_of(decls, name, decl, &resolved.nones) {
                 seen.insert(name.clone(), vec![d.clone()]);
             }
         }
@@ -393,7 +425,8 @@ fn seen_on(
 }
 
 /// Judge a ticket's fields on `surface`: on a create, every field it must
-/// carry; on an edit, every clear.
+/// carry; on an edit, every clear; on both, a project field given a value
+/// while the ticket is kept out of the project.
 pub fn check(
     decls: &BTreeMap<String, FieldDecl>,
     surface: Surface,
@@ -403,9 +436,19 @@ pub fn check(
 ) -> Report {
     let seen = seen_on(decls, surface, resolved, current);
     let mut report = Report::default();
+    let outside = outside_project(decls, &resolved.nones);
     for (name, decl) in decls {
         let field = || name.clone();
         let none = resolved.nones.contains(name);
+        if let Some(project) = outside
+            && matches!(decl.r#where, Some(Place::ProjectField { .. }))
+            && resolved.fields.contains_key(name)
+        {
+            report.refused.push(Problem::OutsideProject {
+                field: field(),
+                project: project.to_string(),
+            });
+        }
         match surface {
             Surface::Create | Surface::McpCreate => {
                 if none {
@@ -499,6 +542,10 @@ pub fn message(decls: &BTreeMap<String, FieldDecl>, problems: &[Problem]) -> Str
             Problem::NoneNotAllowed { .. } => {
                 format!("`{name}` cannot be left empty (allow_none = false): pass --arg {name}=...")
             }
+            Problem::OutsideProject { project, .. } => format!(
+                "`{name}` is a field of the project, but `--none {project}` keeps the ticket out \
+                 of it: drop `--arg {name}=...` or `--none {project}`"
+            ),
         };
         if let Some(decl) = decl {
             if let Some(d) = decl.description.as_deref() {
