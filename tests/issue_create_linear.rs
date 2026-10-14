@@ -75,7 +75,8 @@ fn read_in(team: (&str, &str), number: u32, labels: &[&str], priority: u8) -> St
 
 const CREATED: &str = r#"{"data":{"issueCreate":{"success":true}}}"#;
 const UPDATED: &str = r#"{"data":{"issueUpdate":{"success":true}}}"#;
-const ID_TAKEN: &str = r#"{"data":null,"errors":[{"message":"Argument Validation Error","extensions":{"code":"INVALID_INPUT","userPresentableMessage":"An issue with this id already exists."}}]}"#;
+/// Linear's answer, sent with HTTP 400, to a create whose id an issue has.
+const ID_TAKEN: &str = r#"{"errors":[{"message":"conflict on insert of Issue","extensions":{"code":"INPUT_ERROR","statusCode":400,"userPresentableMessage":"Entity Issue with id 0b7c4a52-9d1e-4f3a-8c6b-2e5d7f9a1c30 already exists."}}]}"#;
 
 fn project(config: &str) -> ghfake::Fake {
     ghfake::Fake::without_pr(config)
@@ -180,7 +181,7 @@ fn a_retried_create_returns_the_first_ticket() {
     let first = run(&fake, &linear, &args);
     assert!(first.status.success(), "{}", stderr(&first));
 
-    linear.answer("issueCreate(", ID_TAKEN);
+    linear.answer_status("issueCreate(", 400, ID_TAKEN);
     let retry = run(&fake, &linear, &args);
     assert!(retry.status.success(), "{}", stderr(&retry));
     assert_eq!(stdout(&retry), stdout(&first), "the same ticket");
@@ -202,7 +203,7 @@ fn a_retried_create_returns_the_first_ticket_after_it_was_archived() {
     archived["data"]["issue"]["nodes"][0]["archivedAt"] = "2026-10-01T00:00:00.000Z".into();
     linear.answer("includeArchived: true", &archived.to_string());
     linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
-    linear.answer("issueCreate(", ID_TAKEN);
+    linear.answer_status("issueCreate(", 400, ID_TAKEN);
     let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("ENG-42"), "{}", stdout(&out));
