@@ -53,5 +53,12 @@
     "kind": "bool",
     "expect": false,
     "proof": "tests/todo_blocking.rs another_tickets_ready_todo_is_not_offered_by_default"
+  },
+  {
+    "id": "ticket-start-survives-sync",
+    "question": "`#65 Add sync` is the todo `devkit todo sync` brought in for GitHub issue 65. You started it, and the issue's status in the tracker has not changed since. Another `devkit todo sync` runs. Is the todo still in progress under you?",
+    "kind": "bool",
+    "expect": true,
+    "proof": "crates/devkit-todo/tests/ticket.rs an_agents_start_survives_an_unmoved_ticket"
   }
 ]

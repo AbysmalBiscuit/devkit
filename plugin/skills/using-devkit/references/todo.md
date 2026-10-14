@@ -60,6 +60,13 @@ With `[ticket.sync]` rules in the repository's `devkit.toml`, `devkit todo sync`
 - A ticket keeps one todo, on every backend: a second sync adds nothing.
 - `devkit todo sync --dry-run` prints each change it would make and writes nothing.
 
+Ticket todos stay current without anyone running sync:
+
+- `devkit todo list`, `ready`, `plan` and the injected lists start a background ticket sync when the repository's last one is older than `[ticket.sync] max_age_secs`. They never wait for it: they show what the store holds now, and the next read shows what the sync brought. One sync runs per repository at a time, and a failed one holds off the next for the same age. `devkit todo sync` syncs now.
+- In a worktree whose `workspace setup` record names a synced ticket, `ready` and `plan` offer that ticket's todo beside the workspace's own todos.
+- A ticket todo whose worktree is on this machine shows `<n> open` in lists, plans and injected lists: the open todos in its workspace. `devkit todo list --expand` and `devkit todo plan --expand` list those todos under it, each with its node.
+- Starting a ticket todo or finishing it moves the ticket's tracker status as `[ticket.events] todo_start` and `todo_done` configure (`references/ticket.md`), in the background. Run the command from a checkout of the ticket's repository: from anywhere else the todo still changes, the ticket stays where it was, and a warning names it. Changes sync itself makes never move a ticket, so when the tracker closes a ticket first, sync finishes its todo and nothing fires.
+
 ## Stopping with open todos
 
 In Claude Code, Codex and Grok, a sub-agent ending its turn while it has open todos is refused once: the stop hook sends it back with the list. A main agent's stop is refused the same way only when the hold mode is `always`. In Claude Code, a main agent that ends its turn while background work it started is still running (a background sub-agent, a `run_in_background` command, a Monitor) or a session wakeup is scheduled is not refused, so ending the turn to wait for that work is fine; its next stop with nothing in flight is refused as usual. Your own claims on any node count. Pending todos on your role's node count when `hold_pending` is true. By default they count when the effective scope names your deepest identity: session for a main agent, agent for a sub-agent. Built-in main agents count session pending todos; built-in sub-agents count only claims. A worker at agent scope counts its pending list; a manager at workspace scope counts only claims unless its role overrides the flag. Role parents affect suggestions, never claim authority. Finish each open todo, or cancel one that no longer applies (`devkit todo cancel <id>`, or delete it in your task tool).
