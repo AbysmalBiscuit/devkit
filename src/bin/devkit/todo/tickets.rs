@@ -275,12 +275,7 @@ pub(crate) fn named_ticket<'a>(todos: &'a [Todo], text: &str) -> Option<&'a Todo
         Some(number) => names_issue(key, number),
         None => key.eq_ignore_ascii_case(text),
     };
-    let open = |t: &&Todo| {
-        matches!(
-            t.status.kind(),
-            StatusKind::Pending | StatusKind::InProgress
-        )
-    };
+    let open = |t: &&Todo| t.status.kind().is_open();
     let tickets = || todos.iter().filter(open).filter(|t| t.ticket.is_some());
     tickets()
         .find(|t| t.ticket.as_ref().is_some_and(|r| names(&r.key)))
@@ -334,12 +329,7 @@ pub(crate) fn ticket_work(
         let open: Vec<Todo> = todos
             .iter()
             .filter(|t| t.node() == ws.workspace || t.node().starts_with(&inside))
-            .filter(|t| {
-                matches!(
-                    t.status.kind(),
-                    StatusKind::Pending | StatusKind::InProgress
-                )
-            })
+            .filter(|t| t.status.kind().is_open())
             .cloned()
             .collect();
         *work.open.entry(ws.todo.clone()).or_default() += open.len();
