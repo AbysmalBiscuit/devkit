@@ -691,12 +691,23 @@ fn parse_issue_url(s: &str, host: &str) -> Option<(String, u64)> {
 pub struct GithubTracker {
     repo: Repo,
     api: Api,
+    /// Where a synced ticket's status is read, `None` without a project.
+    board: Option<BoardRef>,
 }
 
 impl GithubTracker {
     pub fn new(repo: Repo) -> GithubTracker {
         let api = Api::new(&repo.host);
-        GithubTracker { repo, api }
+        GithubTracker {
+            repo,
+            api,
+            board: None,
+        }
+    }
+
+    /// This tracker, reading synced tickets' statuses from `board`.
+    pub fn with_board(self, board: Option<BoardRef>) -> GithubTracker {
+        GithubTracker { board, ..self }
     }
 }
 
@@ -915,34 +926,25 @@ impl Tracker for GithubTracker {
         &self,
         rules: &[devkit_config::MatchRule],
         closed_names: &[String],
-        github: &devkit_config::GithubConfig,
     ) -> Result<Vec<SyncedTicket>> {
-        self.ticket_reader(github).find(rules, closed_names)
+        self.ticket_reader().find(rules, closed_names)
     }
 
-    fn tickets(
-        &self,
-        keys: &[String],
-        github: &devkit_config::GithubConfig,
-    ) -> Result<Vec<SyncedTicket>> {
-        self.ticket_reader(github).read(keys)
+    fn tickets(&self, keys: &[String]) -> Result<Vec<SyncedTicket>> {
+        self.ticket_reader().read(keys)
     }
 
-    fn status_names(
-        &self,
-        _tickets: &[SyncedTicket],
-        github: &devkit_config::GithubConfig,
-    ) -> Result<Vec<String>> {
-        self.ticket_reader(github).status_names()
+    fn status_names(&self, _tickets: &[SyncedTicket]) -> Result<Vec<String>> {
+        self.ticket_reader().status_names()
     }
 }
 
 impl GithubTracker {
-    fn ticket_reader(&self, github: &devkit_config::GithubConfig) -> GithubTickets<'_> {
+    fn ticket_reader(&self) -> GithubTickets<'_> {
         GithubTickets {
             repo: &self.repo,
             api: &self.api,
-            board: BoardRef::of(github),
+            board: self.board.clone(),
         }
     }
 }

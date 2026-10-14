@@ -40,7 +40,7 @@ pub(crate) fn sync_tickets(
     let kind = tracker.kind().to_string();
     let existing = store.list(&Filter::exact([node.to_string()]))?;
     let mut fetched = tracker
-        .find_tickets(&sync.rules, &sync.closed_names(), &config.github)
+        .find_tickets(&sync.rules, &sync.closed_names())
         .with_context(|| format!("reading {kind} tickets"))?;
     let open: Vec<String> = existing
         .iter()
@@ -57,11 +57,11 @@ pub(crate) fn sync_tickets(
     if !open.is_empty() {
         fetched.extend(
             tracker
-                .tickets(&open, &config.github)
+                .tickets(&open)
                 .with_context(|| format!("reading {kind} tickets"))?,
         );
     }
-    let known = tracker.status_names(&fetched, &config.github)?;
+    let known = tracker.status_names(&fetched)?;
     let plan = ticket::plan(&kind, node, &existing, &fetched, &known, sync)?;
     if dry_run {
         match plan.is_empty() {

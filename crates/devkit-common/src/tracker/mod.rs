@@ -159,31 +159,21 @@ pub trait Tracker: Send + Sync {
     /// A one-line identity for `devkit doctor`.
     fn check(&self) -> Result<String>;
     /// Every open ticket a rule in `rules` selects, each once, but those in
-    /// a status named in `closed_names`. `github` is the `[github]` table,
-    /// whose project holds a GitHub issue's status.
+    /// a status named in `closed_names`.
     fn find_tickets(
         &self,
         _rules: &[devkit_config::MatchRule],
         _closed_names: &[String],
-        _github: &devkit_config::GithubConfig,
     ) -> Result<Vec<tickets::SyncedTicket>> {
         anyhow::bail!("the {} tracker cannot sync tickets", self.kind())
     }
     /// The tickets `keys` name, whatever their status. A key that names no
     /// ticket is left out.
-    fn tickets(
-        &self,
-        _keys: &[String],
-        _github: &devkit_config::GithubConfig,
-    ) -> Result<Vec<tickets::SyncedTicket>> {
+    fn tickets(&self, _keys: &[String]) -> Result<Vec<tickets::SyncedTicket>> {
         anyhow::bail!("the {} tracker cannot sync tickets", self.kind())
     }
     /// Every status name `tickets` could be in, for checking a status map.
-    fn status_names(
-        &self,
-        _tickets: &[tickets::SyncedTicket],
-        _github: &devkit_config::GithubConfig,
-    ) -> Result<Vec<String>> {
+    fn status_names(&self, _tickets: &[tickets::SyncedTicket]) -> Result<Vec<String>> {
         anyhow::bail!("the {} tracker cannot sync tickets", self.kind())
     }
 }
@@ -235,16 +225,34 @@ pub const DETECTED: &str = "detected: ";
 /// on such a machine must set `kind` explicitly. What detection buys is that
 /// every config predating `[tracker]` keeps behaving exactly as it did.
 pub fn resolve(kind: Option<TrackerKind>, cwd: &Path, repos: &crate::forge::Repos) -> Resolved {
-    resolve_with_key(kind, cwd, repos, crate::secrets::resolve("LINEAR_API_KEY"))
+    resolve_with_board(kind, cwd, repos, None)
 }
 
-/// `resolve` with the Linear key supplied instead of read from the environment,
-/// so detection can be exercised whatever the ambient `LINEAR_API_KEY` holds.
+/// `resolve`, with a GitHub tracker reading ticket statuses from `board`.
+pub(crate) fn resolve_with_board(
+    kind: Option<TrackerKind>,
+    cwd: &Path,
+    repos: &crate::forge::Repos,
+    board: Option<github_tickets::BoardRef>,
+) -> Resolved {
+    resolve_with_key(
+        kind,
+        cwd,
+        repos,
+        crate::secrets::resolve("LINEAR_API_KEY"),
+        board,
+    )
+}
+
+/// `resolve_with_board` with the Linear key supplied instead of read from the
+/// environment, so detection can be exercised whatever the ambient
+/// `LINEAR_API_KEY` holds.
 fn resolve_with_key(
     kind: Option<TrackerKind>,
     cwd: &Path,
     repos: &crate::forge::Repos,
     key: Option<String>,
+    board: Option<github_tickets::BoardRef>,
 ) -> Resolved {
     let declared = kind.is_some();
     match kind.unwrap_or_else(|| detect(cwd, repos.github_host(), key.as_deref())) {
@@ -263,7 +271,7 @@ fn resolve_with_key(
         // this check would have it claim readiness with no repository to ask.
         TrackerKind::Github => match repos.issues() {
             Ok(repo) => Resolved {
-                tracker: Box::new(github::GithubTracker::new(repo.clone())),
+                tracker: Box::new(github::GithubTracker::new(repo.clone()).with_board(board)),
                 declared,
                 reason: if declared {
                     "[tracker] kind = \"github\"".into()
@@ -443,6 +451,7 @@ mod tests {
             Path::new("/nonexistent-devkit-tracker-probe"),
             &no_repos(),
             None,
+            None,
         );
         assert_eq!(r.tracker.kind(), TrackerKind::None);
         assert!(!r.declared);
@@ -470,7 +479,7 @@ mod tests {
             .output()
             .unwrap();
 
-        let r = resolve_with_key(None, dir.path(), &repos_with("acme/widget"), None);
+        let r = resolve_with_key(None, dir.path(), &repos_with("acme/widget"), None, None);
         assert_eq!(r.tracker.kind(), TrackerKind::Github);
         assert!(!r.declared, "{}", r.reason);
         assert!(r.reason.contains("detected"), "{}", r.reason);
