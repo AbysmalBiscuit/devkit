@@ -1,0 +1,91 @@
+//! `devkit ticket fields`: the declared ticket fields at this caller's level,
+//! read from config alone.
+
+#[path = "common/ghfake.rs"]
+mod ghfake;
+
+const FIELDS: &str = r#"
+[tracker]
+kind = "github"
+
+[ticket.fields.github.estimate]
+type        = "number"
+where       = { project_field = "PVTF_e", name = "Estimate" }
+level       = "info"
+when        = [{ if = { caller = "agent" }, level = "error" }]
+description = "story points"
+
+[ticket.fields.github.project]
+type  = "string"
+where = "project"
+
+[ticket.fields.github.milestone]
+type   = "enum"
+where  = "milestone"
+values = [{ name = "v1", id = "3" }]
+level  = "none"
+when   = [{ if = { project = "*" }, level = "warning" }]
+"#;
+
+fn stdout(out: &std::process::Output) -> String {
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The line naming `field`, which leads its block.
+fn line_of(text: &str, field: &str) -> String {
+    text.lines()
+        .find(|l| l.split_whitespace().next() == Some(field))
+        .unwrap_or_else(|| panic!("no `{field}` in\n{text}"))
+        .to_string()
+}
+
+#[test]
+fn lists_fields_with_their_level_for_this_caller() {
+    let fake = ghfake::Fake::without_pr(FIELDS);
+    let agent = stdout(&fake.issue_as("agent", &["fields"]));
+    assert!(line_of(&agent, "estimate").contains("error"), "{agent}");
+    assert!(agent.contains("story points"), "{agent}");
+    let human = stdout(&fake.issue_as("human", &["fields"]));
+    assert!(line_of(&human, "estimate").contains("info"), "{human}");
+    assert!(
+        !human.lines().any(|l| l.starts_with("project")),
+        "a field that can never rise above none is left out: {human}"
+    );
+}
+
+#[test]
+fn arg_values_evaluate_conditions() {
+    let fake = ghfake::Fake::without_pr(FIELDS);
+    let bare = stdout(&fake.issue_as("agent", &["fields"]));
+    assert!(line_of(&bare, "milestone").contains("none"), "{bare}");
+    let with = stdout(&fake.issue_as("agent", &["fields", "--arg", "project=devkit"]));
+    assert!(line_of(&with, "milestone").contains("warning"), "{with}");
+}
+
+#[test]
+fn json_is_the_field_views() {
+    let fake = ghfake::Fake::without_pr(FIELDS);
+    let out = stdout(&fake.issue_as("agent", &["fields", "--json"]));
+    let v: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+    let items = v.as_array().expect("an array");
+    assert_eq!(items.len(), 2, "{out}");
+    let m = items
+        .iter()
+        .find(|i| i["name"] == "milestone")
+        .expect("milestone");
+    assert_eq!(m["level"], "none");
+    assert_eq!(m["values"], serde_json::json!(["v1"]));
+    assert_eq!(m["allows_none"], true);
+}
+
+#[test]
+fn makes_no_tracker_request() {
+    let fake = ghfake::Fake::without_pr(FIELDS);
+    stdout(&fake.issue_as("agent", &["fields"]));
+    assert_eq!(fake.calls(), "", "no gh call");
+}

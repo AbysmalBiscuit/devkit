@@ -12,6 +12,7 @@ mod dashboard;
 mod edit;
 mod end;
 mod event;
+mod fields;
 mod hooks;
 mod info;
 mod info_cache;
@@ -285,6 +286,19 @@ pub(crate) enum TicketCmd {
         vars: VarArgs,
         #[command(flatten)]
         fields: FieldArgs,
+    },
+    /// List the ticket fields this repository declares for its tracker.
+    ///
+    /// Each field shows its type, its level for this caller and the --arg
+    /// values given (error refuses a ticket without it, warning reports it),
+    /// its values, default and description. A field whose level and every
+    /// `when` entry are `none` is left out. Reads config only.
+    Fields {
+        /// Emit JSON instead of text.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        vars: VarArgs,
     },
     /// Move the issue's tracker status as [ticket.events] configures EVENT.
     ///
@@ -788,6 +802,12 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             body,
             vars,
             fields,
+            dir,
+            config,
+        }),
+        TicketCmd::Fields { json, vars } => fields::run(fields::FieldsArgs {
+            json,
+            vars,
             dir,
             config,
         }),

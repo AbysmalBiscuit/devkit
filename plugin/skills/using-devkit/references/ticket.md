@@ -4,8 +4,9 @@
 
 ```sh
 ticket render --title T [--body B] [--arg k=v] [--arg-file k=path]
-ticket create --title T [--body B] [--arg k=v] [--arg-file k=path]
-ticket edit <number|URL> --body B [--title T] [--arg k=v] [--arg-file k=path]
+ticket create --title T [--body B] [--arg k=v] [--arg-file k=path] [--none FIELD]
+ticket edit <number|URL> --body B [--title T] [--arg k=v] [--arg-file k=path] [--none FIELD]
+ticket fields [--arg k=v] [--json]
 ticket event <setup|start|pr_open> [ID|URL]
 ticket dashboard [--chart bar|line] [--bucket B] [--mode M] [--aggregate cumulative|period] [--all-roles] [--author gh] [--no-plots] [--no-cache]
 ```
@@ -24,6 +25,22 @@ Ticket titles and bodies come from the `ticket_title` and `ticket_body` template
 A denied MCP call names the render command and the `--arg`s it needs. The render has to happen in the same agent session as the call, because its receipt is filed under the session id. Receipts live under `.devkit/issue-receipts/` in the repository's main worktree, so a render in any worktree of the repository counts, and session end deletes that session's receipts.
 
 Enforcement is configuration. `[harness.issue_tools.<name>]` entries name the MCP servers and tools that write tickets and enforce as soon as they exist. `devkit schema` documents their keys. Refusing a bare `gh issue create` takes a `[harness.commands]` rule with `programs = ["gh"]` and `args = ["issue", "create"]`, and a bare `gh issue edit --body` one with `args = ["issue", "edit", "**", "--body*"]`; like every command rule they need `[harness] enforce_commands = true`. `ticket create` and `ticket edit` run their own `gh`, which the rules never see.
+
+## Ticket fields
+
+A repository declares the fields its tickets carry under `[ticket.fields.<tracker>.<field>]`, `github` or `linear`: each field's type, the place on the tracker it is written, its values, and its level. `devkit schema` documents the keys. A field is passed like a template variable, `--arg <field>=<value>`, and fields and `[templates.variables]` share that one namespace. A list field takes comma-separated values (`--arg labels=bug,enhancement`); spaces around each value and repeats are dropped. An enum value is matched by name, ignoring case. A `user` value is a `[people]` alias, which needs the tracker's identity key (`github` or `linear`) under its `[people]` entry.
+
+Run `ticket fields` before filing a ticket. It lists each field that can matter, with its type, its values, its default, its description, and its level for you and for any `--arg` values you pass to it (`ticket fields --arg project=devkit` shows what a ticket in that project needs). It reads config only. `--json` prints the same list for scripts.
+
+| Level | `ticket create` without the field | `ticket edit` clearing it |
+|---|---|---|
+| `error` | refused before anything is written, naming every missing field | refused unless the field allows `--none` |
+| `warning` | filed, then each missing field is reported | done, then reported |
+| `info`, `none` | filed, nothing said | done, nothing said |
+
+A field's `when` entries can raise or lower its level depending on another field of the same ticket or on who is filing (`caller = "agent"`). A value that is not one the field takes is refused at every level, `none` included; the refusal lists the valid values. The body and title templates see each field as text: its values' names joined by `, `, or the empty string when it has none. A field the templates read is never required by the template rule; only its level decides.
+
+`--none <field>` marks a field deliberately empty. On a create it counts as filled and nothing is written; on an edit it clears the field. A field with `allow_none = false` refuses `--none`, so at `error` it needs a real value. An empty value, `--arg milestone=`, is refused and points at `--none`.
 
 ## Status events
 
