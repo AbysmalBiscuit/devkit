@@ -211,7 +211,7 @@ fn linear(args: EditArgs, sel: &Selected, cfg: &Config) -> Result<()> {
     writer
         .update(&before.uuid, &update)
         .map_err(|e| field_write::linear_refused(e, decls, &resolved))
-        .with_context(|| format!("Linear refused the edit of {id}; nothing was written"))?;
+        .with_context(|| format!("Linear refused or did not answer the edit of {id}"))?;
 
     let (after, problems) =
         field_write::linear_finish(&writer, before, decls, &resolved, &refs, true);
