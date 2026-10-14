@@ -26,7 +26,7 @@ Before running a project build, profiling flow, or verification command by hand,
 |---|---|
 | `references/locks.md` | full `lockm` flags, holder identity, TTL, or an enforced-write hook denied your edit |
 | `references/servers.md` | starting or stopping dev servers, allocating ports, reading logs, another worktree's servers |
-| `references/tasks.md` | a `devrun task` needs an `--arg` or a multi-line value, hit a `require_live` gate, or you need to override its env |
+| `references/tasks.md` | a `devrun task` needs an `--arg` or a multi-line value, hit a `require_live` gate, you need to override its env, or you need to show a task passed at a commit (`devrun runs`) |
 | `references/templates.md` | text for a tool devkit does not send to (a Linear update, a Jira comment, a release note), a branch or worktree named by the project's template, or a PR body or Slack message to read before it goes out |
 | `references/commit.md` | committing: named paths, part of a file, or a new message for the last commit, without disturbing what other sessions staged |
 | `references/workspace.md` | starting a workspace for an issue or a slug, binding the checkout you were given, triage, tearing down |

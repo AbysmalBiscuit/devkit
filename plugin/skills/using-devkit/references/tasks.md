@@ -17,6 +17,20 @@ A **command** task runs in the foreground and propagates its exit code. A **sequ
 
 A task `devrun task <name>` would refuse for its shape still lists, with KIND `invalid` and the refusal in place of its description; `devkit config tasks --json` carries it as `error`. Refusals include both or neither of `run` and `steps`, a template that does not compile, an app the catalog lacks, a split on an empty `on`, a sequence setting `app`, `env` or `require_live`, and a step naming an unknown, malformed or sequence task. Port references are found by rendering, so a problem with one surfaces only when the task runs.
 
+## The run ledger
+
+Every `devrun task <name>` that executes is recorded in the run ledger, one record per invocation: the task name and its `--arg` values, the exit code of the program devrun ran (a sequence records its first failing step's code), the full HEAD commit id, whether the tree was clean, start and end times, and the last lines of output. A `--dry-run` or a listing records nothing. The tree counts as clean only when it had no modified, staged or untracked files both when the run started and when it ended, and HEAD had not moved, so a run that rewrites files or races another session's edit is not clean. Ignored files do not count. An output stream attached to a terminal passes straight through uncaptured, so a run from a terminal records no tail for it.
+
+The ledger lives in devkit's state directory, outside every worktree, and only `devrun task` writes it. An agent's edit-tool write into it is denied. Read it with:
+
+```sh
+devrun runs list                              # this repository's runs, oldest first (--task NAME, --limit N, --json with tails)
+devrun runs passed <task>                     # did <task> exit 0 on a clean tree at HEAD? exit 0 = yes, 1 = no
+devrun runs passed <task> --sha <full-id>     # the same question for another commit
+```
+
+`passed` answers yes only for a run at exactly that commit id: a run at an ancestor, an abbreviated id, a dirty tree or a non-zero exit is no. `--json` prints the proving run, or `null`. To claim a check passed, cite `devrun runs passed`, not your own reading of the output.
+
 ## Args
 
 A task's templates can read variables as well as ports. The ARGS column of `devrun task` names them: a bare name is required, a bracketed one is optional. The column answers for whoever runs it, since an arg can be required of agents only; `DEVKIT_CALLER=agent devrun task` shows a human the agent's view. Pass each with `--arg`:
