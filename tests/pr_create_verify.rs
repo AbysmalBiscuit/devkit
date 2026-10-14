@@ -291,6 +291,51 @@ fn a_branch_redefining_the_required_task_as_a_no_op_is_refused() {
 }
 
 #[test]
+fn a_branch_changing_only_the_required_tasks_env_is_refused() {
+    let p = project(GATE);
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    let run = r#"run = ["git", "-c", "x.scope={{ scope }}", "version"]"#;
+    std::fs::write(
+        &config,
+        toml.replace(
+            run,
+            &format!("{run}\nenv = {{ GIT_CONFIG_NOSYSTEM = \"1\" }}"),
+        ),
+    )
+    .unwrap();
+    git(&p, &["commit", "-q", "-am", "set an env on verify"]);
+    serve_head(&p);
+    verify(&p);
+    assert_refused(&p);
+    let (_, stderr) = create(&p, "agent");
+    assert!(
+        stderr.contains("definition changed from the merge base"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_branch_changing_only_a_tasks_description_still_qualifies() {
+    let p = project(GATE);
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        toml.replace(
+            "[tasks.verify]\n",
+            "[tasks.verify]\ndescription = \"Check it\"\n",
+        ),
+    )
+    .unwrap();
+    git(&p, &["commit", "-q", "-am", "describe verify"]);
+    serve_head(&p);
+    verify(&p);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+}
+
+#[test]
 fn a_merge_base_whose_pr_table_does_not_parse_opens_a_humans_pr_ungated() {
     let p = project("\n[pr]\ntest_files = 3\n");
     let config = p.project().join("devkit.toml");

@@ -1752,7 +1752,10 @@ pub struct PrGates {
     /// run ledger records as exiting 0 on a clean tree at exactly the commit
     /// the PR opens at. A run at an earlier commit, on a dirty tree or with
     /// other args does not count, nor does one whose steps ran other
-    /// commands than the task renders to as the merge base defines it. The
+    /// commands than the task renders to as the merge base defines it, nor
+    /// one at a commit defining the task, its sequence's tasks or their apps
+    /// otherwise than the merge base does, descriptions aside. Scripts the
+    /// task calls are not compared. The
     /// PR body gets a Verification section built from that run, or saying
     /// NOT RUN when there is none; a human's PR gets the section without
     /// being refused. Off while `verify_task` is unset.
