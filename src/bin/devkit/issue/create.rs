@@ -1,14 +1,17 @@
 //! `ticket create`: render the issue templates, file the result as a GitHub
-//! issue with every declared field it was given, and read the fields back.
-//! Other trackers create issues through their MCP, gated by the pre-tool-use
-//! hook on `ticket render`'s receipts.
+//! issue or a Linear ticket with every declared field it was given, and read
+//! the fields back.
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
     fields::{self, Surface},
-    tracker::github_fields::{self, GithubFieldWriter},
+    tracker::{
+        Selected,
+        github_fields::{self, GithubFieldWriter},
+        linear_fields::{self, LinearFieldWriter},
+    },
 };
-use devkit_config::TrackerKind;
+use devkit_config::{Config, Place, TrackerKind};
 
 use super::{field_write, render};
 use crate::template::{FieldArgs, VarArgs};
@@ -24,18 +27,25 @@ pub(crate) struct CreateArgs {
 
 pub(crate) fn run(args: CreateArgs) -> Result<()> {
     let start = super::start(&args.dir);
-    let (sel, cfg) = super::github_only("create", &start, args.config.as_deref())?;
+    let (sel, cfg, kind) = super::ticket_tracker("create", &start, args.config.as_deref())?;
+    match kind {
+        TrackerKind::Linear => linear(args, &sel, &cfg),
+        TrackerKind::Github | TrackerKind::None => github(args, &start, &sel, &cfg),
+    }
+}
+
+fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<()> {
     let caller = devkit_common::caller::caller();
     let decls = cfg.ticket.fields.for_tracker(TrackerKind::Github);
-    let input = render::ticket_args(&cfg, &args.vars, &args.fields, decls)?;
+    let input = render::ticket_args(cfg, &args.vars, &args.fields, decls)?;
     let given = input.fields.with_defaults(decls);
-    let mut resolved = render::resolve_fields(&cfg, TrackerKind::Github, decls, &given)?;
+    let mut resolved = render::resolve_fields(cfg, TrackerKind::Github, decls, &given)?;
     field_write::number_issue_refs(sel.tracker.tracker.as_ref(), decls, &mut resolved)?;
     let report = fields::check(decls, Surface::Create, &resolved, None, caller);
     field_write::refuse("ticket create", decls, &report)?;
 
     let rendered = render::render(
-        &cfg,
+        cfg,
         "ticket create",
         render::Title::Input(&args.title),
         Some(args.body.as_deref().unwrap_or_default()),
@@ -56,7 +66,7 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
     .into();
     gh.extend(github_fields::create_flags(decls, &resolved));
     let refs: Vec<&str> = gh.iter().map(String::as_str).collect();
-    let out = devkit_common::cmd::gh_capture(&refs, repo, &start).with_context(|| {
+    let out = devkit_common::cmd::gh_capture(&refs, repo, start).with_context(|| {
         format!(
             "`gh issue create` failed, and the issue may have been created anyway: search {} \
              for the title `{}` before retrying, so a retry does not file it twice",
@@ -73,7 +83,7 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
     println!("{url}");
 
     let number = field_write::number_of(&url)?;
-    let writer = GithubFieldWriter::new(repo.clone(), cfg.github.project.clone(), &start);
+    let writer = GithubFieldWriter::new(repo.clone(), cfg.github.project.clone(), start);
     let written = fields::Resolved {
         nones: Default::default(),
         ..resolved
@@ -95,6 +105,81 @@ pub(crate) fn run(args: CreateArgs) -> Result<()> {
             "issue #{number} was created ({url}), but the fields above did not take. Set them \
              with `devkit ticket edit {number} --arg <field>=...`; rerunning `ticket create` \
              would file a second issue"
+        );
+    }
+    Ok(())
+}
+
+fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
+    let caller = devkit_common::caller::caller();
+    let decls = cfg.ticket.fields.for_tracker(TrackerKind::Linear);
+    let team_field = decls
+        .iter()
+        .find(|(_, d)| d.r#where == Some(Place::Team))
+        .map(|(name, _)| name.clone())
+        .context(
+            "a Linear ticket needs a team, and no field declares one. Declare it in devkit.toml \
+             as `[ticket.fields.linear.team]` with `type = \"enum\"`, `where = \"team\"` and \
+             each team as `values = [{ name = \"ENG\", id = \"<team id>\" }]`",
+        )?;
+    let input = render::ticket_args(cfg, &args.vars, &args.fields, decls)?;
+    let given = input.fields.with_defaults(decls);
+    let mut resolved = render::resolve_fields(cfg, TrackerKind::Linear, decls, &given)?;
+    field_write::number_issue_refs(sel.tracker.tracker.as_ref(), decls, &mut resolved)?;
+    let report = fields::check(decls, Surface::Create, &resolved, None, caller);
+    field_write::refuse("ticket create", decls, &report)?;
+    let team = resolved
+        .fields
+        .get(&team_field)
+        .map(|v| linear_fields::written_ids(v))
+        .and_then(|ids| ids.into_iter().next());
+    let Some(team) = team else {
+        bail!(
+            "ticket create refused, nothing was written:\n{}",
+            fields::message(decls, &[fields::Problem::Missing { field: team_field }])
+        );
+    };
+    let key = field_write::linear_key()?;
+
+    let rendered = render::render(
+        cfg,
+        "ticket create",
+        render::Title::Input(&args.title),
+        Some(args.body.as_deref().unwrap_or_default()),
+        &input.template,
+        &render::shown(decls, &resolved),
+        caller,
+    )?;
+    let written = fields::Resolved {
+        nones: Default::default(),
+        ..resolved
+    };
+    let writer = LinearFieldWriter::new(key);
+    let refs = writer.refs(&linear_fields::issue_refs(decls, &written))?;
+    let id = linear_fields::create_id(&team, &rendered.title, &rendered.body);
+    let create =
+        linear_fields::create_input(id, &rendered.title, &rendered.body, decls, &written, &refs)?;
+    let created = writer
+        .create(&create)
+        .map_err(|e| field_write::linear_refused(e, decls, &written))?;
+    let issue = created.issue;
+    let ident = issue.identifier.clone();
+    println!("{}", field_write::linear_link(&issue));
+    if created.existed {
+        eprintln!(
+            "note: {ident} already had this create's id, so an earlier run of the same \
+             `ticket create` filed it; no second ticket was filed"
+        );
+    }
+    let problems = field_write::linear_finish(&writer, issue, decls, &written, &refs, false);
+    field_write::warn(decls, &report);
+    if !problems.is_empty() {
+        for p in &problems {
+            eprintln!("  {p}");
+        }
+        bail!(
+            "{ident} was created, but the fields above did not take. Set them with `devkit \
+             ticket edit {ident} --arg <field>=...`"
         );
     }
     Ok(())

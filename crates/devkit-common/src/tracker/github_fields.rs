@@ -732,8 +732,13 @@ impl GithubFieldWriter {
     }
 }
 
-/// Why a write may have failed on a stale declared id.
-pub fn stale_hint(field: &str, decl: &FieldDecl, e: &anyhow::Error) -> Option<String> {
+/// Why a write to `kind`'s tracker may have failed on a stale declared id.
+pub fn stale_hint(
+    kind: devkit_config::TrackerKind,
+    field: &str,
+    decl: &FieldDecl,
+    e: &anyhow::Error,
+) -> Option<String> {
     let text = format!("{e:#}");
     let names_an_id = decl.r#type == Some(FieldType::Enum)
         && (text.contains("Could not resolve")
@@ -741,7 +746,7 @@ pub fn stale_hint(field: &str, decl: &FieldDecl, e: &anyhow::Error) -> Option<St
             || text.contains("not found"));
     names_an_id.then(|| {
         format!(
-            "the declared id may be stale: check `values` under [ticket.fields.github.{field}] against the tracker"
+            "the declared id may be stale: check `values` under [ticket.fields.{kind}.{field}] against the tracker"
         )
     })
 }
