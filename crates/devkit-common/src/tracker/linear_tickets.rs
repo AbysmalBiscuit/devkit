@@ -13,22 +13,26 @@ use super::{
     tickets::{SyncedTicket, TicketStatus, in_closed_name},
 };
 
+// Nested connections read up to 250 nodes, Linear's largest page. Linear
+// multiplies a nested connection's cost by its parent's page size, so the
+// outer pages are 10 to stay within its query-complexity budget.
+
 /// The issue fields a sync reads, for one page of `issues(filter:)`.
 const ISSUES_QUERY: &str = "query($filter: IssueFilter, $after: String) { \
-     issues(first: 50, after: $after, filter: $filter) { \
+     issues(first: 10, after: $after, filter: $filter) { \
      pageInfo { hasNextPage endCursor } \
      nodes { identifier title state { name } parent { identifier } \
-     inverseRelations(first: 50) { nodes { type issue { identifier } } } } } }";
+     inverseRelations(first: 250) { nodes { type issue { identifier } } } } } }";
 
 /// Each team's workflow state names, for one page of `teams(filter:)`.
 const TEAMS_QUERY: &str = "query($filter: TeamFilter, $after: String) { \
-     teams(first: 50, after: $after, filter: $filter) { \
+     teams(first: 10, after: $after, filter: $filter) { \
      pageInfo { hasNextPage endCursor } \
-     nodes { key states(first: 100) { nodes { name } } } } }";
+     nodes { key states(first: 250) { nodes { name } } } } }";
 
 /// Keys read by [`LinearTickets::read`] per request: one page of
 /// [`ISSUES_QUERY`].
-const KEYS_PER_REQUEST: usize = 50;
+const KEYS_PER_REQUEST: usize = 10;
 
 fn is_me() -> Value {
     json!({ "isMe": { "eq": true } })
