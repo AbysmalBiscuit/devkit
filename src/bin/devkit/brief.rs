@@ -332,7 +332,15 @@ impl BriefSnapshot {
             out.push_str(&format!("rules\t{floor}\n"));
         }
         for (gate, on) in &self.gates {
-            out.push_str(&format!("gate\t{}\t{}\n", gate.key(), on.mode().as_str()));
+            let required = match gate {
+                config::Gate::WeakenedTests => String::new(),
+                config::Gate::Verify(required) => required.command(),
+            };
+            out.push_str(&format!(
+                "gate\t{}\t{}\t{required}\n",
+                gate.key(),
+                on.mode().as_str()
+            ));
         }
         if let Some(fault) = &self.config_fault {
             out.push_str(&format!("config-fault\t{fault}\n"));
@@ -977,7 +985,7 @@ fn gates_on(root: &Path, config: &config::Config) -> Vec<(config::Gate, GateOn)>
             .ok()
             .flatten()
             .and_then(|base| weakened::config_at(root, &base).ok())
-            .map_or(config.pr.gates, |pr| pr.gates)
+            .map_or_else(|| config.pr.gates.clone(), |pr| pr.gates)
     });
     gates
         .all()
@@ -994,7 +1002,7 @@ fn gates_on(root: &Path, config: &config::Config) -> Vec<(config::Gate, GateOn)>
 fn gates_text(gates: &[(config::Gate, GateOn)]) -> String {
     let lines: String = gates
         .iter()
-        .map(|&(gate, on)| gate_line(gate, on))
+        .map(|(gate, on)| gate_line(gate, *on))
         .collect();
     format!(
         "{}\n\n{lines}",
@@ -1005,25 +1013,35 @@ fn gates_text(gates: &[(config::Gate, GateOn)]) -> String {
     )
 }
 
-/// What the gate flags is left to the help of the command that runs it on its
-/// own, its one home; the bullet says what each mode does with a flag.
-fn gate_line(gate: config::Gate, on: GateOn) -> String {
-    let (finding, help, way_out) = match gate {
-        config::Gate::WeakenedTests => (
-            "weakened test",
-            "devkit pr weakened-tests -h",
-            "a line of its body starting `Test changes:` explains it",
-        ),
+/// What the weakened-tests gate flags is left to the help of the command
+/// that runs it on its own, its one home; the bullet says what each mode does
+/// with a flag.
+fn gate_line(gate: &config::Gate, on: GateOn) -> String {
+    let effect = match gate {
+        config::Gate::WeakenedTests => {
+            let (finding, way_out) = (
+                "weakened test",
+                "a line of its body starting `Test changes:` explains it",
+            );
+            let effect = match on {
+                GateOn::Advise => format!("lists each {finding} in the PR body"),
+                GateOn::Require => format!("refuses the PR on a {finding}, unless {way_out}"),
+            };
+            format!("{effect}. `devkit pr weakened-tests -h` says what it flags")
+        }
+        config::Gate::Verify(required) => {
+            let effect = match on {
+                GateOn::Advise => "says NOT RUN in the PR body",
+                GateOn::Require => "refuses the PR",
+            };
+            format!(
+                "{effect} unless `{}` exited 0 on a clean tree at exactly the HEAD being \
+                 pushed; the PR body shows that run",
+                required.command()
+            )
+        }
     };
-    let effect = match on {
-        GateOn::Advise => format!("lists each {finding} in the PR body"),
-        GateOn::Require => format!("refuses the PR on a {finding}, unless {way_out}"),
-    };
-    let text = format!(
-        "`{}` ({}): {effect}. `{help}` says what it flags.",
-        gate.key(),
-        on.mode().as_str()
-    );
+    let text = format!("`{}` ({}): {effect}.", gate.key(), on.mode().as_str());
     let width = devkit_common::ui::term_width().saturating_sub(2);
     format!("- {}\n", wrap_width(&text, width).replace('\n', "\n  "))
 }

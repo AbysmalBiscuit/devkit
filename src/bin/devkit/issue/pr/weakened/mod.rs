@@ -203,22 +203,13 @@ pub(crate) struct Gate {
 }
 
 impl Gate {
-    /// Read the gate for the branch at `dir` against PR base branch `base`,
-    /// which resolves as `origin/<base>`, else `<base>`.
-    pub(crate) fn read(dir: &Path, base: &str) -> Result<Self> {
-        let merge_base = merge_base(dir, base)?.with_context(|| {
-            format!(
-                "the weakened-tests gate reads its settings from the merge base with \
-                 `{base}`, and neither `origin/{base}` nor `{base}` is a commit here: \
-                 fetch it, or pass --base"
-            )
-        })?;
-        let cfg = config_at(dir, &merge_base)?;
+    /// The gate `cfg`, read at `merge_base`, sets for the branch at `dir`.
+    pub(crate) fn check(dir: &Path, merge_base: &str, cfg: &PrConfig) -> Result<Self> {
         let mode = cfg.gates.weakened_tests;
         let flags = match mode {
             GateMode::Off => Vec::new(),
             GateMode::Advise | GateMode::Require => {
-                check(dir, &merge_base, "HEAD", &TestFiles::new(&cfg.test_files)?)?
+                check(dir, merge_base, "HEAD", &TestFiles::new(&cfg.test_files)?)?
             }
         };
         Ok(Self { mode, flags })

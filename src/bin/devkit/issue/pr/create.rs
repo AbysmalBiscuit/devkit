@@ -8,6 +8,7 @@ use devkit_common::{
     vcs::{Vcs, VersionControl},
 };
 use devkit_config::{IssueEvent, PrCreateState};
+use devkit_ports::ledger::Ledger;
 
 use super::{
     add_reviewers,
@@ -15,7 +16,7 @@ use super::{
     render::{Texts, require_pr_title, values},
     require_reviewer_for_ready,
     resolve::{Existing, assert_belongs, parse_pr_flag, resolve_existing, verify_created},
-    reviewer_logins, weakened,
+    reviewer_logins, verify, weakened,
 };
 use crate::{
     issue::review::{PrAction, Target, action_for, guard_branch, resolve_target},
@@ -154,17 +155,63 @@ pub(crate) struct Ensure<'a, G> {
     /// Claim the `pr_open` event in the record, which holds a tracker issue
     /// and has `[ticket.events.pr_open]` configured.
     pub claim_pr_open: bool,
-    /// Reads the weakened-tests gate a PR this run opens must pass, or `None`
-    /// for a run it does not apply to. Deferred like `pr_body`: reading it
-    /// needs the PR base at hand, which a run reusing a PR does not.
-    pub weakened: Option<G>,
+    /// Reads the gates a PR this run opens must pass. Deferred like
+    /// `pr_body`: reading them needs the PR base at hand, which a run reusing
+    /// a PR does not.
+    pub gates: G,
+}
+
+/// The PR gates one `pr create` applies to the PR it opens.
+pub(crate) struct Gates {
+    weakened: Option<weakened::Gate>,
+    verify: Option<verify::Gate>,
+}
+
+impl Gates {
+    /// The gates the `devkit.toml` committed at the merge base of HEAD with
+    /// PR base branch `base` sets for a PR opened at `head`. The
+    /// weakened-tests gate applies to an agent's PR only. A human's PR with
+    /// no merge base to read the settings from is opened ungated.
+    pub(crate) fn read(dir: &Path, base: &str, head: &str, caller: Caller) -> Result<Self> {
+        let merge_base = match (weakened::merge_base(dir, base)?, caller) {
+            (Some(merge_base), _) => merge_base,
+            (None, Caller::Human) => {
+                return Ok(Self {
+                    weakened: None,
+                    verify: None,
+                });
+            }
+            (None, Caller::Agent) => bail!(
+                "the PR gates read their settings from the merge base with `{base}`, and \
+                 neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
+            ),
+        };
+        let cfg = weakened::config_at(dir, &merge_base)?;
+        let weakened = match caller {
+            Caller::Agent => Some(weakened::Gate::check(dir, &merge_base, &cfg)?),
+            Caller::Human => None,
+        };
+        let verify = verify::Gate::read(dir, &cfg.gates, head, caller, &Ledger::live())?;
+        Ok(Self { weakened, verify })
+    }
+
+    fn apply(&self, body: String) -> Result<String> {
+        let body = match &self.weakened {
+            Some(gate) => gate.apply(body)?,
+            None => body,
+        };
+        match &self.verify {
+            Some(gate) => gate.apply(body),
+            None => Ok(body),
+        }
+    }
 }
 
 /// Resolve this branch's PR and, when there is none, open one. A reused PR
 /// keeps the draft state it already has.
 pub(crate) fn ensure<G>(args: Ensure<'_, G>) -> Result<Resolved>
 where
-    G: FnOnce() -> Result<weakened::Gate>,
+    G: FnOnce() -> Result<Gates>,
 {
     let found = resolve_existing(&args.existing)?;
     let start = args.existing.start;
@@ -215,10 +262,7 @@ where
             let pr_title = (args.pr_title)()?;
             require_pr_title(&pr_title)?;
             let pr_body = (args.pr_body)(&pr_title)?;
-            let pr_body = match args.weakened {
-                Some(read) => read()?.apply(pr_body)?,
-                None => pr_body,
-            };
+            let pr_body = (args.gates)()?.apply(pr_body)?;
             let new = NewPr {
                 base: &args.base,
                 head: args.existing.branch,
@@ -302,11 +346,10 @@ pub fn run(args: Args) -> Result<()> {
         .base
         .clone()
         .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
+    let head = vcs.revision(here)?;
     let gate_base = base.clone();
-    let weakened = match caller {
-        Caller::Agent => Some(move || weakened::Gate::read(here, &gate_base)),
-        Caller::Human => None,
-    };
+    let gate_head = head.clone();
+    let gates = move || Gates::read(here, &gate_base, &gate_head, caller);
 
     let texts = Texts::new(
         &loaded.config.templates,
@@ -317,8 +360,6 @@ pub fn run(args: Args) -> Result<()> {
         args.pr_title,
         args.pr_body,
     );
-
-    let head = vcs.revision(here)?;
 
     // Only a flag the user typed can be reported as ignored; deriving this from
     // the resolved state would warn on every reuse under the default config.
@@ -360,7 +401,7 @@ pub fn run(args: Args) -> Result<()> {
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
         steps: &steps,
         claim_pr_open: tracker_issue.is_some() && loaded.config.ticket.events.pr_open.is_some(),
-        weakened,
+        gates,
     })?;
 
     println!("{}", resolved.url);

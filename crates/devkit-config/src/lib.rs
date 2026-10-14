@@ -1716,7 +1716,28 @@ pub fn default_test_files() -> Vec<String> {
 
 /// The PR gates and how hard each one holds. A gate applies to a PR an
 /// agent opens with `pr create`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
+///
+/// ```
+/// # use devkit_config::{Config, Gate, GateMode};
+/// # let cfg = Config::parse(r#"
+/// [pr.gates]
+/// verify = "require"
+/// verify_task = "verify"
+/// verify_args = { scope = "all" }
+/// # "#).unwrap();
+/// # let gates = cfg.pr.gates.all();
+/// # assert_eq!(gates[1].1, GateMode::Require);
+/// # let Gate::Verify(required) = &gates[1].0 else { panic!() };
+/// # assert_eq!(required.command(), "devrun task verify --arg scope=all");
+/// # let spaced = devkit_config::RequiredTask {
+/// #     task: "verify".into(),
+/// #     args: [("msg".to_string(), "it's  two".to_string())].into(),
+/// # };
+/// # assert_eq!(spaced.command(), r"devrun task verify --arg 'msg=it'\''s  two'");
+/// # assert_eq!(Config::parse("").unwrap().pr.gates.all().len(), 1);
+/// # assert!(Config::parse("[pr.gates]\nverify_task = \" \"\n").is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PrGates {
     /// Flags a test file the branch deletes, a test file with fewer test
@@ -1727,28 +1748,97 @@ pub struct PrGates {
     /// `Test changes:` in the PR body clears the flags. `devkit pr
     /// weakened-tests` runs the same check outside `pr create`.
     pub weakened_tests: GateMode,
+    /// Requires a passing run of `verify_task` with `verify_args`: one the
+    /// run ledger records as exiting 0 on a clean tree at exactly the commit
+    /// the PR opens at. A run at an earlier commit, on a dirty tree or with
+    /// other args does not count. The PR body gets a Verification section
+    /// built from that run, or saying NOT RUN when there is none; a human's
+    /// PR gets the section without being refused. Off while `verify_task` is
+    /// unset.
+    pub verify: GateMode,
+    /// The task the `verify` gate requires a passing run of, as `devrun task`
+    /// names it.
+    #[serde(deserialize_with = "non_blank_task")]
+    pub verify_task: Option<String>,
+    /// The template args the `verify` gate's run must have been given with
+    /// `--arg` or `--arg-file`, no more and no fewer.
+    pub verify_args: std::collections::BTreeMap<String, String>,
+}
+
+fn non_blank_task<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let task = String::deserialize(d)?;
+    if task.trim().is_empty() {
+        return Err(serde::de::Error::custom(
+            "verify_task is blank: name a task, or remove the key",
+        ));
+    }
+    Ok(Some(task))
 }
 
 impl PrGates {
-    /// Each gate with its mode, in a stable order.
-    pub fn all(&self) -> [(Gate, GateMode); 1] {
-        let Self { weakened_tests } = *self;
-        [(Gate::WeakenedTests, weakened_tests)]
+    /// Each gate this config can apply, with its mode, in a stable order.
+    /// `verify` is left out while it names no task.
+    pub fn all(&self) -> Vec<(Gate, GateMode)> {
+        let Self {
+            weakened_tests,
+            verify,
+            verify_task,
+            verify_args,
+        } = self;
+        let mut gates = vec![(Gate::WeakenedTests, *weakened_tests)];
+        if let Some(task) = verify_task {
+            let required = RequiredTask {
+                task: task.clone(),
+                args: verify_args.clone(),
+            };
+            gates.push((Gate::Verify(required), *verify));
+        }
+        gates
     }
 }
 
 /// One PR gate, named by its `[pr.gates]` key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Gate {
     WeakenedTests,
+    Verify(RequiredTask),
 }
 
 impl Gate {
     /// The gate's `[pr.gates]` key.
-    pub fn key(self) -> &'static str {
+    pub fn key(&self) -> &'static str {
         match self {
             Self::WeakenedTests => "weakened_tests",
+            Self::Verify(_) => "verify",
         }
+    }
+}
+
+/// The task run the `verify` gate requires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredTask {
+    pub task: String,
+    pub args: std::collections::BTreeMap<String, String>,
+}
+
+impl RequiredTask {
+    /// The `devrun task` command line that makes such a run, each word
+    /// quoted for a POSIX shell where it needs it.
+    pub fn command(&self) -> String {
+        let mut out = format!("devrun task {}", shell_word(&self.task));
+        for (k, v) in &self.args {
+            out.push_str(&format!(" --arg {}", shell_word(&format!("{k}={v}"))));
+        }
+        out
+    }
+}
+
+fn shell_word(word: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "_-./:=,@%+".contains(c);
+    if !word.is_empty() && word.chars().all(plain) {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
     }
 }
 

@@ -13,6 +13,7 @@ pub(crate) mod ready;
 pub(crate) mod render;
 pub(crate) mod resolve;
 pub(crate) mod splice;
+pub(crate) mod verify;
 pub(crate) mod weakened;
 
 /// GitHub logins among targets that can be requested as reviewers, plus

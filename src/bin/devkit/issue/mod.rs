@@ -497,7 +497,8 @@ pub(crate) enum PrCmd {
     /// draft unless `--ready` or `defaults.pr_create_state` says otherwise;
     /// an open PR that already exists is reused with its state left alone.
     /// A PR an agent opens must first pass the gates `[pr.gates]` sets at the
-    /// merge base, such as `pr weakened-tests`.
+    /// merge base, such as `pr weakened-tests`, and the `verify` gate's
+    /// recorded passing run of its required task at HEAD.
     #[command(after_help = PROOF_HELP)]
     Create {
         /// Open as a draft, whatever `defaults.pr_create_state` says.

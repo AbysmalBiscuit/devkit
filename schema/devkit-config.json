@@ -1314,6 +1314,9 @@
         "gates": {
           "$ref": "#/$defs/PrGates",
           "default": {
+            "verify": "require",
+            "verify_args": {},
+            "verify_task": null,
             "weakened_tests": "require"
           },
           "description": "One key per PR gate."
@@ -1356,8 +1359,29 @@
     },
     "PrGates": {
       "additionalProperties": false,
-      "description": "The PR gates and how hard each one holds. A gate applies to a PR an\nagent opens with `pr create`.",
+      "description": "The PR gates and how hard each one holds. A gate applies to a PR an\nagent opens with `pr create`.\n\n```toml\n[pr.gates]\nverify = \"require\"\nverify_task = \"verify\"\nverify_args = { scope = \"all\" }\n```",
       "properties": {
+        "verify": {
+          "$ref": "#/$defs/GateMode",
+          "default": "require",
+          "description": "Requires a passing run of `verify_task` with `verify_args`: one the\nrun ledger records as exiting 0 on a clean tree at exactly the commit\nthe PR opens at. A run at an earlier commit, on a dirty tree or with\nother args does not count. The PR body gets a Verification section\nbuilt from that run, or saying NOT RUN when there is none; a human's\nPR gets the section without being refused. Off while `verify_task` is\nunset."
+        },
+        "verify_args": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "The template args the `verify` gate's run must have been given with\n`--arg` or `--arg-file`, no more and no fewer.",
+          "type": "object"
+        },
+        "verify_task": {
+          "default": null,
+          "description": "The task the `verify` gate requires a passing run of, as `devrun task`\nnames it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "weakened_tests": {
           "$ref": "#/$defs/GateMode",
           "default": "require",
@@ -2679,6 +2703,9 @@
       "$ref": "#/$defs/PrConfig",
       "default": {
         "gates": {
+          "verify": "require",
+          "verify_args": {},
+          "verify_task": null,
           "weakened_tests": "require"
         },
         "test_files": [
