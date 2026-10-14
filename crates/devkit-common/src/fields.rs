@@ -349,9 +349,13 @@ pub fn resolve(
         }
         let items = items(decl, raw);
         if items.is_empty() {
-            problems.push(invalid(format!(
-                "an empty value is not a value; pass `--none {name}` to leave `{name}` empty"
-            )));
+            problems.push(invalid(if decl.allows_none() {
+                format!(
+                    "an empty value is not a value; pass `--none {name}` to leave `{name}` empty"
+                )
+            } else {
+                format!("an empty value is not a value, and `{name}` cannot be left empty")
+            }));
             continue;
         }
         let mut values = Vec::new();
@@ -971,16 +975,25 @@ when       = [{ if = { project = "*" }, level = "error" }]
     }
 
     #[test]
-    fn an_empty_arg_points_at_none() {
-        let d = decls(MILESTONE);
-        let e = resolve(
-            &d,
-            TrackerKind::Github,
-            &given(&[("milestone", "  ")], &[]),
-            &HashMap::new(),
-            None,
-        )
-        .unwrap_err();
+    fn an_empty_arg_points_at_none_when_the_field_allows_it() {
+        let mut d = decls(MILESTONE);
+        let empty = |d: &BTreeMap<String, FieldDecl>| {
+            resolve(
+                d,
+                TrackerKind::Github,
+                &given(&[("milestone", "  ")], &[]),
+                &HashMap::new(),
+                None,
+            )
+            .unwrap_err()
+        };
+        let e = empty(&d);
+        assert!(
+            matches!(&e[..], [Problem::Invalid { reason, .. }] if !reason.contains("--none") && reason.contains("cannot be left empty")),
+            "allow_none = false refuses --none, so the refusal does not offer it: {e:?}"
+        );
+        d.get_mut("milestone").unwrap().allow_none = None;
+        let e = empty(&d);
         assert!(
             matches!(&e[..], [Problem::Invalid { reason, .. }] if reason.contains("--none milestone")),
             "{e:?}"
