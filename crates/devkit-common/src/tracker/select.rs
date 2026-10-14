@@ -15,6 +15,8 @@ pub struct Selected {
     pub tracker: Resolved,
     pub forge: forge::Resolved,
     pub config: Option<devkit_config::Config>,
+    /// Which layer set each config leaf, for errors that name it.
+    pub origin: std::collections::HashMap<String, std::path::PathBuf>,
     pub health: devkit_config::Health,
 }
 
@@ -29,7 +31,10 @@ pub fn select(config: Option<&Path>, start: &str, pr_override: Option<&str>) -> 
     let dir = Path::new(start);
     let resolved = crate::config::resolve(config, dir);
     let health = devkit_config::Health::of(&resolved);
-    let cfg = resolved.ok().map(|(c, _)| c);
+    let (cfg, origin) = match resolved {
+        Ok((c, p)) => (Some(c), p.origin),
+        Err(_) => (None, Default::default()),
+    };
     let (kind, forge_cfg, github) = match &cfg {
         Some(c) => (c.tracker.kind, c.forge.clone(), c.github.clone()),
         None => (None, Default::default(), Default::default()),
@@ -41,6 +46,7 @@ pub fn select(config: Option<&Path>, start: &str, pr_override: Option<&str>) -> 
         tracker,
         forge,
         config: cfg,
+        origin,
         health,
     }
 }

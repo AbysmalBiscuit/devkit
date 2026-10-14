@@ -1174,6 +1174,7 @@ mod tests {
                 ),
             },
             config: None,
+            origin: Default::default(),
             health: devkit_config::Health::Absent,
         }
     }

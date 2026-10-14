@@ -466,11 +466,15 @@ pub(crate) struct FieldContext<'a> {
     pub origin: &'a HashMap<String, PathBuf>,
 }
 
-/// Refuse a declaration no write could honour, naming the field.
+/// Refuse a declaration no write could honour, naming the field. Unless
+/// `in_use`, `kind` may be a tracker the repository does not use, whose
+/// table a global config fills with levels alone, so a field lacking `type`
+/// or `where` passes.
 pub(crate) fn validate(
     kind: TrackerKind,
     decls: &BTreeMap<String, FieldDecl>,
     cx: &FieldContext<'_>,
+    in_use: bool,
 ) -> Result<()> {
     let mut places: Vec<(&str, &Place)> = Vec::new();
     for (name, decl) in decls {
@@ -489,7 +493,33 @@ pub(crate) fn validate(
                 note(cx, kind, name)
             );
         }
+        for entry in &decl.when {
+            for (cond, accepted) in &entry.r#if {
+                if cond == CALLER_CONDITION {
+                    if let Some(bad) = accepted
+                        .options()
+                        .iter()
+                        .find(|v| !matches!(v.as_str(), "agent" | "human"))
+                    {
+                        bail!(
+                            "`{key}`{}: `when` tests `caller = \"{bad}\"`; a caller is \
+                             \"agent\" or \"human\".",
+                            note(cx, kind, name)
+                        );
+                    }
+                } else if !decls.contains_key(cond) {
+                    bail!(
+                        "`{key}`{}: `when` tests `{cond}`, which is not a declared \
+                         `[ticket.fields.{kind}]` field.",
+                        note(cx, kind, name)
+                    );
+                }
+            }
+        }
         let (Some(ty), Some(place)) = (decl.r#type, decl.r#where.as_ref()) else {
+            if !in_use {
+                continue;
+            }
             let missing = match (decl.r#type, &decl.r#where) {
                 (None, None) => "`type` and `where`",
                 (None, Some(_)) => "`type`",
@@ -547,29 +577,6 @@ pub(crate) fn validate(
             );
         }
         places.push((name, place));
-        for entry in &decl.when {
-            for (cond, accepted) in &entry.r#if {
-                if cond == CALLER_CONDITION {
-                    if let Some(bad) = accepted
-                        .options()
-                        .iter()
-                        .find(|v| !matches!(v.as_str(), "agent" | "human"))
-                    {
-                        bail!(
-                            "`{key}`{}: `when` tests `caller = \"{bad}\"`; a caller is \
-                             \"agent\" or \"human\".",
-                            note(cx, kind, name)
-                        );
-                    }
-                } else if !decls.contains_key(cond) {
-                    bail!(
-                        "`{key}`{}: `when` tests `{cond}`, which is not a declared \
-                         `[ticket.fields.{kind}]` field.",
-                        note(cx, kind, name)
-                    );
-                }
-            }
-        }
     }
     Ok(())
 }

@@ -3174,23 +3174,46 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
     Ok(())
 }
 
-/// Refuse a `[ticket.fields]` declaration no write could honour. A table is
-/// checked unless `[tracker] kind` names another tracker, since the tracker in
-/// use is detected only later, from secrets and remotes.
+/// Refuse a `[ticket.fields]` declaration no write could honour. With
+/// `[tracker] kind` set, its table is checked in full and the other skipped.
+/// Unset, the tracker in use is detected only later, from secrets and
+/// remotes, so either table may be the unused tracker's: both get the checks
+/// that hold whichever tracker is in use, and a field lacking `type` or
+/// `where` waits for [`check_ticket_fields`].
 fn reject_invalid_fields(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
+    if let Some(kind) = cfg.tracker.kind {
+        return check_ticket_fields(cfg, kind, origin);
+    }
+    for kind in [TrackerKind::Github, TrackerKind::Linear] {
+        validate_field_table(cfg, kind, origin, false)?;
+    }
+    Ok(())
+}
+
+/// Refuse a declaration in `kind`'s `[ticket.fields]` table that no write
+/// could honour, once `kind` is known to be the tracker in use. `origin` is
+/// [`Provenance::origin`], which names the layer behind each refusal.
+pub fn check_ticket_fields(
+    cfg: &Config,
+    kind: TrackerKind,
+    origin: &HashMap<String, PathBuf>,
+) -> Result<()> {
+    validate_field_table(cfg, kind, origin, true)
+}
+
+fn validate_field_table(
+    cfg: &Config,
+    kind: TrackerKind,
+    origin: &HashMap<String, PathBuf>,
+    in_use: bool,
+) -> Result<()> {
     let variables = cfg.templates.declared();
     let cx = ticket_fields::FieldContext {
         status_field: cfg.github.status_field(),
         template_variables: &variables,
         origin,
     };
-    for kind in [TrackerKind::Github, TrackerKind::Linear] {
-        if cfg.tracker.kind.is_some_and(|k| k != kind) {
-            continue;
-        }
-        ticket_fields::validate(kind, cfg.ticket.fields.for_tracker(kind), &cx)?;
-    }
-    Ok(())
+    ticket_fields::validate(kind, cfg.ticket.fields.for_tracker(kind), &cx, in_use)
 }
 
 /// Refuse `required = "never"` on a variable with no default. The derived rule
@@ -5539,6 +5562,39 @@ steps = [
         let cfg = Config::parse("[people.lev]\ngithub = \"AbysmalBiscuit\"\n").unwrap();
         assert_eq!(cfg.people["lev"].slack, None);
         assert_eq!(cfg.people["lev"].github.as_deref(), Some("AbysmalBiscuit"));
+    }
+
+    #[test]
+    fn levels_for_an_unused_tracker_do_not_fail_load() {
+        let home = "[ticket.fields.linear.team]\nlevel = \"error\"\n";
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("repo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let home_path = root.path().join("home.toml");
+        std::fs::write(&home_path, home).unwrap();
+        std::fs::write(dir.join("devkit.toml"), "[defaults]\n").unwrap();
+        let (cfg, prov) =
+            resolve_with_home(None, &dir, None, None, Some(&home_path), None).unwrap();
+        check_ticket_fields(&cfg, TrackerKind::Github, &prov.origin).unwrap();
+        let e = format!(
+            "{:#}",
+            check_ticket_fields(&cfg, TrackerKind::Linear, &prov.origin).unwrap_err()
+        );
+        assert!(
+            e.contains("[ticket.fields.linear.team]")
+                && e.contains("`type` and `where`")
+                && e.contains(&home_path.display().to_string()),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn checks_that_hold_for_either_tracker_run_without_a_kind() {
+        let e = field_error(
+            Some("[ticket.fields.linear.team]\nlevel = \"error\"\nwhen = [{ if = { nope = \"*\" }, level = \"none\" }]\n"),
+            "[defaults]\n",
+        );
+        assert!(e.contains("nope") && e.contains("not a declared"), "{e}");
     }
 
     #[test]

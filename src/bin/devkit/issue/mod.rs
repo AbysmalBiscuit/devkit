@@ -755,6 +755,7 @@ fn github_only(
             kind.as_str()
         );
     }
+    devkit_config::check_ticket_fields(&cfg, kind, &sel.origin)?;
     Ok((sel, cfg))
 }
 

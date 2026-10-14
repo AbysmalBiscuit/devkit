@@ -613,3 +613,26 @@ fn edit_with_nothing_to_write_is_refused() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("--body"), "{}", stderr(&out));
 }
+
+#[test]
+fn without_a_kind_only_the_detected_trackers_table_is_checked() {
+    let fake = ghfake::Fake::with_origin_and(
+        "[ticket.fields.linear.team]\nlevel = \"error\"\n",
+        "https://github.com/o/r.git",
+    );
+    let out = fake.issue(&["create", "--title", "T"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let fake = ghfake::Fake::with_origin_and(
+        "[ticket.fields.github.priority]\nlevel = \"error\"\n",
+        "https://github.com/o/r.git",
+    );
+    let out = fake.issue(&["create", "--title", "T"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("[ticket.fields.github.priority]") && err.contains("`type` and `where`"),
+        "{err}"
+    );
+    assert!(!fake.calls().contains("issue create"), "{}", fake.calls());
+}
