@@ -101,6 +101,7 @@ fn both_tables_without_a_kind_use_the_detected_trackers() {
     let out = stdout(&fake.issue_as("agent", &["fields"]));
     assert!(out.contains("estimate") && !out.contains("team"), "{out}");
     assert_eq!(fake.calls(), "", "no gh call");
-    let rendered = stdout(&fake.issue_as("agent", &["render", "--title", "T", "--arg", "estimate=3"]));
+    let rendered =
+        stdout(&fake.issue_as("agent", &["render", "--title", "T", "--arg", "estimate=3"]));
     assert!(rendered.contains("\"title\""), "{rendered}");
 }

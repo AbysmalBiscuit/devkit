@@ -5591,7 +5591,9 @@ steps = [
     #[test]
     fn checks_that_hold_for_either_tracker_run_without_a_kind() {
         let e = field_error(
-            Some("[ticket.fields.linear.team]\nlevel = \"error\"\nwhen = [{ if = { nope = \"*\" }, level = \"none\" }]\n"),
+            Some(
+                "[ticket.fields.linear.team]\nlevel = \"error\"\nwhen = [{ if = { nope = \"*\" }, level = \"none\" }]\n",
+            ),
             "[defaults]\n",
         );
         assert!(e.contains("nope") && e.contains("not a declared"), "{e}");

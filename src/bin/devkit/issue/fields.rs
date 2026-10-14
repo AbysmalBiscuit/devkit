@@ -21,8 +21,7 @@ pub(crate) fn run(args: FieldsArgs) -> Result<()> {
     let start = super::start(&args.dir);
     let (cfg, prov) =
         devkit_common::config::resolve(args.config.as_deref().map(Path::new), Path::new(&start))?;
-    let (kind, decls) =
-        render::tracker_fields(&cfg, &prov.origin, args.config.as_deref(), &start)?;
+    let (kind, decls) = render::tracker_fields(&cfg, &prov.origin, args.config.as_deref(), &start)?;
     let input = render::ticket_args(&cfg, &args.vars, &Default::default(), decls)?;
     let views = listing(decls, devkit_common::caller::caller(), &input.fields);
     if args.json {

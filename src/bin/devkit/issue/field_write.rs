@@ -133,8 +133,7 @@ pub(crate) fn write_and_verify(
     }
     match writer.read(number, decls, None) {
         Ok(after) => {
-            for (field, reads) in GithubFieldWriter::verify(decls, resolved, &after)
-            {
+            for (field, reads) in GithubFieldWriter::verify(decls, resolved, &after) {
                 if !failed.contains(&field) {
                     problems.push(format!(
                         "`{field}`{} reads back as {reads}",
