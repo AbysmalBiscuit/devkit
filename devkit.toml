@@ -140,19 +140,16 @@ pr_body = '''
 {%- set own = (magic ~ " " ~ ("#" if id and id[0] in "0123456789" else "") ~ id) if id else "" -%}
 {%- set ref_lines = ((own ~ ";" ~ refs) if own else refs) | split(";") | map("trim") | reject("eq", "") | list -%}
 {%- set agent = agent_model or agent_harness -%}
+{%- set tldr = human_tldr | trim or not agent -%}
+{%- if tldr -%}
 ## TL;DR (human written)
 {{ human_tldr }}
-{%- if ref_lines %}
-
----
-
-{{ ref_lines | join("\n") }}
-{%- endif %}
-{%- if agent %}
-
----
-
-## Agent summary
+{%- endif -%}
+{%- if ref_lines -%}
+{{ "\n\n---\n\n" if tldr else "" }}{{ ref_lines | join("\n") }}
+{%- endif -%}
+{%- if agent -%}
+{{ "\n\n---\n\n" if tldr or ref_lines else "" }}## Agent summary
 {%- endif %}
 
 {{ input | trim }}

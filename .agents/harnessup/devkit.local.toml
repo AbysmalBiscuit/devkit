@@ -25,7 +25,7 @@ programs = ["gh"]
 args = ["pr", "create"]
 reason = """Open the PR with devkit, which renders the body from the `pr_body` template:
   devkit pr create --pr-title 'type(scope): subject' --pr-body '<markdown>' --arg proof='<markdown>' --attach <media path> --arg agent_model='...' --arg agent_harness='...'
-`--pr-body` is the agent summary and `proof` the evidence for each `Done when` item, one unindented line per item starting with its number (`1. test foo_refuses_gap`); the template adds the TL;DR heading and this worktree's closing line. Pass `--draft` when a draft was asked for.
+`--pr-body` is the agent summary and `proof` the evidence for each `Done when` item, one unindented line per item starting with its number (`1. test foo_refuses_gap`); the template adds this worktree's closing line. Pass `--draft` when a draft was asked for.
 `devkit template show pr_body` describes every `--arg`; `devkit template render pr_body --arg input='<markdown>' ...` previews the body."""
 
 [harness.commands.issue-edit-body]
