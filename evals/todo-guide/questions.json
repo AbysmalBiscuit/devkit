@@ -38,7 +38,7 @@
     "question": "Todo 4 is blocked by 1. Todo 5 is blocked by 1 and 2. You run `devkit todo done 1`. Which todo is ready?",
     "kind": "text",
     "expect": ["4"],
-    "proof": "tests/todo_blocking.rs done_prints_what_it_unblocked_once"
+    "proof": "crates/devkit-todo/tests/graph.rs a_todo_with_one_finished_blocker_is_ready_and_one_with_two_waits"
   },
   {
     "id": "subagent-unblocked",

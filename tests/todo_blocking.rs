@@ -177,6 +177,62 @@ fn another_sessions_steps_are_not_offered() {
 }
 
 #[test]
+fn ready_outside_a_repository_lists_global_todos() {
+    let p = Proj::new();
+    let added = p.devkit_in(p.outside(), &["todo", "add", "far"], &S1, "");
+    assert!(added.status.success(), "{}", stderr(&added));
+    let ready = p.devkit_in(p.outside(), &["todo", "ready"], &S1, "");
+    assert!(ready.status.success(), "{}", stderr(&ready));
+    assert!(stdout(&ready).contains("far"), "{}", stdout(&ready));
+}
+
+#[test]
+fn list_json_omits_a_blocker_outside_the_filter() {
+    let p = Proj::new();
+    let here = add(&p, "here");
+    let there = p.devkit(&["todo", "add", "there", "--node", "proj.side"], &S1);
+    assert!(there.status.success(), "{}", stderr(&there));
+    let side = stdout(&there).trim().to_string();
+    p.devkit(&["todo", "block", &here, "--by", &side], &S1);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&p.devkit(&["todo", "list", "--json"], &S1))).unwrap();
+    let rows = json.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{json}");
+    assert_eq!(rows[0]["description"], "here");
+}
+
+#[test]
+fn list_shows_a_subagent_ready_on_its_own_node() {
+    let p = Proj::with_home_config(
+        "[todo.roles.manager]\nscope = \"workspace\"\n[todo.roles.implementer]\nscope = \"agent\"\nparent = \"manager\"\n",
+    );
+    let selected = p.devkit(&["todo", "role", "implementer"], &S1);
+    assert!(selected.status.success(), "{}", stderr(&selected));
+    let blocker = add(&p, "blocker");
+    p.devkit(&["todo", "done", &blocker], &S1);
+    let waiting = p.devkit(&["todo", "add", "waiting", "--blocked-by", &blocker], &S1);
+    assert!(waiting.status.success(), "{}", stderr(&waiting));
+    let listed = p.devkit(&["todo", "list"], &S1);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    assert!(stdout(&listed).contains("ready"), "{}", stdout(&listed));
+}
+
+#[test]
+fn an_outside_wait_is_not_printed_as_a_cycle() {
+    let p = Proj::new();
+    let side = p.devkit(&["todo", "add", "side", "--node", "proj.side"], &S1);
+    assert!(side.status.success(), "{}", stderr(&side));
+    let blocker = stdout(&side).trim().to_string();
+    let mine = add(&p, "mine");
+    p.devkit(&["todo", "block", &mine, "--by", &blocker], &S1);
+    let plan = p.devkit(&["todo", "plan"], &S1);
+    assert!(plan.status.success(), "{}", stderr(&plan));
+    let text = stdout(&plan);
+    assert!(!text.contains("cycle:"), "{text}");
+    assert!(text.contains("mine"), "{text}");
+}
+
+#[test]
 fn another_tickets_ready_todo_is_not_offered_by_default() {
     let p = Proj::new();
     add(&p, "mine");

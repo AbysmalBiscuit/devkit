@@ -311,8 +311,8 @@ LANGUAGE sql AS $$
         t.modified
 $$;
 
--- An earlier version took the blockers as uuids, which refused a blocker
--- that is not one instead of leaving it unrecorded.
+-- A blocker that is not a uuid names no todo, so the uuid[] overload is
+-- dropped and the text[] function ignores it.
 DROP FUNCTION IF EXISTS devkit.todo_block(text, text, uuid[]);
 DROP FUNCTION IF EXISTS devkit.todo_unblock(text, text, uuid[]);
 

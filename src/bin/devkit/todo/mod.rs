@@ -24,7 +24,7 @@ use devkit_todo::{
     native::NativeMap,
     node::{self, GLOBAL, Place},
     render,
-    roles::Roles,
+    roles::{ResolvedRole, Roles},
     transition,
 };
 use pabal::AnyHarness;
@@ -285,7 +285,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
-        TodoCommand::List(args) => list(&store, &args, &cwd, &layout, &facts, &role.name, &actor)?,
+        TodoCommand::List(args) => list(&store, &args, &cwd, &layout, &facts, &role, &actor)?,
         TodoCommand::Ready => ready(&store, &layout, &facts, &role.name)?,
         TodoCommand::Plan { agents, mermaid } => {
             plan(&store, &layout, &facts, &role.name, agents, mermaid)?
@@ -496,7 +496,10 @@ fn start(
                     .map(|blocker| devkit_todo::short_id(&blocker.id))
                     .collect::<Vec<_>>()
                     .join(", ");
-                bail!("todo {id} is blocked by {names}");
+                bail!(
+                    "todo {} is blocked by {names}",
+                    devkit_todo::short_id(&todo.id)
+                );
             }
         }
     }
@@ -601,7 +604,7 @@ fn offered_todos(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> R
 /// Prints the frontier, critical-path todos first.
 fn ready(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<()> {
     let offered = offered_todos(store, layout, facts, role)?;
-    let plan = ticket_plan(store, layout, facts, &offered, None);
+    let plan = ticket_plan(store, layout, facts, role, &offered, None);
     for todo in plan.frontier() {
         let mark = if plan.critical.iter().any(|on| on.id == todo.id) {
             "  *"
@@ -627,7 +630,7 @@ fn plan(
     mermaid: bool,
 ) -> Result<()> {
     let offered = offered_todos(store, layout, facts, role)?;
-    let plan = ticket_plan(store, layout, facts, &offered, agents);
+    let plan = ticket_plan(store, layout, facts, role, &offered, agents);
     let root = layout
         .ticket_root(facts, store.config().ready_outside_ticket)
         .unwrap_or_else(|| facts.values.get("repo").cloned().unwrap_or_default());
@@ -645,6 +648,7 @@ fn ticket_plan<'a>(
     store: &Store,
     layout: &Layout,
     facts: &Facts,
+    role: &str,
     offered: &'a [Todo],
     cap: Option<std::num::NonZeroUsize>,
 ) -> devkit_todo::graph::Plan<'a> {
@@ -656,7 +660,9 @@ fn ticket_plan<'a>(
     Graph::new(offered).plan(
         |todo| match &root {
             Some(root) => layout.offered(todo.project.as_deref(), root, facts),
-            None => false,
+            None => layout
+                .visible(facts, role)
+                .is_ok_and(|filter| filter.matches(todo.project.as_deref())),
         },
         cap,
     )
@@ -714,7 +720,10 @@ fn refuse_cycle(store: &impl TodoStore, id: Option<&str>, by: &[String]) -> Resu
         .map(|id| devkit_todo::short_id(id))
         .collect::<Vec<_>>()
         .join(", ");
-    bail!("blocking {id} on {blockers} would close the cycle {names}");
+    bail!(
+        "blocking {} on {blockers} would close the cycle {names}",
+        devkit_todo::short_id(id)
+    );
 }
 
 /// Applies the status change and returns the full ids that moved from open
@@ -794,7 +803,7 @@ fn list(
     cwd: &Path,
     layout: &Layout,
     facts: &Facts,
-    role: &str,
+    role: &ResolvedRole,
     viewer: &Holder,
 ) -> Result<()> {
     let filter = match (&args.scope, &args.node, &args.subtree, args.all) {
@@ -804,7 +813,7 @@ fn list(
             nodes: vec![NodeMatch::Subtree(n.clone())],
         },
         (_, _, _, true) => Filter::all(),
-        _ => layout.visible(facts, role)?,
+        _ => layout.visible(facts, &role.name)?,
     };
     if args.sync {
         match store.sync(cwd, sync::FRESH_WAIT) {
@@ -826,18 +835,19 @@ fn list(
     } else {
         store.list(&filter)?
     };
-    let todos = graph::with_blockers(store, todos)?;
+    let graph_todos = graph::with_blockers(store, todos.clone())?;
     if args.json {
         let rows: Vec<Value> = todos.iter().filter_map(alacritree_json).collect();
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
     let nodes = list_nodes(&filter, &todos);
-    let graph = Graph::new(&todos);
+    let graph = Graph::new(&graph_todos);
+    let own = &role.node;
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| {
-            offered_here(store, layout, facts, todo) && (!facts.subagent || todo.node() == role)
+            offered_here(store, layout, facts, todo) && (!facts.subagent || todo.node() == own)
         },
     };
     print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
@@ -923,14 +933,14 @@ fn context(args: &ContextArgs) -> Option<String> {
         .filter(|t| visible.matches(t.project.as_deref()))
         .cloned()
         .collect();
-    let todos = graph::with_blockers(&store, todos).ok()?;
+    let graph_todos = graph::with_blockers(&store, todos.clone()).ok()?;
     let siblings = layout.fence(all).into_iter().filter(|t| {
         filter.matches(t.project.as_deref())
             && !visible.matches(t.project.as_deref())
             && layout.is_other_session(t.node(), &facts)
     });
     let nodes = list_nodes(&visible, &todos);
-    let graph = Graph::new(&todos);
+    let graph = Graph::new(&graph_todos);
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| {

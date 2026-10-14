@@ -122,9 +122,6 @@ impl Api {
     }
 }
 
-/// `e` as every todo store returns it: the store's own refusals as such,
-/// and a refusal whose code says the database is not set up for devkit with
-/// what to do about it.
 /// `e` as every todo store returns it, with setup advice on a refusal whose
 /// code says the database is not set up.
 pub(crate) fn with_advice(e: anyhow::Error) -> anyhow::Error {

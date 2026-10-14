@@ -141,10 +141,15 @@ impl<'a> Graph<'a> {
                 .copied()
                 .filter(|todo| !placed.contains_key(todo.id.as_str()))
                 .filter(|todo| indegree.get(todo.id.as_str()).copied().unwrap_or(1) == 0)
-                .filter(|todo| !batches.is_empty() || !outside(todo))
                 .collect();
             if ready.is_empty() {
                 break;
+            }
+            if batches.is_empty() && !ready.iter().all(|todo| outside(todo)) {
+                ready.retain(|todo| !outside(todo));
+                if ready.is_empty() {
+                    break;
+                }
             }
             // Ranks come from the members still unplaced, so a later batch
             // prefers the longest chain that remains.
