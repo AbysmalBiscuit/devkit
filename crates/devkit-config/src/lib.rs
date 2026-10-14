@@ -1256,7 +1256,7 @@ pub struct TicketSyncConfig {
     /// open GitHub issue with no `[github] status_field` value: one outside
     /// `[github] project`, or every open issue without one. A closed GitHub
     /// issue maps by its close reason instead: completed, or cancelled when
-    /// closed as not planned. A synced ticket in a status this map does not
+    /// closed as not planned or as a duplicate. A synced ticket in a status this map does not
     /// name, or a name here the tracker does not have, fails the sync naming
     /// it, and nothing is written.
     pub statuses: std::collections::BTreeMap<String, MappedStatus>,
