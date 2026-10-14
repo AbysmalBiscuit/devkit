@@ -292,9 +292,9 @@ pub(crate) fn writes_todo(analysis: &Analysis, own: &OwnBinary) -> bool {
         .any(|mut args| args.next().flatten() == Some("add"))
 }
 
-/// Every `devkit todo start|stop|done|undone|cancel <id>...` in a command,
-/// as the status each asks for and the id it names. Ids the analysis could
-/// not resolve are skipped.
+/// Every `todo start|stop|done|undone|cancel <id>...` in a command, run as
+/// `devkit todo` or through devkit's `todo` shim, as the status each asks for
+/// and the id it names. Ids the analysis could not resolve are skipped.
 pub(crate) fn status_edits(analysis: &Analysis, own: &OwnBinary) -> Vec<(StatusKind, String)> {
     let mut out = Vec::new();
     for mut args in analysis
