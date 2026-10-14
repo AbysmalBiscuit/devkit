@@ -279,16 +279,23 @@ pub(crate) fn post_graphql_with(
     graphql_errors(send(body, key, detail)?)
 }
 
-/// `v`, or an error carrying the first GraphQL error's message.
+/// `v`, or an error carrying the first GraphQL error's message, led by
+/// the explanation Linear writes for people when it gives one.
 pub(crate) fn graphql_errors(v: serde_json::Value) -> Result<serde_json::Value> {
-    if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
-        && !errors.is_empty()
+    if let Some(error) = v
+        .get("errors")
+        .and_then(|e| e.as_array())
+        .and_then(|e| e.first())
     {
-        let msg = errors
-            .first()
-            .and_then(|e| e["message"].as_str())
-            .unwrap_or("unknown GraphQL error");
-        anyhow::bail!("Linear API error: {msg}");
+        let msg = error["message"].as_str().unwrap_or("unknown GraphQL error");
+        match error
+            .pointer("/extensions/userPresentableMessage")
+            .and_then(|m| m.as_str())
+            .filter(|m| !m.trim().is_empty())
+        {
+            Some(presentable) => anyhow::bail!("Linear API error: {presentable} ({msg})"),
+            None => anyhow::bail!("Linear API error: {msg}"),
+        }
     }
     Ok(v)
 }

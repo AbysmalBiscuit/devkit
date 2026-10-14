@@ -210,6 +210,25 @@ fn a_retried_create_returns_the_first_ticket_after_it_was_archived() {
 }
 
 #[test]
+fn a_refused_create_shows_linears_explanation() {
+    let fake = project(FIELDS);
+    let linear = LinearFake::start();
+    linear.answer(
+        "issueCreate(",
+        r#"{"data":null,"errors":[{"message":"Argument Validation Error","extensions":{"code":"INVALID_INPUT","userPresentableMessage":"Team ENG is archived."}}]}"#,
+    );
+    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
+    let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("Team ENG is archived."), "{err}");
+    assert!(
+        !err.contains("rerun"),
+        "a refusal is not a lost answer: {err}"
+    );
+}
+
+#[test]
 fn edit_on_linear_reads_first_and_writes_only_named_fields() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();
