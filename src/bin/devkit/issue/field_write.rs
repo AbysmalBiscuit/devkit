@@ -97,7 +97,7 @@ pub(crate) fn write_and_verify(
     let to_write: Vec<&String> = resolved
         .fields
         .keys()
-        .chain(resolved.nones.iter().filter(|_| include_nones))
+        .chain(&resolved.nones)
         .filter(|n| !skip.contains(*n))
         .collect();
     if !to_write.is_empty() {
@@ -127,16 +127,13 @@ pub(crate) fn write_and_verify(
             }
         }
     }
-    let written = resolved
-        .fields
-        .keys()
-        .chain(resolved.nones.iter().filter(|_| include_nones));
+    let written = resolved.fields.keys().chain(&resolved.nones);
     if written.clone().all(|f| failed.contains(f)) {
         return problems;
     }
     match writer.read(number, decls, None) {
         Ok(after) => {
-            for (field, reads) in GithubFieldWriter::verify(decls, resolved, &after, include_nones)
+            for (field, reads) in GithubFieldWriter::verify(decls, resolved, &after)
             {
                 if !failed.contains(&field) {
                     problems.push(format!(

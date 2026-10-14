@@ -633,11 +633,9 @@ impl GithubFieldWriter {
         decls: &BTreeMap<String, FieldDecl>,
         resolved: &Resolved,
         after: &IssueFields,
-        include_nones: bool,
     ) -> Vec<(String, String)> {
         let mut out = Vec::new();
-        let nones = resolved.nones.iter().filter(|_| include_nones);
-        for name in resolved.fields.keys().chain(nones) {
+        for name in resolved.fields.keys().chain(&resolved.nones) {
             let Some(decl) = decls.get(name) else {
                 continue;
             };
@@ -835,14 +833,10 @@ where = { project_field = "PVTF_e", name = "Estimate" }
             nones: BTreeSet::from(["milestone".to_string()]),
         };
         let after = parse_read(&fixture("github_fields_read.json")).unwrap();
-        let bad = GithubFieldWriter::verify(&d, &resolved, &after, true);
+        let bad = GithubFieldWriter::verify(&d, &resolved, &after);
         assert_eq!(bad, [
             ("priority".to_string(), "P1".to_string()),
             ("milestone".to_string(), "v1.0".to_string())
         ]);
-        assert_eq!(
-            GithubFieldWriter::verify(&d, &resolved, &after, false).len(),
-            1
-        );
     }
 }
