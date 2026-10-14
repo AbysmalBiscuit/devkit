@@ -460,6 +460,8 @@ pub(crate) enum PrCmd {
     /// Pushes the branch first unless `--no-push`. A PR this run opens is a
     /// draft unless `--ready` or `defaults.pr_create_state` says otherwise;
     /// an open PR that already exists is reused with its state left alone.
+    /// A PR an agent opens must first pass the gates `[pr.gates]` sets at the
+    /// merge base, such as `pr weakened-tests`.
     #[command(after_help = PROOF_HELP)]
     Create {
         /// Open as a draft, whatever `defaults.pr_create_state` says.
@@ -562,6 +564,27 @@ pub(crate) enum PrCmd {
         /// (meaning `[forge] repo`). Replaces a wrong recorded binding.
         #[arg(long)]
         pr: Option<String>,
+    },
+    /// Flag tests a branch weakened since its merge base with BASE.
+    ///
+    /// Compares each test file at the merge base of BASE and HEAD with the
+    /// same file at HEAD, and prints one `file: rule: detail` line per flag:
+    /// a deleted test file, fewer test declarations or assertions, more skip
+    /// markers or a new `.only(` in an existing file, or a new tautological
+    /// assertion. Exits nonzero on any flag, unless --body-file names a PR
+    /// body with a line starting `Test changes:`. Test files are the
+    /// `[pr] test_files` patterns in the devkit.toml committed at the merge
+    /// base. Needs git and nothing else, so CI can run it on any PR.
+    WeakenedTests {
+        /// The branch the PR merges into, e.g. `origin/main`.
+        base: String,
+        /// The revision to check.
+        #[arg(default_value = "HEAD")]
+        head: String,
+        /// The PR body, or `-` for stdin. A line in it starting
+        /// `Test changes:` clears the flags.
+        #[arg(long, value_name = "FILE")]
+        body_file: Option<std::path::PathBuf>,
     },
     /// Show one worktree's PR and issue id.
     ///
@@ -919,6 +942,11 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             dir,
             config,
         }),
+        PrCmd::WeakenedTests {
+            base,
+            head,
+            body_file,
+        } => pr::weakened::run(Path::new(&start(&dir)), &base, &head, body_file.as_deref()),
         PrCmd::Status(PrStatus {
             selector,
             json,

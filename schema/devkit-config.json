@@ -577,6 +577,26 @@
         }
       ]
     },
+    "GateMode": {
+      "description": "How hard a PR gate holds.",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "The check does not run.",
+          "type": "string"
+        },
+        {
+          "const": "advise",
+          "description": "The check runs, and its findings are listed in the PR body without\nholding the PR back.",
+          "type": "string"
+        },
+        {
+          "const": "require",
+          "description": "The check runs, and a finding the PR body does not account for\nrefuses the PR.",
+          "type": "string"
+        }
+      ]
+    },
     "GithubConfig": {
       "additionalProperties": false,
       "description": "Which GitHub repository holds this project's issues, for the GitHub\ntracker, and which Projects v2 project holds their status for\n`[ticket.events]`. The repository pull requests go to is `[forge] repo`,\nsince a project on any forge has one.\n\nUnknown keys are refused: a misspelled `issue_repo` ignored would default\nfrom `origin` and query another repository's issues.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\nproject = \"org/3\"\nstatus_field = \"Status\"\n```",
@@ -1049,6 +1069,38 @@
       },
       "type": "object"
     },
+    "PrConfig": {
+      "additionalProperties": false,
+      "description": "Pull-request checks. `pr create` reads this table from the `devkit.toml`\ncommitted at the repository root at the branch's merge base with the PR\nbase, never from the working tree or a local layer, so a branch cannot\nloosen the gates on its own PR.\n\n```toml\n[pr]\ntest_files = [\"spec/**/*_spec.rb\", \"**/*.test.ts\"]\n\n[pr.gates]\nweakened_tests = \"advise\"\n```",
+      "properties": {
+        "gates": {
+          "$ref": "#/$defs/PrGates",
+          "default": {
+            "weakened_tests": "require"
+          },
+          "description": "One key per PR gate."
+        },
+        "test_files": {
+          "default": [
+            "**/tests/**",
+            "**/test/**",
+            "**/__tests__/**",
+            "**/*.test.*",
+            "**/*.spec.*",
+            "**/*_test.rs",
+            "**/*_tests.rs",
+            "**/test_*.py",
+            "**/*_test.py"
+          ],
+          "description": "Glob patterns, relative to the repository root, for the files that\ncount as tests. `**` spans directories and `*` stays within one. When\nunset, the usual Rust, JS/TS and Python layouts: `tests/` and `test/`\ndirectories, `__tests__/`, `*.test.*` and `*.spec.*`, `*_test.rs`,\n`test_*.py` and `*_test.py`. Unit tests inline in a Rust source file\nare outside the defaults. Deleting a matching file is flagged in any\nlanguage; the other weakened-test rules read only Rust, JS/TS and\nPython files.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "PrCreateState": {
       "description": "The state a PR is opened in by `pr create` when neither `--draft` nor\n`--ready` is passed.",
       "oneOf": [
@@ -1063,6 +1115,18 @@
           "type": "string"
         }
       ]
+    },
+    "PrGates": {
+      "additionalProperties": false,
+      "description": "The PR gates and how hard each one holds. A gate applies to a PR an\nagent opens with `pr create`.",
+      "properties": {
+        "weakened_tests": {
+          "$ref": "#/$defs/GateMode",
+          "default": "require",
+          "description": "Flags a test file the branch deletes, a test file with fewer test\ndeclarations or assertions than at the merge base, an existing test\nfile with more skip markers (`#[ignore]`, `.skip(`, `.skipIf(`,\n`.todo(`, `@pytest.mark.skip`, ...) or a new `.only(`, and a new\ntautological assertion such as `assert!(true)`. A line starting\n`Test changes:` in the PR body clears the flags. `devkit pr\nweakened-tests` runs the same check outside `pr create`."
+        }
+      },
+      "type": "object"
     },
     "PrepFile": {
       "description": "A file written into an app's directory during `workspace setup`, before the\napp's `setup` commands run. Parent directories are created. Existing files\nare left untouched unless `overwrite` is set.\n\n```toml\n[apps.web]\nbase_port = 4100\nlaunch    = [\"next\", \"dev\", \"-p\", \"{{ port }}\"]\n\n[[apps.web.prep_files]]\npath    = \".env.local\"\ncontent = \"\"\"\nSOME_FEATURE_FLAG=dummy\n\"\"\"\n```",
@@ -2220,6 +2284,26 @@
       "default": {},
       "description": "Reviewer/recipient aliases, keyed by the short name passed to\n`pr review --to`.",
       "type": "object"
+    },
+    "pr": {
+      "$ref": "#/$defs/PrConfig",
+      "default": {
+        "gates": {
+          "weakened_tests": "require"
+        },
+        "test_files": [
+          "**/tests/**",
+          "**/test/**",
+          "**/__tests__/**",
+          "**/*.test.*",
+          "**/*.spec.*",
+          "**/*_test.rs",
+          "**/*_tests.rs",
+          "**/test_*.py",
+          "**/*_test.py"
+        ]
+      },
+      "description": "What `pr create` checks before it opens an agent's PR, and which\nfiles count as tests."
     },
     "preserve": {
       "additionalProperties": {

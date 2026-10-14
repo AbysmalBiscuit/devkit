@@ -82,6 +82,11 @@ impl Fake {
             .args(["commit", "-q", "-m", "init"])
             .output()
             .expect("git commit");
+        // `pr create` reads its gates at the merge base with the PR base.
+        git()
+            .args(["branch", "main"])
+            .output()
+            .expect("git branch main");
         let head = git()
             .args(["rev-parse", "HEAD"])
             .output()

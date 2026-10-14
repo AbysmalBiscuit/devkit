@@ -55,9 +55,12 @@ use devkit_ports::{apps::App, load, registry, task};
 use devkit_rules::vocab::Severity;
 use pabal::AnyHarness;
 
-use crate::hook::{
-    HookEvent,
-    payload::{Holder, Payload},
+use crate::{
+    hook::{
+        HookEvent,
+        payload::{Holder, Payload},
+    },
+    issue::pr::weakened,
 };
 
 /// The hook a brief or a rules block answers: its payload, and whether the
@@ -214,6 +217,7 @@ struct BriefSnapshot {
     enforced: bool,
     pins: Vec<PinKey>,
     rules: Option<Severity>,
+    gates: Vec<(config::Gate, GateOn)>,
     /// Why the config does not load, so that fixing it is a change
     /// `--if-changed` can see — otherwise the session that was told about the
     /// fault would never be told it is over.
@@ -249,6 +253,8 @@ struct DevrunBrief {
     /// The write stage claims locks for this checkout, so the agent does not
     /// reach for `lockm` before an edit.
     enforced: bool,
+    /// The PR gates that are on.
+    gates: Vec<(config::Gate, GateOn)>,
 }
 
 /// Which devrun facilities a checkout has anything to say about. `render` and
@@ -263,6 +269,9 @@ struct Facilities {
     servers: bool,
     locks: bool,
     enforced: bool,
+    /// A PR gate is on: the agent meets it at `pr create` whatever else the
+    /// checkout has.
+    gates: bool,
 }
 
 impl Facilities {
@@ -274,7 +283,7 @@ impl Facilities {
     }
 
     fn any(self) -> bool {
-        self.ports() || self.tasks || self.locks
+        self.ports() || self.tasks || self.locks || self.gates
     }
 }
 
@@ -286,6 +295,7 @@ impl DevrunBrief {
             servers: self.servers.is_some(),
             locks: self.locks,
             enforced: self.enforced,
+            gates: !self.gates.is_empty(),
         }
     }
 }
@@ -320,6 +330,9 @@ impl BriefSnapshot {
         }
         if let Some(floor) = self.rules {
             out.push_str(&format!("rules\t{floor}\n"));
+        }
+        for (gate, on) in &self.gates {
+            out.push_str(&format!("gate\t{}\t{}\n", gate.key(), on.mode().as_str()));
         }
         if let Some(fault) = &self.config_fault {
             out.push_str(&format!("config-fault\t{fault}\n"));
@@ -405,6 +418,10 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
     // The listing is the same text `render` emits, which carries no table and
     // so no terminal width, and a switched-off section is absent from it.
     let listing = devrun.as_ref().map(|loaded| Listing::of(loaded, settings));
+    let gates = devrun
+        .as_ref()
+        .map(|loaded| gates_on(Path::new(&root), &loaded.config))
+        .unwrap_or_default();
 
     // One probe, two consumers: `status_table` probes liveness itself, so
     // hashing here and rendering there would take two probes, and a server
@@ -445,6 +462,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
         servers: !servers.is_empty(),
         locks,
         enforced,
+        gates: !gates.is_empty(),
     };
     let config_fault = config_fault(cwd, checkout);
     let rules = rules_floor(checkout, cwd, settings);
@@ -461,6 +479,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
         enforced,
         pins: pin_keys,
         rules,
+        gates,
         config_fault,
     })
 }
@@ -670,7 +689,11 @@ fn pins_text(table: &str) -> String {
 /// whitespace, so any line breaks already in `text` are not preserved —
 /// multi-line input is rejoined and re-wrapped as one paragraph.
 fn wrap(text: &str) -> String {
-    let width = devkit_common::ui::term_width();
+    wrap_width(text, devkit_common::ui::term_width())
+}
+
+/// [`wrap`] to `width` columns.
+fn wrap_width(text: &str, width: usize) -> String {
     let mut out = String::new();
     let mut line_len = 0usize;
     for word in text.split_whitespace() {
@@ -726,6 +749,7 @@ fn devrun_sections(
         locks: settings.locks,
         enforced: settings.locks
             && devkit_common::harness::writes_enabled(checkout, Path::new(root)),
+        gates: gates_on(Path::new(root), &loaded.config),
     };
     sections.facilities().any().then_some(sections)
 }
@@ -910,6 +934,11 @@ fn devrun_text(sections: &DevrunBrief) -> String {
         out.push_str("### Live servers in this worktree\n\n");
         out.push_str(servers);
     }
+    if !sections.gates.is_empty() {
+        separate(&mut out);
+        out.push_str("### PR gates\n\n");
+        out.push_str(&gates_text(&sections.gates));
+    }
     // `ui::table` renders without a trailing newline, so a half ending in a
     // table would otherwise butt the library section's heading against its
     // last row.
@@ -917,6 +946,86 @@ fn devrun_text(sections: &DevrunBrief) -> String {
         out.push('\n');
     }
     out
+}
+
+/// A PR gate's mode when it is on.
+#[derive(Clone, Copy)]
+enum GateOn {
+    Advise,
+    Require,
+}
+
+impl GateOn {
+    fn mode(self) -> config::GateMode {
+        match self {
+            Self::Advise => config::GateMode::Advise,
+            Self::Require => config::GateMode::Require,
+        }
+    }
+}
+
+/// The PR gates set to `advise` or `require`, read where `pr create` reads
+/// them: the `devkit.toml` committed at the merge base of HEAD with the
+/// default PR base, so neither a local layer nor a branch edit hides a gate
+/// the PR will meet. With no merge base to read (no base branch here, a
+/// shallow clone missing it), the working tree's merged config stands in.
+/// Computed once per process: the brief renders and stamps the same state.
+fn gates_on(root: &Path, config: &config::Config) -> Vec<(config::Gate, GateOn)> {
+    static GATES: OnceLock<config::PrGates> = OnceLock::new();
+    let gates = GATES.get_or_init(|| {
+        weakened::merge_base(root, &config.defaults.pr_base)
+            .ok()
+            .flatten()
+            .and_then(|base| weakened::config_at(root, &base).ok())
+            .map_or(config.pr.gates, |pr| pr.gates)
+    });
+    gates
+        .all()
+        .into_iter()
+        .filter_map(|(gate, mode)| match mode {
+            config::GateMode::Off => None,
+            config::GateMode::Advise => Some((gate, GateOn::Advise)),
+            config::GateMode::Require => Some((gate, GateOn::Require)),
+        })
+        .collect()
+}
+
+/// One bullet per gate in `gates`, under a line saying when they apply.
+fn gates_text(gates: &[(config::Gate, GateOn)]) -> String {
+    let lines: String = gates
+        .iter()
+        .map(|&(gate, on)| gate_line(gate, on))
+        .collect();
+    format!(
+        "{}\n\n{lines}",
+        wrap(
+            "An agent's `devkit pr create` checks the branch against its merge base before \
+             opening the PR:"
+        )
+    )
+}
+
+/// What the gate flags is left to the help of the command that runs it on its
+/// own, its one home; the bullet says what each mode does with a flag.
+fn gate_line(gate: config::Gate, on: GateOn) -> String {
+    let (finding, help, way_out) = match gate {
+        config::Gate::WeakenedTests => (
+            "weakened test",
+            "devkit pr weakened-tests -h",
+            "a line of its body starting `Test changes:` explains it",
+        ),
+    };
+    let effect = match on {
+        GateOn::Advise => format!("lists each {finding} in the PR body"),
+        GateOn::Require => format!("refuses the PR on a {finding}, unless {way_out}"),
+    };
+    let text = format!(
+        "`{}` ({}): {effect}. `{help}` says what it flags.",
+        gate.key(),
+        on.mode().as_str()
+    );
+    let width = devkit_common::ui::term_width().saturating_sub(2);
+    format!("- {}\n", wrap_width(&text, width).replace('\n', "\n  "))
 }
 
 /// Open a blank line before the next block, unless one is already there.
@@ -1000,6 +1109,7 @@ mod tests {
             servers: servers.map(str::to_string),
             locks,
             enforced: false,
+            gates: Vec::new(),
         }
     }
 
@@ -1014,6 +1124,7 @@ mod tests {
             servers: servers.map(str::to_string),
             locks: true,
             enforced: true,
+            gates: Vec::new(),
         }
     }
 

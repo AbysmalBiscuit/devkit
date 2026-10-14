@@ -65,6 +65,15 @@ pub struct NewWorktree<'a> {
     pub branch: Option<&'a str>,
 }
 
+/// One file [`VersionControl::changed_files`] reports, by its path on each
+/// side: `old` is `None` for a file `to` adds, `new` is `None` for one it
+/// deletes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChange {
+    pub old: Option<String>,
+    pub new: Option<String>,
+}
+
 /// What [`VersionControl::commit`] records.
 #[derive(Debug, Clone, Copy)]
 pub enum Selection<'a> {
@@ -150,6 +159,36 @@ pub trait VersionControl {
         dir: &::std::path::Path,
         base: &str,
     ) -> ::anyhow::Result<::std::vec::Vec<::std::string::String>>;
+
+    /// The nearest common ancestor of revisions `a` and `b`. Reads local
+    /// history only.
+    fn merge_base(
+        &self,
+        dir: &::std::path::Path,
+        a: &str,
+        b: &str,
+    ) -> ::anyhow::Result<::std::string::String>;
+
+    /// Whether `rev` names a commit the local repository has.
+    fn has_revision(&self, dir: &::std::path::Path, rev: &str) -> ::anyhow::Result<bool>;
+
+    /// Files that differ between revisions `from` and `to`, relative to the
+    /// repository root, a file the backend reads as renamed being one change.
+    fn changed_files(
+        &self,
+        dir: &::std::path::Path,
+        from: &str,
+        to: &str,
+    ) -> ::anyhow::Result<::std::vec::Vec<::devkit_vcs::FileChange>>;
+
+    /// `path`'s contents at revision `rev`, read lossily as UTF-8, or `None`
+    /// when `rev` has no file there.
+    fn file_at(
+        &self,
+        dir: &::std::path::Path,
+        rev: &str,
+        path: &str,
+    ) -> ::anyhow::Result<::std::option::Option<::std::string::String>>;
 
     /// Creates a worktree. Populating it can fetch the objects it needs.
     fn create_worktree(&self, new: &::devkit_vcs::NewWorktree<'_>) -> ::anyhow::Result<()>;
@@ -291,6 +330,22 @@ mod tests {
         }
 
         fn changed_paths(&self, _: &Path, _: &str) -> anyhow::Result<Vec<String>> {
+            unimplemented!()
+        }
+
+        fn merge_base(&self, _: &Path, _: &str, _: &str) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+
+        fn has_revision(&self, _: &Path, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+
+        fn changed_files(&self, _: &Path, _: &str, _: &str) -> anyhow::Result<Vec<FileChange>> {
+            unimplemented!()
+        }
+
+        fn file_at(&self, _: &Path, _: &str, _: &str) -> anyhow::Result<Option<String>> {
             unimplemented!()
         }
 
