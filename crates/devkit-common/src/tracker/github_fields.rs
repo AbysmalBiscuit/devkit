@@ -227,12 +227,7 @@ impl IssueFields {
             let names: Vec<String> = self
                 .ids(place)
                 .into_iter()
-                .map(|id| {
-                    decl.values
-                        .iter()
-                        .find(|v| v.id == id)
-                        .map_or(id, |v| v.name.clone())
-                })
+                .map(|id| decl.value_name(&id))
                 .collect();
             if !names.is_empty() {
                 out.insert(name.clone(), names);
@@ -666,15 +661,7 @@ impl GithubFieldWriter {
                 _ => want == have,
             };
             if !same {
-                let reads: Vec<String> = have
-                    .iter()
-                    .map(|id| {
-                        decl.values
-                            .iter()
-                            .find(|v| &v.id == id)
-                            .map_or(id.clone(), |v| v.name.clone())
-                    })
-                    .collect();
+                let reads: Vec<String> = have.iter().map(|id| decl.value_name(id)).collect();
                 let reads = if reads.is_empty() {
                     "nothing".to_string()
                 } else {
