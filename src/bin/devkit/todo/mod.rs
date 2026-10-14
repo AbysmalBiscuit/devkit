@@ -419,8 +419,12 @@ pub fn run(cli: TodoCli) -> Result<()> {
             result_file,
             tickets_only,
         } => {
-            let replica = Store::sync_replica(&cwd)?;
-            if let Some(replica) = replica.as_ref().filter(|_| !dry_run && !tickets_only) {
+            let replica = if tickets_only {
+                None
+            } else {
+                Store::sync_replica(&cwd)?
+            };
+            if let Some(replica) = replica.as_ref().filter(|_| !dry_run) {
                 sync::run(replica, background, result_file.as_deref())?;
             }
             let tickets = match (background, tickets_only, &place) {
@@ -451,7 +455,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     );
                 }
                 Some(_) => {}
-                None if replica.is_none() && !background => {
+                None if replica.is_none() && !background && !tickets_only => {
                     eprintln!("devkit todo: this todo store has no sync target")
                 }
                 None => {}

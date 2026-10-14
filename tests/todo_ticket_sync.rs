@@ -439,6 +439,22 @@ fn a_failed_sync_holds_off_the_next() {
 }
 
 #[test]
+fn a_background_sync_needs_no_working_sync_target() {
+    let s = two_issues();
+    let broken = [
+        ("DEVKIT_TODO_BACKEND", "taskchampion"),
+        ("DEVKIT_TODO_SYNC_URL", "x"),
+    ];
+    let out = s.devkit(&["todo", "list"], &broken);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the background sync", || s.sync_state("last").exists());
+    let out = s.devkit(&["todo", "ready"], &broken);
+    assert!(out.status.success(), "{}", stderr(&out));
+    settle();
+    assert_eq!(s.ticket_queries(), 1, "{}", s.calls());
+}
+
+#[test]
 fn a_hook_injection_answers_while_the_tracker_hangs() {
     let s = two_issues();
     assert!(s.sync(&[]).status.success());
