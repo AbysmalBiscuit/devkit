@@ -214,6 +214,7 @@ struct BriefSnapshot {
     enforced: bool,
     pins: Vec<PinKey>,
     rules: Option<Severity>,
+    gates: Vec<(&'static str, config::GateMode)>,
     /// Why the config does not load, so that fixing it is a change
     /// `--if-changed` can see — otherwise the session that was told about the
     /// fault would never be told it is over.
@@ -249,6 +250,8 @@ struct DevrunBrief {
     /// The write stage claims locks for this checkout, so the agent does not
     /// reach for `lockm` before an edit.
     enforced: bool,
+    /// The PR gates that are on.
+    gates: Vec<(&'static str, config::GateMode)>,
 }
 
 /// Which devrun facilities a checkout has anything to say about. `render` and
@@ -320,6 +323,9 @@ impl BriefSnapshot {
         }
         if let Some(floor) = self.rules {
             out.push_str(&format!("rules\t{floor}\n"));
+        }
+        for (key, mode) in &self.gates {
+            out.push_str(&format!("gate\t{key}\t{}\n", mode.as_str()));
         }
         if let Some(fault) = &self.config_fault {
             out.push_str(&format!("config-fault\t{fault}\n"));
@@ -405,6 +411,10 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
     // The listing is the same text `render` emits, which carries no table and
     // so no terminal width, and a switched-off section is absent from it.
     let listing = devrun.as_ref().map(|loaded| Listing::of(loaded, settings));
+    let gates = devrun
+        .as_ref()
+        .map(|loaded| gates_on(&loaded.config.pr.gates))
+        .unwrap_or_default();
 
     // One probe, two consumers: `status_table` probes liveness itself, so
     // hashing here and rendering there would take two probes, and a server
@@ -461,6 +471,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
         enforced,
         pins: pin_keys,
         rules,
+        gates,
         config_fault,
     })
 }
@@ -670,7 +681,11 @@ fn pins_text(table: &str) -> String {
 /// whitespace, so any line breaks already in `text` are not preserved —
 /// multi-line input is rejoined and re-wrapped as one paragraph.
 fn wrap(text: &str) -> String {
-    let width = devkit_common::ui::term_width();
+    wrap_width(text, devkit_common::ui::term_width())
+}
+
+/// [`wrap`] to `width` columns.
+fn wrap_width(text: &str, width: usize) -> String {
     let mut out = String::new();
     let mut line_len = 0usize;
     for word in text.split_whitespace() {
@@ -726,6 +741,7 @@ fn devrun_sections(
         locks: settings.locks,
         enforced: settings.locks
             && devkit_common::harness::writes_enabled(checkout, Path::new(root)),
+        gates: gates_on(&loaded.config.pr.gates),
     };
     sections.facilities().any().then_some(sections)
 }
@@ -910,6 +926,11 @@ fn devrun_text(sections: &DevrunBrief) -> String {
         out.push_str("### Live servers in this worktree\n\n");
         out.push_str(servers);
     }
+    if !sections.gates.is_empty() {
+        separate(&mut out);
+        out.push_str("### PR gates\n\n");
+        out.push_str(&gates_text(&sections.gates));
+    }
     // `ui::table` renders without a trailing newline, so a half ending in a
     // table would otherwise butt the library section's heading against its
     // last row.
@@ -917,6 +938,56 @@ fn devrun_text(sections: &DevrunBrief) -> String {
         out.push('\n');
     }
     out
+}
+
+/// The PR gates set to `advise` or `require`. Read from the working tree's
+/// config: `pr create` reads them at the merge base, which a branch has not
+/// changed yet when its session starts.
+fn gates_on(gates: &config::PrGates) -> Vec<(&'static str, config::GateMode)> {
+    gates
+        .all()
+        .into_iter()
+        .filter(|(_, mode)| *mode != config::GateMode::Off)
+        .collect()
+}
+
+/// One bullet per gate in `gates`, under a line saying when they apply.
+fn gates_text(gates: &[(&'static str, config::GateMode)]) -> String {
+    let lines: String = gates
+        .iter()
+        .filter_map(|&(key, mode)| gate_line(key, mode))
+        .collect();
+    format!(
+        "{}\n\n{lines}",
+        wrap(
+            "An agent's `devkit pr create` checks the branch against its merge base before \
+             opening the PR:"
+        )
+    )
+}
+
+fn gate_line(key: &str, mode: config::GateMode) -> Option<String> {
+    let what = match key {
+        "weakened_tests" => {
+            "a deleted test file, fewer tests or assertions in a test file, more skip markers \
+             or a new `.only(` in an existing one, or a new tautological assertion"
+        }
+        _ => return None,
+    };
+    let effect = match mode {
+        config::GateMode::Off => return None,
+        config::GateMode::Advise => format!("lists in the PR body {what}"),
+        config::GateMode::Require => format!(
+            "refuses the PR on {what}, unless a line of its body starting `Test changes:` \
+             explains it"
+        ),
+    };
+    let text = format!("`{key}` ({}): {effect}", mode.as_str());
+    let width = devkit_common::ui::term_width().saturating_sub(2);
+    Some(format!(
+        "- {}\n",
+        wrap_width(&text, width).replace('\n', "\n  ")
+    ))
 }
 
 /// Open a blank line before the next block, unless one is already there.
@@ -1000,6 +1071,7 @@ mod tests {
             servers: servers.map(str::to_string),
             locks,
             enforced: false,
+            gates: Vec::new(),
         }
     }
 
@@ -1014,6 +1086,7 @@ mod tests {
             servers: servers.map(str::to_string),
             locks: true,
             enforced: true,
+            gates: Vec::new(),
         }
     }
 

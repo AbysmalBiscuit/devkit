@@ -654,7 +654,7 @@ fn brief_tasks_false_drops_the_task_lines_that_are_configured() {
     let out = project.brief(&[]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(!text.contains("devrun task"), "{text}");
-    assert!(!text.contains("tests"), "{text}");
+    assert!(!text.contains("- check: tests"), "{text}");
     assert!(text.contains("apps/api"), "the apps line survives: {text}");
 }
 
