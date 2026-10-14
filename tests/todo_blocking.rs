@@ -298,3 +298,24 @@ fn print_unblocked_false_silences_the_line() {
     assert!(!stdout(&done).contains("unblocked"), "{}", stdout(&done));
     assert!(p.todo(&b).blocked_by == [a]);
 }
+
+#[test]
+fn list_outside_a_repository_marks_ready_only_what_ready_offers() {
+    let p = Proj::new();
+    let blocker = add(&p, "blocker");
+    let waiting = p.devkit(&["todo", "add", "waiting", "--blocked-by", &blocker], &S1);
+    assert!(waiting.status.success(), "{}", stderr(&waiting));
+    p.devkit(&["todo", "done", &blocker], &S1);
+
+    let ready = p.devkit_in(p.outside(), &["todo", "ready"], &S1, "");
+    assert!(ready.status.success(), "{}", stderr(&ready));
+    assert!(!stdout(&ready).contains("waiting"), "{}", stdout(&ready));
+    let listed = p.devkit_in(p.outside(), &["todo", "list", "--all"], &S1, "");
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    let text = stdout(&listed);
+    let line = text
+        .lines()
+        .find(|line| line.contains("waiting"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(!line.contains("ready"), "{text}");
+}

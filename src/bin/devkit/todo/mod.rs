@@ -568,43 +568,22 @@ fn offered_ids(
     facts: &Facts,
     role: &str,
 ) -> Result<BTreeSet<String>> {
-    let wide = store.config().ready_outside_ticket;
-    let listed = layout.fence(store.list(&Filter::all())?);
-    Ok(match layout.ticket_root(facts, wide) {
-        Some(root) => listed
-            .into_iter()
-            .filter(|todo| layout.offered(todo.project.as_deref(), &root, facts, role))
-            .map(|todo| todo.id)
-            .collect(),
-        None => match layout.visible(facts, role) {
-            Ok(filter) => listed
-                .into_iter()
-                .filter(|todo| filter.matches(todo.project.as_deref()))
-                .map(|todo| todo.id)
-                .collect(),
-            Err(_) => BTreeSet::new(),
-        },
-    })
+    Ok(layout
+        .fence(store.list(&Filter::all())?)
+        .into_iter()
+        .filter(|todo| offered_here(store, layout, facts, role, todo))
+        .map(|todo| todo.id)
+        .collect())
 }
 
 /// The todos the ticket fence offers this caller, with the blockers the
 /// listing itself does not hold.
 fn offered_todos(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<Vec<Todo>> {
-    let wide = store.config().ready_outside_ticket;
-    let listed = layout.fence(store.list(&Filter::all())?);
-    let offered = match layout.ticket_root(facts, wide) {
-        Some(root) => listed
-            .into_iter()
-            .filter(|todo| layout.offered(todo.project.as_deref(), &root, facts, role))
-            .collect(),
-        None => match layout.visible(facts, role) {
-            Ok(filter) => listed
-                .into_iter()
-                .filter(|todo| filter.matches(todo.project.as_deref()))
-                .collect(),
-            Err(_) => Vec::new(),
-        },
-    };
+    let offered = layout
+        .fence(store.list(&Filter::all())?)
+        .into_iter()
+        .filter(|todo| offered_here(store, layout, facts, role, todo))
+        .collect();
     graph::with_blockers(store, offered)
 }
 
@@ -659,28 +638,19 @@ fn ticket_plan<'a>(
     offered: &'a [Todo],
     cap: Option<std::num::NonZeroUsize>,
 ) -> devkit_todo::graph::Plan<'a> {
-    let wide = store.config().ready_outside_ticket;
-    let root = layout.ticket_root(facts, wide);
     // Blockers fetched for status sit in `offered` and are not members.
-    // Membership is the ticket fence, or the caller's own listing when there
-    // is no ticket.
-    Graph::new(offered).plan(
-        |todo| match &root {
-            Some(root) => layout.offered(todo.project.as_deref(), root, facts, role),
-            None => layout
-                .visible(facts, role)
-                .is_ok_and(|filter| filter.matches(todo.project.as_deref())),
-        },
-        cap,
-    )
+    Graph::new(offered).plan(|todo| offered_here(store, layout, facts, role, todo), cap)
 }
 
-/// Whether the ticket fence offers `todo` to this caller.
+/// Whether the ticket fence offers `todo` to this caller: the ticket's nodes,
+/// or the caller's own default listing when there is no ticket.
 fn offered_here(store: &Store, layout: &Layout, facts: &Facts, role: &str, todo: &Todo) -> bool {
     let wide = store.config().ready_outside_ticket;
     match layout.ticket_root(facts, wide) {
         Some(root) => layout.offered(todo.project.as_deref(), &root, facts, role),
-        None => true,
+        None => layout
+            .visible(facts, role)
+            .is_ok_and(|filter| filter.matches(todo.project.as_deref())),
     }
 }
 
