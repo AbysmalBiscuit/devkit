@@ -182,7 +182,11 @@ impl LinearIssue {
             Place::DueDate => one(&self.due_date),
             Place::Parent => one(&self.parent),
             Place::BlockedBy => self.blocked_by.iter().map(|(id, _)| id.clone()).collect(),
-            _ => Vec::new(),
+            Place::Assignees
+            | Place::Milestone
+            | Place::IssueType
+            | Place::ProjectField { .. }
+            | Place::State => Vec::new(),
         }
     }
 
@@ -327,7 +331,11 @@ fn input_entry(
             None => Ok(Some(("parentId", Json::Null))),
         },
         Place::BlockedBy => Ok(None),
-        other => bail!("`{}` is not a place on Linear issues", other.label()),
+        Place::Assignees
+        | Place::Milestone
+        | Place::IssueType
+        | Place::ProjectField { .. }
+        | Place::State => bail!("`{}` is not a place on Linear issues", place.label()),
     }
 }
 
