@@ -736,20 +736,14 @@ pub fn resolve_step(
     )
 }
 
-/// Render one command task against an already-resolved port map. Registry-free
-/// so tests exercise rendering, layering, and the prd guard directly.
-#[allow(clippy::too_many_arguments)]
-fn resolve_command_with_ports(
+/// The argv `run` of command task `name` renders to.
+fn render_argv(
     name: &str,
     t: &TaskConfig,
-    env_templates: &BTreeMap<&str, &str>,
-    worktree_root: &Path,
-    app_path: Option<&str>,
-    ports: &BTreeMap<String, u16>,
     own_port: Option<u16>,
+    ports: &BTreeMap<String, u16>,
     variables: &BTreeMap<String, String>,
-    user_env: &BTreeMap<String, String>,
-) -> Result<CommandPlan> {
+) -> Result<Vec<String>> {
     let mut argv = Vec::new();
     for entry in &t.run {
         let rendered = template::render_launch(entry.template(), own_port, ports, variables)
@@ -769,6 +763,69 @@ fn resolve_command_with_ports(
         argv.first().is_some_and(|p| !p.is_empty()),
         "task `{name}` has an empty program"
     );
+    Ok(argv)
+}
+
+/// The command steps a successful run of task `name` with `args` at
+/// `worktree_root` executes, each with the argv devrun renders for it, in
+/// the shape the run ledger records them. Rendered without touching the port
+/// registry, so a step whose `run` references a port is an error.
+pub fn planned_steps(
+    cfg: &Config,
+    catalog: &HashMap<String, App>,
+    worktree_root: &Path,
+    name: &str,
+    args: &BTreeMap<String, String>,
+) -> Result<Vec<crate::ledger::Step>> {
+    let v = view(cfg, catalog, name)?;
+    let checked = v.runnable()?;
+    let vars = variables(cfg, worktree_root, args);
+    let names: Vec<&str> = match checked.kind {
+        TaskKind::Command => vec![name],
+        TaskKind::Sequence => v
+            .task
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Task(r) => Some(r.as_str()),
+                Step::Up(_) => None,
+            })
+            .collect(),
+    };
+    names
+        .into_iter()
+        .map(|step| {
+            let t = &cfg.tasks[step];
+            let templates: Vec<&str> = t.run.iter().map(RunArg::template).collect();
+            let refs = template::referenced_ports(&templates, &vars)
+                .with_context(|| format!("scanning templates of task `{step}`"))?;
+            ensure!(
+                refs.apps.is_empty() && !refs.own_port,
+                "task `{step}` renders a port into its command, which only a run allocates"
+            );
+            Ok(crate::ledger::Step {
+                task: step.to_string(),
+                argv: render_argv(step, t, None, &BTreeMap::new(), &vars)?,
+            })
+        })
+        .collect()
+}
+
+/// Render one command task against an already-resolved port map. Registry-free
+/// so tests exercise rendering, layering, and the prd guard directly.
+#[allow(clippy::too_many_arguments)]
+fn resolve_command_with_ports(
+    name: &str,
+    t: &TaskConfig,
+    env_templates: &BTreeMap<&str, &str>,
+    worktree_root: &Path,
+    app_path: Option<&str>,
+    ports: &BTreeMap<String, u16>,
+    own_port: Option<u16>,
+    variables: &BTreeMap<String, String>,
+    user_env: &BTreeMap<String, String>,
+) -> Result<CommandPlan> {
+    let argv = render_argv(name, t, own_port, ports, variables)?;
 
     let mut env = BTreeMap::new();
     for (k, v) in env_templates {

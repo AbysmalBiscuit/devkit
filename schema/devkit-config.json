@@ -1364,7 +1364,7 @@
         "verify": {
           "$ref": "#/$defs/GateMode",
           "default": "require",
-          "description": "Requires a passing run of `verify_task` with `verify_args`: one the\nrun ledger records as exiting 0 on a clean tree at exactly the commit\nthe PR opens at. A run at an earlier commit, on a dirty tree or with\nother args does not count. The PR body gets a Verification section\nbuilt from that run, or saying NOT RUN when there is none; a human's\nPR gets the section without being refused. Off while `verify_task` is\nunset."
+          "description": "Requires a passing run of `verify_task` with `verify_args`: one the\nrun ledger records as exiting 0 on a clean tree at exactly the commit\nthe PR opens at. A run at an earlier commit, on a dirty tree or with\nother args does not count, nor does one whose steps ran other\ncommands than the task renders to as the merge base defines it. The\nPR body gets a Verification section built from that run, or saying\nNOT RUN when there is none; a human's PR gets the section without\nbeing refused. Off while `verify_task` is unset."
         },
         "verify_args": {
           "additionalProperties": {

@@ -1751,10 +1751,11 @@ pub struct PrGates {
     /// Requires a passing run of `verify_task` with `verify_args`: one the
     /// run ledger records as exiting 0 on a clean tree at exactly the commit
     /// the PR opens at. A run at an earlier commit, on a dirty tree or with
-    /// other args does not count. The PR body gets a Verification section
-    /// built from that run, or saying NOT RUN when there is none; a human's
-    /// PR gets the section without being refused. Off while `verify_task` is
-    /// unset.
+    /// other args does not count, nor does one whose steps ran other
+    /// commands than the task renders to as the merge base defines it. The
+    /// PR body gets a Verification section built from that run, or saying
+    /// NOT RUN when there is none; a human's PR gets the section without
+    /// being refused. Off while `verify_task` is unset.
     pub verify: GateMode,
     /// The task the `verify` gate requires a passing run of, as `devrun task`
     /// names it.
@@ -2839,6 +2840,25 @@ impl Config {
             .try_into()
             .context("parsing devkit.toml")?;
         Ok(cfg)
+    }
+
+    /// The tables of one layer's text a task's command renders from:
+    /// `[tasks]`, `[apps]`, `[templates]` and `[defaults]`. The rest of the
+    /// layer is not read, so a key this build does not know elsewhere in it
+    /// does not stop the tasks loading.
+    ///
+    /// ```
+    /// # use devkit_config::Config;
+    /// let cfg = Config::tasks_layer("[tasks.t]\nrun = [\"x\"]\n[unknown]\nkey = 1\n").unwrap();
+    /// assert!(cfg.tasks.contains_key("t"));
+    /// ```
+    pub fn tasks_layer(text: &str) -> Result<Self> {
+        let mut table: toml::Table = toml::from_str(text).context("parsing devkit.toml")?;
+        read_renamed_keys(&mut table).context("parsing devkit.toml")?;
+        table.retain(|key, _| matches!(key, "tasks" | "apps" | "templates" | "defaults"));
+        toml::Value::Table(table)
+            .try_into()
+            .context("parsing devkit.toml's tasks")
     }
 }
 

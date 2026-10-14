@@ -200,7 +200,8 @@ impl Gates {
             Caller::Agent => Some(weakened::Gate::check(dir, &merge_base, &cfg)?),
             Caller::Human => None,
         };
-        let verify = verify::Gate::read(dir, &cfg.gates, head, caller, &Ledger::live())?;
+        let verify =
+            verify::Gate::read(dir, &merge_base, &cfg.gates, head, caller, &Ledger::live())?;
         Ok(Self { weakened, verify })
     }
 

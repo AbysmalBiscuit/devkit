@@ -267,6 +267,30 @@ fn a_blank_required_task_is_a_config_error() {
 }
 
 #[test]
+fn a_branch_redefining_the_required_task_as_a_no_op_is_refused() {
+    let p = project(GATE);
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        toml.replace(
+            r#"run = ["git", "-c", "x.scope={{ scope }}", "version"]"#,
+            r#"run = ["git", "-c", "y.scope={{ scope }}", "--version"]"#,
+        ),
+    )
+    .unwrap();
+    git(&p, &["commit", "-q", "-am", "make verify a no-op"]);
+    serve_head(&p);
+    verify(&p);
+    assert_refused(&p);
+    let (_, stderr) = create(&p, "agent");
+    assert!(
+        stderr.contains("definition changed from the merge base"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn a_merge_base_whose_pr_table_does_not_parse_opens_a_humans_pr_ungated() {
     let p = project("\n[pr]\ntest_files = 3\n");
     let config = p.project().join("devkit.toml");
@@ -295,4 +319,16 @@ fn a_merge_base_whose_pr_table_does_not_parse_refuses_an_agents_pr() {
     assert!(!ok, "{stderr}");
     assert!(stderr.contains("[pr]"), "{stderr}");
     assert!(!opened(&p), "{}", p.calls());
+}
+
+#[test]
+fn a_passing_sequence_unchanged_from_the_merge_base_satisfies_the_gate() {
+    let p = project(&format!(
+        "\n[tasks.both]\nsteps = [{{ task = \"verify\" }}, {{ task = \"verify\" }}]\n{}",
+        GATE.replace("\"verify\"", "\"both\"")
+    ));
+    task(&p, &["both", "--arg", "scope=all"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+    assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
 }

@@ -98,7 +98,7 @@ impl Run {
 }
 
 /// One command step of a run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
     /// The command task the step ran.
     pub task: String,
@@ -178,21 +178,6 @@ impl Ledger {
             .into_iter()
             .rev()
             .find(|r| r.proves(task, sha)))
-    }
-
-    /// [`Ledger::passed`], counting only a run given exactly `args`.
-    pub fn passed_with(
-        &self,
-        repo: &Path,
-        task: &str,
-        args: &BTreeMap<String, String>,
-        sha: &str,
-    ) -> Result<Option<Run>> {
-        Ok(self
-            .runs_in(repo)?
-            .into_iter()
-            .rev()
-            .find(|r| r.proves_with(task, args, sha)))
     }
 
     /// Whether `path` names something inside the ledger, however it is
