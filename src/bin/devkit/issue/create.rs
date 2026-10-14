@@ -13,7 +13,7 @@ use devkit_common::{
 };
 use devkit_config::{Config, Place, TrackerKind};
 
-use super::{field_write, render};
+use super::{TicketTracker, field_write, render};
 use crate::template::{FieldArgs, VarArgs};
 
 pub(crate) struct CreateArgs {
@@ -27,10 +27,10 @@ pub(crate) struct CreateArgs {
 
 pub(crate) fn run(args: CreateArgs) -> Result<()> {
     let start = super::start(&args.dir);
-    let (sel, cfg, kind) = super::ticket_tracker("create", &start, args.config.as_deref())?;
-    match kind {
-        TrackerKind::Linear => linear(args, &sel, &cfg),
-        TrackerKind::Github | TrackerKind::None => github(args, &start, &sel, &cfg),
+    let (sel, cfg, tracker) = super::ticket_tracker("create", &start, args.config.as_deref())?;
+    match tracker {
+        TicketTracker::Linear => linear(args, &sel, &cfg),
+        TicketTracker::Github => github(args, &start, &sel, &cfg),
     }
 }
 

@@ -733,6 +733,13 @@ fn start(dir: &Option<String>) -> String {
     dir.clone().unwrap_or_else(|| ".".to_string())
 }
 
+/// A tracker `ticket create` and `ticket edit` write tickets on.
+#[derive(Debug, Clone, Copy)]
+enum TicketTracker {
+    Github,
+    Linear,
+}
+
 /// Select the tracker for `ticket <verb>`, a command that writes tickets on
 /// GitHub or Linear, refusing a project with neither.
 fn ticket_tracker(
@@ -742,7 +749,7 @@ fn ticket_tracker(
 ) -> Result<(
     devkit_common::tracker::Selected,
     devkit_config::Config,
-    devkit_config::TrackerKind,
+    TicketTracker,
 )> {
     let mut sel = devkit_common::tracker::select(config.map(Path::new), start, None);
     let cfg = sel
@@ -753,14 +760,16 @@ fn ticket_tracker(
         .tracker
         .kind
         .unwrap_or_else(|| sel.tracker.tracker.kind());
-    if kind == devkit_config::TrackerKind::None {
-        bail!(
+    let tracker = match kind {
+        devkit_config::TrackerKind::Github => TicketTracker::Github,
+        devkit_config::TrackerKind::Linear => TicketTracker::Linear,
+        devkit_config::TrackerKind::None => bail!(
             "`ticket {verb}` writes GitHub issues and Linear tickets, and this project has no \
              tracker. Set `[tracker] kind` in devkit.toml."
-        );
-    }
+        ),
+    };
     devkit_config::check_ticket_fields(&cfg, kind, &sel.origin)?;
-    Ok((sel, cfg, kind))
+    Ok((sel, cfg, tracker))
 }
 
 /// Carry out `action`. `shim_name` is the name a completion script is

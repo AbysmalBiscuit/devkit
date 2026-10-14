@@ -16,7 +16,7 @@ use devkit_common::{
 use devkit_config::{Config, FieldDecl, TrackerKind};
 
 use super::{
-    field_write,
+    TicketTracker, field_write,
     render::{self, Title},
 };
 use crate::template::{FieldArgs, VarArgs};
@@ -33,10 +33,10 @@ pub(crate) struct EditArgs {
 
 pub(crate) fn run(args: EditArgs) -> Result<()> {
     let start = super::start(&args.dir);
-    let (sel, cfg, kind) = super::ticket_tracker("edit", &start, args.config.as_deref())?;
-    match kind {
-        TrackerKind::Linear => linear(args, &sel, &cfg),
-        TrackerKind::Github | TrackerKind::None => github(args, &start, &sel, &cfg),
+    let (sel, cfg, tracker) = super::ticket_tracker("edit", &start, args.config.as_deref())?;
+    match tracker {
+        TicketTracker::Linear => linear(args, &sel, &cfg),
+        TicketTracker::Github => github(args, &start, &sel, &cfg),
     }
 }
 
