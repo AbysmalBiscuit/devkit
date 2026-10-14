@@ -266,7 +266,7 @@ fn blocking_note(todo: &Todo, notes: &Notes<'_>) -> String {
                 if blocker.node() == todo.node() {
                     id.to_string()
                 } else {
-                    format!("{id} on {}", blocker.node())
+                    format!("{id} on {}", printable(blocker.node()))
                 }
             })
             .collect::<Vec<_>>()
