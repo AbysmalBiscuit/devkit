@@ -103,12 +103,12 @@ fn offered_covers_the_ticket_and_own_session_only() {
     let facts = workspace("proj", "main", "s1", "s1");
     let root = layout.ticket_root(&facts, false).unwrap();
     for node in ["proj.main", "proj.main.claude-s1.a1"] {
-        assert!(layout.offered(Some(node), &root, &facts), "{node}");
+        assert!(layout.offered(Some(node), &root, &facts, "main"), "{node}");
     }
     for node in ["proj.main.claude-s2", "proj", "proj.other", "global"] {
-        assert!(!layout.offered(Some(node), &root, &facts), "{node}");
+        assert!(!layout.offered(Some(node), &root, &facts, "main"), "{node}");
     }
-    assert!(!layout.offered(None, &root, &facts));
+    assert!(!layout.offered(None, &root, &facts, "main"));
 }
 
 #[test]
@@ -121,15 +121,29 @@ fn a_sessionless_child_scope_is_offered_in_neither_mode() {
     let facts = workspace("proj", "main", "s1", "s1");
     let narrow = layout.ticket_root(&facts, false).unwrap();
     let wide = layout.ticket_root(&facts, true).unwrap();
-    assert!(!layout.offered(Some("proj.main.personal"), &narrow, &facts));
-    assert!(!layout.offered(Some("proj.main.personal"), &wide, &facts));
-    assert!(layout.offered(Some("proj.main"), &narrow, &facts));
-    assert!(layout.offered(Some("proj.main.claude-s1"), &narrow, &facts));
-    assert!(!layout.offered(Some("proj.other"), &narrow, &facts));
-    assert!(layout.offered(Some("proj"), &wide, &facts));
-    assert!(layout.offered(Some("proj.other"), &wide, &facts));
-    assert!(layout.offered(Some("proj.main.claude-s1"), &wide, &facts));
-    assert!(!layout.offered(Some("proj.other.claude-s2"), &wide, &facts));
+    assert!(!layout.offered(Some("proj.main.personal"), &narrow, &facts, "main"));
+    assert!(!layout.offered(Some("proj.main.personal"), &wide, &facts, "main"));
+    assert!(layout.offered(Some("proj.main"), &narrow, &facts, "main"));
+    assert!(layout.offered(Some("proj.main.claude-s1"), &narrow, &facts, "main"));
+    assert!(!layout.offered(Some("proj.other"), &narrow, &facts, "main"));
+    assert!(layout.offered(Some("proj"), &wide, &facts, "main"));
+    assert!(layout.offered(Some("proj.other"), &wide, &facts, "main"));
+    assert!(layout.offered(Some("proj.main.claude-s1"), &wide, &facts, "main"));
+    assert!(!layout.offered(Some("proj.other.claude-s2"), &wide, &facts, "main"));
+}
+
+#[test]
+fn offered_uses_the_callers_role_only() {
+    let config = Config::parse(
+        "[todo.scopes.personal]\nnode = '{repo}.{branch}.personal'\nparent = 'workspace'\n[todo.roles.manager]\nscope = 'workspace'\n[todo.roles.personal]\nscope = 'personal'\n",
+    )
+    .unwrap();
+    let layout = Layout::new(&config.todo).unwrap();
+    let facts = workspace("proj", "main", "s1", "s1");
+    let root = layout.ticket_root(&facts, false).unwrap();
+    assert!(!layout.offered(Some("proj.main.personal"), &root, &facts, "manager"));
+    assert!(layout.offered(Some("proj.main.personal"), &root, &facts, "personal"));
+    assert!(layout.offered(Some("proj.main.claude-s1"), &root, &facts, "manager"));
 }
 
 #[test]

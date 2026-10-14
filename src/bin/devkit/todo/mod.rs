@@ -573,7 +573,7 @@ fn offered_ids(
     Ok(match layout.ticket_root(facts, wide) {
         Some(root) => listed
             .into_iter()
-            .filter(|todo| layout.offered(todo.project.as_deref(), &root, facts))
+            .filter(|todo| layout.offered(todo.project.as_deref(), &root, facts, role))
             .map(|todo| todo.id)
             .collect(),
         None => match layout.visible(facts, role) {
@@ -595,7 +595,7 @@ fn offered_todos(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> R
     let offered = match layout.ticket_root(facts, wide) {
         Some(root) => listed
             .into_iter()
-            .filter(|todo| layout.offered(todo.project.as_deref(), &root, facts))
+            .filter(|todo| layout.offered(todo.project.as_deref(), &root, facts, role))
             .collect(),
         None => match layout.visible(facts, role) {
             Ok(filter) => listed
@@ -666,7 +666,7 @@ fn ticket_plan<'a>(
     // is no ticket.
     Graph::new(offered).plan(
         |todo| match &root {
-            Some(root) => layout.offered(todo.project.as_deref(), root, facts),
+            Some(root) => layout.offered(todo.project.as_deref(), root, facts, role),
             None => layout
                 .visible(facts, role)
                 .is_ok_and(|filter| filter.matches(todo.project.as_deref())),
@@ -676,10 +676,10 @@ fn ticket_plan<'a>(
 }
 
 /// Whether the ticket fence offers `todo` to this caller.
-fn offered_here(store: &Store, layout: &Layout, facts: &Facts, todo: &Todo) -> bool {
+fn offered_here(store: &Store, layout: &Layout, facts: &Facts, role: &str, todo: &Todo) -> bool {
     let wide = store.config().ready_outside_ticket;
     match layout.ticket_root(facts, wide) {
-        Some(root) => layout.offered(todo.project.as_deref(), &root, facts),
+        Some(root) => layout.offered(todo.project.as_deref(), &root, facts, role),
         None => true,
     }
 }
@@ -854,7 +854,8 @@ fn list(
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| {
-            offered_here(store, layout, facts, todo) && (!facts.subagent || todo.node() == own)
+            offered_here(store, layout, facts, &role.name, todo)
+                && (!facts.subagent || todo.node() == own)
         },
     };
     print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
@@ -951,7 +952,8 @@ fn context(args: &ContextArgs) -> Option<String> {
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| {
-            offered_here(&store, &layout, &facts, todo) && (!facts.subagent || todo.node() == own)
+            offered_here(&store, &layout, &facts, &role.name, todo)
+                && (!facts.subagent || todo.node() == own)
         },
     };
     let mut lists = render::render_lists(&nodes, &todos, &viewer, &notes);
