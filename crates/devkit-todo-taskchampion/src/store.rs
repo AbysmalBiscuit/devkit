@@ -384,6 +384,19 @@ impl TaskchampionStore {
         if deps.is_empty() {
             return Ok(());
         }
+        let have: std::collections::BTreeSet<Uuid> = replica
+            .get_task(Uuid::try_parse(&todo.id)?)
+            .await?
+            .ok_or_else(|| anyhow!("no todo {}", todo.id))?
+            .get_dependencies()
+            .collect();
+        let deps: Vec<Uuid> = deps
+            .into_iter()
+            .filter(|dep| have.contains(dep) != add)
+            .collect();
+        if deps.is_empty() {
+            return Ok(());
+        }
         Self::change(replica, &todo, |task, ops| {
             for dep in deps {
                 if add {

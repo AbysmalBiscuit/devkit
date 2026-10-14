@@ -78,7 +78,7 @@ impl Api {
         table: &str,
         query: &[(&str, String)],
     ) -> Result<Vec<T>> {
-        self.inner.select(table, query).map_err(todo_error)
+        self.inner.select(table, query).map_err(with_advice)
     }
 
     /// The rows of `table` that `query` selects, and how many it selects
@@ -88,7 +88,7 @@ impl Api {
         table: &str,
         query: &[(&str, String)],
     ) -> Result<(Vec<T>, Option<usize>)> {
-        self.select_page_raw(table, query).map_err(todo_error)
+        self.select_page_raw(table, query).map_err(with_advice)
     }
 
     /// As [`select_page`], leaving a refusal as the API answered it.
@@ -113,7 +113,7 @@ impl Api {
 
     /// Calls the function `function` with the named `args`.
     pub(crate) fn call(&self, function: &str, args: &serde_json::Value) -> Result<Response> {
-        self.inner.call(function, args).map_err(todo_error)
+        self.inner.call(function, args).map_err(with_advice)
     }
 
     /// The JSON `resp` carries.
@@ -125,7 +125,9 @@ impl Api {
 /// `e` as every todo store returns it: the store's own refusals as such,
 /// and a refusal whose code says the database is not set up for devkit with
 /// what to do about it.
-fn todo_error(e: anyhow::Error) -> anyhow::Error {
+/// `e` as every todo store returns it, with setup advice on a refusal whose
+/// code says the database is not set up.
+pub(crate) fn with_advice(e: anyhow::Error) -> anyhow::Error {
     let Some(refused) = e.downcast_ref::<Refused>() else {
         return e;
     };

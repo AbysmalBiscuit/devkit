@@ -83,9 +83,16 @@ fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize) -> String {
         Status::InProgress { by } => format!("in progress: {by}"),
         Status::Pending if batch == 0 => "ready".to_string(),
         _ => {
+            let members: std::collections::BTreeSet<&str> = plan
+                .batches
+                .iter()
+                .flatten()
+                .map(|member| member.id.as_str())
+                .collect();
             let after = todo
                 .blocked_by
                 .iter()
+                .filter(|id| members.contains(id.as_str()))
                 .map(|id| crate::short_id(id))
                 .collect::<Vec<_>>()
                 .join(", ");

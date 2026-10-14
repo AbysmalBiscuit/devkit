@@ -151,6 +151,53 @@ fn cycle_through_names_the_cycle() {
 }
 
 #[test]
+fn an_open_blocker_outside_the_plan_keeps_the_dependent_out_of_batch_one() {
+    let todos = vec![
+        pending("side", &[]),
+        pending("mine", &["side"]),
+        pending("free", &[]),
+    ];
+    let plan = Graph::new(&todos).plan(|todo| todo.id != "side", None);
+    assert_eq!(batches(&plan), [vec!["free"], vec!["mine"]]);
+    assert!(plan.frontier().iter().all(|todo| todo.id != "mine"));
+}
+
+#[test]
+fn a_forced_start_still_lands_in_batch_one() {
+    let todos = vec![
+        pending("a", &[]),
+        todo(
+            "b",
+            Status::InProgress {
+                by: Holder::new("S"),
+            },
+            &["a"],
+            None,
+        ),
+    ];
+    let plan = Graph::new(&todos).plan(|_| true, None);
+    assert_eq!(batches(&plan)[0], ["a", "b"]);
+}
+
+#[test]
+fn equal_chains_prefer_the_earlier_rank() {
+    let todos = vec![
+        pending("1", &[]),
+        pending("2", &[]),
+        pending("3", &["1"]),
+        pending("4", &["2"]),
+    ];
+    let plan = Graph::new(&todos).plan(|_| true, None);
+    assert_eq!(
+        plan.critical
+            .iter()
+            .map(|t| t.id.as_str())
+            .collect::<Vec<_>>(),
+        ["1", "3"]
+    );
+}
+
+#[test]
 fn frontier_puts_the_critical_path_first() {
     let todos = sample();
     let plan = Graph::new(&todos).plan(|_| true, None);

@@ -190,7 +190,8 @@ impl SupabaseStore {
                     }
                     self.api.select_page::<Row>("todos", &page)?
                 }
-                other => other?,
+                Err(e) => return Err(e),
+                Ok(page) => page,
             };
             let fetched = rows.len();
             for row in rows {

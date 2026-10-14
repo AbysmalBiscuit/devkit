@@ -99,86 +99,89 @@ impl<'a> Graph<'a> {
             .filter(|todo| is_open(&todo.status.kind()) && offered(todo))
             .collect();
         let is_member = |id: &str| members.iter().any(|todo| todo.id == id);
-        let mut blocked_of: HashMap<&str, Vec<&Todo>> = HashMap::new();
-        let mut waits_on: HashMap<&str, Vec<&Todo>> = HashMap::new();
+        // An open blocker outside the plan counts as finishing in batch 1, so
+        // its dependent is admitted no earlier than batch 2.
+        let outside = |todo: &Todo| {
+            self.open_blockers(todo)
+                .iter()
+                .any(|blocker| !is_member(&blocker.id))
+        };
+        let mut waits_on: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut dependents_of: HashMap<&str, Vec<&str>> = HashMap::new();
         for todo in &members {
-            for blocker in self
+            let waits: Vec<&str> = self
                 .open_blockers(todo)
                 .into_iter()
                 .filter(|blocker| is_member(&blocker.id))
-            {
-                blocked_of
-                    .entry(blocker.id.as_str())
+                .map(|blocker| blocker.id.as_str())
+                .collect();
+            for blocker in &waits {
+                dependents_of
+                    .entry(blocker)
                     .or_default()
-                    .push(todo);
+                    .push(todo.id.as_str());
             }
-            waits_on.insert(
-                todo.id.as_str(),
-                self.open_blockers(todo)
-                    .into_iter()
-                    .filter(|blocker| is_member(&blocker.id))
-                    .collect(),
-            );
+            waits_on.insert(todo.id.as_str(), waits);
         }
-        let waits = |todo: &Todo| waits_on.get(todo.id.as_str()).cloned().unwrap_or_default();
-        let blocked = |todo: &Todo| {
-            blocked_of
-                .get(todo.id.as_str())
-                .cloned()
-                .unwrap_or_default()
-        };
-        let mut ranks: HashMap<&str, Rank> = HashMap::new();
-        for todo in &members {
-            let dependents = members
-                .iter()
-                .filter(|other| other.blocked_by.iter().any(|id| id == &todo.id))
-                .count();
-            ranks.insert(todo.id.as_str(), Rank {
-                chain: chain_length(todo, &blocked),
-                dependents,
-                order: todo.order.unwrap_or(i64::MAX),
-                id: todo.id.as_str(),
-            });
-        }
-        let rank = |todo: &Todo| ranks.get(todo.id.as_str()).unwrap().clone();
 
+        // Kahn over members only. In-progress members are placed first, in
+        // batch 1, even when a blocker is still open: `start --force` already
+        // started them.
+        let mut indegree: HashMap<&str, usize> = HashMap::new();
+        for todo in &members {
+            let waits = waits_on.get(todo.id.as_str()).map_or(0, Vec::len);
+            let started = todo.status.kind() == StatusKind::InProgress;
+            indegree.insert(todo.id.as_str(), if started { 0 } else { waits });
+        }
         let mut placed: HashMap<&str, usize> = HashMap::new();
         let mut batches: Vec<Vec<&Todo>> = Vec::new();
         loop {
-            let ready: Vec<&Todo> = members
+            let mut ready: Vec<&Todo> = members
                 .iter()
                 .copied()
                 .filter(|todo| !placed.contains_key(todo.id.as_str()))
-                .filter(|todo| {
-                    waits(todo)
-                        .iter()
-                        .all(|blocker| placed.contains_key(blocker.id.as_str()))
-                })
+                .filter(|todo| indegree.get(todo.id.as_str()).copied().unwrap_or(1) == 0)
+                .filter(|todo| !batches.is_empty() || !outside(todo))
                 .collect();
             if ready.is_empty() {
                 break;
             }
+            // Ranks come from the members still unplaced, so a later batch
+            // prefers the longest chain that remains.
+            let left: Vec<&Todo> = members
+                .iter()
+                .copied()
+                .filter(|todo| !placed.contains_key(todo.id.as_str()))
+                .collect();
+            let ranks = ranks_of(&left, &dependents_of);
+            ready.sort_by(|a, b| ranks[a.id.as_str()].cmp(&ranks[b.id.as_str()]));
             let batch_index = batches.len();
             let mut batch = Vec::new();
             if batch_index == 0 {
-                let mut started: Vec<&Todo> = ready
+                let started: Vec<&Todo> = ready
                     .iter()
                     .copied()
                     .filter(|todo| todo.status.kind() == StatusKind::InProgress)
                     .collect();
-                started.sort_by(|a, b| rank(a).cmp(&rank(b)));
                 batch.extend(started);
             }
-            let mut waiting: Vec<&Todo> = ready
-                .iter()
-                .copied()
-                .filter(|todo| todo.status.kind() != StatusKind::InProgress)
-                .collect();
-            waiting.sort_by(|a, b| rank(a).cmp(&rank(b)));
             let room = cap.map_or(usize::MAX, |cap| cap.get().saturating_sub(batch.len()));
-            batch.extend(waiting.into_iter().take(room));
+            batch.extend(
+                ready
+                    .into_iter()
+                    .filter(|todo| todo.status.kind() != StatusKind::InProgress)
+                    .take(room),
+            );
+            if batch.is_empty() {
+                break;
+            }
             for todo in &batch {
-                placed.insert(&todo.id, batch_index);
+                placed.insert(todo.id.as_str(), batch_index);
+                for dependent in dependents_of.get(todo.id.as_str()).into_iter().flatten() {
+                    if let Some(left) = indegree.get_mut(dependent) {
+                        *left = left.saturating_sub(1);
+                    }
+                }
             }
             batches.push(batch);
         }
@@ -194,7 +197,7 @@ impl<'a> Graph<'a> {
             .copied()
             .filter(|todo| placed.contains_key(todo.id.as_str()))
             .collect();
-        let critical = longest_chain(&acyclic, &blocked, rank);
+        let critical = critical_path(&acyclic, &dependents_of);
         Plan {
             batches,
             critical,
@@ -203,9 +206,10 @@ impl<'a> Graph<'a> {
     }
 }
 
-/// One batch's ranking: the longest remaining chain, then how many todos
-/// wait on it, then its order, then its id.
-#[derive(Clone)]
+/// One member's rank: the longest remaining chain of dependents, then how
+/// many members wait on it, then its order, then its id. A smaller rank is
+/// scheduled first.
+#[derive(Clone, Copy)]
 struct Rank<'a> {
     chain: usize,
     dependents: usize,
@@ -238,74 +242,123 @@ impl PartialEq for Rank<'_> {
 
 impl Eq for Rank<'_> {}
 
-/// How many members sit on the longest chain of open blockers ending at
-/// `todo`, counting `todo`.
-fn chain_length<'a>(todo: &'a Todo, blockers: &impl Fn(&Todo) -> Vec<&'a Todo>) -> usize {
-    let mut seen = Vec::new();
-    fn walk<'a>(
-        todo: &'a Todo,
-        blockers: &impl Fn(&Todo) -> Vec<&'a Todo>,
-        seen: &mut Vec<&'a str>,
-    ) -> usize {
-        if seen.contains(&todo.id.as_str()) {
-            return 0;
-        }
-        seen.push(&todo.id);
-        let below = blockers(todo)
+/// Each member's rank: longest remaining chain of dependents, then how many
+/// members wait on it. One pass over a reverse topological order.
+fn ranks_of<'a>(
+    members: &[&'a Todo],
+    dependents_of: &HashMap<&str, Vec<&str>>,
+) -> HashMap<&'a str, Rank<'a>> {
+    let mut chain: HashMap<&str, usize> = HashMap::new();
+    for todo in topo(members, dependents_of).iter().rev() {
+        let below = dependents_of
+            .get(todo.id.as_str())
             .into_iter()
-            .map(|blocker| walk(blocker, blockers, seen))
+            .flatten()
+            .filter_map(|id| chain.get(id).copied())
             .max()
             .unwrap_or(0);
-        seen.pop();
-        below + 1
+        chain.insert(todo.id.as_str(), below + 1);
     }
-    walk(todo, blockers, &mut seen)
+    members
+        .iter()
+        .map(|todo| {
+            let dependents = dependents_of
+                .get(todo.id.as_str())
+                .map_or(0, |ids| ids.len());
+            (todo.id.as_str(), Rank {
+                chain: chain.get(todo.id.as_str()).copied().unwrap_or(1),
+                dependents,
+                order: todo.order.unwrap_or(i64::MAX),
+                id: todo.id.as_str(),
+            })
+        })
+        .collect()
+}
+
+/// Members in an order where every blocker precedes its dependents. A cycle
+/// among them is omitted: the caller already placed only the acyclic ones,
+/// or is ranking a batch whose members have no remaining waits.
+fn topo<'a>(members: &[&'a Todo], dependents_of: &HashMap<&str, Vec<&str>>) -> Vec<&'a Todo> {
+    let ids: HashMap<&str, &Todo> = members
+        .iter()
+        .map(|todo| (todo.id.as_str(), *todo))
+        .collect();
+    let mut indegree: HashMap<&str, usize> =
+        members.iter().map(|todo| (todo.id.as_str(), 0)).collect();
+    for todo in members {
+        for dependent in dependents_of.get(todo.id.as_str()).into_iter().flatten() {
+            if let Some(count) = indegree.get_mut(dependent) {
+                *count += 1;
+            }
+        }
+    }
+    let mut ready: Vec<&str> = indegree
+        .iter()
+        .filter(|(_, count)| **count == 0)
+        .map(|(id, _)| *id)
+        .collect();
+    ready.sort_unstable();
+    let mut order = Vec::new();
+    while let Some(id) = ready.pop() {
+        let Some(todo) = ids.get(id) else {
+            continue;
+        };
+        order.push(*todo);
+        let mut freed = Vec::new();
+        for dependent in dependents_of.get(id).into_iter().flatten() {
+            if let Some(count) = indegree.get_mut(dependent) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    freed.push(*dependent);
+                }
+            }
+        }
+        freed.sort_unstable();
+        ready.extend(freed);
+    }
+    order
 }
 
 /// The longest chain of members. Ties go to the chain whose first member
 /// ranks higher, then the next, through to the last.
-fn longest_chain<'a>(
+fn critical_path<'a>(
     members: &[&'a Todo],
-    next: &impl Fn(&Todo) -> Vec<&'a Todo>,
-    rank: impl Fn(&Todo) -> Rank<'a>,
+    dependents_of: &HashMap<&str, Vec<&str>>,
 ) -> Vec<&'a Todo> {
-    fn walk<'a>(
-        todo: &'a Todo,
-        next: &impl Fn(&Todo) -> Vec<&'a Todo>,
-        rank: &impl Fn(&Todo) -> Rank<'a>,
-        seen: &[&'a Todo],
-    ) -> Vec<&'a Todo> {
-        let mut chain = vec![todo];
-        let rest = next(todo)
-            .into_iter()
-            .filter(|step| !seen.iter().any(|have| have.id == step.id))
-            .map(|step| {
-                let mut longer = seen.to_vec();
-                longer.push(todo);
-                walk(step, next, rank, &longer)
-            })
-            .max_by(|a, b| {
-                a.len().cmp(&b.len()).then_with(|| {
-                    a.iter()
-                        .map(|todo| rank(todo))
-                        .cmp(b.iter().map(|todo| rank(todo)))
-                })
-            });
-        if let Some(rest) = rest {
-            chain.extend(rest);
-        }
-        chain
+    if members.is_empty() {
+        return Vec::new();
     }
-    members
+    let ranks = ranks_of(members, dependents_of);
+    let by_id: HashMap<&str, &Todo> = members
         .iter()
-        .map(|start| walk(start, next, &rank, &[]))
-        .max_by(|a, b| {
-            a.len().cmp(&b.len()).then_with(|| {
-                a.iter()
-                    .map(|todo| rank(todo))
-                    .cmp(b.iter().map(|todo| rank(todo)))
-            })
-        })
+        .map(|todo| (todo.id.as_str(), *todo))
+        .collect();
+    let rank = |id: &str| ranks[id];
+    // Prefer the chain that starts at the better rank. Compare rank sequences
+    // with the preferred rank as greater, since `max_by` keeps the greater.
+    let better = |a: &[&str], b: &[&str]| {
+        a.len()
+            .cmp(&b.len())
+            .then_with(|| b.iter().map(|id| rank(id)).cmp(a.iter().map(|id| rank(id))))
+    };
+    let mut best_from: HashMap<&str, Vec<&str>> = HashMap::new();
+    for todo in topo(members, dependents_of).iter().rev() {
+        let mut best = vec![todo.id.as_str()];
+        let next = dependents_of
+            .get(todo.id.as_str())
+            .into_iter()
+            .flatten()
+            .filter_map(|id| best_from.get(id))
+            .max_by(|a, b| better(a, b));
+        if let Some(next) = next {
+            best.extend(next);
+        }
+        best_from.insert(todo.id.as_str(), best);
+    }
+    best_from
+        .values()
+        .max_by(|a, b| better(a, b))
+        .map(|ids| ids.iter().map(|id| by_id[id]).collect())
         .unwrap_or_default()
 }
 

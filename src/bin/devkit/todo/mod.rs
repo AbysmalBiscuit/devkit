@@ -286,8 +286,10 @@ pub fn run(cli: TodoCli) -> Result<()> {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
         TodoCommand::List(args) => list(&store, &args, &cwd, &layout, &facts, &role.name, &actor)?,
-        TodoCommand::Ready => ready(&store, &layout, &facts)?,
-        TodoCommand::Plan { agents, mermaid } => plan(&store, &layout, &facts, agents, mermaid)?,
+        TodoCommand::Ready => ready(&store, &layout, &facts, &role.name)?,
+        TodoCommand::Plan { agents, mermaid } => {
+            plan(&store, &layout, &facts, &role.name, agents, mermaid)?
+        }
         TodoCommand::Add {
             text,
             parent,
@@ -348,14 +350,26 @@ pub fn run(cli: TodoCli) -> Result<()> {
             start(&store, ids, &actor, gone, force)?
         }
         TodoCommand::Stop { ids } | TodoCommand::Undone { ids } => {
-            set_status(&store, ids, StatusKind::Pending, &actor)?
+            let _closed = set_status(&store, ids, StatusKind::Pending, &actor)?;
         }
-        TodoCommand::Done { ids } => {
-            finish(&store, &layout, &facts, ids, StatusKind::Completed, &actor)?
-        }
-        TodoCommand::Cancel { ids } => {
-            finish(&store, &layout, &facts, ids, StatusKind::Cancelled, &actor)?
-        }
+        TodoCommand::Done { ids } => finish(
+            &store,
+            &layout,
+            &facts,
+            &role.name,
+            ids,
+            StatusKind::Completed,
+            &actor,
+        )?,
+        TodoCommand::Cancel { ids } => finish(
+            &store,
+            &layout,
+            &facts,
+            &role.name,
+            ids,
+            StatusKind::Cancelled,
+            &actor,
+        )?,
         TodoCommand::Describe { id, text } => {
             store.apply(&Edit::Describe {
                 id,
@@ -487,7 +501,8 @@ fn start(
         }
     }
     apply_checked(store, ids, |todo| {
-        Ok(
+        Ok((
+            false,
             match transition(&todo.status, StatusKind::InProgress, actor) {
                 Err(Claimed { by }) if !by.is_human() && gone(&by) => Edit::TakeOver {
                     id: todo.id,
@@ -501,8 +516,9 @@ fn start(
                     actor: actor.clone(),
                 },
             },
-        )
+        ))
     })
+    .map(drop)
 }
 
 /// Completes or cancels `ids`, then names the offered todos that became ready.
@@ -510,31 +526,60 @@ fn finish(
     store: &Store,
     layout: &Layout,
     facts: &Facts,
+    role: &str,
     ids: Vec<String>,
     to: StatusKind,
     actor: &Holder,
 ) -> Result<()> {
-    set_status(store, ids.clone(), to, actor)?;
-    if !store.config().print_unblocked {
+    let before = offered_ids(store, layout, facts, role)?;
+    let closed = set_status(store, ids, to, actor)?;
+    if !store.config().print_unblocked || closed.is_empty() {
         return Ok(());
     }
-    let offered = offered_todos(store, layout, facts)?;
+    let offered = offered_todos(store, layout, facts, role)?;
     let graph = Graph::new(&offered);
-    let ready = graph.unblocked_by(&ids.iter().map(String::as_str).collect::<Vec<_>>());
-    if !ready.is_empty() {
-        let names = ready
-            .iter()
-            .map(|todo| devkit_todo::short_id(&todo.id))
-            .collect::<Vec<_>>()
-            .join(" ");
+    let ready = graph.unblocked_by(&closed.iter().map(String::as_str).collect::<Vec<_>>());
+    let names = ready
+        .iter()
+        .filter(|todo| before.contains(&todo.id))
+        .map(|todo| devkit_todo::short_id(&todo.id))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !names.is_empty() {
         println!("unblocked: {names}");
     }
     Ok(())
 }
 
+/// Full ids the ticket fence offers, before a change.
+fn offered_ids(
+    store: &Store,
+    layout: &Layout,
+    facts: &Facts,
+    role: &str,
+) -> Result<BTreeSet<String>> {
+    let wide = store.config().ready_outside_ticket;
+    let listed = layout.fence(store.list(&Filter::all())?);
+    Ok(match layout.ticket_root(facts, wide) {
+        Some(root) => listed
+            .into_iter()
+            .filter(|todo| layout.offered(todo.project.as_deref(), &root, facts))
+            .map(|todo| todo.id)
+            .collect(),
+        None => match layout.visible(facts, role) {
+            Ok(filter) => listed
+                .into_iter()
+                .filter(|todo| filter.matches(todo.project.as_deref()))
+                .map(|todo| todo.id)
+                .collect(),
+            Err(_) => BTreeSet::new(),
+        },
+    })
+}
+
 /// The todos the ticket fence offers this caller, with the blockers the
 /// listing itself does not hold.
-fn offered_todos(store: &Store, layout: &Layout, facts: &Facts) -> Result<Vec<Todo>> {
+fn offered_todos(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<Vec<Todo>> {
     let wide = store.config().ready_outside_ticket;
     let listed = layout.fence(store.list(&Filter::all())?);
     let offered = match layout.ticket_root(facts, wide) {
@@ -542,14 +587,20 @@ fn offered_todos(store: &Store, layout: &Layout, facts: &Facts) -> Result<Vec<To
             .into_iter()
             .filter(|todo| layout.offered(todo.project.as_deref(), &root, facts))
             .collect(),
-        None => listed,
+        None => match layout.visible(facts, role) {
+            Ok(filter) => listed
+                .into_iter()
+                .filter(|todo| filter.matches(todo.project.as_deref()))
+                .collect(),
+            Err(_) => Vec::new(),
+        },
     };
     graph::with_blockers(store, offered)
 }
 
 /// Prints the frontier, critical-path todos first.
-fn ready(store: &Store, layout: &Layout, facts: &Facts) -> Result<()> {
-    let offered = offered_todos(store, layout, facts)?;
+fn ready(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<()> {
+    let offered = offered_todos(store, layout, facts, role)?;
     let plan = ticket_plan(store, layout, facts, &offered, None);
     for todo in plan.frontier() {
         let mark = if plan.critical.iter().any(|on| on.id == todo.id) {
@@ -571,10 +622,11 @@ fn plan(
     store: &Store,
     layout: &Layout,
     facts: &Facts,
+    role: &str,
     agents: Option<std::num::NonZeroUsize>,
     mermaid: bool,
 ) -> Result<()> {
-    let offered = offered_todos(store, layout, facts)?;
+    let offered = offered_todos(store, layout, facts, role)?;
     let plan = ticket_plan(store, layout, facts, &offered, agents);
     let root = layout
         .ticket_root(facts, store.config().ready_outside_ticket)
@@ -598,10 +650,13 @@ fn ticket_plan<'a>(
 ) -> devkit_todo::graph::Plan<'a> {
     let wide = store.config().ready_outside_ticket;
     let root = layout.ticket_root(facts, wide);
+    // Blockers fetched for status sit in `offered` and are not members.
+    // Membership is the ticket fence, or the caller's own listing when there
+    // is no ticket.
     Graph::new(offered).plan(
         |todo| match &root {
             Some(root) => layout.offered(todo.project.as_deref(), root, facts),
-            None => true,
+            None => false,
         },
         cap,
     )
@@ -662,29 +717,37 @@ fn refuse_cycle(store: &impl TodoStore, id: Option<&str>, by: &[String]) -> Resu
     bail!("blocking {id} on {blockers} would close the cycle {names}");
 }
 
+/// Applies the status change and returns the full ids that moved from open
+/// to closed. A todo already closed is not among them.
 fn set_status(
     store: &impl TodoStore,
     ids: Vec<String>,
     to: StatusKind,
     actor: &Holder,
-) -> Result<()> {
+) -> Result<Vec<String>> {
+    let closing = matches!(to, StatusKind::Completed | StatusKind::Cancelled);
     apply_checked(store, ids, |todo| {
+        let was_open = matches!(
+            todo.status.kind(),
+            StatusKind::Pending | StatusKind::InProgress
+        );
         transition(&todo.status, to, actor)?;
-        Ok(Edit::SetStatus {
+        Ok((was_open && closing, Edit::SetStatus {
             id: todo.id,
             to,
             actor: actor.clone(),
-        })
+        }))
     })
 }
 
 /// Applies the edit `edit_for` makes of each todo, after checking every id,
-/// so a batch with one unknown or refused todo changes nothing.
+/// so a batch with one unknown or refused todo changes nothing. Returns the
+/// full ids whose pair was marked.
 fn apply_checked(
     store: &impl TodoStore,
     ids: Vec<String>,
-    edit_for: impl Fn(Todo) -> Result<Edit>,
-) -> Result<()> {
+    edit_for: impl Fn(Todo) -> Result<(bool, Edit)>,
+) -> Result<Vec<String>> {
     if ids.is_empty() {
         bail!("name at least one todo id");
     }
@@ -695,10 +758,18 @@ fn apply_checked(
         };
         edits.push(edit_for(todo)?);
     }
-    for edit in edits {
+    let mut marked = Vec::new();
+    for (keep, edit) in edits {
+        let id = match &edit {
+            Edit::SetStatus { id, .. } => id.clone(),
+            _ => String::new(),
+        };
         store.apply(&edit)?;
+        if keep {
+            marked.push(id);
+        }
     }
-    Ok(())
+    Ok(marked)
 }
 
 fn move_todo(
@@ -755,6 +826,7 @@ fn list(
     } else {
         store.list(&filter)?
     };
+    let todos = graph::with_blockers(store, todos)?;
     if args.json {
         let rows: Vec<Value> = todos.iter().filter_map(alacritree_json).collect();
         println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -764,7 +836,9 @@ fn list(
     let graph = Graph::new(&todos);
     let notes = render::Notes {
         graph: &graph,
-        show_ready: &|todo| offered_here(store, layout, facts, todo),
+        show_ready: &|todo| {
+            offered_here(store, layout, facts, todo) && (!facts.subagent || todo.node() == role)
+        },
     };
     print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
     Ok(())
@@ -849,6 +923,7 @@ fn context(args: &ContextArgs) -> Option<String> {
         .filter(|t| visible.matches(t.project.as_deref()))
         .cloned()
         .collect();
+    let todos = graph::with_blockers(&store, todos).ok()?;
     let siblings = layout.fence(all).into_iter().filter(|t| {
         filter.matches(t.project.as_deref())
             && !visible.matches(t.project.as_deref())
