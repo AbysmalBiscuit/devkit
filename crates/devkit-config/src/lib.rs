@@ -1203,6 +1203,156 @@ pub struct TicketConfig {
     /// Status moves, keyed by the event that fires them. The event names are
     /// fixed, so a misspelled one is a parse error.
     pub events: TicketEventsConfig,
+    /// Which tickets `devkit todo sync` brings into the todo store, and the
+    /// todo status each tracker status maps to.
+    pub sync: TicketSyncConfig,
+}
+
+/// `[ticket.sync]`: the tickets `devkit todo sync` brings in as todos on the
+/// repository's node, and how their tracker statuses map to todo statuses.
+/// Sync only reads the tracker. With no rules, it brings in nothing.
+///
+/// ```
+/// # use devkit_config::{Assignee, Config, MappedStatus, ProjectRole};
+/// # let cfg = Config::parse(r#"
+/// [[ticket.sync.rules]]
+/// assignee = "me"
+///
+/// [[ticket.sync.rules]]
+/// assignee = "none"
+/// project_role = "lead"
+/// labels = ["devkit"]
+///
+/// [ticket.sync.statuses]
+/// "" = "pending"
+/// "Backlog" = "pending"
+/// "Todo" = "pending"
+/// "In Progress" = "in_progress"
+/// "In Review" = "in_progress"
+/// "Done" = "completed"
+/// "Canceled" = "cancelled"
+/// # "#).unwrap();
+/// # let sync = &cfg.ticket.sync;
+/// # assert_eq!(sync.rules.len(), 2);
+/// # assert_eq!(sync.rules[0].assignee, Some(Assignee::Me));
+/// # assert_eq!(sync.rules[1].assignee, Some(Assignee::Nobody));
+/// # assert_eq!(sync.rules[1].project_role, Some(ProjectRole::Lead));
+/// # assert_eq!(sync.rules[1].labels, ["devkit"]);
+/// # assert_eq!(sync.lookup(" in progress "), Some(MappedStatus::InProgress));
+/// # assert_eq!(sync.lookup(""), Some(MappedStatus::Pending));
+/// # assert_eq!(sync.lookup("Blocked"), None);
+/// # assert_eq!(sync.closed_names(), ["Canceled", "Done"]);
+/// ```
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TicketSyncConfig {
+    /// Which tickets sync brings in: a ticket syncs when any rule matches
+    /// it, and a rule matches when all its conditions hold. A ticket in a
+    /// status `statuses` maps to completed or cancelled is never brought in
+    /// by a rule, so the first sync imports no history.
+    pub rules: Vec<MatchRule>,
+    /// Each tracker status name and the todo status it maps to. Names match
+    /// case-insensitively, ignoring surrounding whitespace. `""` names an
+    /// open GitHub issue with no `[github] status_field` value: one outside
+    /// `[github] project`, or every open issue without one. A closed GitHub
+    /// issue maps by its close reason instead: completed, or cancelled when
+    /// closed as not planned. A synced ticket in a status this map does not
+    /// name, or a name here the tracker does not have, fails the sync naming
+    /// it, and nothing is written.
+    pub statuses: std::collections::BTreeMap<String, MappedStatus>,
+}
+
+impl TicketSyncConfig {
+    /// The todo status the tracker status `name` maps to, matched
+    /// case-insensitively and ignoring surrounding whitespace.
+    pub fn lookup(&self, name: &str) -> Option<MappedStatus> {
+        let name = name.trim();
+        self.statuses
+            .iter()
+            .find(|(mapped, _)| mapped.trim().eq_ignore_ascii_case(name))
+            .map(|(_, status)| *status)
+    }
+
+    /// The status names mapped to completed or cancelled, which rules never
+    /// fetch.
+    pub fn closed_names(&self) -> Vec<String> {
+        self.statuses
+            .iter()
+            .filter(|(_, status)| {
+                matches!(status, MappedStatus::Completed | MappedStatus::Cancelled)
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+}
+
+/// One `[[ticket.sync.rules]]` table. Every condition it sets must hold; a
+/// table that sets none matches every open ticket.
+#[derive(Debug, Default, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MatchRule {
+    /// Whose ticket: `"me"` for the account devkit's tracker token belongs
+    /// to, `"none"` for an unassigned ticket, or a user's login (GitHub) or
+    /// name (Linear).
+    pub assignee: Option<Assignee>,
+    /// Linear only: the ticket's project has the authenticated account as
+    /// `"lead"`, or as lead or member (`"member"`). GitHub has no project
+    /// roles, so a GitHub sync with one fails naming this key.
+    pub project_role: Option<ProjectRole>,
+    /// Labels the ticket must carry, every one of them.
+    pub labels: Vec<String>,
+}
+
+/// Whose ticket a rule matches.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(from = "String", into = "String")]
+pub enum Assignee {
+    /// `"me"`: the authenticated account.
+    Me,
+    /// `"none"`: no one.
+    Nobody,
+    /// Any other name: that user.
+    User(String),
+}
+
+impl From<String> for Assignee {
+    fn from(name: String) -> Self {
+        match name.as_str() {
+            "me" => Assignee::Me,
+            "none" => Assignee::Nobody,
+            _ => Assignee::User(name),
+        }
+    }
+}
+
+impl From<Assignee> for String {
+    fn from(assignee: Assignee) -> Self {
+        match assignee {
+            Assignee::Me => "me".to_string(),
+            Assignee::Nobody => "none".to_string(),
+            Assignee::User(name) => name,
+        }
+    }
+}
+
+/// The authenticated account's role on a ticket's project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRole {
+    /// The project's lead.
+    Lead,
+    /// The project's lead or one of its members.
+    Member,
+}
+
+/// The todo status a tracker status maps to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MappedStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Cancelled,
 }
 
 /// One optional status move per event.
@@ -5037,6 +5187,15 @@ steps = [
         })
         .unwrap();
         assert_eq!(o, toml::Value::String("org/7".into()));
+    }
+
+    #[test]
+    fn an_unknown_rule_key_is_a_parse_error() {
+        let err = Config::parse("[[ticket.sync.rules]]\nasignee = \"me\"\n").unwrap_err();
+        assert!(format!("{err:#}").contains("asignee"), "{err:#}");
+        let err = Config::parse("[ticket.sync.statuses]\nTodo = \"open\"\n").unwrap_err();
+        assert!(format!("{err:#}").contains("open"), "{err:#}");
+        assert!(Config::parse("[[ticket.sync.rules]]\nassignee = \"me\"\n").is_ok());
     }
 
     #[test]
