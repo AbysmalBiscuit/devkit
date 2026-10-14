@@ -13,6 +13,7 @@ pub mod holder;
 pub mod layout;
 pub mod node;
 pub mod roles;
+pub mod ticket;
 pub mod transition;
 
 use std::path::PathBuf;
