@@ -1140,7 +1140,7 @@
         },
         "labels": {
           "default": [],
-          "description": "Labels the ticket must carry, every one of them.",
+          "description": "Labels the ticket must carry, every one of them. Surrounding\nwhitespace is ignored, and a blank label is a config error.",
           "items": {
             "type": "string"
           },

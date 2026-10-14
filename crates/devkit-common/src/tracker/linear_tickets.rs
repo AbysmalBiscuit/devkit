@@ -3,7 +3,7 @@
 //! Filters travel as GraphQL variables, so no config value is spliced into
 //! a query.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use devkit_config::{Assignee, MatchRule, ProjectRole};
 use serde_json::{Value, json};
 
@@ -44,7 +44,7 @@ const CLOSED_STATE_TYPES: [&str; 3] = ["completed", "canceled", "duplicate"];
 /// The `IssueFilter` `rule` stands for, over open issues only and leaving
 /// out issues in one of `closed_names`. Every condition is one clause of an
 /// `and`, so a rule's labels each require their own label.
-pub fn rule_filter(rule: &MatchRule, closed_names: &[String]) -> Result<Value> {
+pub fn rule_filter(rule: &MatchRule, closed_names: &[String]) -> Value {
     let mut clauses = Vec::new();
     match &rule.assignee {
         Some(Assignee::Me) => clauses.push(json!({ "assignee": is_me() })),
@@ -64,17 +64,13 @@ pub fn rule_filter(rule: &MatchRule, closed_names: &[String]) -> Result<Value> {
         None => {}
     }
     for label in &rule.labels {
-        let label = label.trim();
-        if label.is_empty() {
-            bail!("[ticket.sync.rules] labels: a label is blank");
-        }
         clauses.push(json!({ "labels": { "some": { "name": { "eqIgnoreCase": label } } } }));
     }
     clauses.push(json!({ "state": { "type": { "nin": CLOSED_STATE_TYPES } } }));
     for name in closed_names {
         clauses.push(json!({ "state": { "name": { "neqIgnoreCase": name.trim() } } }));
     }
-    Ok(json!({ "and": clauses }))
+    json!({ "and": clauses })
 }
 
 /// The `IssueFilter` selecting the issues `keys` name. Keys that are not
@@ -182,7 +178,7 @@ pub fn find_with(
 ) -> Result<Vec<SyncedTicket>> {
     let mut found = Vec::new();
     for rule in rules {
-        read_all(&rule_filter(rule, closed_names)?, &mut found, &mut fetch)?;
+        read_all(&rule_filter(rule, closed_names), &mut found, &mut fetch)?;
     }
     found.retain(|t| !in_closed_name(t, closed_names));
     Ok(found)
@@ -332,13 +328,13 @@ mod tests {
     fn rule_filter_is_built_from_conditions() {
         let me = rule(Some(Assignee::Me), None, &[]);
         assert_eq!(
-            rule_filter(&me, &[]).unwrap(),
+            rule_filter(&me, &[]),
             json!({ "and": [{ "assignee": { "isMe": { "eq": true } } }, open()] })
         );
 
         let unassigned_lead = rule(Some(Assignee::Nobody), Some(ProjectRole::Lead), &[]);
         assert_eq!(
-            rule_filter(&unassigned_lead, &[]).unwrap(),
+            rule_filter(&unassigned_lead, &[]),
             json!({ "and": [
                 { "assignee": { "null": true } },
                 { "project": { "lead": { "isMe": { "eq": true } } } },
@@ -348,16 +344,16 @@ mod tests {
 
         let member = rule(None, Some(ProjectRole::Member), &[]);
         assert_eq!(
-            rule_filter(&member, &[]).unwrap(),
+            rule_filter(&member, &[]),
             json!({ "and": [{ "project": { "or": [
                 { "lead": { "isMe": { "eq": true } } },
                 { "members": { "some": { "isMe": { "eq": true } } } },
             ]}}, open()]})
         );
 
-        let labelled = rule(None, None, &["bug", " Backend "]);
+        let labelled = rule(None, None, &["bug", "Backend"]);
         assert_eq!(
-            rule_filter(&labelled, &[]).unwrap(),
+            rule_filter(&labelled, &[]),
             json!({ "and": [
                 { "labels": { "some": { "name": { "eqIgnoreCase": "bug" } } } },
                 { "labels": { "some": { "name": { "eqIgnoreCase": "Backend" } } } },
@@ -367,7 +363,7 @@ mod tests {
 
         let named = rule(Some(Assignee::User("lev".into())), None, &[]);
         assert_eq!(
-            rule_filter(&named, &[]).unwrap(),
+            rule_filter(&named, &[]),
             json!({ "and": [{ "assignee": { "or": [
                 { "name": { "eqIgnoreCase": "lev" } },
                 { "displayName": { "eqIgnoreCase": "lev" } },
@@ -376,17 +372,9 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_label_is_refused() {
-        let e = rule_filter(&rule(None, None, &["  "]), &[])
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("labels"), "{e}");
-    }
-
-    #[test]
     fn closed_names_are_excluded_by_state_name() {
         let closed = vec!["Done".to_string(), " canceled ".to_string()];
-        let filter = rule_filter(&rule(Some(Assignee::Me), None, &[]), &closed).unwrap();
+        let filter = rule_filter(&rule(Some(Assignee::Me), None, &[]), &closed);
         assert_eq!(
             filter,
             json!({ "and": [
@@ -487,7 +475,7 @@ mod tests {
     #[test]
     fn a_rule_without_conditions_selects_every_open_issue() {
         assert_eq!(
-            rule_filter(&MatchRule::default(), &[]).unwrap(),
+            rule_filter(&MatchRule::default(), &[]),
             json!({ "and": [
                 { "state": { "type": { "nin": ["completed", "canceled", "duplicate"] } } },
             ]})

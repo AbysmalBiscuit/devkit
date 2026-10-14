@@ -1311,8 +1311,22 @@ pub struct MatchRule {
     /// `"lead"`, or as lead or member (`"member"`). GitHub has no project
     /// roles, so a GitHub sync with one fails naming this key.
     pub project_role: Option<ProjectRole>,
-    /// Labels the ticket must carry, every one of them.
+    /// Labels the ticket must carry, every one of them. Surrounding
+    /// whitespace is ignored, and a blank label is a config error.
+    #[serde(deserialize_with = "rule_labels")]
     pub labels: Vec<String>,
+}
+
+fn rule_labels<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    Vec::<String>::deserialize(d)?
+        .into_iter()
+        .map(|label| match label.trim() {
+            "" => Err(serde::de::Error::custom(
+                "[ticket.sync.rules] labels: a label is blank",
+            )),
+            label => Ok(label.to_string()),
+        })
+        .collect()
 }
 
 /// Whose ticket a rule matches.
@@ -5403,6 +5417,18 @@ steps = [
         let err = Config::parse("[ticket.sync.statuses]\nTodo = \"open\"\n").unwrap_err();
         assert!(format!("{err:#}").contains("open"), "{err:#}");
         assert!(Config::parse("[[ticket.sync.rules]]\nassignee = \"me\"\n").is_ok());
+    }
+
+    #[test]
+    fn rule_labels_are_trimmed_and_a_blank_one_refused() {
+        let err = Config::parse("[[ticket.sync.rules]]\nlabels = [\"bug\", \"  \"]\n").unwrap_err();
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("[ticket.sync.rules] labels: a label is blank"),
+            "{err}"
+        );
+        let cfg = Config::parse("[[ticket.sync.rules]]\nlabels = [\" Backend \"]\n").unwrap();
+        assert_eq!(cfg.ticket.sync.rules[0].labels, ["Backend"]);
     }
 
     #[test]
