@@ -24,7 +24,7 @@ use crate::hook::todo::Mirror;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Deferred {
     /// A native tool call to mirror, resolved when it was queued.
-    Capture { mirror: Mirror },
+    Capture { mirror: Box<Mirror> },
     /// A holder whose claims return to pending.
     Release { holder: Holder },
 }

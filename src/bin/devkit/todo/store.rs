@@ -97,7 +97,8 @@ pub(crate) struct Store {
     config: TodoConfig,
     ticket: TicketConfig,
     /// Where the store was opened from: the checkout a ticket event fires
-    /// in. `None` for a queued hook write, which fires nothing.
+    /// in. A queued hook write carries the one its hook resolved. `None`
+    /// fires nothing.
     origin: Option<PathBuf>,
 }
 
@@ -668,14 +669,23 @@ impl Store {
 
     /// The replica at `dir`, for applying a queued hook write
     /// exactly where it was resolved. A hook's lock wait keeps a busy entry
-    /// queued.
-    pub(crate) fn queued_at(dir: &Path) -> Self {
-        Backend::Taskchampion(Replica {
+    /// queued. With `origin`, the checkout the hook ran in, its ticket
+    /// changes fire from there as an unqueued write's do.
+    pub(crate) fn queued_at(dir: &Path, origin: Option<&Path>) -> Self {
+        let mut store = Backend::Taskchampion(Replica {
             store: TaskchampionStore::at(dir.to_path_buf()).with_lock_wait(HOOK_WAIT),
             syncs: false,
             source: ReplicaSource::Config,
         })
-        .recorded()
+        .recorded();
+        if let Some(origin) = origin
+            && let Ok((config, ticket)) = Self::hook_config(&Checkout::at(origin), origin, None)
+        {
+            store.config = config;
+            store.ticket = ticket;
+            store.origin = Some(origin.to_path_buf());
+        }
+        store
     }
 
     /// The replica `devkit todo sync` in `cwd` syncs, its target resolved:

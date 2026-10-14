@@ -66,6 +66,7 @@ Ticket todos stay current without anyone running sync:
 - In a worktree whose `workspace setup` record names a synced ticket, `ready` and `plan` offer that ticket's todo beside the workspace's own todos.
 - A ticket todo whose worktree is on this machine shows `<n> open` in lists, plans and injected lists: the open todos in its workspace. `devkit todo list --expand` and `devkit todo plan --expand` list those todos under it, each with its node.
 - Starting a ticket todo or finishing it moves the ticket's tracker status as `[ticket.events] todo_start` and `todo_done` configure (`references/ticket.md`), in the background. Run the command from a checkout of the ticket's repository: from anywhere else the todo still changes, the ticket stays where it was, and a warning names it. Changes sync itself makes never move a ticket, so when the tracker closes a ticket first, sync finishes its todo and nothing fires.
+- A native task or plan step whose text names an open ticket todo of the repository, by the ticket's key (`o/r#65`, `SWE-123`), as `#65`, or by the todo's own text, is that ticket's todo rather than a new one: starting and completing the task moves the ticket, and deleting the task or dropping the step leaves the ticket's todo as it is.
 
 ## Stopping with open todos
 

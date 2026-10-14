@@ -13,6 +13,7 @@ use std::{
 
 use devkit_todo::{Filter, Holder, Status, Todo, TodoStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore};
+use serde_json::{Value, json};
 use todoenv::{Proj, stderr, stdout};
 
 const STATUSES: &str = r#"
@@ -523,7 +524,12 @@ to = \"Done\"
 /// [`two_issues`] synced, with `todo_start` and `todo_done` moving tickets
 /// on project 3, whose writes `gh` accepts.
 fn moving() -> Synced {
-    let s = Synced::new(&format!("{RULES}{STATUSES}{TODO_EVENTS}"), true);
+    moving_in(Proj::new())
+}
+
+/// [`moving`] in `proj`.
+fn moving_in(proj: Proj) -> Synced {
+    let s = Synced::in_proj(proj, &format!("{RULES}{STATUSES}{TODO_EVENTS}"), true);
     s.serve(
         "graphql.json",
         &graphql(
@@ -610,6 +616,105 @@ fn a_plain_todo_fires_nothing() {
     assert!(out.status.success(), "{}", stderr(&out));
     settle();
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+/// Claude Code's `tool` run in `s`'s checkout with `input` and answered with
+/// `response`, as the post-tool-use hook receives it.
+fn native(s: &Synced, tool: &str, input: Value, response: Value) {
+    let payload = json!({
+        "session_id": "S",
+        "cwd": s.proj.path,
+        "hook_event_name": "PostToolUse",
+        "tool_name": tool,
+        "tool_input": input,
+        "tool_response": response,
+    });
+    let out = s.devkit_fed(
+        &["hook", "post-tool-use", "--harness", "claude-code"],
+        &[],
+        &payload.to_string(),
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stderr(&out).is_empty(), "{}", stderr(&out));
+}
+
+fn task_create(s: &Synced, id: &str, subject: &str) {
+    native(
+        s,
+        "TaskCreate",
+        json!({"subject": subject, "description": subject}),
+        json!({"task": {"id": id, "subject": subject}}),
+    );
+}
+
+fn task_update(s: &Synced, id: &str, status: &str) {
+    native(
+        s,
+        "TaskUpdate",
+        json!({"taskId": id, "status": status}),
+        json!({"success": true}),
+    );
+}
+
+#[test]
+fn a_harness_task_naming_a_ticket_moves_it() {
+    let s = moving();
+    task_create(&s, "1", "#65");
+    assert_eq!(s.proj.todos().len(), 2, "{:?}", s.proj.todos());
+    task_update(&s, "1", "in_progress");
+    poll("the move to In progress", || moved_to(&s, "o1"));
+    task_update(&s, "1", "completed");
+    poll("the move to Done", || moved_to(&s, "o2"));
+    assert_eq!(
+        s.todo_for("o/r#65").status.kind(),
+        devkit_todo::StatusKind::Completed
+    );
+}
+
+#[test]
+fn a_queued_harness_task_naming_a_ticket_moves_it() {
+    let s = moving_in(Proj::with_home_config(
+        "[todo]\nbackend = \"taskchampion\"\n",
+    ));
+    task_create(&s, "1", "o/r#65");
+    task_update(&s, "1", "completed");
+    poll("the move to Done", || moved_to(&s, "o2"));
+}
+
+#[test]
+fn a_harness_task_naming_no_ticket_adds_a_plain_todo() {
+    let s = moving();
+    task_create(&s, "1", "write the fix");
+    let todos = s.proj.todos();
+    let plain = todos
+        .iter()
+        .find(|t| t.description == "write the fix")
+        .unwrap_or_else(|| panic!("{todos:?}"));
+    assert!(plain.ticket.is_none());
+    task_update(&s, "1", "completed");
+    assert_eq!(s.todo_for("o/r#65").status, Status::Pending);
+    settle();
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn a_plan_step_naming_a_ticket_moves_it_and_dropping_it_keeps_it() {
+    let s = moving();
+    let write = |todos: Value| {
+        native(
+            &s,
+            "TodoWrite",
+            json!({"todos": todos}),
+            json!({"oldTodos": [], "newTodos": todos}),
+        )
+    };
+    write(json!([{"content": "#65 Issue 65", "status": "in_progress", "activeForm": "Fixing"}]));
+    assert_eq!(s.proj.todos().len(), 2, "{:?}", s.proj.todos());
+    poll("the move to In progress", || moved_to(&s, "o1"));
+    write(json!([]));
+    let ticket = s.todo_for("o/r#65");
+    assert_eq!(ticket.status.kind(), devkit_todo::StatusKind::InProgress);
+    assert_eq!(ticket.node(), "proj");
 }
 
 /// Makes `s`'s checkout a `workspace setup` worktree for issue `issue`.

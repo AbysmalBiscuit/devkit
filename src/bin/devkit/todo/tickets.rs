@@ -265,6 +265,28 @@ fn names_issue(key: &str, issue: &str) -> bool {
     key.eq_ignore_ascii_case(issue) || key.rsplit_once('#').is_some_and(|(_, n)| n == issue)
 }
 
+/// The open ticket todo in `todos` that `text`, a harness task's subject or
+/// plan step, names: by its ticket key (`SWE-123`, `owner/repo#65`), by its
+/// number after a `#` (`#65`), or by the todo's own description.
+pub(crate) fn named_ticket<'a>(todos: &'a [Todo], text: &str) -> Option<&'a Todo> {
+    let text = devkit_todo::one_line(text);
+    let text = text.trim();
+    let names = |key: &str| match text.strip_prefix('#') {
+        Some(number) => names_issue(key, number),
+        None => key.eq_ignore_ascii_case(text),
+    };
+    let open = |t: &&Todo| {
+        matches!(
+            t.status.kind(),
+            StatusKind::Pending | StatusKind::InProgress
+        )
+    };
+    let tickets = || todos.iter().filter(open).filter(|t| t.ticket.is_some());
+    tickets()
+        .find(|t| t.ticket.as_ref().is_some_and(|r| names(&r.key)))
+        .or_else(|| tickets().find(|t| t.description == text))
+}
+
 /// Each worktree of `checkout`'s repository whose record names the ticket of
 /// a todo in `todos` on the repository node, with that worktree's workspace
 /// node. A worktree on another machine has no record here, so it is absent.
@@ -341,5 +363,33 @@ mod tests {
         assert!(names_issue("o/r#65", "65"));
         assert!(!names_issue("o/r#65", "6"));
         assert!(!names_issue("SWE-123", "SWE-12"));
+    }
+
+    #[test]
+    fn a_task_names_an_open_ticket_by_key_number_or_text() {
+        let todo = |id: &str, key: &str, status: &str| -> Todo {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "description": format!("{key} Issue"),
+                "status": status,
+                "ticket": {"tracker": "github", "key": key},
+            }))
+            .unwrap()
+        };
+        let todos = [
+            todo("a", "o/r#65", "pending"),
+            todo("b", "SWE-7", "pending"),
+            todo("c", "o/r#9", "completed"),
+        ];
+        let named = |text| named_ticket(&todos, text).map(|t| t.id.as_str());
+        assert_eq!(named("#65"), Some("a"));
+        assert_eq!(named("  O/R#65 "), Some("a"));
+        assert_eq!(named("swe-7"), Some("b"));
+        assert_eq!(named("SWE-7  Issue"), Some("b"));
+        assert_eq!(named("65"), None);
+        assert_eq!(named("#9"), None);
+        assert_eq!(named(""), None);
+        assert_eq!(named("#"), None);
+        assert_eq!(named("fix #65 later"), None);
     }
 }
