@@ -592,3 +592,15 @@ fn a_branch_dropping_a_required_arg_is_refused() {
     );
     assert!(!opened(&p), "{}", p.calls());
 }
+
+#[test]
+fn a_task_rendering_a_port_qualifies() {
+    let p = project(&format!(
+        "{}\n[pr.gates]\nverify_task = \"live\"\n",
+        LIVE_READER.replace("require_live = [\"api\"]\n", "")
+    ));
+    task(&p, &["live"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+    assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
+}

@@ -1364,7 +1364,7 @@
         "verify": {
           "$ref": "#/$defs/GateMode",
           "default": "require",
-          "description": "Requires a passing run of `verify_task` with `verify_args`: one the\nrun ledger records as exiting 0 on a clean tree at exactly the commit\nthe PR opens at. A run at an earlier commit, on a dirty tree or with\nother args does not count, nor does one whose steps ran other\ncommands than the task renders to as the merge base defines it, nor\none at a commit defining the task, its sequence's tasks or their apps\notherwise than the merge base does, descriptions aside. Scripts the\ntask calls are not compared. The\nPR body gets a Verification section built from that run, or saying\nNOT RUN when there is none; a human's PR gets the section without\nbeing refused. Off while `verify_task` is unset."
+          "description": "Requires a passing run of `verify_task` with `verify_args`: one the\nrun ledger records as exiting 0 on a clean tree at exactly the commit\nthe PR opens at. A run at an earlier commit, on a dirty tree or with\nother args does not count, nor does one whose task executes anything\ndifferent at that commit than at the merge base: what it executes is\nrebuilt from the `devkit.toml` layers committed at each, with every\nport rendered as its app's base port, and compared step by step,\nincluding the servers each step requires live and which callers its\nargs satisfy. Scripts the task calls are not compared. The PR body\ngets a Verification section built from that run, or saying\nNOT RUN when there is none; a human's PR gets the section without\nbeing refused. Off while `verify_task` is unset."
         },
         "verify_args": {
           "additionalProperties": {
@@ -1376,7 +1376,7 @@
         },
         "verify_task": {
           "default": null,
-          "description": "The task the `verify` gate requires a passing run of, as `devrun task`\nnames it. A task whose command, or a step's command, renders a port\ncan never satisfy the gate: the gate renders it without allocating\nports, so it cannot match the steps the run recorded.",
+          "description": "The task the `verify` gate requires a passing run of, as `devrun task`\nnames it. A task that renders ports can satisfy it: the gate renders\neach app's base port at both commits, so the ports a run reserved are\nnot compared.",
           "type": [
             "string",
             "null"
