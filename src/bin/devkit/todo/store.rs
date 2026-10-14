@@ -97,9 +97,8 @@ pub(crate) struct Store {
     config: TodoConfig,
     ticket: TicketConfig,
     /// Where the store was opened from: the checkout a ticket event fires
-    /// in. A queued hook write carries the one its hook resolved. `None`
-    /// fires nothing.
-    origin: Option<PathBuf>,
+    /// in, as its caller resolved it. `None` fires nothing.
+    origin: Option<Checkout>,
 }
 
 impl TodoStore for Store {
@@ -513,7 +512,7 @@ fn taskchampion(config: &TodoConfig) -> Replica {
 impl Store {
     /// The store `config` names, its claim changes recorded in the activity
     /// log that goes with it.
-    fn open(config: &TodoConfig, ticket: TicketConfig, opener: Opener, origin: &Path) -> Self {
+    fn open(config: &TodoConfig, ticket: TicketConfig, opener: Opener, origin: Checkout) -> Self {
         let backend = match config.backend {
             TodoBackend::Builtin => Backend::Builtin(BuiltinStore::open()),
             TodoBackend::Taskchampion => {
@@ -534,7 +533,7 @@ impl Store {
             store: Recorded::new(backend, Activity::of(config, opener)),
             config: config.clone(),
             ticket,
-            origin: Some(origin.to_path_buf()),
+            origin: Some(origin),
         }
     }
 
@@ -614,7 +613,7 @@ impl Store {
     /// The store a CLI call in `cwd` uses.
     pub(crate) fn for_cli(cwd: &Path) -> Result<Self> {
         let (config, ticket) = Self::effective_cli_config(cwd)?;
-        Ok(Self::open(&config, ticket, Opener::Cli, cwd))
+        Ok(Self::open(&config, ticket, Opener::Cli, Checkout::at(cwd)))
     }
 
     /// The activity log a CLI call in `cwd` reads.
@@ -678,12 +677,13 @@ impl Store {
             source: ReplicaSource::Config,
         })
         .recorded();
-        if let Some(origin) = origin
-            && let Ok((config, ticket)) = Self::hook_config(&Checkout::at(origin), origin, None)
-        {
-            store.config = config;
-            store.ticket = ticket;
-            store.origin = Some(origin.to_path_buf());
+        if let Some(origin) = origin {
+            let checkout = Checkout::at(origin);
+            if let Ok((config, ticket)) = Self::hook_config(&checkout, origin, None) {
+                store.config = config;
+                store.ticket = ticket;
+                store.origin = Some(checkout);
+            }
         }
         store
     }
@@ -728,7 +728,7 @@ impl Store {
     pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Self {
         let backend_var = std::env::var(BACKEND_VAR).ok();
         match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
-            Ok((config, ticket)) => Self::open(&config, ticket, Opener::Hook, cwd),
+            Ok((config, ticket)) => Self::open(&config, ticket, Opener::Hook, checkout.clone()),
             Err(_) => Backend::Builtin(BuiltinStore::open()).recorded(),
         }
     }
@@ -756,7 +756,7 @@ impl Store {
         holds: impl FnOnce(&TodoConfig) -> bool,
     ) -> Option<Self> {
         let (config, ticket) = Self::hook_config(checkout, cwd, backend_var).ok()?;
-        holds(&config).then(|| Self::open(&config, ticket, Opener::Hook, cwd))
+        holds(&config).then(|| Self::open(&config, ticket, Opener::Hook, checkout.clone()))
     }
 }
 

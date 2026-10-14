@@ -681,6 +681,49 @@ fn a_queued_harness_task_naming_a_ticket_moves_it() {
     poll("the move to Done", || moved_to(&s, "o2"));
 }
 
+/// Puts a `git` ahead of the real one on `s`'s `PATH` that logs each spawn's
+/// arguments, one line per spawn, to the returned file.
+#[cfg(unix)]
+fn trace_git(s: &Synced) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git on PATH");
+    let trace = s.bin.path().join("git-spawns");
+    let wrapper = s.bin.path().join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            trace.display(),
+            real.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    trace
+}
+
+#[cfg(unix)]
+#[test]
+fn a_ticket_task_update_asks_git_no_more_than_a_plain_one() {
+    let s = two_issues();
+    assert!(s.sync(&[]).status.success());
+    task_create(&s, "1", "#65");
+    task_create(&s, "2", "write the fix");
+    let trace = trace_git(&s);
+    let spawns = |task: &str| {
+        let _ = std::fs::remove_file(&trace);
+        task_update(&s, task, "in_progress");
+        std::fs::read_to_string(&trace).unwrap_or_default()
+    };
+    let plain = spawns("2");
+    let ticket = spawns("1");
+    assert_eq!(ticket.lines().count(), plain.lines().count(), "{ticket}");
+}
+
 #[test]
 fn a_harness_task_naming_no_ticket_adds_a_plain_todo() {
     let s = moving();

@@ -26,15 +26,14 @@ fn event_of(change: &StatusChange) -> Option<IssueEvent> {
     }
 }
 
-/// The checkout root of `origin` when its repository node is `node`.
+/// The root of `checkout` when its repository node is `node`.
 fn root_on(
-    origin: &Path,
+    checkout: &Checkout,
     node: &str,
     config: &TodoConfig,
     actor: &Holder,
 ) -> Option<std::path::PathBuf> {
-    let checkout = Checkout::at(origin);
-    let place = node::place_of(&checkout).ok()?;
+    let place = node::place_of(checkout).ok()?;
     if place == Place::Global {
         return None;
     }
@@ -56,7 +55,7 @@ pub(crate) fn fire_for(
     store: &impl TodoStore,
     config: &TodoConfig,
     ticket: &TicketConfig,
-    origin: &Path,
+    origin: &Checkout,
 ) {
     if actor.is_tracker() {
         return;
