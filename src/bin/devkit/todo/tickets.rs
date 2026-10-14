@@ -284,7 +284,8 @@ pub(crate) fn named_ticket<'a>(todos: &'a [Todo], text: &str) -> Option<&'a Todo
 
 /// Each worktree of `checkout`'s repository whose record names the ticket of
 /// a todo in `todos` on the repository node, with that worktree's workspace
-/// node. A worktree on another machine has no record here, so it is absent.
+/// node; a `pr checkout` record names none. A worktree on another machine has
+/// no record here, so it is absent.
 pub(crate) fn ticket_workspaces(
     checkout: &Checkout,
     layout: &Layout,
@@ -296,7 +297,13 @@ pub(crate) fn ticket_workspaces(
         .iter()
         .filter(|wt| !wt.bare)
         .filter_map(|wt| {
-            let issue = record::read_on(&wt.path, &wt.branch)?.tracker_issue()?;
+            let record = record::read_on(&wt.path, &wt.branch)?;
+            // A reviewer's `pr checkout` is not where the ticket's work
+            // happens.
+            if record.origin == Some(record::RecordOrigin::Checkout) {
+                return None;
+            }
+            let issue = record.tracker_issue()?;
             let place = node::place_from(worktrees.first(), Some(wt));
             let facts = Facts::new(&place, None, &Holder::human());
             let repo = layout.fill("repo", &facts).ok()?;

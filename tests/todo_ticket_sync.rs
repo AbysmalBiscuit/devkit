@@ -915,10 +915,15 @@ fn a_plan_resent_after_a_sync_closes_its_ticket_moves_nothing() {
 
 /// Makes `s`'s checkout a `workspace setup` worktree for issue `issue`.
 fn record_issue(s: &Synced, issue: &str) {
+    record_issue_from(s, issue, devkit_common::record::RecordOrigin::Setup);
+}
+
+/// Records `s`'s checkout as made by `origin` for issue `issue`.
+fn record_issue_from(s: &Synced, issue: &str, origin: devkit_common::record::RecordOrigin) {
     devkit_common::record::write(&s.proj.path, &devkit_common::record::IssueRecord {
         issue: issue.into(),
         slug: "fix".into(),
-        origin: Some(devkit_common::record::RecordOrigin::Setup),
+        origin: Some(origin),
         ..Default::default()
     })
     .unwrap();
@@ -936,6 +941,16 @@ fn ready_in_a_ticket_workspace_offers_the_ticket() {
     let ready = stdout(&out);
     assert!(ready.contains("#66 Issue 66"), "{ready}");
     assert!(!ready.contains("#65"), "{ready}");
+}
+
+#[test]
+fn a_review_checkout_offers_no_ticket() {
+    let s = two_issues();
+    assert!(s.sync(&[]).status.success());
+    record_issue_from(&s, "66", devkit_common::record::RecordOrigin::Checkout);
+    let out = s.devkit(&["todo", "ready"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!stdout(&out).contains("#66"), "{}", stdout(&out));
 }
 
 #[test]
