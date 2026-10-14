@@ -839,8 +839,9 @@ linear = "user-ada"
 
     #[test]
     fn an_existing_id_is_read_back_not_duplicated() {
+        let id = create_id("team-eng", "T", "B");
         let input = create_input(
-            create_id("team-eng", "T", "B"),
+            id,
             "T",
             "B",
             &config().ticket.fields.linear,
@@ -848,16 +849,34 @@ linear = "user-ada"
             &BTreeMap::new(),
         )
         .unwrap();
-        let (writer, sent) = scripted(vec![
-            Ok(fixture("linear_fields_create_conflict.json")),
-            Ok(fixture("linear_fields_read.json")),
-        ]);
+        let by_id = format!("id: {{ eq: \"{id}\" }}");
+        let mut issue = fixture("linear_fields_read.json");
+        issue["data"]["issue"]["nodes"][0]["id"] = json!(id.to_string());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let log = sent.clone();
+        let filter = by_id.clone();
+        let writer = LinearFieldWriter::with_transport(move |body, _| {
+            log.lock().unwrap().push(body.clone());
+            let query = body["query"].as_str().unwrap_or_default();
+            Ok(if query.contains("issueCreate(") {
+                fixture("linear_fields_create_conflict.json")
+            } else if query.contains(&filter) {
+                issue.clone()
+            } else {
+                json!({ "data": { "issue": { "nodes": [] } } })
+            })
+        });
         let created = writer.create(&input).unwrap();
         assert!(created.existed);
         assert_eq!(created.issue.identifier, "ENG-42");
+        assert_eq!(created.issue.uuid, id.to_string());
         let sent = sent.lock().unwrap();
         assert_eq!(sent.len(), 2, "one create, one read, no second create");
-        assert!(sent[1]["query"].as_str().unwrap().starts_with("query"));
+        assert!(
+            sent[1]["query"].as_str().unwrap().contains(&by_id),
+            "the read is by the client id: {}",
+            sent[1]["query"]
+        );
     }
 
     #[test]

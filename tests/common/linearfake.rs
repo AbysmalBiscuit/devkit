@@ -1,5 +1,6 @@
 //! A Linear GraphQL endpoint in a thread, for `DEVKIT_TEST_LINEAR_URL`: it
-//! answers each POST by the first registered substring its body contains,
+//! answers each POST by the first registered substring its query or body
+//! contains,
 //! with a status and body or by hanging up, and records every body it was
 //! sent.
 #![allow(dead_code)]
@@ -114,17 +115,16 @@ fn serve(shared: &Shared, stream: TcpStream) -> std::io::Result<()> {
         let mut body = vec![0; length];
         reader.read_exact(&mut body)?;
         let text = String::from_utf8_lossy(&body).into_owned();
-        shared
-            .bodies
-            .lock()
-            .unwrap()
-            .push(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+        let query = parsed["query"].as_str().unwrap_or_default().to_string();
+        shared.bodies.lock().unwrap().push(parsed);
         let reply = shared
             .answers
             .lock()
             .unwrap()
             .iter()
-            .find(|(needle, _)| text.contains(needle.as_str()))
+            .find(|(needle, _)| query.contains(needle.as_str()) || text.contains(needle.as_str()))
             .map(|(_, a)| a.clone())
             .unwrap_or_else(|| {
                 Some((

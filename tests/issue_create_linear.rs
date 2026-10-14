@@ -181,17 +181,29 @@ fn a_retried_create_returns_the_first_ticket() {
     let first = run(&fake, &linear, &args);
     assert!(first.status.success(), "{}", stderr(&first));
 
+    let creates = linear.sent("issueCreate(");
+    assert_eq!(creates.len(), 1);
+    let id = creates[0]["variables"]["input"]["id"].as_str().unwrap();
+
+    let linear = LinearFake::start();
     linear.answer_status("issueCreate(", 400, ID_TAKEN);
+    linear.answer(&format!("id: {{ eq: \"{id}\" }}"), &read(&[], 0));
+    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
     let retry = run(&fake, &linear, &args);
     assert!(retry.status.success(), "{}", stderr(&retry));
     assert_eq!(stdout(&retry), stdout(&first), "the same ticket");
     assert!(stderr(&retry).contains("already"), "{}", stderr(&retry));
-
     let creates = linear.sent("issueCreate(");
-    assert_eq!(creates.len(), 2);
     assert_eq!(
-        creates[0]["variables"]["input"]["id"], creates[1]["variables"]["input"]["id"],
+        creates[0]["variables"]["input"]["id"], id,
         "the retry passes the first attempt's id"
+    );
+    assert!(
+        linear.sent("issue: issues(")[0]["query"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("id: {{ eq: \"{id}\" }}")),
+        "the read after the conflict is by the client id"
     );
 }
 
