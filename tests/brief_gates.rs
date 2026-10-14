@@ -4,19 +4,30 @@
 #[path = "common/testenv.rs"]
 mod testenv;
 
-use std::process::{Command, Stdio};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+};
+
+fn git(dir: &Path, args: &[&str]) {
+    devkit_git::Git::fixture(dir)
+        .args(args.iter().copied())
+        .output()
+        .unwrap();
+}
 
 fn brief(config: &str) -> String {
     let p = tempfile::tempdir().unwrap();
-    devkit_git::Git::fixture(p.path())
-        .args(["init", "-q", "-b", "main"])
-        .output()
-        .unwrap();
+    git(p.path(), &["init", "-q", "-b", "main"]);
     std::fs::write(p.path().join("devkit.toml"), config).unwrap();
+    brief_in(p.path())
+}
+
+fn brief_in(dir: &Path) -> String {
     let state = tempfile::tempdir().unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
     cmd.arg("brief")
-        .current_dir(p.path())
+        .current_dir(dir)
         .env("HOME", state.path())
         .env("XDG_STATE_HOME", state.path())
         .env("XDG_CONFIG_HOME", state.path().join("config"))
@@ -71,5 +82,46 @@ fn the_brief_names_no_gate_when_all_are_off() {
 fn a_gate_alone_still_makes_a_brief() {
     let body = brief("[brief]\nlocks = false\n");
     assert!(body.contains("### PR gates"), "{body}");
+    assert!(body.contains("`weakened_tests` (require)"), "{body}");
+}
+
+/// A repository whose `main` commits `devkit.toml` with the gate on, checked
+/// out on a branch.
+fn gated_repo() -> tempfile::TempDir {
+    let p = tempfile::tempdir().unwrap();
+    git(p.path(), &["init", "-q", "-b", "main"]);
+    std::fs::write(
+        p.path().join("devkit.toml"),
+        "[pr.gates]\nweakened_tests = \"require\"\n",
+    )
+    .unwrap();
+    git(p.path(), &["add", "devkit.toml"]);
+    git(p.path(), &["commit", "-q", "-m", "init"]);
+    git(p.path(), &["checkout", "-q", "-b", "feature"]);
+    p
+}
+
+#[test]
+fn a_local_layer_does_not_hide_a_gate_the_merge_base_sets() {
+    let p = gated_repo();
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        "[pr.gates]\nweakened_tests = \"off\"\n",
+    )
+    .unwrap();
+    let body = brief_in(p.path());
+    assert!(body.contains("`weakened_tests` (require)"), "{body}");
+}
+
+#[test]
+fn a_branch_commit_does_not_hide_a_gate_the_merge_base_sets() {
+    let p = gated_repo();
+    std::fs::write(
+        p.path().join("devkit.toml"),
+        "[pr.gates]\nweakened_tests = \"off\"\n",
+    )
+    .unwrap();
+    git(p.path(), &["commit", "-q", "-am", "loosen"]);
+    let body = brief_in(p.path());
     assert!(body.contains("`weakened_tests` (require)"), "{body}");
 }

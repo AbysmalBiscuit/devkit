@@ -55,9 +55,12 @@ use devkit_ports::{apps::App, load, registry, task};
 use devkit_rules::vocab::Severity;
 use pabal::AnyHarness;
 
-use crate::hook::{
-    HookEvent,
-    payload::{Holder, Payload},
+use crate::{
+    hook::{
+        HookEvent,
+        payload::{Holder, Payload},
+    },
+    issue::pr::weakened,
 };
 
 /// The hook a brief or a rules block answers: its payload, and whether the
@@ -417,7 +420,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
     let listing = devrun.as_ref().map(|loaded| Listing::of(loaded, settings));
     let gates = devrun
         .as_ref()
-        .map(|loaded| gates_on(&loaded.config.pr.gates))
+        .map(|loaded| gates_on(Path::new(&root), &loaded.config))
         .unwrap_or_default();
 
     // One probe, two consumers: `status_table` probes liveness itself, so
@@ -746,7 +749,7 @@ fn devrun_sections(
         locks: settings.locks,
         enforced: settings.locks
             && devkit_common::harness::writes_enabled(checkout, Path::new(root)),
-        gates: gates_on(&loaded.config.pr.gates),
+        gates: gates_on(Path::new(root), &loaded.config),
     };
     sections.facilities().any().then_some(sections)
 }
@@ -961,10 +964,21 @@ impl GateOn {
     }
 }
 
-/// The PR gates set to `advise` or `require`. Read from the working tree's
-/// config: `pr create` reads them at the merge base, which a branch has not
-/// changed yet when its session starts.
-fn gates_on(gates: &config::PrGates) -> Vec<(config::Gate, GateOn)> {
+/// The PR gates set to `advise` or `require`, read where `pr create` reads
+/// them: the `devkit.toml` committed at the merge base of HEAD with the
+/// default PR base, so neither a local layer nor a branch edit hides a gate
+/// the PR will meet. With no merge base to read (no base branch here, a
+/// shallow clone missing it), the working tree's merged config stands in.
+/// Computed once per process: the brief renders and stamps the same state.
+fn gates_on(root: &Path, config: &config::Config) -> Vec<(config::Gate, GateOn)> {
+    static GATES: OnceLock<config::PrGates> = OnceLock::new();
+    let gates = GATES.get_or_init(|| {
+        weakened::merge_base(root, &config.defaults.pr_base)
+            .ok()
+            .flatten()
+            .and_then(|base| weakened::config_at(root, &base).ok())
+            .map_or(config.pr.gates, |pr| pr.gates)
+    });
     gates
         .all()
         .into_iter()

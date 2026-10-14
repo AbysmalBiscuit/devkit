@@ -145,6 +145,20 @@ pub(crate) fn check(dir: &Path, base: &str, head: &str, tests: &TestFiles) -> Re
     Ok(flags)
 }
 
+/// The merge base of HEAD with PR base branch `base`, which resolves as
+/// `origin/<base>`, else `<base>`; `None` when neither is a commit here.
+/// `pr create` reads its gates there, and the brief reads them the same way.
+pub(crate) fn merge_base(dir: &Path, base: &str) -> Result<Option<String>> {
+    let vcs = Vcs::at(dir);
+    let origin = format!("origin/{base}");
+    for rev in [origin.as_str(), base] {
+        if vcs.has_revision(dir, rev)? {
+            return vcs.merge_base(dir, rev, "HEAD").map(Some);
+        }
+    }
+    Ok(None)
+}
+
 /// `[pr]` as the `devkit.toml` at the root of revision `rev` has it, the
 /// defaults when that revision has none.
 pub(crate) fn config_at(dir: &Path, rev: &str) -> Result<PrConfig> {
@@ -192,24 +206,13 @@ impl Gate {
     /// Read the gate for the branch at `dir` against PR base branch `base`,
     /// which resolves as `origin/<base>`, else `<base>`.
     pub(crate) fn read(dir: &Path, base: &str) -> Result<Self> {
-        let vcs = Vcs::at(dir);
-        let origin = format!("origin/{base}");
-        let base_rev = [origin.as_str(), base]
-            .into_iter()
-            .find_map(|rev| match vcs.has_revision(dir, rev) {
-                Ok(true) => Some(Ok(rev)),
-                Ok(false) => None,
-                Err(e) => Some(Err(e)),
-            })
-            .transpose()?
-            .with_context(|| {
-                format!(
-                    "the weakened-tests gate reads its settings from the merge base with \
-                     `{base}`, and neither `{origin}` nor `{base}` is a commit here: \
-                     fetch it, or pass --base"
-                )
-            })?;
-        let merge_base = vcs.merge_base(dir, base_rev, "HEAD")?;
+        let merge_base = merge_base(dir, base)?.with_context(|| {
+            format!(
+                "the weakened-tests gate reads its settings from the merge base with \
+                 `{base}`, and neither `origin/{base}` nor `{base}` is a commit here: \
+                 fetch it, or pass --base"
+            )
+        })?;
         let cfg = config_at(dir, &merge_base)?;
         let mode = cfg.gates.weakened_tests;
         let flags = match mode {
