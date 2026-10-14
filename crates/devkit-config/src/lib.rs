@@ -55,6 +55,10 @@ pub struct Config {
     /// ticket. `[issue]`, its old name, is read as this table.
     #[serde(default)]
     pub ticket: TicketConfig,
+    /// What `pr create` checks before it opens an agent's PR, and which
+    /// files count as tests.
+    #[serde(default)]
+    pub pr: PrConfig,
     /// Width of the shared worker pool. Machine tuning; carries no project
     /// convention, so a config may hold it alone.
     #[serde(default)]
@@ -1414,6 +1418,128 @@ pub struct ParallelismConfig {
     /// rayon reads a zero thread count as one thread per core. Raising it
     /// helps most where a stat is slow, such as a Windows drive under WSL.
     pub threads: Option<std::num::NonZeroUsize>,
+}
+
+/// Pull-request checks. `pr create` reads this table from the `devkit.toml`
+/// committed at the repository root at the branch's merge base with the PR
+/// base, never from the working tree or a local layer, so a branch cannot
+/// loosen the gates on its own PR.
+///
+/// ```
+/// # use devkit_config::{Config, GateMode};
+/// # let cfg = Config::parse(r#"
+/// [pr]
+/// test_files = ["spec/**/*_spec.rb", "**/*.test.ts"]
+///
+/// [pr.gates]
+/// weakened_tests = "advise"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.pr.gates.weakened_tests, GateMode::Advise);
+/// # assert_eq!(cfg.pr.test_files, ["spec/**/*_spec.rb", "**/*.test.ts"]);
+/// # let empty = Config::parse("").unwrap();
+/// # assert_eq!(empty.pr.gates.weakened_tests, GateMode::Require);
+/// # assert!(empty.pr.test_files.contains(&"**/*.test.*".to_string()));
+/// # assert!(Config::parse("[pr.gates]\nweakened_tests = \"maybe\"\n").is_err());
+/// # assert!(Config::parse("[pr.gates]\nweakend_tests = \"off\"\n").is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrConfig {
+    /// Glob patterns, relative to the repository root, for the files that
+    /// count as tests. `**` spans directories and `*` stays within one. When
+    /// unset, the usual Rust, JS/TS and Python layouts: `tests/` and `test/`
+    /// directories, `__tests__/`, `*.test.*` and `*.spec.*`, `*_test.rs`,
+    /// `test_*.py` and `*_test.py`. Unit tests inline in a Rust source file
+    /// are outside the defaults.
+    pub test_files: Vec<String>,
+    /// One key per PR gate.
+    pub gates: PrGates,
+}
+
+impl Default for PrConfig {
+    fn default() -> Self {
+        Self {
+            test_files: default_test_files(),
+            gates: PrGates::default(),
+        }
+    }
+}
+
+impl PrConfig {
+    /// The `[pr]` table of one `devkit.toml` layer's text, the defaults when
+    /// it has none. The rest of the layer is not read, so a key this build
+    /// does not know elsewhere in it does not stop the gates loading.
+    pub fn from_layer(text: &str) -> Result<Self> {
+        let mut table: toml::Table = toml::from_str(text).context("parsing devkit.toml")?;
+        match table.remove("pr") {
+            None => Ok(Self::default()),
+            Some(pr) => pr.try_into().context("parsing devkit.toml's [pr] table"),
+        }
+    }
+}
+
+/// The test-file patterns that apply when `[pr] test_files` is unset.
+pub fn default_test_files() -> Vec<String> {
+    [
+        "**/tests/**",
+        "**/test/**",
+        "**/__tests__/**",
+        "**/*.test.*",
+        "**/*.spec.*",
+        "**/*_test.rs",
+        "**/*_tests.rs",
+        "**/test_*.py",
+        "**/*_test.py",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+/// The PR gates and how hard each one holds. A gate applies to a PR an
+/// agent opens with `pr create`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrGates {
+    /// Flags a test file the branch deletes, a test file with fewer test
+    /// declarations or assertions than at the merge base, an existing test
+    /// file with more skip markers (`#[ignore]`, `.skip(`, `.skipIf(`,
+    /// `.todo(`, `@pytest.mark.skip`, ...) or a new `.only(`, and a new
+    /// tautological assertion such as `assert!(true)`. A line starting
+    /// `Test changes:` in the PR body clears the flags. `devkit pr
+    /// weakened-tests` runs the same check outside `pr create`.
+    pub weakened_tests: GateMode,
+}
+
+impl PrGates {
+    /// Each gate by its key, in a stable order.
+    pub fn all(&self) -> [(&'static str, GateMode); 1] {
+        [("weakened_tests", self.weakened_tests)]
+    }
+}
+
+/// How hard a PR gate holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GateMode {
+    /// The check does not run.
+    Off,
+    /// The check runs, and its findings are listed in the PR body without
+    /// holding the PR back.
+    Advise,
+    /// The check runs, and a finding the PR body does not account for
+    /// refuses the PR.
+    #[default]
+    Require,
+}
+
+impl GateMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Advise => "advise",
+            Self::Require => "require",
+        }
+    }
 }
 
 /// The state a PR is opened in by `pr create` when neither `--draft` nor
