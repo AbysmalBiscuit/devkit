@@ -5,7 +5,10 @@ use std::{collections::HashMap, sync::OnceLock};
 
 use anyhow::{Context, Result};
 
-use super::{AssignedIssue, IssueRef, PrRef, State, Tracker, TrackerKind};
+use super::{
+    AssignedIssue, IssueRef, PrRef, State, Tracker, TrackerKind, linear_tickets::LinearTickets,
+    tickets::SyncedTicket,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinearIdentity {
@@ -247,7 +250,21 @@ fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::
 }
 
 pub(crate) fn post_graphql(query: &str, key: &str, detail: &str) -> Result<serde_json::Value> {
-    let v = send(serde_json::json!({ "query": query }), key, detail)?;
+    post_graphql_with(query, serde_json::Value::Null, key, detail)
+}
+
+/// [`post_graphql`] with GraphQL `variables`.
+pub(crate) fn post_graphql_with(
+    query: &str,
+    variables: serde_json::Value,
+    key: &str,
+    detail: &str,
+) -> Result<serde_json::Value> {
+    let body = match variables {
+        serde_json::Value::Null => serde_json::json!({ "query": query }),
+        variables => serde_json::json!({ "query": query, "variables": variables }),
+    };
+    let v = send(body, key, detail)?;
     if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
         && !errors.is_empty()
     {
@@ -727,12 +744,38 @@ impl Tracker for LinearTracker {
     }
 
     fn check(&self) -> Result<String> {
-        let key = self
-            .key
-            .as_deref()
-            .context("no Linear API key — run `devkit auth linear`")?;
-        let id = validate(key)?;
+        let id = validate(self.required_key()?)?;
         Ok(format!("linear: {} ({})", id.org_name, id.viewer_email))
+    }
+
+    fn find_tickets(
+        &self,
+        rules: &[devkit_config::MatchRule],
+        closed_names: &[String],
+    ) -> Result<Vec<SyncedTicket>> {
+        self.ticket_reader()?.find(rules, closed_names)
+    }
+
+    fn tickets(&self, keys: &[String]) -> Result<Vec<SyncedTicket>> {
+        self.ticket_reader()?.read(keys)
+    }
+
+    fn status_names(&self, tickets: &[SyncedTicket]) -> Result<Vec<String>> {
+        self.ticket_reader()?.status_names(tickets)
+    }
+}
+
+impl LinearTracker {
+    fn required_key(&self) -> Result<&str> {
+        self.key
+            .as_deref()
+            .context("no Linear API key, run `devkit auth linear`")
+    }
+
+    fn ticket_reader(&self) -> Result<LinearTickets<'_>> {
+        Ok(LinearTickets {
+            key: self.required_key()?,
+        })
     }
 }
 

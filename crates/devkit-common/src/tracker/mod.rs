@@ -14,6 +14,7 @@ pub mod github_status;
 pub mod github_tickets;
 pub mod linear;
 pub mod linear_status;
+pub mod linear_tickets;
 pub mod none;
 mod select;
 pub mod status;
