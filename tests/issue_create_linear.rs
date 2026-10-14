@@ -195,6 +195,21 @@ fn a_retried_create_returns_the_first_ticket() {
 }
 
 #[test]
+fn a_retried_create_returns_the_first_ticket_after_it_was_archived() {
+    let fake = project(FIELDS);
+    let linear = LinearFake::start();
+    let mut archived: serde_json::Value = serde_json::from_str(&read(&[], 0)).unwrap();
+    archived["data"]["issue"]["nodes"][0]["archivedAt"] = "2026-10-01T00:00:00.000Z".into();
+    linear.answer("includeArchived: true", &archived.to_string());
+    linear.answer("issue: issues(", r#"{"data":{"issue":{"nodes":[]}}}"#);
+    linear.answer("issueCreate(", ID_TAKEN);
+    let out = run(&fake, &linear, &["create", "--title", "T", "--body", "B"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("ENG-42"), "{}", stdout(&out));
+    assert!(stderr(&out).contains("archived"), "{}", stderr(&out));
+}
+
+#[test]
 fn edit_on_linear_reads_first_and_writes_only_named_fields() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();

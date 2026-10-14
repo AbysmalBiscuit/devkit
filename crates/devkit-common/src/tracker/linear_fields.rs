@@ -56,19 +56,23 @@ pub struct LinearIssue {
     pub parent: Option<String>,
     /// Each blocker's identifier and the id of the relation that records it.
     pub blocked_by: Vec<(String, String)>,
+    /// Whether the issue is archived or in the trash.
+    pub archived: bool,
 }
 
 /// The issue fields every read selects.
 const ISSUE_FIELDS: &str = "id identifier url title team { id key } labels(first: 100) { nodes { id } } \
      assignee { id } priority estimate cycle { id } project { id } projectMilestone { id } dueDate \
-     parent { identifier } inverseRelations(first: 100) { nodes { id type issue { identifier } } }";
+     parent { identifier } inverseRelations(first: 100) { nodes { id type issue { identifier } } } \
+     archivedAt";
 
 /// Which issue a [`read_query`] reads.
 #[derive(Debug, Clone, Copy)]
 pub enum Lookup<'a> {
     /// A `TEAM-NUMBER` identifier.
     Identifier(&'a str),
-    /// The issue's own id, as [`create_id`] gives it.
+    /// The issue's own id, as [`create_id`] gives it, archived or trashed
+    /// issues included.
     Uuid(Uuid),
     /// No issue: only the references.
     None,
@@ -91,7 +95,7 @@ pub fn read_query(lookup: Lookup<'_>, refs: &BTreeSet<String>) -> Result<String>
             by_identifier(id)?
         )),
         Lookup::Uuid(u) => parts.push(format!(
-            "issue: issues(filter: {{ id: {{ eq: \"{u}\" }} }}) {{ nodes {{ {ISSUE_FIELDS} }} }}"
+            "issue: issues(filter: {{ id: {{ eq: \"{u}\" }} }}, includeArchived: true) {{ nodes {{ {ISSUE_FIELDS} }} }}"
         )),
         Lookup::None => {}
     }
@@ -145,6 +149,7 @@ pub fn parse_issue(resp: &Json) -> Result<Option<LinearIssue>> {
             .filter(|r| r["type"] == "blocks")
             .filter_map(|r| Some((text(r, "/issue/identifier")?, text(r, "/id")?)))
             .collect(),
+        archived: text(n, "/archivedAt").is_some(),
     }))
 }
 

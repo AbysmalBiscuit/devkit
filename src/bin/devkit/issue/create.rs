@@ -204,6 +204,9 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
             "note: {ident} already had this create's id, so an earlier run of the same \
              `ticket create` filed it; no second ticket was filed"
         );
+        if issue.archived {
+            eprintln!("note: {ident} is archived or in the trash");
+        }
     }
     let (_, problems) = field_write::linear_finish(&writer, issue, decls, &written, &refs, false);
     field_write::warn(decls, &report);
