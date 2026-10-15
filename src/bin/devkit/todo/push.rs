@@ -15,13 +15,12 @@ use devkit_common::{
     tracker::{
         self, github_status,
         status::{self, StatusWriter as _},
-        tickets::TicketStatus,
     },
 };
 use devkit_config::PushKind;
 use devkit_todo::{
     Edit, Holder, Todo, TodoStore as _,
-    push::{LocalStatus, Verdict, status_verdict},
+    push::{FieldWrite, LocalStatus, StatusVerdict, Verdict, status_verdict},
     ticket::status_name,
 };
 
@@ -97,35 +96,25 @@ pub(crate) fn push_status(
         .ticket
         .as_ref()
         .and_then(|t| t.synced_status.as_deref());
-    let verdict = status_verdict(push.local, baseline, &current, transition, tracker.kind());
-    let write = match &verdict {
-        Verdict::Write => true,
-        Verdict::Already | Verdict::NoMove => false,
-        Verdict::Conflict { .. } if push.overwrite => true,
-        Verdict::Conflict { current, baseline } => {
-            let values = format!(
-                "tracker {current:?}, last synced {baseline:?}, local {}",
-                push.local.word()
-            );
-            if push.caller != Caller::Human || !std::io::stdin().is_terminal() {
-                bail!(
-                    "{key} changed on the tracker since the last sync: {values}. Ask the user; \
-                     rerun with --overwrite-tracker to write over it, or run `devkit todo sync \
-                     --ticket {key}` to take the tracker's value."
-                );
-            }
-            if !confirm(&format!("{key}: {values}. Write over the tracker?")) {
-                let node = todo.node().to_string();
-                if super::tickets::sync_ticket(store, push.cwd, &node, key)? {
-                    eprintln!("devkit todo: {key} left as the tracker has it");
-                }
-                return Ok(false);
-            }
-            true
+    let StatusVerdict { verdict, writes } =
+        status_verdict(push.local, baseline, &current, transition, tracker.kind());
+    if let Verdict::Conflict { current, baseline } = &verdict {
+        let values = format!(
+            "tracker {current:?}, last synced {baseline:?}, local {}",
+            push.local.word()
+        );
+        let conflict = Conflict {
+            key,
+            values: &values,
+            overwrite: push.overwrite,
+            caller: push.caller,
+        };
+        if !conflict.settle()? {
+            take_tracker_value(store, push.cwd, todo.node(), key)?;
+            return Ok(false);
         }
-    };
-    let closing = closes.filter(|_| write || verdict == Verdict::NoMove);
-    if let Some(reason) = closing {
+    }
+    if let Some(reason) = writes.close {
         let repo = selected.forge.repos.issues().with_context(unchanged)?;
         github_status::close_issue(repo, github_status::number(key, &repo.slug)?, reason)
             .with_context(unchanged)?;
@@ -133,30 +122,22 @@ pub(crate) fn push_status(
             eprintln!("devkit todo: ticket {key} closed; [ticket.events.{event}] not moved: {e:#}");
         }
     }
-    if let (Some(writer), Some(t)) = (&writer, transition) {
-        let field = match (write, &verdict) {
-            (true, _) => Some(status::set_status(writer, key, event, &t.to)),
-            (false, Verdict::Already) if closes.is_some() => {
-                Some(writer.move_status(key, event, t))
-            }
-            _ => None,
+    if let (Some(writer), Some(t), Some(field)) = (&writer, transition, writes.field) {
+        let moved = match field {
+            FieldWrite::Set => status::set_status(writer, key, event, &t.to),
+            FieldWrite::Move => writer.move_status(key, event, t),
         };
-        if let Some(moved) = field {
-            moved.with_context(|| match closing {
-                Some(_) => format!("ticket {key} closed, but its [ticket.events.{event}] move failed; todo {short} is unchanged"),
-                None => unchanged(),
-            })?;
-        }
+        moved.with_context(|| match writes.close {
+            Some(_) => format!(
+                "ticket {key} closed, but its [ticket.events.{event}] move failed; todo {short} \
+                 is unchanged"
+            ),
+            None => unchanged(),
+        })?;
     }
-    let recorded = match (closing, write, &verdict) {
-        (Some(reason), ..) => Some(status_name(&TicketStatus::Closed(reason))),
-        (None, true, _) => transition.map(|t| t.to.clone()),
-        (None, false, Verdict::Already) => Some(status_name(&current)),
-        (None, false, _) => None,
-    };
     if verdict == Verdict::NoMove {
         let now = status_name(&current);
-        let moved = if closing.is_some() {
+        let moved = if writes.close.is_some() {
             "closed; its status"
         } else {
             "not moved:"
@@ -166,13 +147,53 @@ pub(crate) fn push_status(
         );
     }
     store.apply_unfired(edit)?;
-    if let Some(synced_status) = recorded {
+    if let Some(synced_status) = writes.record {
         store.apply(&Edit::RecordSync {
             id: todo.id.clone(),
             synced_status,
         })?;
     }
     Ok(true)
+}
+
+/// A tracker value that changed since the last sync, standing in a push's way.
+struct Conflict<'a> {
+    key: &'a str,
+    /// The tracker's value, the last synced one and the local change.
+    values: &'a str,
+    overwrite: bool,
+    caller: Caller,
+}
+
+impl Conflict<'_> {
+    /// Whether to write over the tracker: with `--overwrite-tracker`, or when
+    /// a person at a terminal confirms. An agent, or a person without a
+    /// terminal, gets an error naming the values and the flag instead.
+    fn settle(&self) -> Result<bool> {
+        let Self { key, values, .. } = self;
+        if self.overwrite {
+            return Ok(true);
+        }
+        if self.caller != Caller::Human || !std::io::stdin().is_terminal() {
+            bail!(
+                "{key} changed on the tracker since the last sync: {values}. Ask the user; \
+                 rerun with --overwrite-tracker to write over it, or run `devkit todo sync \
+                 --ticket {key}` to take the tracker's value."
+            );
+        }
+        Ok(confirm(&format!(
+            "{key}: {values}. Write over the tracker?"
+        )))
+    }
+}
+
+/// After a person declines to write over the tracker: syncs `key` into
+/// `node` so its todo takes the tracker's value.
+fn take_tracker_value(store: &Store, cwd: &Path, node: &str, key: &str) -> Result<()> {
+    if super::tickets::sync_ticket(store, cwd, node, key)? {
+        eprintln!("devkit todo: {key} left as the tracker has it");
+    }
+    Ok(())
 }
 
 fn confirm(question: &str) -> bool {

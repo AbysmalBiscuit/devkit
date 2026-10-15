@@ -66,6 +66,38 @@ pub enum Verdict {
     Conflict { current: String, baseline: String },
 }
 
+/// A status push's [`Verdict`] and what following it writes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusVerdict {
+    pub verdict: Verdict,
+    /// What the push writes and records when it goes ahead: for `Write`,
+    /// `Already` and `NoMove` as they stand, and for a `Conflict` once it is
+    /// settled in favour of writing over the tracker.
+    pub writes: StatusWrites,
+}
+
+/// The tracker writes a status push makes, in order, and the status it then
+/// records as the ticket's last synced one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StatusWrites {
+    /// Close the GitHub issue for this reason.
+    pub close: Option<CloseReason>,
+    /// Write the event's status field.
+    pub field: Option<FieldWrite>,
+    /// The status recorded once the writes land.
+    pub record: Option<String>,
+}
+
+/// How a status push writes the event's `to`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldWrite {
+    /// Set it, with no `from` check: the verdict already decided.
+    Set,
+    /// Move it as the event's `from` allows: the issue is already closed as
+    /// the change asks, and a project field may still lag behind.
+    Move,
+}
+
 /// How a missing baseline or link reads in a conflict.
 const NONE: &str = "(none)";
 
@@ -85,6 +117,36 @@ fn named_from(event: &EventTransition) -> impl Iterator<Item = &str> {
 /// and `cancel` also close the issue, so a closed issue is compared by its
 /// close reason and an open one by its project field.
 pub fn status_verdict(
+    local: LocalStatus,
+    baseline: Option<&str>,
+    current: &TicketStatus,
+    event: Option<&EventTransition>,
+    tracker: TrackerKind,
+) -> StatusVerdict {
+    let verdict = verdict_of(local, baseline, current, event, tracker);
+    let closes = local.closes(tracker);
+    let closed = closes.map(|reason| status_name(&TicketStatus::Closed(reason)));
+    let writes = match &verdict {
+        Verdict::Write | Verdict::Conflict { .. } => StatusWrites {
+            close: closes,
+            field: event.map(|_| FieldWrite::Set),
+            record: closed.or_else(|| event.map(|e| e.to.clone())),
+        },
+        Verdict::Already => StatusWrites {
+            close: None,
+            field: (closes.is_some() && event.is_some()).then_some(FieldWrite::Move),
+            record: Some(status_name(current)),
+        },
+        Verdict::NoMove => StatusWrites {
+            close: closes,
+            field: None,
+            record: closed,
+        },
+    };
+    StatusVerdict { verdict, writes }
+}
+
+fn verdict_of(
     local: LocalStatus,
     baseline: Option<&str>,
     current: &TicketStatus,
@@ -191,7 +253,8 @@ mod tests {
             &named(" done"),
             Some(&done),
             LINEAR,
-        );
+        )
+        .verdict;
         assert_eq!(v, Verdict::Already);
     }
 
@@ -204,7 +267,8 @@ mod tests {
             &named("todo"),
             Some(&done),
             LINEAR,
-        );
+        )
+        .verdict;
         assert_eq!(v, Verdict::Write);
         let done = event(&["Todo", "In progress"], "Done");
         let v = status_verdict(
@@ -213,7 +277,8 @@ mod tests {
             &named("Todo"),
             Some(&done),
             LINEAR,
-        );
+        )
+        .verdict;
         assert_eq!(v, Verdict::Write);
     }
 
@@ -226,7 +291,8 @@ mod tests {
             &named("Backlog"),
             Some(&start),
             LINEAR,
-        );
+        )
+        .verdict;
         assert_eq!(v, Verdict::NoMove);
     }
 
@@ -239,7 +305,8 @@ mod tests {
             &named("In review"),
             Some(&done),
             LINEAR,
-        );
+        )
+        .verdict;
         assert_eq!(v, Verdict::Write);
     }
 
@@ -253,7 +320,8 @@ mod tests {
                 &named("Backlog"),
                 Some(&done),
                 LINEAR,
-            );
+            )
+            .verdict;
             assert_eq!(v, conflict("Backlog", "Todo"), "from {from:?}");
         }
     }
@@ -267,7 +335,8 @@ mod tests {
             &named("Backlog"),
             Some(&done),
             LINEAR,
-        );
+        )
+        .verdict;
         assert_eq!(v, conflict("Backlog", "Todo"));
         let v = status_verdict(
             LocalStatus::Done,
@@ -275,7 +344,8 @@ mod tests {
             &named("Todo"),
             Some(&event(&["*"], "Done")),
             LINEAR,
-        );
+        )
+        .verdict;
         assert_eq!(v, conflict("Todo", "(none)"));
     }
 
@@ -284,7 +354,7 @@ mod tests {
         let closed = TicketStatus::Closed(CloseReason::Completed);
         let done = event(&["*"], "Done");
         for event in [None, Some(&done)] {
-            let v = status_verdict(LocalStatus::Done, Some("Todo"), &closed, event, GITHUB);
+            let v = status_verdict(LocalStatus::Done, Some("Todo"), &closed, event, GITHUB).verdict;
             assert_eq!(v, Verdict::Already);
         }
         let not_planned = TicketStatus::Closed(CloseReason::NotPlanned);
@@ -294,7 +364,8 @@ mod tests {
             &not_planned,
             None,
             GITHUB,
-        );
+        )
+        .verdict;
         assert_eq!(v, Verdict::Already);
     }
 
@@ -303,18 +374,19 @@ mod tests {
         let not_planned = TicketStatus::Closed(CloseReason::NotPlanned);
         let done = event(&["*"], "Done");
         for event in [None, Some(&done)] {
-            let v = status_verdict(LocalStatus::Done, Some("Todo"), &not_planned, event, GITHUB);
+            let v = status_verdict(LocalStatus::Done, Some("Todo"), &not_planned, event, GITHUB)
+                .verdict;
             assert_eq!(v, conflict("closed:not_planned", "Todo"));
         }
         let completed = TicketStatus::Closed(CloseReason::Completed);
-        let v = status_verdict(LocalStatus::Cancel, Some("Todo"), &completed, None, GITHUB);
+        let v = status_verdict(LocalStatus::Cancel, Some("Todo"), &completed, None, GITHUB).verdict;
         assert_eq!(v, conflict("closed:completed", "Todo"));
     }
 
     #[test]
     fn github_open_without_event_writes() {
         for local in [LocalStatus::Done, LocalStatus::Cancel] {
-            let v = status_verdict(local, Some("Todo"), &named("Backlog"), None, GITHUB);
+            let v = status_verdict(local, Some("Todo"), &named("Backlog"), None, GITHUB).verdict;
             assert_eq!(v, Verdict::Write, "{local:?}");
         }
     }
@@ -328,7 +400,8 @@ mod tests {
             &named("Done"),
             Some(&done),
             GITHUB,
-        );
+        )
+        .verdict;
         assert_eq!(v, Verdict::NoMove);
         let v = status_verdict(
             LocalStatus::Done,
@@ -336,7 +409,8 @@ mod tests {
             &named("Done"),
             Some(&done),
             GITHUB,
-        );
+        )
+        .verdict;
         assert_eq!(v, conflict("Done", "Todo"));
     }
 
@@ -348,8 +422,105 @@ mod tests {
             &named("Todo"),
             None,
             GITHUB,
-        );
+        )
+        .verdict;
         assert_eq!(v, Verdict::NoMove);
+    }
+
+    fn writes(close: Option<CloseReason>, field: Option<FieldWrite>, record: &str) -> StatusWrites {
+        StatusWrites {
+            close,
+            field,
+            record: (!record.is_empty()).then(|| record.to_string()),
+        }
+    }
+
+    #[test]
+    fn a_write_closes_sets_the_field_and_records_what_it_wrote() {
+        let done = event(&["*"], "Done");
+        let todo = named("Todo");
+        let v = status_verdict(LocalStatus::Done, Some("Todo"), &todo, Some(&done), GITHUB);
+        assert_eq!(v.verdict, Verdict::Write);
+        let closed = Some(CloseReason::Completed);
+        assert_eq!(
+            v.writes,
+            writes(closed, Some(FieldWrite::Set), "closed:completed")
+        );
+        let v = status_verdict(LocalStatus::Done, Some("Todo"), &todo, Some(&done), LINEAR);
+        assert_eq!(v.writes, writes(None, Some(FieldWrite::Set), "Done"));
+        let v = status_verdict(LocalStatus::Cancel, Some("Todo"), &todo, None, GITHUB);
+        let closed = Some(CloseReason::NotPlanned);
+        assert_eq!(v.writes, writes(closed, None, "closed:not_planned"));
+    }
+
+    #[test]
+    fn a_conflict_written_over_writes_as_a_write() {
+        let done = event(&["Todo"], "Done");
+        let v = status_verdict(
+            LocalStatus::Done,
+            Some("Todo"),
+            &named("Backlog"),
+            Some(&done),
+            GITHUB,
+        );
+        assert_eq!(v.verdict, conflict("Backlog", "Todo"));
+        let closed = Some(CloseReason::Completed);
+        assert_eq!(
+            v.writes,
+            writes(closed, Some(FieldWrite::Set), "closed:completed")
+        );
+    }
+
+    #[test]
+    fn an_issue_already_closed_moves_only_its_field() {
+        let closed = TicketStatus::Closed(CloseReason::Completed);
+        let done = event(&["Todo"], "Done");
+        let v = status_verdict(
+            LocalStatus::Done,
+            Some("Todo"),
+            &closed,
+            Some(&done),
+            GITHUB,
+        );
+        assert_eq!(v.verdict, Verdict::Already);
+        assert_eq!(
+            v.writes,
+            writes(None, Some(FieldWrite::Move), "closed:completed")
+        );
+        let v = status_verdict(LocalStatus::Done, Some("Todo"), &closed, None, GITHUB);
+        assert_eq!(v.writes, writes(None, None, "closed:completed"));
+        let v = status_verdict(
+            LocalStatus::Done,
+            Some("Todo"),
+            &named("Done"),
+            Some(&done),
+            LINEAR,
+        );
+        assert_eq!(v.writes, writes(None, None, "Done"));
+    }
+
+    #[test]
+    fn no_move_still_closes_and_records_only_the_close() {
+        let done = event(&["Todo"], "Done");
+        let backlog = named("Backlog");
+        let v = status_verdict(
+            LocalStatus::Done,
+            Some("Backlog"),
+            &backlog,
+            Some(&done),
+            GITHUB,
+        );
+        assert_eq!(v.verdict, Verdict::NoMove);
+        let closed = Some(CloseReason::Completed);
+        assert_eq!(v.writes, writes(closed, None, "closed:completed"));
+        let v = status_verdict(
+            LocalStatus::Done,
+            Some("Backlog"),
+            &backlog,
+            Some(&done),
+            LINEAR,
+        );
+        assert_eq!(v.writes, StatusWrites::default());
     }
 
     #[test]
