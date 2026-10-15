@@ -298,8 +298,9 @@ pub(super) fn decide(
 /// levels, from config, the call's input and the local `origin` remote. A
 /// rule naming no `tracker`, a repository using another tracker or declaring
 /// no fields, and a GitHub call to a repository other than the issues
-/// repository are allowed here. A create carries every field its level requires; an update
-/// is judged on the fields it carries. A value is refused at every level.
+/// repository are allowed here. A create carries every field its level
+/// requires; an update is judged on the fields it carries. A value is refused
+/// at every level.
 pub(super) fn field_verdict(
     rule: &RenderedToolRule,
     tool: &str,
@@ -831,15 +832,14 @@ level  = "info"
             ),
             "with no issues repository to compare against, every call is checked"
         );
-        for args in [
-            &["init", "-q"][..],
-            &["remote", "add", "origin", "git@github.com:acme/app.git"],
-        ] {
+        let git = |args: &[&str]| {
             devkit_git::Git::fixture(dir.path())
                 .args(args.iter().copied())
                 .output()
-                .unwrap();
-        }
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["remote", "add", "origin", "git@github.com:acme/app.git"]);
         assert_eq!(
             fields_in(dir.path(), &github_rule(), &toml, other),
             Verdict::Allow

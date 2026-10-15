@@ -16,8 +16,7 @@ use devkit_common::{
     },
 };
 use devkit_config::{
-    CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS,
-    TrackerKind,
+    CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS, TrackerKind,
 };
 use serde::Serialize;
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
