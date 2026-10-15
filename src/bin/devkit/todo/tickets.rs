@@ -24,7 +24,7 @@ use devkit_todo::{
     layout::{Facts, Layout},
     node,
     render::TicketWork,
-    ticket::{self, SyncPlan},
+    ticket::{self, Change, SyncPlan},
 };
 
 /// What a ticket sync did.
@@ -89,23 +89,30 @@ pub(crate) fn sync_tickets(
             changed: 0,
         }));
     }
-    let ids = existing
+    let planned_on: HashMap<String, &Todo> = existing
         .iter()
         .filter_map(|t| {
             let ticket = t.ticket.as_ref().filter(|r| r.tracker == kind)?;
-            Some((ticket.key.clone(), t.id.clone()))
+            Some((ticket.key.clone(), t))
         })
         .collect();
-    apply(store, &plan, ids).map(Some)
+    apply(store, &plan, &planned_on).map(Some)
 }
 
 /// Lands `plan`'s adds, then its edits, each ticket key resolved through
-/// `ids` and the ids the adds return.
+/// `planned_on`, the todos the plan was made from, and the ids the adds
+/// return. A status or description edit whose todo changed that field since
+/// `planned_on` was read is skipped: the change made while the tracker
+/// answered wins.
 fn apply(
     store: &impl TodoStore,
     plan: &SyncPlan,
-    mut ids: HashMap<String, String>,
+    planned_on: &HashMap<String, &Todo>,
 ) -> Result<SyncReport> {
+    let mut ids: HashMap<String, String> = planned_on
+        .iter()
+        .map(|(key, todo)| (key.clone(), todo.id.clone()))
+        .collect();
     for add in &plan.adds {
         let key = add
             .ticket
@@ -116,7 +123,13 @@ fn apply(
         ids.insert(key, id);
     }
     for edit in &plan.edits {
-        store.apply(&edit.resolve(&ids)?)?;
+        let resolved = edit.resolve(&ids)?;
+        if let Some(seen) = planned_on.get(&edit.key)
+            && moved_since(store, seen, &edit.change)?
+        {
+            continue;
+        }
+        store.apply(&resolved)?;
     }
     let mut changed: Vec<&str> = plan.edits.iter().map(|e| e.key.as_str()).collect();
     changed.sort();
@@ -133,6 +146,22 @@ fn apply(
             })
             .count(),
     })
+}
+
+/// Whether the todo `seen` describes now holds another value in `store` for
+/// the status or description `change` sets, or is gone; false for a change
+/// that sets neither.
+fn moved_since(store: &impl TodoStore, seen: &Todo, change: &Change) -> Result<bool> {
+    let field_moved: fn(&Todo, &Todo) -> bool = match change {
+        Change::SetStatus(_) => |now, seen| now.status != seen.status,
+        Change::Describe(_) => |now, seen| now.description != seen.description,
+        Change::RecordSync(_) | Change::Move(_) | Change::Block(_) | Change::Unblock(_) => {
+            return Ok(false);
+        }
+    };
+    Ok(store
+        .get(&seen.id)?
+        .is_none_or(|now| field_moved(&now, seen)))
 }
 
 /// The ticket sync's state files for one repository node.

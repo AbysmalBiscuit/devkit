@@ -337,6 +337,36 @@ fn a_closed_ticket_finishes_its_todo_as_the_tracker() {
 }
 
 #[test]
+fn a_todo_finished_while_the_tracker_answers_stays_finished() {
+    let s = two_issues();
+    assert!(s.sync(&[]).status.success());
+    let id = s.todo_for("o/r#65").id;
+    s.serve(
+        "graphql.json",
+        &graphql(
+            &[issue(65, Some("In progress"), &[66]), issue(66, None, &[])],
+            &OPTIONS,
+        ),
+    );
+    let hang = s.bin.path().join("hang");
+    std::fs::write(&hang, "").unwrap();
+    let before = s.calls().lines().count();
+    std::thread::scope(|scope| {
+        let sync = scope.spawn(|| s.sync(&[]));
+        poll("the sync to reach the tracker", || {
+            s.calls().lines().count() > before
+        });
+        let done = s.devkit(&["todo", "done", &id], &[]);
+        std::fs::remove_file(&hang).unwrap();
+        assert!(done.status.success(), "{}", stderr(&done));
+        let out = sync.join().unwrap();
+        assert!(out.status.success(), "{}", stderr(&out));
+    });
+    let status = s.todo_for("o/r#65").status;
+    assert!(matches!(status, Status::Completed { .. }), "{status:?}");
+}
+
+#[test]
 fn where_github_refuses_graphql_rest_reads_the_tickets() {
     let s = Synced::new(
         &format!("{RULES}\n[ticket.sync.statuses]\n\"\" = \"pending\"\n"),
