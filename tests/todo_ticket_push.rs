@@ -1326,6 +1326,24 @@ fn promote_of_a_ticket_todo_is_refused() {
 }
 
 #[test]
+fn promote_of_a_closed_todo_is_refused() {
+    let s = linked("", None, false);
+    files_68(&s, "Todo");
+    for verb in ["done", "cancel"] {
+        let step = add(&s, &["write the parser"]);
+        let out = s.devkit(&["todo", verb, &step], &AGENT);
+        assert!(out.status.success(), "{verb}: {}", stderr(&out));
+        let before = s.proj.todo(&step);
+        let out = s.devkit(&["todo", "promote", &step], &AGENT);
+        assert_eq!(out.status.code(), Some(1), "{verb}: {}", stderr(&out));
+        let err = stderr(&out);
+        assert!(err.contains("not promoted") && err.contains("closed"), "{verb}: {err}");
+        assert!(!s.calls().contains("issue create"), "{verb}: {}", s.calls());
+        assert_eq!(s.proj.todo(&step), before, "{verb}");
+    }
+}
+
+#[test]
 fn promote_without_a_required_parent_names_the_likely_parents() {
     let s = Synced::new(
         &format!(

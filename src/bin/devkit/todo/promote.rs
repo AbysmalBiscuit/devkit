@@ -51,6 +51,9 @@ pub(crate) fn promote(at: &Promote, id: &str, ticket: Option<&str>, filing: Fili
             t.key
         );
     }
+    if !old.status.kind().is_open() {
+        bail!("todo {short} not promoted: it is closed, and promote takes an open todo");
+    }
     transition(&old.status, StatusKind::Cancelled, at.actor)?;
     if store.ticket().sync.rules.is_empty() {
         bail!(
