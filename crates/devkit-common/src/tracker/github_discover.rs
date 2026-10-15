@@ -202,10 +202,7 @@ pub fn parse(
                 .flatten()
                 .filter_map(id_name)
                 .collect();
-            let mut key = field_name(name);
-            if key.is_empty() || out.fields.contains_key(&key) {
-                key = format!("project_{key}").trim_end_matches('_').to_string();
-            }
+            let key = project_field_key(name, id, &out);
             let place = Place::ProjectField {
                 id: id.to_string(),
                 name: name.to_string(),
@@ -232,6 +229,29 @@ pub fn parse(
         })
         .collect();
     Ok(out)
+}
+
+/// The key a project field called `name` with node id `id` is added under:
+/// its name's, else that prefixed `project_`, else when its name has no
+/// letter or digit or both are taken, its id's, numbered past any taken.
+fn project_field_key(name: &str, id: &str, out: &Discovered) -> String {
+    let free = |k: &String| !k.is_empty() && !out.fields.contains_key(k);
+    let named = field_name(name);
+    if !named.is_empty()
+        && let Some(key) = [named.clone(), format!("project_{named}")]
+            .into_iter()
+            .find(free)
+    {
+        return key;
+    }
+    let base = match field_name(id) {
+        b if b.is_empty() => "project_field".to_string(),
+        b => b,
+    };
+    std::iter::once(base.clone())
+        .chain((2..).map(|n| format!("{base}_{n}")))
+        .find(free)
+        .unwrap_or(base)
 }
 
 /// Read `repo`'s fields, and `project`'s, from GitHub, each list to its
@@ -323,6 +343,32 @@ mod tests {
         let found = parse(&response(), "Status", &people()).unwrap();
         assert_eq!(found.unwritable, ["`Sprint` (ITERATION)"]);
         assert!(!found.fields.contains_key("sprint"));
+    }
+
+    #[test]
+    fn a_project_field_never_takes_a_key_already_used() {
+        let mut resp = response();
+        let fields = resp
+            .pointer_mut("/data/repositoryOwner/projectV2/fields/nodes")
+            .and_then(Json::as_array_mut)
+            .unwrap();
+        fields.extend([
+            json!({ "id": "PVTF_jp", "name": "優先度", "dataType": "TEXT" }),
+            json!({ "id": "PVTF_sp2", "name": "Story-points", "dataType": "NUMBER" }),
+            json!({ "id": "PVTF_sp3", "name": "story points!", "dataType": "NUMBER" }),
+            json!({ "id": "PVTF-sp3", "name": "Story points?", "dataType": "NUMBER" }),
+        ]);
+        let found = parse(&resp, "Status", &people()).unwrap();
+        assert_eq!(found.fields["project"].r#where, Place::Project);
+        let at = |key: &str| match &found.fields[key].r#where {
+            Place::ProjectField { id, .. } => id.clone(),
+            other => panic!("{key}: {other:?}"),
+        };
+        assert_eq!(at("story_points"), "PVTF_e");
+        assert_eq!(at("project_story_points"), "PVTF_sp2");
+        assert_eq!(at("pvtf_jp"), "PVTF_jp");
+        assert_eq!(at("pvtf_sp3"), "PVTF_sp3");
+        assert_eq!(at("pvtf_sp3_2"), "PVTF-sp3");
     }
 
     #[test]
