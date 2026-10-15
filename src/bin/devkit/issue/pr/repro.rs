@@ -816,7 +816,8 @@ fn split(path: &str, before: Option<&str>, after: Option<&str>) -> Split {
 /// `text` split into its source lines and the lines of its test modules: a
 /// `mod` item under a `#[cfg]` that holds only in test builds, from that
 /// attribute to the `}` line indented as the `mod` line is. `None` when a
-/// test module's closing line is not found, so the split is unknown.
+/// test module's closing line is not found, or a test attribute follows it
+/// before the next test module, so the split is unknown.
 fn rust_parts(text: &str) -> Option<(String, String)> {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let (mut source, mut tests) = (String::new(), String::new());
@@ -879,16 +880,47 @@ fn test_module(lines: &[&str], at: usize) -> Module {
         return Module::Unbounded;
     }
     let indent = &lines[item][..lines[item].len() - lines[item].trim_start().len()];
-    lines
+    let Some(end) = lines.iter().skip(item + 1).position(|line| {
+        line.strip_prefix(indent)
+            .and_then(|l| l.strip_prefix('}'))
+            .is_some_and(|l| l.trim().is_empty() || l.trim_start().starts_with("//"))
+    }) else {
+        return Module::Unbounded;
+    };
+    let end = item + 1 + end;
+    // A `}` line inside a string ends the search early; a test after it
+    // shows the module went on.
+    let tests_follow = lines[end + 1..]
         .iter()
-        .enumerate()
-        .skip(item + 1)
-        .find(|(_, line)| {
-            line.strip_prefix(indent)
-                .and_then(|l| l.strip_prefix('}'))
-                .is_some_and(|l| l.trim().is_empty() || l.trim_start().starts_with("//"))
-        })
-        .map_or(Module::Unbounded, |(end, _)| Module::Ends(end))
+        .map(|l| l.trim_start())
+        .take_while(|l| !starts_test_cfg(l))
+        .any(is_test_attribute);
+    if tests_follow {
+        Module::Unbounded
+    } else {
+        Module::Ends(end)
+    }
+}
+
+/// Whether `line` opens with a `#[cfg]` that holds only in test builds.
+fn starts_test_cfg(line: &str) -> bool {
+    line.strip_prefix("#[cfg(")
+        .and_then(balanced)
+        .is_some_and(|(predicate, _)| only_in_tests(predicate))
+}
+
+/// Whether `line` opens with an attribute marking a test function:
+/// `#[test]`, a `#[...::test]` such as `#[tokio::test]`, `#[rstest]` or
+/// `#[test_case(...)]`.
+fn is_test_attribute(line: &str) -> bool {
+    let Some(attr) = line.strip_prefix("#[") else {
+        return false;
+    };
+    let name = attr
+        .split(|c: char| c == '(' || c == ']' || c.is_whitespace())
+        .next()
+        .unwrap_or("");
+    name == "test" || name.ends_with("::test") || name == "rstest" || name == "test_case"
 }
 
 /// `text` up to the `)` closing a `(` already read, and what follows it.
@@ -1196,6 +1228,25 @@ mod tests {
             &[("src/a.rs", "#[cfg(test)]\nmod tests;\n")],
             "src/a/tests.txt"
         ));
+    }
+
+    #[test]
+    fn a_test_after_a_test_modules_closing_line_leaves_it_unbounded() {
+        let src = "fn f() -> u8 { 1 }\n\n#[cfg(test)]\nmod tests {\n    const FIXTURE: &str = \
+                   r#\"\nfn x() {\n}\n\"#;\n\n    #[test]\n    fn t() {}\n}\n";
+        let tested = src.replace("fn t() {}", "fn t() { assert!(true) }");
+        assert_eq!(split("a.rs", Some(src), Some(&tested)), Split::Both);
+        let later = format!("{src}\n#[cfg(test)]\nmod more {{\n    #[test]\n    fn u() {{}}\n}}\n");
+        let fixed = later.replace("{ 1 }", "{ 2 }");
+        assert_eq!(
+            split("a.rs", Some(&later), Some(&fixed)),
+            Split::Both,
+            "{later}"
+        );
+        let two = "#[cfg(test)]\nmod a {\n    #[test]\n    fn t() {}\n}\n\n#[cfg(test)]\nmod b \
+                   {\n    #[tokio::test]\n    async fn u() {}\n}\n\nfn f() -> u8 { 1 }\n";
+        let fixed = two.replace("{ 1 }", "{ 2 }");
+        assert_eq!(split("a.rs", Some(two), Some(&fixed)), Split::Source);
     }
 
     fn ran(exit: i32) -> Ran {

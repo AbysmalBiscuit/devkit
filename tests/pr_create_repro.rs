@@ -242,6 +242,30 @@ fn a_fix_updating_an_out_of_line_test_module_keeps_that_module() {
     );
 }
 
+#[test]
+fn a_test_module_whose_end_is_unclear_is_inconclusive() {
+    let p = project(GATE, FIX);
+    let module = |expect: &str| {
+        format!(
+            "fn f() {{}}\n\n#[cfg(test)]\nmod tests {{\n    const FIXTURE: &str = r#\"\nfn x() \
+             {{\n}}\n\"#;\n\n    #[test]\n    fn t() {{ assert_eq!(FIXTURE, \"{expect}\"); }}\n}}\n"
+        )
+    };
+    git(&p, &["checkout", "-q", "main"]);
+    write(&p, "src/fixture.rs", &module("old"));
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "a module with a fixture"]);
+    git(&p, &["checkout", "-q", "-"]);
+    git(&p, &["rebase", "-q", "main"]);
+    write(&p, "src/fixture.rs", &module("new"));
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "update the expectation"]);
+    p.serve_pr_at(&PR, git(&p, &["rev-parse", "HEAD"]).trim());
+    let body = opened_body(&p);
+    assert!(body.contains("INCONCLUSIVE"), "{body}");
+    assert!(body.contains("`src/fixture.rs`"), "names the file: {body}");
+}
+
 /// What `git` reports of the caller's worktree, index and worktree list.
 fn snapshot(p: &ghfake::Fake) -> String {
     [
