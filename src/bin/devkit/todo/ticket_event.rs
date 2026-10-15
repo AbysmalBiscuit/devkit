@@ -1,7 +1,8 @@
-//! The `todo_start` and `todo_done` ticket events: when a todo `devkit todo
-//! sync` brought in for a ticket becomes in progress or completed, the
-//! ticket's tracker status moves as `[ticket.events]` configures, in a
-//! detached `devkit ticket event` so no todo command waits on the tracker.
+//! The `todo_start`, `todo_done` and `todo_cancel` ticket events: when a
+//! todo `devkit todo sync` brought in for a ticket becomes in progress,
+//! completed or cancelled, the ticket's tracker status moves as
+//! `[ticket.events]` configures, in a detached `devkit ticket event` so no todo
+//! command waits on the tracker.
 
 use std::{path::Path, process::Command};
 
@@ -24,7 +25,8 @@ fn event_of(change: &StatusChange) -> Option<IssueEvent> {
     match to {
         StatusKind::InProgress => Some(IssueEvent::TodoStart),
         StatusKind::Completed => Some(IssueEvent::TodoDone),
-        StatusKind::Pending | StatusKind::Cancelled => None,
+        StatusKind::Cancelled => Some(IssueEvent::TodoCancel),
+        StatusKind::Pending => None,
     }
 }
 

@@ -259,24 +259,29 @@ fn steps_commit_even_when_a_ticket_conflicts() {
 
 #[test]
 fn done_from_another_repository_commits_and_warns() {
-    let s = pushing(DONE_EVENT, true);
-    let other = s.proj.outside().join("other");
-    std::fs::create_dir(&other).unwrap();
-    devkit_git::Git::fixture(&other)
-        .args(["init", "-q", "-b", "main"])
-        .output()
-        .unwrap();
-    std::fs::copy(s.proj.path.join("devkit.toml"), other.join("devkit.toml")).unwrap();
-    let out = s.devkit_in(&other, &["todo", "done", &ticket_id(&s)], &AGENT, "");
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert!(
-        stderr(&out).contains("ticket o/r#65 not moved: run from its repository"),
-        "{}",
-        stderr(&out)
-    );
-    assert_eq!(s.todo_for("o/r#65").status.kind(), StatusKind::Completed);
-    settle();
-    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    for (verb, kind) in [
+        ("done", StatusKind::Completed),
+        ("cancel", StatusKind::Cancelled),
+    ] {
+        let s = pushing(DONE_EVENT, true);
+        let other = s.proj.outside().join("other");
+        std::fs::create_dir(&other).unwrap();
+        devkit_git::Git::fixture(&other)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        std::fs::copy(s.proj.path.join("devkit.toml"), other.join("devkit.toml")).unwrap();
+        let out = s.devkit_in(&other, &["todo", verb, &ticket_id(&s)], &AGENT, "");
+        assert!(out.status.success(), "{verb}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("ticket o/r#65 not moved: run from its repository"),
+            "{verb}: {}",
+            stderr(&out)
+        );
+        assert_eq!(s.todo_for("o/r#65").status.kind(), kind, "{verb}");
+        settle();
+        assert!(s.mutations().is_empty(), "{verb}: {:?}", s.mutations());
+    }
 }
 
 #[test]
