@@ -549,16 +549,11 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 actor: &actor,
                 push: &link_push(false),
             };
-            promote::promote(&at, &id, ticket, crate::issue::create::CreateArgs {
-                title: String::new(),
+            promote::promote(&at, &id, ticket, promote::Filing {
                 body,
                 vars,
                 fields,
-                dir: Some(cwd.to_string_lossy().into_owned()),
-                config: None,
-                verb: "todo promote",
-                likely_parents: Vec::new(),
-                if_found: None,
+                dir: cwd.to_string_lossy().into_owned(),
             })?
         }
         TodoCommand::Move {

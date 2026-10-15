@@ -12,7 +12,10 @@ use devkit_todo::{
 };
 
 use super::{push, store::Store, tickets};
-use crate::issue::create::{self, CreateArgs};
+use crate::{
+    issue::create::{self, CreateArgs},
+    template::{FieldArgs, VarArgs},
+};
 
 /// Where a promote runs and whom for.
 pub(crate) struct Promote<'a> {
@@ -27,13 +30,22 @@ pub(crate) struct Promote<'a> {
     pub push: &'a push::LinkPush<'a>,
 }
 
+/// What a promote files beside the todo's text, as `ticket create` takes it.
+pub(crate) struct Filing {
+    pub body: Option<String>,
+    pub vars: VarArgs,
+    pub fields: FieldArgs,
+    /// The directory the command runs in.
+    pub dir: String,
+}
+
 /// What to promote `id` to: `ticket`, an existing ticket's key, or else a
-/// ticket filed from `filed`, whose title the todo's text replaces.
+/// ticket filed from `filing` with the todo's text as its title.
 pub(crate) fn promote(
     at: &Promote,
     id: &str,
     ticket: Option<&str>,
-    filed: CreateArgs,
+    filing: Filing,
 ) -> Result<()> {
     let store = at.store;
     let old = super::resolve_id(store, id)?;
@@ -59,9 +71,14 @@ pub(crate) fn promote(
         None => {
             let created = create::create(&CreateArgs {
                 title: old.description.clone(),
+                body: filing.body,
+                vars: filing.vars,
+                fields: filing.fields,
+                dir: Some(filing.dir),
+                config: None,
+                verb: "todo promote",
                 likely_parents: likely_parents(at),
                 if_found: Some(format!("devkit todo promote {short} --ticket <number>")),
-                ..filed
             })?;
             (created.key, created.fields)
         }
