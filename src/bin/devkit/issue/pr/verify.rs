@@ -2,7 +2,10 @@
 //! recorded passing on. Only `devrun task` writes the run ledger, so the
 //! record is evidence an agent cannot type into the PR body itself.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
 use devkit_common::caller::Caller;
@@ -377,6 +380,15 @@ fn matches_committed(
     Some(true)
 }
 
+/// At most the first [`ARG_BUDGET`] characters of `value`, with `...` when
+/// the rest was dropped.
+fn capped(value: &str) -> String {
+    match value.char_indices().nth(ARG_BUDGET) {
+        Some((end, _)) => format!("{}...", &value[..end]),
+        None => value.to_string(),
+    }
+}
+
 /// A fenced block of `lines` tagged `info`: the first lines that fit in
 /// [`TAIL_BUDGET`], with a note when later lines were dropped.
 fn leading_block(lines: &[String], info: &str) -> String {
@@ -409,16 +421,25 @@ fn leading_block(lines: &[String], info: &str) -> String {
 /// Why `run`, which exited 0 at the PR's head, does not prove `required`,
 /// and what to do about it; `None` when nothing recorded says why.
 fn unproven(required: &RequiredTask, run: &Run) -> Option<String> {
-    let flags = |args| match devkit_config::arg_flags(args) {
-        none if none.is_empty() => "no `--arg`".to_string(),
-        some => format!("`{some}`"),
+    let flags = |args: &BTreeMap<String, String>, files: &BTreeMap<String, PathBuf>| {
+        if args.is_empty() {
+            return "no `--arg`".to_string();
+        }
+        let quoted: Vec<String> = args
+            .iter()
+            .map(|(key, value)| match files.get(key) {
+                Some(path) => format!("`--arg-file {key}={}`", path.display()),
+                None => format!("`--arg {key}={}`", capped(value)),
+            })
+            .collect();
+        quoted.join(" ")
     };
     let mut why = Vec::new();
     if run.args != required.args {
         why.push(format!(
             "it was given {} where the gate requires {}",
-            flags(&run.args),
-            flags(&required.args)
+            flags(&run.args, &run.arg_files),
+            flags(&required.args, &BTreeMap::new())
         ));
     }
     if !run.env.is_empty() || run.env_file.is_some() {
@@ -459,6 +480,9 @@ fn short(rev: &str) -> &str {
 /// refuses a PR body over 65536 characters, and the ledger's tail can hold
 /// more than that, so the section keeps the body well under the limit.
 const TAIL_BUDGET: usize = 8 * 1024;
+
+/// The most characters of one arg's value a note on a run quotes.
+const ARG_BUDGET: usize = 200;
 
 /// The output-tail block for `lines`: the last lines that fit in
 /// [`TAIL_BUDGET`], fenced, with a note when earlier lines were dropped. A

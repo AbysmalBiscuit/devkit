@@ -314,6 +314,36 @@ fn assert_shows_change(body: &str, task: &str, lines: &[&str]) {
     }
 }
 
+#[test]
+fn a_refusal_caps_a_long_arg_and_never_quotes_an_arg_file() {
+    let p = project(GATE);
+    let long = "v".repeat(300);
+    task(&p, &["verify", "--arg", &format!("scope={long}")]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(
+        stderr.contains(&format!("`--arg scope={}...`", "v".repeat(200))),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(&"v".repeat(201)), "{stderr}");
+
+    let outside = tempfile::tempdir().unwrap();
+    let file = outside.path().join("scope.txt");
+    std::fs::write(&file, "file-contents-stay-out").unwrap();
+    task(&p, &[
+        "verify",
+        "--arg-file",
+        &format!("scope={}", file.display()),
+    ]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(!stderr.contains("file-contents-stay-out"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("--arg-file scope={}", file.display())),
+        "{stderr}"
+    );
+}
+
 /// The merge base's `verify_args` name a variable HEAD's task no longer
 /// reads, so no run at HEAD can take them; the gate requires HEAD's
 /// committed task and args instead, and shows the change.

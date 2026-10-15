@@ -39,6 +39,10 @@ pub struct Run {
     /// The template args passed with `--arg` and `--arg-file`.
     #[serde(default)]
     pub args: BTreeMap<String, String>,
+    /// The file each arg given with `--arg-file` was read from, `-` for
+    /// stdin. Its value in `args` is the file's contents.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub arg_files: BTreeMap<String, PathBuf>,
     /// The repository's primary checkout, which runs are listed by.
     pub repo: PathBuf,
     /// The worktree the run started in.
@@ -305,6 +309,7 @@ pub struct Servers {
 pub struct Start {
     task: String,
     args: BTreeMap<String, String>,
+    arg_files: BTreeMap<String, PathBuf>,
     repo: PathBuf,
     worktree: PathBuf,
     dir: Option<String>,
@@ -326,13 +331,15 @@ fn tree_state(root: &Path) -> (Option<String>, bool) {
 
 impl Start {
     /// Capture the tree state for a run of `task` started in `cwd`, inside
-    /// worktree `root`. `env` names the variables `--env` and `env_file`
-    /// set.
+    /// worktree `root`. `arg_files` names the file each `--arg-file` arg was
+    /// read from. `env` names the variables `--env` and `env_file` set.
+    #[allow(clippy::too_many_arguments)]
     pub fn capture(
         root: &Path,
         cwd: &Path,
         task: &str,
         args: &BTreeMap<String, String>,
+        arg_files: BTreeMap<String, PathBuf>,
         env: Vec<String>,
         env_file: Option<PathBuf>,
     ) -> Self {
@@ -349,6 +356,7 @@ impl Start {
         Self {
             task: task.to_string(),
             args: args.clone(),
+            arg_files,
             repo: std::fs::canonicalize(&repo).unwrap_or(repo),
             worktree,
             dir,
@@ -384,6 +392,7 @@ impl Start {
             live_servers: servers.live,
             task: self.task,
             args: self.args,
+            arg_files: self.arg_files,
             repo: self.repo,
             worktree: self.worktree,
             dir: self.dir,
@@ -567,6 +576,7 @@ mod tests {
             env: Vec::new(),
             env_file: None,
             steps: Vec::new(),
+            arg_files: BTreeMap::new(),
             reused_servers: Vec::new(),
             live_servers: Vec::new(),
             exit_code,

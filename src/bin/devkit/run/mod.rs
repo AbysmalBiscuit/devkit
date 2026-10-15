@@ -809,6 +809,17 @@ fn cmd_task(
         Path::new(cwd),
         name,
         &args,
+        vars.arg_files
+            .iter()
+            .filter_map(|pair| pair.split_once('='))
+            .map(|(key, path)| {
+                let path = match path {
+                    "-" => PathBuf::from("-"),
+                    path => Path::new(cwd).join(path),
+                };
+                (key.to_string(), path)
+            })
+            .collect(),
         user.keys().cloned().collect(),
         env_file.map(|f| Path::new(cwd).join(f)),
     );
