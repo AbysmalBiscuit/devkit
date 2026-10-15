@@ -726,11 +726,16 @@ const UP_VERIFY: &str = "[apps.srv]\nbase_port = 39203\npath = \".\"\nlaunch = [
      [tasks.e2e]\nsteps = [{ up = \"srv\" }, { task = \"verify\" }]\n\
      [pr.gates]\nverify_task = \"e2e\"\nverify_args = { scope = \"all\" }\n";
 
-/// Seed the port registry with this checkout's `srv` row at a port the
-/// returned listener answers on, so the `up` step reports ready at once.
-/// With `pid`, the row is a live server the step reuses; without, a
-/// reservation the step launches into.
+/// [`hold`] for `srv`.
 fn hold_srv(p: &ghfake::Fake, pid: Option<u32>) -> std::net::TcpListener {
+    hold(p, "srv", pid)
+}
+
+/// Seed the port registry with this checkout's `app` row at a port the
+/// returned listener answers on, so an `up` step reports ready at once.
+/// With `pid`, the row is a live server the run reuses; without, a
+/// reservation an `up` step launches into.
+fn hold(p: &ghfake::Fake, app: &str, pid: Option<u32>) -> std::net::TcpListener {
     use devkit_ports::registry::{self, Data, Entry, Role};
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -743,7 +748,7 @@ fn hold_srv(p: &ghfake::Fake, pid: Option<u32>) -> std::net::TcpListener {
         entries: Default::default(),
     };
     data.entries.insert(port, Entry {
-        app: "srv".into(),
+        app: app.into(),
         holder,
         role: Role::Workspace,
         pid,
@@ -766,6 +771,26 @@ fn a_run_whose_up_step_reused_a_live_server_is_refused() {
     assert!(stderr.contains("reused"), "says why: {stderr}");
     assert!(stderr.contains("`srv`"), "names the server: {stderr}");
     assert!(stderr.contains("devrun down"), "says how to fix: {stderr}");
+    assert!(!opened(&p), "{}", p.calls());
+}
+
+/// A server `require_live` needs was running before the run began, so it
+/// may have started at an earlier commit, as a reused `up` server may.
+#[test]
+fn a_run_needing_a_server_live_from_before_it_is_refused() {
+    let p = project(&format!(
+        "{LIVE_READER}\n[pr.gates]\nverify_task = \"live\"\n"
+    ));
+    let _server = hold(&p, "api", Some(std::process::id()));
+    task(&p, &["live"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(stderr.contains("reused"), "says why: {stderr}");
+    assert!(stderr.contains("`api`"), "names the server: {stderr}");
+    assert!(
+        stderr.contains("devrun down --app api"),
+        "says how to fix: {stderr}"
+    );
     assert!(!opened(&p), "{}", p.calls());
 }
 

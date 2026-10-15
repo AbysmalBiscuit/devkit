@@ -821,8 +821,19 @@ fn cmd_task(
     let start = start.committed_definition(committed, outside).plan(plan);
     let tail = ledger::Tail::new();
     let steps = std::cell::RefCell::new(Vec::new());
-    let mut launched = std::collections::HashSet::new();
-    let mut reused = Vec::new();
+    let launched = std::cell::RefCell::new(std::collections::HashSet::new());
+    let reused = std::cell::RefCell::new(Vec::<String>::new());
+    // A server an earlier step of this run launched is this run's own; only
+    // one live before the run began may have started at another commit.
+    let reuse = |apps: Vec<String>| {
+        let launched = launched.borrow();
+        let mut reused = reused.borrow_mut();
+        for app in apps {
+            if !launched.contains(&app) && !reused.contains(&app) {
+                reused.push(app);
+            }
+        }
+    };
     let step = |step_name: &str| -> Result<Option<i32>> {
         let fresh = task::resolve_step(
             &loaded.config,
@@ -833,6 +844,7 @@ fn cmd_task(
             &user,
             &args,
         )?;
+        reuse(fresh.require_live.clone());
         eprintln!("-> {}: {}", fresh.name, fresh.argv.join(" "));
         steps.borrow_mut().push(ledger::Step {
             task: fresh.name.clone(),
@@ -852,12 +864,9 @@ fn cmd_task(
                         }
                     }
                     SeqItem::Up(app) => {
-                        // A server an earlier step of this run launched is
-                        // this run's own; only one live before the run began
-                        // may have started at another commit.
                         let report = up(app, false)?;
-                        reused.extend(report.reused.into_iter().filter(|a| !launched.contains(a)));
-                        launched.extend(report.launched);
+                        reuse(report.reused);
+                        launched.borrow_mut().extend(report.launched);
                     }
                 }
             }
@@ -868,7 +877,7 @@ fn cmd_task(
         outcome.as_ref().ok().copied().flatten(),
         &tail,
         steps.into_inner(),
-        reused,
+        reused.into_inner(),
     );
     if let Err(e) = ledger::Ledger::live().record(&run) {
         eprintln!("devrun: the run was not recorded in the run ledger: {e:#}");

@@ -169,9 +169,9 @@ fn qualifying(
     for pass in passes {
         let why = match (pass.dir.as_deref(), pass.plan.as_deref()) {
             _ if !pass.reused_servers.is_empty() => format!(
-                "A run at that commit passed, but its `up` step reused the server already \
-                 running for {apps}, which may have started at an earlier commit: stop it with \
-                 `devrun down {names}` and run `{command}` again.",
+                "A run at that commit passed, but it reused the server already running for \
+                 {apps}, through an `up` step or `require_live`, which may have started at an \
+                 earlier commit: stop it with `devrun down {names}` and run `{command}` again.",
                 apps = pass
                     .reused_servers
                     .iter()
