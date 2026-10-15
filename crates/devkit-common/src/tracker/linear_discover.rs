@@ -133,7 +133,7 @@ fn gather(asked: &[String], post: &mut Post<'_>) -> Result<Json> {
         }
         team["projects"] = found;
     }
-    let labels = workspace_query("issueLabels", "id name isGroup team { key }");
+    let labels = workspace_query("issueLabels", "id name isGroup retiredAt team { key }");
     let users = workspace_query("users", "id name active");
     let mut data = json!({
         "issueLabels": read(post, &labels, &json!({}), "/data/issueLabels")?,
@@ -172,7 +172,8 @@ fn add(values: &mut Vec<EnumValue>, id: &str, name: &str, taken: &[&str], team: 
 /// key, with its key and name as the aliases Linear also takes for it. A
 /// team-bound value (a team's label, cycle, project or project milestone)
 /// records the keys of the teams it is valid in; a workspace label records
-/// none. The team field is read in part, since the read covers only the
+/// none, and a retired label, which no new issue takes, is left out. The
+/// team field is read in part, since the read covers only the
 /// viewer's or the named teams. The workflow state belongs to
 /// `[ticket.events]` and is never offered. `asked` is the teams `--team`
 /// named, each of which must be found.
@@ -270,6 +271,7 @@ pub fn parse(
     }
     let labels: Vec<EnumValue> = nodes(data, "/issueLabels")
         .filter(|l| l["isGroup"].as_bool() != Some(true))
+        .filter(|l| l.get("retiredAt").is_none_or(Json::is_null))
         .filter_map(|l| {
             let team = l.pointer("/team/key").and_then(Json::as_str);
             if team.is_some_and(|t| !keys.contains(t)) {
@@ -607,6 +609,36 @@ mod tests {
         assert_eq!(cycles, ["t-eng-c1", "t-eng-c2", "t-ops-c1", "t-ops-c2"]);
         assert_eq!(values(&found, "project_milestone")[0].2, s(&["ENG", "OPS"]));
         assert!(found.truncated.is_empty(), "{:?}", found.truncated);
+    }
+
+    #[test]
+    fn a_retired_label_is_not_offered() {
+        let resp = gather(&[], &mut |q, _| {
+            Ok(if q.contains("viewer") {
+                json!({ "data": { "viewer": { "teams": page(
+                    json!([{ "id": "t-eng", "key": "ENG", "issueEstimationType": "notUsed" }]),
+                    None,
+                ) } } })
+            } else if q.contains("issueLabels(") {
+                let label = |id: &str, retired: Option<&str>| {
+                    let mut l = json!({ "id": id, "name": id, "isGroup": false, "team": null });
+                    if q.contains("retiredAt") {
+                        l["retiredAt"] = json!(retired);
+                    }
+                    l
+                };
+                json!({ "data": { "issueLabels": page(
+                    json!([label("live", None), label("old", Some("2026-09-01T00:00:00.000Z"))]),
+                    None,
+                ) } })
+            } else {
+                json!({ "data": null })
+            })
+        })
+        .unwrap();
+        let found = parse(&resp, &[], &people()).unwrap();
+        let ids: Vec<String> = values(&found, "labels").into_iter().map(|v| v.1).collect();
+        assert_eq!(ids, ["live"]);
     }
 
     #[test]
