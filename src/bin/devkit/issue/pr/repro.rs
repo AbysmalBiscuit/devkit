@@ -533,9 +533,19 @@ impl Drop for Throwaway {
 fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result<Revert> {
     let vcs = Vcs::at(dir);
     let mut out = Revert::default();
+    let is_test = |rev: &str, path: &str| -> Result<bool> {
+        Ok(tests.matches(path)
+            || test_module_file(path, tests, &|p: &str| vcs.file_at(dir, rev, p))?)
+    };
     for change in vcs.changed_files(dir, merge_base, head)? {
-        let old = change.old.filter(|p| !tests.matches(p));
-        let new = change.new.filter(|p| !tests.matches(p));
+        let old = match change.old {
+            Some(p) if !is_test(merge_base, &p)? => Some(p),
+            _ => None,
+        };
+        let new = match change.new {
+            Some(p) if !is_test(head, &p)? => Some(p),
+            _ => None,
+        };
         let Some(label) = new.clone().or_else(|| old.clone()) else {
             continue;
         };
@@ -564,6 +574,198 @@ fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result
     }
     out.mixed.sort();
     Ok(out)
+}
+
+/// The deepest chain of out-of-line modules [`test_module_file`] follows up
+/// to a test-only declaration.
+const MODULE_DEPTH: usize = 8;
+
+/// Whether the Rust file at `path` is an out-of-line module only test builds
+/// compile.
+///
+/// That is a module a `mod` declaration under a test-only `#[cfg]` resolves
+/// to, or one declared in a test file or in such a module. `read` gives a
+/// file's text at the revision in question, `None` where it does not exist.
+fn test_module_file(
+    path: &str,
+    tests: &TestFiles,
+    read: &dyn Fn(&str) -> Result<Option<String>>,
+) -> Result<bool> {
+    declared_in_tests(path, tests, read, MODULE_DEPTH)
+}
+
+fn declared_in_tests(
+    path: &str,
+    tests: &TestFiles,
+    read: &dyn Fn(&str) -> Result<Option<String>>,
+    depth: usize,
+) -> Result<bool> {
+    let Some(stem) = path.strip_suffix(".rs") else {
+        return Ok(false);
+    };
+    if depth == 0 {
+        return Ok(false);
+    }
+    let (dir, name) = split_last(stem);
+    let (dir, name) = if name == "mod" {
+        split_last(dir)
+    } else {
+        (dir, name)
+    };
+    if name.is_empty() {
+        return Ok(false);
+    }
+    for declarer in declarers(dir) {
+        let Some(text) = read(&declarer)? else {
+            continue;
+        };
+        let (declarer_dir, _) = split_last(&declarer);
+        let declarations: Vec<ModDeclaration> = mod_declarations(&text)
+            .into_iter()
+            .filter(|d| match &d.path {
+                Some(attr) => joined(declarer_dir, attr) == path,
+                None => d.name == name,
+            })
+            .collect();
+        if declarations.iter().any(|d| d.test_only) {
+            return Ok(true);
+        }
+        if !declarations.is_empty()
+            && (tests.matches(&declarer) || declared_in_tests(&declarer, tests, read, depth - 1)?)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `path` split at its last `/`: the directory, empty at the root, and the
+/// last component.
+fn split_last(path: &str) -> (&str, &str) {
+    path.rsplit_once('/').unwrap_or(("", path))
+}
+
+/// `rel` resolved against the directory `dir`, with `.` and `..` folded.
+fn joined(dir: &str, rel: &str) -> String {
+    let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+    for part in rel.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
+/// The files whose `mod x;` resolves to a module file in `dir`: the module
+/// roots inside it, and the non-`mod.rs` file named for it.
+fn declarers(dir: &str) -> Vec<String> {
+    let inside = |file: &str| {
+        if dir.is_empty() {
+            file.to_string()
+        } else {
+            format!("{dir}/{file}")
+        }
+    };
+    let mut out: Vec<String> = ["mod.rs", "lib.rs", "main.rs"]
+        .into_iter()
+        .map(inside)
+        .collect();
+    if !dir.is_empty() {
+        out.push(format!("{dir}.rs"));
+    }
+    out
+}
+
+/// A `mod x;` declaration of an out-of-line module.
+#[derive(Debug, PartialEq, Eq)]
+struct ModDeclaration {
+    name: String,
+    /// Its `#[path]` attribute's value.
+    path: Option<String>,
+    /// Whether a `#[cfg]` on it holds only in test builds.
+    test_only: bool,
+}
+
+/// The `mod x;` declarations in `text`, with the attributes on their line
+/// and on the attribute lines above it.
+fn mod_declarations(text: &str) -> Vec<ModDeclaration> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        let (mut attrs, rest) = attributes(line.trim());
+        let Some(name) = strip_visibility(rest)
+            .strip_prefix("mod ")
+            .and_then(|m| m.trim().strip_suffix(';'))
+            .map(str::trim)
+        else {
+            continue;
+        };
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        for above in lines[..at].iter().rev().map(|l| l.trim()) {
+            if above.starts_with("//") {
+                continue;
+            }
+            let (found, rest) = attributes(above);
+            if found.is_empty() || !rest.is_empty() {
+                break;
+            }
+            attrs.extend(found);
+        }
+        let mut decl = ModDeclaration {
+            name: name.to_string(),
+            path: None,
+            test_only: false,
+        };
+        for attr in attrs {
+            if let Some((predicate, "")) = attr.strip_prefix("cfg(").and_then(balanced) {
+                decl.test_only |= only_in_tests(predicate);
+            } else if let Some(value) = attr
+                .strip_prefix("path")
+                .and_then(|a| a.trim_start().strip_prefix('='))
+            {
+                decl.path = Some(value.trim().trim_matches('"').to_string());
+            }
+        }
+        out.push(decl);
+    }
+    out
+}
+
+/// The outer attributes leading `line`, each without its `#[` and `]`, and
+/// what follows them.
+fn attributes(line: &str) -> (Vec<&str>, &str) {
+    let mut attrs = Vec::new();
+    let mut rest = line;
+    while let Some(inner) = rest.strip_prefix("#[") {
+        let mut depth = 0usize;
+        let Some(end) = inner.char_indices().find_map(|(i, c)| match c {
+            '[' | '(' => {
+                depth += 1;
+                None
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                None
+            }
+            ']' if depth == 0 => Some(i),
+            ']' => {
+                depth -= 1;
+                None
+            }
+            _ => None,
+        }) else {
+            break;
+        };
+        attrs.push(inner[..end].trim());
+        rest = inner[end + 1..].trim_start();
+    }
+    (attrs, rest)
 }
 
 /// Which side of a changed non-test file its change touches.
@@ -914,6 +1116,86 @@ mod tests {
         let src = "fn f() -> u8 { 1 }\n\n#[cfg(test)]\nmod tests {\n    fn t() {}\n";
         let fixed = src.replace("{ 1 }", "{ 2 }");
         assert_eq!(split("a.rs", Some(src), Some(&fixed)), Split::Both);
+    }
+
+    /// Whether `path` is a test module file in a tree holding `files`.
+    fn test_module_in(files: &[(&str, &str)], path: &str) -> bool {
+        let tests = TestFiles::new(&devkit_config::default_test_files()).unwrap();
+        let read = |p: &str| -> Result<Option<String>> {
+            Ok(files
+                .iter()
+                .find(|(f, _)| *f == p)
+                .map(|(_, t)| (*t).to_string()))
+        };
+        test_module_file(path, &tests, &read).unwrap()
+    }
+
+    #[test]
+    fn a_module_file_a_test_only_declaration_resolves_to_is_a_test() {
+        let decl = "fn f() {}\n\n#[cfg(test)]\nmod tests;\n";
+        for (declarer, module) in [
+            ("src/hook/shell.rs", "src/hook/shell/tests.rs"),
+            ("src/hook/shell/mod.rs", "src/hook/shell/tests.rs"),
+            ("src/hook/shell/mod.rs", "src/hook/shell/tests/mod.rs"),
+            ("src/lib.rs", "src/tests.rs"),
+            ("src/main.rs", "src/tests.rs"),
+            ("lib.rs", "tests.rs"),
+        ] {
+            assert!(
+                test_module_in(&[(declarer, decl)], module),
+                "{declarer} -> {module}"
+            );
+        }
+        for inline in [
+            "#[cfg(test)] mod tests;\n",
+            "#[cfg(all(test, unix))]\n// why\n#[allow(dead_code)]\npub(crate) mod tests;\n",
+        ] {
+            assert!(
+                test_module_in(&[("src/a.rs", inline)], "src/a/tests.rs"),
+                "{inline}"
+            );
+        }
+        assert!(test_module_in(
+            &[(
+                "src/a.rs",
+                "#[cfg(test)]\n#[path = \"./a/checks.rs\"]\nmod tests;\n"
+            )],
+            "src/a/checks.rs"
+        ));
+    }
+
+    #[test]
+    fn a_module_declared_inside_a_test_module_file_is_a_test() {
+        let files = [
+            ("src/a.rs", "#[cfg(test)]\nmod tests;\n"),
+            ("src/a/tests.rs", "mod helpers;\n"),
+        ];
+        assert!(test_module_in(&files, "src/a/tests/helpers.rs"));
+        assert!(test_module_in(
+            &[("tests/it/main.rs", "mod helpers;\n")],
+            "tests/it/helpers.rs"
+        ));
+    }
+
+    #[test]
+    fn a_module_file_compiled_outside_tests_is_source() {
+        for decl in [
+            "mod tests;\n",
+            "#[cfg(not(test))]\nmod tests;\n",
+            "#[cfg(test)]\nfn f() {}\nmod tests;\n",
+            "#[cfg(test)]\nmod other;\n",
+            "#[cfg(test)]\n#[path = \"elsewhere.rs\"]\nmod tests;\n",
+        ] {
+            assert!(
+                !test_module_in(&[("src/a.rs", decl)], "src/a/tests.rs"),
+                "{decl}"
+            );
+        }
+        assert!(!test_module_in(&[], "src/a/tests.rs"));
+        assert!(!test_module_in(
+            &[("src/a.rs", "#[cfg(test)]\nmod tests;\n")],
+            "src/a/tests.txt"
+        ));
     }
 
     fn ran(exit: i32) -> Ran {

@@ -207,6 +207,41 @@ fn a_file_holding_test_and_source_changes_is_inconclusive() {
     assert!(body.contains("`src/mixed.rs`"), "names the file: {body}");
 }
 
+#[test]
+fn a_fix_updating_an_out_of_line_test_module_keeps_that_module() {
+    let fake = project(GATE, "");
+    git(&fake, &["checkout", "-q", "main"]);
+    write(
+        &fake,
+        "src/shell.rs",
+        "fn f() {}\n\n#[cfg(test)]\nmod tests;\n",
+    );
+    write(&fake, "src/shell/tests.rs", "// expects: lib: broken\n");
+    git(&fake, &["add", "-A"]);
+    git(&fake, &[
+        "commit",
+        "-q",
+        "-m",
+        "a module tested out of line",
+    ]);
+    git(&fake, &["checkout", "-q", "-"]);
+    git(&fake, &["rebase", "-q", "main"]);
+    write(&fake, "src/shell/tests.rs", "// expects the fix\n");
+    write(&fake, "tests/old.txt", "lib: fixed\nexpects: lib: broken\n");
+    git(&fake, &["add", "-A"]);
+    git(&fake, &["commit", "-q", "-m", "update the expectation"]);
+    fake.serve_pr_at(&PR, git(&fake, &["rev-parse", "HEAD"]).trim());
+    fake.serve_issue(
+        "Why.\n\n## Done when\n\n- [ ] The lib is fixed (proof: repro tests/old.txt)\n",
+    );
+    let body = opened_body(&fake);
+    assert!(body.contains("PASSED"), "{body}");
+    assert!(
+        !body.contains("`src/shell/tests.rs`"),
+        "the test module is not reverted: {body}"
+    );
+}
+
 /// What `git` reports of the caller's worktree, index and worktree list.
 fn snapshot(p: &ghfake::Fake) -> String {
     [
