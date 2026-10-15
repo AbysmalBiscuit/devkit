@@ -471,7 +471,8 @@ pub struct EnumValue {
     /// What devkit writes: a label's name, a milestone's title, a project
     /// option's id, a Linear id.
     pub id: String,
-    /// The Linear teams the value is valid in; any team when empty.
+    /// The Linear teams the value is valid in, each by the team value's
+    /// name, id or one of its aliases; any team when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub teams: Vec<String>,
     /// Other spellings the tracker itself takes for the value, matched
@@ -482,11 +483,6 @@ pub struct EnumValue {
 }
 
 impl EnumValue {
-    /// Whether the value is valid in the team keyed `team`.
-    pub fn in_team(&self, team: &str) -> bool {
-        self.teams.is_empty() || self.teams.iter().any(|t| t == team)
-    }
-
     /// Whether `raw` is one of the value's aliases, ignoring case.
     pub fn has_alias(&self, raw: &str) -> bool {
         self.aliases.iter().any(|a| a.eq_ignore_ascii_case(raw))

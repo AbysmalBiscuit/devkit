@@ -313,7 +313,7 @@ pub enum Naming {
     /// narrowed to one by the ticket's team, or given as an id.
     Devkit,
     /// The tracker resolves the name itself, within the issue's team, so a
-    /// name several values share passes.
+    /// name several values share passes while the team is unknown.
     Tracker,
     /// The value reaches the tracker as given, so only what the tracker
     /// itself takes names a value: its id or an alias, never devkit's name.
@@ -355,12 +355,45 @@ fn as_tracker_takes(value: &EnumValue) -> String {
     }
 }
 
-/// The value of `decl` that `item` names in `team`.
+/// The ticket's team as team-bound values may record it: by any spelling of
+/// the declared team value it names, case-insensitively.
+struct Team<'a> {
+    given: &'a str,
+    spellings: Vec<&'a str>,
+}
+
+impl<'a> Team<'a> {
+    fn of(decls: &'a BTreeMap<String, FieldDecl>, given: &'a str) -> Self {
+        let mut spellings = vec![given];
+        for value in decls
+            .values()
+            .filter(|d| d.r#where == Some(Place::Team))
+            .flat_map(|d| d.enum_values(given))
+        {
+            spellings.push(&value.name);
+            spellings.push(&value.id);
+            spellings.extend(value.aliases.iter().map(String::as_str));
+        }
+        Team { given, spellings }
+    }
+
+    fn admits(&self, value: &EnumValue) -> bool {
+        value.teams.is_empty()
+            || value
+                .teams
+                .iter()
+                .any(|t| self.spellings.iter().any(|s| s.eq_ignore_ascii_case(t)))
+    }
+}
+
+/// The value of `decl` that `item` names in `team`. When the team is known,
+/// a name only one of its values carries resolves to that value, whatever
+/// the naming, and a name several of them share is refused.
 fn enum_one<'a>(
     name: &str,
     decl: &'a FieldDecl,
     item: &str,
-    team: Option<&str>,
+    team: Option<&Team>,
     naming: Naming,
 ) -> Result<&'a EnumValue, String> {
     let named = match naming {
@@ -381,11 +414,11 @@ fn enum_one<'a>(
     let fits: Vec<&EnumValue> = named
         .iter()
         .copied()
-        .filter(|v| team.is_none_or(|t| v.in_team(t)))
+        .filter(|v| team.is_none_or(|t| t.admits(v)))
         .collect();
-    match (fits.as_slice(), naming) {
-        ([v], _) | ([v, ..], Naming::Tracker | Naming::Verbatim) => Ok(v),
-        ([], _) => match team.filter(|_| !named.is_empty()) {
+    match (fits.as_slice(), naming, team) {
+        ([v], ..) | ([v, ..], Naming::Tracker | Naming::Verbatim, None) => Ok(v),
+        ([], ..) => match team.filter(|_| !named.is_empty()) {
             Some(team) => {
                 let mut teams: Vec<&str> = named
                     .iter()
@@ -395,13 +428,14 @@ fn enum_one<'a>(
                 teams.sort_unstable();
                 teams.dedup();
                 Err(format!(
-                    "is valid in team {} only, not in team {team}",
-                    teams.join(", ")
+                    "is valid in team {} only, not in team {}",
+                    teams.join(", "),
+                    team.given
                 ))
             }
             None => Err(format!("is not a value of `{name}`")),
         },
-        (several, Naming::Devkit) => Err(format!(
+        (several, ..) => Err(format!(
             "names several values of `{name}`; pass the id of the one meant: {}",
             several
                 .iter()
@@ -418,7 +452,7 @@ fn one(
     item: &str,
     kind: TrackerKind,
     people: &HashMap<String, Person>,
-    team: Option<&str>,
+    team: Option<&Team>,
     naming: Naming,
 ) -> Result<Value, String> {
     let ty = decl.r#type.unwrap_or(FieldType::String);
@@ -470,6 +504,7 @@ pub fn resolve(
     team: Option<&str>,
     naming: Naming,
 ) -> Result<Resolved, Vec<Problem>> {
+    let team = team.map(|t| Team::of(decls, t));
     let mut problems = Vec::new();
     let mut out = Resolved::default();
     for (name, raw) in &given.values {
@@ -501,7 +536,7 @@ pub fn resolve(
         }
         let mut values = Vec::new();
         for item in &items {
-            match one(name, decl, item, kind, people, team, naming) {
+            match one(name, decl, item, kind, people, team.as_ref(), naming) {
                 Ok(v) => values.push(v),
                 Err(reason) => problems.push(Problem::Invalid {
                     field: name.clone(),

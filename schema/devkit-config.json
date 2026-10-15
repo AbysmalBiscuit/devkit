@@ -480,7 +480,7 @@
           "type": "string"
         },
         "teams": {
-          "description": "The Linear teams the value is valid in; any team when empty.",
+          "description": "The Linear teams the value is valid in, each by the team value's\nname, id or one of its aliases; any team when empty.",
           "items": {
             "type": "string"
           },

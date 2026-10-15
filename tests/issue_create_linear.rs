@@ -731,3 +731,96 @@ fn a_shared_name_with_no_team_is_refused_listing_each_id() {
         "{input}"
     );
 }
+
+/// [`FIELDS`] with each team declared by its display name, its key an alias,
+/// and the labels `labels`.
+fn display_named_teams(labels: &str) -> String {
+    FIELDS
+        .replace(
+            r#"values  = [{ name = "ENG", id = "team-eng" }, { name = "OPS", id = "team-ops" }]
+default = "ENG""#,
+            r#"values  = [{ name = "Engineering", id = "team-eng", aliases = ["ENG"] }, { name = "Operations", id = "team-ops", aliases = ["OPS"] }]
+default = "Engineering""#,
+        )
+        .replace(
+            r#"values = [{ name = "bug", id = "lbl-bug" }, { name = "infra", id = "lbl-infra", teams = ["ENG"] }]"#,
+            &format!("values = [{labels}]"),
+        )
+}
+
+#[test]
+fn a_shared_name_resolves_in_a_team_declared_by_its_display_name() {
+    let fake = project(&display_named_teams(
+        r#"{ name = "Bug", id = "lbl-bug-eng", teams = ["ENG"] }, { name = "Bug", id = "lbl-bug-ops", teams = ["OPS"] }"#,
+    ));
+    let linear = LinearFake::start();
+    let ops_7 = read_in(("team-ops", "OPS"), 7, &["lbl-bug-ops"], 0);
+    linear.answer("issueCreate(", CREATED);
+    linear.answer("issue: issues(", &ops_7);
+    let out = run(&fake, &linear, &[
+        "create",
+        "--title",
+        "T",
+        "--arg",
+        "team=OPS",
+        "--arg",
+        "labels=Bug",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let input = &linear.sent("issueCreate(")[0]["variables"]["input"];
+    assert_eq!(
+        input["labelIds"],
+        serde_json::json!(["lbl-bug-ops"]),
+        "{input}"
+    );
+
+    let unlabelled = read_in(("team-ops", "OPS"), 7, &[], 0);
+    linear.answer(r#"issue: issue(id: "OPS-7")"#, &by_identifier(&unlabelled));
+    linear.answer("issueUpdate(", UPDATED);
+    let out = run(&fake, &linear, &["edit", "OPS-7", "--arg", "labels=Bug"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        linear.sent("issueUpdate(")[0]["variables"]["input"]["labelIds"],
+        serde_json::json!(["lbl-bug-ops"])
+    );
+}
+
+#[test]
+fn a_name_two_values_of_the_tickets_team_share_is_refused_naming_both() {
+    let labels = r#"{ name = "Bug", id = "lbl-bug-all" }, { name = "Bug", id = "lbl-bug-ops", teams = ["OPS"] }"#;
+    let named_both = |out: &std::process::Output| {
+        let err = stderr(out);
+        assert!(!out.status.success(), "{err}");
+        assert!(
+            err.contains("Bug (id lbl-bug-all)") && err.contains("Bug (id lbl-bug-ops, teams OPS)"),
+            "{err}"
+        );
+    };
+
+    let fake = project(&display_named_teams(labels));
+    let linear = LinearFake::start();
+    named_both(&run(&fake, &linear, &[
+        "create",
+        "--title",
+        "T",
+        "--arg",
+        "team=OPS",
+        "--arg",
+        "labels=Bug",
+    ]));
+    assert!(linear.sent("issueCreate(").is_empty());
+
+    let fake = project(&FIELDS.replace(
+        r#"values = [{ name = "bug", id = "lbl-bug" }, { name = "infra", id = "lbl-infra", teams = ["ENG"] }]"#,
+        &format!("values = [{labels}]"),
+    ));
+    named_both(&run(&fake, &linear, &[
+        "render",
+        "--title",
+        "T",
+        "--arg",
+        "team=OPS",
+        "--arg",
+        "labels=Bug",
+    ]));
+}
