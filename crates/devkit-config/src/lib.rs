@@ -5759,6 +5759,33 @@ steps = [
     }
 
     #[test]
+    fn a_linear_relation_field_must_be_an_issue() {
+        for (name, decl) in [
+            ("epic", "type = \"number\"\nwhere = \"parent\""),
+            ("up", "type = \"date\"\nwhere = \"parent\""),
+            ("lead", "type = \"user\"\nwhere = \"parent\""),
+            ("deps", "type = \"string\"\nlist = true\nwhere = \"blocked_by\""),
+            ("after", "type = \"number\"\nlist = true\nwhere = \"blocked_by\""),
+        ] {
+            let e = field_error(
+                None,
+                &format!("[tracker]\nkind = \"linear\"\n[ticket.fields.linear.{name}]\n{decl}\n"),
+            );
+            assert!(
+                e.contains(&format!("[ticket.fields.linear.{name}]")) && e.contains("`issue`"),
+                "{name}: {e}"
+            );
+        }
+        field_load(
+            None,
+            "[tracker]\nkind = \"linear\"\n[ticket.fields.linear.epic]\ntype = \"issue\"\n\
+             where = \"parent\"\n[ticket.fields.linear.deps]\ntype = \"issue\"\nlist = true\n\
+             where = \"blocked_by\"\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn a_table_of_another_configured_tracker_is_not_checked() {
         field_load(
             Some("[ticket.fields.linear.team]\nlevel = \"error\"\n"),

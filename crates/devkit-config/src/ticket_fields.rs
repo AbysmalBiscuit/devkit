@@ -629,8 +629,17 @@ pub(crate) fn validate(
 }
 
 /// Why Linear could not take a `ty` value at `place`, whose input takes ids
-/// that only an `enum`'s values, or a `user`'s `[people]` entry, supply.
+/// that only an `enum`'s values, or a `user`'s `[people]` entry, supply, or
+/// issue identifiers that only an `issue` supplies.
 fn linear_writable(key: &str, ty: FieldType, place: &Place) -> std::result::Result<(), String> {
+    if matches!(place, Place::Parent | Place::BlockedBy) && ty != FieldType::Issue {
+        return Err(format!(
+            "has `type = \"{}\"`, but Linear's `{}` takes issue identifiers, which an \
+             `issue` supplies. Change `type` in `{key}`.",
+            ty.as_str(),
+            place.label()
+        ));
+    }
     let wants = match place {
         Place::Assignee => "a `user` or `enum`",
         Place::Team | Place::Labels | Place::Cycle | Place::Project | Place::ProjectMilestone => {
