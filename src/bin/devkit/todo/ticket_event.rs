@@ -1,12 +1,13 @@
-//! The `todo_start` and `todo_done` ticket events: when a todo `devkit todo
-//! sync` brought in for a ticket becomes in progress or completed, the
-//! ticket's tracker status moves as `[ticket.events]` configures, in a
-//! detached `devkit ticket event` so no todo command waits on the tracker.
+//! The `todo_start`, `todo_done` and `todo_cancel` ticket events: when a
+//! todo `devkit todo sync` brought in for a ticket becomes in progress,
+//! completed or cancelled, the ticket's tracker status moves as
+//! `[ticket.events]` configures, in a detached `devkit ticket event` so no todo
+//! command waits on the tracker.
 
 use std::{path::Path, process::Command};
 
 use devkit_common::vcs::Checkout;
-use devkit_config::{IssueEvent, TicketConfig, TodoConfig};
+use devkit_config::{IssueEvent, PushKind, TicketConfig, TodoConfig};
 use devkit_todo::{
     Holder, StatusChange, StatusKind, TodoStore,
     layout::{Facts, Layout},
@@ -24,12 +25,14 @@ fn event_of(change: &StatusChange) -> Option<IssueEvent> {
     match to {
         StatusKind::InProgress => Some(IssueEvent::TodoStart),
         StatusKind::Completed => Some(IssueEvent::TodoDone),
-        StatusKind::Pending | StatusKind::Cancelled => None,
+        StatusKind::Cancelled => Some(IssueEvent::TodoCancel),
+        StatusKind::Pending => None,
     }
 }
 
-/// The root of `checkout` when its repository node is `node`.
-fn root_on(
+/// The root of `checkout` when its repository node is `node`: where a ticket
+/// todo on `node` may move its ticket from.
+pub(crate) fn root_on(
     checkout: &Checkout,
     node: &str,
     config: &TodoConfig,
@@ -48,9 +51,9 @@ fn root_on(
 
 /// Fires the ticket event each of `changes`, made by `actor` from `origin`,
 /// calls for. A change `tracker` made fires nothing, so a sync never moves a
-/// ticket back. A ticket todo changed from outside its repository fires
-/// nothing and says so on stderr: only a checkout of the repository resolves
-/// the ticket's config.
+/// ticket back. A cancel fires only with `"status"` in `[ticket.sync] push`. A
+/// ticket todo changed from outside its repository fires nothing and says so on
+/// stderr: only a checkout of the repository resolves the ticket's config.
 pub(crate) fn fire_for(
     changes: &[StatusChange],
     actor: &Holder,
@@ -73,7 +76,11 @@ pub(crate) fn fire_for(
             continue;
         };
         match root_on(origin, &change.node, config, actor) {
-            Some(root) if ticket.events.get(event).is_some() => {
+            Some(root)
+                if ticket.events.get(event).is_some()
+                    && (event != IssueEvent::TodoCancel
+                        || ticket.sync.pushes(PushKind::Status)) =>
+            {
                 spawn(&root, event, &key, &change.todo)
             }
             Some(_) => {}
@@ -101,6 +108,7 @@ fn firing_status(event: IssueEvent) -> Option<StatusKind> {
     match event {
         IssueEvent::TodoStart => Some(StatusKind::InProgress),
         IssueEvent::TodoDone => Some(StatusKind::Completed),
+        IssueEvent::TodoCancel => Some(StatusKind::Cancelled),
         IssueEvent::Setup | IssueEvent::Start | IssueEvent::PrOpen => None,
     }
 }

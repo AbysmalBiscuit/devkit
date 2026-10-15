@@ -53,6 +53,21 @@ pub fn apply(
     })
 }
 
+/// Move the issue to `to` from whatever status it is in, as `event` fires:
+/// for a push, whose own check of the tracker already allowed the move.
+pub fn set_status(
+    writer: &impl StatusWriter,
+    id: &str,
+    event: IssueEvent,
+    to: &str,
+) -> Result<Outcome> {
+    let any = EventTransition {
+        from: vec!["*".to_string()],
+        to: to.to_string(),
+    };
+    writer.move_status(id, event, &any)
+}
+
 /// The status writer for the resolved tracker.
 #[derive(ambassador::Delegate)]
 #[delegate(StatusWriter)]
@@ -272,6 +287,43 @@ mod tests {
         })
         .unwrap_err();
         assert!(format!("{failed:#}").starts_with("[ticket.events.pr_open] to: no option"));
+    }
+
+    /// A writer over an issue at `current` that records the statuses it
+    /// writes.
+    struct At {
+        current: &'static str,
+        wrote: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl StatusWriter for At {
+        fn move_status(&self, _: &str, event: IssueEvent, t: &EventTransition) -> Result<Outcome> {
+            apply(event, t, Some(self.current.into()), |to| {
+                self.wrote.borrow_mut().push(to.into());
+                Ok(())
+            })
+        }
+    }
+
+    #[test]
+    fn set_status_writes_without_a_from_check() {
+        let at = At {
+            current: "Backlog",
+            wrote: Default::default(),
+        };
+        let moved = set_status(&at, "1", IssueEvent::TodoDone, "Done").unwrap();
+        assert_eq!(moved, Outcome::Moved {
+            from: Some("Backlog".into()),
+            to: "Done".into()
+        });
+        assert_eq!(*at.wrote.borrow(), ["Done"]);
+        let at = At {
+            current: "done",
+            wrote: Default::default(),
+        };
+        let already = set_status(&at, "1", IssueEvent::TodoDone, "Done").unwrap();
+        assert_eq!(already, Outcome::Already("done".into()));
+        assert!(at.wrote.borrow().is_empty());
     }
 
     #[test]

@@ -118,12 +118,12 @@ pub fn issues_query(slug: &str, numbers: &[u64], board: Option<&BoardRef>) -> St
 /// repositories' issues with one number are two tickets. GitHub names a
 /// repository in any case, so the slug is lowercased: a slug configured
 /// in another case still names the same tickets.
-fn ticket_key(slug: &str, number: u64) -> String {
+pub(crate) fn ticket_key(slug: &str, number: u64) -> String {
     format!("{}#{number}", slug.to_ascii_lowercase())
 }
 
 /// The issue number `key` names when it is a [`ticket_key`] of `slug`.
-fn key_number(key: &str, slug: &str) -> Option<u64> {
+pub(crate) fn key_number(key: &str, slug: &str) -> Option<u64> {
     let (repo, number) = key.rsplit_once('#')?;
     repo.eq_ignore_ascii_case(slug)
         .then(|| number.parse().ok())

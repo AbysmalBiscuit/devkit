@@ -27,6 +27,8 @@ use devkit_todo::{
     ticket::{self, Change, SyncPlan},
 };
 
+use super::store::Store;
+
 /// What a ticket sync did.
 pub(crate) struct SyncReport {
     pub added: usize,
@@ -89,6 +91,79 @@ pub(crate) fn sync_tickets(
             changed: 0,
         }));
     }
+    apply_plan(store, &kind, &existing, &plan).map(Some)
+}
+
+/// `devkit todo sync --ticket`'s sync of `key` into `node`: [`sync_one`],
+/// refused while the store's own sync has not completed, and saying on stderr
+/// when the repository has no `[ticket.sync]` rules. Returns whether the
+/// ticket synced.
+pub(crate) fn sync_ticket(store: &Store, cwd: &Path, node: &str, key: &str) -> Result<bool> {
+    if !store.replica_pulled() {
+        anyhow::bail!("ticket {key} not synced: the store's sync did not complete");
+    }
+    let synced = sync_one(store, cwd, node, key)?.is_some();
+    if !synced {
+        eprintln!("devkit todo: no [ticket.sync] rules here; ticket {key} not synced");
+    }
+    Ok(synced)
+}
+
+/// Syncs the one ticket `key`, in any spelling [`tracker::Tracker::ticket_key`]
+/// reads, into `node`, the repository node of the
+/// checkout at `cwd`, reading no other ticket and running no rule search,
+/// and returns its todo; `None` when the repository has no `[ticket.sync]`
+/// rules, which queries no tracker. The ticket's parent and blockers link
+/// to the todos already synced for them.
+pub(crate) fn sync_one(
+    store: &impl TodoStore,
+    cwd: &Path,
+    node: &str,
+    key: &str,
+) -> Result<Option<Todo>> {
+    let selected = tracker::select(None, &cwd.to_string_lossy(), None);
+    let Some(config) = selected.config.filter(|c| !c.ticket.sync.rules.is_empty()) else {
+        return Ok(None);
+    };
+    let tracker = &selected.tracker.tracker;
+    let kind = tracker.kind().to_string();
+    let key = tracker.ticket_key(key)?;
+    let key = key.as_str();
+    let fetched: Vec<_> = tracker
+        .tickets(&[key.to_string()])
+        .with_context(|| format!("reading {kind} ticket {key}"))?
+        .into_iter()
+        .filter(|t| t.key == key)
+        .collect();
+    anyhow::ensure!(!fetched.is_empty(), "{kind} has no ticket {key}");
+    let existing = store.list(&Filter::exact([node.to_string()]))?;
+    let known = tracker.status_names()?;
+    let plan = ticket::plan(
+        &kind,
+        node,
+        &existing,
+        &fetched,
+        &known,
+        &config.ticket.sync,
+    )?;
+    apply_plan(store, &kind, &existing, &plan)?;
+    Ok(store
+        .list(&Filter::exact([node.to_string()]))?
+        .into_iter()
+        .find(|t| {
+            t.ticket
+                .as_ref()
+                .is_some_and(|r| r.tracker == kind && r.key == key)
+        }))
+}
+
+/// Lands `plan`, made from `existing`, the todos on its node.
+fn apply_plan(
+    store: &impl TodoStore,
+    kind: &str,
+    existing: &[Todo],
+    plan: &SyncPlan,
+) -> Result<SyncReport> {
     let planned_on: HashMap<String, &Todo> = existing
         .iter()
         .filter_map(|t| {
@@ -96,7 +171,7 @@ pub(crate) fn sync_tickets(
             Some((ticket.key.clone(), t))
         })
         .collect();
-    apply(store, &plan, &planned_on).map(Some)
+    apply(store, plan, &planned_on)
 }
 
 /// Lands `plan`'s adds, then its edits, each ticket key resolved through

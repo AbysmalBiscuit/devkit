@@ -65,8 +65,20 @@ Ticket todos stay current without anyone running sync:
 - `devkit todo list`, `ready`, `plan` and the injected lists start a background ticket sync when the repository's last one is older than `[ticket.sync] max_age_secs`. They never wait for it: they show what the store holds now, and the next read shows what the sync brought. One sync runs per repository at a time, and a failed one holds off the next for the same age. A synced taskchampion replica syncs no tickets until it has completed a sync of its own, so tickets never land on a replica that has not pulled the server's lists. `devkit todo sync` syncs now.
 - In a worktree whose `workspace setup` record names a synced ticket, `ready` and `plan` offer that ticket's todo beside the workspace's own todos.
 - A ticket todo whose worktree is on this machine shows `<n> open` in lists, plans and injected lists: the open todos in its workspace. `devkit todo list --expand` and `devkit todo plan --expand` list those todos under it, each with its node.
-- Starting a ticket todo or finishing it moves the ticket's tracker status as `[ticket.events] todo_start` and `todo_done` configure (`references/ticket.md`), in the background. Run the command from a checkout of the ticket's repository: from anywhere else the todo still changes, the ticket stays where it was, and a warning names it.
+- Starting a ticket todo or finishing it moves the ticket's tracker status as `[ticket.events] todo_start` and `todo_done` configure (`references/ticket.md`), in the background, unless the repository pushes statuses (below). Run the command from a checkout of the ticket's repository: from anywhere else the todo still changes, the ticket stays where it was, and a warning names it.
+- `devkit todo sync --ticket <key>` syncs that one ticket and no other, running no rule search: it adds the ticket's todo, under its parent's todo when that is synced, or brings an existing one to the tracker's status.
 - A native task or plan step whose text names an open ticket todo of the repository, by the ticket's key (`o/r#65`, `SWE-123`), as `#65`, or by the todo's own text, is that ticket's todo rather than a new one: starting and completing the task moves the ticket, and deleting the task or dropping the step leaves the ticket's todo as it is.
+
+### Ticket todos that push
+
+With `push = ["status"]` under the repository's `[ticket.sync]`, `devkit todo start`, `done` and `cancel` on a ticket todo, run from a checkout of its repository, move the ticket before the command returns, as `[ticket.events] todo_start`, `todo_done` and `todo_cancel` configure. On GitHub, `done` also closes the issue as completed and `cancel` closes it as not planned, with or without an event and with or without `[github] project`; the close comes before the project move. The todo changes only after the tracker write lands, and records the status written as the ticket's last synced one. Other todos named in the same command change at once, whatever happens to the ticket. The native task tool and the plan mirror never push: a ticket todo they start or complete fires the background event, as without the opt-in.
+
+Before writing, devkit reads the ticket and compares its status with the last synced one. A status the tracker changed since then stops the push, unless the event's `from` names that status; `"*"` and an unset `from` waive nothing. Nothing changes on either side, and the command exits 1 naming the tracker's status, the last synced one and the local change. What to do with that:
+
+- Ask the user whether to write over the tracker. Pass `--overwrite-tracker` only on their word.
+- To take the tracker's value instead, run `devkit todo sync --ticket <key>`.
+
+A person at a terminal is asked instead, and declining takes the tracker's value. A ticket that cannot be read, or a write that fails, fails the command naming the ticket, with the todo unchanged. With several ticket todos in one command, the first that stops ends it, and the message names the todos done and not done. The read and the write are separate requests, since neither tracker has a conditional write, so a tracker change that lands between them is written over.
 
 ## Stopping with open todos
 

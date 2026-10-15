@@ -27,6 +27,8 @@ pub(crate) enum EventArg {
     TodoStart,
     #[value(name = "todo_done")]
     TodoDone,
+    #[value(name = "todo_cancel")]
+    TodoCancel,
 }
 
 impl From<EventArg> for IssueEvent {
@@ -37,6 +39,7 @@ impl From<EventArg> for IssueEvent {
             EventArg::PrOpen => IssueEvent::PrOpen,
             EventArg::TodoStart => IssueEvent::TodoStart,
             EventArg::TodoDone => IssueEvent::TodoDone,
+            EventArg::TodoCancel => IssueEvent::TodoCancel,
         }
     }
 }
