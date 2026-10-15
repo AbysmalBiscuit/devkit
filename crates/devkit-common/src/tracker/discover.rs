@@ -21,6 +21,9 @@ pub struct Discovered {
     /// Fields someone created on the tracker whose type devkit cannot write,
     /// as `` `<name>` (<type>) ``.
     pub unwritable: Vec<String>,
+    /// The keys of the Linear teams the read covered, whose team-bound values
+    /// it answered in full; empty when the tracker has no teams.
+    pub teams_read: Vec<String>,
 }
 
 /// One place on the tracker and what it holds.

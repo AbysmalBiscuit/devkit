@@ -256,17 +256,20 @@ fn a_human_without_a_terminal_must_pass_yes() {
     assert!(devkit_toml(&fake).contains("[ticket.fields.github.labels]"));
 }
 
-#[test]
-fn linear_discover_records_team_scoped_values_for_the_named_team() {
-    let fake = ghfake::Fake::without_pr("[tracker]\nkind = \"linear\"\n");
-    let linear = linearfake::LinearFake::start();
-    let page = |nodes: &str, next: Option<&str>| {
-        format!(
-            r#"{{ "pageInfo": {{ "hasNextPage": {}, "endCursor": {} }}, "nodes": {nodes} }}"#,
-            next.is_some(),
-            next.map_or("null".to_string(), |c| format!("\"{c}\""))
-        )
-    };
+/// One page of `nodes`, as Linear answers a list, with a next page at
+/// `next` when given.
+fn page(nodes: &str, next: Option<&str>) -> String {
+    format!(
+        r#"{{ "pageInfo": {{ "hasNextPage": {}, "endCursor": {} }}, "nodes": {nodes} }}"#,
+        next.is_some(),
+        next.map_or("null".to_string(), |c| format!("\"{c}\""))
+    )
+}
+
+/// Answer each list `ticket fields discover --team ENG` reads: the team
+/// ENG, its upcoming cycles over two pages, `projects`, two labels, a
+/// priority, and no milestones or users.
+fn serve_eng(linear: &linearfake::LinearFake, projects: &str) {
     linear.answer(
         "teams(first",
         &format!(
@@ -298,7 +301,7 @@ fn linear_discover_records_team_scoped_values_for_the_named_team() {
         "projects(first",
         &format!(
             r#"{{ "data": {{ "team": {{ "projects": {} }} }} }}"#,
-            page("[]", None)
+            page(projects, None)
         ),
     );
     linear.answer(
@@ -322,6 +325,20 @@ fn linear_discover_records_team_scoped_values_for_the_named_team() {
         "users(first",
         &format!(r#"{{ "data": {{ "users": {} }} }}"#, page("[]", None)),
     );
+    linear.answer(
+        "projectMilestones(first",
+        &format!(
+            r#"{{ "data": {{ "project": {{ "projectMilestones": {} }} }} }}"#,
+            page("[]", None)
+        ),
+    );
+}
+
+#[test]
+fn linear_discover_records_team_scoped_values_for_the_named_team() {
+    let fake = ghfake::Fake::without_pr("[tracker]\nkind = \"linear\"\n");
+    let linear = linearfake::LinearFake::start();
+    serve_eng(&linear, "[]");
     let mut env = linear.env().to_vec();
     env.push(("DEVKIT_CALLER", "agent"));
     let out = stdout(&fake.issue_with_env(&["fields", "discover", "--team", "ENG"], &env));
@@ -372,6 +389,46 @@ fn linearfake_refuses_a_list_nested_in_a_list_of_full_pages() {
     assert!(linearfake::complexity(nested) > linearfake::MAX_COMPLEXITY);
     let flat = "query($after: String) { teams(first: 250, after: $after) { nodes { id } } }";
     assert!(linearfake::complexity(flat) <= linearfake::MAX_COMPLEXITY);
+}
+
+#[test]
+fn linear_discover_of_one_team_keeps_what_other_teams_hold() {
+    let fake = ghfake::Fake::without_pr(
+        "[tracker]\nkind = \"linear\"\n\n[ticket.fields.linear.team]\ntype = \"enum\"\n\
+         where = \"team\"\nlevel = \"info\"\nvalues = [{ name = \"ENG\", id = \"t-eng\" }, \
+         { name = \"OPS\", id = \"t-ops\" }]\n\n[ticket.fields.linear.project]\n\
+         type = \"enum\"\nwhere = \"project\"\nlevel = \"info\"\nvalues = [\
+         { name = \"Platform\", id = \"prj-1\", teams = [\"ENG\", \"OPS\"] }, \
+         { name = \"Pager\", id = \"prj-2\", teams = [\"OPS\"] }]\n",
+    );
+    let linear = linearfake::LinearFake::start();
+    serve_eng(&linear, r#"[{ "id": "prj-1", "name": "Platform" }]"#);
+    let mut env = linear.env().to_vec();
+    env.push(("DEVKIT_CALLER", "agent"));
+    stdout(&fake.issue_with_env(&["fields", "discover", "--team", "ENG"], &env));
+    let after = std::fs::read_to_string(fake.project().join("devkit.toml")).unwrap();
+    let cfg = devkit_config::Config::parse(&after).unwrap();
+    let values = |field: &str| -> Vec<(String, Vec<String>)> {
+        cfg.ticket.fields.linear[field]
+            .values
+            .iter()
+            .map(|v| (v.id.clone(), v.teams.clone()))
+            .collect()
+    };
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        values("team"),
+        [("t-eng".into(), vec![]), ("t-ops".into(), vec![])],
+        "{after}"
+    );
+    assert_eq!(
+        values("project"),
+        [
+            ("prj-1".into(), s(&["ENG", "OPS"])),
+            ("prj-2".into(), s(&["OPS"]))
+        ],
+        "{after}"
+    );
 }
 
 #[test]

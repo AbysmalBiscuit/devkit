@@ -268,18 +268,24 @@ pub(crate) fn merge(
         };
         match by_place.or_else(by_name) {
             Some((target, decl)) => {
-                let values = refreshed_values(decl, field);
+                let values = refreshed_values(decl, field, &found.teams_read);
                 for unseen in decl
                     .values
                     .iter()
                     .filter(|v| !field.values.iter().any(|n| n.id == v.id))
                 {
-                    let (field, value) = (target.clone(), unseen.name.clone());
-                    changes.push(if values.iter().any(|v| v.id == unseen.id) {
-                        Change::ValueKept { field, value }
-                    } else {
-                        Change::ValueDropped { field, value }
-                    });
+                    let (field_name, value) = (target.clone(), unseen.name.clone());
+                    match values.iter().any(|v| v.id == unseen.id) {
+                        false => changes.push(Change::ValueDropped {
+                            field: field_name,
+                            value,
+                        }),
+                        true if field.partial => changes.push(Change::ValueKept {
+                            field: field_name,
+                            value,
+                        }),
+                        true => {}
+                    }
                 }
                 let same = decl.r#type == Some(field.r#type)
                     && decl.list == field.list
@@ -306,30 +312,54 @@ pub(crate) fn merge(
     Ok(changes)
 }
 
-/// The tracker's values for `field`, each under the name `decl` gives the
-/// same id, then, when the tracker answered `field` only in part, each
+/// `decl`'s values refreshed from `field`, matched by id: each value the
+/// tracker offers, under the name `decl` gives it, then each declared value
+/// it did not answer that the read could not judge. A read covering only
+/// the teams `teams_read` replaces a value's teams within them and keeps its
+/// teams outside them, and keeps a declared value it did not see while it
+/// is valid in a team outside them. A read of `field` in part keeps every
 /// declared value it did not answer.
-fn refreshed_values(decl: &FieldDecl, field: &DiscoveredField) -> Vec<EnumValue> {
+fn refreshed_values(
+    decl: &FieldDecl,
+    field: &DiscoveredField,
+    teams_read: &[String],
+) -> Vec<EnumValue> {
+    let outside = |d: &EnumValue| -> Vec<String> {
+        d.teams
+            .iter()
+            .filter(|t| !teams_read.is_empty() && !teams_read.contains(t))
+            .cloned()
+            .collect()
+    };
     let mut out: Vec<EnumValue> = field
         .values
         .iter()
         .map(|v| match decl.values.iter().find(|d| d.id == v.id) {
-            Some(d) => EnumValue {
-                name: d.name.clone(),
-                ..v.clone()
-            },
+            Some(d) => {
+                let mut teams = v.teams.clone();
+                if !teams.is_empty() {
+                    teams.extend(outside(d).into_iter().filter(|t| !v.teams.contains(t)));
+                }
+                EnumValue {
+                    name: d.name.clone(),
+                    teams,
+                    ..v.clone()
+                }
+            }
             None => v.clone(),
         })
         .collect();
-    if field.partial {
-        let unseen: Vec<EnumValue> = decl
-            .values
-            .iter()
-            .filter(|d| !out.iter().any(|v| v.id == d.id))
-            .cloned()
-            .collect();
-        out.extend(unseen);
-    }
+    let unseen: Vec<EnumValue> = decl
+        .values
+        .iter()
+        .filter(|d| !out.iter().any(|v| v.id == d.id))
+        .filter_map(|d| match outside(d) {
+            _ if field.partial => Some(d.clone()),
+            teams if teams.is_empty() => None,
+            teams => Some(EnumValue { teams, ..d.clone() }),
+        })
+        .collect();
+    out.extend(unseen);
     out
 }
 
@@ -441,9 +471,18 @@ mod tests {
 
     /// Merge `found` into `repo`, with `home` as a lower layer.
     fn merged(home: &str, repo: &str, found: &Discovered) -> (String, Vec<Change>) {
+        merged_on(TrackerKind::Github, home, repo, found)
+    }
+
+    fn merged_on(
+        kind: TrackerKind,
+        home: &str,
+        repo: &str,
+        found: &Discovered,
+    ) -> (String, Vec<Change>) {
         let cfg = Config::parse(&format!("{home}\n{repo}")).unwrap();
         let mut doc: DocumentMut = repo.parse().unwrap();
-        let changes = merge(&mut doc, TrackerKind::Github, &cfg, found).unwrap();
+        let changes = merge(&mut doc, kind, &cfg, found).unwrap();
         (doc.to_string(), changes)
     }
 
@@ -622,6 +661,57 @@ description = "how soon"
         assert_eq!(ids, ["o1", "o0"], "{text}");
         let out = summary(TrackerKind::Github, &changes, &Discovered::default());
         assert!(out.contains("kept `urgent`"), "{out}");
+    }
+
+    #[test]
+    fn a_read_of_some_teams_keeps_what_other_teams_hold() {
+        let repo = r#"[ticket.fields.linear.project]
+type   = "enum"
+where  = "project"
+values = [
+  { name = "Platform", id = "prj-1", teams = ["ENG", "OPS"] },
+  { name = "Pager", id = "prj-2", teams = ["OPS"] },
+  { name = "Infra", id = "prj-3", teams = ["ENG", "OPS"] },
+  { name = "Old", id = "prj-4", teams = ["ENG"] },
+]
+"#;
+        let value = |name: &str, id: &str| EnumValue {
+            name: name.into(),
+            id: id.into(),
+            teams: vec!["ENG".into()],
+        };
+        let read = Discovered {
+            teams_read: vec!["ENG".into()],
+            ..found(&[(
+                "project",
+                DiscoveredField::new(FieldType::Enum, Place::Project)
+                    .with_values(vec![value("Platform", "prj-1"), value("New", "prj-5")]),
+            )])
+        };
+        let (text, changes) = merged_on(TrackerKind::Linear, "", repo, &read);
+        assert_eq!(changes, [
+            Change::ValueDropped {
+                field: "project".into(),
+                value: "Old".into()
+            },
+            Change::Refreshed("project".into())
+        ]);
+        let cfg = Config::parse(&text).unwrap();
+        let values: Vec<(&str, Vec<&str>)> = cfg.ticket.fields.linear["project"]
+            .values
+            .iter()
+            .map(|v| (v.id.as_str(), v.teams.iter().map(String::as_str).collect()))
+            .collect();
+        assert_eq!(
+            values,
+            [
+                ("prj-1", vec!["ENG", "OPS"]),
+                ("prj-5", vec!["ENG"]),
+                ("prj-2", vec!["OPS"]),
+                ("prj-3", vec!["OPS"]),
+            ],
+            "{text}"
+        );
     }
 
     #[test]

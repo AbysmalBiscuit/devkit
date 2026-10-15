@@ -164,9 +164,11 @@ fn add(values: &mut Vec<EnumValue>, id: &str, name: &str, team: &str) {
     }
 }
 
-/// The fields a [`query`] response offers. A team-bound value (a team's
+/// The fields a [`gather`] response offers. A team-bound value (a team's
 /// label, cycle, project or project milestone) records the keys of the
-/// teams it is valid in; a workspace label records none. The workflow state
+/// teams it is valid in; a workspace label records none. The team field is
+/// read in part, since the read covers only the viewer's or the named
+/// teams. The workflow state
 /// belongs to `[ticket.events]` and is never offered. `asked` is the teams
 /// `--team` named, each of which must be found.
 pub fn parse(
@@ -190,6 +192,7 @@ pub fn parse(
     }
     let mut out = Discovered {
         people_key: "linear",
+        teams_read: keys.iter().map(|k| k.to_string()).collect(),
         ..Discovered::default()
     };
     for (pointer, what) in [
@@ -289,16 +292,12 @@ pub fn parse(
     let enumerated = |place: Place, values: Vec<EnumValue>| {
         DiscoveredField::new(FieldType::Enum, place).with_values(values)
     };
-    let partial = |pointer: &str| unfinished(data.pointer(pointer));
-    field(
-        "team",
-        enumerated(Place::Team, team_values).partly(partial(teams_at)),
-    );
+    field("team", enumerated(Place::Team, team_values).partly(true));
     field(
         "labels",
         enumerated(Place::Labels, labels)
             .list()
-            .partly(partial("/issueLabels")),
+            .partly(unfinished(data.pointer("/issueLabels"))),
     );
     field(
         "assignee",
