@@ -171,8 +171,7 @@ fn an_unmatched_name_says_no_todo() {
 fn an_ambiguous_name_names_each_match_and_changes_nothing() {
     let s = two_issues();
     ok(s.sync(&[]));
-    let other = s.devkit(&["todo", "add", "other"], &S1);
-    ok(other);
+    ok(s.devkit(&["todo", "add", "other"], &S1));
     // With no GitHub tracker in reach, `66` names every GitHub ticket 66;
     // the full key of another repository's ticket still resolves.
     let p = &s.proj;
