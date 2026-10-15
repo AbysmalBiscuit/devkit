@@ -513,6 +513,28 @@ fn start_on_a_ticket_todo_moves_the_ticket() {
 }
 
 #[test]
+fn cancel_on_a_ticket_todo_without_push_moves_nothing() {
+    let s = Synced::new(
+        &format!("{RULES}{STATUSES}{TODO_EVENTS}\n[ticket.events.todo_cancel]\nto = \"Done\"\n"),
+        true,
+    );
+    s.serve(
+        "graphql.json",
+        &graphql(
+            &[issue(65, Some("Todo"), &[66]), issue(66, None, &[])],
+            &OPTIONS,
+        ),
+    );
+    s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+    assert!(s.sync(&[]).status.success());
+    let id = s.todo_for("o/r#65").id;
+    let out = s.devkit(&["todo", "cancel", &id], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    settle();
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
 fn a_sync_completing_a_ticket_fires_nothing() {
     let s = moving();
     let closed = issue(65, Some("In progress"), &[66]).replace(

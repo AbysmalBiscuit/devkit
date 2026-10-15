@@ -7,7 +7,7 @@
 use std::{path::Path, process::Command};
 
 use devkit_common::vcs::Checkout;
-use devkit_config::{IssueEvent, TicketConfig, TodoConfig};
+use devkit_config::{IssueEvent, PushKind, TicketConfig, TodoConfig};
 use devkit_todo::{
     Holder, StatusChange, StatusKind, TodoStore,
     layout::{Facts, Layout},
@@ -51,7 +51,7 @@ pub(crate) fn root_on(
 
 /// Fires the ticket event each of `changes`, made by `actor` from `origin`,
 /// calls for. A change `tracker` made fires nothing, so a sync never moves a
-/// ticket back. A ticket todo changed from outside its repository fires
+/// ticket back. A cancel fires only with `"status"` in `[ticket.sync] push`. A ticket todo changed from outside its repository fires
 /// nothing and says so on stderr: only a checkout of the repository resolves
 /// the ticket's config.
 pub(crate) fn fire_for(
@@ -76,7 +76,11 @@ pub(crate) fn fire_for(
             continue;
         };
         match root_on(origin, &change.node, config, actor) {
-            Some(root) if ticket.events.get(event).is_some() => {
+            Some(root)
+                if ticket.events.get(event).is_some()
+                    && (event != IssueEvent::TodoCancel
+                        || ticket.sync.pushes(PushKind::Status)) =>
+            {
                 spawn(&root, event, &key, &change.todo)
             }
             Some(_) => {}
