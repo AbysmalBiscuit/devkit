@@ -266,6 +266,27 @@ fn a_test_module_whose_end_is_unclear_is_inconclusive() {
     assert!(body.contains("`src/fixture.rs`"), "names the file: {body}");
 }
 
+#[test]
+fn a_test_added_in_an_out_of_line_module_is_run_with_the_fix_reverted() {
+    let p = project("\n[pr.gates]\nrepro_task = \"repro\"\n", "");
+    git(&p, &["checkout", "-q", "main"]);
+    write(&p, "src/shell.rs", "fn f() {}\n\n#[cfg(test)]\nmod tests;\n");
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "a module to be tested out of line"]);
+    git(&p, &["checkout", "-q", "-"]);
+    git(&p, &["rebase", "-q", "main"]);
+    write(&p, "src/shell/tests.rs", "// passes either way\n");
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "a test that needs no fix"]);
+    p.serve_pr_at(&PR, git(&p, &["rev-parse", "HEAD"]).trim());
+    p.serve_issue("Why.\n\n## Done when\n\n- [ ] The shell works (proof: repro src/shell/tests.rs)\n");
+    let stderr = refusal(&p);
+    assert!(
+        stderr.contains("1. The shell works") && stderr.contains("passes with the fix reverted"),
+        "not reported PASSED for want of the test: {stderr}"
+    );
+}
+
 /// What `git` reports of the caller's worktree, index and worktree list.
 fn snapshot(p: &ghfake::Fake) -> String {
     [
