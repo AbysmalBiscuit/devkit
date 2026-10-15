@@ -12,7 +12,7 @@ mod tickets;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use devkit_todo::{Status, StatusKind};
+use devkit_todo::{NewTodo, Status, StatusKind, TicketRef, TodoStore as _};
 use tickets::*;
 use todoenv::{Proj, stderr, stdout};
 
@@ -1094,4 +1094,40 @@ fn a_block_stopping_partway_names_the_blockers_applied() {
     ];
     want.sort();
     assert_eq!(blockers, want);
+}
+
+#[test]
+fn a_link_with_a_ticket_of_another_repository_stays_local() {
+    let s = linked("\"parent\", \"blocking\"", Some(65), false);
+    let foreign = s
+        .proj
+        .store()
+        .add(NewTodo {
+            project: s.todo_for("o/r#65").project,
+            description: "o/x#5".into(),
+            parent: None,
+            order: None,
+            ticket: Some(TicketRef {
+                tracker: "github".into(),
+                key: "o/x#5".into(),
+                synced_status: None,
+            }),
+        })
+        .unwrap();
+    let out = s.devkit(&["todo", "block", &id_of(&s, 65), "--by", &foreign], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(s.todo_for("o/r#65").blocked_by, std::slice::from_ref(&foreign));
+
+    let out = s.devkit(
+        &["todo", "move", &id_of(&s, 67), "--parent", &foreign],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("o/r#67") && err.contains("o/r#65") && err.contains("next sync"),
+        "{err}"
+    );
+    assert_eq!(parent_of(&s, 67), Some(foreign));
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
 }

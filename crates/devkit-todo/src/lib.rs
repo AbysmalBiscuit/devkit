@@ -81,6 +81,17 @@ impl TicketRef {
     pub fn same_ticket(&self, other: &TicketRef) -> bool {
         self.tracker == other.tracker && self.key == other.key
     }
+
+    /// Whether a link between this ticket and `other` can live on one
+    /// tracker: the same tracker and, for keys naming a repository
+    /// (`owner/repo#65`), the same repository.
+    pub fn same_tracker(&self, other: &TicketRef) -> bool {
+        let repo = |key: &str| {
+            key.rsplit_once('#')
+                .map(|(repo, _)| repo.to_ascii_lowercase())
+        };
+        self.tracker == other.tracker && repo(&self.key) == repo(&other.key)
+    }
 }
 
 /// The id a ticket's todo takes in a store whose ids are uuids: a name-based

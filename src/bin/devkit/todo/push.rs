@@ -67,10 +67,11 @@ pub(crate) struct LinkPush<'a> {
 impl LinkPush<'_> {
     /// Whether a `kind` link between `written`, the ticket todo whose ticket
     /// the link lands on, and `other` reaches the tracker. A link with a todo
-    /// that is not a ticket todo, or with a ticket on another tracker, stays
-    /// local. A link between two tickets that cannot reach the tracker is
-    /// refused, since the next sync would revert it: one changed outside
-    /// their repository, or in a repository whose `push` leaves `kind` out.
+    /// that is not a ticket todo, or with a ticket on another tracker or in
+    /// another repository, stays local. A link between two tickets that cannot
+    /// reach the tracker is refused, since the next sync would revert it:
+    /// one changed outside their repository, or in a repository whose
+    /// `push` leaves `kind` out.
     pub(crate) fn reaches(
         &self,
         store: &Store,
@@ -81,7 +82,7 @@ impl LinkPush<'_> {
         let (Some(a), Some(b)) = (&written.ticket, &other.ticket) else {
             return Ok(false);
         };
-        if a.tracker != b.tracker {
+        if !a.same_tracker(b) {
             return Ok(false);
         }
         let (a, b) = (&a.key, &b.key);

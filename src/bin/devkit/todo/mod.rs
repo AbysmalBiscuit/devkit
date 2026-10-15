@@ -1199,11 +1199,21 @@ fn move_todo(
         .map(|p| store.get(p))
         .transpose()?
         .flatten()
-        .filter(|p| {
-            p.ticket
-                .as_ref()
-                .is_some_and(|t| t.tracker == ticket.tracker)
-        });
+        .filter(|p| p.ticket.as_ref().is_some_and(|t| t.same_tracker(ticket)));
+    if let Some(old) = before.as_ref().and_then(|p| p.ticket.as_ref())
+        && let Some(new) = parent.as_ref().and_then(|p| p.ticket.as_ref())
+        && !new.same_tracker(ticket)
+    {
+        store.apply(&edit)?;
+        eprintln!(
+            "devkit todo: {new} is on another tracker, so {key}'s parent there stays {old}, and \
+             the next sync restores it",
+            new = new.key,
+            key = ticket.key,
+            old = old.key
+        );
+        return Ok(());
+    }
     let linked = parent
         .as_ref()
         .filter(|p| p.ticket.is_some())

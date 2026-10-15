@@ -93,7 +93,7 @@ These are refused, and change nothing:
 - A link between two ticket todos changed from outside their repository, or in a repository whose `push` does not list `parent` or `blocking`: the next sync would revert it. Change it on the tracker, or from a checkout that opts in.
 - With `"parent"` pushing, in a checkout of the ticket todo's repository, a todo under a ticket todo, by `todo add --parent` or `todo move --parent`: it would be a sub-issue. File one with `devkit ticket create`, or turn a todo into a ticket with `devkit todo promote`. A ticket todo under a todo that is not a ticket todo is refused too.
 
-Links between a ticket todo and any other todo stay local, so `devkit todo add --blocked-by <ticket todo>` and blocking a step on a ticket work as before, and so do links between tickets on two trackers.
+Links between a ticket todo and any other todo stay local, so `devkit todo add --blocked-by <ticket todo>` and blocking a step on a ticket work as before, and so do links between tickets on two trackers or in two repositories. Moving a ticket todo from a ticket parent to a ticket on another tracker or repository changes only the todo: the tracker keeps the old parent, the command says so, and the next sync restores it.
 
 ## Stopping with open todos
 
