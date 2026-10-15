@@ -335,6 +335,7 @@ impl BriefSnapshot {
             let required = match gate {
                 config::Gate::WeakenedTests => String::new(),
                 config::Gate::Verify(required) => required.command(),
+                config::Gate::Repro(task) => task.command("<selector>"),
             };
             out.push_str(&format!(
                 "gate\t{}\t{}\t{required}\n",
@@ -1040,6 +1041,20 @@ fn gate_line(gate: &config::Gate, on: GateOn) -> String {
                  run (`devrun down` it and rerun); the PR body shows that run and any change \
                  the PR makes to what the task runs, which refuses nothing",
                 required.command()
+            )
+        }
+        config::Gate::Repro(task) => {
+            let effect = match on {
+                GateOn::Advise => "reports in the PR body",
+                GateOn::Require => "refuses the PR naming",
+            };
+            format!(
+                "for each issue `Done when` item ending `(proof: repro <selector>)`, runs `{}` \
+                 in a throwaway worktree at HEAD and again with the branch's non-test changes \
+                 reverted to the merge base, and {effect} an item whose selector passes with the \
+                 fix reverted or matches no test; the PR body shows both runs, and an item with \
+                 no marker gets an advisory line",
+                task.command("<selector>")
             )
         }
     };

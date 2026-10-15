@@ -1782,6 +1782,17 @@ pub fn default_test_files() -> Vec<String> {
 /// # assert_eq!(spaced.command(), r"devrun task verify --arg 'msg=it'\''s  two'");
 /// # assert_eq!(Config::parse("").unwrap().pr.gates.all().len(), 1);
 /// # assert!(Config::parse("[pr.gates]\nverify_task = \" \"\n").is_err());
+/// # let repro = Config::parse(r#"
+/// [pr.gates]
+/// repro = "advise"
+/// repro_task = "test-one"
+/// repro_no_tests_exit = 4
+/// # "#).unwrap().pr.gates.all();
+/// # let Gate::Repro(task) = &repro[1].0 else { panic!() };
+/// # assert_eq!(repro[1].1, GateMode::Advise);
+/// # assert_eq!(task.no_tests_exit, Some(4));
+/// # assert_eq!(task.command("a b"), "devrun task test-one --arg 'selector=a b'");
+/// # assert!(Config::parse("[pr.gates]\nrepro_task = \"\"\n").is_err());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1811,14 +1822,48 @@ pub struct PrGates {
     /// The template args the `verify` gate's run must have been given with
     /// `--arg` or `--arg-file`, no more and no fewer.
     pub verify_args: std::collections::BTreeMap<String, String>,
+    /// Checks each `Done when` item of the worktree's issue that ends
+    /// `(proof: repro <selector>)` red to green: in a throwaway worktree at
+    /// HEAD with every changed non-test path restored to the merge base,
+    /// `repro_task` given `--arg selector=<selector>` must fail, and at HEAD
+    /// it must pass. `require` refuses an agent's PR when a selector passes
+    /// with the fix reverted or matches no test; anything else the check
+    /// finds, such as a changed file holding both test and source changes,
+    /// an item with no marker, or a check that could not run, is shown in
+    /// the PR body's Verification section and refuses nothing. A human's PR
+    /// is never refused. Off while `repro_task` is unset.
+    pub repro: GateMode,
+    /// The task the `repro` gate runs each selector through, as `devrun
+    /// task` names it. It takes the selector as the template variable
+    /// `selector` and hands it to the test runner verbatim.
+    #[serde(deserialize_with = "non_blank_repro_task")]
+    pub repro_task: Option<String>,
+    /// The exit code `repro_task` exits with when its selector matches no
+    /// test, as `cargo nextest run` exits 4 and pytest exits 5. Unset, a
+    /// selector matching no test is caught only when it also passes with
+    /// the fix reverted.
+    pub repro_no_tests_exit: Option<i32>,
 }
 
 fn non_blank_task<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    non_blank(d, "verify_task")
+}
+
+fn non_blank_repro_task<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<String>, D::Error> {
+    non_blank(d, "repro_task")
+}
+
+fn non_blank<'de, D: serde::Deserializer<'de>>(
+    d: D,
+    key: &str,
+) -> Result<Option<String>, D::Error> {
     let task = String::deserialize(d)?;
     if task.trim().is_empty() {
-        return Err(serde::de::Error::custom(
-            "verify_task is blank: name a task, or remove the key",
-        ));
+        return Err(serde::de::Error::custom(format!(
+            "{key} is blank: name a task, or remove the key"
+        )));
     }
     Ok(Some(task))
 }
@@ -1832,6 +1877,9 @@ impl PrGates {
             verify,
             verify_task,
             verify_args,
+            repro,
+            repro_task,
+            repro_no_tests_exit,
         } = self;
         let mut gates = vec![(Gate::WeakenedTests, *weakened_tests)];
         if let Some(task) = verify_task {
@@ -1840,6 +1888,13 @@ impl PrGates {
                 args: verify_args.clone(),
             };
             gates.push((Gate::Verify(required), *verify));
+        }
+        if let Some(task) = repro_task {
+            let repro_task = ReproTask {
+                task: task.clone(),
+                no_tests_exit: *repro_no_tests_exit,
+            };
+            gates.push((Gate::Repro(repro_task), *repro));
         }
         gates
     }
@@ -1850,6 +1905,7 @@ impl PrGates {
 pub enum Gate {
     WeakenedTests,
     Verify(RequiredTask),
+    Repro(ReproTask),
 }
 
 impl Gate {
@@ -1858,7 +1914,28 @@ impl Gate {
         match self {
             Self::WeakenedTests => "weakened_tests",
             Self::Verify(_) => "verify",
+            Self::Repro(_) => "repro",
         }
+    }
+}
+
+/// The task the `repro` gate runs each selector through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReproTask {
+    pub task: String,
+    /// The exit code that says the selector matched no test.
+    pub no_tests_exit: Option<i32>,
+}
+
+impl ReproTask {
+    /// The `devrun task` command line that runs `selector`, quoted as
+    /// [`RequiredTask::command`] quotes it.
+    pub fn command(&self, selector: &str) -> String {
+        RequiredTask {
+            task: self.task.clone(),
+            args: [("selector".to_string(), selector.to_string())].into(),
+        }
+        .command()
     }
 }
 

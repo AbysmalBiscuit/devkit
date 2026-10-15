@@ -12,9 +12,9 @@ use devkit_ports::ledger::Ledger;
 
 use super::{
     add_reviewers,
-    proof::gate_proof,
+    proof::{done_when_items, gate_proof},
     render::{Texts, require_pr_title, values},
-    require_reviewer_for_ready,
+    repro, require_reviewer_for_ready,
     resolve::{Existing, assert_belongs, parse_pr_flag, resolve_existing, verify_created},
     reviewer_logins, verify, weakened,
 };
@@ -165,6 +165,7 @@ pub(crate) struct Ensure<'a, G> {
 pub(crate) struct Gates {
     weakened: Option<weakened::Gate>,
     verify: Option<verify::Gate>,
+    repro: Option<repro::Gate>,
 }
 
 impl Gates {
@@ -176,10 +177,19 @@ impl Gates {
     /// or a merge-base `devkit.toml` that parses, an agent's PR is refused
     /// and a human's opens ungated, with a warning only when this
     /// checkout's own config turns on a gate that binds a human.
-    pub(crate) fn read(dir: &Path, base: &str, head: &str, caller: Caller) -> Result<Self> {
+    /// The repro gate checks the `Done when` items `items` returns, `None`
+    /// when the worktree has no issue.
+    pub(crate) fn read(
+        dir: &Path,
+        base: &str,
+        head: &str,
+        caller: Caller,
+        items: impl FnOnce() -> Result<Option<Vec<String>>>,
+    ) -> Result<Self> {
         let ungated = Self {
             weakened: None,
             verify: None,
+            repro: None,
         };
         let settings = weakened::merge_base(dir, base).and_then(|merge_base| {
             merge_base
@@ -218,7 +228,20 @@ impl Gates {
         };
         let verify =
             verify::Gate::read(dir, &merge_base, &cfg.gates, head, caller, &Ledger::live())?;
-        Ok(Self { weakened, verify })
+        let repro = repro::Gate::read(
+            dir,
+            &merge_base,
+            &cfg.gates,
+            &cfg.test_files,
+            head,
+            caller,
+            items,
+        )?;
+        Ok(Self {
+            weakened,
+            verify,
+            repro,
+        })
     }
 
     fn apply(&self, body: String) -> Result<String> {
@@ -226,8 +249,12 @@ impl Gates {
             Some(gate) => gate.apply(body)?,
             None => body,
         };
-        match &self.verify {
-            Some(gate) => gate.apply(body),
+        let body = match &self.verify {
+            Some(gate) => gate.apply(body)?,
+            None => body,
+        };
+        match &self.repro {
+            Some(gate) => gate.apply(body, self.verify.is_some()),
             None => Ok(body),
         }
     }
@@ -248,7 +275,7 @@ fn checkout_gates_a_human(dir: &Path) -> bool {
         .into_iter()
         .any(|(gate, mode)| match gate {
             GateKey::Verify(_) => mode != GateMode::Off,
-            GateKey::WeakenedTests => false,
+            GateKey::WeakenedTests | GateKey::Repro(_) => false,
         })
 }
 
@@ -394,7 +421,19 @@ pub fn run(args: Args) -> Result<()> {
     let head = vcs.revision(here)?;
     let gate_base = base.clone();
     let gate_head = head.clone();
-    let gates = move || Gates::read(here, &gate_base, &gate_head, caller);
+    let gate_issue = tracker_issue.clone();
+    let (config, repos) = (&loaded.config, &forge.repos);
+    let items = move || -> Result<Option<Vec<String>>> {
+        let Some(issue) = gate_issue else {
+            return Ok(None);
+        };
+        let tracker = devkit_common::tracker::resolve(config.tracker.kind, here, repos);
+        let details = tracker.tracker.details(&issue)?.with_context(|| {
+            format!("no issue {issue} in the {} tracker", tracker.tracker.kind())
+        })?;
+        Ok(Some(done_when_items(&details.description)))
+    };
+    let gates = move || Gates::read(here, &gate_base, &gate_head, caller, items);
 
     let texts = Texts::new(
         &loaded.config.templates,

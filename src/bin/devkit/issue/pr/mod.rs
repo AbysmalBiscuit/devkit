@@ -11,6 +11,7 @@ pub(crate) mod edit;
 pub(crate) mod proof;
 pub(crate) mod ready;
 pub(crate) mod render;
+pub(crate) mod repro;
 pub(crate) mod resolve;
 pub(crate) mod splice;
 pub(crate) mod verify;

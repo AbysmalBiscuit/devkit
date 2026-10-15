@@ -48,7 +48,7 @@ impl Gate {
     ) -> Result<Option<Self>> {
         let Some((required, mode)) = gates.all().into_iter().find_map(|(gate, mode)| match gate {
             GateKey::Verify(required) => Some((required, mode)),
-            GateKey::WeakenedTests => None,
+            GateKey::WeakenedTests | GateKey::Repro(_) => None,
         }) else {
             return Ok(None);
         };
@@ -246,7 +246,7 @@ fn heads_required(
     let gates = super::weakened::config_at(dir, head).ok()?.gates;
     let at_head = gates.all().into_iter().find_map(|(gate, _)| match gate {
         GateKey::Verify(r) => Some(r),
-        GateKey::WeakenedTests => None,
+        GateKey::WeakenedTests | GateKey::Repro(_) => None,
     })?;
     applies(&at_head).then_some(at_head)
 }
@@ -504,14 +504,19 @@ const ARG_BUDGET: usize = 200;
 /// [`TAIL_BUDGET`], fenced, with a note when earlier lines were dropped. A
 /// lone last line over the budget keeps its end, cut on a char boundary.
 fn output_tail(lines: &[String]) -> String {
+    output_tail_within(lines, TAIL_BUDGET)
+}
+
+/// [`output_tail`] keeping at most `budget` bytes of `lines`.
+pub(super) fn output_tail_within(lines: &[String], budget: usize) -> String {
     let mut kept: Vec<&str> = Vec::new();
     let mut used = 0;
     let mut cut = false;
     for line in lines.iter().rev() {
         let cost = line.len() + 1;
-        if used + cost > TAIL_BUDGET {
+        if used + cost > budget {
             if kept.is_empty() {
-                let mut start = line.len() - TAIL_BUDGET;
+                let mut start = line.len() - budget;
                 while !line.is_char_boundary(start) {
                     start += 1;
                 }
@@ -529,7 +534,7 @@ fn output_tail(lines: &[String]) -> String {
     let note = match (dropped, cut) {
         (0, false) => String::new(),
         (0, true) => format!(
-            "\nThe line was cut to at most its last {TAIL_BUDGET} bytes to keep the PR body within \
+            "\nThe line was cut to at most its last {budget} bytes to keep the PR body within \
              GitHub's limit.\n"
         ),
         (1, _) => {
