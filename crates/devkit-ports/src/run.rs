@@ -147,6 +147,9 @@ pub struct ServerStatus {
     pub pid: Option<u32>,
     pub logfile: Option<PathBuf>,
     pub state: ServerState,
+    /// [`launch`] found this server already running and did not spawn it.
+    #[serde(skip)]
+    pub reused: bool,
 }
 
 /// Classify from already-probed signals: listening -> Ready; else live pid ->
@@ -188,6 +191,7 @@ pub fn server_rows(data: &Data, only_holder: Option<&str>) -> Vec<ServerStatus> 
             pid: e.pid,
             logfile: e.logfile.clone(),
             state: server_state(*port, e.pid),
+            reused: false,
         });
     }
     rows
@@ -485,6 +489,7 @@ fn existing_server(
         pid: Some(pid),
         logfile: e.logfile.clone(),
         state: server_state(plan.port, Some(pid)),
+        reused: true,
     })
 }
 
@@ -562,6 +567,7 @@ pub fn launch(
                 } else {
                     ServerState::Starting
                 },
+                reused: false,
             })
             .collect();
         out.extend(existing);
@@ -576,6 +582,7 @@ pub fn launch(
                 pid: Some(pid),
                 logfile: Some(log),
                 state: server_state(port, Some(pid)),
+                reused: false,
             })
             .collect();
         out.extend(existing);
@@ -624,6 +631,7 @@ fn supervise_via_daemon(
             } else {
                 ServerState::Starting
             },
+            reused: false,
         });
     }
     Ok(out)

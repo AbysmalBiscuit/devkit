@@ -493,7 +493,8 @@ pub fn run(cli: RunCli) -> Result<()> {
         } => cmd_up(&cli, &cwd, apps, *role, env, env_file.as_deref(), UpFlags {
             dry_run: *dry_run,
             supervise: *supervise,
-        }),
+        })
+        .map(drop),
         Cmd::Down {
             selectors,
             all,
@@ -778,7 +779,7 @@ fn cmd_task(
                 for item in items {
                     match item {
                         SeqItem::Run(plan) => print_plan(plan),
-                        SeqItem::Up(app) => up(app, true)?,
+                        SeqItem::Up(app) => drop(up(app, true)?),
                     }
                 }
             }
@@ -819,6 +820,7 @@ fn cmd_task(
     let start = start.committed_definition(committed).plan(plan);
     let tail = ledger::Tail::new();
     let steps = std::cell::RefCell::new(Vec::new());
+    let mut reused = Vec::new();
     let step = |step_name: &str| -> Result<Option<i32>> {
         let fresh = task::resolve_step(
             &loaded.config,
@@ -847,7 +849,7 @@ fn cmd_task(
                             return Ok(code);
                         }
                     }
-                    SeqItem::Up(app) => up(app, false)?,
+                    SeqItem::Up(app) => reused.extend(up(app, false)?),
                 }
             }
             Ok(Some(0))
@@ -857,6 +859,7 @@ fn cmd_task(
         outcome.as_ref().ok().copied().flatten(),
         &tail,
         steps.into_inner(),
+        reused,
     );
     if let Err(e) = ledger::Ledger::live().record(&run) {
         eprintln!("devrun: the run was not recorded in the run ledger: {e:#}");
@@ -877,6 +880,8 @@ fn print_plan(plan: &devkit_ports::task::CommandPlan) {
     println!("  env:  {}", envs.join(" "));
 }
 
+/// Bring `apps_arg` up and return the apps it found already running rather
+/// than launched.
 fn cmd_up(
     cli: &RunCli,
     cwd: &str,
@@ -885,7 +890,7 @@ fn cmd_up(
     env_pairs: &[String],
     env_file: Option<&str>,
     flags: UpFlags,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let UpFlags { dry_run, supervise } = flags;
     #[cfg(not(feature = "daemon"))]
     let _ = supervise;
@@ -1011,6 +1016,7 @@ fn cmd_up(
         .map(|(n, _)| n.clone());
 
     let mut rows: Vec<Row> = Vec::new();
+    let mut reused = Vec::new();
     for (grp_role, holder, base_dir) in &groups {
         let ports =
             run::resolve_ports(catalog, &apps, holder, *grp_role, &cfg.templates.defaults())?;
@@ -1059,6 +1065,9 @@ fn cmd_up(
             || run::launch(&plans, holder, *grp_role, supervise, true),
         )?;
         for s in statuses {
+            if s.reused {
+                reused.push(s.app.clone());
+            }
             if s.state != devkit_ports::run::ServerState::Ready
                 && let Some(log) = &s.logfile
             {
@@ -1082,7 +1091,7 @@ fn cmd_up(
     }
 
     print_summary(&rows);
-    Ok(())
+    Ok(reused)
 }
 
 /// True if any matched row belongs to a holder other than `current` or the

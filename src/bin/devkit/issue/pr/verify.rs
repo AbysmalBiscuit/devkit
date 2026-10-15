@@ -171,6 +171,24 @@ fn qualifying(
     let mut rejected = None;
     for pass in passes {
         let why = match (pass.dir.as_deref(), pass.plan.as_deref()) {
+            _ if !pass.reused_servers.is_empty() => format!(
+                "A run at that commit passed, but its `up` step reused the server already \
+                 running for {apps}, which may have started at an earlier commit: stop it with \
+                 `devrun down {names}` and run `{command}` again.",
+                apps = pass
+                    .reused_servers
+                    .iter()
+                    .map(|a| format!("`{a}`"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                names = pass
+                    .reused_servers
+                    .iter()
+                    .map(|a| format!("--app {a}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                command = required.command(),
+            ),
             (None, _) => format!(
                 "A run at that commit passed, but its record does not say which directory it \
                  started in, so what it ran cannot be rebuilt: run `{}` again.",

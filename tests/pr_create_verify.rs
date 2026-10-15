@@ -670,3 +670,61 @@ fn a_task_rendering_a_port_qualifies() {
     assert!(ok, "{stderr}");
     assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
 }
+
+/// A required sequence that brings `srv` up before running `verify`.
+const UP_VERIFY: &str = "[apps.srv]\nbase_port = 39203\npath = \".\"\nlaunch = [\"git\", \"version\"]\n\
+     [tasks.e2e]\nsteps = [{ up = \"srv\" }, { task = \"verify\" }]\n\
+     [pr.gates]\nverify_task = \"e2e\"\nverify_args = { scope = \"all\" }\n";
+
+/// Seed the port registry with this checkout's `srv` row at a port the
+/// returned listener answers on, so the `up` step reports ready at once.
+/// With `pid`, the row is a live server the step reuses; without, a
+/// reservation the step launches into.
+fn hold_srv(p: &ghfake::Fake, pid: Option<u32>) -> std::net::TcpListener {
+    use devkit_ports::registry::{self, Data, Entry, Role};
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let holder = devkit_common::vcs::checkout_root(p.project())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let mut data = Data {
+        version: registry::SCHEMA_VERSION,
+        entries: Default::default(),
+    };
+    data.entries.insert(port, Entry {
+        app: "srv".into(),
+        holder,
+        role: Role::Workspace,
+        pid,
+        logfile: None,
+        ts: registry::now(),
+    });
+    let dir = p.state().join("devkit");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("ports.json"), serde_json::to_vec(&data).unwrap()).unwrap();
+    listener
+}
+
+#[test]
+fn a_run_whose_up_step_reused_a_live_server_is_refused() {
+    let p = project(UP_VERIFY);
+    let _server = hold_srv(&p, Some(std::process::id()));
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(stderr.contains("reused"), "says why: {stderr}");
+    assert!(stderr.contains("`srv`"), "names the server: {stderr}");
+    assert!(stderr.contains("devrun down"), "says how to fix: {stderr}");
+    assert!(!opened(&p), "{}", p.calls());
+}
+
+#[test]
+fn a_run_whose_up_step_launched_its_server_qualifies() {
+    let p = project(UP_VERIFY);
+    let _server = hold_srv(&p, None);
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+    assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
+}

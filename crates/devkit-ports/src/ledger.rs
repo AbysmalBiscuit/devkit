@@ -79,6 +79,11 @@ pub struct Run {
     /// Each command step devrun executed, in order, with the argv it ran.
     #[serde(default)]
     pub steps: Vec<Step>,
+    /// The apps an `up` step found already running and did not launch. Such
+    /// a server may have started at another commit, so a run that reused
+    /// one satisfies no PR gate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reused_servers: Vec<String>,
     /// The exit code of the program devrun ran, or of a sequence's first
     /// failing step. `None` when it was killed by a signal or never ran.
     pub exit_code: Option<i32>,
@@ -350,8 +355,15 @@ impl Start {
     }
 
     /// The finished run, re-reading the tree so a run that changed it, or
-    /// whose head moved under it, is not clean.
-    pub fn finish(self, exit_code: Option<i32>, tail: &Tail, steps: Vec<Step>) -> Run {
+    /// whose head moved under it, is not clean. `reused_servers` names the
+    /// apps its `up` steps found already running.
+    pub fn finish(
+        self,
+        exit_code: Option<i32>,
+        tail: &Tail,
+        steps: Vec<Step>,
+        reused_servers: Vec<String>,
+    ) -> Run {
         let (head_after, clean_after) = tree_state(&self.worktree);
         Run {
             clean: self.clean
@@ -364,6 +376,7 @@ impl Start {
             env: self.env,
             env_file: self.env_file,
             steps,
+            reused_servers,
             task: self.task,
             args: self.args,
             repo: self.repo,
@@ -552,6 +565,7 @@ mod tests {
             env: Vec::new(),
             env_file: None,
             steps: Vec::new(),
+            reused_servers: Vec::new(),
             exit_code,
             started_at: "2026-01-01T00:00:00.000Z".into(),
             ended_at: "2026-01-01T00:00:01.000Z".into(),
