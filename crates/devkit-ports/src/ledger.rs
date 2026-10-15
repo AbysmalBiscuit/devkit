@@ -45,36 +45,16 @@ pub struct Run {
     pub worktree: PathBuf,
     /// The directory the run started in, relative to `worktree`, with `/`
     /// between components and empty at its root: where the config layers
-    /// it ran under apply. `None` when it could not be read, and such a run
-    /// satisfies no PR gate.
+    /// it ran under apply. `None` when it could not be read.
     #[serde(default)]
     pub dir: Option<String>,
-    /// The digest ([`crate::task::ExecutionPlan::digest`]) of the plan the
-    /// run executed, rendered with the worktree's branch and issue as they
-    /// were then. `None` when the task did not render to one, or on a
-    /// record that predates it, and such a run satisfies no PR gate.
-    #[serde(default)]
-    pub plan: Option<String>,
     /// The full commit id checked out when the run started; `None` when it
     /// could not be read, as on a repository with no commits.
     pub head: Option<String>,
     /// The tree had no modified, staged or untracked files when the run
-    /// started and when it ended, the head had not moved, the task ran as
-    /// the committed config defines it ([`Run::committed_definition`]), and
-    /// no `--env` or `--env-file` was given.
+    /// started and when it ended, the head had not moved, and no `--env` or
+    /// `--env-file` was given.
     pub clean: bool,
-    /// The task's execution plan ([`crate::task::ExecutionPlan`]) is the
-    /// one the repository's committed `devkit.toml` layers alone give at
-    /// HEAD: no local, home, `--config` or `$DEVKIT_CONFIG` layer changed
-    /// it. `false` when that could not be determined.
-    #[serde(default)]
-    pub committed_definition: bool,
-    /// When the task did not run as the committed config defines it, the
-    /// config layers outside the committed `devkit.toml` files that set a
-    /// task, app or template value it ran under: a local, home, `--config`
-    /// or `$DEVKIT_CONFIG` layer.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub uncommitted_layers: Vec<PathBuf>,
     /// The names of the variables `--env` and `--env-file` set. Their values
     /// may be secrets, so they are never stored.
     #[serde(default)]
@@ -273,11 +253,8 @@ pub struct Start {
     repo: PathBuf,
     worktree: PathBuf,
     dir: Option<String>,
-    plan: Option<String>,
     head: Option<String>,
     clean: bool,
-    committed_definition: bool,
-    uncommitted_layers: Vec<PathBuf>,
     env: Vec<String>,
     env_file: Option<PathBuf>,
     started_at: String,
@@ -295,8 +272,7 @@ fn tree_state(root: &Path) -> (Option<String>, bool) {
 impl Start {
     /// Capture the tree state for a run of `task` started in `cwd`, inside
     /// worktree `root`. `env` names the variables `--env` and `env_file`
-    /// set. The run counts as committed only once
-    /// [`Start::committed_definition`] says so.
+    /// set.
     pub fn capture(
         root: &Path,
         cwd: &Path,
@@ -321,51 +297,11 @@ impl Start {
             repo: std::fs::canonicalize(&repo).unwrap_or(repo),
             worktree,
             dir,
-            plan: None,
             head,
             clean,
-            committed_definition: false,
-            uncommitted_layers: Vec::new(),
             env,
             env_file,
             started_at: devkit_common::harness_log::now_rfc3339(),
-        }
-    }
-
-    /// The commit checked out when the run started.
-    pub fn head(&self) -> Option<&str> {
-        self.head.as_deref()
-    }
-
-    /// See [`Run::dir`].
-    pub fn dir(&self) -> Option<&str> {
-        self.dir.as_deref()
-    }
-
-    /// See [`Run::worktree`].
-    pub fn worktree(&self) -> &Path {
-        &self.worktree
-    }
-
-    /// Record the digest of the plan the run executes.
-    pub fn plan(self, digest: Option<String>) -> Self {
-        Self {
-            plan: digest,
-            ..self
-        }
-    }
-
-    /// Record whether the task runs as the committed config defines it,
-    /// and when it does not, the layers [`Run::uncommitted_layers`] names.
-    pub fn committed_definition(self, committed: bool, uncommitted_layers: Vec<PathBuf>) -> Self {
-        Self {
-            committed_definition: committed,
-            uncommitted_layers: if committed {
-                Vec::new()
-            } else {
-                uncommitted_layers
-            },
-            ..self
         }
     }
 
@@ -382,13 +318,10 @@ impl Start {
         let (head_after, clean_after) = tree_state(&self.worktree);
         Run {
             clean: self.clean
-                && self.committed_definition
                 && self.env.is_empty()
                 && self.env_file.is_none()
                 && clean_after
                 && head_after == self.head,
-            committed_definition: self.committed_definition,
-            uncommitted_layers: self.uncommitted_layers,
             env: self.env,
             env_file: self.env_file,
             steps,
@@ -398,7 +331,6 @@ impl Start {
             repo: self.repo,
             worktree: self.worktree,
             dir: self.dir,
-            plan: self.plan,
             head: self.head,
             exit_code,
             started_at: self.started_at,
@@ -574,11 +506,8 @@ mod tests {
             repo: "/r".into(),
             worktree: "/r".into(),
             dir: Some(String::new()),
-            plan: Some(String::new()),
             head: Some(head.into()),
             clean,
-            committed_definition: clean,
-            uncommitted_layers: Vec::new(),
             env: Vec::new(),
             env_file: None,
             steps: Vec::new(),

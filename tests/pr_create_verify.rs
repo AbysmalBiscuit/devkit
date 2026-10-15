@@ -190,28 +190,6 @@ fn a_pass_given_env_does_not_satisfy_the_gate_and_says_so() {
 }
 
 #[test]
-fn a_pass_under_an_uncommitted_config_layer_is_refused_naming_the_layer() {
-    let p = project(GATE);
-    let exclude = p.project().join(".git/info/exclude");
-    let mut ignored = std::fs::read_to_string(&exclude).unwrap_or_default();
-    ignored.push_str("devkit.local.toml\n");
-    std::fs::write(&exclude, ignored).unwrap();
-    let layer = p.project().join("devkit.local.toml");
-    std::fs::write(&layer, "[tasks.verify.env]\nGIT_TRACE = \"0\"\n").unwrap();
-    verify(&p);
-    let stderr = refusal(&p);
-    assert!(
-        stderr.contains("outside the committed devkit.toml files"),
-        "says why: {stderr}"
-    );
-    let layer = std::fs::canonicalize(&layer).unwrap();
-    assert!(
-        stderr.contains(&layer.display().to_string()),
-        "names the layer: {stderr}"
-    );
-}
-
-#[test]
 fn the_body_carries_a_verification_section_built_from_the_qualifying_run() {
     let p = project(GATE);
     verify(&p);
@@ -316,8 +294,28 @@ fn a_blank_required_task_is_a_config_error() {
     assert!(!opened(&p), "{}", p.calls());
 }
 
+/// The PR's Verification section, once an agent's `pr create` opened it.
+fn opened_body(p: &ghfake::Fake) -> String {
+    let (ok, stderr) = create(p, "agent");
+    assert!(ok, "{stderr}");
+    body(p)
+}
+
+/// `body` says the PR changes what `task` runs, with each of `lines` in
+/// the diff it shows.
+fn assert_shows_change(body: &str, task: &str, lines: &[&str]) {
+    assert!(
+        body.contains(&format!("This PR changes what `{task}` runs")),
+        "{body}"
+    );
+    assert!(body.contains("```diff\n"), "{body}");
+    for line in lines {
+        assert!(body.contains(&format!("\n{line}\n")), "{line}: {body}");
+    }
+}
+
 #[test]
-fn a_branch_redefining_the_required_task_as_a_no_op_is_refused() {
+fn a_branch_redefining_the_required_task_opens_showing_the_change() {
     let p = project(GATE);
     let config = p.project().join("devkit.toml");
     let toml = std::fs::read_to_string(&config).unwrap();
@@ -332,16 +330,34 @@ fn a_branch_redefining_the_required_task_as_a_no_op_is_refused() {
     git(&p, &["commit", "-q", "-am", "make verify a no-op"]);
     serve_head(&p);
     verify(&p);
-    assert_refused(&p);
-    let (_, stderr) = create(&p, "agent");
-    assert!(
-        stderr.contains("definition changed from the merge base"),
-        "{stderr}"
-    );
+    let body = opened_body(&p);
+    assert!(body.contains("Exit code: 0"), "{body}");
+    assert_shows_change(&body, "verify", &[
+        "  step 1: task verify",
+        r#"-   argv: ["git","-c","x.scope=all","version"]"#,
+        r#"+   argv: ["git","-c","y.scope=all","--version"]"#,
+    ]);
 }
 
 #[test]
-fn a_branch_changing_only_the_required_tasks_env_is_refused() {
+fn a_human_with_no_run_sees_the_change_beside_not_run() {
+    let p = project(GATE);
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, toml.replace("x.scope=", "y.scope=")).unwrap();
+    git(&p, &["commit", "-q", "-am", "rename the key"]);
+    serve_head(&p);
+    let (ok, stderr) = create(&p, "human");
+    assert!(ok, "{stderr}");
+    let body = body(&p);
+    assert!(body.contains("NOT RUN"), "{body}");
+    assert_shows_change(&body, "verify", &[
+        r#"+   argv: ["git","-c","y.scope=all","version"]"#,
+    ]);
+}
+
+#[test]
+fn a_branch_changing_only_the_required_tasks_env_opens_showing_the_change() {
     let p = project(GATE);
     let config = p.project().join("devkit.toml");
     let toml = std::fs::read_to_string(&config).unwrap();
@@ -357,12 +373,66 @@ fn a_branch_changing_only_the_required_tasks_env_is_refused() {
     git(&p, &["commit", "-q", "-am", "set an env on verify"]);
     serve_head(&p);
     verify(&p);
-    assert_refused(&p);
-    let (_, stderr) = create(&p, "agent");
+    assert_shows_change(&opened_body(&p), "verify", &[
+        r#"+   env GIT_CONFIG_NOSYSTEM = "1""#,
+    ]);
+}
+
+/// A linked worktree reads the primary clone's `devkit.toml` as a layer,
+/// and the primary clone's uncommitted edit to it is no part of what the
+/// branch commits, so it neither stops the run qualifying nor shows as a
+/// change.
+#[test]
+fn a_run_in_a_linked_worktree_beside_an_edited_primary_config_qualifies() {
+    let p = project(GATE);
+    let branch = git(&p, &["branch", "--show-current"]).trim().to_string();
+    git(&p, &["checkout", "-q", "--detach"]);
+    let outside = tempfile::tempdir().unwrap();
+    let wt = outside.path().join("wt");
+    git(&p, &[
+        "worktree",
+        "add",
+        "-q",
+        wt.to_str().unwrap(),
+        &branch,
+    ]);
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        format!("{toml}\n[tasks.verify.env]\nGIT_CONFIG_NOSYSTEM = \"1\"\n"),
+    )
+    .unwrap();
+
+    let out = p.devkit_here(&[
+        "run",
+        "-C",
+        wt.to_str().unwrap(),
+        "task",
+        "verify",
+        "--arg",
+        "scope=all",
+    ]);
     assert!(
-        stderr.contains("definition changed from the merge base"),
-        "{stderr}"
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    let out = p.issue_as_in("agent", &wt, &[
+        "pr",
+        "create",
+        "--no-push",
+        "--pr-title",
+        "feat: a thing",
+        "--pr-body",
+        "Adds a thing.",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let body = body(&p);
+    assert!(body.contains("Exit code: 0"), "{body}");
+    assert!(!body.contains("NOT RUN"), "{body}");
+    assert!(!body.contains("This PR changes"), "{body}");
 }
 
 #[test]
@@ -381,8 +451,8 @@ fn a_branch_changing_only_a_tasks_description_still_qualifies() {
     git(&p, &["commit", "-q", "-am", "describe verify"]);
     serve_head(&p);
     verify(&p);
-    let (ok, stderr) = create(&p, "agent");
-    assert!(ok, "{stderr}");
+    let body = opened_body(&p);
+    assert!(!body.contains("This PR changes"), "{body}");
 }
 
 #[test]
@@ -502,15 +572,6 @@ fn verify_in_sub(p: &ghfake::Fake) {
     );
 }
 
-fn assert_redefined(p: &ghfake::Fake) {
-    assert_refused(p);
-    let (_, stderr) = create(p, "agent");
-    assert!(
-        stderr.contains("definition changed from the merge base"),
-        "{stderr}"
-    );
-}
-
 #[test]
 fn a_run_under_an_unchanged_nested_layer_qualifies() {
     let p = project_with_nested_layer(GATE, "[tasks.verify.env]\nGIT_TRACE = \"0\"\n");
@@ -521,7 +582,7 @@ fn a_run_under_an_unchanged_nested_layer_qualifies() {
 }
 
 #[test]
-fn a_branch_changing_the_tasks_env_in_a_nested_layer_is_refused() {
+fn a_branch_changing_the_tasks_env_in_a_nested_layer_opens_showing_the_change() {
     let p = project_with_nested_layer(GATE, "[tasks.verify.env]\nGIT_TRACE = \"0\"\n");
     std::fs::write(
         p.project().join("sub/devkit.toml"),
@@ -536,7 +597,9 @@ fn a_branch_changing_the_tasks_env_in_a_nested_layer_is_refused() {
     ]);
     serve_head(&p);
     verify_in_sub(&p);
-    assert_redefined(&p);
+    assert_shows_change(&opened_body(&p), "verify", &[
+        r#"+   env GIT_CONFIG_NOSYSTEM = "1""#,
+    ]);
 }
 
 /// Tasks reading the template variable `mode`, through their own `env` and
@@ -566,54 +629,30 @@ fn a_task_reading_an_unchanged_template_variable_qualifies() {
 }
 
 /// A variable read by the task's `env` or its app's `static_env` shapes
-/// what it runs, so a branch changing its default is refused.
+/// what it runs, so a branch changing its default shows as a change, with
+/// the rendered values left out.
 #[test]
-fn a_branch_changing_a_template_variable_the_task_reads_is_refused() {
+fn a_branch_changing_a_template_variable_the_task_reads_shows_the_change_without_values() {
     for reader in MODE_READERS {
         let p = project_reading_mode(reader);
         let file = p.project().join("devkit.toml");
         let toml = std::fs::read_to_string(&file).unwrap();
-        std::fs::write(&file, toml.replace("mode = \"full\"", "mode = \"none\"")).unwrap();
+        std::fs::write(&file, toml.replace("mode = \"full\"", "mode = \"s3cr3t\"")).unwrap();
         git(&p, &["commit", "-q", "-am", "change the variable"]);
         serve_head(&p);
         task(&p, &["envy"]);
-        let (ok, stderr) = create(&p, "agent");
-        assert!(!ok, "{reader}: {stderr}");
-        assert!(
-            stderr.contains("definition changed from the merge base"),
-            "{reader}: {stderr}"
-        );
-        assert!(!opened(&p), "{reader}: {}", p.calls());
+        let body = opened_body(&p);
+        assert_shows_change(&body, "envy", &[
+            r#"~   env GIT_MODE = "{{ mode }}" (rendered value changed)"#,
+        ]);
+        assert!(!body.contains("s3cr3t"), "{reader}: {body}");
+        assert!(!body.contains("full"), "{reader}: {body}");
     }
 }
 
+/// A run never records the values its env rendered.
 #[test]
-fn a_pass_recorded_without_what_it_ran_does_not_satisfy_the_gate() {
-    for (field, why) in [
-        ("dir", "which directory it started in"),
-        ("plan", "what it ran"),
-    ] {
-        let p = project(GATE);
-        verify(&p);
-        let runs = p.state().join("devkit/runs");
-        for entry in std::fs::read_dir(&runs).unwrap() {
-            let path = entry.unwrap().path();
-            let mut run: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            assert!(!run[field].is_null(), "{field}: {run:#}");
-            run.as_object_mut().unwrap().remove(field);
-            std::fs::write(&path, run.to_string()).unwrap();
-        }
-        assert_refused(&p);
-        let (_, stderr) = create(&p, "agent");
-        assert!(stderr.contains(why), "{field}: {stderr}");
-    }
-}
-
-/// A run records the digest of the plan it executed, never the values its
-/// env rendered.
-#[test]
-fn the_ledger_records_the_plans_digest_but_no_env_value() {
+fn the_ledger_records_no_env_value() {
     let p = project(&format!(
         "
 [tasks.secretive]
@@ -629,9 +668,6 @@ env = {{ TOKEN = \"hunter2-{{{{ branch }}}}\" }}
         .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
         .collect();
     assert!(!text.contains("hunter2"), "{text}");
-    let run: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
-    let plan = run["plan"].as_str().unwrap_or_default();
-    assert_eq!(plan.len(), 64, "a sha256: {run:#}");
     let (ok, stderr) = create(&p, "agent");
     assert!(ok, "{stderr}");
 }
@@ -648,18 +684,16 @@ fn a_task_rendering_the_branch_qualifies_on_the_branch_it_ran_on() {
     assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
 }
 
-/// The run rendered the old branch name, so it did not run what the PR's
-/// branch runs.
+/// Both commits' tasks render the branch as it is when the PR opens, so a
+/// rename after the run changes nothing the gate compares.
 #[test]
-fn a_branch_renamed_after_the_run_is_refused_for_a_task_rendering_the_branch() {
+fn a_branch_renamed_after_the_run_still_qualifies_a_task_rendering_it() {
     let p = project(BRANCH_READER);
     task(&p, &["named"]);
     git(&p, &["branch", "-m", "lev/eng-1-renamed"]);
-    let (ok, stderr) = create(&p, "agent");
-    assert!(!ok, "{stderr}");
-    assert!(stderr.contains("the run ledger records none"), "{stderr}");
-    assert!(stderr.contains("branch or issue record"), "{stderr}");
-    assert!(!opened(&p), "{}", p.calls());
+    let body = opened_body(&p);
+    assert!(body.contains("Exit code: 0"), "{body}");
+    assert!(!body.contains("This PR changes"), "{body}");
 }
 
 #[test]
@@ -677,9 +711,9 @@ const LIVE_READER: &str = "[tasks.live]\nrun = [\"git\", \"-c\", \"x.api={{ port
      [apps.api]\nbase_port = 39202\npath = \".\"\nlaunch = [\"git\", \"version\"]\n";
 
 /// `require_live` is a precondition of the run, so a branch dropping it
-/// runs the task where the merge base would refuse to.
+/// shows as a change.
 #[test]
-fn a_branch_dropping_a_require_live_entry_is_refused() {
+fn a_branch_dropping_a_require_live_entry_opens_showing_the_change() {
     let p = project(&format!(
         "{LIVE_READER}\n[pr.gates]\nverify_task = \"live\"\n"
     ));
@@ -689,22 +723,15 @@ fn a_branch_dropping_a_require_live_entry_is_refused() {
     git(&p, &["commit", "-q", "-am", "drop require_live"]);
     serve_head(&p);
     task(&p, &["live"]);
-    let (ok, stderr) = create(&p, "agent");
-    assert!(!ok, "{stderr}");
-    assert!(
-        stderr.contains("definition changed from the merge base"),
-        "{stderr}"
-    );
-    assert!(!opened(&p), "{}", p.calls());
+    assert_shows_change(&opened_body(&p), "live", &["-   require_live: api"]);
 }
 
 const AGENTS_NAME_SCOPE: &str = "[tasks.verify.required_args]\nscope = \"agents\"\n";
 
 /// An arg the merge base requires of agents is a precondition of the run,
-/// so a branch dropping the requirement runs the task where the merge base
-/// would refuse an agent.
+/// so a branch dropping the requirement shows as a change.
 #[test]
-fn a_branch_dropping_a_required_arg_is_refused() {
+fn a_branch_dropping_a_required_arg_opens_showing_the_change() {
     let p = project(&format!(
         "\n{AGENTS_NAME_SCOPE}\n[templates.variables]\nscope = \"all\"\n\n[pr.gates]\nverify_task = \"verify\"\n"
     ));
@@ -714,13 +741,10 @@ fn a_branch_dropping_a_required_arg_is_refused() {
     git(&p, &["commit", "-q", "-am", "drop required_args"]);
     serve_head(&p);
     task(&p, &["verify"]);
-    let (ok, stderr) = create(&p, "agent");
-    assert!(!ok, "{stderr}");
-    assert!(
-        stderr.contains("definition changed from the merge base"),
-        "{stderr}"
-    );
-    assert!(!opened(&p), "{}", p.calls());
+    assert_shows_change(&opened_body(&p), "verify", &[
+        "- args accepted from: human",
+        "+ args accepted from: human, agent",
+    ]);
 }
 
 #[test]

@@ -13,9 +13,6 @@ pub struct Loaded {
     pub config: Config,
     pub catalog: HashMap<String, App>,
     pub provenance: Provenance,
-    /// The doppler map app paths are inferred from, read from the
-    /// config's `defaults.doppler_yaml`; empty without one.
-    pub path_to_project: HashMap<String, String>,
     /// Apps the config named that the catalog could not resolve a path for.
     pub skipped: Vec<String>,
 }
@@ -54,19 +51,25 @@ pub fn load_quiet(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
 /// one rather than one apiece.
 pub fn load_quiet_in(checkout: &Checkout, explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
     let (cfg, provenance) = devkit_common::config::resolve_in(checkout, explicit, start)?;
-    let yaml_path = config::expand_tilde(&cfg.defaults.doppler_yaml);
-    let p2p = match std::fs::read_to_string(&yaml_path) {
-        Ok(y) => doppler::path_to_project(&y)?,
-        Err(_) => HashMap::new(), // doppler.yaml optional; apps then need explicit path/project
-    };
+    let p2p = path_to_project(&cfg)?;
     let (catalog, skipped) = apps::catalog(&cfg, &p2p)?;
     Ok(Loaded {
         config: cfg,
         catalog,
         provenance,
-        path_to_project: p2p,
         skipped,
     })
+}
+
+/// The doppler map app paths are inferred from, read from `cfg`'s
+/// `defaults.doppler_yaml`; empty without one, since apps can then name
+/// their path or project explicitly.
+pub fn path_to_project(cfg: &Config) -> Result<HashMap<String, String>> {
+    let yaml_path = config::expand_tilde(&cfg.defaults.doppler_yaml);
+    match std::fs::read_to_string(&yaml_path) {
+        Ok(y) => doppler::path_to_project(&y),
+        Err(_) => Ok(HashMap::new()),
+    }
 }
 
 #[cfg(test)]

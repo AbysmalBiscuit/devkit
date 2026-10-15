@@ -9,7 +9,7 @@ use devkit_common::caller::Caller;
 use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask};
 use devkit_ports::{
     ledger::{Ledger, Run},
-    load, task,
+    task,
 };
 
 /// The verify gate for one `pr create`: the required run and the run that
@@ -23,13 +23,15 @@ pub(crate) struct Gate {
     /// Why the latest run that passed at `head` does not qualify, when one
     /// passed and none qualifies.
     rejected: Option<String>,
+    /// What the PR changes in what the required task runs, when it does.
+    change: Option<String>,
 }
 
 impl Gate {
     /// The gate `gates` configures for a PR opened at `head` from the
-    /// checkout at `dir`, or `None` when it is off or names no task. A run
-    /// qualifies only when it ran exactly what the required task runs at
-    /// `merge_base`, so a branch cannot redefine the task it is checked by.
+    /// checkout at `dir`, or `None` when it is off or names no task. A
+    /// branch that changes what the required task runs since `merge_base`
+    /// is not refused for it: the Verification section shows the change.
     pub(crate) fn read(
         dir: &Path,
         merge_base: &str,
@@ -55,14 +57,22 @@ impl Gate {
             .filter(|r| r.proves_with(&required.task, &required.args, head))
             .cloned()
             .collect();
-        let (run, rejected) = if passes.is_empty() {
-            let near = runs.iter().find(|r| {
-                r.task == required.task && r.exit_code == Some(0) && r.head.as_deref() == Some(head)
-            });
-            (None, near.and_then(|r| unproven(&required, r)))
-        } else {
-            qualifying(dir, merge_base, &required, passes)
+        let (run, rejected) = match passes.iter().find(|r| r.reused_servers.is_empty()) {
+            Some(run) => (Some(run.clone()), None),
+            None => match passes.first() {
+                Some(reused) => (None, Some(reused_note(&required, reused))),
+                None => {
+                    let near = runs.iter().find(|r| {
+                        r.task == required.task
+                            && r.exit_code == Some(0)
+                            && r.head.as_deref() == Some(head)
+                    });
+                    (None, near.and_then(|r| unproven(&required, r)))
+                }
+            },
         };
+        let run_dir = run.as_ref().and_then(|r| r.dir.as_deref()).unwrap_or("");
+        let change = definition_change(dir, merge_base, head, run_dir, &required);
         Ok(Some(Self {
             mode,
             required,
@@ -70,6 +80,7 @@ impl Gate {
             caller,
             run,
             rejected,
+            change,
         }))
     }
 
@@ -118,6 +129,7 @@ impl Gate {
             Some(_) => out.push_str("\nThe run printed nothing.\n"),
             None => out.push_str("\nNo output was captured: it went straight to a terminal.\n"),
         }
+        out.push_str(self.change.as_deref().unwrap_or_default());
         out
     }
 
@@ -125,10 +137,11 @@ impl Gate {
         format!(
             "### Verification\n\n\
              NOT RUN: the run ledger records no run of `{command}` that exited 0 on a clean \
-             tree at `{head}`.{rejected}\n",
+             tree at `{head}`.{rejected}\n{change}",
             command = self.required.command(),
             head = self.head,
             rejected = self.rejected_note(),
+            change = self.change.as_deref().unwrap_or_default(),
         )
     }
 
@@ -140,86 +153,99 @@ impl Gate {
     }
 }
 
-/// The latest of `passes`, all runs at `head`, that ran what the required
-/// task runs at the merge base: the digest of the plan it executed is the
-/// digest of the [`task::ExecutionPlan`] the merge base's committed config
-/// layers give now, in the directory the run started in, with the
-/// worktree's branch and issue as they are now. Or, when none qualifies,
-/// why the latest one does not.
-fn qualifying(
+/// Why `run`, which passed at the PR's head with the required args, does
+/// not qualify: it used a server already running before it started, which
+/// may have started at another commit.
+fn reused_note(required: &RequiredTask, run: &Run) -> String {
+    format!(
+        "A run at that commit passed, but it reused the server already running for {apps}, \
+         through an `up` step or `require_live`, which may have started at an earlier commit: \
+         stop it with `devrun down {names}` and run `{command}` again.",
+        apps = run
+            .reused_servers
+            .iter()
+            .map(|a| format!("`{a}`"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        names = run
+            .reused_servers
+            .iter()
+            .map(|a| format!("--app {a}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        command = required.command(),
+    )
+}
+
+/// The note on what the PR changes in what the required task runs: the
+/// task as the `devkit.toml` layers committed at `merge_base` define it for
+/// a run started in `run_dir`, against the same at `head`, both rendered
+/// for the checkout at `dir`. No other layer enters either side, so an
+/// uncommitted edit, the primary checkout's config, the home config or a
+/// `devkit.local.toml` shows as no change. `None` when nothing differs.
+fn definition_change(
     dir: &Path,
     merge_base: &str,
+    head: &str,
+    run_dir: &str,
     required: &RequiredTask,
-    passes: Vec<Run>,
-) -> (Option<Run>, Option<String>) {
-    let path_to_project = match load::load_quiet(None, dir) {
-        Ok(loaded) => loaded.path_to_project,
-        Err(e) => {
-            return (
-                None,
-                Some(format!(
-                    "A run at that commit passed, but this checkout's config does not load: {e:#}"
-                )),
-            );
-        }
-    };
+) -> Option<String> {
+    let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let plan = |rev| task::committed_plan(dir, rev, run_dir, &root, &required.task, &required.args);
     let task = &required.task;
     let base = short(merge_base);
-    let mut rejected = None;
-    for pass in passes {
-        let why = match (pass.dir.as_deref(), pass.plan.as_deref()) {
-            _ if !pass.reused_servers.is_empty() => format!(
-                "A run at that commit passed, but it reused the server already running for \
-                 {apps}, through an `up` step or `require_live`, which may have started at an \
-                 earlier commit: stop it with `devrun down {names}` and run `{command}` again.",
-                apps = pass
-                    .reused_servers
-                    .iter()
-                    .map(|a| format!("`{a}`"))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                names = pass
-                    .reused_servers
-                    .iter()
-                    .map(|a| format!("--app {a}"))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                command = required.command(),
-            ),
-            (None, _) => format!(
-                "A run at that commit passed, but its record does not say which directory it \
-                 started in, so what it ran cannot be rebuilt: run `{}` again.",
-                required.command()
-            ),
-            (_, None) => format!(
-                "A run at that commit passed, but its record does not say what it ran: run \
-                 `{}` again.",
-                required.command()
-            ),
-            (Some(run_dir), Some(ran)) => match task::committed_plan(
-                dir,
-                merge_base,
-                run_dir,
-                &path_to_project,
-                &pass.worktree,
-                task,
-                &required.args,
-            ) {
-                Ok(at_base) if at_base.digest() == ran => return (Some(pass), None),
-                Ok(_) => format!(
-                    "A run at that commit passed, but it did not run what `{task}` runs at the \
-                     merge base {base}: the task's definition changed from the merge base, or \
-                     the branch or issue record it renders changed since the run."
-                ),
-                Err(e) => format!(
-                    "A run at that commit passed, but `{task}` as the merge base {base} \
-                     defines it does not render: {e:#}"
-                ),
-            },
-        };
-        rejected.get_or_insert(why);
+    let lines = match (plan(merge_base), plan(head)) {
+        (Ok(at_base), Ok(at_head)) => task::plan_diff(&at_base, &at_head),
+        (Err(_), Err(_)) => Vec::new(),
+        (Ok(_), Err(e)) => {
+            return Some(format!(
+                "\nThis PR changes `{task}`: it renders at the merge base `{base}` but not at \
+                 HEAD: {e:#}\n"
+            ));
+        }
+        (Err(e), Ok(_)) => {
+            return Some(format!(
+                "\nThis PR changes `{task}`: it renders at HEAD but not at the merge base \
+                 `{base}`: {e:#}\n"
+            ));
+        }
+    };
+    (!lines.is_empty()).then(|| {
+        format!(
+            "\nThis PR changes what `{task}` runs, as the `devkit.toml` files committed at the \
+             merge base `{base}` and at HEAD define it, rendered env values left out:\n{}",
+            diff_block(&lines)
+        )
+    })
+}
+
+/// The fenced diff block for `lines`: the first lines that fit in
+/// [`TAIL_BUDGET`], with a note when later lines were dropped.
+fn diff_block(lines: &[String]) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0;
+    for line in lines {
+        let cost = line.len() + 1;
+        if used + cost > TAIL_BUDGET {
+            if kept.is_empty() {
+                let mut end = TAIL_BUDGET;
+                while !line.is_char_boundary(end) {
+                    end -= 1;
+                }
+                kept.push(&line[..end]);
+            }
+            break;
+        }
+        used += cost;
+        kept.push(line);
     }
-    (None, rejected)
+    let fence = fence(&kept);
+    let note = match lines.len() - kept.len() {
+        0 => String::new(),
+        1 => "\n1 later line was dropped to keep the PR body within GitHub's limit.\n".to_string(),
+        n => format!("\n{n} later lines were dropped to keep the PR body within GitHub's limit.\n"),
+    };
+    format!("\n{fence}diff\n{}\n{fence}\n{note}", kept.join("\n"))
 }
 
 /// Why `run`, which exited 0 at the PR's head, does not prove `required`,
@@ -236,24 +262,6 @@ fn unproven(required: &RequiredTask, run: &Run) -> Option<String> {
             flags(&run.args),
             flags(&required.args)
         ));
-    }
-    if !run.committed_definition {
-        why.push(if run.uncommitted_layers.is_empty() {
-            "what it ran was not what the committed devkit.toml files define: a config layer \
-             outside them (devkit.local.toml, the home config, `--config` or `$DEVKIT_CONFIG`) \
-             changed it, so run it without that layer"
-                .to_string()
-        } else {
-            format!(
-                "a config layer outside the committed devkit.toml files changed what it ran: \
-                 {}; move that layer aside or commit its change",
-                run.uncommitted_layers
-                    .iter()
-                    .map(|l| format!("`{}`", l.display()))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        });
     }
     if !run.env.is_empty() || run.env_file.is_some() {
         let mut given = Vec::new();
@@ -367,6 +375,7 @@ mod tests {
             caller: Caller::Agent,
             run: None,
             rejected: None,
+            change: None,
         };
         for body in ["", "  \n\n"] {
             let out = gate.apply(body.into()).unwrap();
@@ -406,6 +415,28 @@ mod tests {
         assert!(
             out.contains("The line was cut to at most its last 8192 bytes"),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn an_oversized_diff_keeps_its_first_lines_within_the_budget() {
+        let lines: Vec<String> = (0..100)
+            .map(|i| format!("+ {i:03}{}", "x".repeat(4090)))
+            .collect();
+        let out = diff_block(&lines);
+        assert!(out.len() < TAIL_BUDGET + 512, "{} bytes", out.len());
+        assert!(
+            out.starts_with(&format!("\n```diff\n{}\n", lines[0])),
+            "{out}"
+        );
+        assert!(!out.contains("+ 002"), "{out}");
+        assert!(
+            out.contains("\n98 later lines were dropped to keep the PR body"),
+            "{out}"
+        );
+        assert_eq!(
+            diff_block(&["- a".to_string(), "+ b".to_string()]),
+            "\n```diff\n- a\n+ b\n```\n"
         );
     }
 

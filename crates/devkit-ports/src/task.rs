@@ -17,8 +17,6 @@ use devkit_common::{
     vcs::{Vcs, VersionControl},
 };
 use devkit_config::{Config, Required, RunAction, RunArg, Step, TaskConfig};
-use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::{
     apps::App,
@@ -710,11 +708,9 @@ pub fn resolve_step(
 /// every template rendered: per step, the command task's app, argv, cwd,
 /// env and the servers it requires live, or the servers an `up` step
 /// launches; and which callers its args satisfy, since a run's arg check
-/// depends on who runs it. Ports render as each app's
-/// base port, so no registry is touched. Rendered env values may be
-/// secrets, so a plan is only digested, never printed or stored, and has
-/// no `Debug`.
-#[derive(Serialize)]
+/// depends on who runs it. Ports render as each app's base port, so no
+/// registry is touched. Rendered env values may be secrets, so a plan has
+/// no `Debug`, and [`plan_diff`] compares them without printing them.
 pub struct ExecutionPlan {
     /// Whether the args pass the check `devrun task` makes of a human
     /// caller and of an agent caller, in that order.
@@ -722,44 +718,204 @@ pub struct ExecutionPlan {
     steps: Vec<PlannedStep>,
 }
 
-#[derive(Serialize)]
 enum PlannedStep {
     Run {
         task: String,
         app: Option<String>,
         argv: Vec<String>,
-        cwd: PathBuf,
-        env: BTreeMap<String, String>,
+        cwd: String,
+        env: BTreeMap<String, PlannedEnv>,
         require_live: Vec<String>,
     },
-    Up(Vec<PlannedLaunch>),
+    Up {
+        app: String,
+        launches: Vec<PlannedLaunch>,
+    },
 }
 
-#[derive(Serialize)]
 struct PlannedLaunch {
     app: String,
     port: u16,
     argv: Vec<String>,
-    cwd: PathBuf,
-    env: BTreeMap<String, String>,
+    cwd: String,
+    env: BTreeMap<String, PlannedEnv>,
     url: String,
 }
 
+/// One env variable of a plan: the template config gave it, when one did,
+/// and the value it rendered to, which may be a secret.
+struct PlannedEnv {
+    template: Option<String>,
+    value: String,
+}
+
+/// One line of a plan's readable form. `secret` holds the rendered env
+/// value behind it, compared but never printed.
+#[derive(PartialEq, Eq)]
+struct PlanLine {
+    text: String,
+    secret: Option<String>,
+}
+
 impl ExecutionPlan {
-    /// The plan's sha256, in hex: what a run records of the plan it
-    /// executed, since the plan itself may hold secrets.
-    pub fn digest(&self) -> String {
-        let json = serde_json::to_vec(self).expect("a plan serializes");
-        Sha256::digest(&json)
+    fn lines(&self) -> Vec<PlanLine> {
+        let plain = |text: String| PlanLine { text, secret: None };
+        let mut out = Vec::new();
+        let callers: Vec<&str> = ["human", "agent"]
+            .into_iter()
+            .zip(self.accepts)
+            .filter_map(|(who, ok)| ok.then_some(who))
+            .collect();
+        out.push(plain(format!(
+            "args accepted from: {}",
+            if callers.is_empty() {
+                "nobody".to_string()
+            } else {
+                callers.join(", ")
+            }
+        )));
+        let quoted = |argv: &[String]| serde_json::to_string(argv).expect("strings serialize");
+        let env_lines = |indent: &str, env: &BTreeMap<String, PlannedEnv>| -> Vec<PlanLine> {
+            env.iter()
+                .map(|(key, e)| PlanLine {
+                    text: match &e.template {
+                        Some(t) => format!(
+                            "{indent}env {key} = {}",
+                            serde_json::to_string(t).expect("a string serializes")
+                        ),
+                        None => format!("{indent}env {key}"),
+                    },
+                    secret: Some(e.value.clone()),
+                })
+                .collect()
+        };
+        for (i, step) in self.steps.iter().enumerate() {
+            let n = i + 1;
+            match step {
+                PlannedStep::Run {
+                    task,
+                    app,
+                    argv,
+                    cwd,
+                    env,
+                    require_live,
+                } => {
+                    out.push(plain(format!("step {n}: task {task}")));
+                    if let Some(app) = app {
+                        out.push(plain(format!("  app: {app}")));
+                    }
+                    out.push(plain(format!("  argv: {}", quoted(argv))));
+                    out.push(plain(format!("  cwd: {cwd}")));
+                    out.extend(env_lines("  ", env));
+                    if !require_live.is_empty() {
+                        out.push(plain(format!(
+                            "  require_live: {}",
+                            require_live.join(", ")
+                        )));
+                    }
+                }
+                PlannedStep::Up { app, launches } => {
+                    out.push(plain(format!("step {n}: up {app}")));
+                    for l in launches {
+                        out.push(plain(format!("  launch {} on port {}", l.app, l.port)));
+                        out.push(plain(format!("    argv: {}", quoted(&l.argv))));
+                        out.push(plain(format!("    cwd: {}", l.cwd)));
+                        out.extend(env_lines("    ", &l.env));
+                        out.push(plain(format!("    url: {}", l.url)));
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// The readable difference between what a task executes under `base` and
+/// under `head`, one line each, or nothing when they execute the same.
+/// A line `head` drops starts `- `, one it adds `+ `, and a step header
+/// they share `  `, for context. An env variable whose template is the
+/// same but whose rendered value differs reads `~ ` with the template and
+/// `(rendered value changed)`: rendered values are never printed.
+pub fn plan_diff(base: &ExecutionPlan, head: &ExecutionPlan) -> Vec<String> {
+    let (old, new) = (base.lines(), head.lines());
+    if old == new {
+        return Vec::new();
+    }
+    let mut lcs = vec![vec![0usize; new.len() + 1]; old.len() + 1];
+    for i in (0..old.len()).rev() {
+        for j in (0..new.len()).rev() {
+            lcs[i][j] = if old[i] == new[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+    let mut ops: Vec<(char, &PlanLine)> = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < old.len() || j < new.len() {
+        if i < old.len() && j < new.len() && old[i] == new[j] {
+            ops.push((' ', &old[i]));
+            i += 1;
+            j += 1;
+        } else if i < old.len() && (j == new.len() || lcs[i + 1][j] >= lcs[i][j + 1]) {
+            ops.push(('-', &old[i]));
+            i += 1;
+        } else {
+            ops.push(('+', &new[j]));
+            j += 1;
+        }
+    }
+    // Within each run of changed lines, a dropped and an added line with
+    // the same text differ only in their hidden rendered value.
+    let mut paired = vec![false; ops.len()];
+    let mut start = 0;
+    while start < ops.len() {
+        let end = (start..ops.len())
+            .find(|&k| ops[k].0 == ' ')
+            .unwrap_or(ops.len());
+        for k in start..end {
+            if ops[k].0 != '+' {
+                continue;
+            }
+            if let Some(d) = (start..end)
+                .find(|&d| ops[d].0 == '-' && !paired[d] && ops[d].1.text == ops[k].1.text)
+            {
+                paired[d] = true;
+                paired[k] = true;
+            }
+        }
+        start = end + 1;
+    }
+    let mut out = Vec::new();
+    for (k, &(op, line)) in ops.iter().enumerate() {
+        match (op, paired[k]) {
+            (' ', _) if line.text.starts_with(' ') => {}
+            ('-', true) => {}
+            ('+', true) => out.push(format!("~ {} (rendered value changed)", line.text)),
+            (op, _) => out.push(format!("{op} {}", line.text)),
+        }
+    }
+    out
+}
+
+/// `path` relative to `root`, with `/` between components, or `.` for
+/// `root` itself; `path` whole when it lies outside `root`.
+fn relative(path: &Path, root: &Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(rel) if rel.as_os_str().is_empty() => ".".to_string(),
+        Ok(rel) => rel
             .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+            .map(|c| c.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => path.display().to_string(),
     }
 }
 
 /// The [`ExecutionPlan`] of task `name` given `args` at `worktree_root`,
 /// rendered by the code `devrun task` and `devrun up` run it through.
-pub fn execution_plan(
+fn execution_plan(
     cfg: &Config,
     catalog: &HashMap<String, App>,
     worktree_root: &Path,
@@ -781,12 +937,18 @@ pub fn execution_plan(
             t,
             &BTreeMap::new(),
         )?;
+        let static_env = t
+            .app
+            .as_deref()
+            .map(|a| catalog[a].static_env.clone())
+            .unwrap_or_default();
+        let templates = effective_env(&static_env, t, &BTreeMap::new());
         Ok(PlannedStep::Run {
             task: plan.name,
             app: t.app.clone(),
             argv: plan.argv,
-            cwd: plan.cwd,
-            env: plan.env,
+            cwd: relative(&plan.cwd, worktree_root),
+            env: planned_env(plan.env, |k| templates.get(k).map(|t| t.to_string())),
             require_live: plan.require_live,
         })
     };
@@ -803,6 +965,19 @@ pub fn execution_plan(
             .collect::<Result<_>>()?,
     };
     Ok(ExecutionPlan { accepts, steps })
+}
+
+/// `env` with each value paired with the template `template` gives its key.
+fn planned_env(
+    env: BTreeMap<String, String>,
+    template: impl Fn(&str) -> Option<String>,
+) -> BTreeMap<String, PlannedEnv> {
+    env.into_iter()
+        .map(|(k, value)| {
+            let template = template(&k);
+            (k, PlannedEnv { template, value })
+        })
+        .collect()
 }
 
 /// The launches an `up` step of `app` makes, as `devrun up` plans them for
@@ -830,37 +1005,40 @@ fn planned_up(
         &BTreeMap::new(),
         &vars,
     )?;
-    Ok(PlannedStep::Up(
-        launches
+    Ok(PlannedStep::Up {
+        app: app.to_string(),
+        launches: launches
             .into_iter()
-            .map(|p| PlannedLaunch {
-                app: p.app,
-                port: p.port,
-                argv: p.argv,
-                cwd: p.cwd,
-                env: p.env,
-                url: p.url,
+            .map(|p| {
+                let static_env = &catalog[&p.app].static_env;
+                PlannedLaunch {
+                    port: p.port,
+                    argv: p.argv,
+                    cwd: relative(&p.cwd, worktree_root),
+                    env: planned_env(p.env, |k| static_env.get(k).cloned()),
+                    url: p.url,
+                    app: p.app,
+                }
             })
             .collect(),
-    ))
+    })
 }
 
 /// The [`ExecutionPlan`] of task `name` given `args` at `worktree_root`, as
 /// the tracked `devkit.toml` layers committed at `rev` define it for a run
-/// started in `dir` ([`crate::ledger::committed_config`]). `checkout` is
-/// any checkout of the repository, and `path_to_project` the doppler map
-/// app paths are inferred from.
+/// started in `dir` ([`crate::ledger::committed_config`]), with no other
+/// layer: not the working tree's, the primary checkout's, the home config
+/// or a `devkit.local.toml`. `checkout` is any checkout of the repository.
 pub fn committed_plan(
     checkout: &Path,
     rev: &str,
     dir: &str,
-    path_to_project: &HashMap<String, String>,
     worktree_root: &Path,
     name: &str,
     args: &BTreeMap<String, String>,
 ) -> Result<ExecutionPlan> {
     let cfg = crate::ledger::committed_config(checkout, rev, dir)?;
-    let (catalog, _) = crate::apps::catalog(&cfg, path_to_project)?;
+    let (catalog, _) = crate::apps::catalog(&cfg, &crate::load::path_to_project(&cfg)?)?;
     execution_plan(&cfg, &catalog, worktree_root, name, args)
 }
 
@@ -1469,12 +1647,12 @@ mod tests {
         };
         let cfg = cfg_with(&[("seq", seq)]);
         let plan = execution_plan(&cfg, &cat, Path::new("/wt"), "seq", &BTreeMap::new()).unwrap();
-        let PlannedStep::Up(launches) = &plan.steps[0] else {
+        let PlannedStep::Up { launches, .. } = &plan.steps[0] else {
             panic!("an up step plans launches");
         };
         let apps: Vec<&str> = launches.iter().map(|l| l.app.as_str()).collect();
         assert_eq!(apps, ["api-a", "web"]);
-        assert_eq!(launches[1].env["API_URL"], "http://localhost:9302");
+        assert_eq!(launches[1].env["API_URL"].value, "http://localhost:9302");
     }
 
     #[test]

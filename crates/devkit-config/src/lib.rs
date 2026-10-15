@@ -1751,20 +1751,15 @@ pub struct PrGates {
     /// Requires a passing run of `verify_task` with `verify_args`: one the
     /// run ledger records as exiting 0 on a clean tree at exactly the commit
     /// the PR opens at. A run at an earlier commit, on a dirty tree or with
-    /// other args does not count, nor does one whose task executes anything
-    /// different at that commit than at the merge base: what it executes is
-    /// rebuilt from the `devkit.toml` layers committed at each, with every
-    /// port rendered as its app's base port, and compared step by step,
-    /// including the servers each step requires live and which callers its
-    /// args satisfy. Scripts the task calls are not compared. The PR body
-    /// gets a Verification section built from that run, or saying
-    /// NOT RUN when there is none; a human's PR gets the section without
-    /// being refused. Off while `verify_task` is unset.
+    /// other args does not count. The PR body gets a Verification section
+    /// built from that run, or saying NOT RUN when there is none; a human's
+    /// PR gets the section without being refused. When the PR changes what
+    /// the task executes, as the `devkit.toml` files committed at the merge
+    /// base and at HEAD define it, the section shows the change; the change
+    /// refuses nothing. Off while `verify_task` is unset.
     pub verify: GateMode,
     /// The task the `verify` gate requires a passing run of, as `devrun task`
-    /// names it. A task that renders ports can satisfy it: the gate renders
-    /// each app's base port at both commits, so the ports a run reserved are
-    /// not compared.
+    /// names it.
     #[serde(deserialize_with = "non_blank_task")]
     pub verify_task: Option<String>,
     /// The template args the `verify` gate's run must have been given with
