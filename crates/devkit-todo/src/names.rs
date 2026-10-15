@@ -116,11 +116,11 @@ impl Names {
 
     /// The name the todo whose id is `id` shows under.
     pub fn id<'a>(&'a self, id: &'a str) -> Cow<'a, str> {
-        match self.style {
-            IdStyle::Full => Cow::Borrowed(id),
-            _ if self.keys.contains_key(id) => Cow::Borrowed(&self.keys[id]),
-            IdStyle::Name => word_name(id).map_or(Cow::Borrowed(id), Cow::Owned),
-            IdStyle::Short => Cow::Borrowed(crate::short_id(id)),
+        match (self.style, self.keys.get(id)) {
+            (IdStyle::Full, _) => Cow::Borrowed(id),
+            (_, Some(key)) => Cow::Borrowed(key),
+            (IdStyle::Name, None) => word_name(id).map_or(Cow::Borrowed(id), Cow::Owned),
+            (IdStyle::Short, None) => Cow::Borrowed(crate::short_id(id)),
         }
     }
 
