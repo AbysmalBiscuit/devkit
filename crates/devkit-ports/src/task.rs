@@ -558,13 +558,10 @@ enum Ports<'a> {
     /// Reserved in the registry for `holder`, with `require_live` enforced
     /// when `live` is set.
     Registry { holder: &'a str, live: bool },
-    /// Each app's base port, with no registry touched: what an
-    /// [`ExecutionPlan`] renders, since the ports a run binds are not part
-    /// of what the task is. `require_live` is left unchecked and carried
-    /// in the plan.
-    Base,
-    /// The ports a recorded run rendered, each other app's base port, with
-    /// no registry touched and `require_live` unchecked, as for `Base`.
+    /// Each app in the map at its port there, any other at its base port,
+    /// with no registry touched: what an [`ExecutionPlan`] renders, given
+    /// the ports a recorded run rendered or none. `require_live` is left
+    /// unchecked and carried in the plan.
     Given(&'a BTreeMap<String, u16>),
 }
 
@@ -576,7 +573,7 @@ impl Ports<'_> {
                     .into_iter()
                     .collect())
             }
-            Ports::Registry { .. } | Ports::Base => Ok(wanted.iter().cloned().collect()),
+            Ports::Registry { .. } => Ok(wanted.iter().cloned().collect()),
             Ports::Given(given) => Ok(wanted
                 .iter()
                 .map(|(app, base)| (app.clone(), given.get(app).copied().unwrap_or(*base)))
@@ -1685,7 +1682,7 @@ mod tests {
             &cfg,
             &cat,
             Path::new("/wt"),
-            &Ports::Base,
+            &Ports::Given(&BTreeMap::new()),
             "seq",
             &BTreeMap::new(),
         )
