@@ -1314,6 +1314,9 @@
         "gates": {
           "$ref": "#/$defs/PrGates",
           "default": {
+            "repro": "require",
+            "repro_no_tests_exit": null,
+            "repro_task": null,
             "verify": "require",
             "verify_args": {},
             "verify_task": null,
@@ -1359,8 +1362,30 @@
     },
     "PrGates": {
       "additionalProperties": false,
-      "description": "The PR gates and how hard each one holds. A gate applies to a PR an\nagent opens with `pr create`.\n\n```toml\n[pr.gates]\nverify = \"require\"\nverify_task = \"verify\"\nverify_args = { scope = \"all\" }\n```",
+      "description": "The PR gates and how hard each one holds. A gate applies to a PR an\nagent opens with `pr create`.\n\n```toml\n[pr.gates]\nverify = \"require\"\nverify_task = \"verify\"\nverify_args = { scope = \"all\" }\nrepro = \"advise\"\nrepro_task = \"test-one\"\nrepro_no_tests_exit = 4\n```",
       "properties": {
+        "repro": {
+          "$ref": "#/$defs/GateMode",
+          "default": "require",
+          "description": "Checks each `Done when` item of the worktree's issue that ends\n`(proof: repro <selector>)` red to green: in a throwaway worktree at\nHEAD with every changed non-test path restored to the merge base,\n`repro_task` given `--arg selector=<selector>` must fail, and at HEAD\nit must pass. `require` refuses an agent's PR when a selector passes\nwith the fix reverted or matches no test; anything else the check\nfinds, such as a changed file holding both test and source changes,\nan item with no marker, or a check that could not run, is shown in\nthe PR body's Verification section and refuses nothing. A human's PR\nis never refused. Off while `repro_task` is unset."
+        },
+        "repro_no_tests_exit": {
+          "default": null,
+          "description": "The exit code `repro_task` exits with when its selector matches no\ntest, as `cargo nextest run` exits 4 and pytest exits 5. Unset, a\nselector matching no test is caught only when it also passes with\nthe fix reverted.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "repro_task": {
+          "default": null,
+          "description": "The task the `repro` gate runs each selector through, as `devrun\ntask` names it. It takes the selector as the template variable\n`selector` and hands it to the test runner verbatim.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "verify": {
           "$ref": "#/$defs/GateMode",
           "default": "require",
@@ -2745,6 +2770,9 @@
       "$ref": "#/$defs/PrConfig",
       "default": {
         "gates": {
+          "repro": "require",
+          "repro_no_tests_exit": null,
+          "repro_task": null,
           "verify": "require",
           "verify_args": {},
           "verify_task": null,

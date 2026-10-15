@@ -65,7 +65,24 @@ const SECTION_TITLES: [&str; 2] = ["done when", "acceptance criteria"];
 /// A nested entry or a wrapped line joins the item above it. The list ends at
 /// a heading, a bold label, or unindented text after a blank line.
 pub(crate) fn done_when_items(description: &str) -> Vec<String> {
-    let mut items: Vec<String> = Vec::new();
+    done_when_entries(description)
+        .into_iter()
+        .map(|e| e.text)
+        .collect()
+}
+
+/// One item of an issue's `Done when` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DoneWhen {
+    /// The item's text, without its list marker or checkbox.
+    pub(crate) text: String,
+    /// Whether its task checkbox is ticked, `[x]`.
+    pub(crate) done: bool,
+}
+
+/// The items [`done_when_items`] lists, each with whether it is ticked.
+pub(crate) fn done_when_entries(description: &str) -> Vec<DoneWhen> {
+    let mut items: Vec<DoneWhen> = Vec::new();
     let mut top: Option<usize> = None;
     let mut after_blank = false;
     let section = outside_fences(description)
@@ -82,14 +99,20 @@ pub(crate) fn done_when_items(description: &str) -> Vec<String> {
         }
         let indent = indent(line);
         match (list_item(text), top) {
-            (Some(item), None) => {
+            (Some((done, item)), None) => {
                 top = Some(indent);
-                items.push(item.to_string());
+                items.push(DoneWhen {
+                    text: item.to_string(),
+                    done,
+                });
             }
-            (Some(item), Some(top)) if indent <= top => items.push(item.to_string()),
+            (Some((done, item)), Some(top)) if indent <= top => items.push(DoneWhen {
+                text: item.to_string(),
+                done,
+            }),
             (_, None) => {}
             (_, Some(top)) if indent > top || !after_blank => {
-                let last = items.last_mut().expect("a list has begun");
+                let last = &mut items.last_mut().expect("a list has begun").text;
                 last.push(' ');
                 last.push_str(text);
             }
@@ -165,9 +188,10 @@ fn bold_label(line: &str) -> Option<&str> {
     (!inner.is_empty() && !inner.contains("**")).then_some(inner)
 }
 
-/// The text after a list marker (`-`, `*`, `+`, `1.`, `1)`) and any task
-/// checkbox, or `None` when `text` is not a list entry.
-fn list_item(text: &str) -> Option<&str> {
+/// Whether a list entry's task checkbox is ticked, and the text after its
+/// list marker (`-`, `*`, `+`, `1.`, `1)`) and that checkbox, or `None` when
+/// `text` is not a list entry.
+fn list_item(text: &str) -> Option<(bool, &str)> {
     let rest = match text.strip_prefix(['-', '*', '+']) {
         Some(rest) => rest,
         None => {
@@ -182,11 +206,11 @@ fn list_item(text: &str) -> Option<&str> {
         return None;
     }
     let rest = rest.trim_start();
-    let rest = ["[ ]", "[x]", "[X]"]
+    let (done, rest) = [("[ ]", false), ("[x]", true), ("[X]", true)]
         .iter()
-        .find_map(|b| rest.strip_prefix(b))
-        .unwrap_or(rest);
-    Some(rest.trim())
+        .find_map(|(b, done)| rest.strip_prefix(b).map(|r| (*done, r)))
+        .unwrap_or((false, rest));
+    Some((done, rest.trim()))
 }
 
 /// The item number a proof line answers: its first token, after any bullet,

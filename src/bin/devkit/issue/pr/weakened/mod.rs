@@ -3,7 +3,7 @@
 //! each change that thins one is flagged, and a `Test changes:` line in the
 //! PR body puts the reason in front of the reviewer.
 
-mod scan;
+pub(super) mod scan;
 
 use std::{fmt, path::Path};
 

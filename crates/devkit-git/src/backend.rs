@@ -198,6 +198,49 @@ impl VersionControl for GitBackend {
         Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
     }
 
+    fn files_containing(&self, dir: &Path, rev: &str, needle: &str) -> Result<Vec<String>> {
+        let out = Git::at(dir)
+            .args([
+                "grep",
+                "-l",
+                "-z",
+                "--full-name",
+                "-F",
+                "-e",
+                needle,
+                rev,
+                "--",
+                ":/",
+            ])
+            .wait()?;
+        match out.status.code() {
+            Some(0) => {}
+            Some(1) => return Ok(Vec::new()),
+            _ => anyhow::bail!(
+                "`git grep {needle} {rev}` failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        }
+        let prefix = format!("{rev}:");
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(|p| p.strip_prefix(&prefix).unwrap_or(p).to_string())
+            .collect())
+    }
+
+    fn restore_paths(&self, dir: &Path, rev: &str, paths: &[String]) -> Result<()> {
+        // Chunked to stay under Windows' command-line length limit.
+        for chunk in paths.chunks(100) {
+            Git::at(dir)
+                .args(["--literal-pathspecs", "checkout", rev, "--"])
+                .args(chunk.iter().map(String::as_str))
+                .network()
+                .output()?;
+        }
+        Ok(())
+    }
+
     fn create_worktree(&self, new: &NewWorktree<'_>) -> Result<()> {
         let path = utf8(new.path)?;
         let mut args = vec!["worktree", "add"];
@@ -577,6 +620,35 @@ mod tests {
         );
         assert!(GitBackend.has_revision(repo.path(), "main").unwrap());
         assert!(!GitBackend.has_revision(repo.path(), "nope").unwrap());
+    }
+
+    #[test]
+    fn files_containing_names_the_files_at_a_revision_holding_a_needle() {
+        let repo = repo_with_commit();
+        std::fs::create_dir_all(repo.path().join("src/deep")).unwrap();
+        std::fs::write(repo.path().join("src/deep/a.rs"), "#[path = \"x.rs\"]\n").unwrap();
+        std::fs::write(repo.path().join("b.rs"), "#[path = \"y.rs\"]\n").unwrap();
+        std::fs::write(repo.path().join("c.rs"), "mod c;\n").unwrap();
+        run(&["add", "."], repo.path()).unwrap();
+        run(&["commit", "-qm", "files"], repo.path()).unwrap();
+        std::fs::write(repo.path().join("c.rs"), "#[path = \"z.rs\"]\n").unwrap();
+
+        let sub = repo.path().join("src");
+        assert_eq!(
+            GitBackend.files_containing(&sub, "HEAD", "#[path").unwrap(),
+            vec!["b.rs".to_string(), "src/deep/a.rs".to_string()]
+        );
+        assert_eq!(
+            GitBackend
+                .files_containing(repo.path(), "HEAD", "nowhere")
+                .unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(
+            GitBackend
+                .files_containing(repo.path(), "nope", "#[path")
+                .is_err()
+        );
     }
 
     /// `devrun up` picks apps by the directory a changed path starts with,

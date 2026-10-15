@@ -98,6 +98,30 @@ fn the_brief_names_the_run_the_verify_gate_requires() {
 }
 
 #[test]
+fn the_brief_names_the_repro_gate_and_what_it_refuses() {
+    let gate = "[pr.gates]\nrepro_task = \"test-one\"\n";
+    let body = brief(gate);
+    assert!(
+        body.contains(
+            "`repro` (require): for each issue `Done when` item ending `(proof: repro <selector>)`"
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains("`devrun task test-one --arg 'selector=<selector>'`"),
+        "{body}"
+    );
+    assert!(
+        body.contains("refuses the PR naming an item whose selector passes with the fix reverted or matches no test"),
+        "{body}"
+    );
+    let body = brief(&format!("{gate}repro = \"advise\"\n"));
+    assert!(body.contains("`repro` (advise)"), "{body}");
+    let body = brief("[pr.gates]\nrepro = \"require\"\n");
+    assert!(!body.contains("`repro`"), "no task, no gate: {body}");
+}
+
+#[test]
 fn the_brief_names_no_gate_when_all_are_off() {
     let body = brief("[pr.gates]\nweakened_tests = \"off\"\n");
     assert!(body.contains("devkit project"), "still a brief: {body}");
