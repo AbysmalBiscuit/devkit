@@ -16,7 +16,7 @@ use devkit_common::{
     },
 };
 use devkit_config::{
-    CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS, Place,
+    CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS,
     TrackerKind,
 };
 use serde::Serialize;
@@ -330,7 +330,7 @@ fn write_facts(t: &mut dyn TableLike, field: &DiscoveredField, values: &[EnumVal
 #[cfg(test)]
 mod tests {
     use devkit_common::tracker::discover::named;
-    use devkit_config::Config;
+    use devkit_config::{Config, Place};
 
     use super::*;
 
