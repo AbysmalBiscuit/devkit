@@ -204,6 +204,7 @@ impl VersionControl for GitBackend {
             Git::at(dir)
                 .args(["--literal-pathspecs", "checkout", rev, "--"])
                 .args(chunk.iter().map(String::as_str))
+                .network()
                 .output()?;
         }
         Ok(())
