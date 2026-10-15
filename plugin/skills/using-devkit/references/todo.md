@@ -86,6 +86,8 @@ With `"parent"` in `push`, `devkit todo move <ticket todo> --parent <ticket todo
 
 A tracker that changed the link since the last sync stops the command the same way a status does, naming the tracker's value, the last synced one and the local change: a parent that is a third ticket, or on Linear another relation between the pair (a `related`, a `duplicate`, or a `blocks` the other way), which a new relation would silently replace. Ask the user, and pass `--overwrite-tracker` only on their word.
 
+A move to the parent the todo already has, a block it already has, and an unblock of a link it lacks change only the local todo, from anywhere.
+
 These are refused, and change nothing:
 
 - A link between two ticket todos changed from outside their repository, or in a repository whose `push` does not list `parent` or `blocking`: the next sync would revert it. Change it on the tracker, or from a checkout that opts in.

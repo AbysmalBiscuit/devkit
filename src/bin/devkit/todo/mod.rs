@@ -957,7 +957,8 @@ fn resolve_ids(store: &impl TodoStore, ids: &[String]) -> Result<Vec<String>> {
 /// Records `by` as blockers of `id`, or with `add` false removes them,
 /// refusing an edge that would close a cycle. The edges between two ticket
 /// todos that `push` takes to the tracker are written there one by one,
-/// after the others have changed.
+/// after the others have changed. An edge the todo already has, or already
+/// lacks, stays local.
 fn link(store: &Store, id: &str, by: &[String], add: bool, push: &push::LinkPush) -> Result<()> {
     let todo = resolve_id(store, id)?;
     let blockers = by
@@ -971,6 +972,10 @@ fn link(store: &Store, id: &str, by: &[String], add: bool, push: &push::LinkPush
     let mut pushed = Vec::new();
     let mut local = Vec::new();
     for blocker in blockers {
+        if todo.blocked_by.contains(&blocker.id) == add {
+            local.push(blocker.id);
+            continue;
+        }
         match push.reaches(store, PushKind::Blocking, &todo, &blocker)? {
             true => pushed.push(blocker),
             false => local.push(blocker.id),
@@ -1126,7 +1131,7 @@ fn apply_checked(
 /// `order`. A ticket todo's move between ticket parents reaches the tracker
 /// as `push` allows; with parents pushing from the ticket todo's
 /// repository, a ticket todo and a todo that is not one never nest under
-/// each other.
+/// each other. A move to the parent `id` already has stays local.
 fn move_todo(
     store: &Store,
     id: &str,
@@ -1149,6 +1154,9 @@ fn move_todo(
         parent: parent.as_ref().map(|p| p.id.clone()),
         order,
     };
+    if parent.as_ref().map(|p| &p.id) == todo.parent.as_ref() {
+        return store.apply(&edit).map(drop);
+    }
     let Some(ticket) = &todo.ticket else {
         if let Some(parent) = &parent {
             refuse_under_a_ticket(store, parent, push)?;

@@ -941,6 +941,68 @@ fn other_checkout(s: &Synced) -> std::path::PathBuf {
 }
 
 #[test]
+fn a_link_edit_the_store_already_holds_is_not_refused() {
+    let s = linked("\"status\"", Some(65), true);
+    let other = other_checkout(&s);
+    let (i65, i66, i67) = (id_of(&s, 65), id_of(&s, 66), id_of(&s, 67));
+    let edits = [
+        vec!["todo", "move", &i67, "--parent", &i65, "--order", "2"],
+        vec!["todo", "block", &i65, "--by", &i66],
+        vec!["todo", "unblock", &i66, "--by", &i65],
+    ];
+    let calls = s.calls();
+    for args in &edits {
+        let out = s.devkit(args, &AGENT);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        let out = s.devkit_in(&other, args, &AGENT, "");
+        assert!(out.status.success(), "{args:?} outside: {}", stderr(&out));
+    }
+    assert_eq!(s.calls(), calls, "the tracker was not asked");
+    assert_eq!(parent_of(&s, 67), Some(i65.clone()));
+    assert_eq!(s.todo_for("o/r#67").order, Some(2));
+    assert_eq!(s.todo_for("o/r#65").blocked_by, [i66]);
+    assert!(s.todo_for("o/r#66").blocked_by.is_empty());
+}
+
+#[test]
+fn a_step_already_under_a_ticket_reorders_without_a_refusal() {
+    let s = linked("\"status\"", None, false);
+    let out = s.devkit(
+        &["todo", "add", "a step", "--parent", &id_of(&s, 65)],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let step = stdout(&out).trim().to_string();
+    let toml = s.proj.path.join("devkit.toml");
+    let config = std::fs::read_to_string(&toml).unwrap();
+    std::fs::write(
+        &toml,
+        config.replace("push = [\"status\"]", "push = [\"parent\"]"),
+    )
+    .unwrap();
+    let out = s.devkit(
+        &[
+            "todo",
+            "move",
+            &step,
+            "--parent",
+            &id_of(&s, 65),
+            "--order",
+            "2",
+        ],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let step = s
+        .proj
+        .todos()
+        .into_iter()
+        .find(|t| t.id.starts_with(&step))
+        .unwrap();
+    assert_eq!((step.parent, step.order), (Some(id_of(&s, 65)), Some(2)));
+}
+
+#[test]
 fn a_step_under_a_ticket_of_another_repository_stays_local() {
     let s = linked("\"parent\"", None, false);
     let other = other_checkout(&s);
