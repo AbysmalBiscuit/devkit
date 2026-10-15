@@ -599,6 +599,7 @@ impl Store {
     /// Applies `edit` without firing a ticket event: for a change whose
     /// ticket a push has already moved.
     pub(crate) fn apply_unfired(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
+        self.forget_listing();
         self.store.apply(edit)
     }
 
