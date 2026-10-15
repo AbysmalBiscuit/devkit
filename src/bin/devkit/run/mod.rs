@@ -815,6 +815,7 @@ fn cmd_task(
         steps.borrow_mut().push(ledger::Step {
             task: fresh.name.clone(),
             argv: fresh.argv.clone(),
+            ports: fresh.ports.clone(),
         });
         Ok(task::exec(&fresh, &tail)?.code())
     };

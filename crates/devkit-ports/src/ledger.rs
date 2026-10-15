@@ -136,6 +136,10 @@ pub struct Step {
     pub task: String,
     /// The argv it resolved to.
     pub argv: Vec<String>,
+    /// The port each app its templates reference rendered as, so the step
+    /// can be rendered again from another config with the same ports.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ports: BTreeMap<String, u16>,
 }
 
 /// The directory holding the records.

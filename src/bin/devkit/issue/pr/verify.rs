@@ -25,6 +25,9 @@ pub(crate) struct Gate {
     rejected: Option<String>,
     /// What the PR changes in what the required task runs, when it does.
     change: Option<String>,
+    /// The steps `run` executed, and whether they differ from what HEAD's
+    /// committed config defines.
+    ran: String,
 }
 
 impl Gate {
@@ -73,6 +76,10 @@ impl Gate {
         };
         let run_dir = run.as_ref().and_then(|r| r.dir.as_deref()).unwrap_or("");
         let change = definition_change(dir, merge_base, head, run_dir, &required);
+        let ran = run
+            .as_ref()
+            .map(|r| ran_note(dir, head, r, &required))
+            .unwrap_or_default();
         Ok(Some(Self {
             mode,
             required,
@@ -81,6 +88,7 @@ impl Gate {
             run,
             rejected,
             change,
+            ran,
         }))
     }
 
@@ -130,6 +138,7 @@ impl Gate {
                 server.app, server.started_at
             ));
         }
+        out.push_str(&self.ran);
         match run.tail.as_deref() {
             Some(lines) if !lines.is_empty() => out.push_str(&output_tail(lines)),
             Some(_) => out.push_str("\nThe run printed nothing.\n"),
@@ -197,12 +206,28 @@ fn definition_change(
     required: &RequiredTask,
 ) -> Option<String> {
     let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
-    let plan = |rev| task::committed_plan(dir, rev, run_dir, &root, &required.task, &required.args);
+    let base_ports = Default::default();
+    let plan = |rev| {
+        task::committed_plan(
+            dir,
+            rev,
+            run_dir,
+            &root,
+            &required.task,
+            &required.args,
+            &base_ports,
+        )
+    };
     let task = &required.task;
     let base = short(merge_base);
     let lines = match (plan(merge_base), plan(head)) {
         (Ok(at_base), Ok(at_head)) => task::plan_diff(&at_base, &at_head),
-        (Err(_), Err(_)) => Vec::new(),
+        (Err(_), Err(e)) => {
+            return Some(format!(
+                "\nThe `devkit.toml` files committed at the merge base `{base}` and at HEAD do \
+                 not define `{task}` as a task devrun can run: {e:#}\n"
+            ));
+        }
         (Ok(_), Err(e)) => {
             return Some(format!(
                 "\nThis PR changes `{task}`: it renders at the merge base `{base}` but not at \
@@ -220,14 +245,63 @@ fn definition_change(
         format!(
             "\nThis PR changes what `{task}` runs, as the `devkit.toml` files committed at the \
              merge base `{base}` and at HEAD define it, rendered env values left out:\n{}",
-            diff_block(&lines)
+            leading_block(&lines, "diff")
         )
     })
 }
 
-/// The fenced diff block for `lines`: the first lines that fit in
+/// The steps `run` executed, as the section lists them, and a line saying
+/// so when they differ from what the `devkit.toml` files committed at
+/// `head` define the required task to run, rendered with the run's ports.
+/// A layer outside those files, such as a `devkit.local.toml`, the primary
+/// checkout's config, `--config` or `$DEVKIT_CONFIG`, changes what runs
+/// without dirtying the tree.
+fn ran_note(dir: &Path, head: &str, run: &Run, required: &RequiredTask) -> String {
+    if run.steps.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<String> = run
+        .steps
+        .iter()
+        .map(|s| format!("{}: {}", s.task, s.argv.join(" ")))
+        .collect();
+    let mut out = format!("\nSteps run:\n{}", leading_block(&lines, "text"));
+    let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let ports = run
+        .steps
+        .iter()
+        .flat_map(|s| s.ports.iter().map(|(app, port)| (app.clone(), *port)))
+        .collect();
+    let committed = task::committed_plan(
+        dir,
+        head,
+        run.dir.as_deref().unwrap_or(""),
+        &root,
+        &required.task,
+        &required.args,
+        &ports,
+    );
+    let same = |plan: &task::ExecutionPlan| {
+        let committed = plan.commands();
+        committed.len() == run.steps.len()
+            && committed
+                .iter()
+                .zip(&run.steps)
+                .all(|(c, r)| c.task == r.task && c.argv == r.argv)
+    };
+    if committed.is_ok_and(|plan| !same(&plan)) {
+        out.push_str(&format!(
+            "\nAn uncommitted config layer changed what ran: these steps differ from what the \
+             `devkit.toml` files committed at HEAD define for `{}`.\n",
+            required.task
+        ));
+    }
+    out
+}
+
+/// A fenced block of `lines` tagged `info`: the first lines that fit in
 /// [`TAIL_BUDGET`], with a note when later lines were dropped.
-fn diff_block(lines: &[String]) -> String {
+fn leading_block(lines: &[String], info: &str) -> String {
     let mut kept: Vec<&str> = Vec::new();
     let mut used = 0;
     for line in lines {
@@ -251,7 +325,7 @@ fn diff_block(lines: &[String]) -> String {
         1 => "\n1 later line was dropped to keep the PR body within GitHub's limit.\n".to_string(),
         n => format!("\n{n} later lines were dropped to keep the PR body within GitHub's limit.\n"),
     };
-    format!("\n{fence}diff\n{}\n{fence}\n{note}", kept.join("\n"))
+    format!("\n{fence}{info}\n{}\n{fence}\n{note}", kept.join("\n"))
 }
 
 /// Why `run`, which exited 0 at the PR's head, does not prove `required`,
@@ -382,6 +456,7 @@ mod tests {
             run: None,
             rejected: None,
             change: None,
+            ran: String::new(),
         };
         for body in ["", "  \n\n"] {
             let out = gate.apply(body.into()).unwrap();
@@ -429,7 +504,7 @@ mod tests {
         let lines: Vec<String> = (0..100)
             .map(|i| format!("+ {i:03}{}", "x".repeat(4090)))
             .collect();
-        let out = diff_block(&lines);
+        let out = leading_block(&lines, "diff");
         assert!(out.len() < TAIL_BUDGET + 512, "{} bytes", out.len());
         assert!(
             out.starts_with(&format!("\n```diff\n{}\n", lines[0])),
@@ -441,7 +516,7 @@ mod tests {
             "{out}"
         );
         assert_eq!(
-            diff_block(&["- a".to_string(), "+ b".to_string()]),
+            leading_block(&["- a".to_string(), "+ b".to_string()], "diff"),
             "\n```diff\n- a\n+ b\n```\n"
         );
     }

@@ -435,6 +435,60 @@ fn a_run_in_a_linked_worktree_beside_an_edited_primary_config_qualifies() {
     assert!(!body.contains("This PR changes"), "{body}");
 }
 
+/// A layer outside the committed files, such as `--config`, can change
+/// what the task runs while the tree stays clean, so the section shows the
+/// steps the run executed and says they differ from HEAD's.
+#[test]
+fn a_run_under_an_uncommitted_layer_shows_its_steps_and_says_so() {
+    let p = project(GATE);
+    let outside = tempfile::tempdir().unwrap();
+    let layer = outside.path().join("devkit.toml");
+    let toml = std::fs::read_to_string(p.project().join("devkit.toml")).unwrap();
+    std::fs::write(&layer, toml.replace("x.scope=", "z.scope=")).unwrap();
+    task(&p, &[
+        "--config",
+        layer.to_str().unwrap(),
+        "verify",
+        "--arg",
+        "scope=all",
+    ]);
+    let body = opened_body(&p);
+    assert!(body.contains("Exit code: 0"), "{body}");
+    assert!(
+        body.contains("\nverify: git -c z.scope=all version\n"),
+        "shows the steps that ran: {body}"
+    );
+    assert!(
+        body.contains("An uncommitted config layer changed what ran"),
+        "{body}"
+    );
+}
+
+#[test]
+fn a_run_under_the_committed_config_shows_its_steps_alone() {
+    let p = project(GATE);
+    verify(&p);
+    let body = opened_body(&p);
+    assert!(
+        body.contains("\nverify: git -c x.scope=all version\n"),
+        "{body}"
+    );
+    assert!(!body.contains("uncommitted config layer"), "{body}");
+}
+
+#[test]
+fn a_task_no_commit_defines_says_so() {
+    let p = project("\n[pr.gates]\nverify_task = \"ghost\"\n");
+    let (ok, stderr) = create(&p, "human");
+    assert!(ok, "{stderr}");
+    let body = body(&p);
+    assert!(body.contains("NOT RUN"), "{body}");
+    assert!(
+        body.contains("do not define `ghost`"),
+        "says the committed config lacks the task: {body}"
+    );
+}
+
 #[test]
 fn a_branch_changing_only_a_tasks_description_still_qualifies() {
     let p = project(GATE);

@@ -35,6 +35,8 @@ pub struct CommandPlan {
     /// runs. Enforced against the registry when the ports are reserved
     /// there for execution; an [`ExecutionPlan`] carries them unchecked.
     pub require_live: Vec<String>,
+    /// The port each app its templates reference rendered as.
+    pub ports: BTreeMap<String, u16>,
 }
 
 /// A resolved sequence step.
@@ -561,6 +563,9 @@ enum Ports<'a> {
     /// of what the task is. `require_live` is left unchecked and carried
     /// in the plan.
     Base,
+    /// The ports a recorded run rendered, each other app's base port, with
+    /// no registry touched and `require_live` unchecked, as for `Base`.
+    Given(&'a BTreeMap<String, u16>),
 }
 
 impl Ports<'_> {
@@ -572,6 +577,10 @@ impl Ports<'_> {
                     .collect())
             }
             Ports::Registry { .. } | Ports::Base => Ok(wanted.iter().cloned().collect()),
+            Ports::Given(given) => Ok(wanted
+                .iter()
+                .map(|(app, base)| (app.clone(), given.get(app).copied().unwrap_or(*base)))
+                .collect()),
         }
     }
 }
@@ -758,6 +767,21 @@ struct PlanLine {
 }
 
 impl ExecutionPlan {
+    /// Each command step's task and argv, in order, as a run records them.
+    pub fn commands(&self) -> Vec<crate::ledger::Step> {
+        self.steps
+            .iter()
+            .filter_map(|step| match step {
+                PlannedStep::Run { task, argv, .. } => Some(crate::ledger::Step {
+                    task: task.clone(),
+                    argv: argv.clone(),
+                    ports: BTreeMap::new(),
+                }),
+                PlannedStep::Up { .. } => None,
+            })
+            .collect()
+    }
+
     fn lines(&self) -> Vec<PlanLine> {
         let plain = |text: String| PlanLine { text, secret: None };
         let mut out = Vec::new();
@@ -919,6 +943,7 @@ fn execution_plan(
     cfg: &Config,
     catalog: &HashMap<String, App>,
     worktree_root: &Path,
+    ports: &Ports<'_>,
     name: &str,
     args: &BTreeMap<String, String>,
 ) -> Result<ExecutionPlan> {
@@ -932,7 +957,7 @@ fn execution_plan(
             &vars,
             catalog,
             worktree_root,
-            &Ports::Base,
+            ports,
             step,
             t,
             &BTreeMap::new(),
@@ -1029,6 +1054,7 @@ fn planned_up(
 /// started in `dir` ([`crate::ledger::committed_config`]), with no other
 /// layer: not the working tree's, the primary checkout's, the home config
 /// or a `devkit.local.toml`. `checkout` is any checkout of the repository.
+/// An app in `ports` renders as that port, any other as its base port.
 pub fn committed_plan(
     checkout: &Path,
     rev: &str,
@@ -1036,10 +1062,18 @@ pub fn committed_plan(
     worktree_root: &Path,
     name: &str,
     args: &BTreeMap<String, String>,
+    ports: &BTreeMap<String, u16>,
 ) -> Result<ExecutionPlan> {
     let cfg = crate::ledger::committed_config(checkout, rev, dir)?;
     let (catalog, _) = crate::apps::catalog(&cfg, &crate::load::path_to_project(&cfg)?)?;
-    execution_plan(&cfg, &catalog, worktree_root, name, args)
+    execution_plan(
+        &cfg,
+        &catalog,
+        worktree_root,
+        &Ports::Given(ports),
+        name,
+        args,
+    )
 }
 
 /// The argv `run` of command task `name` renders to.
@@ -1111,6 +1145,7 @@ fn resolve_command_with_ports(
         cwd,
         env,
         require_live: Vec::new(),
+        ports: ports.clone(),
     })
 }
 
@@ -1646,7 +1681,14 @@ mod tests {
             ..TaskConfig::default()
         };
         let cfg = cfg_with(&[("seq", seq)]);
-        let plan = execution_plan(&cfg, &cat, Path::new("/wt"), "seq", &BTreeMap::new()).unwrap();
+        let plan = execution_plan(
+            &cfg,
+            &cat,
+            Path::new("/wt"),
+            &Ports::Base,
+            "seq",
+            &BTreeMap::new(),
+        ).unwrap();
         let PlannedStep::Up { launches, .. } = &plan.steps[0] else {
             panic!("an up step plans launches");
         };
