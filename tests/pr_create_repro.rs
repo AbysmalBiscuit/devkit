@@ -389,6 +389,18 @@ fn a_stale_throwaway_worktree_is_pruned_and_one_in_use_is_kept() {
     assert!(live.join("repro").exists());
 }
 
+#[test]
+fn a_check_that_cannot_run_says_not_run_and_opens_the_pr() {
+    let p = project(GATE, FIX);
+    std::fs::create_dir_all(repro_root(&p).parent().unwrap()).unwrap();
+    std::fs::write(repro_root(&p), "not a directory").unwrap();
+    let body = opened_body(&p);
+    assert!(
+        body.contains("1. The lib is fixed: NOT RUN: the check could not run: creating "),
+        "{body}"
+    );
+}
+
 /// What `git` reports of the caller's worktree, index and worktree list.
 fn snapshot(p: &ghfake::Fake) -> String {
     [
