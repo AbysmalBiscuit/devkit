@@ -265,7 +265,8 @@ fn items(decl: &FieldDecl, raw: &str) -> Vec<String> {
     out
 }
 
-fn person_id(p: &Person, kind: TrackerKind) -> Option<&str> {
+/// `p`'s identity on `kind`, when `[people]` records one.
+pub fn person_id(p: &Person, kind: TrackerKind) -> Option<&str> {
     match kind {
         TrackerKind::Github => p.github.as_deref(),
         TrackerKind::Linear => p.linear.as_deref(),

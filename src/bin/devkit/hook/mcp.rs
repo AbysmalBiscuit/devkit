@@ -448,14 +448,7 @@ fn alias(people: &HashMap<String, Person>, kind: TrackerKind, who: &str) -> Stri
     }
     people
         .iter()
-        .find(|(_, p)| {
-            let id = match kind {
-                TrackerKind::Github => p.github.as_deref(),
-                TrackerKind::Linear => p.linear.as_deref(),
-                TrackerKind::None => None,
-            };
-            id.is_some_and(|id| id.eq_ignore_ascii_case(who))
-        })
+        .find(|(_, p)| fields::person_id(p, kind).is_some_and(|id| id.eq_ignore_ascii_case(who)))
         .map_or_else(|| who.to_string(), |(a, _)| a.clone())
 }
 
