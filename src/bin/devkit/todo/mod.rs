@@ -1253,7 +1253,7 @@ fn move_todo(
     let before = todo
         .parent
         .as_deref()
-        .map(|p| store.get(p))
+        .map(|p| store.get_exact(p))
         .transpose()?
         .flatten()
         .filter(|p| p.ticket.as_ref().is_some_and(|t| t.same_tracker(ticket)));

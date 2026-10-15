@@ -596,6 +596,13 @@ impl Store {
         self.origin.as_ref()
     }
 
+    /// The todo whose stored id is exactly `id`, resolving no name: for an
+    /// id devkit stored, such as a parent, which names nothing once its todo
+    /// is gone.
+    pub(crate) fn get_exact(&self, id: &str) -> Result<Option<Todo>> {
+        self.store.get(id)
+    }
+
     /// Applies `edit` without firing a ticket event: for a change whose
     /// ticket a push has already moved.
     pub(crate) fn apply_unfired(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
