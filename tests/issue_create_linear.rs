@@ -418,7 +418,7 @@ fn an_edit_moving_the_ticket_to_another_team_reads_it_back_by_its_id() {
 }
 
 #[test]
-fn a_team_move_that_drops_a_cycle_reports_it() {
+fn a_team_move_that_drops_a_cycle_warns_with_its_old_value() {
     let config = format!(
         "{FIELDS}\n[ticket.fields.linear.cycle]\ntype   = \"enum\"\nwhere  = \"cycle\"\n\
          values = [{{ name = \"Sprint 1\", id = \"cyc-1\", teams = [\"ENG\"] }}]\n"
@@ -435,10 +435,14 @@ fn a_team_move_that_drops_a_cycle_reports_it() {
     );
     linear.answer("issueUpdate(", UPDATED);
     let out = run(&fake, &linear, &["edit", "ENG-42", "--arg", "team=OPS"]);
-    assert!(!out.status.success(), "{}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "the move was asked for: {}",
+        stderr(&out)
+    );
     let err = stderr(&out);
     assert!(
-        err.contains("`cycle`") && err.contains("`Sprint 1`"),
+        err.contains("warning:") && err.contains("`cycle`") && err.contains("`Sprint 1`"),
         "names the dropped field and its old value: {err}"
     );
     assert!(

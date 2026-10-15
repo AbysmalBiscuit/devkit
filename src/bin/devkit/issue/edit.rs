@@ -242,19 +242,24 @@ fn linear(args: EditArgs, sel: &Selected, cfg: &Config) -> Result<()> {
         .with_context(|| format!("Linear refused or did not answer the edit of {id}"))?;
 
     let team_before = before.team.clone();
-    let (after, mut problems) =
+    let (after, problems) =
         field_write::linear_finish(&writer, before, decls, &resolved, &refs, true);
-    if after.team != team_before {
-        let kept = after.current(decls, &cfg.people);
-        problems.extend(lost_in_move(&resolved, &current, &kept));
-    }
     println!("{}", field_write::linear_link(&after));
     field_write::warn(decls, &report);
+    if after.team != team_before {
+        let kept = after.current(decls, &cfg.people);
+        for lost in lost_in_move(&resolved, &current, &kept) {
+            eprintln!(
+                "warning: {lost}; set it with `devkit ticket edit {}` if the new team has it",
+                after.identifier
+            );
+        }
+    }
     field_write::fail_on(
         &problems,
         format!(
-            "{id} was edited, but the fields above do not hold what they should. Rerun \
-             `devkit ticket edit {id}` with them"
+            "{id} was edited, but the fields above did not take. Rerun `devkit ticket edit {id}` \
+             with them"
         ),
     )
 }
