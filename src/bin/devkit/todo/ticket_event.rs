@@ -101,6 +101,7 @@ fn firing_status(event: IssueEvent) -> Option<StatusKind> {
     match event {
         IssueEvent::TodoStart => Some(StatusKind::InProgress),
         IssueEvent::TodoDone => Some(StatusKind::Completed),
+        IssueEvent::TodoCancel => Some(StatusKind::Cancelled),
         IssueEvent::Setup | IssueEvent::Start | IssueEvent::PrOpen => None,
     }
 }

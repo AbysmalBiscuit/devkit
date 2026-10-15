@@ -1159,16 +1159,19 @@ pub enum IssueEvent {
     TodoStart,
     /// The ticket's synced todo became completed.
     TodoDone,
+    /// The ticket's synced todo became cancelled.
+    TodoCancel,
 }
 
 impl IssueEvent {
     /// Every event, in the order each fires on an issue.
-    pub const ALL: [IssueEvent; 5] = [
+    pub const ALL: [IssueEvent; 6] = [
         IssueEvent::Setup,
         IssueEvent::Start,
         IssueEvent::TodoStart,
         IssueEvent::PrOpen,
         IssueEvent::TodoDone,
+        IssueEvent::TodoCancel,
     ];
 
     /// The `[ticket.events]` spelling, which is also the serialized form.
@@ -1179,6 +1182,7 @@ impl IssueEvent {
             IssueEvent::PrOpen => "pr_open",
             IssueEvent::TodoStart => "todo_start",
             IssueEvent::TodoDone => "todo_done",
+            IssueEvent::TodoCancel => "todo_cancel",
         }
     }
 }
@@ -1241,8 +1245,11 @@ pub struct TicketConfig {
 /// Sync only reads the tracker. With no rules, it brings in nothing.
 ///
 /// ```
-/// # use devkit_config::{Assignee, Config, MappedStatus, ProjectRole};
+/// # use devkit_config::{Assignee, Config, MappedStatus, ProjectRole, PushKind};
 /// # let cfg = Config::parse(r#"
+/// [ticket.sync]
+/// push = ["status", "blocking"]
+///
 /// [[ticket.sync.rules]]
 /// assignee = "me"
 ///
@@ -1271,6 +1278,7 @@ pub struct TicketConfig {
 /// # assert_eq!(sync.lookup("Blocked"), None);
 /// # assert_eq!(sync.closed_names(), ["Canceled", "Done"]);
 /// # assert_eq!(sync.max_age_secs, 600);
+/// # assert!(sync.pushes(PushKind::Status) && !sync.pushes(PushKind::Parent));
 /// ```
 #[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1295,6 +1303,31 @@ pub struct TicketSyncConfig {
     /// one in the background. The read never waits for it, and a failed
     /// background sync holds off the next for as long.
     pub max_age_secs: u64,
+    /// What a local change to a ticket's todo writes back to the ticket.
+    /// `"status"`: `devkit todo start`, `done` and `cancel`, run from a
+    /// checkout of the ticket's repository, move the ticket before the
+    /// command returns, firing `[ticket.events]` `todo_start`, `todo_done`
+    /// and `todo_cancel`; on GitHub `done` also closes the issue as
+    /// completed and `cancel` as not planned. A ticket whose status changed
+    /// on the tracker since the last sync stops the command instead, unless
+    /// the event's `from` names that status (`"*"` does not count) or
+    /// `--overwrite-tracker` is passed. `"parent"` and `"blocking"` name
+    /// sub-issue and blocking links between tickets. Empty, the default:
+    /// todo changes fire the events in the background and never wait on the
+    /// tracker.
+    pub push: Vec<PushKind>,
+}
+
+/// One kind of local todo change `[ticket.sync] push` writes to the ticket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PushKind {
+    /// Start, done and cancel.
+    Status,
+    /// The ticket's parent ticket.
+    Parent,
+    /// Blocking links between tickets.
+    Blocking,
 }
 
 impl Default for TicketSyncConfig {
@@ -1303,11 +1336,17 @@ impl Default for TicketSyncConfig {
             rules: Vec::new(),
             statuses: std::collections::BTreeMap::new(),
             max_age_secs: 600,
+            push: Vec::new(),
         }
     }
 }
 
 impl TicketSyncConfig {
+    /// Whether `push` lists `kind`.
+    pub fn pushes(&self, kind: PushKind) -> bool {
+        self.push.contains(&kind)
+    }
+
     /// The todo status the tracker status `name` maps to, matched
     /// case-insensitively and ignoring surrounding whitespace.
     pub fn lookup(&self, name: &str) -> Option<MappedStatus> {
@@ -1436,9 +1475,14 @@ pub struct TicketEventsConfig {
     /// the ticket becomes in progress, by `devkit todo start` or a harness's
     /// task tool, from a checkout of the ticket's repository. Changes sync
     /// itself makes never fire it. A failed move leaves the todo as it is.
+    /// With `"status"` in `[ticket.sync] push` it runs in the foreground
+    /// instead, and a failed move fails the command.
     pub todo_start: Option<EventTransition>,
     /// Fired like `todo_start` when the ticket's todo becomes completed.
     pub todo_done: Option<EventTransition>,
+    /// Fired when the ticket's todo becomes cancelled, by `devkit todo
+    /// cancel`, and only with `"status"` in `[ticket.sync] push`.
+    pub todo_cancel: Option<EventTransition>,
 }
 
 impl TicketEventsConfig {
@@ -1450,6 +1494,7 @@ impl TicketEventsConfig {
             IssueEvent::PrOpen => self.pr_open.as_ref(),
             IssueEvent::TodoStart => self.todo_start.as_ref(),
             IssueEvent::TodoDone => self.todo_done.as_ref(),
+            IssueEvent::TodoCancel => self.todo_cancel.as_ref(),
         }
     }
 
@@ -5626,6 +5671,46 @@ steps = [
         let err = Config::parse("[ticket.sync.statuses]\nTodo = \"open\"\n").unwrap_err();
         assert!(format!("{err:#}").contains("open"), "{err:#}");
         assert!(Config::parse("[[ticket.sync.rules]]\nassignee = \"me\"\n").is_ok());
+    }
+
+    #[test]
+    fn push_defaults_to_empty() {
+        let sync = Config::parse("").unwrap().ticket.sync;
+        assert!(sync.push.is_empty());
+        assert!(!sync.pushes(PushKind::Status));
+    }
+
+    #[test]
+    fn push_parses_status_parent_blocking() {
+        let cfg = Config::parse("[ticket.sync]\npush = [\"status\", \"parent\", \"blocking\"]\n")
+            .unwrap();
+        let sync = &cfg.ticket.sync;
+        assert_eq!(sync.push, [
+            PushKind::Status,
+            PushKind::Parent,
+            PushKind::Blocking
+        ]);
+        assert!(sync.pushes(PushKind::Parent));
+        let cfg = Config::parse("[ticket.sync]\npush = [\"blocking\"]\n").unwrap();
+        assert!(!cfg.ticket.sync.pushes(PushKind::Status));
+    }
+
+    #[test]
+    fn an_unknown_push_kind_is_a_parse_error() {
+        let err = Config::parse("[ticket.sync]\npush = [\"labels\"]\n").unwrap_err();
+        assert!(format!("{err:#}").contains("labels"), "{err:#}");
+    }
+
+    #[test]
+    fn todo_cancel_event_parses() {
+        let cfg =
+            Config::parse("[ticket.events.todo_cancel]\nfrom = [\"Todo\"]\nto = \"Canceled\"\n")
+                .unwrap();
+        let t = cfg.ticket.events.get(IssueEvent::TodoCancel).unwrap();
+        assert_eq!(t.to, "Canceled");
+        assert_eq!(t.from, ["Todo"]);
+        assert_eq!(IssueEvent::TodoCancel.to_string(), "todo_cancel");
+        assert!(IssueEvent::ALL.contains(&IssueEvent::TodoCancel));
     }
 
     #[test]

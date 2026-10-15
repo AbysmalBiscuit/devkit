@@ -1507,6 +1507,26 @@
         }
       ]
     },
+    "PushKind": {
+      "description": "One kind of local todo change `[ticket.sync] push` writes to the ticket.",
+      "oneOf": [
+        {
+          "const": "status",
+          "description": "Start, done and cancel.",
+          "type": "string"
+        },
+        {
+          "const": "parent",
+          "description": "The ticket's parent ticket.",
+          "type": "string"
+        },
+        {
+          "const": "blocking",
+          "description": "Blocking links between tickets.",
+          "type": "string"
+        }
+      ]
+    },
     "RenderedToolRule": {
       "description": "One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits issues or PRs, whose title and body the\npre-tool-use hook allows only when `devkit ticket render` (an issue) or\n`devkit pr render` (a PR) produced them in the same agent session.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-create]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\"]\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-update]\nservers = [\"*github*\"]\ntools   = [\"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
       "properties": {
@@ -2206,6 +2226,7 @@
             "pr_open": null,
             "setup": null,
             "start": null,
+            "todo_cancel": null,
             "todo_done": null,
             "todo_start": null
           },
@@ -2223,6 +2244,7 @@
           "$ref": "#/$defs/TicketSyncConfig",
           "default": {
             "max_age_secs": 600,
+            "push": [],
             "rules": [],
             "statuses": {}
           },
@@ -2271,6 +2293,18 @@
           "default": null,
           "description": "Fired by the first agent session in a worktree `workspace setup`\ncreated, once per worktree, in the background. `pr checkout`\nworktrees never fire it. List the states work starts from in `from`:\n`[\"*\"]` lets a second worktree pull an issue back from review."
         },
+        "todo_cancel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fired when the ticket's todo becomes cancelled, by `devkit todo\ncancel`, and only with `\"status\"` in `[ticket.sync] push`."
+        },
         "todo_done": {
           "anyOf": [
             {
@@ -2293,7 +2327,7 @@
             }
           ],
           "default": null,
-          "description": "Fired in the background when a todo `devkit todo sync` brought in for\nthe ticket becomes in progress, by `devkit todo start` or a harness's\ntask tool, from a checkout of the ticket's repository. Changes sync\nitself makes never fire it. A failed move leaves the todo as it is."
+          "description": "Fired in the background when a todo `devkit todo sync` brought in for\nthe ticket becomes in progress, by `devkit todo start` or a harness's\ntask tool, from a checkout of the ticket's repository. Changes sync\nitself makes never fire it. A failed move leaves the todo as it is.\nWith `\"status\"` in `[ticket.sync] push` it runs in the foreground\ninstead, and a failed move fails the command."
         }
       },
       "type": "object"
@@ -2323,7 +2357,7 @@
     },
     "TicketSyncConfig": {
       "additionalProperties": false,
-      "description": "`[ticket.sync]`: the tickets `devkit todo sync` brings in as todos on the\nrepository's node, and how their tracker statuses map to todo statuses.\nSync only reads the tracker. With no rules, it brings in nothing.\n\n```toml\n[[ticket.sync.rules]]\nassignee = \"me\"\n\n[[ticket.sync.rules]]\nassignee = \"none\"\nproject_role = \"lead\"\nlabels = [\"devkit\"]\n\n[ticket.sync.statuses]\n\"\" = \"pending\"\n\"Backlog\" = \"pending\"\n\"Todo\" = \"pending\"\n\"In Progress\" = \"in_progress\"\n\"In Review\" = \"in_progress\"\n\"Done\" = \"completed\"\n\"Canceled\" = \"cancelled\"\n```",
+      "description": "`[ticket.sync]`: the tickets `devkit todo sync` brings in as todos on the\nrepository's node, and how their tracker statuses map to todo statuses.\nSync only reads the tracker. With no rules, it brings in nothing.\n\n```toml\n[ticket.sync]\npush = [\"status\", \"blocking\"]\n\n[[ticket.sync.rules]]\nassignee = \"me\"\n\n[[ticket.sync.rules]]\nassignee = \"none\"\nproject_role = \"lead\"\nlabels = [\"devkit\"]\n\n[ticket.sync.statuses]\n\"\" = \"pending\"\n\"Backlog\" = \"pending\"\n\"Todo\" = \"pending\"\n\"In Progress\" = \"in_progress\"\n\"In Review\" = \"in_progress\"\n\"Done\" = \"completed\"\n\"Canceled\" = \"cancelled\"\n```",
       "properties": {
         "max_age_secs": {
           "default": 600,
@@ -2331,6 +2365,14 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "push": {
+          "default": [],
+          "description": "What a local change to a ticket's todo writes back to the ticket.\n`\"status\"`: `devkit todo start`, `done` and `cancel`, run from a\ncheckout of the ticket's repository, move the ticket before the\ncommand returns, firing `[ticket.events]` `todo_start`, `todo_done`\nand `todo_cancel`; on GitHub `done` also closes the issue as\ncompleted and `cancel` as not planned. A ticket whose status changed\non the tracker since the last sync stops the command instead, unless\nthe event's `from` names that status (`\"*\"` does not count) or\n`--overwrite-tracker` is passed. `\"parent\"` and `\"blocking\"` name\nsub-issue and blocking links between tickets. Empty, the default:\ntodo changes fire the events in the background and never wait on the\ntracker.",
+          "items": {
+            "$ref": "#/$defs/PushKind"
+          },
+          "type": "array"
         },
         "rules": {
           "default": [],
@@ -2795,6 +2837,7 @@
           "pr_open": null,
           "setup": null,
           "start": null,
+          "todo_cancel": null,
           "todo_done": null,
           "todo_start": null
         },
@@ -2804,6 +2847,7 @@
         },
         "sync": {
           "max_age_secs": 600,
+          "push": [],
           "rules": [],
           "statuses": {}
         }
