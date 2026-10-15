@@ -109,7 +109,8 @@ pub(crate) fn sync_ticket(store: &Store, cwd: &Path, node: &str, key: &str) -> R
     Ok(synced)
 }
 
-/// Syncs the one ticket `key` into `node`, the repository node of the
+/// Syncs the one ticket `key`, in any spelling [`tracker::Tracker::ticket_key`]
+/// reads, into `node`, the repository node of the
 /// checkout at `cwd`, reading no other ticket and running no rule search,
 /// and returns its todo; `None` when the repository has no `[ticket.sync]`
 /// rules, which queries no tracker. The ticket's parent and blockers link
@@ -126,6 +127,8 @@ pub(crate) fn sync_one(
     };
     let tracker = &selected.tracker.tracker;
     let kind = tracker.kind().to_string();
+    let key = tracker.ticket_key(key)?;
+    let key = key.as_str();
     let fetched: Vec<_> = tracker
         .tickets(&[key.to_string()])
         .with_context(|| format!("reading {kind} ticket {key}"))?

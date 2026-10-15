@@ -415,6 +415,20 @@ fn sync_one_leaves_other_tickets_alone() {
 }
 
 #[test]
+fn sync_one_takes_the_key_in_any_spelling_the_tracker_reads() {
+    for key in ["O/R#65", "#65", "65"] {
+        let s = with_sub_issue();
+        let out = s.sync(&["--ticket", key]);
+        assert!(out.status.success(), "{key}: {}", stderr(&out));
+        assert_eq!(
+            s.todo_for("o/r#65").status.kind(),
+            StatusKind::InProgress,
+            "{key}"
+        );
+    }
+}
+
+#[test]
 fn sync_one_without_rules_does_nothing() {
     let s = Synced::new(STATUSES, true);
     let out = s.sync(&["--ticket", "o/r#65"]);

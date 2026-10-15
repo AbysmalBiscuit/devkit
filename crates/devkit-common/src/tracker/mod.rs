@@ -170,6 +170,11 @@ pub trait Tracker: Send + Sync {
     ) -> Result<Vec<tickets::SyncedTicket>> {
         anyhow::bail!("the {} tracker cannot sync tickets", self.kind())
     }
+    /// The ticket key [`Tracker::tickets`] gives the ticket `input` names,
+    /// read as [`Tracker::issue_ref`] reads an id.
+    fn ticket_key(&self, input: &str) -> Result<String> {
+        Ok(self.issue_ref(input)?.id)
+    }
     /// The tickets `keys` name, whatever their status. A key that names no
     /// ticket is left out.
     fn tickets(&self, _keys: &[String]) -> Result<Vec<tickets::SyncedTicket>> {

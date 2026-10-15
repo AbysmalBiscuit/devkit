@@ -118,7 +118,7 @@ pub fn issues_query(slug: &str, numbers: &[u64], board: Option<&BoardRef>) -> St
 /// repositories' issues with one number are two tickets. GitHub names a
 /// repository in any case, so the slug is lowercased: a slug configured
 /// in another case still names the same tickets.
-fn ticket_key(slug: &str, number: u64) -> String {
+pub(crate) fn ticket_key(slug: &str, number: u64) -> String {
     format!("{}#{number}", slug.to_ascii_lowercase())
 }
 

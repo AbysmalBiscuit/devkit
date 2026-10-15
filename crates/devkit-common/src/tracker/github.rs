@@ -941,6 +941,15 @@ impl Tracker for GithubTracker {
         self.ticket_reader().find(rules, closed_names)
     }
 
+    /// `owner/repo#65`, from that key in any case, an issue URL, `#65` or
+    /// `65`.
+    fn ticket_key(&self, input: &str) -> Result<String> {
+        let s = input.trim();
+        let id = self.issue_ref(s.strip_prefix('#').unwrap_or(s))?.id;
+        let number = id.parse().with_context(|| format!("bad issue number {id}"))?;
+        Ok(super::github_tickets::ticket_key(&self.repo.slug, number))
+    }
+
     fn tickets(&self, keys: &[String]) -> Result<Vec<SyncedTicket>> {
         self.ticket_reader().read(keys)
     }

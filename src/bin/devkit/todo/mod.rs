@@ -165,7 +165,8 @@ pub enum TodoCommand {
         #[arg(long, hide = true, conflicts_with = "dry_run")]
         tickets_only: bool,
         /// Sync only this ticket, by its key (`owner/repo#65`, `ENG-123`),
-        /// reading no other and not the store's sync target. A ticket no
+        /// or as the tracker reads an issue (`#65`, `65`, its URL), reading
+        /// no other and not the store's sync target. A ticket no
         /// rule selects is brought in too.
         #[arg(long, value_name = "KEY", conflicts_with_all = ["background", "dry_run", "tickets_only"])]
         ticket: Option<String>,
