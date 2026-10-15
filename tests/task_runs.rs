@@ -480,3 +480,14 @@ fn a_shell_redirect_into_the_ledger_is_denied() {
         }));
     }
 }
+
+#[test]
+fn a_run_started_with_a_relative_dir_records_that_dir() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.repo.join("sub")).unwrap();
+    let out = f.run(&["-C", "sub", "task", "pass"]);
+    assert!(out.status.success(), "{out:?}");
+    let runs = f.runs();
+    let run = by_task(&runs, "pass")[0];
+    assert_eq!(run["dir"], "sub", "{run:#}");
+}
