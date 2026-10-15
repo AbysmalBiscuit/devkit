@@ -24,7 +24,7 @@ mod select;
 pub mod status;
 pub mod tickets;
 
-pub use select::{Selected, select};
+pub use select::{Selected, select, select_unfilled};
 
 /// Where an issue sits in its tracker's workflow. Linear's `state.type`
 /// vocabulary, adopted as devkit's own because the status verdict, the triage

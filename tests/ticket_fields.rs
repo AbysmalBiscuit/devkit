@@ -543,3 +543,34 @@ fn discovered_linear_labels_pass_the_mcp_gate_by_their_names() {
     let reason = linear_mcp_denial(&fake, call("labels", "nope")).expect("denied");
     assert!(reason.contains("`nope`"), "{reason}");
 }
+
+#[test]
+fn discover_fills_an_error_enum_declared_with_no_values() {
+    let fake = ghfake::Fake::without_pr(
+        "[tracker]\nkind = \"linear\"\n\n[ticket.fields.linear.cycle]\ntype = \"enum\"\n\
+         where = \"cycle\"\nlevel = \"error\"\n",
+    );
+    let refused = fake.issue_as("agent", &["fields"]);
+    assert!(!refused.status.success());
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        err.contains("[ticket.fields.linear.cycle]") && err.contains("ticket fields discover"),
+        "the loader names the command that fills it: {err}"
+    );
+
+    let linear = linearfake::LinearFake::start();
+    serve_eng(&linear, "[]");
+    let mut env = linear.env().to_vec();
+    env.push(("DEVKIT_CALLER", "agent"));
+    let out = stdout(&fake.issue_with_env(&["fields", "discover", "--team", "ENG"], &env));
+    assert!(out.contains("refreshed [ticket.fields.linear.cycle]"), "{out}");
+    let after = std::fs::read_to_string(fake.project().join("devkit.toml")).unwrap();
+    let cfg = devkit_config::Config::parse(&after).unwrap();
+    let ids: Vec<&str> = cfg.ticket.fields.linear["cycle"]
+        .values
+        .iter()
+        .map(|v| v.id.as_str())
+        .collect();
+    assert_eq!(ids, ["cyc-1", "cyc-2"], "{after}");
+    stdout(&fake.issue_as("agent", &["fields"]));
+}

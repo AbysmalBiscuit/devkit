@@ -647,15 +647,6 @@ pub(crate) fn validate(
             };
             writable.map_err(|why| anyhow::anyhow!("`{key}`{} {why}", note(cx, kind, name)))?;
         }
-        if ty == FieldType::Enum && decl.values.is_empty() && decl.max_level() == FieldLevel::Error
-        {
-            bail!(
-                "`{key}`{} is an `enum` with no `values` that can reach `error`, so no value \
-                 could satisfy it. List the tracker's values under `values` in `{key}`, or \
-                 lower its level.",
-                note(cx, kind, name)
-            );
-        }
         if let Some((other, _)) = places.iter().find(|(_, p)| p.same_place(place)) {
             bail!(
                 "`{key}`{} and `[ticket.fields.{kind}.{other}]` are both written to `{}`; each \
@@ -665,6 +656,31 @@ pub(crate) fn validate(
             );
         }
         places.push((name, place));
+    }
+    Ok(())
+}
+
+/// Refuse an `enum` in `decls` with no `values` that can reach `error`,
+/// which no ticket could satisfy, naming `ticket fields discover`, which
+/// fills its values in.
+pub(crate) fn reject_unfilled(
+    kind: TrackerKind,
+    decls: &BTreeMap<String, FieldDecl>,
+    cx: &FieldContext<'_>,
+) -> Result<()> {
+    for (name, decl) in decls {
+        if decl.r#type == Some(FieldType::Enum)
+            && decl.values.is_empty()
+            && decl.max_level() == FieldLevel::Error
+        {
+            let key = format!("[ticket.fields.{kind}.{name}]");
+            bail!(
+                "`{key}`{} is an `enum` with no `values` that can reach `error`, so no value \
+                 could satisfy it. Run `devkit ticket fields discover` to list the tracker's \
+                 values under `values` in `{key}`, or lower its level.",
+                note(cx, kind, name)
+            );
+        }
     }
     Ok(())
 }

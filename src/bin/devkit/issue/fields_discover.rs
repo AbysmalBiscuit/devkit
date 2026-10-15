@@ -58,7 +58,7 @@ pub(crate) enum Change {
 pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
     let start = super::start(&args.dir);
     let config = args.config.as_deref().map(Path::new);
-    let mut sel = devkit_common::tracker::select(config, &start, None);
+    let mut sel = devkit_common::tracker::select_unfilled(config, &start);
     let cfg = sel
         .config
         .take()

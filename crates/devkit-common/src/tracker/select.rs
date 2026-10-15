@@ -28,8 +28,30 @@ pub struct Selected {
 /// Only `devkit.toml` is loaded, not `devkit_ports::load`, so an unparseable
 /// `doppler.yaml` cannot discard the declared tracker.
 pub fn select(config: Option<&Path>, start: &str, pr_override: Option<&str>) -> Selected {
+    selected(
+        crate::config::resolve(config, Path::new(start)),
+        start,
+        pr_override,
+    )
+}
+
+/// [`select`] for `ticket fields discover`, which fills in what an
+/// error-level `enum` with no `values` lacks, so it takes the config a load
+/// refuses for that alone.
+pub fn select_unfilled(config: Option<&Path>, start: &str) -> Selected {
+    let resolved = crate::config::resolve(config, Path::new(start)).or_else(|e| {
+        e.downcast::<devkit_config::UnfilledFields>()
+            .map(devkit_config::UnfilledFields::into_loaded)
+    });
+    selected(resolved, start, None)
+}
+
+fn selected(
+    resolved: anyhow::Result<(devkit_config::Config, devkit_config::Provenance)>,
+    start: &str,
+    pr_override: Option<&str>,
+) -> Selected {
     let dir = Path::new(start);
-    let resolved = crate::config::resolve(config, dir);
     let health = devkit_config::Health::of(&resolved);
     let (cfg, origin) = match resolved {
         Ok((c, p)) => (Some(c), p.origin),

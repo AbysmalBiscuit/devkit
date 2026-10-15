@@ -3408,11 +3408,20 @@ fn resolve_layers(
     reject_invalid_fields(&cfg, &origin)?;
     reject_never_without_default(&cfg, &origin)?;
     resolve_defaults(&mut cfg, &origin, checkout_root, default_worktree_root)?;
-    Ok((cfg, Provenance {
+    let unfilled = reject_unfilled_fields(&cfg, &origin);
+    let loaded = (cfg, Provenance {
         layers: order,
         origin,
         shadowed,
-    }))
+    });
+    match unfilled {
+        Ok(()) => Ok(loaded),
+        Err(error) => Err(UnfilledFields {
+            error,
+            loaded: Box::new(loaded),
+        }
+        .into()),
+    }
 }
 
 /// Check a leftover `defaults.baseline_path`: baselines are now per-fork-point
@@ -3477,13 +3486,52 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
 /// `where` waits for [`check_ticket_fields`].
 fn reject_invalid_fields(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
     if let Some(kind) = cfg.tracker.kind {
-        return check_ticket_fields(cfg, kind, origin);
+        return validate_field_table(cfg, kind, origin, true);
     }
     for kind in [TrackerKind::Github, TrackerKind::Linear] {
         validate_field_table(cfg, kind, origin, false)?;
     }
     Ok(())
 }
+
+/// Refuse an error-level `enum` with no `values` in the `[ticket.fields]`
+/// tables [`reject_invalid_fields`] checks.
+fn reject_unfilled_fields(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
+    let kinds = match cfg.tracker.kind {
+        Some(kind) => vec![kind],
+        None => vec![TrackerKind::Github, TrackerKind::Linear],
+    };
+    for kind in kinds {
+        with_field_context(cfg, origin, |cx| {
+            ticket_fields::reject_unfilled(kind, cfg.ticket.fields.for_tracker(kind), cx)
+        })?;
+    }
+    Ok(())
+}
+
+/// A config that loads but for an error-level `enum` with no `values`,
+/// which `ticket fields discover` fills in. It carries the loaded config,
+/// so discover can read it.
+#[derive(Debug)]
+pub struct UnfilledFields {
+    error: anyhow::Error,
+    loaded: Box<(Config, Provenance)>,
+}
+
+impl UnfilledFields {
+    /// The config as it loaded, with its provenance.
+    pub fn into_loaded(self) -> (Config, Provenance) {
+        *self.loaded
+    }
+}
+
+impl std::fmt::Display for UnfilledFields {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.error)
+    }
+}
+
+impl std::error::Error for UnfilledFields {}
 
 /// Refuse a declaration in `kind`'s `[ticket.fields]` table that no write
 /// could honour, once `kind` is known to be the tracker in use. `origin` is
@@ -3493,7 +3541,10 @@ pub fn check_ticket_fields(
     kind: TrackerKind,
     origin: &HashMap<String, PathBuf>,
 ) -> Result<()> {
-    validate_field_table(cfg, kind, origin, true)
+    validate_field_table(cfg, kind, origin, true)?;
+    with_field_context(cfg, origin, |cx| {
+        ticket_fields::reject_unfilled(kind, cfg.ticket.fields.for_tracker(kind), cx)
+    })
 }
 
 fn validate_field_table(
@@ -3502,14 +3553,23 @@ fn validate_field_table(
     origin: &HashMap<String, PathBuf>,
     in_use: bool,
 ) -> Result<()> {
+    with_field_context(cfg, origin, |cx| {
+        ticket_fields::validate(kind, cfg.ticket.fields.for_tracker(kind), cx, in_use)
+    })
+}
+
+fn with_field_context(
+    cfg: &Config,
+    origin: &HashMap<String, PathBuf>,
+    check: impl FnOnce(&ticket_fields::FieldContext<'_>) -> Result<()>,
+) -> Result<()> {
     let variables = cfg.templates.declared();
-    let cx = ticket_fields::FieldContext {
+    check(&ticket_fields::FieldContext {
         status_field: cfg.github.status_field(),
         github_project: cfg.github.project.is_some(),
         template_variables: &variables,
         origin,
-    };
-    ticket_fields::validate(kind, cfg.ticket.fields.for_tracker(kind), &cx, in_use)
+    })
 }
 
 /// Refuse `required = "never"` on a variable with no default. The derived rule
