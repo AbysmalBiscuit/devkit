@@ -1058,3 +1058,40 @@ fn an_unreadable_issue_is_reported_as_a_read() {
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
     assert_eq!(parent_of(&s, 67), None);
 }
+
+#[test]
+fn a_block_stopping_partway_names_the_blockers_applied() {
+    let s = linked("\"blocking\"", None, false);
+    let out = s.devkit(&["todo", "add", "a step"], &AGENT);
+    let step = stdout(&out).trim().to_string();
+    s.serve(
+        "graphql.json",
+        &graphql(
+            &[issue(65, Some("Todo"), &[]), issue(66, Some("Todo"), &[])],
+            &OPTIONS,
+        ),
+    );
+    let by = format!("{step},{},{}", id_of(&s, 66), id_of(&s, 67));
+    let out = s.devkit(&["todo", "block", &id_of(&s, 65), "--by", &by], &AGENT);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    let (i66, i67) = (id_of(&s, 66), id_of(&s, 67));
+    assert!(
+        err.contains(&format!("done: {step} {i66}; not done: {i67}"))
+            && err.contains("o/r#67 was not found"),
+        "{err}"
+    );
+    let mut blockers = s.todo_for("o/r#65").blocked_by;
+    blockers.sort();
+    let mut want = vec![
+        s.proj
+            .todos()
+            .into_iter()
+            .find(|t| t.id.starts_with(&step))
+            .unwrap()
+            .id,
+        i66,
+    ];
+    want.sort();
+    assert_eq!(blockers, want);
+}

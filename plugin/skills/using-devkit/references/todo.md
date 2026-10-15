@@ -82,7 +82,7 @@ A person at a terminal is asked instead, and declining takes the tracker's value
 
 #### Parents and blocking links
 
-With `"parent"` in `push`, `devkit todo move <ticket todo> --parent <ticket todo>` makes the first ticket a sub-issue of the second (a Linear parent), and `--top` takes it out. With `"blocking"`, `devkit todo block` and `unblock` between two ticket todos add or remove the tracker's blocked-by link (a Linear `blocks` relation). Run them from a checkout of the tickets' repository; the link lands on the tracker before the todo changes. A link the tracker already has, or already lacks, is written nowhere and the todo still changes.
+With `"parent"` in `push`, `devkit todo move <ticket todo> --parent <ticket todo>` makes the first ticket a sub-issue of the second (a Linear parent), and `--top` takes it out. With `"blocking"`, `devkit todo block` and `unblock` between two ticket todos add or remove the tracker's blocked-by link (a Linear `blocks` relation). Run them from a checkout of the tickets' repository; the link lands on the tracker before the todo changes. With several blockers in one command, the first that stops ends it, and the message names the blockers done and not done. A link the tracker already has, or already lacks, is written nowhere and the todo still changes.
 
 A tracker that changed the link since the last sync stops the command the same way a status does, naming the tracker's value, the last synced one and the local change: a parent that is a third ticket, or on Linear another relation between the pair (a `related`, a `duplicate`, or a `blocks` the other way), which a new relation would silently replace. Ask the user, and pass `--overwrite-tracker` only on their word.
 

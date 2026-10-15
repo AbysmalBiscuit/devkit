@@ -957,8 +957,9 @@ fn resolve_ids(store: &impl TodoStore, ids: &[String]) -> Result<Vec<String>> {
 /// Records `by` as blockers of `id`, or with `add` false removes them,
 /// refusing an edge that would close a cycle. The edges between two ticket
 /// todos that `push` takes to the tracker are written there one by one,
-/// after the others have changed. An edge the todo already has, or already
-/// lacks, stays local.
+/// after the others have changed, and the first that fails stops the rest,
+/// naming the blockers done and not done. An edge the todo already has, or
+/// already lacks, stays local.
 fn link(store: &Store, id: &str, by: &[String], add: bool, push: &push::LinkPush) -> Result<()> {
     let todo = resolve_id(store, id)?;
     let blockers = by
@@ -981,15 +982,31 @@ fn link(store: &Store, id: &str, by: &[String], add: bool, push: &push::LinkPush
             false => local.push(blocker.id),
         }
     }
+    let mut done: Vec<&str> = local.iter().map(|b| devkit_todo::short_id(b)).collect();
     if !local.is_empty() {
-        let (id, by) = (todo.id.clone(), local);
+        let (id, by) = (todo.id.clone(), local.clone());
         store.apply(&match add {
             true => Edit::Block { id, by },
             false => Edit::Unblock { id, by },
         })?;
     }
-    for blocker in &pushed {
-        push::push_block(store, &todo, blocker, add, push)?;
+    for (at, blocker) in pushed.iter().enumerate() {
+        match push::push_block(store, &todo, blocker, add, push) {
+            Ok(true) => done.push(devkit_todo::short_id(&blocker.id)),
+            Ok(false) => {}
+            Err(err) if by.len() == 1 => return Err(err),
+            Err(err) => {
+                let not_done: Vec<&str> = pushed[at..]
+                    .iter()
+                    .map(|b| devkit_todo::short_id(&b.id))
+                    .collect();
+                let done = match done.is_empty() {
+                    true => "(none)".to_string(),
+                    false => done.join(" "),
+                };
+                return Err(err.context(format!("done: {done}; not done: {}", not_done.join(" "))));
+            }
+        }
     }
     Ok(())
 }
