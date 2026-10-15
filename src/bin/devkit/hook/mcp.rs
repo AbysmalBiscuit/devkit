@@ -403,7 +403,8 @@ fn origin_slug(cwd: &Path) -> Option<String> {
 
 /// The call's mapped field values, the items of every key a field maps to
 /// together, with a field whose keys carry only `null`, or `[]` for a list
-/// field, as an explicit none; each `user` value already resolved, since the
+/// field, as an explicit none, and one some keys set and others clear as a
+/// problem; each `user` value already resolved, since the
 /// call names a user by tracker identity where `--arg` takes an alias; a
 /// note for each user value that is also a `[people]` alias; and a problem
 /// for each value of a JSON type the field does not take or a user the
@@ -436,7 +437,7 @@ fn given(
             }
             _ => None,
         };
-        let (mut items, mut none) = (Vec::new(), false);
+        let (mut items, mut set, mut cleared) = (Vec::new(), None, None);
         for key in keys.keys() {
             let Some(value) = input.get(key.as_str()) else {
                 continue;
@@ -448,8 +449,11 @@ fn given(
                 v => scalar(v).map(|s| vec![s]),
             };
             match carried {
-                Some(carried) if carried.is_empty() => none = true,
-                Some(carried) => items.extend(carried),
+                Some(carried) if carried.is_empty() => cleared = cleared.or(Some(key)),
+                Some(carried) => {
+                    items.extend(carried);
+                    set = set.or(Some(key));
+                }
                 None => problems.push(Problem::Invalid {
                     field: field.clone(),
                     value: value.to_string(),
@@ -460,11 +464,24 @@ fn given(
                 }),
             }
         }
-        if items.is_empty() {
-            if none {
-                out.nones.insert(field.clone());
+        match (set, cleared) {
+            (Some(set), Some(cleared)) => {
+                problems.push(Problem::Invalid {
+                    field: field.clone(),
+                    value: String::new(),
+                    reason: format!(
+                        "is set under `{set}` and cleared under `{cleared}` in one call; pass one"
+                    ),
+                });
+                continue;
             }
-            continue;
+            (None, cleared) => {
+                if cleared.is_some() {
+                    out.nones.insert(field.clone());
+                }
+                continue;
+            }
+            (Some(_), None) => {}
         }
         if ty != FieldType::User {
             out.values.insert(field.clone(), Raw::Items(items));
@@ -1309,5 +1326,27 @@ level  = "info"
         }
         assert_eq!(call(json!(5)), Verdict::Allow);
         assert_eq!(call(json!("3.1")), Verdict::Allow);
+    }
+
+    #[test]
+    fn a_field_both_set_and_cleared_in_one_call_is_refused_naming_both_keys() {
+        let rule: RenderedToolRule = toml::from_str(
+            "servers = [\"*linear*\"]\ntools = [\"save_issue\"]\nabsent = [\"id\"]\n\
+             title = \"title\"\nbody = \"description\"\ntracker = \"linear\"\n\
+             fields = { team = \"team\", labels = [\"labels\", \"addLabels\"] }\n",
+        )
+        .unwrap();
+        for cleared in [json!(null), json!([])] {
+            let input =
+                json!({"title": "T", "team": "ENG", "labels": ["L2"], "addLabels": cleared});
+            let v = fields(&rule, LINEAR_FIELDS, input);
+            assert!(
+                denied_mentioning(
+                    &v,
+                    "`labels`: is set under `labels` and cleared under `addLabels`"
+                ),
+                "{cleared}: {v:?}"
+            );
+        }
     }
 }
