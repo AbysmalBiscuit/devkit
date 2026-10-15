@@ -1134,3 +1134,24 @@ fn a_link_with_a_ticket_of_another_repository_stays_local() {
     assert_eq!(parent_of(&s, 67), Some(foreign));
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
 }
+
+#[test]
+fn a_failed_link_read_names_the_tracker_error() {
+    let s = linked("\"parent\"", None, false);
+    s.serve(
+        "graphql.json",
+        r#"{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user"}]}"#,
+    );
+    let out = s.devkit(
+        &["todo", "move", &id_of(&s, 67), "--parent", &id_of(&s, 65)],
+        &AGENT,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("API rate limit exceeded") && !err.contains("not found"),
+        "{err}"
+    );
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert_eq!(parent_of(&s, 67), None);
+}

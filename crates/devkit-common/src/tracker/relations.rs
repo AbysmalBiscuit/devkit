@@ -125,11 +125,7 @@ impl GithubRelations {
             let resp = api.graphql_or_gh(query, Api::graphql_value)?;
             match query.starts_with("mutation") {
                 true => github_fields::check_mutation(&resp, source)?,
-                false => {
-                    if let Some(e) = github_status::scope_error(&resp, source) {
-                        return Err(e);
-                    }
-                }
+                false => github_status::check(&resp, source)?,
             }
             Ok(resp)
         })
