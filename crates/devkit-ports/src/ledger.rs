@@ -62,7 +62,8 @@ pub struct Run {
     /// The `--env-file` given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_file: Option<PathBuf>,
-    /// Each command step devrun executed, in order, with the argv it ran.
+    /// Each step devrun executed, in order: a command step with the argv it
+    /// ran, or the app an `up` step brought up.
     #[serde(default)]
     pub steps: Vec<Step>,
     /// The apps an `up` step found already running from before the run
@@ -132,13 +133,16 @@ impl LiveServer {
     }
 }
 
-/// One command step of a run.
+/// One step of a run: a command task, or an `up` step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
-    /// The command task the step ran.
+    /// The command task the step ran; empty for an `up` step.
     pub task: String,
-    /// The argv it resolved to.
+    /// The argv it resolved to; empty for an `up` step.
     pub argv: Vec<String>,
+    /// The app an `up` step brought up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub up: Option<String>,
     /// The port each app its templates reference rendered as, so the step
     /// can be rendered again from another config with the same ports.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

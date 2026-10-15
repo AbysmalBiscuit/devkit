@@ -262,7 +262,10 @@ fn ran_note(dir: &Path, head: &str, run: &Run, required: &RequiredTask) -> Strin
         let lines: Vec<String> = run
             .steps
             .iter()
-            .map(|s| format!("{}: {}", s.task, s.argv.join(" ")))
+            .map(|s| match &s.up {
+                Some(app) => format!("up: {app}"),
+                None => format!("{}: {}", s.task, s.argv.join(" ")),
+            })
             .collect();
         out = format!("\nSteps run:\n{}", leading_block(&lines, "text"));
     }
@@ -302,7 +305,11 @@ fn matches_committed(
     }
     for (i, step) in recorded.iter().enumerate() {
         let plan = committed(&step.ports).ok()?;
-        if plan.len() != recorded.len() || plan[i].task != step.task || plan[i].argv != step.argv {
+        if plan.len() != recorded.len()
+            || plan[i].task != step.task
+            || plan[i].argv != step.argv
+            || plan[i].up != step.up
+        {
             return Some(false);
         }
     }
@@ -457,6 +464,7 @@ mod tests {
         Step {
             task: task.into(),
             argv: vec![task.into(), app_port.to_string()],
+            up: None,
             ports: BTreeMap::from([("srv".to_string(), app_port)]),
         }
     }
@@ -474,6 +482,19 @@ mod tests {
         assert_eq!(matches_committed(&recorded, sequence), Some(true));
         let changed = [step("first", 4001), step("third", 4002)];
         assert_eq!(matches_committed(&changed, sequence), Some(false));
+    }
+
+    #[test]
+    fn an_up_step_for_another_app_differs_from_the_committed_plan() {
+        let up = |app: &str| Step {
+            task: String::new(),
+            argv: Vec::new(),
+            up: Some(app.into()),
+            ports: BTreeMap::new(),
+        };
+        let committed = |_: &BTreeMap<String, u16>| Ok(vec![up("srv")]);
+        assert_eq!(matches_committed(&[up("srv")], committed), Some(true));
+        assert_eq!(matches_committed(&[up("db")], committed), Some(false));
     }
 
     #[test]

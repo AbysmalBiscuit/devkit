@@ -929,9 +929,9 @@ fn runs_passed_answers_no_where_the_gate_refuses() {
     assert!(!create(&p, "agent").0, "the gate refuses too");
 }
 
-/// A layer can leave the required task only `up` steps, which record no
-/// command, while HEAD's committed task runs one; the run still differs
-/// from what HEAD defines.
+/// A layer can leave the required task only `up` steps while HEAD's
+/// committed task also runs a command; the run differs from what HEAD
+/// defines.
 #[test]
 fn a_run_of_only_up_steps_under_an_uncommitted_layer_says_so() {
     let p = project(
@@ -953,7 +953,7 @@ fn a_run_of_only_up_steps_under_an_uncommitted_layer_says_so() {
     task(&p, &["--config", layer.to_str().unwrap(), "e2e"]);
     let body = opened_body(&p);
     assert!(body.contains("Exit code: 0"), "{body}");
-    assert!(!body.contains("Steps run:"), "{body}");
+    assert!(body.contains("\nup: srv\n"), "{body}");
     assert!(
         body.contains("An uncommitted config layer changed what ran"),
         "{body}"

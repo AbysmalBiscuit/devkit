@@ -832,6 +832,7 @@ fn cmd_task(
         steps.borrow_mut().push(ledger::Step {
             task: fresh.name.clone(),
             argv: fresh.argv.clone(),
+            up: None,
             ports: fresh.ports.clone(),
         });
         Ok(task::exec(&fresh, &tail)?.code())
@@ -851,6 +852,12 @@ fn cmd_task(
                         // A server an earlier step of this run launched is
                         // this run's own; only one live before the run began
                         // may have started at another commit.
+                        steps.borrow_mut().push(ledger::Step {
+                            task: String::new(),
+                            argv: Vec::new(),
+                            up: Some(app.clone()),
+                            ports: Default::default(),
+                        });
                         let report = up(app, false)?;
                         reused.extend(report.reused.into_iter().filter(|a| !launched.contains(a)));
                         launched.extend(report.launched);

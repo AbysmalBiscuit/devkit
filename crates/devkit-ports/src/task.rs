@@ -764,17 +764,24 @@ struct PlanLine {
 }
 
 impl ExecutionPlan {
-    /// Each command step's task and argv, in order, as a run records them.
+    /// Each step's task and argv, or the app an `up` step brings up, in
+    /// order, as a run records them.
     pub fn commands(&self) -> Vec<crate::ledger::Step> {
         self.steps
             .iter()
-            .filter_map(|step| match step {
-                PlannedStep::Run { task, argv, .. } => Some(crate::ledger::Step {
+            .map(|step| match step {
+                PlannedStep::Run { task, argv, .. } => crate::ledger::Step {
                     task: task.clone(),
                     argv: argv.clone(),
+                    up: None,
                     ports: BTreeMap::new(),
-                }),
-                PlannedStep::Up { .. } => None,
+                },
+                PlannedStep::Up { app, .. } => crate::ledger::Step {
+                    task: String::new(),
+                    argv: Vec::new(),
+                    up: Some(app.clone()),
+                    ports: BTreeMap::new(),
+                },
             })
             .collect()
     }
