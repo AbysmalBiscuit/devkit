@@ -294,3 +294,21 @@ fn discover_refuses_a_refresh_the_config_loader_would_refuse() {
     );
     assert_eq!(devkit_toml(&fake), before, "nothing written");
 }
+
+#[test]
+fn a_name_several_values_share_is_listed_with_each_id() {
+    let fake = ghfake::Fake::without_pr(
+        "[tracker]\nkind = \"linear\"\n\n[ticket.fields.linear.cycle]\ntype = \"enum\"\n\
+         where = \"cycle\"\nlevel = \"warning\"\nvalues = [\
+         { name = \"Cycle 3\", id = \"c-eng\", teams = [\"ENG\"] }, \
+         { name = \"Cycle 3\", id = \"c-ops\", teams = [\"OPS\"] }, \
+         { name = \"Cycle 4\", id = \"c-4\", teams = [\"ENG\"] }]\n",
+    );
+    let out = stdout(&fake.issue_as("agent", &["fields"]));
+    assert!(
+        out.contains(
+            "values: Cycle 3 (id c-eng, teams ENG), Cycle 3 (id c-ops, teams OPS), Cycle 4\n"
+        ),
+        "{out}"
+    );
+}

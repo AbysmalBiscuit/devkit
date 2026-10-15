@@ -582,7 +582,7 @@
         },
         "values": {
           "default": [],
-          "description": "For `enum`: each value's `name`, which agents pass and match\ncase-insensitively, and its tracker `id`, which devkit writes. A higher\nlayer replaces the list whole.",
+          "description": "For `enum`: each value's `name`, which agents pass and match\ncase-insensitively, and its tracker `id`, which devkit writes and agents\nmay pass instead. A higher layer replaces the list whole.",
           "items": {
             "$ref": "#/$defs/EnumValue"
           },

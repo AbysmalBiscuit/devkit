@@ -13,7 +13,7 @@ use std::{
 use anyhow::Result;
 use devkit_common::{
     caller::Caller,
-    fields::{self, Given, Problem, Resolved, Surface},
+    fields::{self, Given, Naming, Problem, Resolved, Surface},
     harness, required,
     vcs::Checkout,
 };
@@ -322,7 +322,15 @@ pub(super) fn field_verdict(
         return Verdict::Deny(format!("devkit ticket fields: {e:#}"));
     }
     let (given, mut problems) = given(rule, decls, kind, &cfg.people, input);
-    let resolved = match fields::resolve(decls, kind, &given, &cfg.people, None) {
+    let team = fields::team(decls, &given);
+    let resolved = match fields::resolve(
+        decls,
+        kind,
+        &given,
+        &cfg.people,
+        team.as_deref(),
+        Naming::Tracker,
+    ) {
         Ok(r) => r,
         Err(more) => {
             problems.extend(more);
@@ -875,7 +883,7 @@ level  = "info"
 
     #[test]
     fn a_linear_label_valid_in_any_team_is_accepted() {
-        let input = json!({"title": "T", "team": "OPS", "labels": ["infra", "L2"]});
+        let input = json!({"title": "T", "team": "OPS", "labels": ["bug", "L2"]});
         assert_eq!(fields(&linear_rule(), LINEAR_FIELDS, input), Verdict::Allow);
         let input = json!({"title": "T", "team": "OPS", "labels": ["nope"]});
         let v = fields(&linear_rule(), LINEAR_FIELDS, input);
@@ -924,6 +932,53 @@ level  = "info"
         assert_eq!(
             fields(&linear_rule(), LINEAR_FIELDS, update),
             Verdict::Allow
+        );
+    }
+
+    /// [`LINEAR_FIELDS`] with a `Bug` label in each team besides `infra`.
+    fn bug_in_each_team() -> String {
+        LINEAR_FIELDS.replace(
+            r#"{ name = "bug", id = "L2" }"#,
+            r#"{ name = "Bug", id = "L2", teams = ["ENG"] }, { name = "Bug", id = "L3", teams = ["OPS"] }"#,
+        )
+    }
+
+    #[test]
+    fn a_create_scopes_team_bound_values_to_its_team() {
+        let input = json!({"title": "T", "team": "OPS", "labels": ["infra"]});
+        let v = fields(&linear_rule(), LINEAR_FIELDS, input);
+        assert!(
+            denied_mentioning(&v, "`infra`") && denied_mentioning(&v, "OPS"),
+            "{v:?}"
+        );
+        let input = json!({"title": "T", "team": "OPS", "labels": ["bug"]});
+        assert_eq!(
+            fields(&linear_rule(), &bug_in_each_team(), input),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn a_name_several_teams_share_passes_with_no_team_known() {
+        let update = json!({"id": "ENG-1", "labels": ["Bug"]});
+        assert_eq!(
+            fields(&linear_rule(), &bug_in_each_team(), update),
+            Verdict::Allow,
+            "the MCP resolves the name in the issue's team"
+        );
+    }
+
+    #[test]
+    fn a_denial_shows_the_id_of_each_shared_name() {
+        let v = fields(
+            &linear_rule(),
+            &bug_in_each_team(),
+            json!({"title": "T", "team": "ENG"}),
+        );
+        assert!(
+            denied_mentioning(&v, "Bug (id L2, teams ENG), Bug (id L3, teams OPS)")
+                && denied_mentioning(&v, "infra,"),
+            "{v:?}"
         );
     }
 

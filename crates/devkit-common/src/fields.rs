@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use devkit_config::{
-    CALLER_CONDITION, FieldDecl, FieldLevel, FieldType, Person, Place, TrackerKind,
+    CALLER_CONDITION, EnumValue, FieldDecl, FieldLevel, FieldType, Person, Place, TrackerKind,
 };
 use serde::Serialize;
 
@@ -274,6 +274,75 @@ pub fn person_id(p: &Person, kind: TrackerKind) -> Option<&str> {
     }
 }
 
+/// Who turns an enum value's name into the id the tracker takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Naming {
+    /// devkit writes the id, so a name several values share must be
+    /// narrowed to one by the ticket's team, or given as an id.
+    Devkit,
+    /// The tracker resolves the name itself, within the issue's team, so a
+    /// name several values share passes.
+    Tracker,
+}
+
+/// `value` as a person tells it from another value of the same name: its
+/// id, and the teams it is valid in.
+fn described(value: &EnumValue) -> String {
+    if value.teams.is_empty() {
+        format!("{} (id {})", value.name, value.id)
+    } else {
+        format!(
+            "{} (id {}, teams {})",
+            value.name,
+            value.id,
+            value.teams.join(", ")
+        )
+    }
+}
+
+/// The value of `decl` that `item` names in `team`.
+fn enum_one<'a>(
+    name: &str,
+    decl: &'a FieldDecl,
+    item: &str,
+    team: Option<&str>,
+    naming: Naming,
+) -> Result<&'a EnumValue, String> {
+    let named = decl.enum_values(item);
+    let fits: Vec<&EnumValue> = named
+        .iter()
+        .copied()
+        .filter(|v| team.is_none_or(|t| v.in_team(t)))
+        .collect();
+    match (fits.as_slice(), naming) {
+        ([v], _) | ([v, ..], Naming::Tracker) => Ok(v),
+        ([], _) => match team.filter(|_| !named.is_empty()) {
+            Some(team) => {
+                let mut teams: Vec<&str> = named
+                    .iter()
+                    .flat_map(|v| &v.teams)
+                    .map(String::as_str)
+                    .collect();
+                teams.sort_unstable();
+                teams.dedup();
+                Err(format!(
+                    "is valid in team {} only, not in team {team}",
+                    teams.join(", ")
+                ))
+            }
+            None => Err(format!("is not a value of `{name}`")),
+        },
+        (several, Naming::Devkit) => Err(format!(
+            "names several values of `{name}`; pass the id of the one meant: {}",
+            several
+                .iter()
+                .map(|v| described(v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
 fn one(
     name: &str,
     decl: &FieldDecl,
@@ -281,6 +350,7 @@ fn one(
     kind: TrackerKind,
     people: &HashMap<String, Person>,
     team: Option<&str>,
+    naming: Naming,
 ) -> Result<Value, String> {
     let ty = decl.r#type.unwrap_or(FieldType::String);
     match ty {
@@ -296,18 +366,7 @@ fn one(
             .map(|_| Value::Date(item.to_string()))
             .map_err(|_| "is not a date (YYYY-MM-DD)".to_string()),
         FieldType::Enum => {
-            let v = decl
-                .enum_value(item)
-                .ok_or_else(|| format!("is not a value of `{name}`"))?;
-            if let Some(team) = team
-                && !v.teams.is_empty()
-                && !v.teams.iter().any(|t| t == team)
-            {
-                return Err(format!(
-                    "is valid in team {} only, not in team {team}",
-                    v.teams.join(", ")
-                ));
-            }
+            let v = enum_one(name, decl, item, team, naming)?;
             Ok(Value::Enum {
                 name: v.name.clone(),
                 id: v.id.clone(),
@@ -332,13 +391,15 @@ fn one(
 }
 
 /// Validate every given value and `--none` name, reporting every problem
-/// rather than the first.
+/// rather than the first. `team` is the ticket's team, when known, which
+/// scopes team-bound enum values.
 pub fn resolve(
     decls: &BTreeMap<String, FieldDecl>,
     kind: TrackerKind,
     given: &Given,
     people: &HashMap<String, Person>,
     team: Option<&str>,
+    naming: Naming,
 ) -> Result<Resolved, Vec<Problem>> {
     let mut problems = Vec::new();
     let mut out = Resolved::default();
@@ -371,7 +432,7 @@ pub fn resolve(
         }
         let mut values = Vec::new();
         for item in &items {
-            match one(name, decl, item, kind, people, team) {
+            match one(name, decl, item, kind, people, team, naming) {
                 Ok(v) => values.push(v),
                 Err(reason) => problems.push(Problem::Invalid {
                     field: name.clone(),
@@ -407,7 +468,8 @@ pub fn team(decls: &BTreeMap<String, FieldDecl>, given: &Given) -> Option<String
         .find(|(_, d)| d.r#where == Some(devkit_config::Place::Team))?;
     let raw = given.values.get(name)?;
     Some(
-        decl.enum_value(raw)
+        decl.enum_values(raw)
+            .first()
             .map_or_else(|| raw.trim().to_string(), |v| v.name.clone()),
     )
 }
@@ -515,16 +577,27 @@ pub fn check(
     report
 }
 
+/// Each enum value of `decl` as a person passes it: its name, with its id
+/// and teams when another value shares the name.
+fn value_names(decl: &FieldDecl) -> Vec<String> {
+    decl.values
+        .iter()
+        .map(|v| {
+            let shared = decl
+                .values
+                .iter()
+                .filter(|o| o.name.eq_ignore_ascii_case(&v.name))
+                .count()
+                > 1;
+            if shared { described(v) } else { v.name.clone() }
+        })
+        .collect()
+}
+
 /// The values a field takes, as a person passes them.
 fn valid_values(decl: &FieldDecl) -> Option<String> {
     match decl.r#type? {
-        FieldType::Enum => Some(
-            decl.values
-                .iter()
-                .map(|v| v.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
+        FieldType::Enum => Some(value_names(decl).join(", ")),
         FieldType::User => Some("a `[people]` alias".into()),
         FieldType::Number => Some("a number".into()),
         FieldType::Date => Some("a date, YYYY-MM-DD".into()),
@@ -639,7 +712,7 @@ pub fn listing(
             list: d.list,
             level: level_of(decls, name, &seen, caller),
             when: d.when.clone(),
-            values: d.values.iter().map(|v| v.name.clone()).collect(),
+            values: value_names(d),
             default: d.default.clone(),
             description: d.description.clone(),
             allows_none: d.allows_none(),
@@ -702,7 +775,15 @@ when       = [{ if = { project = "*" }, level = "error" }]
     }
 
     fn ok(d: &BTreeMap<String, FieldDecl>, g: &Given) -> Resolved {
-        resolve(d, TrackerKind::Github, g, &HashMap::new(), None).unwrap()
+        resolve(
+            d,
+            TrackerKind::Github,
+            g,
+            &HashMap::new(),
+            None,
+            Naming::Devkit,
+        )
+        .unwrap()
     }
 
     fn missing(field: &str) -> Problem {
@@ -890,6 +971,7 @@ when       = [{ if = { project = "*" }, level = "error" }]
             &given(&[("milestone", "v9")], &[]),
             &HashMap::new(),
             None,
+            Naming::Devkit,
         )
         .unwrap_err();
         assert!(
@@ -917,6 +999,7 @@ when       = [{ if = { project = "*" }, level = "error" }]
             ),
             &HashMap::new(),
             None,
+            Naming::Devkit,
         )
         .unwrap_err();
         let fields: Vec<&str> = e.iter().map(Problem::field).collect();
@@ -931,7 +1014,8 @@ when       = [{ if = { project = "*" }, level = "error" }]
                 TrackerKind::Github,
                 &given(&[("estimate", "NaN")], &[]),
                 &HashMap::new(),
-                None
+                None,
+                Naming::Devkit,
             )
             .is_err()
         );
@@ -969,6 +1053,7 @@ when       = [{ if = { project = "*" }, level = "error" }]
             &given(&[("assignee", "lev")], &[]),
             &people,
             None,
+            Naming::Devkit,
         )
         .unwrap_err();
         assert!(
@@ -981,11 +1066,26 @@ when       = [{ if = { project = "*" }, level = "error" }]
             &given(&[("assignee", "lev")], &[]),
             &people,
             None,
+            Naming::Devkit,
         )
         .unwrap();
         assert_eq!(r.fields["assignee"], [Value::User {
             alias: "lev".into(),
             id: "LevValle".into()
+        }]);
+    }
+
+    #[test]
+    fn an_exact_id_resolves_before_a_name() {
+        let d = decls(
+            "[ticket.fields.github.size]\ntype = \"enum\"\n\
+             where = { project_field = \"F\", name = \"Size\" }\n\
+             values = [{ name = \"2\", id = \"o-two\" }, { name = \"small\", id = \"2\" }]\n",
+        );
+        let r = ok(&d, &given(&[("size", "2")], &[]));
+        assert_eq!(r.fields["size"], [Value::Enum {
+            name: "small".into(),
+            id: "2".into()
         }]);
     }
 
@@ -996,12 +1096,30 @@ when       = [{ if = { project = "*" }, level = "error" }]
              values = [{ name = \"infra\", id = \"L1\", teams = [\"ENG\"] }]\n",
         );
         let g = given(&[("labels", "infra")], &[]);
-        let e = resolve(&d, TrackerKind::Linear, &g, &HashMap::new(), Some("OPS")).unwrap_err();
+        let e = resolve(
+            &d,
+            TrackerKind::Linear,
+            &g,
+            &HashMap::new(),
+            Some("OPS"),
+            Naming::Devkit,
+        )
+        .unwrap_err();
         assert!(
             matches!(&e[..], [Problem::Invalid { reason, .. }] if reason.contains("ENG") && reason.contains("OPS")),
             "{e:?}"
         );
-        assert!(resolve(&d, TrackerKind::Linear, &g, &HashMap::new(), Some("ENG")).is_ok());
+        assert!(
+            resolve(
+                &d,
+                TrackerKind::Linear,
+                &g,
+                &HashMap::new(),
+                Some("ENG"),
+                Naming::Devkit
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1014,6 +1132,7 @@ when       = [{ if = { project = "*" }, level = "error" }]
                 &given(&[("milestone", "  ")], &[]),
                 &HashMap::new(),
                 None,
+                Naming::Devkit,
             )
             .unwrap_err()
         };
@@ -1039,6 +1158,7 @@ when       = [{ if = { project = "*" }, level = "error" }]
             &given(&[], &["nope"]),
             &HashMap::new(),
             None,
+            Naming::Devkit,
         )
         .unwrap_err();
         assert!(message(&d, &e).contains("--none nope"), "{e:?}");

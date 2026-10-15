@@ -826,6 +826,7 @@ linear = "user-ada"
             &given,
             &cfg.people,
             Some("ENG"),
+            crate::fields::Naming::Devkit,
         )
         .unwrap()
     }

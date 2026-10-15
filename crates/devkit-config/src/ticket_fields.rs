@@ -95,8 +95,8 @@ pub struct FieldDecl {
     /// Required once the layers are merged.
     pub r#where: Option<Place>,
     /// For `enum`: each value's `name`, which agents pass and match
-    /// case-insensitively, and its tracker `id`, which devkit writes. A higher
-    /// layer replaces the list whole.
+    /// case-insensitively, and its tracker `id`, which devkit writes and agents
+    /// may pass instead. A higher layer replaces the list whole.
     pub values: Vec<EnumValue>,
     /// How a ticket missing this field is treated: `error` refuses it,
     /// `warning` reports it after the write, `info` and `none` say nothing.
@@ -133,14 +133,19 @@ impl FieldDecl {
             .fold(self.level, FieldLevel::max)
     }
 
-    /// The enum value `raw` names: a case-insensitive name match, else an
-    /// exact id.
-    pub fn enum_value(&self, raw: &str) -> Option<&EnumValue> {
+    /// The enum values `raw` names: the one whose id it is exactly, else
+    /// every value whose name it matches case-insensitively, which is
+    /// several when values of different Linear teams share a name.
+    pub fn enum_values(&self, raw: &str) -> Vec<&EnumValue> {
         let raw = raw.trim();
-        self.values
-            .iter()
-            .find(|v| v.name.eq_ignore_ascii_case(raw))
-            .or_else(|| self.values.iter().find(|v| v.id == raw))
+        match self.values.iter().find(|v| v.id == raw) {
+            Some(v) => vec![v],
+            None => self
+                .values
+                .iter()
+                .filter(|v| v.name.eq_ignore_ascii_case(raw))
+                .collect(),
+        }
     }
 }
 
@@ -451,6 +456,13 @@ pub struct EnumValue {
     /// The Linear teams the value is valid in; any team when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub teams: Vec<String>,
+}
+
+impl EnumValue {
+    /// Whether the value is valid in the team keyed `team`.
+    pub fn in_team(&self, team: &str) -> bool {
+        self.teams.is_empty() || self.teams.iter().any(|t| t == team)
+    }
 }
 
 /// One conditional level.

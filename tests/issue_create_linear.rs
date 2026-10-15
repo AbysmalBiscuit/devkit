@@ -632,3 +632,102 @@ fn an_unknown_identifier_is_named_as_missing() {
         stderr(&out)
     );
 }
+
+/// [`FIELDS`] with a `Bug` label in each team, one name over two ids.
+fn bug_in_each_team() -> String {
+    FIELDS.replace(
+        r#"values = [{ name = "bug", id = "lbl-bug" }, { name = "infra", id = "lbl-infra", teams = ["ENG"] }]"#,
+        r#"values = [{ name = "Bug", id = "lbl-bug-eng", teams = ["ENG"] }, { name = "Bug", id = "lbl-bug-ops", teams = ["OPS"] }]"#,
+    )
+}
+
+#[test]
+fn a_name_two_teams_share_resolves_in_the_tickets_team() {
+    let fake = project(&bug_in_each_team());
+    let linear = LinearFake::start();
+    linear.answer("issueCreate(", CREATED);
+    linear.answer(
+        "issue: issues(",
+        &read_in(("team-ops", "OPS"), 7, &["lbl-bug-ops"], 0),
+    );
+    let out = run(&fake, &linear, &[
+        "create",
+        "--title",
+        "T",
+        "--arg",
+        "team=OPS",
+        "--arg",
+        "labels=bug",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let input = &linear.sent("issueCreate(")[0]["variables"]["input"];
+    assert_eq!(
+        input["labelIds"],
+        serde_json::json!(["lbl-bug-ops"]),
+        "{input}"
+    );
+}
+
+#[test]
+fn an_edit_resolves_a_shared_name_in_the_tickets_current_team() {
+    let fake = project(&bug_in_each_team());
+    let linear = LinearFake::start();
+    let ops_7 = read_in(("team-ops", "OPS"), 7, &[], 0);
+    linear.answer(r#"issue: issue(id: "OPS-7")"#, &by_identifier(&ops_7));
+    linear.answer(
+        "issue: issues(",
+        &read_in(("team-ops", "OPS"), 7, &["lbl-bug-ops"], 0),
+    );
+    linear.answer("issueUpdate(", UPDATED);
+    let out = run(&fake, &linear, &["edit", "OPS-7", "--arg", "labels=Bug"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let updates = linear.sent("issueUpdate(");
+    assert_eq!(
+        updates[0]["variables"]["input"]["labelIds"],
+        serde_json::json!(["lbl-bug-ops"])
+    );
+}
+
+#[test]
+fn a_shared_name_with_no_team_is_refused_listing_each_id() {
+    let config = bug_in_each_team().replace("default = \"ENG\"\n", "");
+    let fake = project(&config);
+    let linear = LinearFake::start();
+    let out = run(&fake, &linear, &[
+        "create",
+        "--title",
+        "T",
+        "--arg",
+        "labels=bug",
+    ]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("Bug (id lbl-bug-eng, teams ENG)")
+            && err.contains("Bug (id lbl-bug-ops, teams OPS)"),
+        "{err}"
+    );
+    assert!(linear.bodies().is_empty(), "{:?}", linear.bodies());
+
+    linear.answer("issueCreate(", CREATED);
+    linear.answer(
+        "issue: issues(",
+        &read_in(("team-ops", "OPS"), 7, &["lbl-bug-ops"], 0),
+    );
+    let out = run(&fake, &linear, &[
+        "create",
+        "--title",
+        "T",
+        "--arg",
+        "team=OPS",
+        "--arg",
+        "labels=lbl-bug-ops",
+    ]);
+    assert!(out.status.success(), "the id resolves: {}", stderr(&out));
+    let input = &linear.sent("issueCreate(")[0]["variables"]["input"];
+    assert_eq!(
+        input["labelIds"],
+        serde_json::json!(["lbl-bug-ops"]),
+        "{input}"
+    );
+}
