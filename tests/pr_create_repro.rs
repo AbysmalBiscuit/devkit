@@ -130,16 +130,36 @@ fn a_fix_that_turns_its_repro_red_to_green_opens_with_both_runs_in_the_body() {
         assert!(body.contains(want), "{want}: {body}");
     }
 
+    let codes = repro_runs(&p);
+    assert_eq!(codes.len(), 2, "both runs land in the ledger: {codes:?}");
+    assert!(codes.contains(&0) && codes.contains(&1), "{codes:?}");
+}
+
+/// The exit codes of the repro runs the project's ledger holds.
+fn repro_runs(p: &ghfake::Fake) -> Vec<i64> {
     let out = p.devkit_here(&["run", "runs", "list", "--task", "repro", "--json"]);
     let runs: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let codes: Vec<i64> = runs
-        .as_array()
+    runs.as_array()
         .unwrap()
         .iter()
         .map(|r| r["exit_code"].as_i64().unwrap())
-        .collect();
-    assert_eq!(codes.len(), 2, "both runs land in the ledger: {runs:#}");
-    assert!(codes.contains(&0) && codes.contains(&1), "{codes:?}");
+        .collect()
+}
+
+#[test]
+fn a_pr_another_gate_refuses_runs_no_repro() {
+    let p = project(
+        &format!(
+            "\n[tasks.verify]\nrun = [\"git\", \"version\"]\n{GATE}verify_task = \"verify\"\n"
+        ),
+        FIX,
+    );
+    let stderr = refusal(&p);
+    assert!(
+        stderr.contains("verify"),
+        "the verify gate refused: {stderr}"
+    );
+    assert_eq!(repro_runs(&p), Vec::<i64>::new());
 }
 
 #[test]

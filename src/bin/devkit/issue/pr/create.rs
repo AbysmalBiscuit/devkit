@@ -244,7 +244,7 @@ impl Gates {
         })
     }
 
-    fn apply(&self, body: String) -> Result<String> {
+    fn apply(self, body: String) -> Result<String> {
         let body = match &self.weakened {
             Some(gate) => gate.apply(body)?,
             None => body,
@@ -253,7 +253,7 @@ impl Gates {
             Some(gate) => gate.apply(body)?,
             None => body,
         };
-        match &self.repro {
+        match self.repro {
             Some(gate) => gate.apply(body, self.verify.is_some()),
             None => Ok(body),
         }

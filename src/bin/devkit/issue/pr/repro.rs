@@ -103,6 +103,12 @@ pub(crate) struct Gate {
     task: ReproTask,
     head: String,
     merge_base: String,
+    /// The checkout the PR is opened from.
+    dir: PathBuf,
+    /// The `test_files` globs the merge base's config sets.
+    test_files: Vec<String>,
+    /// The text of each of the issue's `Done when` items.
+    texts: Vec<String>,
     /// The non-test paths the check restored or deleted.
     reverted: Vec<String>,
     items: Vec<Item>,
@@ -122,9 +128,10 @@ struct Revert {
 }
 
 impl Gate {
-    /// The gate `gates` configures for a PR opened at `head`, checking the
+    /// The gate `gates` configures for a PR opened at `head`, to check the
     /// items `items` returns: `None` when the gate is off, names no task,
-    /// or the worktree's issue lists no items.
+    /// or the worktree's issue lists no items. Nothing runs until
+    /// [`Gate::apply`].
     pub(crate) fn read(
         dir: &Path,
         merge_base: &str,
@@ -149,18 +156,28 @@ impl Gate {
             task,
             head: head.to_string(),
             merge_base: merge_base.to_string(),
+            dir: dir.to_path_buf(),
+            test_files: test_files.to_vec(),
+            texts: Vec::new(),
             reverted: Vec::new(),
             items: Vec::new(),
             unread: None,
         };
-        let texts = match items() {
-            Ok(Some(texts)) if !texts.is_empty() => texts,
+        match items() {
+            Ok(Some(texts)) if !texts.is_empty() => gate.texts = texts,
             Ok(_) => return Ok(None),
-            Err(e) => {
-                gate.unread = Some(format!("{e:#}"));
-                return Ok(Some(gate));
-            }
-        };
+            Err(e) => gate.unread = Some(format!("{e:#}")),
+        }
+        Ok(Some(gate))
+    }
+
+    /// Runs the check of each item, filling in its outcome.
+    fn evaluate(&mut self) -> Result<()> {
+        if self.unread.is_some() {
+            return Ok(());
+        }
+        let texts = std::mem::take(&mut self.texts);
+        let dir = self.dir.clone();
         let marked: Vec<(usize, Option<String>)> = texts
             .iter()
             .enumerate()
@@ -168,8 +185,8 @@ impl Gate {
             .collect();
         let mut outcomes: Vec<Outcome> = texts.iter().map(|_| Outcome::Unmarked).collect();
         if !marked.is_empty() {
-            let tests = TestFiles::new(test_files)?;
-            match gate.check(dir, &tests, &marked) {
+            let tests = TestFiles::new(&self.test_files)?;
+            match self.check(&dir, &tests, &marked) {
                 Ok(found) => {
                     for (i, outcome) in found {
                         outcomes[i] = outcome;
@@ -182,7 +199,7 @@ impl Gate {
                 }
             }
         }
-        gate.items = texts
+        self.items = texts
             .iter()
             .zip(outcomes)
             .enumerate()
@@ -192,7 +209,7 @@ impl Gate {
                 outcome,
             })
             .collect();
-        Ok(Some(gate))
+        Ok(())
     }
 
     /// The outcome of each item of `marked`, by its index, with the
@@ -335,8 +352,10 @@ impl Gate {
     /// `body` with the repro checks appended, under the Verification
     /// section `verification` says the body already ends with, or a new
     /// one. Refused when an agent's PR under `require` has an item whose
-    /// selector passes with the fix reverted or matches no test.
-    pub(crate) fn apply(&self, body: String, verification: bool) -> Result<String> {
+    /// selector passes with the fix reverted or matches no test. The check
+    /// runs here, so a PR another gate refuses first never pays for it.
+    pub(crate) fn apply(mut self, body: String, verification: bool) -> Result<String> {
+        self.evaluate()?;
         if let (GateMode::Require, Caller::Agent) = (self.mode, self.caller) {
             let refused: Vec<String> = self
                 .items
