@@ -22,6 +22,7 @@ use devkit_config::TicketSyncConfig;
 use devkit_todo::{
     Filter, Holder, StatusKind, Todo, TodoStore,
     layout::{Facts, Layout},
+    names::names_issue,
     node,
     render::TicketWork,
     ticket::{self, Change, SyncPlan},
@@ -392,12 +393,6 @@ pub(crate) struct TicketWorkspace {
     pub here: bool,
 }
 
-/// Whether the ticket key `key` names the tracker issue `issue` a worktree
-/// record holds: `SWE-123` names itself, and `owner/repo#65` is issue `65`.
-fn names_issue(key: &str, issue: &str) -> bool {
-    key.eq_ignore_ascii_case(issue) || key.rsplit_once('#').is_some_and(|(_, n)| n == issue)
-}
-
 /// The open ticket todo in `todos` that `text`, a harness task's subject or
 /// plan step, names: by its ticket key (`SWE-123`, `owner/repo#65`), by its
 /// number after a `#` (`#65`), or by the todo's own description.
@@ -486,14 +481,6 @@ pub(crate) fn ticket_work(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_ticket_key_names_its_issue() {
-        assert!(names_issue("SWE-123", "swe-123"));
-        assert!(names_issue("o/r#65", "65"));
-        assert!(!names_issue("o/r#65", "6"));
-        assert!(!names_issue("SWE-123", "SWE-12"));
-    }
 
     #[test]
     fn a_task_names_an_open_ticket_by_key_number_or_text() {

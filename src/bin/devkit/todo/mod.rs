@@ -2,6 +2,7 @@
 //! `[todo] backend` names.
 
 pub(crate) mod hold;
+mod names;
 pub(crate) mod promote;
 pub(crate) mod push;
 pub(crate) mod queue;
@@ -440,13 +441,9 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     node
                 }
             };
-            if let Some(parent) = parent
-                .as_deref()
-                .map(|p| store.get(p))
-                .transpose()?
-                .flatten()
-            {
-                refuse_under_a_ticket(&store, &parent, &link_push(false))?;
+            let parent = parent.map(|p| resolve_id(&store, &p)).transpose()?;
+            if let Some(parent) = &parent {
+                refuse_under_a_ticket(&store, parent, &link_push(false))?;
             }
             let blockers = resolve_ids(&store, &blocked_by)?;
             refuse_cycle(&store, None, &blockers)?;
@@ -454,7 +451,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 ticket: None,
                 project: project_of(node),
                 description: text,
-                parent,
+                parent: parent.map(|p| p.id),
                 order,
             })?;
             if !blockers.is_empty()
@@ -522,7 +519,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
         }
         TodoCommand::Describe { id, text } => {
             store.apply(&Edit::Describe {
-                id,
+                id: resolve_id(&store, &id)?.id,
                 description: text,
             })?;
         }

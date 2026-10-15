@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -99,22 +99,55 @@ pub(crate) struct Store {
     /// Where the store was opened from: the checkout a ticket event fires
     /// in, as its caller resolved it. `None` fires nothing.
     origin: Option<Checkout>,
+    /// Whether [`TodoStore::get`] reads a name typed at the CLI, a ticket
+    /// key, word name or short uuid prefix, when no stored id matches. A
+    /// hook looks up only ids devkit stored, and a gone one names nothing.
+    resolves_names: bool,
+    /// The whole store as a name lookup read it, so a command lists it at
+    /// most once; a write clears it.
+    listing: Mutex<Option<Vec<Todo>>>,
 }
 
 impl TodoStore for Store {
     fn list(&self, filter: &Filter) -> Result<Vec<Todo>> {
-        self.store.list(filter)
+        let todos = self.store.list(filter)?;
+        if self.resolves_names && *filter == Filter::all() {
+            *self.listing.lock().unwrap_or_else(PoisonError::into_inner) = Some(todos.clone());
+        }
+        Ok(todos)
     }
 
+    /// The todo whose stored id is `id`, or that `id` names as
+    /// [`devkit_todo::names::resolve`] reads it when the store resolves
+    /// names. A stored id wins outright.
     fn get(&self, id: &str) -> Result<Option<Todo>> {
-        self.store.get(id)
+        if let Some(todo) = self.store.get(id)? {
+            return Ok(Some(todo));
+        }
+        if !self.resolves_names {
+            return Ok(None);
+        }
+        let mut listing = self.listing.lock().unwrap_or_else(PoisonError::into_inner);
+        let todos = match listing.as_ref() {
+            Some(todos) => todos.clone(),
+            None => listing.insert(self.store.list(&Filter::all())?).clone(),
+        };
+        drop(listing);
+        let tracker_key = self
+            .origin
+            .as_ref()
+            .filter(|_| devkit_todo::names::is_github_short_form(id))
+            .and_then(|origin| super::names::tracker_key(origin.dir()));
+        devkit_todo::names::resolve(id, todos, tracker_key.as_deref())
     }
 
     fn add(&self, todo: NewTodo) -> Result<String> {
+        self.forget_listing();
         self.store.add(todo)
     }
 
     fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
+        self.forget_listing();
         let changes = self.store.apply(edit)?;
         let actor = match edit {
             Edit::SetStatus { actor, .. } | Edit::TakeOver { actor, .. } => Some(actor),
@@ -479,6 +512,8 @@ impl Backend {
             config: TodoConfig::default(),
             ticket: TicketConfig::default(),
             origin: None,
+            resolves_names: false,
+            listing: Mutex::new(None),
         }
     }
 }
@@ -534,7 +569,13 @@ impl Store {
             config: config.clone(),
             ticket,
             origin: Some(origin),
+            resolves_names: false,
+            listing: Mutex::new(None),
         }
+    }
+
+    fn forget_listing(&self) {
+        *self.listing.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     fn backend(&self) -> &Backend {
@@ -636,7 +677,10 @@ impl Store {
     /// The store a CLI call in `cwd` uses.
     pub(crate) fn for_cli(cwd: &Path) -> Result<Self> {
         let (config, ticket) = Self::effective_cli_config(cwd)?;
-        Ok(Self::open(&config, ticket, Opener::Cli, Checkout::at(cwd)))
+        Ok(Self {
+            resolves_names: true,
+            ..Self::open(&config, ticket, Opener::Cli, Checkout::at(cwd))
+        })
     }
 
     /// The activity log a CLI call in `cwd` reads.
