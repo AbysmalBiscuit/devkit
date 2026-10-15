@@ -819,10 +819,7 @@ fn planned_up(
     let ports: BTreeMap<String, u16> = run::wanted_ports(catalog, &apps, &vars)?
         .into_iter()
         .collect();
-    let provider = catalog
-        .iter()
-        .find(|(_, a)| a.provides_url)
-        .map(|(n, _)| n.as_str());
+    let provider = run::url_provider(catalog);
     let launches = run::plan_group(
         catalog,
         &apps,
@@ -1440,6 +1437,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("never references"));
+    }
+
+    #[test]
+    fn an_up_step_wires_the_first_provider_by_name_when_several_are_marked() {
+        let app = |name: &str, port: u16, provides_url: bool| App {
+            name: name.into(),
+            base_port: port,
+            path: format!("apps/{name}"),
+            launch: vec![],
+            url: None,
+            url_env: Some("API_URL".into()),
+            provides_url,
+            static_env: HashMap::new(),
+            prep_files: vec![],
+            setup: vec![],
+        };
+        let mut cat = HashMap::new();
+        cat.insert("web".to_string(), app("web", 9200, false));
+        for (i, name) in [
+            "api-h", "api-c", "api-a", "api-f", "api-b", "api-g", "api-d", "api-e",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            cat.insert(name.to_string(), app(name, 9300 + i as u16, true));
+        }
+        let seq = TaskConfig {
+            steps: vec![Step::Up("web".into())],
+            ..TaskConfig::default()
+        };
+        let cfg = cfg_with(&[("seq", seq)]);
+        let plan = execution_plan(&cfg, &cat, Path::new("/wt"), "seq", &BTreeMap::new()).unwrap();
+        let PlannedStep::Up(launches) = &plan.steps[0] else {
+            panic!("an up step plans launches");
+        };
+        let apps: Vec<&str> = launches.iter().map(|l| l.app.as_str()).collect();
+        assert_eq!(apps, ["api-a", "web"]);
+        assert_eq!(launches[1].env["API_URL"], "http://localhost:9302");
     }
 
     #[test]

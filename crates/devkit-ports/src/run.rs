@@ -206,14 +206,22 @@ pub fn holder_slug(holder: &str) -> String {
         .to_string()
 }
 
+/// The app consumers wire their `url_env` to: the one marked `provides_url`,
+/// or the first by name when several are, so every plan of the same catalog
+/// picks the same one.
+pub fn url_provider(catalog: &HashMap<String, App>) -> Option<&str> {
+    catalog
+        .iter()
+        .filter(|(_, a)| a.provides_url)
+        .map(|(n, _)| n.as_str())
+        .min()
+}
+
 /// Ensure the URL-providing app (the API) is present whenever a selected app
 /// consumes its URL, so the consumer can be wired. The provider is identified
-/// by config (`provides_url`), not by name.
+/// by config ([`url_provider`]), not by name.
 pub fn ensure_provider(catalog: &HashMap<String, App>, apps: &mut Vec<String>) {
-    let provider = catalog
-        .iter()
-        .find(|(_, a)| a.provides_url)
-        .map(|(n, _)| n.clone());
+    let provider = url_provider(catalog).map(str::to_string);
     let needs_provider = apps
         .iter()
         .any(|a| catalog[a].url_env.is_some() && !catalog[a].provides_url);

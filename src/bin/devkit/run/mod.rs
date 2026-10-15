@@ -1010,10 +1010,7 @@ fn cmd_up(
         g
     };
 
-    let provider = catalog
-        .iter()
-        .find(|(_, a)| a.provides_url)
-        .map(|(n, _)| n.clone());
+    let provider = run::url_provider(catalog);
 
     let mut rows: Vec<Row> = Vec::new();
     let mut reused = Vec::new();
@@ -1024,7 +1021,7 @@ fn cmd_up(
             catalog,
             &apps,
             &ports,
-            provider.as_deref(),
+            provider,
             base_dir,
             *grp_role,
             &user,

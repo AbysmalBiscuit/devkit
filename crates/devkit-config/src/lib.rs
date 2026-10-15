@@ -2809,8 +2809,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub url_env: Option<String>,
     /// This app serves the URL that consumer apps wire to via their `url_env`.
-    /// Exactly one app should be marked. `devrun up` of a consumer brings the
-    /// provider up too.
+    /// Exactly one app should be marked; when several are, the first by name
+    /// serves. `devrun up` of a consumer brings the provider up too.
     #[serde(default)]
     pub provides_url: bool,
     /// Commands run in the app's directory during `workspace setup`, in order.

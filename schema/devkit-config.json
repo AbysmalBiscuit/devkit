@@ -35,7 +35,7 @@
         },
         "provides_url": {
           "default": false,
-          "description": "This app serves the URL that consumer apps wire to via their `url_env`.\nExactly one app should be marked. `devrun up` of a consumer brings the\nprovider up too.",
+          "description": "This app serves the URL that consumer apps wire to via their `url_env`.\nExactly one app should be marked; when several are, the first by name\nserves. `devrun up` of a consumer brings the provider up too.",
           "type": "boolean"
         },
         "setup": {
