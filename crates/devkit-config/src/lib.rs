@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 mod layers;
 pub mod todo;
 pub use layers::{
-    BrokenLayer, CONFIG_FILE, Layer, LayerKind, ReadLayers, nearest_tracked, project_layers,
-    read_project_layers,
+    BrokenLayer, CONFIG_FILE, Layer, LayerKind, PendingLayer, ReadLayers, nearest_tracked,
+    project_layers, read_project_layers,
 };
 pub use todo::{HARNESS_PREFIXES, RoleConfig, ScopeConfig};
 pub mod harness;
@@ -3171,22 +3171,27 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
 /// project layers `project_layers` finds for `start`. An explicit path or
 /// `$DEVKIT_CONFIG` replaces the project layers and the home config, all but
 /// its `[todo]` table.
+/// `pending` stands in for its file.
 fn discover(
     explicit: Option<&Path>,
     start: &Path,
     main_checkout: Option<&Path>,
     home: Option<&Path>,
+    pending: Option<PendingLayer<'_>>,
 ) -> Result<Vec<(PathBuf, toml::Table)>> {
     let explicit = explicit
         .map(Path::to_path_buf)
         .or_else(|| std::env::var_os("DEVKIT_CONFIG").map(PathBuf::from));
     if let Some(p) = explicit {
         let mut layers: Vec<_> = home_todo_layer(home)?.into_iter().collect();
-        layers.push(read_layer(&p)?);
+        match pending.filter(|l| l.is(&p)) {
+            Some(l) => layers.push((absolutize(&p)?, l.table()?)),
+            None => layers.push(read_layer(&p)?),
+        }
         return Ok(layers);
     }
 
-    let found = layers::project_layers_rooted(start, main_checkout)?;
+    let found = layers::project_layers_rooted(start, main_checkout, pending)?;
 
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
     if found.rooted {
@@ -3201,7 +3206,10 @@ fn discover(
     for (layer, parsed) in found.layers.into_iter().zip(found.parsed) {
         match parsed {
             Some(table) => layers.push((absolutize(&layer.path)?, table)),
-            None => layers.push(read_layer(&layer.path)?),
+            None => match pending.filter(|l| l.is(&layer.path)) {
+                Some(l) => layers.push((absolutize(&layer.path)?, l.table()?)),
+                None => layers.push(read_layer(&layer.path)?),
+            },
         }
     }
 
@@ -3325,6 +3333,27 @@ pub fn resolve(
     )
 }
 
+/// [`resolve`] as it would be once `pending` is written, so a command can
+/// refuse a config edit the loader would refuse before making it.
+pub fn resolve_pending(
+    explicit: Option<&Path>,
+    start: &Path,
+    main_checkout: Option<&Path>,
+    checkout_root: Option<&Path>,
+    default_worktree_root: Option<&Path>,
+    pending: PendingLayer<'_>,
+) -> Result<(Config, Provenance)> {
+    resolve_layers(
+        explicit,
+        start,
+        main_checkout,
+        checkout_root,
+        home_config_path().as_deref(),
+        default_worktree_root,
+        Some(pending),
+    )
+}
+
 /// `resolve` with an injectable home-config path (tests pass a controlled path
 /// or `None` so the real `~/.config/devkit/config.toml` never participates).
 pub(crate) fn resolve_with_home(
@@ -3335,13 +3364,33 @@ pub(crate) fn resolve_with_home(
     home: Option<&Path>,
     default_worktree_root: Option<&Path>,
 ) -> Result<(Config, Provenance)> {
+    resolve_layers(
+        explicit,
+        start,
+        main_checkout,
+        checkout_root,
+        home,
+        default_worktree_root,
+        None,
+    )
+}
+
+fn resolve_layers(
+    explicit: Option<&Path>,
+    start: &Path,
+    main_checkout: Option<&Path>,
+    checkout_root: Option<&Path>,
+    home: Option<&Path>,
+    default_worktree_root: Option<&Path>,
+    pending: Option<PendingLayer<'_>>,
+) -> Result<(Config, Provenance)> {
     // Every discovered layer path, and every `[defaults]` path resolved against
     // it, must be absolute — `strays/mod.rs` uses `worktree_root` as holder
     // identity and for prefix matching, so a relative `start` (e.g. `doctor`
     // passing `.`) must not leak into that value.
     let start_buf = absolutize(start)?;
     let start = start_buf.as_path();
-    let mut layers = discover(explicit, start, main_checkout, home)?;
+    let mut layers = discover(explicit, start, main_checkout, home, pending)?;
     for (path, table) in &mut layers {
         read_renamed_keys(table)
             .with_context(|| format!("reading config layer {}", path.display()))?;

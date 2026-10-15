@@ -49,7 +49,37 @@ pub(crate) struct Discovery {
 /// Excludes the home config and any `--config` / `$DEVKIT_CONFIG` override:
 /// those differ per reader, so each composes its own.
 pub fn project_layers(start: &Path, main_checkout: Option<&Path>) -> Result<Vec<Layer>> {
-    Ok(project_layers_rooted(start, main_checkout)?.layers)
+    Ok(project_layers_rooted(start, main_checkout, None)?.layers)
+}
+
+/// A layer file as it would read after a write not yet made: `text` at
+/// `path`, which need not exist.
+#[derive(Debug, Clone, Copy)]
+pub struct PendingLayer<'a> {
+    pub path: &'a Path,
+    pub text: &'a str,
+}
+
+impl PendingLayer<'_> {
+    /// Whether `path` names this layer's file, however either is spelled.
+    pub(crate) fn is(&self, path: &Path) -> bool {
+        fn key(p: &Path) -> PathBuf {
+            if let Ok(c) = std::fs::canonicalize(p) {
+                return c;
+            }
+            match (p.parent().map(std::fs::canonicalize), p.file_name()) {
+                (Some(Ok(dir)), Some(name)) => dir.join(name),
+                _ => p.to_path_buf(),
+            }
+        }
+        key(self.path) == key(path)
+    }
+
+    /// The pending text, parsed as a layer.
+    pub(crate) fn table(&self) -> Result<toml::Table> {
+        toml::from_str(self.text)
+            .with_context(|| format!("parsing config layer {}", self.path.display()))
+    }
 }
 
 /// The nearest tracked `devkit.toml` among `layers`: the file a command
@@ -69,13 +99,14 @@ pub fn nearest_tracked(layers: &[Layer]) -> Option<&Path> {
 /// `project_layers`, plus whether a `[config] root = true` marker fired and
 /// cut off layers above it. `discover` needs the flag to decide whether the
 /// home config still applies on top; callers that don't merge in a home
-/// config use `project_layers` instead.
+/// config use `project_layers` instead. `pending` stands in for its file.
 pub(crate) fn project_layers_rooted(
     start: &Path,
     main_checkout: Option<&Path>,
+    pending: Option<PendingLayer<'_>>,
 ) -> Result<Discovery> {
-    let mut layers = candidates(start, main_checkout);
-    let (barrier, bodies) = scan_cutoff(&layers);
+    let mut layers = candidates(start, main_checkout, pending);
+    let (barrier, bodies) = scan_cutoff(&layers, pending);
     let cut = barrier.unwrap_or(0);
     layers.drain(..cut);
     // Nearest first, so the error reported is the one closest to `start`.
@@ -111,8 +142,8 @@ pub struct ReadLayers {
 /// to `broken` instead of failing the walk. It cannot declare a
 /// `[config] root = true` barrier, so the layers above it stay in.
 pub fn read_project_layers(start: &Path, main_checkout: Option<&Path>) -> ReadLayers {
-    let layers = candidates(start, main_checkout);
-    let (barrier, bodies) = scan_cutoff(&layers);
+    let layers = candidates(start, main_checkout, None);
+    let (barrier, bodies) = scan_cutoff(&layers, None);
     let mut read = ReadLayers::default();
     for (layer, body) in layers.into_iter().zip(bodies).skip(barrier.unwrap_or(0)) {
         match body.unwrap_or_else(|| read_table(&layer.path)) {
@@ -127,11 +158,17 @@ pub fn read_project_layers(start: &Path, main_checkout: Option<&Path>) -> ReadLa
 }
 
 /// Every config file that could apply at `start`, lowest precedence first,
-/// before any `[config] root = true` barrier is applied.
-fn candidates(start: &Path, main_checkout: Option<&Path>) -> Vec<Layer> {
+/// before any `[config] root = true` barrier is applied. `pending`'s file
+/// counts as present.
+fn candidates(
+    start: &Path,
+    main_checkout: Option<&Path>,
+    pending: Option<PendingLayer<'_>>,
+) -> Vec<Layer> {
+    let present = |p: &Path| p.is_file() || pending.is_some_and(|l| l.is(p));
     let root = start
         .ancestors()
-        .find(|d| d.join(CONFIG_FILE).is_file() || d.join(LOCAL_CONFIG_FILE).is_file())
+        .find(|d| present(&d.join(CONFIG_FILE)) || present(&d.join(LOCAL_CONFIG_FILE)))
         .unwrap_or(start);
 
     let mut ordered: Vec<Layer> = Vec::new();
@@ -144,16 +181,16 @@ fn candidates(start: &Path, main_checkout: Option<&Path>) -> Vec<Layer> {
         .collect();
     ancestors.reverse();
     for dir in ancestors {
-        ordered.extend(files_in(dir, LayerKind::Ancestor));
+        ordered.extend(files_in(dir, LayerKind::Ancestor, &present));
     }
 
     // Above every ancestor: tracked files, then untracked, each with this
     // checkout's file over the main checkout's.
     for name in [CONFIG_FILE, LOCAL_CONFIG_FILE] {
         if let Some(main) = main_checkout {
-            ordered.extend(layer_at(main, name, LayerKind::MainCheckout));
+            ordered.extend(layer_at(main, name, LayerKind::MainCheckout, &present));
         }
-        ordered.extend(layer_at(root, name, LayerKind::Checkout));
+        ordered.extend(layer_at(root, name, LayerKind::Checkout, &present));
     }
 
     dedupe(&mut ordered);
@@ -162,16 +199,21 @@ fn candidates(start: &Path, main_checkout: Option<&Path>) -> Vec<Layer> {
 
 /// The config files present in one directory, tracked first so the untracked
 /// one outranks it.
-fn files_in(dir: &Path, kind: LayerKind) -> Vec<Layer> {
+fn files_in(dir: &Path, kind: LayerKind, present: &dyn Fn(&Path) -> bool) -> Vec<Layer> {
     [CONFIG_FILE, LOCAL_CONFIG_FILE]
         .into_iter()
-        .filter_map(|name| layer_at(dir, name, kind))
+        .filter_map(|name| layer_at(dir, name, kind, present))
         .collect()
 }
 
-fn layer_at(dir: &Path, name: &str, kind: LayerKind) -> Option<Layer> {
+fn layer_at(
+    dir: &Path,
+    name: &str,
+    kind: LayerKind,
+    present: &dyn Fn(&Path) -> bool,
+) -> Option<Layer> {
     let path = dir.join(name);
-    path.is_file().then_some(Layer { path, kind })
+    present(&path).then_some(Layer { path, kind })
 }
 
 /// Whether two layers fall on the same side of a `[config] root = true`
@@ -218,10 +260,16 @@ fn read_table(path: &Path) -> Result<toml::Table> {
 ///
 /// Returns the first surviving index when a barrier fired, and each layer's
 /// body as far as the scan read, `None` past where it stopped.
-fn scan_cutoff(layers: &[Layer]) -> (Option<usize>, Vec<Option<Result<toml::Table>>>) {
+fn scan_cutoff(
+    layers: &[Layer],
+    pending: Option<PendingLayer<'_>>,
+) -> (Option<usize>, Vec<Option<Result<toml::Table>>>) {
     let mut bodies: Vec<_> = layers.iter().map(|_| None).collect();
     for i in (0..layers.len()).rev() {
-        let body = read_table(&layers[i].path);
+        let body = match pending.filter(|l| l.is(&layers[i].path)) {
+            Some(l) => l.table(),
+            None => read_table(&layers[i].path),
+        };
         let is_root = body.as_ref().is_ok_and(crate::is_root_layer);
         bodies[i] = Some(body);
         if is_root {
@@ -257,6 +305,22 @@ mod tests {
             .map(|l| l.path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["devkit.toml", "devkit.local.toml"]);
+    }
+
+    #[test]
+    fn a_pending_file_loads_before_it_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "devkit.local.toml", "[config]\nroot = true\n");
+        let path = dir.path().join("devkit.toml");
+        let pending = PendingLayer {
+            path: &path,
+            text: "[tracker]\nkind = \"linear\"\n",
+        };
+        let (cfg, provenance) =
+            crate::resolve_layers(None, dir.path(), None, None, None, None, Some(pending)).unwrap();
+        assert_eq!(cfg.tracker.kind, Some(crate::TrackerKind::Linear));
+        assert_eq!(provenance.layers.len(), 2, "{:?}", provenance.layers);
+        assert!(!path.exists());
     }
 
     #[test]

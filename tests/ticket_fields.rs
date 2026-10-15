@@ -271,3 +271,26 @@ fn linear_discover_records_team_scoped_values_for_the_named_team() {
     assert!(fields.contains_key("estimate"), "{after}");
     assert!(!after.contains("state"), "{after}");
 }
+
+#[test]
+fn discover_refuses_a_refresh_the_config_loader_would_refuse() {
+    let fake = ghfake::Fake::without_pr(
+        "[tracker]\nkind = \"github\"\n\n[ticket.fields.github.milestone]\ntype = \"enum\"\n\
+         where = \"milestone\"\nvalues = [{ name = \"v1\", id = \"v1\" }]\nlevel = \"error\"\n",
+    );
+    fake.github_keys("project = 1");
+    fake.serve_graphql(&DISCOVERED.replace(r#"[{ "title": "v1" }, { "title": "v2" }]"#, "[]"));
+    let before = devkit_toml(&fake);
+    let out = fake.issue_as("agent", &["fields", "discover"]);
+    assert!(
+        !out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("[ticket.fields.github.milestone]") && stderr.contains("no `values`"),
+        "the loader's error: {stderr}"
+    );
+    assert_eq!(devkit_toml(&fake), before, "nothing written");
+}

@@ -16,7 +16,8 @@ use devkit_common::{
     },
 };
 use devkit_config::{
-    CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS, TrackerKind,
+    CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS, PendingLayer,
+    TrackerKind,
 };
 use serde::Serialize;
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
@@ -93,6 +94,7 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
         );
         return Ok(());
     }
+    refuse_unloadable(config, Path::new(&start), kind, &path, &after)?;
     if !approved(&path, &before, &after, args.yes)? {
         println!("nothing written");
         return Ok(());
@@ -118,6 +120,29 @@ fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
         Some(p) => Ok(p.to_path_buf()),
         None => Ok(devkit_common::vcs::checkout_root(start)?.join(devkit_config::CONFIG_FILE)),
     }
+}
+
+/// Refuse to write `after` to `path` when the config would then fail to
+/// load, or fail the field checks every ticket command runs on `kind`: an
+/// error-level `enum` left with no values, say.
+fn refuse_unloadable(
+    config: Option<&Path>,
+    start: &Path,
+    kind: TrackerKind,
+    path: &Path,
+    after: &str,
+) -> Result<()> {
+    let pending = PendingLayer { path, text: after };
+    devkit_common::config::resolve_pending(config, start, pending)
+        .and_then(|(cfg, provenance)| {
+            devkit_config::check_ticket_fields(&cfg, kind, &provenance.origin)
+        })
+        .with_context(|| {
+            format!(
+                "not writing {}: the config would no longer load with the tracker's fields",
+                path.display()
+            )
+        })
 }
 
 /// Whether to write: an agent always writes, a human after `--yes` or a

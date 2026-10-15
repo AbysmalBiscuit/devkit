@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use devkit_config::{Config, Provenance};
+use devkit_config::{Config, PendingLayer, Provenance};
 
 use crate::vcs::Checkout;
 
@@ -52,6 +52,27 @@ pub fn resolve_in(
         crate::github::configure(cfg.github.no_graphql);
     }
     resolved
+}
+
+/// [`resolve`] as it would be once `pending` is written, configuring
+/// nothing: the config it answers is not yet the one in force.
+pub fn resolve_pending(
+    explicit: Option<&Path>,
+    start: &Path,
+    pending: PendingLayer<'_>,
+) -> Result<(Config, Provenance)> {
+    let checkout = Checkout::at(start);
+    let derived = checkout
+        .main_worktree()
+        .and_then(crate::vcs::derived_worktree_root);
+    devkit_config::resolve_pending(
+        explicit,
+        start,
+        checkout.main_checkout(),
+        checkout.root(),
+        derived.as_deref(),
+        pending,
+    )
 }
 
 #[cfg(test)]
