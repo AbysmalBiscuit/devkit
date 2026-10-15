@@ -8,10 +8,7 @@ mod tickets;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant, SystemTime},
-};
+use std::time::{Duration, Instant, SystemTime};
 
 use devkit_todo::{Filter, Holder, Status, TodoStore};
 use devkit_todo_taskchampion::{SyncTarget, TaskchampionStore};
@@ -646,7 +643,7 @@ fn a_queued_harness_task_naming_a_ticket_moves_it() {
 /// Puts a `git` ahead of the real one on `s`'s `PATH` that logs each spawn's
 /// arguments, one line per spawn, to the returned file.
 #[cfg(unix)]
-fn trace_git(s: &Synced) -> PathBuf {
+fn trace_git(s: &Synced) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
