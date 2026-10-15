@@ -173,9 +173,17 @@ pub fn issue(number: u64, option: Option<&str>, blocked_by: &[u64]) -> String {
         .map(|n| format!(r#"{{"number":{n},"repository":{{"nameWithOwner":"o/r"}}}}"#))
         .collect();
     format!(
-        r#"{{"number":{number},"title":"Issue {number}","state":"OPEN","stateReason":null,
+        r#"{{"id":"I_{number}","number":{number},"title":"Issue {number}","state":"OPEN","stateReason":null,
             "parent":null,"blockedBy":{{"nodes":[{}]}},"projectItems":{{"nodes":{items}}}}}"#,
         blockers.join(",")
+    )
+}
+
+/// `issue`, an [`issue`], as a sub-issue of issue `parent`.
+pub fn under(issue: String, parent: u64) -> String {
+    issue.replace(
+        r#""parent":null"#,
+        &format!(r#""parent":{{"id":"I_{parent}","number":{parent},"repository":{{"nameWithOwner":"o/r"}}}}"#),
     )
 }
 
