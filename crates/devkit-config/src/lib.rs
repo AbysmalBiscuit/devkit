@@ -5764,8 +5764,14 @@ steps = [
             ("epic", "type = \"number\"\nwhere = \"parent\""),
             ("up", "type = \"date\"\nwhere = \"parent\""),
             ("lead", "type = \"user\"\nwhere = \"parent\""),
-            ("deps", "type = \"string\"\nlist = true\nwhere = \"blocked_by\""),
-            ("after", "type = \"number\"\nlist = true\nwhere = \"blocked_by\""),
+            (
+                "deps",
+                "type = \"string\"\nlist = true\nwhere = \"blocked_by\"",
+            ),
+            (
+                "after",
+                "type = \"number\"\nlist = true\nwhere = \"blocked_by\"",
+            ),
         ] {
             let e = field_error(
                 None,
