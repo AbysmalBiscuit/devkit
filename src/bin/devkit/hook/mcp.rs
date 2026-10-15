@@ -382,7 +382,8 @@ fn names_issues_repo(kind: TrackerKind, cfg: &Config, cwd: &Path, input: &Value)
     }
 }
 
-/// The call's mapped field values, with each `null`, and `[]` for a list
+/// The call's mapped field values, the items of every key a field maps to
+/// together, with a field whose keys carry only `null`, or `[]` for a list
 /// field, as an explicit none; each `user` value already resolved, since the
 /// call names a user by tracker identity where `--arg` takes an alias; and a
 /// problem for each value of a JSON type the field does not take or a user
@@ -397,8 +398,8 @@ fn given(
     let mut out = Given::default();
     let mut users = BTreeMap::new();
     let mut problems = Vec::new();
-    for (field, key) in &rule.fields {
-        let (Some(decl), Some(value)) = (decls.get(field), input.get(key.as_str())) else {
+    for (field, keys) in &rule.fields {
+        let Some(decl) = decls.get(field) else {
             continue;
         };
         let ty = decl.r#type.unwrap_or(FieldType::String);
@@ -409,30 +410,36 @@ fn given(
             }
             _ => None,
         };
-        let items = match value {
-            Value::Null => {
-                out.nones.insert(field.clone());
+        let (mut items, mut none) = (Vec::new(), false);
+        for key in keys.keys() {
+            let Some(value) = input.get(key.as_str()) else {
                 continue;
+            };
+            let carried = match value {
+                Value::Null => Some(Vec::new()),
+                Value::Array(items) if decl.list => items.iter().map(scalar).collect(),
+                Value::Array(_) => None,
+                v => scalar(v).map(|s| vec![s]),
+            };
+            match carried {
+                Some(carried) if carried.is_empty() => none = true,
+                Some(carried) => items.extend(carried),
+                None => problems.push(Problem::Invalid {
+                    field: field.clone(),
+                    value: value.to_string(),
+                    reason: format!(
+                        "is not a JSON value `{field}` takes: {} under `{key}`",
+                        json_shape(ty, decl.list)
+                    ),
+                }),
             }
-            Value::Array(items) if decl.list && items.is_empty() => {
+        }
+        if items.is_empty() {
+            if none {
                 out.nones.insert(field.clone());
-                continue;
             }
-            Value::Array(items) if decl.list => items.iter().map(scalar).collect(),
-            Value::Array(_) => None,
-            v => scalar(v).map(|s| vec![s]),
-        };
-        let Some(items) = items else {
-            problems.push(Problem::Invalid {
-                field: field.clone(),
-                value: value.to_string(),
-                reason: format!(
-                    "is not a JSON value `{field}` takes: {} under `{key}`",
-                    json_shape(ty, decl.list)
-                ),
-            });
             continue;
-        };
+        }
         if ty != FieldType::User {
             out.values.insert(field.clone(), Raw::Items(items));
             continue;
@@ -539,7 +546,14 @@ fn blocks(
                     None => "",
                 };
                 block.push_str(&match rule.fields.get(field) {
-                    Some(key) => format!("\n  pass `{key}` in this call{none}"),
+                    Some(keys) => format!(
+                        "\n  pass {} in this call{none}",
+                        keys.keys()
+                            .iter()
+                            .map(|k| format!("`{k}`"))
+                            .collect::<Vec<_>>()
+                            .join(" or ")
+                    ),
                     None => format!(
                         "\n  `{tool}` cannot set `{field}`: file the ticket with \
                          `devkit ticket create --arg {field}=...` instead"
@@ -556,6 +570,7 @@ fn blocks(
 mod tests {
     use std::collections::{HashMap, HashSet};
 
+    use devkit_config::InputKeys;
     use serde_json::json;
 
     use super::*;
@@ -741,7 +756,7 @@ level  = "info"
         rule.tracker = Some(tracker);
         rule.fields = map
             .iter()
-            .map(|(f, k)| (f.to_string(), k.to_string()))
+            .map(|(f, k)| (f.to_string(), InputKeys::One(k.to_string())))
             .collect();
         rule
     }
@@ -1086,6 +1101,36 @@ level  = "info"
         }
         let v = lin("ada");
         assert!(denied_mentioning(&v, "pass `u-ada`"), "{v:?}");
+    }
+
+    #[test]
+    fn every_input_key_a_field_maps_to_is_checked() {
+        let rule: RenderedToolRule = toml::from_str(
+            "servers = [\"*linear*\"]\ntools = [\"save_issue\"]\nabsent = [\"id\"]\n\
+             title = \"title\"\nbody = \"description\"\ntracker = \"linear\"\n\
+             fields = { team = \"team\", labels = [\"labels\", \"addLabels\"] }\n",
+        )
+        .unwrap();
+        let check = |input: Value| fields(&rule, LINEAR_FIELDS, input);
+        assert_eq!(
+            check(json!({"title": "T", "team": "ENG", "addLabels": ["L2"]})),
+            Verdict::Allow,
+            "either key sets the field on a create"
+        );
+        let v = check(json!({"id": "ENG-1", "addLabels": ["nope"]}));
+        assert!(denied_mentioning(&v, "`nope`"), "{v:?}");
+        let v = check(json!({"id": "ENG-1", "labels": ["L2"], "addLabels": ["nope"]}));
+        assert!(denied_mentioning(&v, "`nope`"), "{v:?}");
+        assert_eq!(
+            check(json!({"id": "ENG-1", "removeLabels": ["nope"]})),
+            Verdict::Allow,
+            "removing a value cannot break a level"
+        );
+        let v = check(json!({"title": "T", "team": "ENG"}));
+        assert!(
+            denied_mentioning(&v, "pass `labels` or `addLabels` in this call"),
+            "{v:?}"
+        );
     }
 
     #[test]

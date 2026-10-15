@@ -17,8 +17,8 @@ pub use todo::{HARNESS_PREFIXES, RoleConfig, ScopeConfig};
 pub mod harness;
 mod ticket_fields;
 pub use harness::{
-    AppMatch, CommandRule, Fidelity, HarnessSection, LogSection, PolicyAction, PromptFidelity,
-    RenderedToolRule, RuleAction, Severity, ShellSetting, wildcard_matches,
+    AppMatch, CommandRule, Fidelity, HarnessSection, InputKeys, LogSection, PolicyAction,
+    PromptFidelity, RenderedToolRule, RuleAction, Severity, ShellSetting, wildcard_matches,
 };
 pub use ticket_fields::{
     CALLER_CONDITION, Cond, EnumValue, FieldDecl, FieldLevel, FieldType, ISSUE_CONTEXT_KEYS, Place,

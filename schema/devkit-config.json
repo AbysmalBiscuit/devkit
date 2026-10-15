@@ -947,6 +947,20 @@
       },
       "type": "object"
     },
+    "InputKeys": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "The input keys of one ticket field: one key, or an array of keys."
+    },
     "LayerMarker": {
       "description": "The `[config]` table. Read straight off the raw layer by `is_root_layer`\nrather than through `Config`, because it decides which layers exist before\nthere is a merged config to deserialize; this type exists so the published\nJSON Schema can still describe it.\n\n```toml\n[config]\nroot = true\n```",
       "properties": {
@@ -1535,7 +1549,7 @@
       ]
     },
     "RenderedToolRule": {
-      "description": "One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits issues or PRs, whose title and body the\npre-tool-use hook allows only when `devkit ticket render` (an issue) or\n`devkit pr render` (a PR) produced them in the same agent session.\n\nAn issue entry naming its `tracker` also holds the call to that tracker's\n`[ticket.fields]` levels, reading each field's value from the input key\n`fields` maps it to.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\ntracker    = \"linear\"\nfields     = { labels = \"labels\", priority = \"priority\", team = \"team\" }\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\ntracker = \"github\"\nfields  = { labels = \"labels\", assignees = \"assignees\" }\n\n[harness.pr_tools.github-create]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\"]\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-update]\nservers = [\"*github*\"]\ntools   = [\"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
+      "description": "One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits issues or PRs, whose title and body the\npre-tool-use hook allows only when `devkit ticket render` (an issue) or\n`devkit pr render` (a PR) produced them in the same agent session.\n\nAn issue entry naming its `tracker` also holds the call to that tracker's\n`[ticket.fields]` levels, reading each field's values from the input keys\n`fields` maps it to.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\ntracker    = \"linear\"\nfields     = { labels = [\"labels\", \"addLabels\"], priority = \"priority\", team = \"team\" }\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\ntracker = \"github\"\nfields  = { labels = \"labels\", assignees = \"assignees\" }\n\n[harness.pr_tools.github-create]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\"]\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-update]\nservers = [\"*github*\"]\ntools   = [\"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
       "properties": {
         "absent": {
           "default": [],
@@ -1572,10 +1586,10 @@
         },
         "fields": {
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/$defs/InputKeys"
           },
           "default": {},
-          "description": "Ticket field name to the input key that carries its value, as the\ntracker names it: a string, an array of strings for a list, a number\nfor a `number` field, or `null` for a field left empty on purpose. A\ndeclared field with no key here cannot be set by the tool, so at\n`error` it denies every create. Map a key only when it takes the\nvalue as the field records it: GitHub's `issue_write` takes a\nmilestone's number, and a `milestone` field records its title.",
+          "description": "Ticket field name to the input key that carries its value, as the\ntracker names it: a string, an array of strings for a list, a number\nfor a `number` field, or `null` for a field left empty on purpose. An\narray of keys maps a field the tool sets under several, such as\nLinear's `labels` and `addLabels`: each key the call carries is\nchecked, and any one sets the field on a create. Leave a key that\nonly removes values (`removeLabels`) unmapped, since removing a value\ncannot break a level. A declared field with no key here cannot be set\nby the tool, so at `error` it denies every create. Map a key only when\nit takes the value as the field records it: GitHub's `issue_write`\ntakes a milestone's number, and a `milestone` field records its title.",
           "type": "object"
         },
         "servers": {
