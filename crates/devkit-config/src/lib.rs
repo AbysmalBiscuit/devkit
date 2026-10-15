@@ -322,33 +322,6 @@ impl HoldStop {
     }
 }
 
-/// How `[todo] ids` names each todo in a listing.
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    JsonSchema,
-    Deserialize,
-    Serialize,
-    strum::Display,
-    strum::EnumString,
-    strum::VariantNames,
-)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
-pub enum IdStyle {
-    /// Tracker keys, word names, and non-uuid ids whole.
-    #[default]
-    Name,
-    /// Tracker keys, 8-hex uuid prefixes, and non-uuid ids whole.
-    Short,
-    /// Stored ids.
-    Full,
-}
-
 impl<'de> Deserialize<'de> for HoldStop {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct Visitor;
@@ -374,6 +347,33 @@ impl<'de> Deserialize<'de> for HoldStop {
         }
         deserializer.deserialize_any(Visitor)
     }
+}
+
+/// How `[todo] ids` names each todo in a listing.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    JsonSchema,
+    Deserialize,
+    Serialize,
+    strum::Display,
+    strum::EnumString,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+pub enum IdStyle {
+    /// Tracker keys, word names, and non-uuid ids whole.
+    #[default]
+    Name,
+    /// Tracker keys, 8-hex uuid prefixes, and non-uuid ids whole.
+    Short,
+    /// Stored ids.
+    Full,
 }
 
 /// Where `[todo] backend = "taskchampion"` keeps its replica and syncs it.
