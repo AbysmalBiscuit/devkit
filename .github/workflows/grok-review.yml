@@ -46,19 +46,7 @@ jobs:
       - name: Configure Grok
         run: |
           mkdir -p "$HOME/.grok"
-          cat > "$HOME/.grok/config.toml" <<'EOF'
-          [models]
-          default = "grok-4.7"
-          default_reasoning_effort = "xhigh"
-
-          # Quoted: [model.grok-4.7] is a nested table, so grok never sees the override.
-          [model."grok-4.7"]
-          context_window = 500000
-          context_windows = [500000, 256000]
-
-          [features]
-          subagent_model_inheritance = true
-          EOF
+          cp .github/grok-config.toml "$HOME/.grok/config.toml"
 
       # --trust also applies project harness config (permission rules, hooks,
       # MCP servers); drop it so the flags below are Grok's whole policy: file
