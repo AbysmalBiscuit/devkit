@@ -170,9 +170,12 @@ pub(crate) struct Gates {
 impl Gates {
     /// The gates the `devkit.toml` committed at the merge base of HEAD with
     /// PR base branch `base` sets for a PR opened at `head`. The
-    /// weakened-tests gate applies to an agent's PR only. A human's PR whose
-    /// settings cannot be read, for want of a merge base or a merge-base
-    /// `devkit.toml` that parses, is opened ungated, with a warning.
+    /// weakened-tests gate applies to an agent's PR only; the verify gate
+    /// renders its section into either caller's PR and refuses only an
+    /// agent's. When the settings cannot be read, for want of a merge base
+    /// or a merge-base `devkit.toml` that parses, an agent's PR is refused
+    /// and a human's opens ungated, with a warning only when this
+    /// checkout's own config turns on a gate that binds a human.
     pub(crate) fn read(dir: &Path, base: &str, head: &str, caller: Caller) -> Result<Self> {
         let ungated = Self {
             weakened: None,
