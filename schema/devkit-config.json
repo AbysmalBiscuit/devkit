@@ -947,6 +947,26 @@
       },
       "type": "object"
     },
+    "IdStyle": {
+      "description": "How `[todo] ids` names each todo in a listing.",
+      "oneOf": [
+        {
+          "const": "name",
+          "description": "Tracker keys, word names, and non-uuid ids whole.",
+          "type": "string"
+        },
+        {
+          "const": "short",
+          "description": "Tracker keys, 8-hex uuid prefixes, and non-uuid ids whole.",
+          "type": "string"
+        },
+        {
+          "const": "full",
+          "description": "Stored ids.",
+          "type": "string"
+        }
+      ]
+    },
     "InputKeys": {
       "anyOf": [
         {
@@ -2471,7 +2491,7 @@
     },
     "TodoConfig": {
       "additionalProperties": false,
-      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskchampion\"\nhold_stop = \"always\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\nroot = \"agents\"\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n\n[todo.supabase]\nurl = \"https://abcdefghijklmnop.supabase.co\"\nroot = \"agents\"\n```",
+      "description": "Where agent todo lists are kept.\n\n```toml\n[todo]\nbackend = \"taskchampion\"\nhold_stop = \"always\"\nids = \"short\"\n\n[todo.taskchampion]\ndata_dir = \"/var/devkit/todo\"\nserver_dir = \"/mnt/shared/todo-sync\"\ndoppler_project = \"devkit\"\ndoppler_config = \"dev\"\n\n[todo.postgres]\nroot = \"agents\"\ndoppler_project = \"swarm\"\ndoppler_config = \"agents\"\nca_file = \"~/.config/devkit/supabase-ca.crt\"\n\n[todo.supabase]\nurl = \"https://abcdefghijklmnop.supabase.co\"\nroot = \"agents\"\n```",
       "properties": {
         "backend": {
           "$ref": "#/$defs/TodoBackend",
@@ -2482,6 +2502,11 @@
           "$ref": "#/$defs/HoldStopSpelling",
           "default": "subagents",
           "description": "Whose stop a stop hook refuses while the agent has open todos: its\nown claims on any node and pending todos when its role holds them.\n`always` holds every agent, `subagents` only sub-agents, and `never`\nnone; `true` and `false` mean `always` and `never`. One reminder per\nunchanged list; stopping again goes through. A Claude Code main\nagent's stop while its background tasks or session crons are in\nflight is never refused.\n`DEVKIT_TODO_HOLD_STOP` overrides it with the same spellings, and\n`devkit todo hold` overrides both for one session."
+        },
+        "ids": {
+          "$ref": "#/$defs/IdStyle",
+          "default": "name",
+          "description": "How listings name each todo. `name` shows a ticket todo's tracker\nkey (`#65` where the caller's tracker reads it back, `owner/repo#65`\nelsewhere, `SWE-123`), any other uuid todo's word name\n(`brave-otter`), and an id that is not a uuid whole. `short` shows\nthe tracker key, the first 8 hex characters of any other uuid, and a\nnon-uuid id whole. `full` shows every stored id whole. Commands take\nevery one of these forms as a todo id whatever the style, `devkit\ntodo --ids` overrides it for one command, and JSON output always\ncarries full ids."
         },
         "postgres": {
           "$ref": "#/$defs/PostgresConfig",
@@ -2928,6 +2953,7 @@
       "default": {
         "backend": "builtin",
         "hold_stop": "subagents",
+        "ids": "name",
         "postgres": {
           "ca_file": null,
           "doppler_config": null,

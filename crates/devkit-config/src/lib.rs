@@ -107,11 +107,12 @@ pub struct Config {
 /// Where agent todo lists are kept.
 ///
 /// ```
-/// # use devkit_config::{Config, HoldStop, TodoBackend};
+/// # use devkit_config::{Config, HoldStop, IdStyle, TodoBackend};
 /// # let cfg = Config::parse(r#"
 /// [todo]
 /// backend = "taskchampion"
 /// hold_stop = "always"
+/// ids = "short"
 ///
 /// [todo.taskchampion]
 /// data_dir = "/var/devkit/todo"
@@ -165,6 +166,12 @@ pub struct Config {
 /// # assert!(format!("{bad:#}").contains(&HoldStop::spellings()), "{bad:#}");
 /// # assert!(!HoldStop::Subagents.holds(false) && HoldStop::Subagents.holds(true));
 /// # assert!(HoldStop::Always.holds(false) && !HoldStop::Never.holds(true));
+/// # assert_eq!(cfg.todo.ids, IdStyle::Short);
+/// # assert_eq!(empty.todo.ids, IdStyle::Name);
+/// # let ids = |v: &str| Config::parse(&format!("[todo]\nids = \"{v}\"\n")).map(|c| c.todo.ids);
+/// # assert_eq!(ids("name").unwrap(), IdStyle::Name);
+/// # assert_eq!(ids("full").unwrap(), IdStyle::Full);
+/// # assert!(ids("hex").is_err());
 /// # let blocking = Config::parse("[todo]\nprint_unblocked = false\nready_outside_ticket = true\n").unwrap();
 /// # assert!(!blocking.todo.print_unblocked);
 /// # assert!(blocking.todo.ready_outside_ticket);
@@ -206,6 +213,16 @@ pub struct TodoConfig {
     /// `devkit todo hold` overrides both for one session.
     #[schemars(with = "todo::HoldStopSpelling")]
     pub hold_stop: HoldStop,
+    /// How listings name each todo. `name` shows a ticket todo's tracker
+    /// key (`#65` where the caller's tracker reads it back, `owner/repo#65`
+    /// elsewhere, `SWE-123`), any other uuid todo's word name
+    /// (`brave-otter`), and an id that is not a uuid whole. `short` shows
+    /// the tracker key, the first 8 hex characters of any other uuid, and a
+    /// non-uuid id whole. `full` shows every stored id whole. Commands take
+    /// every one of these forms as a todo id whatever the style, `devkit
+    /// todo --ids` overrides it for one command, and JSON output always
+    /// carries full ids.
+    pub ids: IdStyle,
     /// Whether `devkit todo done` and `devkit todo cancel` print the todos
     /// they made ready, as `unblocked: <ids>`.
     pub print_unblocked: bool,
@@ -229,6 +246,7 @@ impl Default for TodoConfig {
             roles: todo::default_roles(),
             backend: TodoBackend::default(),
             hold_stop: HoldStop::default(),
+            ids: IdStyle::default(),
             print_unblocked: true,
             ready_outside_ticket: false,
             taskchampion: TaskchampionConfig::default(),
@@ -302,6 +320,33 @@ impl HoldStop {
             Self::Never => false,
         }
     }
+}
+
+/// How `[todo] ids` names each todo in a listing.
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    JsonSchema,
+    Deserialize,
+    Serialize,
+    strum::Display,
+    strum::EnumString,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+pub enum IdStyle {
+    /// Tracker keys, word names, and non-uuid ids whole.
+    #[default]
+    Name,
+    /// Tracker keys, 8-hex uuid prefixes, and non-uuid ids whole.
+    Short,
+    /// Stored ids.
+    Full,
 }
 
 impl<'de> Deserialize<'de> for HoldStop {
