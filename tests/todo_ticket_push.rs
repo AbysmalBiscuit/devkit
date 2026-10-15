@@ -1152,7 +1152,7 @@ fn a_move_from_a_ticket_parent_to_another_repositorys_ticket_is_refused() {
         assert!(
             err.contains("o/r#67")
                 && err.contains("o/r#65")
-                && err.contains("o/x#5 is a ticket of another repository")
+                && err.contains("o/x#5 is a ticket of another tracker or repository")
                 && err.contains("next sync"),
             "{push}: {err}"
         );

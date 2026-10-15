@@ -1271,8 +1271,8 @@ fn move_todo(
     {
         bail!(
             "todo {} is ticket {key}, a sub-issue of {old}; {new} is a ticket of another \
-             repository, so it cannot become {key}'s parent there, and the next sync would put \
-             {key} back under {old}. Change {key}'s parent on the tracker instead",
+             tracker or repository, so it cannot become {key}'s parent there, and the next sync \
+             would put {key} back under {old}. Change {key}'s parent on the tracker instead",
             devkit_todo::short_id(&todo.id),
             new = new.key,
             key = ticket.key,
