@@ -1419,3 +1419,24 @@ fn a_promote_whose_sync_fails_finishes_with_ticket() {
     assert_eq!(s.proj.todo(&after).blocked_by, [id_of(&s, 68)]);
     assert_eq!(s.proj.todo(&step).status.kind(), StatusKind::Cancelled);
 }
+
+#[test]
+fn promote_skips_an_edge_that_would_close_a_cycle() {
+    let s = linked("\"blocking\"", None, true);
+    let step = add(&s, &["write the parser"]);
+    let after = add(&s, &["ship it", "--blocked-by", &step]);
+    let out = s.devkit(&["todo", "block", &id_of(&s, 66), "--by", &step], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = s.devkit(&["todo", "promote", &step, "--ticket", "#65"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("o/r#65 blocks o/r#66") && err.contains("cycle"),
+        "{err}"
+    );
+    assert!(s.todo_for("o/r#66").blocked_by.is_empty());
+    assert_eq!(s.todo_for("o/r#65").blocked_by, [id_of(&s, 66)]);
+    assert_eq!(s.proj.todo(&after).blocked_by, [id_of(&s, 65)]);
+    assert_eq!(s.proj.todo(&step).status.kind(), StatusKind::Cancelled);
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use devkit_common::{record, vcs::Checkout};
 use devkit_config::PushKind;
 use devkit_todo::{
-    Edit, Filter, Holder, StatusKind, Todo, TodoStore as _, layout::Layout, transition,
+    Edit, Filter, Holder, StatusKind, Todo, TodoStore as _, graph, layout::Layout, transition,
 };
 
 use super::{push, store::Store, tickets};
@@ -126,9 +126,27 @@ fn rewire(at: &Promote, old: &Todo, new: &Todo) -> Result<()> {
 
 /// Records that `blocker` blocks `blocked`. An edge between two tickets of
 /// one tracker reaches it where the repository pushes blocking links;
-/// elsewhere it is local, and the next sync drops it.
+/// elsewhere it is local, and the next sync drops it. An edge that would
+/// close a cycle is skipped with a warning, so the rest of the promote
+/// still lands.
 fn block(at: &Promote, blocked: &Todo, blocker: &Todo) -> Result<()> {
     if blocked.blocked_by.contains(&blocker.id) {
+        return Ok(());
+    }
+    let todos = at.store.list(&Filter::all())?;
+    if let Some(cycle) =
+        graph::cycle_through(&todos, &blocked.id, std::slice::from_ref(&blocker.id))
+    {
+        let cycle = cycle
+            .iter()
+            .map(|id| devkit_todo::short_id(id))
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        eprintln!(
+            "devkit todo: {} blocks {} skipped: it would close the cycle {cycle}",
+            name(blocker),
+            name(blocked)
+        );
         return Ok(());
     }
     let tickets = match (&blocked.ticket, &blocker.ticket) {
@@ -149,6 +167,13 @@ fn block(at: &Promote, blocked: &Todo, blocker: &Todo) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// A todo as a message names it: its ticket's key, else its short id.
+fn name(todo: &Todo) -> &str {
+    todo.ticket
+        .as_ref()
+        .map_or_else(|| devkit_todo::short_id(&todo.id), |t| t.key.as_str())
 }
 
 /// The values a promoted ticket's parent likely takes: the ticket this
