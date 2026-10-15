@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -99,11 +99,18 @@ pub(crate) struct Store {
     /// Where the store was opened from: the checkout a ticket event fires
     /// in, as its caller resolved it. `None` fires nothing.
     origin: Option<Checkout>,
+    /// The whole store as [`Store::resolve`] read it, so a command lists it
+    /// at most once; a write clears it.
+    listing: Mutex<Option<Vec<Todo>>>,
 }
 
 impl TodoStore for Store {
     fn list(&self, filter: &Filter) -> Result<Vec<Todo>> {
-        self.store.list(filter)
+        let todos = self.store.list(filter)?;
+        if *filter == Filter::all() {
+            *self.listing.lock().unwrap_or_else(PoisonError::into_inner) = Some(todos.clone());
+        }
+        Ok(todos)
     }
 
     fn get(&self, id: &str) -> Result<Option<Todo>> {
@@ -111,10 +118,12 @@ impl TodoStore for Store {
     }
 
     fn add(&self, todo: NewTodo) -> Result<String> {
+        self.forget_listing();
         self.store.add(todo)
     }
 
     fn apply(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
+        self.forget_listing();
         let changes = self.store.apply(edit)?;
         let actor = match edit {
             Edit::SetStatus { actor, .. } | Edit::TakeOver { actor, .. } => Some(actor),
@@ -479,6 +488,7 @@ impl Backend {
             config: TodoConfig::default(),
             ticket: TicketConfig::default(),
             origin: None,
+            listing: Mutex::new(None),
         }
     }
 }
@@ -534,7 +544,12 @@ impl Store {
             config: config.clone(),
             ticket,
             origin: Some(origin),
+            listing: Mutex::new(None),
         }
+    }
+
+    fn forget_listing(&self) {
+        *self.listing.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     fn backend(&self) -> &Backend {
@@ -555,9 +570,34 @@ impl Store {
         self.origin.as_ref()
     }
 
+    /// The todo that `input`, typed by a caller, names: the one the backend
+    /// finds by its stored id or a uuid prefix of 8 or more characters, else
+    /// the one it names as [`devkit_todo::names::resolve`] reads it. What the
+    /// backend finds wins outright, so the short id a listing prints always
+    /// reads back to its todo, even when it is all digits and a GitHub
+    /// ticket has that number.
+    pub(crate) fn resolve(&self, input: &str) -> Result<Option<Todo>> {
+        if let Some(todo) = self.store.get(input)? {
+            return Ok(Some(todo));
+        }
+        let mut listing = self.listing.lock().unwrap_or_else(PoisonError::into_inner);
+        let todos = match listing.as_ref() {
+            Some(todos) => todos.clone(),
+            None => listing.insert(self.store.list(&Filter::all())?).clone(),
+        };
+        drop(listing);
+        let tracker_key = self
+            .origin
+            .as_ref()
+            .filter(|_| devkit_todo::names::needs_tracker(input))
+            .and_then(|origin| super::names::tracker_key(origin.dir()));
+        devkit_todo::names::resolve(input, todos, tracker_key.as_deref())
+    }
+
     /// Applies `edit` without firing a ticket event: for a change whose
     /// ticket a push has already moved.
     pub(crate) fn apply_unfired(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
+        self.forget_listing();
         self.store.apply(edit)
     }
 

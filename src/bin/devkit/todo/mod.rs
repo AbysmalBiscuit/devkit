@@ -2,6 +2,7 @@
 //! `[todo] backend` names.
 
 pub(crate) mod hold;
+mod names;
 pub(crate) mod promote;
 pub(crate) mod push;
 pub(crate) mod queue;
@@ -440,13 +441,9 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     node
                 }
             };
-            if let Some(parent) = parent
-                .as_deref()
-                .map(|p| store.get(p))
-                .transpose()?
-                .flatten()
-            {
-                refuse_under_a_ticket(&store, &parent, &link_push(false))?;
+            let parent = parent.map(|p| resolve_id(&store, &p)).transpose()?;
+            if let Some(parent) = &parent {
+                refuse_under_a_ticket(&store, parent, &link_push(false))?;
             }
             let blockers = resolve_ids(&store, &blocked_by)?;
             refuse_cycle(&store, None, &blockers)?;
@@ -454,7 +451,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 ticket: None,
                 project: project_of(node),
                 description: text,
-                parent,
+                parent: parent.map(|p| p.id),
                 order,
             })?;
             if !blockers.is_empty()
@@ -522,7 +519,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
         }
         TodoCommand::Describe { id, text } => {
             store.apply(&Edit::Describe {
-                id,
+                id: resolve_id(&store, &id)?.id,
                 description: text,
             })?;
         }
@@ -658,9 +655,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                      (devkit todo cancel <id>)"
                 );
             }
-            let Some(todo) = store.get(&id)? else {
-                bail!("no todo {id}");
-            };
+            let todo = resolve_id(&store, &id)?;
             store.apply(&Edit::Purge(todo.id.clone()))?;
             NativeMap::at(devkit_todo::state_dir()).forget(&todo.id)?;
         }
@@ -759,7 +754,7 @@ fn start(
         let listed = graph::with_blockers(store, store.list(&Filter::all())?)?;
         let graph = Graph::new(&listed);
         for id in &ids {
-            let Some(todo) = store.get(id)? else {
+            let Some(todo) = store.resolve(id)? else {
                 continue;
             };
             let open = graph.open_blockers(&todo);
@@ -999,14 +994,14 @@ impl<'a> Fence<'a> {
 }
 
 /// The todo `id` names, its full id included, or the error `no todo <id>`.
-fn resolve_id(store: &impl TodoStore, id: &str) -> Result<Todo> {
+fn resolve_id(store: &Store, id: &str) -> Result<Todo> {
     store
-        .get(id)?
+        .resolve(id)?
         .ok_or_else(|| anyhow::anyhow!("no todo {id}"))
 }
 
 /// Each id resolved to the full id the store holds.
-fn resolve_ids(store: &impl TodoStore, ids: &[String]) -> Result<Vec<String>> {
+fn resolve_ids(store: &Store, ids: &[String]) -> Result<Vec<String>> {
     ids.iter()
         .map(|id| resolve_id(store, id).map(|todo| todo.id))
         .collect()
@@ -1154,9 +1149,7 @@ fn apply_checked(
     }
     let mut checked = Vec::new();
     for id in &ids {
-        let Some(todo) = store.get(id)? else {
-            bail!("no todo {id}");
-        };
+        let todo = resolve_id(store, id)?;
         let (keep, edit) = edit_for(todo.clone())?;
         checked.push((todo, keep, edit));
     }
@@ -1221,7 +1214,7 @@ fn move_todo(
         let Some(order) = order else {
             bail!("name a new --parent, --top or an --order");
         };
-        let id = id.to_string();
+        let id = resolve_id(store, id)?.id;
         return store.apply(&Edit::Reorder { id, order }).map(drop);
     }
     let todo = resolve_id(store, id)?;

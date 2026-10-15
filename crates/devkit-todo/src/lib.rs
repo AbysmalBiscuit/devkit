@@ -11,6 +11,7 @@ pub mod contract;
 pub mod graph;
 pub mod holder;
 pub mod layout;
+pub mod names;
 pub mod node;
 pub mod push;
 pub mod roles;

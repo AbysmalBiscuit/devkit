@@ -12,7 +12,7 @@ mod tickets;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use devkit_todo::{NewTodo, Status, StatusKind, TicketRef, TodoStore as _};
+use devkit_todo::{Edit, NewTodo, Status, StatusKind, TicketRef, TodoStore as _};
 use tickets::*;
 use todoenv::{Proj, stderr, stdout};
 
@@ -605,6 +605,39 @@ fn move_under_a_ticket_makes_a_sub_issue() {
         s.mutations()
     );
     assert_eq!(parent_of(&s, 67), Some(id_of(&s, 65)));
+}
+
+#[test]
+fn a_purged_parent_numbered_like_a_ticket_is_not_that_ticket() {
+    let s = linked("\"parent\"", Some(65), false);
+    let store = s.proj.store();
+    let file = s.proj.state().join("todo/todos.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    doc["next_id"] = 65.into();
+    std::fs::write(&file, doc.to_string()).unwrap();
+    let gone = store
+        .add(NewTodo {
+            description: "gone".into(),
+            project: s.todo_for("o/r#67").project,
+            parent: None,
+            order: None,
+            ticket: None,
+        })
+        .unwrap();
+    assert_eq!(gone, "65");
+    store
+        .apply(&Edit::Move {
+            id: id_of(&s, 67),
+            parent: Some(gone.clone()),
+            order: None,
+        })
+        .unwrap();
+    store.apply(&Edit::Purge(gone)).unwrap();
+    let out = s.devkit(&["todo", "move", &id_of(&s, 67), "--top"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert_eq!(parent_of(&s, 67), None);
 }
 
 #[test]
