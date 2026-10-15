@@ -40,6 +40,9 @@ pub(crate) enum Change {
     Refreshed(String),
     /// A declared value the tracker no longer offers.
     ValueDropped { field: String, value: String },
+    /// A declared value kept though the tracker did not answer it, since it
+    /// answered that list only in part.
+    ValueKept { field: String, value: String },
     /// A tracker field not added, because its name is declared for another
     /// place, or is a template variable or a name devkit supplies.
     NameTaken { field: String, place: String },
@@ -200,6 +203,10 @@ fn summary(kind: TrackerKind, changes: &[Change], found: &Discovered) -> String 
                 "dropped `{value}` from [ticket.fields.{kind}.{field}]: the tracker no longer \
                  offers it\n"
             ),
+            Change::ValueKept { field, value } => format!(
+                "kept `{value}` in [ticket.fields.{kind}.{field}] unchecked: the tracker's list \
+                 was read only in part\n"
+            ),
             Change::NameTaken { field, place } => format!(
                 "not added: the tracker's `{place}` would be [ticket.fields.{kind}.{field}], \
                  whose name is taken by another field, a template variable or devkit; declare \
@@ -262,14 +269,16 @@ pub(crate) fn merge(
         match by_place.or_else(by_name) {
             Some((target, decl)) => {
                 let values = refreshed_values(decl, field);
-                for gone in decl
+                for unseen in decl
                     .values
                     .iter()
-                    .filter(|v| !values.iter().any(|n| n.id == v.id))
+                    .filter(|v| !field.values.iter().any(|n| n.id == v.id))
                 {
-                    changes.push(Change::ValueDropped {
-                        field: target.clone(),
-                        value: gone.name.clone(),
+                    let (field, value) = (target.clone(), unseen.name.clone());
+                    changes.push(if values.iter().any(|v| v.id == unseen.id) {
+                        Change::ValueKept { field, value }
+                    } else {
+                        Change::ValueDropped { field, value }
                     });
                 }
                 let same = decl.r#type == Some(field.r#type)
@@ -298,9 +307,10 @@ pub(crate) fn merge(
 }
 
 /// The tracker's values for `field`, each under the name `decl` gives the
-/// same id.
+/// same id, then, when the tracker answered `field` only in part, each
+/// declared value it did not answer.
 fn refreshed_values(decl: &FieldDecl, field: &DiscoveredField) -> Vec<EnumValue> {
-    field
+    let mut out: Vec<EnumValue> = field
         .values
         .iter()
         .map(|v| match decl.values.iter().find(|d| d.id == v.id) {
@@ -310,7 +320,17 @@ fn refreshed_values(decl: &FieldDecl, field: &DiscoveredField) -> Vec<EnumValue>
             },
             None => v.clone(),
         })
-        .collect()
+        .collect();
+    if field.partial {
+        let unseen: Vec<EnumValue> = decl
+            .values
+            .iter()
+            .filter(|d| !out.iter().any(|v| v.id == d.id))
+            .cloned()
+            .collect();
+        out.extend(unseen);
+    }
+    out
 }
 
 /// The table `[ticket.fields.<kind>.<name>]` of `doc`, created when absent
@@ -577,6 +597,31 @@ description = "how soon"
             Change::Refreshed("prio".into())
         ]);
         assert!(!text.contains("o0"), "{text}");
+    }
+
+    #[test]
+    fn a_list_read_in_part_keeps_the_declared_values_it_did_not_answer() {
+        let (text, changes) = merged(
+            "",
+            REPO,
+            &found(&[("priority", priority(&[("P1", "o1")]).partly(true))]),
+        );
+        assert_eq!(changes, [
+            Change::ValueKept {
+                field: "prio".into(),
+                value: "urgent".into()
+            },
+            Change::Refreshed("prio".into())
+        ]);
+        let cfg = Config::parse(&text).unwrap();
+        let ids: Vec<&str> = cfg.ticket.fields.github["prio"]
+            .values
+            .iter()
+            .map(|v| v.id.as_str())
+            .collect();
+        assert_eq!(ids, ["o1", "o0"], "{text}");
+        let out = summary(TrackerKind::Github, &changes, &Discovered::default());
+        assert!(out.contains("kept `urgent`"), "{out}");
     }
 
     #[test]

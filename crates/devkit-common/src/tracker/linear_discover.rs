@@ -10,7 +10,9 @@ use anyhow::{Context, Result, bail};
 use devkit_config::{EnumValue, FieldType, Person, Place};
 use serde_json::{Value as Json, json};
 
-use super::discover::{Discovered, DiscoveredField, id_name, nodes, partly, read_all, str_of};
+use super::discover::{
+    Discovered, DiscoveredField, id_name, nodes, partly, read_all, str_of, unfinished,
+};
 
 /// How many of a list one request reads: Linear's largest page.
 const PAGE: u32 = 250;
@@ -201,6 +203,7 @@ pub fn parse(
     let mut team_values = Vec::new();
     let (mut cycles, mut projects, mut milestones) = (Vec::new(), Vec::new(), Vec::new());
     let mut estimates = false;
+    let (mut partial_cycles, mut partial_projects, mut partial_milestones) = (false, false, false);
     for team in &teams {
         let (Some(id), Some(key)) = (str_of(team, "id"), str_of(team, "key")) else {
             continue;
@@ -211,6 +214,8 @@ pub fn parse(
             teams: Vec::new(),
         });
         estimates |= str_of(team, "issueEstimationType").is_some_and(|t| t != "notUsed");
+        partial_cycles |= unfinished(team.get("cycles"));
+        partial_projects |= unfinished(team.get("projects"));
         out.truncated.extend(partly(
             team.get("cycles"),
             &format!("upcoming cycles of team {key}"),
@@ -236,6 +241,7 @@ pub fn parse(
                 continue;
             };
             add(&mut projects, pid, pname, key);
+            partial_milestones |= unfinished(p.get("projectMilestones"));
             let what = format!("milestones of project {pname}");
             if let Some(t) = partly(p.get("projectMilestones"), &what)
                 && !out.truncated.contains(&t)
@@ -283,8 +289,17 @@ pub fn parse(
     let enumerated = |place: Place, values: Vec<EnumValue>| {
         DiscoveredField::new(FieldType::Enum, place).with_values(values)
     };
-    field("team", enumerated(Place::Team, team_values));
-    field("labels", enumerated(Place::Labels, labels).list());
+    let partial = |pointer: &str| unfinished(data.pointer(pointer));
+    field(
+        "team",
+        enumerated(Place::Team, team_values).partly(partial(teams_at)),
+    );
+    field(
+        "labels",
+        enumerated(Place::Labels, labels)
+            .list()
+            .partly(partial("/issueLabels")),
+    );
     field(
         "assignee",
         DiscoveredField::new(FieldType::User, Place::Assignee),
@@ -299,15 +314,22 @@ pub fn parse(
         );
     }
     if !cycles.is_empty() {
-        field("cycle", enumerated(Place::Cycle, cycles));
+        field(
+            "cycle",
+            enumerated(Place::Cycle, cycles).partly(partial_cycles),
+        );
     }
     if !projects.is_empty() {
-        field("project", enumerated(Place::Project, projects));
+        field(
+            "project",
+            enumerated(Place::Project, projects).partly(partial_projects),
+        );
     }
     if !milestones.is_empty() {
         field(
             "project_milestone",
-            enumerated(Place::ProjectMilestone, milestones),
+            enumerated(Place::ProjectMilestone, milestones)
+                .partly(partial_projects || partial_milestones),
         );
     }
     field(
@@ -437,6 +459,19 @@ mod tests {
         ]);
         assert!(!found.fields.contains_key("estimate"), "no team estimates");
         assert_eq!(found.unmatched_users, ["u-bob (Bob)"]);
+    }
+
+    #[test]
+    fn a_list_read_in_part_marks_its_field() {
+        let mut resp = response();
+        resp["data"]["viewer"]["teams"]["nodes"][0]["cycles"]["pageInfo"] =
+            json!({ "hasNextPage": true });
+        let found = parse(&resp, &[], &people()).unwrap();
+        assert!(found.fields["cycle"].partial);
+        assert!(!found.fields["labels"].partial);
+        assert_eq!(found.truncated, [
+            "only the first 1 upcoming cycles of team ENG were read"
+        ]);
     }
 
     #[test]

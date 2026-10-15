@@ -1,7 +1,7 @@
-//! `ticket fields discover` on GitHub: one query reading the issues
-//! repository's labels, open milestones, assignable users and issue types,
-//! and the fields of `[github] project`, and the parse into the fields they
-//! offer.
+//! `ticket fields discover` on GitHub: one query reading the first page of
+//! the issues repository's labels, open milestones, assignable users and
+//! issue types, and of the fields of `[github] project`, then the rest of
+//! each list page by page, and the parse into the fields they offer.
 
 use std::collections::HashMap;
 
@@ -9,7 +9,10 @@ use anyhow::{Context, Result};
 use devkit_config::{EnumValue, FieldType, Person, Place, ProjectRef};
 use serde_json::Value as Json;
 
-use super::discover::{Discovered, DiscoveredField, field_name, id_name, named, nodes, str_of};
+use super::discover::{
+    Discovered, DiscoveredField, field_name, follow, id_name, named, nodes, partly, str_of,
+    unfinished,
+};
 use crate::{forge::Repo, github::Api};
 
 /// How many of each list one query reads.
@@ -31,29 +34,61 @@ const BUILT_IN: &[&str] = &[
     "TRACKS",
 ];
 
-/// The query reading what [`parse`] needs from `slug` and `project`.
-pub fn query(slug: &str, project: Option<&ProjectRef>) -> String {
-    let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
-    let more = "pageInfo { hasNextPage }";
-    let board = project.map_or_else(String::new, |p| {
-        format!(
-            "\n  repositoryOwner(login: {po}) {{ ... on ProjectV2Owner {{ projectV2(number: {n}) {{ \
-             fields(first: {PAGE}) {{ {more} nodes {{ \
-             ... on ProjectV2FieldCommon {{ id name dataType }} \
-             ... on ProjectV2SingleSelectField {{ options {{ id name }} }} }} }} }} }} }}",
-            po = Json::from(p.owner.as_deref().unwrap_or(owner)),
-            n = p.number,
-        )
-    });
+/// Each repository list [`parse`] reads: its name, its arguments past the
+/// page, the fields of each node, and what a note calls its items.
+const LISTS: [(&str, &str, &str, &str); 4] = [
+    ("labels", "", "name", "labels"),
+    ("milestones", ", states: [OPEN]", "title", "open milestones"),
+    ("assignableUsers", "", "login name", "assignable users"),
+    ("issueTypes", "", "id name", "issue types"),
+];
+
+/// One page of the list `name`, after `after` when given.
+fn list(name: &str, args: &str, fields: &str, after: Option<&str>) -> String {
+    let after = after.map_or_else(String::new, |c| format!(", after: {}", Json::from(c)));
     format!(
-        "query {{\n  repository(owner: {o}, name: {n}) {{\n    \
-         labels(first: {PAGE}) {{ {more} nodes {{ name }} }}\n    \
-         milestones(first: {PAGE}, states: [OPEN]) {{ {more} nodes {{ title }} }}\n    \
-         assignableUsers(first: {PAGE}) {{ {more} nodes {{ login name }} }}\n    \
-         issueTypes(first: {PAGE}) {{ {more} nodes {{ id name }} }}\n  }}{board}\n}}",
-        o = Json::from(owner),
-        n = Json::from(name),
+        "{name}(first: {PAGE}{after}{args}) {{ pageInfo {{ hasNextPage endCursor }} \
+         nodes {{ {fields} }} }}"
     )
+}
+
+/// `slug`'s repository holding `lists`.
+fn repository(slug: &str, lists: &str) -> String {
+    let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
+    format!(
+        "repository(owner: {}, name: {}) {{ {lists} }}",
+        Json::from(owner),
+        Json::from(name)
+    )
+}
+
+/// One page of `project`'s fields, after `after` when given. A
+/// single-select field's options are a plain list GitHub answers whole.
+fn board(slug: &str, project: &ProjectRef, after: Option<&str>) -> String {
+    let owner = slug.split_once('/').map_or(slug, |(o, _)| o);
+    format!(
+        "repositoryOwner(login: {}) {{ ... on ProjectV2Owner {{ projectV2(number: {}) {{ {} }} }} }}",
+        Json::from(project.owner.as_deref().unwrap_or(owner)),
+        project.number,
+        list(
+            "fields",
+            "",
+            "... on ProjectV2FieldCommon { id name dataType } \
+             ... on ProjectV2SingleSelectField { options { id name } }",
+            after
+        )
+    )
+}
+
+/// The query reading the first page of every list [`parse`] needs from
+/// `slug` and `project`.
+pub fn query(slug: &str, project: Option<&ProjectRef>) -> String {
+    let lists: Vec<String> = LISTS
+        .iter()
+        .map(|(name, args, fields, _)| list(name, args, fields, None))
+        .collect();
+    let board = project.map_or_else(String::new, |p| board(slug, p, None));
+    format!("query {{ {} {board} }}", repository(slug, &lists.join(" ")))
 }
 
 /// The fields a [`query`] response offers. The project field named
@@ -74,17 +109,10 @@ pub fn parse(
         people_key: "github",
         ..Discovered::default()
     };
-    for (list, what) in [
-        ("labels", "labels"),
-        ("milestones", "open milestones"),
-        ("assignableUsers", "assignable users"),
-        ("issueTypes", "issue types"),
-    ] {
-        if repo.pointer(&format!("/{list}/pageInfo/hasNextPage")) == Some(&Json::Bool(true)) {
-            out.truncated
-                .push(format!("only the first {PAGE} {what} were read"));
-        }
+    for (list, _, _, what) in LISTS {
+        out.truncated.extend(partly(repo.get(list), what));
     }
+    let partial = |list: &str| unfinished(repo.get(list));
     let field = |name: &str, f: DiscoveredField, out: &mut Discovered| {
         out.fields.insert(name.to_string(), f);
     };
@@ -96,7 +124,8 @@ pub fn parse(
         "labels",
         DiscoveredField::new(FieldType::Enum, Place::Labels)
             .list()
-            .with_values(labels),
+            .with_values(labels)
+            .partly(partial("labels")),
         &mut out,
     );
     let milestones: Vec<EnumValue> = nodes(repo, "/milestones")
@@ -105,7 +134,9 @@ pub fn parse(
         .collect();
     field(
         "milestone",
-        DiscoveredField::new(FieldType::Enum, Place::Milestone).with_values(milestones),
+        DiscoveredField::new(FieldType::Enum, Place::Milestone)
+            .with_values(milestones)
+            .partly(partial("milestones")),
         &mut out,
     );
     field(
@@ -117,7 +148,9 @@ pub fn parse(
     if !types.is_empty() {
         field(
             "type",
-            DiscoveredField::new(FieldType::Enum, Place::IssueType).with_values(types),
+            DiscoveredField::new(FieldType::Enum, Place::IssueType)
+                .with_values(types)
+                .partly(partial("issueTypes")),
             &mut out,
         );
     }
@@ -140,10 +173,8 @@ pub fn parse(
             DiscoveredField::new(FieldType::String, Place::Project),
             &mut out,
         );
-        if board.pointer("/fields/pageInfo/hasNextPage") == Some(&Json::Bool(true)) {
-            out.truncated
-                .push(format!("only the first {PAGE} project fields were read"));
-        }
+        out.truncated
+            .extend(partly(board.get("fields"), "project fields"));
         for f in nodes(board, "/fields") {
             let (Some(id), Some(name), Some(data)) =
                 (str_of(f, "id"), str_of(f, "name"), str_of(f, "dataType"))
@@ -203,7 +234,8 @@ pub fn parse(
     Ok(out)
 }
 
-/// Read `repo`'s fields, and `project`'s, from GitHub.
+/// Read `repo`'s fields, and `project`'s, from GitHub, each list to its
+/// end.
 pub fn fetch(
     repo: &Repo,
     project: Option<&ProjectRef>,
@@ -212,8 +244,28 @@ pub fn fetch(
 ) -> Result<Discovered> {
     let api = Api::new(&repo.host);
     let source = api.token_source();
-    let resp = api.graphql_or_gh(&query(&repo.slug, project), Api::graphql_value)?;
-    super::github_status::check(&resp, source)?;
+    let send = |query: &str| -> Result<Json> {
+        let resp = api.graphql_or_gh(query, Api::graphql_value)?;
+        super::github_status::check(&resp, source)?;
+        Ok(resp)
+    };
+    let slug = &repo.slug;
+    let mut resp = send(&query(slug, project))?;
+    for (name, args, fields, _) in LISTS {
+        follow(&mut resp, &format!("/data/repository/{name}"), |after| {
+            send(&format!(
+                "query {{ {} }}",
+                repository(slug, &list(name, args, fields, Some(after)))
+            ))
+        })?;
+    }
+    if let Some(p) = project {
+        follow(
+            &mut resp,
+            "/data/repositoryOwner/projectV2/fields",
+            |after| send(&format!("query {{ {} }}", board(slug, p, Some(after)))),
+        )?;
+    }
     parse(&resp, status_field, people)
 }
 
@@ -297,7 +349,8 @@ mod tests {
         assert_eq!(found.fields["type"].values[0].id, "IT_bug");
         assert_eq!(found.unmatched_users, ["octo (Octo Cat)"]);
         assert_eq!(found.truncated, [
-            "only the first 100 assignable users were read"
+            "only the first 2 assignable users were read"
         ]);
+        assert!(!found.fields["labels"].partial);
     }
 }

@@ -186,6 +186,38 @@ fn an_agent_writes_without_asking() {
 }
 
 #[test]
+fn github_discover_reads_every_page_of_a_list() {
+    let fake = fields_fake();
+    fake.serve_graphql(DISCOVERED);
+    fake.serve_graphql_nth(
+        1,
+        &DISCOVERED.replace(
+            r#""labels": { "pageInfo": { "hasNextPage": false }"#,
+            r#""labels": { "pageInfo": { "hasNextPage": true, "endCursor": "after-enhancement" }"#,
+        ),
+    );
+    fake.serve_graphql_nth(
+        2,
+        r#"{ "data": { "repository": { "labels": {
+          "pageInfo": { "hasNextPage": false }, "nodes": [{ "name": "wontfix" }]
+        } } } }"#,
+    );
+    stdout(&fake.issue_as("agent", &["fields", "discover"]));
+    let cfg = devkit_config::Config::parse(&devkit_toml(&fake)).unwrap();
+    let labels: Vec<&str> = cfg.ticket.fields.github["labels"]
+        .values
+        .iter()
+        .map(|v| v.name.as_str())
+        .collect();
+    assert_eq!(labels, ["bug", "enhancement", "wontfix"]);
+    assert!(
+        fake.calls().contains("after-enhancement"),
+        "the second page is read after the first's cursor: {}",
+        fake.calls()
+    );
+}
+
+#[test]
 fn discover_writes_the_config_devkit_config_names() {
     let fake = fields_fake();
     fake.serve_graphql(DISCOVERED);

@@ -31,6 +31,9 @@ pub struct DiscoveredField {
     pub r#where: Place,
     /// For an `enum`, every value the tracker offers, in its order.
     pub values: Vec<EnumValue>,
+    /// The tracker answered only part of `values`, so a declared value
+    /// missing from them may still be offered.
+    pub partial: bool,
 }
 
 impl DiscoveredField {
@@ -40,6 +43,7 @@ impl DiscoveredField {
             list: false,
             r#where,
             values: Vec::new(),
+            partial: false,
         }
     }
 
@@ -50,6 +54,12 @@ impl DiscoveredField {
 
     pub fn with_values(mut self, values: Vec<EnumValue>) -> Self {
         self.values = values;
+        self
+    }
+
+    /// Mark `values` as read only in part when `partial`.
+    pub fn partly(mut self, partial: bool) -> Self {
+        self.partial = partial;
         self
     }
 }
@@ -153,13 +163,16 @@ pub(crate) fn read_all(
 /// For [`Discovered::truncated`]: a sentence saying the list of `what` at
 /// `conn` was read only in part, when it has pages left unread.
 pub(crate) fn partly(conn: Option<&Json>, what: &str) -> Option<String> {
-    let conn = conn?;
-    (conn.pointer("/pageInfo/hasNextPage") == Some(&Json::Bool(true))).then(|| {
-        format!(
-            "only the first {} {what} were read",
-            nodes(conn, "").count()
-        )
-    })
+    let conn = conn.filter(|c| unfinished(Some(c)))?;
+    Some(format!(
+        "only the first {} {what} were read",
+        nodes(conn, "").count()
+    ))
+}
+
+/// Whether the connection `conn` has pages left unread.
+pub(crate) fn unfinished(conn: Option<&Json>) -> bool {
+    conn.and_then(|c| c.pointer("/pageInfo/hasNextPage")) == Some(&Json::Bool(true))
 }
 
 /// An enum value read from a node's `id` and `name`, valid in every team.
