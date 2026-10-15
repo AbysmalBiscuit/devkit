@@ -1355,7 +1355,10 @@ fn promote_of_a_closed_todo_is_refused() {
         let out = s.devkit(&["todo", "promote", &step], &AGENT);
         assert_eq!(out.status.code(), Some(1), "{verb}: {}", stderr(&out));
         let err = stderr(&out);
-        assert!(err.contains("not promoted") && err.contains("closed"), "{verb}: {err}");
+        assert!(
+            err.contains("not promoted") && err.contains("closed"),
+            "{verb}: {err}"
+        );
         assert!(!s.calls().contains("issue create"), "{verb}: {}", s.calls());
         assert_eq!(s.proj.todo(&step), before, "{verb}");
     }
