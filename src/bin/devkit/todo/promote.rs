@@ -192,8 +192,9 @@ fn block(at: &Promote, blocked: &Todo, blocker: &Todo) -> Result<()> {
     })?;
     if let Some((key, by)) = tickets {
         eprintln!(
-            "devkit todo: {by} blocks {key} in the todo list only: without \"blocking\" in \
-             [ticket.sync] push the next sync drops the link, so add it on the tracker"
+            "devkit todo: {by} blocks {key} in the todo list only, and the link will be lost at \
+             the next sync, since [ticket.sync] push lacks \"blocking\": add it on the tracker \
+             to keep it"
         );
     }
     Ok(())

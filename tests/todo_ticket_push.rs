@@ -1326,6 +1326,24 @@ fn promote_of_a_ticket_todo_is_refused() {
 }
 
 #[test]
+fn promote_without_blocking_pushed_warns_the_ticket_edge_is_lost_at_sync() {
+    let s = linked("", None, false);
+    let step = add(&s, &["write the parser"]);
+    let out = s.devkit(&["todo", "block", &id_of(&s, 65), "--by", &step], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    files_68(&s, "Todo");
+    let out = s.devkit(&["todo", "promote", &step], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("o/r#68 blocks o/r#65") && err.contains("lost at the next sync"),
+        "{err}"
+    );
+    assert_eq!(s.todo_for("o/r#65").blocked_by, [id_of(&s, 68)]);
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
 fn promote_of_a_closed_todo_is_refused() {
     let s = linked("", None, false);
     files_68(&s, "Todo");
