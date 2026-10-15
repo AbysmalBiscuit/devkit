@@ -324,7 +324,7 @@ pub(super) fn field_verdict(
     if let Err(e) = devkit_config::check_ticket_fields(cfg, kind, provenance) {
         return Verdict::Deny(format!("devkit ticket fields: {e:#}"));
     }
-    let (given, users, mut problems) = given(rule, decls, kind, &cfg.people, input);
+    let (given, users, notes, mut problems) = given(rule, decls, kind, &cfg.people, input);
     let team = fields::team(decls, &given);
     let resolved = match fields::resolve(
         decls,
@@ -355,14 +355,19 @@ pub(super) fn field_verdict(
     if !report.refused.is_empty() {
         return Verdict::Deny(field_denial(rule, tool, kind, decls, &report.refused));
     }
+    let mut context = notes;
     if !report.warned.is_empty() {
-        return Verdict::AllowWith(format!(
+        context.push(format!(
             "devkit ticket fields: this `{tool}` call leaves out warning-level fields of \
              [ticket.fields.{kind}].\n{}",
             blocks(rule, tool, decls, &report.warned)
         ));
     }
-    Verdict::Allow
+    if context.is_empty() {
+        Verdict::Allow
+    } else {
+        Verdict::AllowWith(context.join("\n"))
+    }
 }
 
 /// Whether a call to `kind` writes the repository's own tickets: on GitHub,
@@ -399,18 +404,25 @@ fn origin_slug(cwd: &Path) -> Option<String> {
 /// The call's mapped field values, the items of every key a field maps to
 /// together, with a field whose keys carry only `null`, or `[]` for a list
 /// field, as an explicit none; each `user` value already resolved, since the
-/// call names a user by tracker identity where `--arg` takes an alias; and a
-/// problem for each value of a JSON type the field does not take or a user
-/// no `[people]` entry has as its identity.
+/// call names a user by tracker identity where `--arg` takes an alias; a
+/// note for each user value that is also a `[people]` alias; and a problem
+/// for each value of a JSON type the field does not take or a user the
+/// tracker cannot take.
 fn given(
     rule: &RenderedToolRule,
     decls: &BTreeMap<String, FieldDecl>,
     kind: TrackerKind,
     people: &HashMap<String, Person>,
     input: &Value,
-) -> (Given, BTreeMap<String, Vec<fields::Value>>, Vec<Problem>) {
+) -> (
+    Given,
+    BTreeMap<String, Vec<fields::Value>>,
+    Vec<String>,
+    Vec<Problem>,
+) {
     let mut out = Given::default();
     let mut users = BTreeMap::new();
+    let mut notes = Vec::new();
     let mut problems = Vec::new();
     for (field, keys) in &rule.fields {
         let Some(decl) = decls.get(field) else {
@@ -461,7 +473,10 @@ fn given(
         let mut found = Vec::new();
         for item in items {
             match user(people, kind, &item) {
-                Ok(v) => found.push(v),
+                Ok((v, note)) => {
+                    found.push(v);
+                    notes.extend(note.map(|n| format!("devkit ticket fields: `{field}`: {n}")));
+                }
                 Err(reason) => problems.push(Problem::Invalid {
                     field: field.clone(),
                     value: item,
@@ -471,7 +486,7 @@ fn given(
         }
         users.insert(field.clone(), found);
     }
-    (out, users, problems)
+    (out, users, notes, problems)
 }
 
 /// The JSON a field's input key takes.
@@ -487,16 +502,18 @@ fn json_shape(ty: FieldType, list: bool) -> String {
     }
 }
 
-/// A user as a tracker MCP takes it: the identity on `kind` of a `[people]`
-/// entry, ignoring case. Linear resolves `me`, an email address and a
-/// display name itself, so anything but a user id passes there unchecked. A
-/// bare `[people]` alias is refused naming the identity to send, since the
-/// tracker would read it as a user of its own.
+/// A user as a tracker MCP takes it, with a note for the agent: the identity
+/// on `kind` of a `[people]` entry, ignoring case. Linear resolves `me`, an
+/// email address and a display name itself, so anything but a user id passes
+/// there unchecked; one that is also a `[people]` alias passes with a note
+/// naming that alias's Linear identity, in case the alias was meant. On
+/// GitHub a bare `[people]` alias is refused naming the identity to send,
+/// since GitHub would read it as a login of its own.
 fn user(
     people: &HashMap<String, Person>,
     kind: TrackerKind,
     who: &str,
-) -> Result<fields::Value, String> {
+) -> Result<(fields::Value, Option<String>), String> {
     let who = who.trim();
     let known = people.iter().find_map(|(alias, p)| {
         let id = fields::person_id(p, kind)?;
@@ -506,18 +523,26 @@ fn user(
         })
     });
     if let Some(v) = known {
-        return Ok(v);
+        return Ok((v, None));
     }
     let alias = people
         .iter()
         .find(|(alias, _)| alias.eq_ignore_ascii_case(who));
-    if kind == TrackerKind::Linear && alias.is_none() && !is_uuid(who) {
-        return Ok(fields::Value::User {
+    let identity = alias.map(|(alias, p)| (alias, fields::person_id(p, kind)));
+    if kind == TrackerKind::Linear && !is_uuid(who) {
+        let note = match identity {
+            Some((alias, Some(id))) => Some(format!(
+                "Linear reads `{who}` as a display name; if `[people.{alias}]` is meant, \
+                 pass its Linear identity `{id}` instead"
+            )),
+            _ => None,
+        };
+        let value = fields::Value::User {
             alias: who.to_string(),
             id: who.to_string(),
-        });
+        };
+        return Ok((value, note));
     }
-    let identity = alias.map(|(alias, p)| (alias, fields::person_id(p, kind)));
     Err(match identity {
         Some((_, Some(id))) => format!(
             "is a `[people]` alias, and this call takes the user's {kind} identity: pass `{id}`"
@@ -1148,7 +1173,10 @@ level  = "info"
             assert_eq!(lin(who), Verdict::Allow, "{who}");
         }
         let v = lin("ada");
-        assert!(denied_mentioning(&v, "pass `u-ada`"), "{v:?}");
+        assert!(
+            matches!(&v, Verdict::AllowWith(n) if n.contains("`u-ada`")),
+            "{v:?}"
+        );
     }
 
     #[test]
@@ -1163,8 +1191,8 @@ level  = "info"
         }
         let v = lin("Ada");
         assert!(
-            denied_mentioning(&v, "pass `0b7c4a52-9d1e-4f3a-8c6b-2e5d7f9a1c30`"),
-            "a `[people]` alias still names the identity to pass: {v:?}"
+            matches!(&v, Verdict::AllowWith(n) if n.contains("`0b7c4a52-9d1e-4f3a-8c6b-2e5d7f9a1c30`")),
+            "a `[people]` alias passes naming the identity it stands for: {v:?}"
         );
         let v = lin("6f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a00");
         assert!(

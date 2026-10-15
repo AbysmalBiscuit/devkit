@@ -488,3 +488,30 @@ fn a_broken_config_denies_once_a_rule_matched() {
     );
     assert_eq!(denial(&out), None, "an unmatched call stays allowed");
 }
+
+#[test]
+fn a_people_alias_linear_reads_as_a_display_name_passes_with_its_identity() {
+    let p = project();
+    let config = fields_config().replace(
+        "labels = \"labels\" }",
+        "labels = \"labels\", assignee = \"assignee\" }",
+    );
+    let config = format!(
+        "{config}\n[people.lev]\nlinear = \"u-lev\"\n\n\
+         [ticket.fields.linear.assignee]\ntype = \"user\"\nwhere = \"assignee\"\n\
+         level = \"error\"\n"
+    );
+    std::fs::write(p.path().join("devkit.toml"), config).unwrap();
+    let (t, b) = render(p.path(), "S1", "T", "B");
+    let input = json!({"title": t, "description": b, "team": "ENG", "priority": 2,
+                       "labels": ["L1"], "assignee": "lev"});
+    let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, input));
+    let v: Value = serde_json::from_slice(&out.stdout).expect("one JSON envelope");
+    let hso = &v["hookSpecificOutput"];
+    assert_ne!(hso["permissionDecision"], "deny", "{v}");
+    let context = hso["additionalContext"].as_str().unwrap_or_default();
+    assert!(
+        context.contains("`lev`") && context.contains("`u-lev`"),
+        "{v}"
+    );
+}
