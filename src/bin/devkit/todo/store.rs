@@ -550,6 +550,17 @@ impl Store {
         &self.ticket
     }
 
+    /// The checkout the store was opened from, which ticket events fire in.
+    pub(crate) fn origin(&self) -> Option<&Checkout> {
+        self.origin.as_ref()
+    }
+
+    /// Applies `edit` without firing a ticket event: for a change whose
+    /// ticket a push has already moved.
+    pub(crate) fn apply_unfired(&self, edit: &Edit) -> Result<Vec<StatusChange>> {
+        self.store.apply(edit)
+    }
+
     /// The taskchampion replica this store syncs: `None` for another backend
     /// or a replica with no sync target.
     fn synced_replica(&self) -> Result<Option<&TaskchampionStore>> {

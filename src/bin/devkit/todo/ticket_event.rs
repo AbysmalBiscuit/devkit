@@ -28,8 +28,9 @@ fn event_of(change: &StatusChange) -> Option<IssueEvent> {
     }
 }
 
-/// The root of `checkout` when its repository node is `node`.
-fn root_on(
+/// The root of `checkout` when its repository node is `node`: where a ticket
+/// todo on `node` may move its ticket from.
+pub(crate) fn root_on(
     checkout: &Checkout,
     node: &str,
     config: &TodoConfig,

@@ -2,6 +2,7 @@
 //! `[todo] backend` names.
 
 pub(crate) mod hold;
+pub(crate) mod push;
 pub(crate) mod queue;
 pub(crate) mod store;
 pub(crate) mod sync;
@@ -26,6 +27,7 @@ use devkit_todo::{
     layout::{Facts, Layout},
     native::NativeMap,
     node::{self, GLOBAL, Place},
+    push::LocalStatus,
     render,
     roles::{ResolvedRole, Roles},
     transition,
@@ -91,20 +93,33 @@ pub enum TodoCommand {
         by: Vec<String>,
     },
     /// Mark todos in progress, claiming them for this caller.
+    #[command(after_help = PUSH_HELP)]
     Start {
         ids: Vec<String>,
         /// Start a todo even while a blocker is still open.
         #[arg(long)]
         force: bool,
+        #[arg(long, help = OVERWRITE_HELP)]
+        overwrite_tracker: bool,
     },
     /// Return todos in progress to pending.
     Stop { ids: Vec<String> },
     /// Mark todos completed.
-    Done { ids: Vec<String> },
+    #[command(after_help = PUSH_HELP)]
+    Done {
+        ids: Vec<String>,
+        #[arg(long, help = OVERWRITE_HELP)]
+        overwrite_tracker: bool,
+    },
     /// Return completed todos to pending.
     Undone { ids: Vec<String> },
     /// Drop todos. The record stays, marked cancelled.
-    Cancel { ids: Vec<String> },
+    #[command(after_help = PUSH_HELP)]
+    Cancel {
+        ids: Vec<String>,
+        #[arg(long, help = OVERWRITE_HELP)]
+        overwrite_tracker: bool,
+    },
     /// Replace a todo's text.
     Describe { id: String, text: String },
     /// Nest a todo under another, or change its position.
@@ -201,6 +216,15 @@ pub enum TodoCommand {
         shell: Shell,
     },
 }
+
+const OVERWRITE_HELP: &str = "Write a ticket todo's change over a status the tracker changed since \
+     the last sync. Only on the user's word.";
+
+const PUSH_HELP: &str = "With \"status\" in [ticket.sync] push, a ticket todo's change moves its \
+     ticket before the command returns, as [ticket.events] todo_start, todo_done and todo_cancel \
+     configure; on GitHub, done and cancel also close the issue. A ticket whose status changed \
+     on the tracker since the last sync stops the command, naming both values, and changes \
+     nothing. Other todos in the same command change as usual.";
 
 #[derive(Subcommand)]
 pub enum SchemaAction {
@@ -326,6 +350,13 @@ pub fn run(cli: TodoCli) -> Result<()> {
         refresh_tickets(&store, &cwd, &layout, &facts);
     }
     let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
+    let status_push = |local, overwrite| push::StatusPush {
+        local,
+        overwrite,
+        caller,
+        actor: &actor,
+        cwd: &cwd,
+    };
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
@@ -387,7 +418,11 @@ pub fn run(cli: TodoCli) -> Result<()> {
             let by = resolve_ids(&store, &by)?;
             store.apply(&Edit::Unblock { id, by })?;
         }
-        TodoCommand::Start { ids, force } => {
+        TodoCommand::Start {
+            ids,
+            force,
+            overwrite_tracker,
+        } => {
             let activity = LazyCell::new(|| {
                 Store::activity_for_cli(&cwd)
                     .and_then(|log| log.read_now())
@@ -401,13 +436,26 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     )
                 })
             };
-            start(&store, ids, &actor, gone, force)?
+            let push = status_push(LocalStatus::Start, overwrite_tracker);
+            start(&store, ids, &actor, gone, force, &push)?
         }
         TodoCommand::Stop { ids } | TodoCommand::Undone { ids } => {
-            let _closed = set_status(&store, ids, StatusKind::Pending, &actor)?;
+            let _closed = set_status(&store, ids, StatusKind::Pending, &actor, None)?;
         }
-        TodoCommand::Done { ids } => finish(&fence, ids, StatusKind::Completed, &actor)?,
-        TodoCommand::Cancel { ids } => finish(&fence, ids, StatusKind::Cancelled, &actor)?,
+        TodoCommand::Done {
+            ids,
+            overwrite_tracker,
+        } => {
+            let push = status_push(LocalStatus::Done, overwrite_tracker);
+            finish(&fence, ids, StatusKind::Completed, &actor, &push)?
+        }
+        TodoCommand::Cancel {
+            ids,
+            overwrite_tracker,
+        } => {
+            let push = status_push(LocalStatus::Cancel, overwrite_tracker);
+            finish(&fence, ids, StatusKind::Cancelled, &actor, &push)?
+        }
         TodoCommand::Describe { id, text } => {
             store.apply(&Edit::Describe {
                 id,
@@ -600,11 +648,12 @@ fn project_of(node: String) -> Option<String> {
 /// has been silent past the backstop; otherwise it is refused naming the
 /// holder.
 fn start(
-    store: &impl TodoStore,
+    store: &Store,
     ids: Vec<String>,
     actor: &Holder,
     gone: impl Fn(&Holder) -> bool,
     force: bool,
+    push: &push::StatusPush,
 ) -> Result<()> {
     if !force {
         let listed = graph::with_blockers(store, store.list(&Filter::all())?)?;
@@ -627,7 +676,7 @@ fn start(
             }
         }
     }
-    apply_checked(store, ids, |todo| {
+    apply_checked(store, ids, Some(push), |todo| {
         Ok((
             false,
             match transition(&todo.status, StatusKind::InProgress, actor) {
@@ -649,10 +698,16 @@ fn start(
 }
 
 /// Completes or cancels `ids`, then names the offered todos that became ready.
-fn finish(fence: &Fence, ids: Vec<String>, to: StatusKind, actor: &Holder) -> Result<()> {
+fn finish(
+    fence: &Fence,
+    ids: Vec<String>,
+    to: StatusKind,
+    actor: &Holder,
+    push: &push::StatusPush,
+) -> Result<()> {
     let store = fence.store;
     let before = offered_ids(fence)?;
-    let closed = set_status(store, ids, to, actor)?;
+    let closed = set_status(store, ids, to, actor, Some(push))?;
     if !store.config().print_unblocked || closed.is_empty() {
         return Ok(());
     }
@@ -895,13 +950,14 @@ fn refuse_cycle(store: &impl TodoStore, id: Option<&str>, by: &[String]) -> Resu
 /// Applies the status change and returns the full ids that moved from open
 /// to closed. A todo already closed is not among them.
 fn set_status(
-    store: &impl TodoStore,
+    store: &Store,
     ids: Vec<String>,
     to: StatusKind,
     actor: &Holder,
+    push: Option<&push::StatusPush>,
 ) -> Result<Vec<String>> {
     let closing = matches!(to, StatusKind::Completed | StatusKind::Cancelled);
-    apply_checked(store, ids, |todo| {
+    apply_checked(store, ids, push, |todo| {
         let was_open = matches!(
             todo.status.kind(),
             StatusKind::Pending | StatusKind::InProgress
@@ -918,30 +974,63 @@ fn set_status(
 /// Applies the edit `edit_for` makes of each todo, after checking every id,
 /// so a batch with one unknown or refused todo changes nothing. Returns the
 /// full ids whose pair was marked.
+///
+/// With `push`, the todos it pushes move their tickets one by one after the
+/// others have changed, and the first that fails stops the rest, naming
+/// which todos changed and which did not.
 fn apply_checked(
-    store: &impl TodoStore,
+    store: &Store,
     ids: Vec<String>,
+    push: Option<&push::StatusPush>,
     edit_for: impl Fn(Todo) -> Result<(bool, Edit)>,
 ) -> Result<Vec<String>> {
     if ids.is_empty() {
         bail!("name at least one todo id");
     }
-    let mut edits = Vec::new();
+    let mut checked = Vec::new();
     for id in &ids {
         let Some(todo) = store.get(id)? else {
             bail!("no todo {id}");
         };
-        edits.push(edit_for(todo)?);
+        let (keep, edit) = edit_for(todo.clone())?;
+        checked.push((todo, keep, edit));
     }
+    let (pushed, local): (Vec<_>, Vec<_>) = checked
+        .into_iter()
+        .partition(|(todo, ..)| push.is_some_and(|push| push.pushes(store, todo)));
     let mut marked = Vec::new();
-    for (keep, edit) in edits {
-        let id = match &edit {
-            Edit::SetStatus { id, .. } => id.clone(),
-            _ => String::new(),
-        };
+    let mut changed = Vec::new();
+    for (todo, keep, edit) in local {
         store.apply(&edit)?;
+        changed.push(devkit_todo::short_id(&todo.id).to_string());
         if keep {
-            marked.push(id);
+            marked.push(todo.id);
+        }
+    }
+    let Some(push) = push else {
+        return Ok(marked);
+    };
+    for (at, (todo, keep, edit)) in pushed.iter().enumerate() {
+        let applied = match push::push_status(store, todo, edit, push) {
+            Ok(applied) => applied,
+            Err(err) if ids.len() == 1 => return Err(err),
+            Err(err) => {
+                let not_done: Vec<&str> = pushed[at..]
+                    .iter()
+                    .map(|(todo, ..)| devkit_todo::short_id(&todo.id))
+                    .collect();
+                let done = match changed.is_empty() {
+                    true => "(none)".to_string(),
+                    false => changed.join(" "),
+                };
+                return Err(err.context(format!("done: {done}; not done: {}", not_done.join(" "))));
+            }
+        };
+        if applied {
+            changed.push(devkit_todo::short_id(&todo.id).to_string());
+            if *keep {
+                marked.push(todo.id.clone());
+            }
         }
     }
     Ok(marked)
