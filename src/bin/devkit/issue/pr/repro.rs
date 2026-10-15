@@ -557,15 +557,23 @@ enum Split {
 
 /// How the change from `before` to `after` of the file at `path` splits
 /// between its source and the tests inline in it. A Rust file's tests are
-/// everything from its first `#[cfg(test)]` line on; in another language
+/// its test modules (see [`rust_parts`]), and a file whose test modules
+/// cannot be delimited counts as both when it changed; in another language
 /// the scanner reads, a change in its count of test declarations or
 /// assertions counts as both, since the two cannot be told apart.
 fn split(path: &str, before: Option<&str>, after: Option<&str>) -> Split {
     let (before, after) = (before.unwrap_or(""), after.unwrap_or(""));
     match Lang::of(path) {
         Some(Lang::Rust) => {
-            let (src_was, tests_was) = rust_parts(before);
-            let (src_now, tests_now) = rust_parts(after);
+            let (Some((src_was, tests_was)), Some((src_now, tests_now))) =
+                (rust_parts(before), rust_parts(after))
+            else {
+                return if before == after {
+                    Split::Source
+                } else {
+                    Split::Both
+                };
+            };
             match (src_was != src_now, tests_was != tests_now) {
                 (_, false) => Split::Source,
                 (false, true) => Split::Tests,
@@ -584,16 +592,142 @@ fn split(path: &str, before: Option<&str>, after: Option<&str>) -> Split {
     }
 }
 
-/// `text` split at the start of its first `#[cfg(test)]` line.
-fn rust_parts(text: &str) -> (&str, &str) {
-    let mut at = 0;
-    for line in text.split_inclusive('\n') {
-        if line.trim_start().starts_with("#[cfg(test)]") {
-            return text.split_at(at);
+/// `text` split into its source lines and the lines of its test modules: a
+/// `mod` item under a `#[cfg]` that holds only in test builds, from that
+/// attribute to the `}` line indented as the `mod` line is. `None` when a
+/// test module's closing line is not found, so the split is unknown.
+fn rust_parts(text: &str) -> Option<(String, String)> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let (mut source, mut tests) = (String::new(), String::new());
+    let mut i = 0;
+    while i < lines.len() {
+        match test_module(&lines, i) {
+            Module::Ends(end) => {
+                tests.extend(lines[i..=end].iter().copied());
+                i = end + 1;
+            }
+            Module::Absent => {
+                source.push_str(lines[i]);
+                i += 1;
+            }
+            Module::Unbounded => return None,
         }
-        at += line.len();
     }
-    (text, "")
+    Some((source, tests))
+}
+
+/// Whether a test module starts at `lines[at]`, and where it ends.
+enum Module {
+    Absent,
+    /// It ends at this line index.
+    Ends(usize),
+    /// It starts here, but where it ends was not found.
+    Unbounded,
+}
+
+fn test_module(lines: &[&str], at: usize) -> Module {
+    let first = lines[at].trim_start();
+    let Some(rest) = first.strip_prefix("#[cfg(") else {
+        return Module::Absent;
+    };
+    let Some((predicate, after)) = balanced(rest) else {
+        return Module::Absent;
+    };
+    let Some(after) = after.strip_prefix(']') else {
+        return Module::Absent;
+    };
+    if !only_in_tests(predicate) {
+        return Module::Absent;
+    }
+    let mut item = at;
+    let mut text = after.trim();
+    while text.is_empty() || text.starts_with("#[") || text.starts_with("//") {
+        item += 1;
+        let Some(line) = lines.get(item) else {
+            return Module::Absent;
+        };
+        text = line.trim();
+    }
+    let Some(module) = strip_visibility(text).strip_prefix("mod ") else {
+        return Module::Absent;
+    };
+    if module.trim_end().ends_with(';') || module.trim_end().ends_with('}') {
+        return Module::Ends(item);
+    }
+    if !module.trim_end().ends_with('{') {
+        return Module::Unbounded;
+    }
+    let indent = &lines[item][..lines[item].len() - lines[item].trim_start().len()];
+    lines
+        .iter()
+        .enumerate()
+        .skip(item + 1)
+        .find(|(_, line)| {
+            line.strip_prefix(indent)
+                .and_then(|l| l.strip_prefix('}'))
+                .is_some_and(|l| l.trim().is_empty() || l.trim_start().starts_with("//"))
+        })
+        .map_or(Module::Unbounded, |(end, _)| Module::Ends(end))
+}
+
+/// `text` up to the `)` closing a `(` already read, and what follows it.
+fn balanced(text: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+    for (i, c) in text.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some((&text[..i], &text[i + 1..])),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether the `cfg` predicate `predicate` holds only in test builds: it is
+/// `test`, or an `all(...)` with `test` among its arguments.
+fn only_in_tests(predicate: &str) -> bool {
+    let predicate = predicate.trim();
+    if predicate == "test" {
+        return true;
+    }
+    let Some((args, rest)) = predicate.strip_prefix("all(").and_then(balanced) else {
+        return false;
+    };
+    if !rest.trim().is_empty() {
+        return false;
+    }
+    let mut depth = 0usize;
+    let mut start = 0;
+    let mut found = false;
+    for (i, c) in args.char_indices().chain([(args.len(), ',')]) {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                found |= only_in_tests(&args[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// `item` without a leading `pub` or `pub(...)`.
+fn strip_visibility(item: &str) -> &str {
+    let Some(rest) = item.strip_prefix("pub") else {
+        return item;
+    };
+    let rest = match rest.strip_prefix('(').and_then(balanced) {
+        Some((_, after)) => after,
+        None => rest,
+    };
+    if rest.starts_with(char::is_whitespace) {
+        rest.trim_start()
+    } else {
+        item
+    }
 }
 
 /// The selector an item ending `(proof: repro <selector>)` names: `None`
@@ -712,6 +846,55 @@ mod tests {
         assert_eq!(split("a.rs", None, Some(src)), Split::Both);
         assert_eq!(split("a.rs", None, Some("fn f() {}\n")), Split::Source);
         assert_eq!(split("a.txt", Some("a"), Some("b")), Split::Source);
+    }
+
+    #[test]
+    fn a_cfg_test_item_that_is_not_a_module_is_source() {
+        let src = "#[cfg(test)]\nuse std::fmt;\n\nfn f() -> u8 { 1 }\n\n#[cfg(test)]\nmod tests \
+                   {\n    fn t() {}\n}\n";
+        let fixed = src.replace("{ 1 }", "{ 2 }");
+        let tested = src.replace("fn t() {}", "fn t() { assert!(true) }");
+        assert_eq!(split("a.rs", Some(src), Some(&fixed)), Split::Source);
+        assert_eq!(split("a.rs", Some(src), Some(&tested)), Split::Tests);
+        let both = fixed.replace("fn t() {}", "fn t() { assert!(true) }");
+        assert_eq!(split("a.rs", Some(src), Some(&both)), Split::Both);
+    }
+
+    #[test]
+    fn a_module_under_a_cfg_naming_test_among_others_holds_tests() {
+        let src = "fn f() -> u8 { 1 }\n\n#[cfg(all(test, target_os = \"linux\"))]\nmod tests {\n    \
+                   fn t() {}\n}\n";
+        let tested = src.replace("fn t() {}", "fn t() { assert!(true) }");
+        let fixed = src.replace("{ 1 }", "{ 2 }");
+        assert_eq!(split("a.rs", Some(src), Some(&tested)), Split::Tests);
+        assert_eq!(split("a.rs", Some(src), Some(&fixed)), Split::Source);
+    }
+
+    #[test]
+    fn source_after_a_test_module_is_source() {
+        let src = "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n\nfn f() -> u8 { 1 }\n";
+        let fixed = src.replace("{ 1 }", "{ 2 }");
+        assert_eq!(split("a.rs", Some(src), Some(&fixed)), Split::Source);
+    }
+
+    #[test]
+    fn a_module_compiled_outside_tests_is_source() {
+        for cfg in ["not(test)", "any(test, feature = \"x\")"] {
+            let src = format!("#[cfg({cfg})]\nmod real {{\n    fn f() -> u8 {{ 1 }}\n}}\n");
+            let fixed = src.replace("{ 1 }", "{ 2 }");
+            assert_eq!(
+                split("a.rs", Some(&src), Some(&fixed)),
+                Split::Source,
+                "{cfg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_test_module_with_no_closing_brace_is_both() {
+        let src = "fn f() -> u8 { 1 }\n\n#[cfg(test)]\nmod tests {\n    fn t() {}\n";
+        let fixed = src.replace("{ 1 }", "{ 2 }");
+        assert_eq!(split("a.rs", Some(src), Some(&fixed)), Split::Both);
     }
 
     fn ran(exit: i32) -> Ran {
