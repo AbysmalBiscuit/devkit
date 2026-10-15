@@ -946,7 +946,9 @@ impl Tracker for GithubTracker {
     fn ticket_key(&self, input: &str) -> Result<String> {
         let s = input.trim();
         let id = self.issue_ref(s.strip_prefix('#').unwrap_or(s))?.id;
-        let number = id.parse().with_context(|| format!("bad issue number {id}"))?;
+        let number = id
+            .parse()
+            .with_context(|| format!("bad issue number {id}"))?;
         Ok(super::github_tickets::ticket_key(&self.repo.slug, number))
     }
 
