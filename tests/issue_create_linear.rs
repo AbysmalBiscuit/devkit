@@ -418,6 +418,37 @@ fn an_edit_moving_the_ticket_to_another_team_reads_it_back_by_its_id() {
 }
 
 #[test]
+fn a_team_move_that_drops_a_cycle_reports_it() {
+    let config = format!(
+        "{FIELDS}\n[ticket.fields.linear.cycle]\ntype   = \"enum\"\nwhere  = \"cycle\"\n\
+         values = [{{ name = \"Sprint 1\", id = \"cyc-1\", teams = [\"ENG\"] }}]\n"
+    );
+    let fake = project(&config);
+    let linear = LinearFake::start();
+    let mut before: serde_json::Value =
+        serde_json::from_str(&by_identifier(&read(&["lbl-bug"], 2))).unwrap();
+    before["data"]["issue"]["cycle"] = serde_json::json!({ "id": "cyc-1" });
+    linear.answer(ENG_42, &before.to_string());
+    linear.answer(
+        "id: { eq: ",
+        &read_in(("team-ops", "OPS"), 7, &["lbl-bug"], 2),
+    );
+    linear.answer("issueUpdate(", UPDATED);
+    let out = run(&fake, &linear, &["edit", "ENG-42", "--arg", "team=OPS"]);
+    assert!(!out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("`cycle`") && err.contains("`Sprint 1`"),
+        "names the dropped field and its old value: {err}"
+    );
+    assert!(
+        !err.contains("`labels`") && !err.contains("`priority`"),
+        "fields the move kept are not reported: {err}"
+    );
+    assert_eq!(stdout(&out).trim(), "https://linear.app/acme/issue/OPS-7/t");
+}
+
+#[test]
 fn an_edit_finds_the_ticket_by_its_identifier_from_before_a_team_move() {
     let fake = project(FIELDS);
     let linear = LinearFake::start();

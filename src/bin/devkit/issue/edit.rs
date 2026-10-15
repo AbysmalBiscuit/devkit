@@ -59,6 +59,37 @@ fn shown(
     shown
 }
 
+/// One line per declared field the edit did not name whose value a move to
+/// another team changed, as Linear drops team-bound values on a move.
+fn lost_in_move(resolved: &Resolved, before: &Current, after: &Current) -> Vec<String> {
+    let none = Vec::new();
+    before
+        .0
+        .keys()
+        .chain(after.0.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|f| !resolved.fields.contains_key(*f) && !resolved.nones.contains(*f))
+        .filter_map(|f| {
+            let (was, is) = (
+                before.0.get(f).unwrap_or(&none),
+                after.0.get(f).unwrap_or(&none),
+            );
+            (was != is).then(|| {
+                let shown = |v: &[String]| match v {
+                    [] => "nothing".to_string(),
+                    v => format!("`{}`", v.join(", ")),
+                };
+                format!(
+                    "`{f}` held {} before the move to another team and reads back as {}",
+                    shown(was),
+                    shown(is)
+                )
+            })
+        })
+        .collect()
+}
+
 fn nothing_to_edit() -> anyhow::Error {
     anyhow!(
         "nothing to edit: pass --body, --title, or a field as --arg <field>=... or --none <field>"
@@ -210,15 +241,20 @@ fn linear(args: EditArgs, sel: &Selected, cfg: &Config) -> Result<()> {
         .map_err(|e| field_write::linear_refused(e, decls, &resolved))
         .with_context(|| format!("Linear refused or did not answer the edit of {id}"))?;
 
-    let (after, problems) =
+    let team_before = before.team.clone();
+    let (after, mut problems) =
         field_write::linear_finish(&writer, before, decls, &resolved, &refs, true);
+    if after.team != team_before {
+        let kept = after.current(decls, &cfg.people);
+        problems.extend(lost_in_move(&resolved, &current, &kept));
+    }
     println!("{}", field_write::linear_link(&after));
     field_write::warn(decls, &report);
     field_write::fail_on(
         &problems,
         format!(
-            "{id} was edited, but the fields above did not take. Rerun `devkit ticket edit {id}` \
-             with them"
+            "{id} was edited, but the fields above do not hold what they should. Rerun \
+             `devkit ticket edit {id}` with them"
         ),
     )
 }
