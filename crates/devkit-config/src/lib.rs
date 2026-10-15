@@ -365,7 +365,7 @@ impl<'de> Deserialize<'de> for HoldStop {
     strum::VariantNames,
 )]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+#[strum(serialize_all = "lowercase")]
 pub enum IdStyle {
     /// Tracker keys, word names, and non-uuid ids whole.
     #[default]
