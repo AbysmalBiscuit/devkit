@@ -228,29 +228,79 @@ fn a_human_without_a_terminal_must_pass_yes() {
 fn linear_discover_records_team_scoped_values_for_the_named_team() {
     let fake = ghfake::Fake::without_pr("[tracker]\nkind = \"linear\"\n");
     let linear = linearfake::LinearFake::start();
+    let page = |nodes: &str, next: Option<&str>| {
+        format!(
+            r#"{{ "pageInfo": {{ "hasNextPage": {}, "endCursor": {} }}, "nodes": {nodes} }}"#,
+            next.is_some(),
+            next.map_or("null".to_string(), |c| format!("\"{c}\""))
+        )
+    };
     linear.answer(
-        "issuePriorityValues",
-        r#"{ "data": {
-          "teams": { "pageInfo": { "hasNextPage": false }, "nodes": [{
-            "id": "t-eng", "key": "ENG", "name": "Engineering", "issueEstimationType": "fibonacci",
-            "cycles": { "nodes": [{ "id": "cyc-1", "number": 4, "name": "" }] },
-            "projects": { "nodes": [] }
-          }] },
-          "issueLabels": { "pageInfo": { "hasNextPage": false }, "nodes": [
+        "teams(first",
+        &format!(
+            r#"{{ "data": {{ "teams": {} }} }}"#,
+            page(
+                r#"[{ "id": "t-eng", "key": "ENG", "name": "Engineering", "issueEstimationType": "fibonacci" }]"#,
+                None
+            )
+        ),
+    );
+    linear.answer(
+        r#""after":"cyc-next""#,
+        &format!(
+            r#"{{ "data": {{ "team": {{ "cycles": {} }} }} }}"#,
+            page(r#"[{ "id": "cyc-2", "number": 5, "name": "" }]"#, None)
+        ),
+    );
+    linear.answer(
+        "cycles(first",
+        &format!(
+            r#"{{ "data": {{ "team": {{ "cycles": {} }} }} }}"#,
+            page(
+                r#"[{ "id": "cyc-1", "number": 4, "name": "" }]"#,
+                Some("cyc-next")
+            )
+        ),
+    );
+    linear.answer(
+        "projects(first",
+        &format!(
+            r#"{{ "data": {{ "team": {{ "projects": {} }} }} }}"#,
+            page("[]", None)
+        ),
+    );
+    linear.answer(
+        "issueLabels(first",
+        &format!(
+            r#"{{ "data": {{ "issueLabels": {} }} }}"#,
+            page(
+                r#"[
             { "id": "L1", "name": "infra", "isGroup": false, "team": { "key": "ENG" } },
             { "id": "L2", "name": "bug", "isGroup": false, "team": null }
-          ] },
-          "issuePriorityValues": [{ "priority": 1, "label": "Urgent" }],
-          "users": { "pageInfo": { "hasNextPage": false }, "nodes": [] }
-        } }"#,
+          ]"#,
+                None
+            )
+        ),
+    );
+    linear.answer(
+        "issuePriorityValues",
+        r#"{ "data": { "issuePriorityValues": [{ "priority": 1, "label": "Urgent" }] } }"#,
+    );
+    linear.answer(
+        "users(first",
+        &format!(r#"{{ "data": {{ "users": {} }} }}"#, page("[]", None)),
     );
     let mut env = linear.env().to_vec();
     env.push(("DEVKIT_CALLER", "agent"));
     let out = stdout(&fake.issue_with_env(&["fields", "discover", "--team", "ENG"], &env));
     assert!(out.contains("added [ticket.fields.linear.team]"), "{out}");
-    let sent = linear.sent("issuePriorityValues");
-    let query = sent[0]["query"].as_str().unwrap();
-    assert!(query.contains(r#"in: ["ENG"]"#), "{query}");
+    let sent = linear.sent("teams(first");
+    assert_eq!(sent[0]["variables"]["keys"], serde_json::json!(["ENG"]));
+    assert_eq!(
+        linear.sent("cycles(first").len(),
+        2,
+        "the cycles are read page by page"
+    );
     let after = std::fs::read_to_string(fake.project().join("devkit.toml")).unwrap();
     let cfg = devkit_config::Config::parse(&after).unwrap();
     let fields = &cfg.ticket.fields.linear;
@@ -266,10 +316,30 @@ fn linear_discover_records_team_scoped_values_for_the_named_team() {
         .find(|v| v.id == "L2")
         .unwrap();
     assert!(bug.teams.is_empty(), "{after}");
-    assert_eq!(fields["cycle"].values[0].teams, ["ENG"], "{after}");
+    let cycles: Vec<(&str, &[String])> = fields["cycle"]
+        .values
+        .iter()
+        .map(|v| (v.id.as_str(), v.teams.as_slice()))
+        .collect();
+    assert_eq!(
+        cycles,
+        [
+            ("cyc-1", &["ENG".to_string()][..]),
+            ("cyc-2", &["ENG".to_string()][..])
+        ],
+        "{after}"
+    );
     assert_eq!(fields["team"].values[0].id, "t-eng");
     assert!(fields.contains_key("estimate"), "{after}");
     assert!(!after.contains("state"), "{after}");
+}
+
+#[test]
+fn linearfake_refuses_a_list_nested_in_a_list_of_full_pages() {
+    let nested = "query { teams(first: 250) { nodes { projects(first: 250) { nodes { id } } } } }";
+    assert!(linearfake::complexity(nested) > linearfake::MAX_COMPLEXITY);
+    let flat = "query($after: String) { teams(first: 250, after: $after) { nodes { id } } }";
+    assert!(linearfake::complexity(flat) <= linearfake::MAX_COMPLEXITY);
 }
 
 #[test]

@@ -8,6 +8,7 @@ use devkit_config::{Assignee, MatchRule, ProjectRole};
 use serde_json::{Value, json};
 
 use super::{
+    discover::next_cursor,
     linear::{parse_id, post_graphql_with},
     status::same_status,
     tickets::{SyncedTicket, TicketStatus, in_closed_name},
@@ -115,17 +116,6 @@ fn parse_issue(v: &Value) -> Option<SyncedTicket> {
             .and_then(Value::as_str)
             .map(String::from),
     })
-}
-
-/// The cursor of the page after `connection`, when there is one.
-fn next_cursor(connection: &Value) -> Option<String> {
-    match connection.pointer("/pageInfo/hasNextPage") {
-        Some(Value::Bool(true)) => connection
-            .pointer("/pageInfo/endCursor")
-            .and_then(Value::as_str)
-            .map(String::from),
-        _ => None,
-    }
 }
 
 /// The tickets on one issues page and the cursor of the next.

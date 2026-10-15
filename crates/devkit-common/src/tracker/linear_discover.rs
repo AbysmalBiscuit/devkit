@@ -1,41 +1,151 @@
-//! `ticket fields discover` on Linear: one query reading the viewer's teams,
-//! or the teams `--team` names, with their cycles, projects and project
+//! `ticket fields discover` on Linear: the viewer's teams, or the teams
+//! `--team` names, with each team's cycles and projects and each project's
 //! milestones, plus the workspace's labels, priority scale and users, and
-//! the parse into the fields they offer.
+//! the parse into the fields they offer. Each list is its own paged query,
+//! since Linear multiplies a nested list's cost by its parent's page size.
 
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
 use devkit_config::{EnumValue, FieldType, Person, Place};
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
-use super::discover::{Discovered, DiscoveredField, id_name, nodes, str_of};
+use super::discover::{Discovered, DiscoveredField, id_name, nodes, partly, read_all, str_of};
 
-/// How many of each list one query reads.
+/// How many of a list one request reads: Linear's largest page.
 const PAGE: u32 = 250;
 
-/// The query reading what [`parse`] needs: the viewer's teams, or with
-/// `teams` the teams of those keys.
-pub fn query(teams: &[String]) -> String {
-    let fields = format!(
-        "pageInfo {{ hasNextPage }} nodes {{ id key name issueEstimationType \
-         cycles(first: {PAGE}, filter: {{ isPast: {{ eq: false }} }}) {{ nodes {{ id number name }} }} \
-         projects(first: {PAGE}) {{ nodes {{ id name projectMilestones(first: {PAGE}) {{ nodes {{ id name }} }} }} }} }}"
-    );
-    let teams = if teams.is_empty() {
-        format!("viewer {{ teams(first: {PAGE}) {{ {fields} }} }}")
+/// One page of the list `name`, after `$after`, with `args` added to its
+/// arguments.
+fn list(name: &str, args: &str, fields: &str) -> String {
+    format!(
+        "{name}(first: {PAGE}, after: $after{args}) {{ pageInfo {{ hasNextPage endCursor }} \
+         nodes {{ {fields} }} }}"
+    )
+}
+
+/// The query reading one page of the teams [`parse`] reads: the viewer's,
+/// or with `named` those whose keys `$keys` holds.
+fn teams_query(named: bool) -> String {
+    let fields = "id key name issueEstimationType";
+    if named {
+        format!(
+            "query($after: String, $keys: [String!]) {{ {} }}",
+            list("teams", ", filter: { key: { in: $keys } }", fields)
+        )
     } else {
         format!(
-            "teams(first: {PAGE}, filter: {{ key: {{ in: {} }} }}) {{ {fields} }}",
-            Json::from(teams.to_vec())
+            "query($after: String) {{ viewer {{ {} }} }}",
+            list("teams", "", fields)
         )
-    };
+    }
+}
+
+/// One page of a list of the team `$team`.
+fn team_query(name: &str, args: &str, fields: &str) -> String {
     format!(
-        "query {{\n  {teams}\n  \
-         issueLabels(first: {PAGE}) {{ pageInfo {{ hasNextPage }} nodes {{ id name isGroup team {{ key }} }} }}\n  \
-         issuePriorityValues {{ priority label }}\n  \
-         users(first: {PAGE}) {{ pageInfo {{ hasNextPage }} nodes {{ id name active }} }}\n}}"
+        "query($team: String!, $after: String) {{ team(id: $team) {{ {} }} }}",
+        list(name, args, fields)
     )
+}
+
+/// One page of the milestones of the project `$project`.
+fn milestones_query() -> String {
+    format!(
+        "query($project: String!, $after: String) {{ project(id: $project) {{ {} }} }}",
+        list("projectMilestones", "", "id name")
+    )
+}
+
+/// One page of the workspace list `name`.
+fn workspace_query(name: &str, fields: &str) -> String {
+    format!("query($after: String) {{ {} }}", list(name, "", fields))
+}
+
+const PRIORITIES_QUERY: &str = "query { issuePriorityValues { priority label } }";
+
+/// Send one GraphQL query with its variables, answering its response.
+type Post<'a> = dyn FnMut(&str, Json) -> Result<Json> + 'a;
+
+/// The list at `at` in what `query` answers with `vars`, read to its end.
+fn read(post: &mut Post<'_>, query: &str, vars: &Json, at: &str) -> Result<Json> {
+    read_all(at, |after| {
+        let mut vars = vars.clone();
+        vars["after"] = after.into();
+        post(query, vars)
+    })
+}
+
+/// Every list [`parse`] reads, each read to its end through `post`, laid
+/// out as one response: the teams at `/data/viewer/teams`, or with `asked`
+/// at `/data/teams`, each holding its `cycles` and its `projects`, each
+/// project its `projectMilestones`; then `issueLabels`,
+/// `issuePriorityValues` and `users`.
+fn gather(asked: &[String], post: &mut Post<'_>) -> Result<Json> {
+    let (query, vars, at) = if asked.is_empty() {
+        (teams_query(false), json!({}), "/data/viewer/teams")
+    } else {
+        (teams_query(true), json!({ "keys": asked }), "/data/teams")
+    };
+    let mut teams = read(post, &query, &vars, at)?;
+    let cycles = team_query(
+        "cycles",
+        ", filter: { isPast: { eq: false } }",
+        "id number name",
+    );
+    let projects = team_query("projects", "", "id name");
+    let milestones = milestones_query();
+    let mut read_milestones: HashMap<String, Json> = HashMap::new();
+    for team in teams
+        .get_mut("nodes")
+        .and_then(Json::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = str_of(team, "id").map(String::from) else {
+            continue;
+        };
+        let vars = json!({ "team": id });
+        team["cycles"] = read(post, &cycles, &vars, "/data/team/cycles")?;
+        let mut found = read(post, &projects, &vars, "/data/team/projects")?;
+        for project in found
+            .get_mut("nodes")
+            .and_then(Json::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            let Some(pid) = str_of(project, "id").map(String::from) else {
+                continue;
+            };
+            let ms = match read_milestones.get(&pid) {
+                Some(ms) => ms.clone(),
+                None => {
+                    let vars = json!({ "project": pid });
+                    let ms = read(post, &milestones, &vars, "/data/project/projectMilestones")?;
+                    read_milestones.insert(pid, ms.clone());
+                    ms
+                }
+            };
+            project["projectMilestones"] = ms;
+        }
+        team["projects"] = found;
+    }
+    let labels = workspace_query("issueLabels", "id name isGroup team { key }");
+    let users = workspace_query("users", "id name active");
+    let mut data = json!({
+        "issueLabels": read(post, &labels, &json!({}), "/data/issueLabels")?,
+        "issuePriorityValues": post(PRIORITIES_QUERY, Json::Null)?
+            .pointer_mut("/data/issuePriorityValues")
+            .map(Json::take)
+            .unwrap_or(Json::Null),
+        "users": read(post, &users, &json!({}), "/data/users")?,
+    });
+    if asked.is_empty() {
+        data["viewer"] = json!({ "teams": teams });
+    } else {
+        data["teams"] = teams;
+    }
+    Ok(json!({ "data": data }))
 }
 
 /// Add a value valid in `team` to `values`, or `team` to the value of the
@@ -85,10 +195,7 @@ pub fn parse(
         ("/issueLabels", "labels"),
         ("/users", "users"),
     ] {
-        if data.pointer(&format!("{pointer}/pageInfo/hasNextPage")) == Some(&Json::Bool(true)) {
-            out.truncated
-                .push(format!("only the first {PAGE} {what} were read"));
-        }
+        out.truncated.extend(partly(data.pointer(pointer), what));
     }
 
     let mut team_values = Vec::new();
@@ -104,6 +211,14 @@ pub fn parse(
             teams: Vec::new(),
         });
         estimates |= str_of(team, "issueEstimationType").is_some_and(|t| t != "notUsed");
+        out.truncated.extend(partly(
+            team.get("cycles"),
+            &format!("upcoming cycles of team {key}"),
+        ));
+        out.truncated.extend(partly(
+            team.get("projects"),
+            &format!("projects of team {key}"),
+        ));
         for c in nodes(team, "/cycles") {
             let Some(cid) = str_of(c, "id") else { continue };
             let name = match (
@@ -121,6 +236,12 @@ pub fn parse(
                 continue;
             };
             add(&mut projects, pid, pname, key);
+            let what = format!("milestones of project {pname}");
+            if let Some(t) = partly(p.get("projectMilestones"), &what)
+                && !out.truncated.contains(&t)
+            {
+                out.truncated.push(t);
+            }
             for m in nodes(p, "/projectMilestones") {
                 if let (Some(mid), Some(mname)) = (str_of(m, "id"), str_of(m, "name")) {
                     add(&mut milestones, mid, mname, key);
@@ -223,7 +344,9 @@ pub fn fetch(key: &str, teams: &[String], people: &HashMap<String, Person>) -> R
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty())
         .collect();
-    let resp = super::linear::post_graphql(&query(&teams), key, "fields_discover")?;
+    let resp = gather(&teams, &mut |query, vars| {
+        super::linear::post_graphql_with(query, vars, key, "fields_discover")
+    })?;
     parse(&resp, &teams, people)
 }
 
@@ -325,16 +448,109 @@ mod tests {
             found.fields.keys()
         );
         assert!(!found.fields.contains_key("state") && !found.fields.contains_key("status"));
-        assert!(!query(&[]).contains("states"));
+        let mut sent = Vec::new();
+        gather(&[], &mut |q, _| {
+            sent.push(q.to_string());
+            Ok(json!({ "data": null }))
+        })
+        .unwrap();
+        assert!(sent.iter().all(|q| !q.contains("states")), "{sent:?}");
+    }
+
+    /// One page of `nodes`, with a next page at `next` when given.
+    fn page(nodes: Json, next: Option<&str>) -> Json {
+        json!({ "pageInfo": { "hasNextPage": next.is_some(), "endCursor": next }, "nodes": nodes })
+    }
+
+    #[test]
+    fn each_list_is_read_on_its_own_to_its_end() {
+        let mut sent = Vec::new();
+        let resp = gather(&[], &mut |q, vars| {
+            sent.push(q.to_string());
+            let after = vars["after"].as_str();
+            let at = |pointer: &str, v: Json| {
+                let mut out = json!({ "data": {} });
+                let mut at = &mut out["data"];
+                for key in pointer.split('/').filter(|k| !k.is_empty()) {
+                    at = &mut at[key];
+                }
+                *at = v;
+                out
+            };
+            Ok(if q.contains("viewer") {
+                at(
+                    "viewer/teams",
+                    page(
+                        json!([
+                            { "id": "t-eng", "key": "ENG", "issueEstimationType": "notUsed" },
+                            { "id": "t-ops", "key": "OPS", "issueEstimationType": "notUsed" }
+                        ]),
+                        None,
+                    ),
+                )
+            } else if q.contains("cycles(") {
+                let id = vars["team"].as_str().unwrap();
+                match after {
+                    None => at(
+                        "team/cycles",
+                        page(
+                            json!([{ "id": format!("{id}-c1"), "number": 1 }]),
+                            Some("p2"),
+                        ),
+                    ),
+                    Some(_) => at(
+                        "team/cycles",
+                        page(json!([{ "id": format!("{id}-c2"), "number": 2 }]), None),
+                    ),
+                }
+            } else if q.contains("projects(") {
+                at(
+                    "team/projects",
+                    page(json!([{ "id": "prj-1", "name": "Platform" }]), None),
+                )
+            } else if q.contains("projectMilestones(") {
+                at(
+                    "project/projectMilestones",
+                    page(json!([{ "id": "ms-1", "name": "Beta" }]), None),
+                )
+            } else if q.contains("issueLabels(") {
+                at("issueLabels", page(json!([]), None))
+            } else if q.contains("users(") {
+                at("users", page(json!([]), None))
+            } else {
+                json!({ "data": { "issuePriorityValues": [] } })
+            })
+        })
+        .unwrap();
+        assert!(
+            sent.iter().all(|q| q.matches("first:").count() <= 1),
+            "no list nests another: {sent:#?}"
+        );
+        assert_eq!(
+            sent.iter()
+                .filter(|q| q.contains("projectMilestones"))
+                .count(),
+            1,
+            "a project two teams share is read once"
+        );
+        let found = parse(&resp, &[], &people()).unwrap();
+        let cycles: Vec<String> = values(&found, "cycle").into_iter().map(|v| v.1).collect();
+        assert_eq!(cycles, ["t-eng-c1", "t-eng-c2", "t-ops-c1", "t-ops-c2"]);
+        assert_eq!(values(&found, "project_milestone")[0].2, s(&["ENG", "OPS"]));
+        assert!(found.truncated.is_empty(), "{:?}", found.truncated);
     }
 
     #[test]
     fn team_option_limits_the_teams_read() {
-        let q = query(&s(&["ENG"]));
-        assert!(
-            q.contains(r#"teams(first: 250, filter: { key: { in: ["ENG"] } })"#),
-            "{q}"
-        );
+        let mut sent = Vec::new();
+        gather(&s(&["ENG"]), &mut |q, vars| {
+            sent.push((q.to_string(), vars));
+            Ok(json!({ "data": null }))
+        })
+        .unwrap();
+        let (q, vars) = &sent[0];
+        assert!(q.contains("filter: { key: { in: $keys } }"), "{q}");
+        assert_eq!(vars["keys"], json!(["ENG"]));
         assert!(!q.contains("viewer"), "{q}");
         let mut resp = response();
         let teams = resp["data"]["viewer"]["teams"].take();
