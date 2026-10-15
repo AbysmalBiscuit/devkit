@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use devkit_config::{EnumValue, FieldType, Person, Place, ProjectRef};
 use serde_json::Value as Json;
 
-use super::discover::{Discovered, DiscoveredField, field_name, named};
+use super::discover::{Discovered, DiscoveredField, field_name, id_name, named, nodes, str_of};
 use crate::{forge::Repo, github::Api};
 
 /// How many of each list one query reads.
@@ -38,17 +38,6 @@ pub fn query(slug: &str, project: Option<&ProjectRef>) -> String {
         o = Json::from(owner),
         n = Json::from(name),
     )
-}
-
-fn nodes<'a>(v: &'a Json, pointer: &str) -> impl Iterator<Item = &'a Json> {
-    v.pointer(&format!("{pointer}/nodes"))
-        .and_then(Json::as_array)
-        .into_iter()
-        .flatten()
-}
-
-fn str_of<'a>(v: &'a Json, key: &str) -> Option<&'a str> {
-    v.get(key).and_then(Json::as_str)
 }
 
 /// The fields a [`query`] response offers. The project field named
@@ -107,15 +96,7 @@ pub fn parse(
         DiscoveredField::new(FieldType::User, Place::Assignees).list(),
         &mut out,
     );
-    let types: Vec<EnumValue> = nodes(repo, "/issueTypes")
-        .filter_map(|n| {
-            Some(EnumValue {
-                name: str_of(n, "name")?.to_string(),
-                id: str_of(n, "id")?.to_string(),
-                teams: Vec::new(),
-            })
-        })
-        .collect();
+    let types: Vec<EnumValue> = nodes(repo, "/issueTypes").filter_map(id_name).collect();
     if !types.is_empty() {
         field(
             "type",
@@ -167,13 +148,7 @@ pub fn parse(
                 .and_then(Json::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|o| {
-                    Some(EnumValue {
-                        name: str_of(o, "name")?.to_string(),
-                        id: str_of(o, "id")?.to_string(),
-                        teams: Vec::new(),
-                    })
-                })
+                .filter_map(id_name)
                 .collect();
             let mut key = field_name(name);
             if key.is_empty() || out.fields.contains_key(&key) {

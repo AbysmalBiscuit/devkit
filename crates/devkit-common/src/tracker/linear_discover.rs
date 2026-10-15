@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use devkit_config::{EnumValue, FieldType, Person, Place};
 use serde_json::Value as Json;
 
-use super::discover::{Discovered, DiscoveredField};
+use super::discover::{Discovered, DiscoveredField, id_name, nodes, str_of};
 
 /// How many of each list one query reads.
 const PAGE: u32 = 250;
@@ -36,17 +36,6 @@ pub fn query(teams: &[String]) -> String {
          issuePriorityValues {{ priority label }}\n  \
          users(first: {PAGE}) {{ pageInfo {{ hasNextPage }} nodes {{ id name active }} }}\n}}"
     )
-}
-
-fn str_of<'a>(v: &'a Json, key: &str) -> Option<&'a str> {
-    v.get(key).and_then(Json::as_str)
-}
-
-fn nodes<'a>(v: &'a Json, pointer: &str) -> impl Iterator<Item = &'a Json> {
-    v.pointer(&format!("{pointer}/nodes"))
-        .and_then(Json::as_array)
-        .into_iter()
-        .flatten()
 }
 
 /// Add a value valid in `team` to `values`, or `team` to the value of the
@@ -147,9 +136,8 @@ pub fn parse(
                 return None;
             }
             Some(EnumValue {
-                name: str_of(l, "name")?.to_string(),
-                id: str_of(l, "id")?.to_string(),
                 teams: team.map(String::from).into_iter().collect(),
+                ..id_name(l)?
             })
         })
         .collect();

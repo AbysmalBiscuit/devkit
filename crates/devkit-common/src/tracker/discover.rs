@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use devkit_config::{EnumValue, FieldType, Place};
+use serde_json::Value as Json;
 
 /// A tracker's ticket fields, by the name each is added as.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -70,6 +71,28 @@ pub fn named(name: &str) -> EnumValue {
         id: name.to_string(),
         teams: Vec::new(),
     }
+}
+
+/// The string under `key` of `v`.
+pub(crate) fn str_of<'a>(v: &'a Json, key: &str) -> Option<&'a str> {
+    v.get(key).and_then(Json::as_str)
+}
+
+/// The items of the GraphQL connection at `pointer` in `v`.
+pub(crate) fn nodes<'a>(v: &'a Json, pointer: &str) -> impl Iterator<Item = &'a Json> {
+    v.pointer(&format!("{pointer}/nodes"))
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+}
+
+/// An enum value read from a node's `id` and `name`, valid in every team.
+pub(crate) fn id_name(v: &Json) -> Option<EnumValue> {
+    Some(EnumValue {
+        name: str_of(v, "name")?.to_string(),
+        id: str_of(v, "id")?.to_string(),
+        teams: Vec::new(),
+    })
 }
 
 #[cfg(test)]
