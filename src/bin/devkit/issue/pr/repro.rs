@@ -593,6 +593,9 @@ fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result
         }
     }
     out.mixed.sort();
+    // A path both restored and deleted, as by a rename onto a path the branch
+    // also recreates, ends at its merge-base contents.
+    out.delete.retain(|d| !out.restore.contains(d));
     Ok(out)
 }
 
