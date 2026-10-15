@@ -139,22 +139,10 @@ jobs:
             exit 1
           fi
 
-          jq --arg sha "$HEAD_SHA" '
-            def suggestion:
-              if (.suggestion // "") == "" then ""
-              else "\n\n```suggestion\n\(.suggestion | rtrimstr("\n"))\n```" end;
-            def comment:
-              {path, line, side: "RIGHT",
-               body: "**[P\(.priority // 3)] \(.title)**\n\n\(.body)\(suggestion)"}
-              + if (.start_line // .line) < .line
-                then {start_line, start_side: "RIGHT"} else {} end;
-            {commit_id: $sha,
-             event: (if any(.findings[]; (.priority // 3) <= 1)
-                     then "REQUEST_CHANGES" else "COMMENT" end),
-             body: (if .findings == [] then "No issues found. \(.explanation)"
-                    else "**Verdict:** patch is \(.verdict). \(.explanation)" end),
-             comments: [.findings[] | comment]}
-          ' review.json > payload.json
+          for inline in true false; do
+            jq --arg sha "$HEAD_SHA" --arg repo "$GITHUB_REPOSITORY" --argjson inline "$inline" \
+              -f .github/grok-review-payload.jq review.json > "payload-$inline.json"
+          done
 
           gh api "$reviews" --paginate \
             | jq -r --arg bot "$BOT_LOGIN" \
@@ -166,8 +154,6 @@ jobs:
 
           # GitHub rejects the whole review when one comment's line is outside
           # the diff, so fall back to listing the findings in the body.
-          if ! gh api "$reviews" --input payload.json > /dev/null; then
-            jq '.body += ([.comments[] | "\n\n---\n\n`\(.path):\(.line)`\n\n\(.body)"] | add // "")
-                | del(.comments)' payload.json \
-              | gh api "$reviews" --input - > /dev/null
+          if ! gh api "$reviews" --input payload-true.json > /dev/null; then
+            gh api "$reviews" --input payload-false.json > /dev/null
           fi
