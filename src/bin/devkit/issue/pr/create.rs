@@ -201,7 +201,9 @@ impl Gates {
                 return Ok(ungated);
             }
             (Err(e), Caller::Human) => {
-                eprintln!("warning: opening the PR without its gates: {e:#}");
+                if checkout_gates_a_human(dir) {
+                    eprintln!("warning: opening the PR without its gates: {e:#}");
+                }
                 return Ok(ungated);
             }
             (Ok(None), Caller::Agent) => return Err(unresolved()),

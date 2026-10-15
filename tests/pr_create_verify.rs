@@ -509,18 +509,36 @@ fn a_branch_changing_only_a_tasks_description_still_qualifies() {
     assert!(!body.contains("This PR changes"), "{body}");
 }
 
-#[test]
-fn a_merge_base_whose_pr_table_does_not_parse_opens_a_humans_pr_ungated() {
-    let p = project("\n[pr]\ntest_files = 3\n");
+/// A project whose merge base commits a `[pr]` table that does not parse,
+/// with `gates` after it, and whose branch repairs it.
+fn project_with_a_broken_base_pr_table(gates: &str) -> ghfake::Fake {
+    let p = project(&format!("\n[pr]\ntest_files = 3\n{gates}"));
     let config = p.project().join("devkit.toml");
     let toml = std::fs::read_to_string(&config).unwrap();
     std::fs::write(&config, toml.replace("test_files = 3\n", "")).unwrap();
     git(&p, &["commit", "-q", "-am", "repair [pr]"]);
     serve_head(&p);
+    p
+}
 
+#[test]
+fn a_merge_base_whose_pr_table_does_not_parse_opens_a_humans_pr_ungated() {
+    let p = project_with_a_broken_base_pr_table("");
     let (ok, stderr) = create(&p, "human");
     assert!(ok, "{stderr}");
-    assert!(stderr.contains("warning"), "{stderr}");
+    assert!(!stderr.contains("warning"), "no gate binds a human: {stderr}");
+    assert_eq!(body(&p), "Adds a thing.");
+}
+
+#[test]
+fn a_merge_base_whose_pr_table_does_not_parse_warns_a_human_with_gates_on() {
+    let p = project_with_a_broken_base_pr_table(GATE);
+    let (ok, stderr) = create(&p, "human");
+    assert!(ok, "{stderr}");
+    assert!(
+        stderr.contains("warning: opening the PR without its gates"),
+        "{stderr}"
+    );
     assert!(stderr.contains("[pr]"), "says what failed: {stderr}");
     assert_eq!(body(&p), "Adds a thing.");
 }
@@ -568,13 +586,7 @@ fn a_base_that_resolves_nowhere_opens_a_humans_pr_ungated_with_a_warning() {
 
 #[test]
 fn a_merge_base_whose_pr_table_does_not_parse_refuses_an_agents_pr() {
-    let p = project("\n[pr]\ntest_files = 3\n");
-    let config = p.project().join("devkit.toml");
-    let toml = std::fs::read_to_string(&config).unwrap();
-    std::fs::write(&config, toml.replace("test_files = 3\n", "")).unwrap();
-    git(&p, &["commit", "-q", "-am", "repair [pr]"]);
-    serve_head(&p);
-
+    let p = project_with_a_broken_base_pr_table("");
     let (ok, stderr) = create(&p, "agent");
     assert!(!ok, "{stderr}");
     assert!(stderr.contains("[pr]"), "{stderr}");
