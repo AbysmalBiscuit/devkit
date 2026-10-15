@@ -18,6 +18,8 @@ pub struct Discovered {
     pub people_key: &'static str,
     /// Lists the tracker answered only in part, said in a sentence each.
     pub truncated: Vec<String>,
+    /// Anything else about the read worth saying, a sentence each.
+    pub notes: Vec<String>,
     /// Fields someone created on the tracker whose type devkit cannot write,
     /// as `` `<name>` (<type>) ``.
     pub unwritable: Vec<String>,

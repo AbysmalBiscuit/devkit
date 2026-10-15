@@ -574,3 +574,16 @@ fn discover_fills_an_error_enum_declared_with_no_values() {
     assert_eq!(ids, ["cyc-1", "cyc-2"], "{after}");
     stdout(&fake.issue_as("agent", &["fields"]));
 }
+
+#[test]
+fn a_project_github_answers_as_none_is_noted() {
+    let fake = fields_fake();
+    let mut no_board: serde_json::Value = serde_json::from_str(DISCOVERED).unwrap();
+    no_board["data"]["repositoryOwner"]["projectV2"] = serde_json::Value::Null;
+    fake.serve_graphql(&no_board.to_string());
+    let out = stdout(&fake.issue_as("agent", &["fields", "discover"]));
+    assert!(
+        out.contains("note:") && out.contains("[github] project") && out.contains("read:project"),
+        "{out}"
+    );
+}

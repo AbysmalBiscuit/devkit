@@ -296,7 +296,24 @@ pub fn fetch(
             |after| send(&format!("query {{ {} }}", board(slug, p, Some(after)))),
         )?;
     }
-    parse(&resp, status_field, people)
+    let mut found = parse(&resp, status_field, people)?;
+    if let Some(p) = project
+        && resp
+            .pointer("/data/repositoryOwner/projectV2")
+            .is_none_or(Json::is_null)
+    {
+        let owner = p
+            .owner
+            .as_deref()
+            .unwrap_or_else(|| slug.split_once('/').map_or(slug.as_str(), |(o, _)| o));
+        found.notes.push(format!(
+            "`[github] project` names project {} of {owner}, which GitHub answered as no \
+             project, so no project field was read: check the number, and that the token has \
+             the `read:project` scope",
+            p.number
+        ));
+    }
+    Ok(found)
 }
 
 #[cfg(test)]

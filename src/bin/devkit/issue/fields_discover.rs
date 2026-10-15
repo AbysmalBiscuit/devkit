@@ -246,7 +246,7 @@ fn summary(kind: TrackerKind, changes: &[Change], found: &Discovered) -> String 
             "not written: the tracker's {f}: devkit cannot set a field of that type\n"
         ));
     }
-    for t in &found.truncated {
+    for t in found.truncated.iter().chain(&found.notes) {
         out.push_str(&format!("note: {t}\n"));
     }
     out
