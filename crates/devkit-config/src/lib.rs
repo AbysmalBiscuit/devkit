@@ -1312,7 +1312,8 @@ pub struct TicketSyncConfig {
     /// on the tracker since the last sync stops the command instead, unless
     /// the event's `from` names that status (`"*"` does not count) or
     /// `--overwrite-tracker` is passed. `"parent"` and `"blocking"` name
-    /// sub-issue and blocking links between tickets. Empty, the default:
+    /// sub-issue and blocking links between tickets; they parse but take no
+    /// action yet. Empty, the default:
     /// todo changes fire the events in the background and never wait on the
     /// tracker.
     pub push: Vec<PushKind>,

@@ -2368,7 +2368,7 @@
         },
         "push": {
           "default": [],
-          "description": "What a local change to a ticket's todo writes back to the ticket.\n`\"status\"`: `devkit todo start`, `done` and `cancel`, run from a\ncheckout of the ticket's repository, move the ticket before the\ncommand returns, firing `[ticket.events]` `todo_start`, `todo_done`\nand `todo_cancel`; on GitHub `done` also closes the issue as\ncompleted and `cancel` as not planned. A ticket whose status changed\non the tracker since the last sync stops the command instead, unless\nthe event's `from` names that status (`\"*\"` does not count) or\n`--overwrite-tracker` is passed. `\"parent\"` and `\"blocking\"` name\nsub-issue and blocking links between tickets. Empty, the default:\ntodo changes fire the events in the background and never wait on the\ntracker.",
+          "description": "What a local change to a ticket's todo writes back to the ticket.\n`\"status\"`: `devkit todo start`, `done` and `cancel`, run from a\ncheckout of the ticket's repository, move the ticket before the\ncommand returns, firing `[ticket.events]` `todo_start`, `todo_done`\nand `todo_cancel`; on GitHub `done` also closes the issue as\ncompleted and `cancel` as not planned. A ticket whose status changed\non the tracker since the last sync stops the command instead, unless\nthe event's `from` names that status (`\"*\"` does not count) or\n`--overwrite-tracker` is passed. `\"parent\"` and `\"blocking\"` name\nsub-issue and blocking links between tickets; they parse but take no\naction yet. Empty, the default:\ntodo changes fire the events in the background and never wait on the\ntracker.",
           "items": {
             "$ref": "#/$defs/PushKind"
           },
