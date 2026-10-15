@@ -321,7 +321,7 @@ pub(super) fn field_verdict(
     if let Err(e) = devkit_config::check_ticket_fields(cfg, kind, provenance) {
         return Verdict::Deny(format!("devkit ticket fields: {e:#}"));
     }
-    let (given, mut problems) = given(rule, decls, kind, &cfg.people, input);
+    let (given, users, mut problems) = given(rule, decls, kind, &cfg.people, input);
     let team = fields::team(decls, &given);
     let resolved = match fields::resolve(
         decls,
@@ -331,7 +331,10 @@ pub(super) fn field_verdict(
         team.as_deref(),
         Naming::Tracker,
     ) {
-        Ok(r) => r,
+        Ok(mut r) => {
+            r.fields.extend(users);
+            r
+        }
         Err(more) => {
             problems.extend(more);
             Resolved::default()
@@ -379,18 +382,20 @@ fn names_issues_repo(kind: TrackerKind, cfg: &Config, cwd: &Path, input: &Value)
     }
 }
 
-/// The call's mapped field values, each list item kept whole, with each
-/// `null`, and `[]` for a list field, as an explicit none, and a problem for
-/// each value of a JSON type the field does not take. A `user` given as a
-/// tracker login or id becomes its `[people]` alias.
+/// The call's mapped field values, with each `null`, and `[]` for a list
+/// field, as an explicit none; each `user` value already resolved, since the
+/// call names a user by tracker identity where `--arg` takes an alias; and a
+/// problem for each value of a JSON type the field does not take or a user
+/// no `[people]` entry has as its identity.
 fn given(
     rule: &RenderedToolRule,
     decls: &BTreeMap<String, FieldDecl>,
     kind: TrackerKind,
     people: &HashMap<String, Person>,
     input: &Value,
-) -> (Given, Vec<Problem>) {
+) -> (Given, BTreeMap<String, Vec<fields::Value>>, Vec<Problem>) {
     let mut out = Given::default();
+    let mut users = BTreeMap::new();
     let mut problems = Vec::new();
     for (field, key) in &rule.fields {
         let (Some(decl), Some(value)) = (decls.get(field), input.get(key.as_str())) else {
@@ -398,7 +403,6 @@ fn given(
         };
         let ty = decl.r#type.unwrap_or(FieldType::String);
         let scalar = |v: &Value| match v {
-            Value::String(s) if ty == FieldType::User => Some(alias(people, kind, s)),
             Value::String(s) => Some(s.clone()),
             Value::Number(n) if matches!(ty, FieldType::Number | FieldType::Enum) => {
                 Some(n.to_string())
@@ -418,21 +422,35 @@ fn given(
             Value::Array(_) => None,
             v => scalar(v).map(|s| vec![s]),
         };
-        match items {
-            Some(items) => {
-                out.values.insert(field.clone(), Raw::Items(items));
-            }
-            None => problems.push(Problem::Invalid {
+        let Some(items) = items else {
+            problems.push(Problem::Invalid {
                 field: field.clone(),
                 value: value.to_string(),
                 reason: format!(
                     "is not a JSON value `{field}` takes: {} under `{key}`",
                     json_shape(ty, decl.list)
                 ),
-            }),
+            });
+            continue;
+        };
+        if ty != FieldType::User {
+            out.values.insert(field.clone(), Raw::Items(items));
+            continue;
         }
+        let mut found = Vec::new();
+        for item in items {
+            match user(people, kind, &item) {
+                Ok(v) => found.push(v),
+                Err(reason) => problems.push(Problem::Invalid {
+                    field: field.clone(),
+                    value: item,
+                    reason,
+                }),
+            }
+        }
+        users.insert(field.clone(), found);
     }
-    (out, problems)
+    (out, users, problems)
 }
 
 /// The JSON a field's input key takes.
@@ -448,16 +466,42 @@ fn json_shape(ty: FieldType, list: bool) -> String {
     }
 }
 
-/// The `[people]` alias whose identity on `kind` is `who`, ignoring case,
-/// else `who` itself.
-fn alias(people: &HashMap<String, Person>, kind: TrackerKind, who: &str) -> String {
-    if people.contains_key(who) {
-        return who.to_string();
+/// A user as a tracker MCP takes it: the identity on `kind` of a `[people]`
+/// entry, ignoring case. Linear resolves `me` and an email address itself,
+/// so those pass unchecked. A bare alias is refused naming the identity to
+/// send, since the tracker would read it as an identity of its own.
+fn user(
+    people: &HashMap<String, Person>,
+    kind: TrackerKind,
+    who: &str,
+) -> Result<fields::Value, String> {
+    let who = who.trim();
+    let known = people.iter().find_map(|(alias, p)| {
+        let id = fields::person_id(p, kind)?;
+        id.eq_ignore_ascii_case(who).then(|| fields::Value::User {
+            alias: alias.clone(),
+            id: id.to_string(),
+        })
+    });
+    if let Some(v) = known {
+        return Ok(v);
     }
-    people
-        .iter()
-        .find(|(_, p)| fields::person_id(p, kind).is_some_and(|id| id.eq_ignore_ascii_case(who)))
-        .map_or_else(|| who.to_string(), |(a, _)| a.clone())
+    if kind == TrackerKind::Linear && (who == "me" || who.contains('@')) {
+        return Ok(fields::Value::User {
+            alias: who.to_string(),
+            id: who.to_string(),
+        });
+    }
+    Err(match people.get(who).map(|p| fields::person_id(p, kind)) {
+        Some(Some(id)) => format!(
+            "is a `[people]` alias, and this call takes the user's {kind} identity: pass `{id}`"
+        ),
+        Some(None) => format!(
+            "is a `[people]` alias with no `{kind}` identity; add `{kind} = \"...\"` to \
+             `[people.{who}]`"
+        ),
+        None => format!("is not the {kind} identity of any `[people]` entry"),
+    })
 }
 
 fn field_denial(
@@ -1008,17 +1052,38 @@ level  = "info"
     }
 
     #[test]
-    fn a_user_matches_by_alias_login_or_id() {
-        let toml = "[people.lev]\ngithub = \"LevValle\"\n\
+    fn a_user_is_passed_as_its_tracker_identity() {
+        let toml = "[people.lev]\ngithub = \"LevValle\"\nlinear = \"u-lev\"\n\
+                    [people.ada]\nlinear = \"u-ada\"\n\
                     [ticket.fields.github.assignees]\ntype = \"user\"\nlist = true\n\
-                    where = \"assignees\"\nlevel = \"error\"\n";
+                    where = \"assignees\"\nlevel = \"error\"\n\
+                    [ticket.fields.linear.assignee]\ntype = \"user\"\n\
+                    where = \"assignee\"\nlevel = \"error\"\n";
         let rule = with_fields(github(), TrackerKind::Github, &[("assignees", "assignees")]);
-        for who in ["lev", "levvalle"] {
-            let input = gh_create(json!({"assignees": [who]}));
-            assert_eq!(fields(&rule, toml, input), Verdict::Allow, "{who}");
+        let gh = |who: &str| fields(&rule, toml, gh_create(json!({"assignees": [who]})));
+        assert_eq!(gh("levvalle"), Verdict::Allow);
+        let v = gh("lev");
+        assert!(
+            denied_mentioning(&v, "`[people]` alias") && denied_mentioning(&v, "pass `LevValle`"),
+            "an alias is not a login: {v:?}"
+        );
+        let v = gh("ghost");
+        assert!(
+            denied_mentioning(&v, "ghost") && denied_mentioning(&v, "identity"),
+            "{v:?}"
+        );
+        assert!(
+            denied_mentioning(&gh("me"), "`me`"),
+            "`me` passes on Linear only"
+        );
+
+        let rule = with_fields(linear(), TrackerKind::Linear, &[("assignee", "assignee")]);
+        let lin = |who: &str| fields(&rule, toml, json!({"title": "T", "assignee": who}));
+        for who in ["u-ada", "U-LEV", "me", "ada@example.com"] {
+            assert_eq!(lin(who), Verdict::Allow, "{who}");
         }
-        let v = fields(&rule, toml, gh_create(json!({"assignees": ["ghost"]})));
-        assert!(denied_mentioning(&v, "ghost"), "{v:?}");
+        let v = lin("ada");
+        assert!(denied_mentioning(&v, "pass `u-ada`"), "{v:?}");
     }
 
     #[test]
