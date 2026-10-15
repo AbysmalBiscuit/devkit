@@ -296,7 +296,7 @@ fn a_hook_injection_answers_while_the_tracker_hangs() {
     let took = started.elapsed();
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(took < Duration::from_secs(3), "the injection took {took:?}");
-    assert!(stdout(&out).contains("#65 Issue 65"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("Issue 65 (#65"), "{}", stdout(&out));
     poll("the background sync to reach the tracker", || {
         s.calls().lines().count() > before
     });
@@ -802,7 +802,7 @@ fn ready_in_a_ticket_workspace_offers_the_ticket() {
     let out = s.devkit(&["todo", "ready"], &AGENT);
     assert!(out.status.success(), "{}", stderr(&out));
     let ready = stdout(&out);
-    assert!(ready.contains("#66 Issue 66"), "{ready}");
+    assert!(ready.contains("#66  Issue 66"), "{ready}");
     assert!(!ready.contains("#65"), "{ready}");
 }
 
@@ -845,11 +845,7 @@ fn expand_lists_the_workspace_todos_under_the_ticket() {
             .status
             .success()
     );
-    let ticket = s.todo_for("o/r#66");
-    let summary = format!(
-        "- [ ] #66 Issue 66 ({}, 1 open)",
-        devkit_todo::short_id(&ticket.id)
-    );
+    let summary = "- [ ] Issue 66 (#66, 1 open)";
 
     let out = s.devkit(&["todo", "list"], &AGENT);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -862,7 +858,7 @@ fn expand_lists_the_workspace_todos_under_the_ticket() {
     let lines: Vec<&str> = expanded.lines().collect();
     let at = lines
         .iter()
-        .position(|l| l.starts_with(&summary))
+        .position(|l| l.starts_with(summary))
         .unwrap_or_else(|| panic!("{expanded}"));
     assert!(
         lines[at + 1].starts_with("  - [ ] write the fix (")
@@ -880,10 +876,10 @@ fn expand_lists_the_workspace_todos_under_the_ticket() {
     assert!(out.status.success(), "{}", stderr(&out));
     let plan = stdout(&out);
     let lines: Vec<&str> = plan.lines().collect();
-    let row = format!("o {}  #66 Issue 66", devkit_todo::short_id(&ticket.id));
+    let row = "o #66  Issue 66";
     let at = lines
         .iter()
-        .position(|l| l.trim_start().starts_with(&row))
+        .position(|l| l.trim_start().starts_with(row))
         .unwrap_or_else(|| panic!("{plan}"));
     assert!(lines[at].ends_with(", 1 open"), "{plan}");
     assert!(

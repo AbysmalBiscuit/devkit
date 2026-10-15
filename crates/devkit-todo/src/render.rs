@@ -12,15 +12,17 @@ use devkit_common::ui::printable;
 use crate::{
     Holder, Status, StatusKind, Todo,
     graph::{Graph, Plan},
+    names::Names,
 };
 
 /// What a listing says beside each todo: blocking, from the graph the lines
-/// were drawn from, which ready todos earn a `ready` note, and the work under
-/// each synced ticket.
+/// were drawn from, which ready todos earn a `ready` note, the work under
+/// each synced ticket, and the name each todo shows under.
 pub struct Notes<'a> {
     pub graph: &'a Graph<'a>,
     pub show_ready: &'a dyn Fn(&Todo) -> bool,
     pub work: &'a TicketWork,
+    pub names: &'a Names,
 }
 
 /// The work a worktree on this machine does for each synced ticket, keyed
@@ -43,7 +45,7 @@ impl TicketWork {
 
 /// The plan as a person reads it: a header, the critical path, then one block
 /// per batch, and a `cycle:` line when some members never placed.
-pub fn render_plan(root: &str, plan: &Plan<'_>, work: &TicketWork) -> String {
+pub fn render_plan(root: &str, plan: &Plan<'_>, work: &TicketWork, names: &Names) -> String {
     let open = plan.batches.iter().flatten().count() + plan.cycle.len();
     let started = plan
         .batches
@@ -56,7 +58,7 @@ pub fn render_plan(root: &str, plan: &Plan<'_>, work: &TicketWork) -> String {
         let path = plan
             .critical
             .iter()
-            .map(|todo| crate::short_id(&todo.id))
+            .map(|todo| names.id(&todo.id))
             .collect::<Vec<_>>()
             .join(" -> ");
         let _ = writeln!(
@@ -72,9 +74,9 @@ pub fn render_plan(root: &str, plan: &Plan<'_>, work: &TicketWork) -> String {
         };
         let _ = writeln!(out, "\nbatch {}{label}", index + 1);
         for todo in batch {
-            let _ = writeln!(out, "  {}", plan_line(todo, plan, index, work));
+            let _ = writeln!(out, "  {}", plan_line(todo, plan, index, work, names));
             for under in work.expanded.get(&todo.id).into_iter().flatten() {
-                let _ = writeln!(out, "    {}", work_line(under, None));
+                let _ = writeln!(out, "    {}", work_line(under, None, names));
             }
         }
     }
@@ -82,7 +84,7 @@ pub fn render_plan(root: &str, plan: &Plan<'_>, work: &TicketWork) -> String {
         let ids = plan
             .cycle
             .iter()
-            .map(|todo| crate::short_id(&todo.id))
+            .map(|todo| names.id(&todo.id))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(out, "\ncycle: {ids}");
@@ -90,9 +92,15 @@ pub fn render_plan(root: &str, plan: &Plan<'_>, work: &TicketWork) -> String {
     out
 }
 
-/// One plan row: the mark, the short id, the text, the critical mark, and
-/// why the todo sits in this batch.
-fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize, work: &TicketWork) -> String {
+/// One plan row: the mark, the name, the text, the critical mark, and why
+/// the todo sits in this batch.
+fn plan_line(
+    todo: &Todo,
+    plan: &Plan<'_>,
+    batch: usize,
+    work: &TicketWork,
+    names: &Names,
+) -> String {
     let mark = match todo.status.kind() {
         StatusKind::InProgress => ">",
         _ => "o",
@@ -116,7 +124,7 @@ fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize, work: &TicketWork) -> S
                 .blocked_by
                 .iter()
                 .filter(|id| members.contains(id.as_str()))
-                .map(|id| crate::short_id(id))
+                .map(|id| names.id(id))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("after {after}")
@@ -128,21 +136,26 @@ fn plan_line(todo: &Todo, plan: &Plan<'_>, batch: usize, work: &TicketWork) -> S
     };
     format!(
         "{mark} {}  {}  {critical}  {note}",
-        crate::short_id(&todo.id),
-        printable(&todo.description)
+        printable(&names.id(&todo.id)),
+        printable(names.text(todo))
     )
 }
 
 /// The plan as Mermaid `flowchart LR` source, one subgraph per batch and
 /// one for the cycle.
-pub fn render_mermaid(plan: &Plan<'_>) -> String {
+pub fn render_mermaid(plan: &Plan<'_>, names: &Names) -> String {
     let mut out = String::from("flowchart LR\n");
     for (index, batch) in plan.batches.iter().enumerate() {
         let number = index + 1;
-        mermaid_subgraph(&mut out, &format!("b{number}[\"batch {number}\"]"), batch);
+        mermaid_subgraph(
+            &mut out,
+            &format!("b{number}[\"batch {number}\"]"),
+            batch,
+            names,
+        );
     }
     if !plan.cycle.is_empty() {
-        mermaid_subgraph(&mut out, "cycle[\"cycle\"]", &plan.cycle);
+        mermaid_subgraph(&mut out, "cycle[\"cycle\"]", &plan.cycle, names);
     }
     let members: Vec<&Todo> = plan
         .batches
@@ -183,12 +196,13 @@ pub fn render_mermaid(plan: &Plan<'_>) -> String {
     out
 }
 
-fn mermaid_subgraph(out: &mut String, head: &str, todos: &[&Todo]) {
+fn mermaid_subgraph(out: &mut String, head: &str, todos: &[&Todo], names: &Names) {
     let _ = writeln!(out, "  subgraph {head}");
     for todo in todos {
-        let text = printable(&todo.description).replace('"', "#quot;");
+        let text = printable(names.text(todo)).replace('"', "#quot;");
+        let name = printable(&names.id(&todo.id)).replace('"', "#quot;");
         let id = crate::short_id(&todo.id);
-        let _ = writeln!(out, "    t{id}[\"{id}: {text}\"]");
+        let _ = writeln!(out, "    t{id}[\"{name}: {text}\"]");
     }
     let _ = writeln!(out, "  end");
 }
@@ -258,7 +272,7 @@ fn section(
                 out,
                 "{}{}",
                 "  ".repeat(depth + 1),
-                work_line(under, Some(viewer))
+                work_line(under, Some(viewer), notes.names)
             );
         }
     }
@@ -300,19 +314,19 @@ fn line(todo: &Todo, viewer: &Holder, notes: &Notes<'_>) -> String {
     }
     format!(
         "- [{mark}] {} ({}{joined})",
-        printable(&todo.description),
-        printable(crate::short_id(&todo.id))
+        printable(notes.names.text(todo)),
+        printable(&notes.names.id(&todo.id))
     )
 }
 
 /// A workspace todo listed under its ticket: its mark, text, id, holder, and
 /// the node it sits on, `viewer` naming whose claim reads as the reader's own.
-fn work_line(todo: &Todo, viewer: Option<&Holder>) -> String {
+fn work_line(todo: &Todo, viewer: Option<&Holder>, names: &Names) -> String {
     let (mark, note) = mark_and_note(todo, viewer);
     format!(
         "- [{mark}] {} ({}{note}) on {}",
-        printable(&todo.description),
-        printable(crate::short_id(&todo.id)),
+        printable(names.text(todo)),
+        printable(&names.id(&todo.id)),
         printable(todo.node())
     )
 }
@@ -328,7 +342,7 @@ fn blocking_note(todo: &Todo, notes: &Notes<'_>) -> String {
         let names = open
             .iter()
             .map(|blocker| {
-                let id = crate::short_id(&blocker.id);
+                let id = notes.names.id(&blocker.id);
                 if blocker.node() == todo.node() {
                     id.to_string()
                 } else {
@@ -442,6 +456,8 @@ pub fn digest(lists: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use devkit_config::IdStyle;
+
     use super::*;
     use crate::{Holder, Status, Todo};
 
@@ -465,10 +481,13 @@ mod tests {
     }
 
     fn quiet<'a>(graph: &'a Graph<'a>) -> Notes<'a> {
+        static SHORT: std::sync::LazyLock<Names> =
+            std::sync::LazyLock::new(|| Names::plain(IdStyle::Short));
         Notes {
             graph,
             show_ready: &|_| false,
             work: TicketWork::none(),
+            names: &SHORT,
         }
     }
 
@@ -629,6 +648,67 @@ mod tests {
             ),
             "## r.main\n- [ ] x (96432cd6)\n"
         );
+    }
+
+    const UUID: &str = "96432cd6-082a-4d8c-a9cb-adef8823ff92";
+
+    fn ticket_todos() -> Vec<Todo> {
+        let mut issue = todo(
+            "1234abcd-0000-4000-8000-000000000001",
+            "#65 Issue 65",
+            None,
+            1024,
+            Status::Pending,
+        );
+        issue.ticket = Some(crate::TicketRef {
+            tracker: "github".into(),
+            key: "o/r#65".into(),
+            synced_status: None,
+        });
+        vec![issue, todo(UUID, "plain", None, 2048, Status::Pending)]
+    }
+
+    fn named(todos: &[Todo]) -> Names {
+        Names::new(IdStyle::Name, todos, |_| "#65".to_string())
+    }
+
+    #[test]
+    fn plan_rows_show_names() {
+        let todos = ticket_todos();
+        let graph = Graph::new(&todos);
+        let plan = graph.plan(|_| true, None);
+        let out = render_plan("r", &plan, TicketWork::none(), &named(&todos));
+        assert!(out.contains("o #65  Issue 65"), "{out}");
+        let word = crate::names::word_name(UUID).unwrap();
+        assert!(out.contains(&format!("o {word}  plain")), "{out}");
+        assert!(!out.contains("96432cd6"), "{out}");
+    }
+
+    #[test]
+    fn list_lines_show_names_in_parentheses() {
+        let todos = ticket_todos();
+        let graph = Graph::new(&todos);
+        let names = named(&todos);
+        let notes = Notes {
+            names: &names,
+            ..quiet(&graph)
+        };
+        let out = render_lists(&nodes(), &todos, &Holder::new("S"), &notes);
+        assert!(out.contains("- [ ] Issue 65 (#65)\n"), "{out}");
+    }
+
+    #[test]
+    fn mermaid_keeps_hex_node_ids_and_labels_names() {
+        let todos = ticket_todos();
+        let graph = Graph::new(&todos);
+        let plan = graph.plan(|_| true, None);
+        let out = render_mermaid(&plan, &named(&todos));
+        let word = crate::names::word_name(UUID).unwrap();
+        assert!(
+            out.contains(&format!("t96432cd6[\"{word}: plain\"]")),
+            "{out}"
+        );
+        assert!(out.contains("t1234abcd[\"#65: Issue 65\"]"), "{out}");
     }
 
     #[test]

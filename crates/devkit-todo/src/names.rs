@@ -6,9 +6,11 @@
 //! letters, less every word spelled only with hex letters, sorted, the first
 //! 4096.
 
-use std::sync::LazyLock;
+use std::{borrow::Cow, collections::HashMap, sync::LazyLock};
 
-use crate::{TicketRef, Todo};
+use devkit_config::IdStyle;
+
+use crate::{TicketRef, Todo, ticket::key_prefix};
 
 /// The words a word name is drawn from, 4096 of them, so 12 bits pick one.
 pub static WORDS: LazyLock<Vec<&'static str>> =
@@ -83,6 +85,58 @@ pub fn needs_tracker(input: &str) -> bool {
     let number = input.strip_prefix('#').unwrap_or(input);
     let short_form = !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit());
     short_form || input.starts_with("https://") || input.starts_with("http://")
+}
+
+/// How a listing names each todo under an [`IdStyle`]: a ticket todo by the
+/// key its listing shows, any other uuid todo by its word name or 8-hex
+/// prefix, and any other id whole.
+pub struct Names {
+    style: IdStyle,
+    keys: HashMap<String, String>,
+}
+
+impl Names {
+    /// Names for the todos in `todos`, each ticket todo shown as
+    /// `shown_key` gives its ticket.
+    pub fn new(style: IdStyle, todos: &[Todo], shown_key: impl Fn(&TicketRef) -> String) -> Self {
+        let keys = todos
+            .iter()
+            .filter_map(|todo| Some((todo.id.clone(), shown_key(todo.ticket.as_ref()?))))
+            .collect();
+        Self { style, keys }
+    }
+
+    /// Names that know no ticket todos, for an output that holds none.
+    pub fn plain(style: IdStyle) -> Self {
+        Self {
+            style,
+            keys: HashMap::new(),
+        }
+    }
+
+    /// The name the todo whose id is `id` shows under.
+    pub fn id<'a>(&'a self, id: &'a str) -> Cow<'a, str> {
+        match (self.style, self.keys.get(id)) {
+            (IdStyle::Full, _) => Cow::Borrowed(id),
+            (_, Some(key)) => Cow::Borrowed(key),
+            (IdStyle::Name, None) => word_name(id).map_or(Cow::Borrowed(id), Cow::Owned),
+            (IdStyle::Short, None) => Cow::Borrowed(crate::short_id(id)),
+        }
+    }
+
+    /// `todo`'s text, less the key it starts with when its name already
+    /// shows that key.
+    pub fn text<'a>(&self, todo: &'a Todo) -> &'a str {
+        let shows_key = self.style != IdStyle::Full && self.keys.contains_key(&todo.id);
+        todo.ticket
+            .as_ref()
+            .filter(|_| shows_key)
+            .and_then(|ticket| {
+                let prefix = key_prefix(&ticket.tracker, &ticket.key);
+                todo.description.strip_prefix(&prefix)?.strip_prefix(' ')
+            })
+            .unwrap_or(&todo.description)
+    }
 }
 
 #[cfg(test)]
@@ -253,5 +307,69 @@ mod tests {
         assert!(names_issue("o/r#65", "65"));
         assert!(!names_issue("o/r#65", "6"));
         assert!(!names_issue("SWE-123", "SWE-12"));
+    }
+
+    fn shown(ticket: &TicketRef) -> String {
+        match ticket.key.rsplit_once('#') {
+            Some(("o/r", n)) => format!("#{n}"),
+            _ => ticket.key.clone(),
+        }
+    }
+
+    fn listed() -> Vec<Todo> {
+        let mut issue = todo(A, Some(("github", "o/r#65")));
+        issue.description = "#65 Issue 65".into();
+        vec![issue, todo(D, None), todo("7", None)]
+    }
+
+    #[test]
+    fn name_style_shows_a_word_a_key_and_a_builtin_id() {
+        let names = Names::new(IdStyle::Name, &listed(), shown);
+        assert_eq!(names.id(A), "#65");
+        assert_eq!(names.id(D), word_name(D).unwrap());
+        assert_eq!(names.id("7"), "7");
+    }
+
+    #[test]
+    fn short_and_full_styles() {
+        let short = Names::new(IdStyle::Short, &listed(), shown);
+        assert_eq!(short.id(A), "#65");
+        assert_eq!(short.id(D), "77777777");
+        assert_eq!(short.id("7"), "7");
+        let full = Names::new(IdStyle::Full, &listed(), shown);
+        assert_eq!(full.id(A), A);
+        assert_eq!(full.id(D), D);
+        assert_eq!(full.id("7"), "7");
+    }
+
+    #[test]
+    fn another_repos_key_shows_as_its_shown_key() {
+        let todos = vec![todo(C, Some(("github", "x/y#65")))];
+        assert_eq!(Names::new(IdStyle::Name, &todos, shown).id(C), "x/y#65");
+    }
+
+    #[test]
+    fn text_strips_the_key_the_description_starts_with() {
+        let todos = listed();
+        let names = Names::new(IdStyle::Name, &todos, shown);
+        assert_eq!(names.text(&todos[0]), "Issue 65");
+        let mut renamed = todos[0].clone();
+        renamed.description = "Renamed by hand".into();
+        assert_eq!(names.text(&renamed), "Renamed by hand");
+        let mut linear = todo(B, Some(("linear", "SWE-123")));
+        linear.description = "SWE-123 Fix it".into();
+        let linear_names = Names::new(IdStyle::Short, std::slice::from_ref(&linear), shown);
+        assert_eq!(linear_names.text(&linear), "Fix it");
+        let full = Names::new(IdStyle::Full, &todos, shown);
+        assert_eq!(full.text(&todos[0]), "#65 Issue 65");
+    }
+
+    #[test]
+    fn plain_names_match_short_ids() {
+        let todos = listed();
+        let names = Names::plain(IdStyle::Short);
+        assert_eq!(names.id(A), "96432cd6");
+        assert_eq!(names.id("7"), "7");
+        assert_eq!(names.text(&todos[0]), "#65 Issue 65");
     }
 }

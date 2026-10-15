@@ -20,7 +20,7 @@ use devkit_common::{
     caller::{self, Caller},
     vcs::Checkout,
 };
-use devkit_config::{HoldStop, PushKind};
+use devkit_config::{HoldStop, IdStyle, PushKind};
 use devkit_todo::{
     Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
     activity::{ActivityStore as _, SessionState},
@@ -46,6 +46,10 @@ use crate::hook::{
 
 #[derive(Args)]
 pub struct TodoCli {
+    /// How listings name todos: `name`, `short` or `full`. Overrides
+    /// [todo] ids for this command.
+    #[arg(long = "ids", global = true, value_name = "STYLE", value_parser = id_styles())]
+    pub id_style: Option<IdStyle>,
     #[command(subcommand)]
     pub command: TodoCommand,
 }
@@ -105,6 +109,7 @@ pub enum TodoCommand {
     /// Mark todos in progress, claiming them for this caller.
     #[command(after_help = PUSH_HELP)]
     Start {
+        #[arg(required = true)]
         ids: Vec<String>,
         /// Start a todo even while a blocker is still open.
         #[arg(long)]
@@ -113,19 +118,27 @@ pub enum TodoCommand {
         overwrite_tracker: bool,
     },
     /// Return todos in progress to pending.
-    Stop { ids: Vec<String> },
+    Stop {
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
     /// Mark todos completed.
     #[command(after_help = PUSH_HELP)]
     Done {
+        #[arg(required = true)]
         ids: Vec<String>,
         #[arg(long, help = OVERWRITE_HELP)]
         overwrite_tracker: bool,
     },
     /// Return completed todos to pending.
-    Undone { ids: Vec<String> },
+    Undone {
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
     /// Drop todos. The record stays, marked cancelled.
     #[command(after_help = PUSH_HELP)]
     Cancel {
+        #[arg(required = true)]
         ids: Vec<String>,
         #[arg(long, help = OVERWRITE_HELP)]
         overwrite_tracker: bool,
@@ -337,7 +350,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
         return crate::emit_completions(shell, "todo", "todo");
     }
     if let TodoCommand::Context(args) = cli.command {
-        if let Some(text) = context(&args) {
+        if let Some(text) = context(&args, cli.id_style) {
             print!("{text}");
         }
         return Ok(());
@@ -396,6 +409,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     if refreshes {
         refresh_tickets(&store, &cwd, &layout, &facts);
     }
+    let style = cli.id_style.unwrap_or(store.config().ids);
     let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
     let status_push = |local, overwrite| push::StatusPush {
         local,
@@ -413,13 +427,13 @@ pub fn run(cli: TodoCli) -> Result<()> {
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
-        TodoCommand::List(args) => list(&fence, &args, &cwd, &role, &actor)?,
-        TodoCommand::Ready => ready(&fence)?,
+        TodoCommand::List(args) => list(&fence, &args, &cwd, &role, &actor, style)?,
+        TodoCommand::Ready => ready(&fence, style)?,
         TodoCommand::Plan {
             agents,
             mermaid,
             expand,
-        } => plan(&fence, agents, mermaid, expand)?,
+        } => plan(&fence, agents, mermaid, expand, style)?,
         TodoCommand::Add {
             text,
             parent,
@@ -467,7 +481,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     Err(purge) => Err(err.context(purge)),
                 };
             }
-            println!("{}", devkit_todo::short_id(&id));
+            println!("{}", names::Names::plain(style).id(&id));
         }
         TodoCommand::Block {
             id,
@@ -683,6 +697,12 @@ fn refresh_tickets(store: &Store, cwd: &Path, layout: &Layout, facts: &Facts) {
     }
 }
 
+/// The id display styles by name.
+fn id_styles() -> impl clap::builder::TypedValueParser<Value = IdStyle> {
+    clap::builder::PossibleValuesParser::new(IdStyle::VARIANTS)
+        .map(|name| name.parse::<IdStyle>().expect("a listed style parses"))
+}
+
 /// The hold modes by name, `true` and `false` left to the config.
 fn hold_modes() -> impl clap::builder::TypedValueParser<Value = HoldStop> {
     clap::builder::PossibleValuesParser::new(HoldStop::VARIANTS)
@@ -843,8 +863,9 @@ fn offered_todos(fence: &Fence) -> Result<Vec<Todo>> {
 }
 
 /// Prints the frontier, critical-path todos first.
-fn ready(fence: &Fence) -> Result<()> {
+fn ready(fence: &Fence, style: IdStyle) -> Result<()> {
     let offered = offered_todos(fence)?;
+    let names = names::names(style, &offered, fence.checkout.dir());
     let plan = ticket_plan(fence, &offered, None);
     for todo in plan.frontier() {
         let mark = if plan.critical.iter().any(|on| on.id == todo.id) {
@@ -854,8 +875,8 @@ fn ready(fence: &Fence) -> Result<()> {
         };
         println!(
             "{}  {}{mark}",
-            devkit_todo::short_id(&todo.id),
-            devkit_common::ui::printable(&todo.description)
+            devkit_common::ui::printable(&names.id(&todo.id)),
+            devkit_common::ui::printable(names.text(todo))
         );
     }
     Ok(())
@@ -867,18 +888,20 @@ fn plan(
     agents: Option<std::num::NonZeroUsize>,
     mermaid: bool,
     expand: bool,
+    style: IdStyle,
 ) -> Result<()> {
     let offered = offered_todos(fence)?;
+    let names = names::names(style, &offered, fence.checkout.dir());
     let plan = ticket_plan(fence, &offered, agents);
     let root = fence
         .layout
         .ticket_root(fence.facts, fence.store.config().ready_outside_ticket)
         .unwrap_or_else(|| fence.facts.values.get("repo").cloned().unwrap_or_default());
     let text = if mermaid {
-        render::render_mermaid(&plan)
+        render::render_mermaid(&plan, &names)
     } else {
         let work = fence.work(&offered, expand)?;
-        render::render_plan(&root, &plan, &work)
+        render::render_plan(&root, &plan, &work, &names)
     };
     print!("{text}");
     Ok(())
@@ -1144,9 +1167,6 @@ fn apply_checked(
     push: Option<&push::StatusPush>,
     edit_for: impl Fn(Todo) -> Result<(bool, Edit)>,
 ) -> Result<Vec<String>> {
-    if ids.is_empty() {
-        bail!("name at least one todo id");
-    }
     let mut checked = Vec::new();
     for id in &ids {
         let todo = resolve_id(store, id)?;
@@ -1290,6 +1310,7 @@ fn list(
     cwd: &Path,
     role: &ResolvedRole,
     viewer: &Holder,
+    style: IdStyle,
 ) -> Result<()> {
     let (store, layout, facts) = (fence.store, fence.layout, fence.facts);
     let filter = match (&args.scope, &args.node, &args.subtree, args.all) {
@@ -1331,10 +1352,12 @@ fn list(
     let graph = Graph::new(&graph_todos);
     let own = &role.node;
     let work = fence.work(&todos, args.expand)?;
+    let names = names::names(style, &graph_todos, cwd);
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
         work: &work,
+        names: &names,
     };
     print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
     Ok(())
@@ -1389,7 +1412,7 @@ pub(crate) fn alacritree_json(todo: &Todo) -> Option<Value> {
 /// The block to inject, or `None` for silence: no payload, no session, a
 /// harness without session nodes, nothing new under `--if-changed`, or any
 /// store failure.
-fn context(args: &ContextArgs) -> Option<String> {
+fn context(args: &ContextArgs, id_style: Option<IdStyle>) -> Option<String> {
     let payload = hook::read_payload(Some(args.harness), HookEvent::SessionStart)?;
     payload.session_id()?;
     let viewer = to_todo_holder(&payload.holder().ok()?);
@@ -1430,10 +1453,13 @@ fn context(args: &ContextArgs) -> Option<String> {
     let nodes = list_nodes(&visible, &todos);
     let graph = Graph::new(&graph_todos);
     let work = fence.work(&todos, false).ok()?;
+    let style = id_style.unwrap_or(store.config().ids);
+    let names = names::names(style, &graph_todos, &cwd);
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
         work: &work,
+        names: &names,
     };
     let mut lists = render::render_lists(&nodes, &todos, &viewer, &notes);
     let own_open = todos.iter().any(|t| {

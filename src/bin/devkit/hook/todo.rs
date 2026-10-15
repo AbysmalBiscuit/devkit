@@ -233,6 +233,7 @@ pub(crate) fn hold(
         graph: &graph,
         show_ready: &|_| false,
         work: render::TicketWork::none(),
+        names: &devkit_todo::names::Names::plain(devkit_config::IdStyle::Short),
     };
     let lists = render::render_lists(&nodes, &open, &holder, &notes);
     let reason = format!(
@@ -349,7 +350,7 @@ pub(crate) fn check_claims(
         };
         let store = Store::for_hook(&anchor, cwd);
         edits.into_iter().find_map(|(to, id)| {
-            let todo = store.get(&id).ok()??;
+            let todo = store.resolve(&id).ok()??;
             let Claimed { by } = transition(&todo.status, to, &actor).err()?;
             Some(format!(
                 "devkit todo: todo {} is in progress by {}; pick another todo",

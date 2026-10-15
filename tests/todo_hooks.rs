@@ -6,7 +6,8 @@ mod shimtest;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use devkit_todo::{Edit, Holder, NewTodo, Status, StatusKind, TodoStore};
+use devkit_todo::{Edit, Holder, NewTodo, Status, StatusKind, TodoStore, names::word_name};
+use devkit_todo_taskchampion::TaskchampionStore;
 use serde_json::json;
 use todoenv::{Proj, stdout};
 
@@ -269,6 +270,31 @@ fn attribution_a_siblings_start_is_denied_naming_the_holder() {
     let reason = denial(&out).expect("denied");
     assert!(reason.contains("in progress by S/a1"), "{reason}");
     assert_eq!(p.todo(&id).status, in_progress("S/a1"));
+}
+
+#[test]
+fn attribution_a_siblings_start_by_word_name_is_denied_naming_the_holder() {
+    let p = Proj::with_home_config("[todo]\nbackend = \"taskchampion\"\n");
+    let replica = TaskchampionStore::at(p.state().join("todo/taskchampion"));
+    let id = replica
+        .add(NewTodo {
+            ticket: None,
+            project: Some("proj.main.claude-S".into()),
+            description: "a".into(),
+            parent: None,
+            order: None,
+        })
+        .unwrap();
+    let run = run_as_sub_agent(&p, CLAUDE_CODE, "a1", &format!("devkit todo start {id}"));
+    assert!(run.status.success(), "{}", todoenv::stderr(&run));
+    let start = format!("devkit todo start {}", word_name(&id).unwrap());
+    let out = p.hook(
+        "pre-tool-use",
+        CLAUDE_CODE.harness,
+        &bash(&p, Some("a2"), &start),
+    );
+    let reason = denial(&out).expect("denied");
+    assert!(reason.contains("in progress by S/a1"), "{reason}");
 }
 
 #[test]

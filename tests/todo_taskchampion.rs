@@ -40,12 +40,14 @@ fn the_env_selects_taskchampion_with_no_config() {
     let p = Proj::new();
     let out = p.devkit(&["todo", "add", "one"], &backend("taskchampion"));
     assert!(out.status.success(), "{}", stderr(&out));
-    let id = stdout(&out).trim().to_string();
-    assert_eq!(id.len(), 8, "{id}");
-    assert!(id.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+    let name = stdout(&out).trim().to_string();
     let todos = replica(&p);
     assert_eq!(todos.len(), 1, "{todos:?}");
-    assert!(todos[0].id.starts_with(&id));
+    assert_eq!(
+        devkit_todo::names::word_name(&todos[0].id),
+        Some(name.clone()),
+        "{name}"
+    );
     assert!(p.todos().is_empty());
 }
 

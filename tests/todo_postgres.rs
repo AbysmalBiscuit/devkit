@@ -79,7 +79,7 @@ fn devkit(p: &Proj, args: &[&str], env: &[(&'static str, String)]) -> Output {
 }
 
 fn added(p: &Proj, text: &str, env: &[(&'static str, String)]) -> String {
-    let out = devkit(p, &["todo", "add", text], env);
+    let out = devkit(p, &["todo", "add", "--ids", "short", text], env);
     assert!(out.status.success(), "{}", stderr(&out));
     stdout(&out).trim().to_string()
 }
