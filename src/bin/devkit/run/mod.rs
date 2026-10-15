@@ -820,6 +820,7 @@ fn cmd_task(
     let start = start.committed_definition(committed).plan(plan);
     let tail = ledger::Tail::new();
     let steps = std::cell::RefCell::new(Vec::new());
+    let mut launched = std::collections::HashSet::new();
     let mut reused = Vec::new();
     let step = |step_name: &str| -> Result<Option<i32>> {
         let fresh = task::resolve_step(
@@ -849,7 +850,14 @@ fn cmd_task(
                             return Ok(code);
                         }
                     }
-                    SeqItem::Up(app) => reused.extend(up(app, false)?),
+                    SeqItem::Up(app) => {
+                        // A server an earlier step of this run launched is
+                        // this run's own; only one live before the run began
+                        // may have started at another commit.
+                        let report = up(app, false)?;
+                        reused.extend(report.reused.into_iter().filter(|a| !launched.contains(a)));
+                        launched.extend(report.launched);
+                    }
                 }
             }
             Ok(Some(0))
@@ -880,8 +888,15 @@ fn print_plan(plan: &devkit_ports::task::CommandPlan) {
     println!("  env:  {}", envs.join(" "));
 }
 
-/// Bring `apps_arg` up and return the apps it found already running rather
-/// than launched.
+/// The apps one `devrun up` launched, and those it found already running.
+#[derive(Default)]
+struct UpReport {
+    launched: Vec<String>,
+    reused: Vec<String>,
+}
+
+/// Bring `apps_arg` up and report which apps it launched and which it found
+/// already running.
 fn cmd_up(
     cli: &RunCli,
     cwd: &str,
@@ -890,7 +905,7 @@ fn cmd_up(
     env_pairs: &[String],
     env_file: Option<&str>,
     flags: UpFlags,
-) -> Result<Vec<String>> {
+) -> Result<UpReport> {
     let UpFlags { dry_run, supervise } = flags;
     #[cfg(not(feature = "daemon"))]
     let _ = supervise;
@@ -1013,7 +1028,7 @@ fn cmd_up(
     let provider = run::url_provider(catalog);
 
     let mut rows: Vec<Row> = Vec::new();
-    let mut reused = Vec::new();
+    let mut report = UpReport::default();
     for (grp_role, holder, base_dir) in &groups {
         let ports =
             run::resolve_ports(catalog, &apps, holder, *grp_role, &cfg.templates.defaults())?;
@@ -1063,7 +1078,9 @@ fn cmd_up(
         )?;
         for s in statuses {
             if s.reused {
-                reused.push(s.app.clone());
+                report.reused.push(s.app.clone());
+            } else {
+                report.launched.push(s.app.clone());
             }
             if s.state != devkit_ports::run::ServerState::Ready
                 && let Some(log) = &s.logfile
@@ -1088,7 +1105,7 @@ fn cmd_up(
     }
 
     print_summary(&rows);
-    Ok(reused)
+    Ok(report)
 }
 
 /// True if any matched row belongs to a holder other than `current` or the

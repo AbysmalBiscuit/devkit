@@ -728,3 +728,39 @@ fn a_run_whose_up_step_launched_its_server_qualifies() {
     assert!(ok, "{stderr}");
     assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
 }
+
+/// Serves the port `DEVKIT_TEST_SERVE_PORT` names, for a minute, when this
+/// test binary is launched as an app's server; a no-op otherwise.
+#[test]
+fn serve_port_when_launched_as_an_app() {
+    let Ok(port) = std::env::var("DEVKIT_TEST_SERVE_PORT") else {
+        return;
+    };
+    let _listener =
+        std::net::TcpListener::bind(("127.0.0.1", port.parse::<u16>().unwrap())).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(60));
+}
+
+#[test]
+fn a_run_whose_second_up_step_reuses_the_server_its_first_launched_qualifies() {
+    let exe = std::env::current_exe().unwrap();
+    // A TOML literal string: a Windows path's backslashes are not escapes.
+    let p = project(&format!(
+        "[apps.srv]\nbase_port = 39211\npath = \".\"\n\
+         launch = ['{}', '--exact', 'serve_port_when_launched_as_an_app', '--nocapture']\n\
+         static_env = {{ DEVKIT_TEST_SERVE_PORT = \"{{{{ port }}}}\" }}\n\
+         [tasks.e2e]\nsteps = [{{ up = \"srv\" }}, {{ up = \"srv\" }}, {{ task = \"verify\" }}]\n\
+         [pr.gates]\nverify_task = \"e2e\"\nverify_args = {{ scope = \"all\" }}\n",
+        exe.display()
+    ));
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    let down = p.devkit_here(&["run", "down", "--app", "srv"]);
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+    assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
+}

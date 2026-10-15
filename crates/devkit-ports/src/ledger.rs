@@ -79,9 +79,9 @@ pub struct Run {
     /// Each command step devrun executed, in order, with the argv it ran.
     #[serde(default)]
     pub steps: Vec<Step>,
-    /// The apps an `up` step found already running and did not launch. Such
-    /// a server may have started at another commit, so a run that reused
-    /// one satisfies no PR gate.
+    /// The apps an `up` step found already running from before the run
+    /// started, and did not launch. Such a server may have started at another
+    /// commit, so a run that reused one satisfies no PR gate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reused_servers: Vec<String>,
     /// The exit code of the program devrun ran, or of a sequence's first
@@ -356,7 +356,7 @@ impl Start {
 
     /// The finished run, re-reading the tree so a run that changed it, or
     /// whose head moved under it, is not clean. `reused_servers` names the
-    /// apps its `up` steps found already running.
+    /// apps its `up` steps found running from before the run started.
     pub fn finish(
         self,
         exit_code: Option<i32>,
