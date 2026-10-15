@@ -176,36 +176,113 @@ fn an_unmatched_name_says_no_todo() {
     }
 }
 
-#[test]
-fn an_ambiguous_name_names_each_match_and_changes_nothing() {
-    let s = two_issues();
-    ok(s.sync(&[]));
-    ok(s.devkit(&["todo", "add", "other"], &S1));
-    // With no GitHub tracker in reach, `66` names every GitHub ticket 66;
-    // the full key of another repository's ticket still resolves.
-    let p = &s.proj;
-    p.store()
-        .add(devkit_todo::NewTodo {
-            description: "#66 Elsewhere".into(),
-            project: Some("proj".into()),
-            parent: None,
-            order: None,
-            ticket: Some(devkit_todo::TicketRef {
-                tracker: "github".into(),
-                key: "x/y#66".into(),
-                synced_status: None,
-            }),
+/// Two ticket todos on a taskchampion replica, sharing a `digits`-long
+/// name: one of `x/y` whose uuid starts with those decimal digits, and
+/// `o/r`'s issue of that number, which the tracker reads them as. Returns
+/// the digits and each todo's id, the `x/y` one first.
+fn prefix_like_a_ticket(s: &Synced, digits: usize) -> (String, String, String) {
+    let (key, prefix) = (1..)
+        .map(|n| format!("x/y#{n}"))
+        .find_map(|key| {
+            let id = devkit_todo::ticket_todo_uuid("", "github", &key).to_string();
+            let prefix = &id[..digits];
+            prefix
+                .bytes()
+                .all(|b| b.is_ascii_digit())
+                .then(|| (key.clone(), prefix.to_string()))
         })
         .unwrap();
-    ok(s.devkit(&["todo", "start", "x/y#66"], &S1));
-    std::fs::remove_file(p.path.join("devkit.toml")).unwrap();
-    let out = p.devkit(&["todo", "stop", "66"], &S1);
+    let number: u64 = prefix.parse().unwrap();
+    let store = TaskchampionStore::at(s.proj.state().join("todo/taskchampion"));
+    let add = |key: &str| {
+        store
+            .add(devkit_todo::NewTodo {
+                description: key.into(),
+                project: Some("proj".into()),
+                parent: None,
+                order: None,
+                ticket: Some(devkit_todo::TicketRef {
+                    tracker: "github".into(),
+                    key: key.into(),
+                    synced_status: None,
+                }),
+            })
+            .unwrap()
+    };
+    let elsewhere = add(&key);
+    let numbered = add(&format!("o/r#{number}"));
+    (prefix, elsewhere, numbered)
+}
+
+#[test]
+fn an_ambiguous_name_names_each_match_and_changes_nothing() {
+    let s = Synced::new(RULES, false);
+    let (prefix, elsewhere, numbered) = prefix_like_a_ticket(&s, 4);
+    ok(s.devkit(&["todo", "start", &elsewhere], &TASKCHAMPION));
+    let out = s.devkit(&["todo", "stop", &prefix], &TASKCHAMPION);
     assert_eq!(out.status.code(), Some(1));
     let err = stderr(&out);
-    assert!(err.contains("todo name 66 is ambiguous"), "{err}");
-    assert!(err.contains(&s.todo_for("o/r#66").id), "{err}");
-    assert!(err.contains(&s.todo_for("x/y#66").id), "{err}");
-    assert_eq!(s.todo_for("x/y#66").status.kind(), StatusKind::InProgress);
+    assert!(
+        err.contains(&format!("todo name {prefix} is ambiguous")),
+        "{err}"
+    );
+    assert!(err.contains(&elsewhere[..8]), "{err}");
+    assert!(err.contains(&numbered[..8]), "{err}");
+    assert_eq!(
+        replica_todo(&s.proj, &elsewhere).status.kind(),
+        StatusKind::InProgress
+    );
+}
+
+#[test]
+fn a_uuid_prefix_that_is_also_a_ticket_number_is_ambiguous() {
+    let s = Synced::new(RULES, false);
+    let (prefix, elsewhere, numbered) = prefix_like_a_ticket(&s, 8);
+    let out = s.devkit(&["todo", "start", &prefix], &TASKCHAMPION);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains(&format!("todo name {prefix} is ambiguous")),
+        "{err}"
+    );
+    assert!(err.contains(&elsewhere[..8]), "{err}");
+    assert!(err.contains(&numbered[..8]), "{err}");
+    for id in [elsewhere, numbered] {
+        assert_eq!(replica_todo(&s.proj, &id).status, Status::Pending);
+    }
+}
+
+#[test]
+fn a_number_with_a_non_github_tracker_is_not_a_key() {
+    let s = two_issues();
+    ok(s.sync(&[]));
+    std::fs::write(
+        s.proj.path.join("devkit.toml"),
+        "[tracker]\nkind = \"linear\"\n",
+    )
+    .unwrap();
+    for name in ["66", "#66"] {
+        let out = s.devkit(&["todo", "start", name], &S1);
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        assert!(
+            stderr(&out).contains(&format!("no todo {name}")),
+            "{}",
+            stderr(&out)
+        );
+    }
+    assert_eq!(s.todo_for("o/r#66").status, Status::Pending);
+}
+
+#[test]
+fn an_issue_url_resolves_with_no_tracker_in_reach() {
+    let s = two_issues();
+    ok(s.sync(&[]));
+    std::fs::remove_file(s.proj.path.join("devkit.toml")).unwrap();
+    let out = s.devkit(&["todo", "start", "66"], &S1);
+    assert!(stderr(&out).contains("no todo 66"), "{}", stderr(&out));
+    ok(s.devkit(&["todo", "start", "https://github.com/O/R/issues/66"], &S1));
+    assert_eq!(s.todo_for("o/r#66").status.kind(), StatusKind::InProgress);
+    assert_eq!(s.todo_for("o/r#65").status, Status::Pending);
 }
 
 #[test]
@@ -221,29 +298,12 @@ fn a_purged_blocker_numbered_like_tickets_names_none_of_them() {
         &graphql(&[issue(3, Some("Todo"), &[])], &OPTIONS),
     );
     ok(s.sync(&[]));
-    s.proj
-        .store()
-        .add(devkit_todo::NewTodo {
-            description: "Elsewhere".into(),
-            project: Some("proj".into()),
-            parent: None,
-            order: None,
-            ticket: Some(devkit_todo::TicketRef {
-                tracker: "github".into(),
-                key: "x/y#3".into(),
-                synced_status: None,
-            }),
-        })
-        .unwrap();
-    std::fs::remove_file(s.proj.path.join("devkit.toml")).unwrap();
     let out = s.devkit(&["todo", "ready"], &S1);
     assert!(out.status.success(), "{}", stderr(&out));
     let ready = String::from_utf8_lossy(&out.stdout);
     for text in ["one", "two", "four", "five"] {
         assert_eq!(ready.matches(text).count(), 1, "{text}: {ready}");
     }
-    for key in ["o/r#3", "x/y#3"] {
-        let ticket = s.todo_for(key).id;
-        assert!(!s.proj.todo("5").blocked_by.contains(&ticket), "{key}");
-    }
+    let ticket = s.todo_for("o/r#3").id;
+    assert!(!s.proj.todo("5").blocked_by.contains(&ticket));
 }
