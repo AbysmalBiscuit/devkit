@@ -49,6 +49,12 @@ pub struct Run {
     /// satisfies no PR gate.
     #[serde(default)]
     pub dir: Option<String>,
+    /// The digest ([`crate::task::ExecutionPlan::digest`]) of the plan the
+    /// run executed, rendered with the worktree's branch and issue as they
+    /// were then. `None` when the task did not render to one, or on a
+    /// record that predates it, and such a run satisfies no PR gate.
+    #[serde(default)]
+    pub plan: Option<String>,
     /// The full commit id checked out when the run started; `None` when it
     /// could not be read, as on a repository with no commits.
     pub head: Option<String>,
@@ -255,6 +261,7 @@ pub struct Start {
     repo: PathBuf,
     worktree: PathBuf,
     dir: Option<String>,
+    plan: Option<String>,
     head: Option<String>,
     clean: bool,
     committed_definition: bool,
@@ -301,6 +308,7 @@ impl Start {
             repo: std::fs::canonicalize(&repo).unwrap_or(repo),
             worktree,
             dir,
+            plan: None,
             head,
             clean,
             committed_definition: false,
@@ -318,6 +326,19 @@ impl Start {
     /// See [`Run::dir`].
     pub fn dir(&self) -> Option<&str> {
         self.dir.as_deref()
+    }
+
+    /// See [`Run::worktree`].
+    pub fn worktree(&self) -> &Path {
+        &self.worktree
+    }
+
+    /// Record the digest of the plan the run executes.
+    pub fn plan(self, digest: Option<String>) -> Self {
+        Self {
+            plan: digest,
+            ..self
+        }
     }
 
     /// Record whether the task runs as the committed config defines it.
@@ -348,6 +369,7 @@ impl Start {
             repo: self.repo,
             worktree: self.worktree,
             dir: self.dir,
+            plan: self.plan,
             head: self.head,
             exit_code,
             started_at: self.started_at,
@@ -523,6 +545,7 @@ mod tests {
             repo: "/r".into(),
             worktree: "/r".into(),
             dir: Some(String::new()),
+            plan: Some(String::new()),
             head: Some(head.into()),
             clean,
             committed_definition: clean,

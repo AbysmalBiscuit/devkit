@@ -17,6 +17,8 @@ use devkit_common::{
     vcs::{Vcs, VersionControl},
 };
 use devkit_config::{Config, Required, RunAction, RunArg, Step, TaskConfig};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::{
     apps::App,
@@ -710,8 +712,9 @@ pub fn resolve_step(
 /// launches; and which callers its args satisfy, since a run's arg check
 /// depends on who runs it. Ports render as each app's
 /// base port, so no registry is touched. Rendered env values may be
-/// secrets, so a plan is only compared, never printed, and has no `Debug`.
-#[derive(PartialEq, Eq)]
+/// secrets, so a plan is only digested, never printed or stored, and has
+/// no `Debug`.
+#[derive(Serialize)]
 pub struct ExecutionPlan {
     /// Whether the args pass the check `devrun task` makes of a human
     /// caller and of an agent caller, in that order.
@@ -719,7 +722,7 @@ pub struct ExecutionPlan {
     steps: Vec<PlannedStep>,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Serialize)]
 enum PlannedStep {
     Run {
         task: String,
@@ -732,7 +735,7 @@ enum PlannedStep {
     Up(Vec<PlannedLaunch>),
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Serialize)]
 struct PlannedLaunch {
     app: String,
     port: u16,
@@ -740,6 +743,18 @@ struct PlannedLaunch {
     cwd: PathBuf,
     env: BTreeMap<String, String>,
     url: String,
+}
+
+impl ExecutionPlan {
+    /// The plan's sha256, in hex: what a run records of the plan it
+    /// executed, since the plan itself may hold secrets.
+    pub fn digest(&self) -> String {
+        let json = serde_json::to_vec(self).expect("a plan serializes");
+        Sha256::digest(&json)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
 }
 
 /// The [`ExecutionPlan`] of task `name` given `args` at `worktree_root`,

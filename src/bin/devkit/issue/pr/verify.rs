@@ -28,9 +28,8 @@ pub(crate) struct Gate {
 impl Gate {
     /// The gate `gates` configures for a PR opened at `head` from the
     /// checkout at `dir`, or `None` when it is off or names no task. A run
-    /// qualifies only when the required task runs at `head` exactly as it
-    /// would at `merge_base`, so a branch cannot redefine the task it is
-    /// checked by.
+    /// qualifies only when it ran exactly what the required task runs at
+    /// `merge_base`, so a branch cannot redefine the task it is checked by.
     pub(crate) fn read(
         dir: &Path,
         merge_base: &str,
@@ -59,7 +58,7 @@ impl Gate {
         let (run, rejected) = if passes.is_empty() {
             (None, None)
         } else {
-            qualifying(dir, merge_base, head, &required, passes)
+            qualifying(dir, merge_base, &required, passes)
         };
         Ok(Some(Self {
             mode,
@@ -144,15 +143,15 @@ impl Gate {
     }
 }
 
-/// The latest of `passes`, all runs at `head`, whose task runs at `head` as
-/// it would at the merge base: the [`task::ExecutionPlan`] the committed
-/// config layers give at each, in the directory the run started in, is the
-/// same. Or, when none qualifies, why the latest one does not. The run's
-/// ledger record already says it ran the plan committed at `head`.
+/// The latest of `passes`, all runs at `head`, that ran what the required
+/// task runs at the merge base: the digest of the plan it executed is the
+/// digest of the [`task::ExecutionPlan`] the merge base's committed config
+/// layers give now, in the directory the run started in, with the
+/// worktree's branch and issue as they are now. Or, when none qualifies,
+/// why the latest one does not.
 fn qualifying(
     dir: &Path,
     merge_base: &str,
-    head: &str,
     required: &RequiredTask,
     passes: Vec<Run>,
 ) -> (Option<Run>, Option<String>) {
@@ -171,43 +170,37 @@ fn qualifying(
     let base = short(merge_base);
     let mut rejected = None;
     for pass in passes {
-        let why = match pass.dir.as_deref() {
-            None => format!(
+        let why = match (pass.dir.as_deref(), pass.plan.as_deref()) {
+            (None, _) => format!(
                 "A run at that commit passed, but its record does not say which directory it \
                  started in, so what it ran cannot be rebuilt: run `{}` again.",
                 required.command()
             ),
-            Some(run_dir) => {
-                let plan = |rev: &str| {
-                    task::committed_plan(
-                        dir,
-                        rev,
-                        run_dir,
-                        &path_to_project,
-                        &pass.worktree,
-                        task,
-                        &required.args,
-                    )
-                };
-                match (plan(head), plan(merge_base)) {
-                    (Ok(at_head), Ok(at_base)) if at_head == at_base => {
-                        return (Some(pass), None);
-                    }
-                    (Ok(_), Ok(_)) => format!(
-                        "A run at that commit passed, but `{task}` there does not run what it \
-                         runs at the merge base {base}: the task's definition changed from the \
-                         merge base."
-                    ),
-                    (Err(e), _) => format!(
-                        "A run at that commit passed, but `{task}` as that commit defines it \
-                         does not render: {e:#}"
-                    ),
-                    (_, Err(e)) => format!(
-                        "A run at that commit passed, but `{task}` as the merge base {base} \
-                         defines it does not render: {e:#}"
-                    ),
-                }
-            }
+            (_, None) => format!(
+                "A run at that commit passed, but its record does not say what it ran: run \
+                 `{}` again.",
+                required.command()
+            ),
+            (Some(run_dir), Some(ran)) => match task::committed_plan(
+                dir,
+                merge_base,
+                run_dir,
+                &path_to_project,
+                &pass.worktree,
+                task,
+                &required.args,
+            ) {
+                Ok(at_base) if at_base.digest() == ran => return (Some(pass), None),
+                Ok(_) => format!(
+                    "A run at that commit passed, but it did not run what `{task}` runs at the \
+                     merge base {base}: the task's definition changed from the merge base, or \
+                     the branch or issue record it renders changed since the run."
+                ),
+                Err(e) => format!(
+                    "A run at that commit passed, but `{task}` as the merge base {base} \
+                     defines it does not render: {e:#}"
+                ),
+            },
         };
         rejected.get_or_insert(why);
     }

@@ -794,24 +794,29 @@ fn cmd_task(
         user.keys().cloned().collect(),
         env_file.map(|f| Path::new(cwd).join(f)),
     );
-    let committed = match (start.head(), start.dir()) {
-        (Some(head), Some(dir)) => {
-            let live =
-                task::execution_plan(&loaded.config, &loaded.catalog, root_path, name, &args);
-            let committed = task::committed_plan(
-                root_path,
-                head,
-                dir,
-                &loaded.path_to_project,
-                root_path,
-                name,
-                &args,
-            );
-            matches!((live, committed), (Ok(live), Ok(committed)) if live == committed)
-        }
+    let plan = task::execution_plan(
+        &loaded.config,
+        &loaded.catalog,
+        start.worktree(),
+        name,
+        &args,
+    )
+    .ok()
+    .map(|p| p.digest());
+    let committed = match (start.head(), start.dir(), &plan) {
+        (Some(head), Some(dir), Some(plan)) => task::committed_plan(
+            root_path,
+            head,
+            dir,
+            &loaded.path_to_project,
+            start.worktree(),
+            name,
+            &args,
+        )
+        .is_ok_and(|c| &c.digest() == plan),
         _ => false,
     };
-    let start = start.committed_definition(committed);
+    let start = start.committed_definition(committed).plan(plan);
     let tail = ledger::Tail::new();
     let steps = std::cell::RefCell::new(Vec::new());
     let step = |step_name: &str| -> Result<Option<i32>> {

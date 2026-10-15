@@ -524,21 +524,87 @@ fn a_branch_changing_a_template_variable_the_task_reads_is_refused() {
 }
 
 #[test]
-fn a_pass_recorded_without_its_directory_does_not_satisfy_the_gate() {
+fn a_pass_recorded_without_what_it_ran_does_not_satisfy_the_gate() {
+    for (field, why) in [
+        ("dir", "which directory it started in"),
+        ("plan", "what it ran"),
+    ] {
+        let p = project(GATE);
+        verify(&p);
+        let runs = p.state().join("devkit/runs");
+        for entry in std::fs::read_dir(&runs).unwrap() {
+            let path = entry.unwrap().path();
+            let mut run: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert!(!run[field].is_null(), "{field}: {run:#}");
+            run.as_object_mut().unwrap().remove(field);
+            std::fs::write(&path, run.to_string()).unwrap();
+        }
+        assert_refused(&p);
+        let (_, stderr) = create(&p, "agent");
+        assert!(stderr.contains(why), "{field}: {stderr}");
+    }
+}
+
+/// A run records the digest of the plan it executed, never the values its
+/// env rendered.
+#[test]
+fn the_ledger_records_the_plans_digest_but_no_env_value() {
+    let p = project(&format!(
+        "
+[tasks.secretive]
+run = [\"git\", \"version\"]
+env = {{ TOKEN = \"hunter2-{{{{ branch }}}}\" }}
+{}",
+        "\n[pr.gates]\nverify_task = \"secretive\"\n"
+    ));
+    task(&p, &["secretive"]);
+    let runs = p.state().join("devkit/runs");
+    let text: String = std::fs::read_dir(&runs)
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect();
+    assert!(!text.contains("hunter2"), "{text}");
+    let run: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    let plan = run["plan"].as_str().unwrap_or_default();
+    assert_eq!(plan.len(), 64, "a sha256: {run:#}");
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+}
+
+/// A task rendering the checkout's branch.
+const BRANCH_READER: &str = "\n[tasks.named]\nrun = [\"git\", \"-c\", \"x.branch={{ branch }}\", \"version\"]\n\n[pr.gates]\nverify_task = \"named\"\n";
+
+#[test]
+fn a_task_rendering_the_branch_qualifies_on_the_branch_it_ran_on() {
+    let p = project(BRANCH_READER);
+    task(&p, &["named"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+    assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
+}
+
+/// The run rendered the old branch name, so it did not run what the PR's
+/// branch runs.
+#[test]
+fn a_branch_renamed_after_the_run_is_refused_for_a_task_rendering_the_branch() {
+    let p = project(BRANCH_READER);
+    task(&p, &["named"]);
+    git(&p, &["branch", "-m", "lev/eng-1-renamed"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(stderr.contains("the run ledger records none"), "{stderr}");
+    assert!(stderr.contains("branch or issue record"), "{stderr}");
+    assert!(!opened(&p), "{}", p.calls());
+}
+
+#[test]
+fn a_branch_renamed_after_the_run_still_qualifies_a_task_not_rendering_it() {
     let p = project(GATE);
     verify(&p);
-    let runs = p.state().join("devkit/runs");
-    for entry in std::fs::read_dir(&runs).unwrap() {
-        let path = entry.unwrap().path();
-        let mut run: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(run["dir"].is_string(), "{run:#}");
-        run.as_object_mut().unwrap().remove("dir");
-        std::fs::write(&path, run.to_string()).unwrap();
-    }
-    assert_refused(&p);
-    let (_, stderr) = create(&p, "agent");
-    assert!(stderr.contains("which directory it started in"), "{stderr}");
+    git(&p, &["branch", "-m", "lev/eng-1-renamed"]);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
 }
 
 /// A task that needs `api` live, through `require_live`.
