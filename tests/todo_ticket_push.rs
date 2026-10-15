@@ -1036,3 +1036,25 @@ fn a_step_under_a_ticket_of_another_repository_stays_local() {
     assert_eq!(parent(&moved), Some(id_of(&s, 66)));
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
 }
+
+#[test]
+fn an_unreadable_issue_is_reported_as_a_read() {
+    let s = linked("\"parent\"", None, false);
+    s.serve(
+        "graphql.json",
+        r#"{"data":{"repository":{"i67":null,"i65":{"id":"I_65"}}},
+            "errors":[{"type":"NOT_FOUND","message":"Could not resolve to an Issue with the number of 67."}]}"#,
+    );
+    let out = s.devkit(
+        &["todo", "move", &id_of(&s, 67), "--parent", &id_of(&s, 65)],
+        &AGENT,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("o/r#67 was not found") && !err.contains("refused the write"),
+        "{err}"
+    );
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert_eq!(parent_of(&s, 67), None);
+}

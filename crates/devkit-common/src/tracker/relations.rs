@@ -122,7 +122,14 @@ impl GithubRelations {
         Self::with_transport(repo, move |query| {
             let source = api.token_source();
             let resp = api.graphql_or_gh(query, Api::graphql_value)?;
-            github_fields::check_mutation(&resp, source)?;
+            match query.starts_with("mutation") {
+                true => github_fields::check_mutation(&resp, source)?,
+                false => {
+                    if let Some(e) = github_status::scope_error(&resp, source) {
+                        return Err(e);
+                    }
+                }
+            }
             Ok(resp)
         })
     }
