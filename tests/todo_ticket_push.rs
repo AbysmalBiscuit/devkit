@@ -746,7 +746,6 @@ fn a_relation_edit_outside_the_repository_is_refused() {
             stderr(&out)
         );
     }
-    settle();
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
     assert!(s.todo_for("o/r#65").blocked_by.is_empty());
     assert_eq!(parent_of(&s, 67), None);
