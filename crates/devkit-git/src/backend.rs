@@ -198,6 +198,17 @@ impl VersionControl for GitBackend {
         Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
     }
 
+    fn restore_paths(&self, dir: &Path, rev: &str, paths: &[String]) -> Result<()> {
+        // Chunked to stay under Windows' command-line length limit.
+        for chunk in paths.chunks(100) {
+            Git::at(dir)
+                .args(["--literal-pathspecs", "checkout", rev, "--"])
+                .args(chunk.iter().map(String::as_str))
+                .output()?;
+        }
+        Ok(())
+    }
+
     fn create_worktree(&self, new: &NewWorktree<'_>) -> Result<()> {
         let path = utf8(new.path)?;
         let mut args = vec!["worktree", "add"];

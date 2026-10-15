@@ -204,6 +204,21 @@ pub trait VersionControl {
         path: &str,
     ) -> ::anyhow::Result<::std::option::Option<::std::string::String>>;
 
+    /// Sets each of `paths`, relative to the root of the worktree at `dir`,
+    /// to its contents at revision `rev`, which has a file at every one.
+    /// Byte for byte, so a binary file survives.
+    ///
+    /// The default refuses, naming the backend.
+    fn restore_paths(
+        &self,
+        dir: &::std::path::Path,
+        rev: &str,
+        paths: &[::std::string::String],
+    ) -> ::anyhow::Result<()> {
+        let _ = (dir, rev, paths);
+        ::anyhow::bail!("the {} backend cannot restore paths", self.name())
+    }
+
     /// Creates a worktree. Populating it can fetch the objects it needs.
     fn create_worktree(&self, new: &::devkit_vcs::NewWorktree<'_>) -> ::anyhow::Result<()>;
 
