@@ -477,7 +477,10 @@ pub struct EnumValue {
     pub teams: Vec<String>,
     /// Other spellings the tracker itself takes for the value, matched
     /// case-insensitively wherever `id` is, such as a Linear team's key and
-    /// name or a label's name. `ticket fields discover` writes them.
+    /// name or a label's name. `ticket fields discover` writes them; a
+    /// hand-written value needs aliases for the spellings a tracker MCP
+    /// takes (a GitHub issue type's name, a milestone's number, a Linear
+    /// value's name), or an MCP call naming it that way is refused.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
 }

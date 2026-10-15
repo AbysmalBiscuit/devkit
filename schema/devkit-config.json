@@ -465,7 +465,7 @@
       "description": "One value of an `enum` field.",
       "properties": {
         "aliases": {
-          "description": "Other spellings the tracker itself takes for the value, matched\ncase-insensitively wherever `id` is, such as a Linear team's key and\nname or a label's name. `ticket fields discover` writes them.",
+          "description": "Other spellings the tracker itself takes for the value, matched\ncase-insensitively wherever `id` is, such as a Linear team's key and\nname or a label's name. `ticket fields discover` writes them; a\nhand-written value needs aliases for the spellings a tracker MCP\ntakes (a GitHub issue type's name, a milestone's number, a Linear\nvalue's name), or an MCP call naming it that way is refused.",
           "items": {
             "type": "string"
           },
