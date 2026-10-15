@@ -111,13 +111,7 @@ impl Gate {
             head = self.head,
         );
         match run.tail.as_deref() {
-            Some(lines) if !lines.is_empty() => {
-                let fence = fence(lines);
-                out.push_str(&format!(
-                    "\nOutput tail:\n\n{fence}text\n{}\n{fence}\n",
-                    lines.join("\n")
-                ));
-            }
+            Some(lines) if !lines.is_empty() => out.push_str(&output_tail(lines)),
             Some(_) => out.push_str("\nThe run printed nothing.\n"),
             None => out.push_str("\nNo output was captured: it went straight to a terminal.\n"),
         }
@@ -229,9 +223,59 @@ fn short(rev: &str) -> &str {
     &rev[..rev.len().min(12)]
 }
 
+/// The most output, in bytes, the Verification section quotes. GitHub
+/// refuses a PR body over 65536 characters, and the ledger's tail can hold
+/// more than that, so the section keeps the body well under the limit.
+const TAIL_BUDGET: usize = 8 * 1024;
+
+/// The output-tail block for `lines`: the last lines that fit in
+/// [`TAIL_BUDGET`], fenced, with a note when earlier lines were dropped. A
+/// lone last line over the budget keeps its end, cut on a char boundary.
+fn output_tail(lines: &[String]) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0;
+    let mut cut = false;
+    for line in lines.iter().rev() {
+        let cost = line.len() + 1;
+        if used + cost > TAIL_BUDGET {
+            if kept.is_empty() {
+                let mut start = line.len() - TAIL_BUDGET;
+                while !line.is_char_boundary(start) {
+                    start += 1;
+                }
+                kept.push(&line[start..]);
+            }
+            cut = true;
+            break;
+        }
+        used += cost;
+        kept.push(line);
+    }
+    kept.reverse();
+    let fence = fence(&kept);
+    let dropped = lines.len() - kept.len();
+    let note = match (dropped, cut) {
+        (0, false) => String::new(),
+        (0, true) => format!(
+            "\nThe line was cut to at most its last {TAIL_BUDGET} bytes to keep the PR body within \
+             GitHub's limit.\n"
+        ),
+        (1, _) => {
+            "\n1 earlier line was dropped to keep the PR body within GitHub's limit.\n".to_string()
+        }
+        (n, _) => {
+            format!("\n{n} earlier lines were dropped to keep the PR body within GitHub's limit.\n")
+        }
+    };
+    format!(
+        "\nOutput tail:\n\n{fence}text\n{}\n{fence}\n{note}",
+        kept.join("\n")
+    )
+}
+
 /// A code fence longer than any run of backticks in `lines`, so the output
 /// cannot close it early.
-fn fence(lines: &[String]) -> String {
+fn fence(lines: &[&str]) -> String {
     let longest = lines
         .iter()
         .flat_map(|l| l.split(|c| c != '`'))
@@ -266,8 +310,45 @@ mod tests {
 
     #[test]
     fn the_fence_outruns_backticks_in_the_output() {
-        assert_eq!(fence(&["plain".into()]), "```");
-        assert_eq!(fence(&["```rust".into(), "x".into()]), "````");
-        assert_eq!(fence(&["a ````` b".into()]), "``````");
+        assert_eq!(fence(&["plain"]), "```");
+        assert_eq!(fence(&["```rust", "x"]), "````");
+        assert_eq!(fence(&["a ````` b"]), "``````");
+    }
+
+    #[test]
+    fn an_oversized_tail_keeps_its_last_lines_within_the_budget() {
+        let lines: Vec<String> = (0..100)
+            .map(|i| format!("{i:03}{}", "x".repeat(4093)))
+            .collect();
+        assert!(lines.iter().all(|l| l.len() == 4096));
+        let out = output_tail(&lines);
+        assert!(out.len() < TAIL_BUDGET + 512, "{} bytes", out.len());
+        assert!(out.contains(&format!("\n{}\n```\n", lines[99])), "{out}");
+        assert!(!out.contains("\n098x"), "{out}");
+        assert!(
+            out.contains("\n99 earlier lines were dropped to keep the PR body"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_lone_line_over_the_budget_keeps_its_end_on_a_char_boundary() {
+        let line = format!("{}end", "\u{e9}".repeat(TAIL_BUDGET));
+        let out = output_tail(&[line]);
+        assert!(out.len() < TAIL_BUDGET + 512, "{} bytes", out.len());
+        assert!(out.contains("end\n```\n"), "{out}");
+        assert!(
+            out.contains("The line was cut to at most its last 8192 bytes"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_tail_within_the_budget_is_quoted_whole() {
+        let lines = vec!["one".to_string(), "```two".to_string()];
+        assert_eq!(
+            output_tail(&lines),
+            "\nOutput tail:\n\n````text\none\n```two\n````\n"
+        );
     }
 }
