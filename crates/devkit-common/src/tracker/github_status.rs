@@ -332,19 +332,22 @@ impl GithubWriter {
     }
 }
 
-/// The issue number `id` names: `65`, `#65` or `owner/repo#65`.
-pub fn number(id: &str) -> Result<u64> {
-    id.trim()
-        .rsplit('#')
-        .next()
-        .unwrap_or_default()
-        .parse()
-        .with_context(|| format!("`{id}` is not a GitHub issue number"))
+/// The issue number `id` names in `slug`: `65`, `#65` or `slug#65`. An
+/// `owner/repo#65` of another repository is refused, so a write never lands
+/// on the same number in the wrong repository.
+pub fn number(id: &str, slug: &str) -> Result<u64> {
+    let id = id.trim();
+    let parsed = match id.strip_prefix('#').unwrap_or(id).parse() {
+        Ok(n) => Some(n),
+        Err(_) if id.contains('#') => super::github_tickets::key_number(id, slug),
+        Err(_) => None,
+    };
+    parsed.with_context(|| format!("`{id}` is not an issue number of {slug}"))
 }
 
 impl StatusWriter for GithubWriter {
     fn move_status(&self, id: &str, event: IssueEvent, t: &EventTransition) -> Result<Outcome> {
-        let read = self.read(number(id)?)?;
+        let read = self.read(number(id, &self.repo.slug)?)?;
         apply(event, t, read.current.clone(), |to| self.write(&read, to))
     }
 }
@@ -539,10 +542,18 @@ mod tests {
 
     #[test]
     fn an_issue_number_reads_from_a_key() {
-        assert_eq!(number("o/r#65").unwrap(), 65);
-        assert_eq!(number(" #7").unwrap(), 7);
-        assert_eq!(number("12").unwrap(), 12);
-        assert!(number("o/r").is_err());
+        assert_eq!(number("o/r#65", "o/r").unwrap(), 65);
+        assert_eq!(number("O/R#65", "o/r").unwrap(), 65);
+        assert_eq!(number(" #7", "o/r").unwrap(), 7);
+        assert_eq!(number("12", "o/r").unwrap(), 12);
+        assert!(number("o/r", "o/r").is_err());
+        assert!(number("", "o/r").is_err());
+    }
+
+    #[test]
+    fn an_issue_key_of_another_repository_is_refused() {
+        let e = number("x/y#65", "o/r").unwrap_err().to_string();
+        assert!(e.contains("x/y#65") && e.contains("o/r"), "{e}");
     }
 
     #[test]

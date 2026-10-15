@@ -123,7 +123,7 @@ fn ticket_key(slug: &str, number: u64) -> String {
 }
 
 /// The issue number `key` names when it is a [`ticket_key`] of `slug`.
-fn key_number(key: &str, slug: &str) -> Option<u64> {
+pub(crate) fn key_number(key: &str, slug: &str) -> Option<u64> {
     let (repo, number) = key.rsplit_once('#')?;
     repo.eq_ignore_ascii_case(slug)
         .then(|| number.parse().ok())

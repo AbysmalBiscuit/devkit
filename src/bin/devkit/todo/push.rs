@@ -147,7 +147,7 @@ pub(crate) fn push_status(
     let closing = closes.filter(|_| write || verdict == Verdict::NoMove);
     if let Some(reason) = closing {
         let repo = selected.forge.repos.issues().with_context(unchanged)?;
-        github_status::close_issue(repo, github_status::number(key)?, reason)
+        github_status::close_issue(repo, github_status::number(key, &repo.slug)?, reason)
             .with_context(unchanged)?;
         if let Some(e) = &unwritable {
             eprintln!("devkit todo: ticket {key} closed; [ticket.events.{event}] not moved: {e:#}");
