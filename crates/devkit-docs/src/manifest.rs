@@ -197,14 +197,10 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
     stamp(&mut manifest, &global_path);
 
     let main = devkit_common::vcs::main_checkout(start).ok().flatten();
-    let mut nearest: Option<PathBuf> = None;
     let mut problems: Vec<String> = Vec::new();
-    for layer in devkit_config::project_layers(start, main.as_deref())? {
-        if layer.kind != devkit_config::LayerKind::MainCheckout
-            && layer.path.file_name() == Some(std::ffi::OsStr::new(devkit_config::CONFIG_FILE))
-        {
-            nearest = Some(layer.path.clone());
-        }
+    let layers = devkit_config::project_layers(start, main.as_deref())?;
+    let nearest = devkit_config::nearest_tracked(&layers).map(Path::to_path_buf);
+    for layer in layers {
         if let Some(mut docs) = docs_layer(&layer.path)? {
             for lib in docs.libs.iter().filter(|lib| lib.exclude.is_some()) {
                 problems.push(format!(

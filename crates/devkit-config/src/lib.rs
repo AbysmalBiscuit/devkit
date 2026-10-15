@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 mod layers;
 pub mod todo;
 pub use layers::{
-    BrokenLayer, CONFIG_FILE, Layer, LayerKind, ReadLayers, project_layers, read_project_layers,
+    BrokenLayer, CONFIG_FILE, Layer, LayerKind, ReadLayers, nearest_tracked, project_layers,
+    read_project_layers,
 };
 pub use todo::{HARNESS_PREFIXES, RoleConfig, ScopeConfig};
 pub mod harness;

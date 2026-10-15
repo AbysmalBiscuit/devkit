@@ -52,6 +52,20 @@ pub fn project_layers(start: &Path, main_checkout: Option<&Path>) -> Result<Vec<
     Ok(project_layers_rooted(start, main_checkout)?.layers)
 }
 
+/// The nearest tracked `devkit.toml` among `layers`: the file a command
+/// writes project config to. Never an untracked `devkit.local.toml`, even
+/// where one outranks it, nor the main checkout's file a worktree inherits.
+pub fn nearest_tracked(layers: &[Layer]) -> Option<&Path> {
+    layers
+        .iter()
+        .rev()
+        .find(|l| {
+            l.kind != LayerKind::MainCheckout
+                && l.path.file_name() == Some(std::ffi::OsStr::new(CONFIG_FILE))
+        })
+        .map(|l| l.path.as_path())
+}
+
 /// `project_layers`, plus whether a `[config] root = true` marker fired and
 /// cut off layers above it. `discover` needs the flag to decide whether the
 /// home config still applies on top; callers that don't merge in a home
