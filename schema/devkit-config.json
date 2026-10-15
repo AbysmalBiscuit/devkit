@@ -2327,7 +2327,7 @@
             }
           ],
           "default": null,
-          "description": "Fired in the background when a todo `devkit todo sync` brought in for\nthe ticket becomes in progress, by `devkit todo start` or a harness's\ntask tool, from a checkout of the ticket's repository. Changes sync\nitself makes never fire it. A failed move leaves the todo as it is.\nWith `\"status\"` in `[ticket.sync] push` it runs in the foreground\ninstead, and a failed move fails the command."
+          "description": "Fired in the background when a todo `devkit todo sync` brought in for\nthe ticket becomes in progress, by `devkit todo start` or a harness's\ntask tool, from a checkout of the ticket's repository. Changes sync\nitself makes never fire it. A failed move leaves the todo as it is.\nWith `\"status\"` in `[ticket.sync] push`, `devkit todo start` runs it\nin the foreground instead, and a failed move fails the command."
         }
       },
       "type": "object"

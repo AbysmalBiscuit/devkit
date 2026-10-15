@@ -1475,8 +1475,8 @@ pub struct TicketEventsConfig {
     /// the ticket becomes in progress, by `devkit todo start` or a harness's
     /// task tool, from a checkout of the ticket's repository. Changes sync
     /// itself makes never fire it. A failed move leaves the todo as it is.
-    /// With `"status"` in `[ticket.sync] push` it runs in the foreground
-    /// instead, and a failed move fails the command.
+    /// With `"status"` in `[ticket.sync] push`, `devkit todo start` runs it
+    /// in the foreground instead, and a failed move fails the command.
     pub todo_start: Option<EventTransition>,
     /// Fired like `todo_start` when the ticket's todo becomes completed.
     pub todo_done: Option<EventTransition>,
