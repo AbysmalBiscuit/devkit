@@ -1,0 +1,30 @@
+{
+  "data": {
+    "issue": {
+      "nodes": [
+        {
+          "id": "0b7c4a52-9d1e-4f3a-8c6b-2e5d7f9a1c30",
+          "identifier": "ENG-42",
+          "url": "https://linear.app/acme/issue/ENG-42/fix-the-export",
+          "title": "Fix the export",
+          "team": { "id": "team-eng", "key": "ENG" },
+          "labels": { "nodes": [{ "id": "lbl-bug" }, { "id": "lbl-unknown" }] },
+          "assignee": { "id": "user-ada" },
+          "priority": 2,
+          "estimate": 3,
+          "cycle": { "id": "cyc-7" },
+          "project": null,
+          "projectMilestone": null,
+          "dueDate": null,
+          "parent": { "identifier": "ENG-1" },
+          "inverseRelations": {
+            "nodes": [
+              { "id": "rel-3", "type": "blocks", "issue": { "identifier": "ENG-3" } },
+              { "id": "rel-9", "type": "related", "issue": { "identifier": "ENG-9" } }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -5515,6 +5515,47 @@ steps = [
     }
 
     #[test]
+    fn a_list_on_a_single_valued_place_is_refused_naming_its_layer() {
+        for (kind, name, place) in [
+            ("github", "milestone", "\"milestone\""),
+            ("github", "kind", "\"issue_type\""),
+            ("github", "up", "\"parent\""),
+            (
+                "github",
+                "size",
+                "{ project_field = \"PVTF_s\", name = \"Size\" }",
+            ),
+            ("linear", "team", "\"team\""),
+            ("linear", "owner", "\"assignee\""),
+            ("linear", "due", "\"due_date\""),
+            ("linear", "up", "\"parent\""),
+        ] {
+            let e = field_error(
+                Some(&format!("[ticket.fields.{kind}.{name}]\nlist = true\n")),
+                &format!(
+                    "[github]\nproject = \"o/1\"\n\
+                     [ticket.fields.{kind}.{name}]\ntype = \"string\"\nwhere = {place}\n"
+                ),
+            );
+            assert!(
+                e.contains(&format!("[ticket.fields.{kind}.{name}]"))
+                    && e.contains("`list = true`")
+                    && e.contains("home.toml"),
+                "{kind}.{name}: {e}"
+            );
+        }
+        field_load(
+            None,
+            "[ticket.fields.github.area]\ntype = \"string\"\nlist = true\nwhere = \"labels\"\n\
+             [ticket.fields.github.owners]\ntype = \"user\"\nlist = true\nwhere = \"assignees\"\n\
+             [ticket.fields.github.blockers]\ntype = \"issue\"\nlist = true\nwhere = \"blocked_by\"\n\
+             [ticket.fields.linear.area]\ntype = \"string\"\nlist = true\nwhere = \"labels\"\n\
+             [ticket.fields.linear.blockers]\ntype = \"issue\"\nlist = true\nwhere = \"blocked_by\"\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn a_condition_on_an_undeclared_field_is_refused() {
         let e = field_error(
             None,
@@ -5674,6 +5715,80 @@ steps = [
             check_ticket_fields(&cfg, TrackerKind::Github, &prov.origin).unwrap_err()
         );
         assert!(e.contains("[ticket.fields.github.parent]"), "{e}");
+    }
+
+    #[test]
+    fn a_linear_field_at_a_place_taking_ids_must_give_ids() {
+        for (name, decl, says) in [
+            (
+                "labels",
+                "type = \"string\"\nlist = true\nwhere = \"labels\"",
+                "`enum`",
+            ),
+            ("team", "type = \"string\"\nwhere = \"team\"", "`enum`"),
+            ("cycle", "type = \"number\"\nwhere = \"cycle\"", "`enum`"),
+            ("board", "type = \"string\"\nwhere = \"project\"", "`enum`"),
+            (
+                "stage",
+                "type = \"date\"\nwhere = \"project_milestone\"",
+                "`enum`",
+            ),
+            ("owner", "type = \"string\"\nwhere = \"assignee\"", "`user`"),
+            (
+                "tags",
+                "type = \"user\"\nlist = true\nwhere = \"labels\"",
+                "`enum`",
+            ),
+        ] {
+            let e = field_error(
+                None,
+                &format!("[tracker]\nkind = \"linear\"\n[ticket.fields.linear.{name}]\n{decl}\n"),
+            );
+            assert!(
+                e.contains(&format!("[ticket.fields.linear.{name}]")) && e.contains(says),
+                "{name}: {e}"
+            );
+        }
+        field_load(
+            None,
+            "[tracker]\nkind = \"linear\"\n[ticket.fields.linear.owner]\ntype = \"user\"\n\
+             where = \"assignee\"\n[ticket.fields.linear.due]\ntype = \"string\"\n\
+             where = \"due_date\"\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_linear_relation_field_must_be_an_issue() {
+        for (name, decl) in [
+            ("epic", "type = \"number\"\nwhere = \"parent\""),
+            ("up", "type = \"date\"\nwhere = \"parent\""),
+            ("lead", "type = \"user\"\nwhere = \"parent\""),
+            (
+                "deps",
+                "type = \"string\"\nlist = true\nwhere = \"blocked_by\"",
+            ),
+            (
+                "after",
+                "type = \"number\"\nlist = true\nwhere = \"blocked_by\"",
+            ),
+        ] {
+            let e = field_error(
+                None,
+                &format!("[tracker]\nkind = \"linear\"\n[ticket.fields.linear.{name}]\n{decl}\n"),
+            );
+            assert!(
+                e.contains(&format!("[ticket.fields.linear.{name}]")) && e.contains("`issue`"),
+                "{name}: {e}"
+            );
+        }
+        field_load(
+            None,
+            "[tracker]\nkind = \"linear\"\n[ticket.fields.linear.epic]\ntype = \"issue\"\n\
+             where = \"parent\"\n[ticket.fields.linear.deps]\ntype = \"issue\"\nlist = true\n\
+             where = \"blocked_by\"\n",
+        )
+        .unwrap();
     }
 
     #[test]

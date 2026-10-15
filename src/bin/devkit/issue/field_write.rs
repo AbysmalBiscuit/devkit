@@ -1,18 +1,19 @@
 //! What `ticket create` and `ticket edit` share for ticket fields: refusing
-//! before any write, writing through the GitHub writer, reading back, and
-//! reporting what did not take.
+//! before any write, writing through the GitHub or Linear writer, reading
+//! back, and reporting what did not take.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
-    fields::{Problem, Report, Resolved, Value, message},
+    fields::{Problem, Report, Resolved, Value, message, stale_hint},
     tracker::{
         Tracker,
-        github_fields::{GithubFieldWriter, IssueFields, stale_hint},
+        github_fields::{GithubFieldWriter, IssueFields},
+        linear_fields::{IssueRef, LinearFieldWriter, LinearIssue, written_ids},
     },
 };
-use devkit_config::FieldDecl;
+use devkit_config::{FieldDecl, Place, TrackerKind};
 
 /// Turn each `issue` value into the issue number the tracker's own parser
 /// reads from it, refusing one it rejects before anything is written.
@@ -70,6 +71,18 @@ pub(crate) fn warn(decls: &BTreeMap<String, FieldDecl>, report: &Report) {
     }
 }
 
+/// List each of `problems` and fail with `summary`, or succeed when there
+/// are none.
+pub(crate) fn fail_on(problems: &[String], summary: String) -> Result<()> {
+    if problems.is_empty() {
+        return Ok(());
+    }
+    for p in problems {
+        eprintln!("  {p}");
+    }
+    bail!("{summary}")
+}
+
 /// Write the fields of `resolved` other than `skip` onto issue `number`,
 /// which held `before` (or reads it first when `None`), then read it back.
 /// Returns one line per field that did not take.
@@ -98,7 +111,10 @@ pub(crate) fn write_and_verify(
             Ok(before) => {
                 for (field, e) in writer.apply(number, decls, resolved, &before, skip) {
                     let mut line = format!("`{field}`{}: {e:#}", given_text(resolved, &field));
-                    if let Some(hint) = decls.get(&field).and_then(|d| stale_hint(&field, d, &e)) {
+                    if let Some(hint) = decls
+                        .get(&field)
+                        .and_then(|d| stale_hint(TrackerKind::Github, &field, d, &e))
+                    {
                         line.push_str(&format!("; {hint}"));
                     }
                     problems.push(line);
@@ -136,6 +152,93 @@ pub(crate) fn write_and_verify(
         )),
     }
     problems
+}
+
+/// The Linear API key, refusing before any request without one.
+pub(crate) fn linear_key() -> Result<String> {
+    devkit_common::secrets::resolve("LINEAR_API_KEY").context(
+        "no LINEAR_API_KEY in the environment or ~/.config/devkit/secrets.toml; run `devkit auth \
+         linear`",
+    )
+}
+
+/// The ticket's URL, else its identifier.
+pub(crate) fn linear_link(issue: &LinearIssue) -> &str {
+    if issue.url.is_empty() {
+        &issue.identifier
+    } else {
+        &issue.url
+    }
+}
+
+/// Set the blocked-by fields of `resolved` on the Linear ticket that held
+/// `before`, then compare every field of `resolved` with what the ticket
+/// holds. `before` is read again first when `stale`, because writes followed
+/// its read. Returns the ticket as last read, and one line per field that
+/// did not take.
+pub(crate) fn linear_finish(
+    writer: &LinearFieldWriter,
+    before: LinearIssue,
+    decls: &BTreeMap<String, FieldDecl>,
+    resolved: &Resolved,
+    refs: &BTreeMap<String, IssueRef>,
+    stale: bool,
+) -> (LinearIssue, Vec<String>) {
+    let mut problems = Vec::new();
+    let mut failed: BTreeSet<String> = BTreeSet::new();
+    let mut related = false;
+    for (name, values) in resolved.written() {
+        if decls.get(name).and_then(|d| d.r#where.as_ref()) != Some(&Place::BlockedBy) {
+            continue;
+        }
+        related = true;
+        if let Err(e) = writer.set_blocked_by(&before, &written_ids(values), refs) {
+            problems.push(format!("`{name}`{}: {e:#}", given_text(resolved, name)));
+            failed.insert(name.clone());
+        }
+    }
+    let after = if stale || related {
+        match writer.read_by_id(&before.uuid) {
+            Ok(after) => after,
+            Err(e) => {
+                problems.push(format!(
+                    "{} could not be read back to confirm its fields: {e:#}",
+                    before.identifier
+                ));
+                return (before, problems);
+            }
+        }
+    } else {
+        before
+    };
+    for (field, reads) in LinearFieldWriter::verify(decls, resolved, refs, &after) {
+        if !failed.contains(&field) {
+            problems.push(format!(
+                "`{field}`{} reads back as {reads}",
+                given_text(resolved, &field)
+            ));
+        }
+    }
+    (after, problems)
+}
+
+/// A refused Linear write, with the stale-id hint of each enum field it
+/// named.
+pub(crate) fn linear_refused(
+    e: anyhow::Error,
+    decls: &BTreeMap<String, FieldDecl>,
+    resolved: &Resolved,
+) -> anyhow::Error {
+    let hints: Vec<String> = resolved
+        .fields
+        .keys()
+        .filter_map(|f| stale_hint(TrackerKind::Linear, f, decls.get(f)?, &e))
+        .collect();
+    if hints.is_empty() {
+        e
+    } else {
+        e.context(hints.join("; "))
+    }
 }
 
 /// ` = <values>` for a field given values, ` (--none)` for a clear.

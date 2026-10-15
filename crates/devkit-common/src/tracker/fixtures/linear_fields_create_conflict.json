@@ -1,0 +1,12 @@
+{
+  "errors": [
+    {
+      "message": "conflict on insert of Issue",
+      "extensions": {
+        "code": "INPUT_ERROR",
+        "statusCode": 400,
+        "userPresentableMessage": "Entity Issue with id 0b7c4a52-9d1e-4f3a-8c6b-2e5d7f9a1c30 already exists."
+      }
+    }
+  ]
+}

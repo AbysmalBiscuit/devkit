@@ -85,6 +85,7 @@ pub struct FieldDecl {
     pub r#type: Option<FieldType>,
     /// Whether the field takes several values, passed comma-separated
     /// (`--arg labels=bug,enhancement`). A write sets exactly the values given.
+    /// Only `labels`, `assignees` and `blocked_by` hold several values.
     pub list: bool,
     /// The place on the tracker the value is written. Each place belongs to at
     /// most one field, and the status (`[github] status_field`, Linear's
@@ -273,6 +274,27 @@ impl Place {
                     | State
             ),
             TrackerKind::None => false,
+        }
+    }
+
+    /// Whether the place holds several values, so a `list` field may write it.
+    pub fn takes_several(&self) -> bool {
+        use Place::*;
+        match self {
+            Labels | Assignees | BlockedBy => true,
+            Assignee
+            | Milestone
+            | IssueType
+            | Parent
+            | Project
+            | ProjectField { .. }
+            | Team
+            | Priority
+            | Estimate
+            | Cycle
+            | ProjectMilestone
+            | DueDate
+            | State => false,
         }
     }
 
@@ -551,9 +573,34 @@ pub(crate) fn validate(
                 place.label()
             );
         }
-        if in_use && kind == TrackerKind::Github {
-            github_writable(&key, ty, place, cx)
-                .map_err(|why| anyhow::anyhow!("`{key}`{} {why}", note(cx, kind, name)))?;
+        if decl.list && !place.takes_several() {
+            let prefix = format!("ticket.fields.{kind}.{name}.");
+            let mut layers = cx.origin.iter().filter(|(k, _)| k.starts_with(&prefix));
+            let list_from = cx
+                .origin
+                .get(&format!("{prefix}list"))
+                .filter(|from| layers.any(|(_, p)| p != *from))
+                .map(|from| format!(" `list` is set in {}.", from.display()))
+                .unwrap_or_default();
+            let several = match kind {
+                TrackerKind::Github => "`labels`, `assignees` or `blocked_by`",
+                _ => "`labels` or `blocked_by`",
+            };
+            bail!(
+                "`{key}`{} has `list = true`, but `{}` holds one value, so a write would \
+                 keep only the first.{list_from} Remove `list`, or write the field to \
+                 {several}.",
+                note(cx, kind, name),
+                place.label()
+            );
+        }
+        if in_use {
+            let writable = match kind {
+                TrackerKind::Github => github_writable(&key, ty, place, cx),
+                TrackerKind::Linear => linear_writable(&key, ty, place),
+                TrackerKind::None => Ok(()),
+            };
+            writable.map_err(|why| anyhow::anyhow!("`{key}`{} {why}", note(cx, kind, name)))?;
         }
         if ty == FieldType::Enum && decl.values.is_empty() && decl.max_level() == FieldLevel::Error
         {
@@ -579,6 +626,37 @@ pub(crate) fn validate(
         places.push((name, place));
     }
     Ok(())
+}
+
+/// Why Linear could not take a `ty` value at `place`, whose input takes ids
+/// that only an `enum`'s values, or a `user`'s `[people]` entry, supply, or
+/// issue identifiers that only an `issue` supplies.
+fn linear_writable(key: &str, ty: FieldType, place: &Place) -> std::result::Result<(), String> {
+    if matches!(place, Place::Parent | Place::BlockedBy) && ty != FieldType::Issue {
+        return Err(format!(
+            "has `type = \"{}\"`, but Linear's `{}` takes issue identifiers, which an \
+             `issue` supplies. Change `type` in `{key}`.",
+            ty.as_str(),
+            place.label()
+        ));
+    }
+    let wants = match place {
+        Place::Assignee => "a `user` or `enum`",
+        Place::Team | Place::Labels | Place::Cycle | Place::Project | Place::ProjectMilestone => {
+            "an `enum`"
+        }
+        _ => return Ok(()),
+    };
+    let fits = ty == FieldType::Enum || (ty == FieldType::User && *place == Place::Assignee);
+    if fits {
+        return Ok(());
+    }
+    Err(format!(
+        "has `type = \"{}\"`, but Linear's `{}` takes ids, which {wants} supplies. Change \
+         `type` in `{key}`.",
+        ty.as_str(),
+        place.label()
+    ))
 }
 
 /// Why GitHub could not take a `ty` value at `place`, which would otherwise

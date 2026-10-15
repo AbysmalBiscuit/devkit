@@ -257,13 +257,15 @@ pub(crate) enum TicketCmd {
         #[command(flatten)]
         vars: VarArgs,
     },
-    /// Create a GitHub issue from the issue templates, with its fields.
+    /// Create a GitHub or Linear ticket from the templates, with its fields.
     ///
     /// Each declared field (`ticket fields` lists them) is passed as
     /// `--arg <field>=<value>` or marked empty with `--none <field>`. A missing
     /// `error` field or an invalid value refuses before anything is written.
     /// Every field written is read back; a field that did not take is named
-    /// after the URL, to fix with `ticket edit`, and the command fails.
+    /// after the URL, to fix with `ticket edit`, and the command fails. On
+    /// Linear a create passes an id derived from its team, title and body, so
+    /// rerunning one that may have gone through returns the first ticket.
     Create {
         /// Issue title, the `input` of the `ticket_title` template.
         #[arg(long)]
@@ -276,7 +278,7 @@ pub(crate) enum TicketCmd {
         #[command(flatten)]
         fields: FieldArgs,
     },
-    /// Rewrite a GitHub issue's body, title or declared fields.
+    /// Rewrite a ticket's body, title or declared fields.
     ///
     /// `--body` and `--title` render the issue templates. Without `--title`
     /// the issue keeps its current title, which the `ticket_body` template
@@ -285,7 +287,7 @@ pub(crate) enum TicketCmd {
     /// clears one, and fields not named are left alone. With only field args
     /// the title and body are left alone.
     Edit {
-        /// Issue number or issue URL.
+        /// GitHub issue number, Linear identifier (`ENG-42`), or either's URL.
         issue: String,
         /// New issue title, the `input` of the `ticket_title` template.
         #[arg(long)]
@@ -731,14 +733,24 @@ fn start(dir: &Option<String>) -> String {
     dir.clone().unwrap_or_else(|| ".".to_string())
 }
 
-/// Select the tracker for `ticket <verb>`, a command that writes GitHub issues
-/// with `gh`, and refuse any other tracker by pointing at `ticket render` and
-/// the tracker's MCP.
-fn github_only(
+/// A tracker `ticket create` and `ticket edit` write tickets on.
+#[derive(Debug, Clone, Copy)]
+enum TicketTracker {
+    Github,
+    Linear,
+}
+
+/// Select the tracker for `ticket <verb>`, a command that writes tickets on
+/// GitHub or Linear, refusing a project with neither.
+fn ticket_tracker(
     verb: &str,
     start: &str,
     config: Option<&str>,
-) -> Result<(devkit_common::tracker::Selected, devkit_config::Config)> {
+) -> Result<(
+    devkit_common::tracker::Selected,
+    devkit_config::Config,
+    TicketTracker,
+)> {
     let mut sel = devkit_common::tracker::select(config.map(Path::new), start, None);
     let cfg = sel
         .config
@@ -748,15 +760,16 @@ fn github_only(
         .tracker
         .kind
         .unwrap_or_else(|| sel.tracker.tracker.kind());
-    if kind != devkit_config::TrackerKind::Github {
-        bail!(
-            "`ticket {verb}` writes GitHub issues only, and this project's tracker is {}. \
-             Render the issue with `devkit ticket render` and {verb} it through the tracker's MCP.",
-            kind.as_str()
-        );
-    }
+    let tracker = match kind {
+        devkit_config::TrackerKind::Github => TicketTracker::Github,
+        devkit_config::TrackerKind::Linear => TicketTracker::Linear,
+        devkit_config::TrackerKind::None => bail!(
+            "`ticket {verb}` writes GitHub issues and Linear tickets, and this project has no \
+             tracker. Set `[tracker] kind` in devkit.toml."
+        ),
+    };
     devkit_config::check_ticket_fields(&cfg, kind, &sel.origin)?;
-    Ok((sel, cfg))
+    Ok((sel, cfg, tracker))
 }
 
 /// Carry out `action`. `shim_name` is the name a completion script is

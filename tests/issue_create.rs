@@ -1,6 +1,6 @@
 //! `devkit ticket create` and `devkit ticket edit` render the issue templates
-//! and write the result through `gh issue create` and `gh issue edit`, on
-//! GitHub only.
+//! and write the result through `gh issue create` and `gh issue edit` on
+//! GitHub. `issue_create_linear.rs` covers Linear.
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
@@ -56,16 +56,17 @@ fn create_passes_the_rendered_text_to_gh() {
 }
 
 #[test]
-fn a_linear_tracker_is_pointed_at_render() {
-    let fake = fake("linear");
-    let out = fake.issue(&["create", "--title", "T", "--arg", "acceptance=A"]);
-    assert!(!out.status.success());
-    assert!(
-        stderr(&out).contains("devkit ticket render") && !stderr(&out).contains("issue render"),
-        "{}",
-        stderr(&out)
-    );
-    assert!(!fake.calls().contains("issue create"), "{}", fake.calls());
+fn a_none_tracker_is_refused() {
+    let fake = fake("none");
+    for args in [
+        &["create", "--title", "T", "--arg", "acceptance=A"][..],
+        &["edit", "7", "--body", "B", "--arg", "acceptance=A"][..],
+    ] {
+        let out = fake.issue(args);
+        assert!(!out.status.success(), "{args:?}");
+        assert!(stderr(&out).contains("[tracker] kind"), "{}", stderr(&out));
+    }
+    assert!(fake.calls().is_empty(), "{}", fake.calls());
 }
 
 #[test]
@@ -120,19 +121,6 @@ fn edit_refuses_a_missing_required_arg_before_gh_runs() {
     let out = fake.issue(&["edit", "7", "--body", "B"]);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("acceptance"), "{}", stderr(&out));
-    assert!(!fake.calls().contains("issue edit"), "{}", fake.calls());
-}
-
-#[test]
-fn edit_under_a_linear_tracker_is_pointed_at_render() {
-    let fake = fake("linear");
-    let out = fake.issue(&["edit", "7", "--body", "B", "--arg", "acceptance=A"]);
-    assert!(!out.status.success());
-    assert!(
-        stderr(&out).contains("devkit ticket render") && !stderr(&out).contains("issue render"),
-        "{}",
-        stderr(&out)
-    );
     assert!(!fake.calls().contains("issue edit"), "{}", fake.calls());
 }
 

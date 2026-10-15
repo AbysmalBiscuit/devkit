@@ -120,6 +120,16 @@ pub struct Resolved {
     pub nones: BTreeSet<String>,
 }
 
+impl Resolved {
+    /// Each field a write sets, with its values: a `--none` clear has none.
+    pub fn written(&self) -> impl Iterator<Item = (&String, &[Value])> {
+        self.fields
+            .iter()
+            .map(|(name, values)| (name, values.as_slice()))
+            .chain(self.nones.iter().map(|name| (name, &[][..])))
+    }
+}
+
 /// A ticket's present field values by field name, as names (an enum value's
 /// name, a user's alias), for [`Surface::Edit`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -349,9 +359,13 @@ pub fn resolve(
         }
         let items = items(decl, raw);
         if items.is_empty() {
-            problems.push(invalid(format!(
-                "an empty value is not a value; pass `--none {name}` to leave `{name}` empty"
-            )));
+            problems.push(invalid(if decl.allows_none() {
+                format!(
+                    "an empty value is not a value; pass `--none {name}` to leave `{name}` empty"
+                )
+            } else {
+                format!("an empty value is not a value, and `{name}` cannot be left empty")
+            }));
             continue;
         }
         let mut values = Vec::new();
@@ -516,6 +530,25 @@ fn valid_values(decl: &FieldDecl) -> Option<String> {
         FieldType::Issue => Some("a ticket reference".into()),
         FieldType::String => None,
     }
+}
+
+/// Why a write to `kind`'s tracker may have failed on a stale declared id.
+pub fn stale_hint(
+    kind: TrackerKind,
+    field: &str,
+    decl: &FieldDecl,
+    e: &anyhow::Error,
+) -> Option<String> {
+    let text = format!("{e:#}");
+    let names_an_id = decl.r#type == Some(FieldType::Enum)
+        && (text.contains("Could not resolve")
+            || text.contains("NOT_FOUND")
+            || text.contains("not found"));
+    names_an_id.then(|| {
+        format!(
+            "the declared id may be stale: check `values` under [ticket.fields.{kind}.{field}] against the tracker"
+        )
+    })
 }
 
 /// One block per problem: the field, what is wrong, how to set it (`--arg`,
@@ -971,16 +1004,25 @@ when       = [{ if = { project = "*" }, level = "error" }]
     }
 
     #[test]
-    fn an_empty_arg_points_at_none() {
-        let d = decls(MILESTONE);
-        let e = resolve(
-            &d,
-            TrackerKind::Github,
-            &given(&[("milestone", "  ")], &[]),
-            &HashMap::new(),
-            None,
-        )
-        .unwrap_err();
+    fn an_empty_arg_points_at_none_when_the_field_allows_it() {
+        let mut d = decls(MILESTONE);
+        let empty = |d: &BTreeMap<String, FieldDecl>| {
+            resolve(
+                d,
+                TrackerKind::Github,
+                &given(&[("milestone", "  ")], &[]),
+                &HashMap::new(),
+                None,
+            )
+            .unwrap_err()
+        };
+        let e = empty(&d);
+        assert!(
+            matches!(&e[..], [Problem::Invalid { reason, .. }] if !reason.contains("--none") && reason.contains("cannot be left empty")),
+            "allow_none = false refuses --none, so the refusal does not offer it: {e:?}"
+        );
+        d.get_mut("milestone").unwrap().allow_none = None;
+        let e = empty(&d);
         assert!(
             matches!(&e[..], [Problem::Invalid { reason, .. }] if reason.contains("--none milestone")),
             "{e:?}"
