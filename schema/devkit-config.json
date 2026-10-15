@@ -1362,7 +1362,7 @@
     },
     "PrGates": {
       "additionalProperties": false,
-      "description": "The PR gates and how hard each one holds. A gate applies to a PR an\nagent opens with `pr create`.\n\n```toml\n[pr.gates]\nverify = \"require\"\nverify_task = \"verify\"\nverify_args = { scope = \"all\" }\n[pr.gates]\nrepro = \"advise\"\nrepro_task = \"test-one\"\nrepro_no_tests_exit = 4\n```",
+      "description": "The PR gates and how hard each one holds. A gate applies to a PR an\nagent opens with `pr create`.\n\n```toml\n[pr.gates]\nverify = \"require\"\nverify_task = \"verify\"\nverify_args = { scope = \"all\" }\nrepro = \"advise\"\nrepro_task = \"test-one\"\nrepro_no_tests_exit = 4\n```",
       "properties": {
         "repro": {
           "$ref": "#/$defs/GateMode",

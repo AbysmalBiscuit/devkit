@@ -1770,11 +1770,18 @@ pub fn default_test_files() -> Vec<String> {
 /// verify = "require"
 /// verify_task = "verify"
 /// verify_args = { scope = "all" }
+/// repro = "advise"
+/// repro_task = "test-one"
+/// repro_no_tests_exit = 4
 /// # "#).unwrap();
 /// # let gates = cfg.pr.gates.all();
 /// # assert_eq!(gates[1].1, GateMode::Require);
 /// # let Gate::Verify(required) = &gates[1].0 else { panic!() };
 /// # assert_eq!(required.command(), "devrun task verify --arg scope=all");
+/// # let Gate::Repro(task) = &gates[2].0 else { panic!() };
+/// # assert_eq!(gates[2].1, GateMode::Advise);
+/// # assert_eq!(task.no_tests_exit, Some(4));
+/// # assert_eq!(task.command("a b"), "devrun task test-one --arg 'selector=a b'");
 /// # let spaced = devkit_config::RequiredTask {
 /// #     task: "verify".into(),
 /// #     args: [("msg".to_string(), "it's  two".to_string())].into(),
@@ -1782,16 +1789,6 @@ pub fn default_test_files() -> Vec<String> {
 /// # assert_eq!(spaced.command(), r"devrun task verify --arg 'msg=it'\''s  two'");
 /// # assert_eq!(Config::parse("").unwrap().pr.gates.all().len(), 1);
 /// # assert!(Config::parse("[pr.gates]\nverify_task = \" \"\n").is_err());
-/// # let repro = Config::parse(r#"
-/// [pr.gates]
-/// repro = "advise"
-/// repro_task = "test-one"
-/// repro_no_tests_exit = 4
-/// # "#).unwrap().pr.gates.all();
-/// # let Gate::Repro(task) = &repro[1].0 else { panic!() };
-/// # assert_eq!(repro[1].1, GateMode::Advise);
-/// # assert_eq!(task.no_tests_exit, Some(4));
-/// # assert_eq!(task.command("a b"), "devrun task test-one --arg 'selector=a b'");
 /// # assert!(Config::parse("[pr.gates]\nrepro_task = \"\"\n").is_err());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
