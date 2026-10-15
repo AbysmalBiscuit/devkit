@@ -13,7 +13,7 @@ use std::{
 use anyhow::Result;
 use devkit_common::{
     caller::Caller,
-    fields::{self, Given, Naming, Problem, Resolved, Surface},
+    fields::{self, Given, Naming, Problem, Raw, Resolved, Surface},
     harness, required,
     vcs::Checkout,
 };
@@ -379,10 +379,10 @@ fn names_issues_repo(kind: TrackerKind, cfg: &Config, cwd: &Path, input: &Value)
     }
 }
 
-/// The call's mapped field values as `--arg` text, with each `null`, and
-/// `[]` for a list field, as an explicit none, and a problem for each value
-/// of a JSON type the field does not take. A `user` given as a tracker login
-/// or id becomes its `[people]` alias.
+/// The call's mapped field values, each list item kept whole, with each
+/// `null`, and `[]` for a list field, as an explicit none, and a problem for
+/// each value of a JSON type the field does not take. A `user` given as a
+/// tracker login or id becomes its `[people]` alias.
 fn given(
     rule: &RenderedToolRule,
     decls: &BTreeMap<String, FieldDecl>,
@@ -405,7 +405,7 @@ fn given(
             }
             _ => None,
         };
-        let text = match value {
+        let items = match value {
             Value::Null => {
                 out.nones.insert(field.clone());
                 continue;
@@ -414,17 +414,13 @@ fn given(
                 out.nones.insert(field.clone());
                 continue;
             }
-            Value::Array(items) if decl.list => items
-                .iter()
-                .map(scalar)
-                .collect::<Option<Vec<_>>>()
-                .map(|v| v.join(",")),
+            Value::Array(items) if decl.list => items.iter().map(scalar).collect(),
             Value::Array(_) => None,
-            v => scalar(v),
+            v => scalar(v).map(|s| vec![s]),
         };
-        match text {
-            Some(t) => {
-                out.values.insert(field.clone(), t);
+        match items {
+            Some(items) => {
+                out.values.insert(field.clone(), Raw::Items(items));
             }
             None => problems.push(Problem::Invalid {
                 field: field.clone(),
@@ -1023,5 +1019,18 @@ level  = "info"
         }
         let v = fields(&rule, toml, gh_create(json!({"assignees": ["ghost"]})));
         assert!(denied_mentioning(&v, "ghost"), "{v:?}");
+    }
+
+    #[test]
+    fn a_list_item_holding_a_comma_is_one_value() {
+        let toml = LINEAR_FIELDS.replace(
+            r#"{ name = "bug", id = "L2" }"#,
+            r#"{ name = "needs, triage", id = "L2" }"#,
+        );
+        let input = json!({"title": "T", "team": "ENG", "labels": ["needs, triage"]});
+        assert_eq!(fields(&linear_rule(), &toml, input), Verdict::Allow);
+        let input = json!({"title": "T", "team": "ENG", "labels": ["needs"]});
+        let v = fields(&linear_rule(), &toml, input);
+        assert!(denied_mentioning(&v, "`needs`"), "{v:?}");
     }
 }

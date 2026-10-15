@@ -133,7 +133,7 @@ pub(crate) fn ticket_args(
     };
     for (k, v) in vars.parse()? {
         if decls.contains_key(&k) {
-            out.fields.values.insert(k, v);
+            out.fields.values.insert(k, v.into());
         } else if declared.contains(&k) {
             out.template.insert(k, v);
         } else {

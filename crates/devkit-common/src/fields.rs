@@ -26,12 +26,44 @@ pub enum Surface {
     McpUpdate,
 }
 
-/// The field values a caller passed, as text, and the fields marked
-/// deliberately empty.
+/// The field values a caller passed, and the fields marked deliberately
+/// empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Given {
-    pub values: BTreeMap<String, String>,
+    pub values: BTreeMap<String, Raw>,
     pub nones: BTreeSet<String>,
+}
+
+/// One field's value as a caller passed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Raw {
+    /// `--arg` text, which a list field splits on commas.
+    Text(String),
+    /// Items passed one by one, as an MCP call's array carries them: none is
+    /// split, so an item may hold a comma.
+    Items(Vec<String>),
+}
+
+impl Raw {
+    /// The value as a refusal quotes it.
+    pub fn shown(&self) -> String {
+        match self {
+            Raw::Text(s) => s.clone(),
+            Raw::Items(items) => items.join(", "),
+        }
+    }
+}
+
+impl From<String> for Raw {
+    fn from(s: String) -> Self {
+        Raw::Text(s)
+    }
+}
+
+impl From<&str> for Raw {
+    fn from(s: &str) -> Self {
+        Raw::Text(s.to_string())
+    }
 }
 
 impl Given {
@@ -43,7 +75,7 @@ impl Given {
             if let Some(d) = default_of(decls, name, decl, &self.nones)
                 && !out.values.contains_key(name)
             {
-                out.values.insert(name.clone(), d.clone());
+                out.values.insert(name.clone(), d.as_str().into());
             }
         }
         out
@@ -248,13 +280,13 @@ fn level_upper_bound(
     level.max(decl.level)
 }
 
-/// The list items of `raw`: split on commas for a list field, trimmed, with
-/// blanks and repeats dropped.
-fn items(decl: &FieldDecl, raw: &str) -> Vec<String> {
-    let pieces: Vec<&str> = if decl.list {
-        raw.split(',').collect()
-    } else {
-        vec![raw]
+/// The list items of `raw`: text split on commas for a list field, each
+/// trimmed, with blanks and repeats dropped.
+fn items(decl: &FieldDecl, raw: &Raw) -> Vec<String> {
+    let pieces: Vec<&str> = match raw {
+        Raw::Text(text) if decl.list => text.split(',').collect(),
+        Raw::Text(text) => vec![text],
+        Raw::Items(items) => items.iter().map(String::as_str).collect(),
     };
     let mut out: Vec<String> = Vec::new();
     for p in pieces.into_iter().map(str::trim).filter(|p| !p.is_empty()) {
@@ -406,7 +438,7 @@ pub fn resolve(
     for (name, raw) in &given.values {
         let invalid = |reason: String| Problem::Invalid {
             field: name.clone(),
-            value: raw.clone(),
+            value: raw.shown(),
             reason,
         };
         let Some(decl) = decls.get(name) else {
@@ -466,11 +498,11 @@ pub fn team(decls: &BTreeMap<String, FieldDecl>, given: &Given) -> Option<String
     let (name, decl) = decls
         .iter()
         .find(|(_, d)| d.r#where == Some(devkit_config::Place::Team))?;
-    let raw = given.values.get(name)?;
+    let raw = items(decl, given.values.get(name)?).into_iter().next()?;
     Some(
-        decl.enum_values(raw)
+        decl.enum_values(&raw)
             .first()
-            .map_or_else(|| raw.trim().to_string(), |v| v.name.clone()),
+            .map_or_else(|| raw.clone(), |v| v.name.clone()),
     )
 }
 
@@ -699,7 +731,7 @@ pub fn listing(
         .map(|(k, v)| {
             let items = decls
                 .get(k)
-                .map_or_else(|| vec![v.clone()], |d| items(d, v));
+                .map_or_else(|| vec![v.shown()], |d| items(d, v));
             (k.clone(), items)
         })
         .collect();
@@ -768,7 +800,7 @@ when       = [{ if = { project = "*" }, level = "error" }]
         Given {
             values: values
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .map(|(k, v)| (k.to_string(), (*v).into()))
                 .collect(),
             nones: nones.iter().map(|n| n.to_string()).collect(),
         }
