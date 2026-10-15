@@ -315,7 +315,7 @@ pub(super) fn field_verdict(
     };
     let decls = cfg.ticket.fields.for_tracker(kind);
     let other_tracker = cfg.tracker.kind.is_some_and(|k| k != kind);
-    if decls.is_empty() || other_tracker || !names_issues_repo(kind, cfg, cwd, input) {
+    if decls.is_empty() || other_tracker || !names_issues_repo(kind, cfg, input, || origin_slug(cwd)) {
         return Verdict::Allow;
     }
     if let Err(e) = devkit_config::check_ticket_fields(cfg, kind, provenance) {
@@ -364,9 +364,14 @@ pub(super) fn field_verdict(
 
 /// Whether a call to `kind` writes the repository's own tickets: on GitHub,
 /// a call naming an `owner`/`repo` other than the issues repository, which
-/// is `[github] issues_repo` or else the `origin` remote's, does not. With
-/// neither, every call is checked.
-fn names_issues_repo(kind: TrackerKind, cfg: &Config, cwd: &Path, input: &Value) -> bool {
+/// is `[github] issues_repo` or else the slug `origin_slug` reads, does not.
+/// With neither, every call is checked.
+fn names_issues_repo(
+    kind: TrackerKind,
+    cfg: &Config,
+    input: &Value,
+    origin_slug: impl FnOnce() -> Option<String>,
+) -> bool {
     if kind != TrackerKind::Github {
         return true;
     }
@@ -374,12 +379,18 @@ fn names_issues_repo(kind: TrackerKind, cfg: &Config, cwd: &Path, input: &Value)
     let (Some(owner), Some(name)) = (part("owner"), part("repo")) else {
         return true;
     };
-    let resolved =
-        devkit_common::forge::resolve(&cfg.forge, &cfg.github, &cwd.to_string_lossy(), None);
-    match resolved.repos.issues() {
-        Ok(repo) => repo.slug.eq_ignore_ascii_case(&format!("{owner}/{name}")),
-        Err(_) => true,
+    match cfg.github.issues_repo.clone().or_else(origin_slug) {
+        Some(slug) => slug.eq_ignore_ascii_case(&format!("{owner}/{name}")),
+        None => true,
     }
+}
+
+/// The owner/repo of the `origin` remote at `cwd`, read from the URL alone.
+/// The pre-tool-use hook runs under a deadline that resolving an ssh alias
+/// through `ssh -G` could outlast, so the remote's host is not checked.
+fn origin_slug(cwd: &Path) -> Option<String> {
+    let url = devkit_common::forge::remote::origin_url(&cwd.to_string_lossy()).ok()?;
+    devkit_common::forge::remote::slug_from_remote_url(&url)
 }
 
 /// The call's mapped field values, the items of every key a field maps to
@@ -893,6 +904,25 @@ level  = "info"
         assert!(matches!(
             fields(&github_rule(), GITHUB_FIELDS, same),
             Verdict::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn a_configured_issues_repo_never_reads_the_origin() {
+        let cfg = devkit_config::Config::parse(GITHUB_FIELDS).unwrap();
+        let never = || -> Option<String> { panic!("the origin was read") };
+        let call = |repo: &str| json!({"owner": "acme", "repo": repo});
+        assert!(names_issues_repo(
+            TrackerKind::Github,
+            &cfg,
+            &call("app"),
+            never
+        ));
+        assert!(!names_issues_repo(
+            TrackerKind::Github,
+            &cfg,
+            &call("other"),
+            never
         ));
     }
 
