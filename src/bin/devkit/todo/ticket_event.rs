@@ -51,9 +51,9 @@ pub(crate) fn root_on(
 
 /// Fires the ticket event each of `changes`, made by `actor` from `origin`,
 /// calls for. A change `tracker` made fires nothing, so a sync never moves a
-/// ticket back. A cancel fires only with `"status"` in `[ticket.sync] push`. A ticket todo changed from outside its repository fires
-/// nothing and says so on stderr: only a checkout of the repository resolves
-/// the ticket's config.
+/// ticket back. A cancel fires only with `"status"` in `[ticket.sync] push`. A
+/// ticket todo changed from outside its repository fires nothing and says so on
+/// stderr: only a checkout of the repository resolves the ticket's config.
 pub(crate) fn fire_for(
     changes: &[StatusChange],
     actor: &Holder,
