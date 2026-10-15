@@ -268,15 +268,34 @@ fn a_number_with_a_non_github_tracker_is_not_a_key() {
 }
 
 #[test]
-fn an_issue_url_resolves_with_no_tracker_in_reach() {
+fn an_issue_url_is_not_a_key_with_no_tracker_in_reach() {
     let s = two_issues();
     ok(s.sync(&[]));
     std::fs::remove_file(s.proj.path.join("devkit.toml")).unwrap();
-    let out = s.devkit(&["todo", "start", "66"], &S1);
-    assert!(stderr(&out).contains("no todo 66"), "{}", stderr(&out));
-    ok(s.devkit(&["todo", "start", "https://github.com/O/R/issues/66"], &S1));
-    assert_eq!(s.todo_for("o/r#66").status.kind(), StatusKind::InProgress);
-    assert_eq!(s.todo_for("o/r#65").status, Status::Pending);
+    let url = "https://github.com/o/r/issues/66";
+    let out = s.devkit(&["todo", "start", url], &S1);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains(&format!("no todo {url}")),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(s.todo_for("o/r#66").status, Status::Pending);
+}
+
+#[test]
+fn an_issue_url_on_another_host_is_not_a_key() {
+    let s = two_issues();
+    ok(s.sync(&[]));
+    let url = "https://ghe.example/o/r/issues/66";
+    let out = s.devkit(&["todo", "start", url], &S1);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains(&format!("no todo {url}")),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(s.todo_for("o/r#66").status, Status::Pending);
 }
 
 #[test]

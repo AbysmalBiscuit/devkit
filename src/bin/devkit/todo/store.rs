@@ -589,7 +589,7 @@ impl Store {
         let tracker_key = self
             .origin
             .as_ref()
-            .filter(|_| devkit_todo::names::is_github_short_form(input))
+            .filter(|_| devkit_todo::names::needs_tracker(input))
             .and_then(|origin| super::names::tracker_key(origin.dir()));
         devkit_todo::names::resolve(input, todos, tracker_key.as_deref())
     }

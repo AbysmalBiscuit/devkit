@@ -28,8 +28,8 @@ fn uuid(id: &str) -> Option<uuid::Uuid> {
     (id.len() == 36).then(|| uuid::Uuid::try_parse(id).ok())?
 }
 
-/// Reads a GitHub issue's short form into the full ticket key the caller's
-/// tracker gives it, or `None` for input that tracker refuses.
+/// Reads a GitHub issue's short form or URL into the full ticket key the
+/// caller's tracker gives it, or `None` for input that tracker refuses.
 pub type TrackerKey = dyn Fn(&str) -> Option<String>;
 
 /// Whether the ticket key `key` names the tracker issue `issue`:
@@ -40,21 +40,19 @@ pub fn names_issue(key: &str, issue: &str) -> bool {
 
 /// The todo in `todos` that `input` names, read as a ticket key, a word name
 /// or a uuid prefix of 4 or more hex characters, all ignoring case. A full
-/// key matches the key a todo's ticket carries, and an issue URL matches the
-/// GitHub key its path spells. A GitHub short form (`#65`, `65`) is a key
-/// only when `tracker_key` reads it into one. `None` when nothing matches,
-/// and an error naming each match when more than one todo does.
+/// key matches the key a todo's ticket carries. A GitHub short form (`#65`,
+/// `65`) or issue URL is a key only when `tracker_key` reads it into one.
+/// `None` when nothing matches, and an error naming each match when more than
+/// one todo does.
 pub fn resolve(
     input: &str,
     todos: Vec<Todo>,
     tracker_key: Option<&TrackerKey>,
 ) -> anyhow::Result<Option<Todo>> {
     let lower = input.to_ascii_lowercase();
-    let github_key = issue_url_key(input).or_else(|| {
-        tracker_key
-            .filter(|_| is_github_short_form(input))
-            .and_then(|read| read(input))
-    });
+    let github_key = tracker_key
+        .filter(|_| needs_tracker(input))
+        .and_then(|read| read(input));
     let hex = lower.len() >= 4 && lower.bytes().all(|b| b == b'-' || b.is_ascii_hexdigit());
     let by_key = |ticket: &TicketRef| {
         ticket.key.eq_ignore_ascii_case(input)
@@ -79,29 +77,12 @@ pub fn resolve(
     anyhow::bail!("todo name {input} is ambiguous: {}", ids.join(", "))
 }
 
-/// Whether `input` is a GitHub issue's short form, `#65` or `65`, which only
-/// the caller's tracker reads into a full key.
-pub fn is_github_short_form(input: &str) -> bool {
+/// Whether `input` is a GitHub issue's short form, `#65` or `65`, or an
+/// issue URL, which only the caller's tracker reads into a full key.
+pub fn needs_tracker(input: &str) -> bool {
     let number = input.strip_prefix('#').unwrap_or(input);
-    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
-}
-
-/// The key `owner/repo#65` that an issue URL on any host,
-/// `https://<host>/<owner>/<repo>/issues/<n>`, names.
-fn issue_url_key(input: &str) -> Option<String> {
-    let rest = input
-        .strip_prefix("https://")
-        .or_else(|| input.strip_prefix("http://"))?;
-    let mut parts = rest.split('/').skip(1);
-    let owner = parts.next().filter(|s| !s.is_empty())?;
-    let repo = parts.next().filter(|s| !s.is_empty())?;
-    if parts.next()? != "issues" {
-        return None;
-    }
-    let tail = parts.next()?;
-    let digits = &tail[..tail.bytes().take_while(u8::is_ascii_digit).count()];
-    let number: u64 = digits.parse().ok()?;
-    Some(format!("{owner}/{repo}#{number}"))
+    let short_form = !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit());
+    short_form || input.starts_with("https://") || input.starts_with("http://")
 }
 
 #[cfg(test)]
@@ -187,18 +168,11 @@ mod tests {
     }
 
     #[test]
-    fn an_issue_url_resolves_without_a_tracker() {
+    fn an_issue_url_is_a_key_only_through_a_tracker() {
         let url = "https://github.com/O/R/issues/65";
-        assert_eq!(id(resolve(url, tickets(), None)), Some(A.into()));
-        let comment = "http://ghe.example/x/y/issues/65#issuecomment-1";
-        assert_eq!(id(resolve(comment, tickets(), None)), Some(C.into()));
-        for other in [
-            "https://github.com/o/r/pull/65",
-            "https://github.com/o/r/issues/",
-            "https://github.com/o/issues/65",
-        ] {
-            assert_eq!(id(resolve(other, tickets(), None)), None, "{other}");
-        }
+        assert_eq!(id(resolve(url, tickets(), None)), None);
+        let tracker = move |input: &str| (input == url).then(|| "o/r#65".to_string());
+        assert_eq!(id(resolve(url, tickets(), Some(&tracker))), Some(A.into()));
     }
 
     #[test]
