@@ -138,6 +138,15 @@ fn a_quoted_hash_key_and_the_full_key_resolve() {
 }
 
 #[test]
+fn start_takes_an_issue_url_of_the_configured_repo() {
+    let s = two_issues();
+    ok(s.sync(&[]));
+    ok(s.devkit(&["todo", "start", "https://github.com/o/r/issues/66"], &S1));
+    assert_eq!(s.todo_for("o/r#66").status.kind(), StatusKind::InProgress);
+    assert_eq!(s.todo_for("o/r#65").status, Status::Pending);
+}
+
+#[test]
 fn an_exact_builtin_id_wins_over_a_ticket_number() {
     let s = Synced::new(&format!("{RULES}{STATUSES}"), true);
     ok(s.devkit(&["todo", "add", "plain"], &S1));
