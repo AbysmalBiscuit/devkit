@@ -30,7 +30,7 @@ toml.workspace = true
 toml_edit.workspace = true
 # The diff `ticket fields discover` shows before writing, and the collapsed
 # one a test shows when the committed JSON schema drifts.
-similar = "2"
+similar.workspace = true
 fd-lock.workspace = true
 interprocess.workspace = true
 chrono.workspace = true
@@ -103,6 +103,7 @@ interprocess = { version = "2", default-features = false }
 jwalk = "0.9"
 nix = { version = "0.29", features = ["signal", "process", "term"] }
 same-file = "1"
+similar = "2"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
