@@ -7,7 +7,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use devkit_config::{EventTransition, IssueEvent, ProjectRef};
 use serde_json::Value;
 
-use super::status::{Outcome, StatusWriter, Statuses, apply};
+use super::{
+    status::{Outcome, StatusWriter, Statuses, apply},
+    tickets::CloseReason,
+};
 use crate::{
     forge::Repo,
     github::{Api, TokenSource},
@@ -223,6 +226,55 @@ pub fn set_field_mutation(
     )
 }
 
+/// One query reading issue `number`'s node id, which `closeIssue` takes.
+pub fn issue_id_query(slug: &str, number: u64) -> String {
+    let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
+    format!(
+        "query {{ repository(owner: {o}, name: {n}) {{ issue(number: {number}) {{ id }} }} }}",
+        o = Value::from(owner),
+        n = Value::from(name),
+    )
+}
+
+/// The issue's node id in an [`issue_id_query`] response.
+pub fn parse_issue_id(resp: &Value, slug: &str, number: u64) -> Result<String> {
+    str_at(resp, "/data/repository/issue/id")
+        .map(String::from)
+        .with_context(|| format!("{slug}#{number} was not found, or the token cannot see it"))
+}
+
+/// Close the issue with node id `issue_id` for `reason`.
+pub fn close_mutation(issue_id: &str, reason: CloseReason) -> String {
+    let reason = match reason {
+        CloseReason::Completed => "COMPLETED",
+        CloseReason::NotPlanned => "NOT_PLANNED",
+        CloseReason::Duplicate => "DUPLICATE",
+    };
+    format!(
+        "mutation {{ closeIssue(input: {{issueId: {i}, stateReason: {reason}}}) {{ issue {{ state stateReason }} }} }}",
+        i = Value::from(issue_id),
+    )
+}
+
+/// Close issue `number` of `repo` for `reason`. It needs no `[github]
+/// project`: an issue's open state is its own, apart from any board.
+pub fn close_issue(repo: &Repo, number: u64, reason: CloseReason) -> Result<()> {
+    let api = Api::new(&repo.host);
+    let send = |query: &str| -> Result<Value> {
+        let resp = api.graphql_or_gh(query, Api::graphql_value)?;
+        check(&resp, api.token_source())?;
+        Ok(resp)
+    };
+    let id = parse_issue_id(
+        &send(&issue_id_query(&repo.slug, number))?,
+        &repo.slug,
+        number,
+    )?;
+    send(&close_mutation(&id, reason))
+        .with_context(|| format!("closing {}#{number}", repo.slug))?;
+    Ok(())
+}
+
 /// The status of issues in `repo`, kept in `project`'s single-select `field`.
 pub struct GithubWriter {
     repo: Repo,
@@ -280,9 +332,12 @@ impl GithubWriter {
     }
 }
 
-fn number(id: &str) -> Result<u64> {
+/// The issue number `id` names: `65`, `#65` or `owner/repo#65`.
+pub fn number(id: &str) -> Result<u64> {
     id.trim()
-        .trim_start_matches('#')
+        .rsplit('#')
+        .next()
+        .unwrap_or_default()
         .parse()
         .with_context(|| format!("`{id}` is not a GitHub issue number"))
 }
@@ -453,6 +508,41 @@ mod tests {
             e.contains("no option `Shipping` in `Status`") && e.contains("Todo, In progress, Done"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn close_issue_sends_state_reason_not_planned() {
+        let m = close_mutation("I_65", CloseReason::NotPlanned);
+        assert!(
+            m.contains("closeIssue(input: {issueId: \"I_65\", stateReason: NOT_PLANNED})"),
+            "{m}"
+        );
+        let m = close_mutation("I_65", CloseReason::Completed);
+        assert!(m.contains("stateReason: COMPLETED"), "{m}");
+    }
+
+    #[test]
+    fn close_issue_needs_no_project() {
+        let q = issue_id_query("o/r", 65);
+        assert!(
+            q.contains("repository(owner: \"o\", name: \"r\")")
+                && q.contains("issue(number: 65)")
+                && !q.contains("projectV2"),
+            "{q}"
+        );
+        let resp = serde_json::json!({ "data": { "repository": { "issue": { "id": "I_65" } } } });
+        assert_eq!(parse_issue_id(&resp, "o/r", 65).unwrap(), "I_65");
+        let gone = serde_json::json!({ "data": { "repository": { "issue": null } } });
+        let e = parse_issue_id(&gone, "o/r", 65).unwrap_err().to_string();
+        assert!(e.contains("o/r#65"), "{e}");
+    }
+
+    #[test]
+    fn an_issue_number_reads_from_a_key() {
+        assert_eq!(number("o/r#65").unwrap(), 65);
+        assert_eq!(number(" #7").unwrap(), 7);
+        assert_eq!(number("12").unwrap(), 12);
+        assert!(number("o/r").is_err());
     }
 
     #[test]
