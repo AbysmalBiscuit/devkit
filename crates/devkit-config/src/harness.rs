@@ -276,7 +276,7 @@ pub struct CommandRule {
 /// title   = "title"
 /// body    = "body"
 /// tracker = "github"
-/// fields  = { labels = "labels", assignees = "assignees", milestone = "milestone" }
+/// fields  = { labels = "labels", assignees = "assignees" }
 ///
 /// [harness.pr_tools.github-create]
 /// servers = ["*github*"]
@@ -345,7 +345,9 @@ pub struct RenderedToolRule {
     /// tracker names it: a string, an array of strings for a list, a number
     /// for a `number` field, or `null` for a field left empty on purpose. A
     /// declared field with no key here cannot be set by the tool, so at
-    /// `error` it denies every create.
+    /// `error` it denies every create. Map a key only when it takes the
+    /// value as the field records it: GitHub's `issue_write` takes a
+    /// milestone's number, and a `milestone` field records its title.
     #[serde(default)]
     pub fields: BTreeMap<String, String>,
 }
