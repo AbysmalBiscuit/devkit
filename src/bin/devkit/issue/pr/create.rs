@@ -12,7 +12,7 @@ use devkit_ports::ledger::Ledger;
 
 use super::{
     add_reviewers,
-    proof::{done_when_items, gate_proof},
+    proof::{DoneWhen, done_when_entries, gate_proof},
     render::{Texts, require_pr_title, values},
     repro, require_reviewer_for_ready,
     resolve::{Existing, assert_belongs, parse_pr_flag, resolve_existing, verify_created},
@@ -184,7 +184,7 @@ impl Gates {
         base: &str,
         head: &str,
         caller: Caller,
-        items: impl FnOnce() -> Result<Option<Vec<String>>>,
+        items: impl FnOnce() -> Result<Option<Vec<DoneWhen>>>,
     ) -> Result<Self> {
         let ungated = Self {
             weakened: None,
@@ -423,7 +423,7 @@ pub fn run(args: Args) -> Result<()> {
     let gate_head = head.clone();
     let gate_issue = tracker_issue.clone();
     let (config, repos) = (&loaded.config, &forge.repos);
-    let items = move || -> Result<Option<Vec<String>>> {
+    let items = move || -> Result<Option<Vec<DoneWhen>>> {
         let Some(issue) = gate_issue else {
             return Ok(None);
         };
@@ -431,7 +431,7 @@ pub fn run(args: Args) -> Result<()> {
         let details = tracker.tracker.details(&issue)?.with_context(|| {
             format!("no issue {issue} in the {} tracker", tracker.tracker.kind())
         })?;
-        Ok(Some(done_when_items(&details.description)))
+        Ok(Some(done_when_entries(&details.description)))
     };
     let gates = move || Gates::read(here, &gate_base, &gate_head, caller, items);
 

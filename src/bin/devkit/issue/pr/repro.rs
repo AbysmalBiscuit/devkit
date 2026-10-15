@@ -20,6 +20,7 @@ use devkit_common::{
 use devkit_config::{Gate as GateKey, GateMode, PrGates, ReproTask};
 
 use super::{
+    proof::DoneWhen,
     verify::output_tail_within,
     weakened::scan::{self, Lang},
 };
@@ -43,6 +44,8 @@ struct Ran {
 enum Outcome {
     /// The item carries no repro marker.
     Unmarked,
+    /// The issue ticks the item off, so an earlier change landed it.
+    Done,
     /// The check could not judge the item, for the reason given.
     Inconclusive(String),
     /// The check could not run.
@@ -107,8 +110,8 @@ pub(crate) struct Gate {
     dir: PathBuf,
     /// The `test_files` globs the merge base's config sets.
     test_files: Vec<String>,
-    /// The text of each of the issue's `Done when` items.
-    texts: Vec<String>,
+    /// The issue's `Done when` items.
+    texts: Vec<DoneWhen>,
     /// The non-test paths the check restored or deleted.
     reverted: Vec<String>,
     items: Vec<Item>,
@@ -139,7 +142,7 @@ impl Gate {
         test_files: &[String],
         head: &str,
         caller: Caller,
-        items: impl FnOnce() -> Result<Option<Vec<String>>>,
+        items: impl FnOnce() -> Result<Option<Vec<DoneWhen>>>,
     ) -> Result<Option<Self>> {
         let Some((task, mode)) = gates.all().into_iter().find_map(|(gate, mode)| match gate {
             GateKey::Repro(task) => Some((task, mode)),
@@ -181,9 +184,19 @@ impl Gate {
         let marked: Vec<(usize, Option<String>)> = texts
             .iter()
             .enumerate()
-            .filter_map(|(i, t)| marker(t).map(|sel| (i, sel)))
+            .filter(|(_, t)| !t.done)
+            .filter_map(|(i, t)| marker(&t.text).map(|sel| (i, sel)))
             .collect();
-        let mut outcomes: Vec<Outcome> = texts.iter().map(|_| Outcome::Unmarked).collect();
+        let mut outcomes: Vec<Outcome> = texts
+            .iter()
+            .map(|t| {
+                if t.done {
+                    Outcome::Done
+                } else {
+                    Outcome::Unmarked
+                }
+            })
+            .collect();
         if !marked.is_empty() {
             let tests = TestFiles::new(&self.test_files)?;
             match self.check(&dir, &tests, &marked) {
@@ -205,7 +218,7 @@ impl Gate {
             .enumerate()
             .map(|(i, (text, outcome))| Item {
                 number: i + 1,
-                title: title(text).to_string(),
+                title: title(&text.text).to_string(),
                 outcome,
             })
             .collect();
@@ -377,7 +390,10 @@ impl Gate {
                             )
                         })
                     }
-                    Outcome::Unmarked | Outcome::Inconclusive(_) | Outcome::Error(_) => None,
+                    Outcome::Unmarked
+                    | Outcome::Done
+                    | Outcome::Inconclusive(_)
+                    | Outcome::Error(_) => None,
                 })
                 .collect();
             if !refused.is_empty() {
@@ -431,6 +447,10 @@ impl Gate {
             Outcome::Unmarked => format!(
                 "{lead}: no `(proof: repro <selector>)` marker, so nothing checked that its test \
                  fails without the fix.\n"
+            ),
+            Outcome::Done => format!(
+                "{lead}: already ticked in the issue, so an earlier change landed it and \
+                 nothing checked it here.\n"
             ),
             Outcome::Inconclusive(why) => format!("{lead}: INCONCLUSIVE: {why}.\n"),
             Outcome::Error(why) => format!("{lead}: NOT RUN: the check could not run: {why}\n"),

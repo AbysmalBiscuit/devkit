@@ -267,19 +267,44 @@ fn a_test_module_whose_end_is_unclear_is_inconclusive() {
 }
 
 #[test]
+fn a_ticked_item_is_shown_as_done_and_not_checked() {
+    let p = project(
+        GATE,
+        &format!("{FIX}\n- [x] The lib reads well (proof: repro tests/always.txt)"),
+    );
+    let body = opened_body(&p);
+    assert!(
+        body.contains("2. The lib reads well: already ticked in the issue"),
+        "{body}"
+    );
+    assert_eq!(repro_runs(&p).len(), 2, "only item 1 ran");
+}
+
+#[test]
 fn a_test_added_in_an_out_of_line_module_is_run_with_the_fix_reverted() {
     let p = project("\n[pr.gates]\nrepro_task = \"repro\"\n", "");
     git(&p, &["checkout", "-q", "main"]);
-    write(&p, "src/shell.rs", "fn f() {}\n\n#[cfg(test)]\nmod tests;\n");
+    write(
+        &p,
+        "src/shell.rs",
+        "fn f() {}\n\n#[cfg(test)]\nmod tests;\n",
+    );
     git(&p, &["add", "-A"]);
-    git(&p, &["commit", "-q", "-m", "a module to be tested out of line"]);
+    git(&p, &[
+        "commit",
+        "-q",
+        "-m",
+        "a module to be tested out of line",
+    ]);
     git(&p, &["checkout", "-q", "-"]);
     git(&p, &["rebase", "-q", "main"]);
     write(&p, "src/shell/tests.rs", "// passes either way\n");
     git(&p, &["add", "-A"]);
     git(&p, &["commit", "-q", "-m", "a test that needs no fix"]);
     p.serve_pr_at(&PR, git(&p, &["rev-parse", "HEAD"]).trim());
-    p.serve_issue("Why.\n\n## Done when\n\n- [ ] The shell works (proof: repro src/shell/tests.rs)\n");
+    p.serve_issue(
+        "Why.\n\n## Done when\n\n- [ ] The shell works (proof: repro src/shell/tests.rs)\n",
+    );
     let stderr = refusal(&p);
     assert!(
         stderr.contains("1. The shell works") && stderr.contains("passes with the fix reverted"),
