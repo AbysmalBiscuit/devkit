@@ -1181,3 +1181,241 @@ fn a_failed_link_read_names_the_tracker_error() {
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
     assert_eq!(parent_of(&s, 67), None);
 }
+
+/// `s`'s tracker answering with 65, 66 and 67 unlinked and issue 68, the
+/// one `gh issue create` files, at `option`.
+fn files_68(s: &Synced, option: &str) {
+    s.serve("issue_create.txt", "https://github.com/o/r/issues/68\n");
+    s.serve(
+        "graphql.json",
+        &graphql(
+            &[
+                issue(65, Some("Todo"), &[]),
+                issue(66, Some("Todo"), &[]),
+                issue(67, Some("Todo"), &[]),
+                issue(68, Some(option), &[]),
+            ],
+            &OPTIONS,
+        ),
+    );
+}
+
+/// Adds a todo with `args` and returns its full id.
+fn add(s: &Synced, args: &[&str]) -> String {
+    let mut all = vec!["todo", "add"];
+    all.extend_from_slice(args);
+    let out = s.devkit(&all, &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let short = stdout(&out).trim().to_string();
+    s.proj
+        .todos()
+        .into_iter()
+        .find(|t| t.id.starts_with(&short))
+        .unwrap()
+        .id
+}
+
+fn todos_for(s: &Synced, key: &str) -> usize {
+    s.proj
+        .todos()
+        .iter()
+        .filter(|t| t.ticket.as_ref().is_some_and(|r| r.key == key))
+        .count()
+}
+
+#[test]
+fn promote_creates_the_ticket_and_rewires_edges() {
+    let s = linked("\"blocking\"", None, false);
+    let step = add(&s, &["write the parser"]);
+    let after = add(&s, &["ship it", "--blocked-by", &step]);
+    for (blocked, by) in [(id_of(&s, 65), step.clone()), (step.clone(), id_of(&s, 66))] {
+        let out = s.devkit(&["todo", "block", &blocked, "--by", &by], &AGENT);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    files_68(&s, "Todo");
+    let out = s.devkit(&["todo", "promote", &step], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("https://github.com/o/r/issues/68"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(
+        s.calls().contains("issue create --title write the parser"),
+        "{}",
+        s.calls()
+    );
+    let new = id_of(&s, 68);
+    assert_eq!(s.proj.todo(&after).blocked_by, std::slice::from_ref(&new));
+    assert_eq!(s.todo_for("o/r#65").blocked_by, [new]);
+    assert_eq!(s.todo_for("o/r#68").blocked_by, [id_of(&s, 66)]);
+    let mutations = s.mutations();
+    assert_eq!(mutations.len(), 2, "{mutations:?}");
+    for written in [
+        "addBlockedBy(input: {issueId: \"I_65\", blockingIssueId: \"I_68\"})",
+        "addBlockedBy(input: {issueId: \"I_68\", blockingIssueId: \"I_66\"})",
+    ] {
+        assert!(
+            mutations.iter().any(|m| m.contains(written)),
+            "{written}: {mutations:?}"
+        );
+    }
+}
+
+#[test]
+fn promote_keeps_the_old_todos_children_in_place() {
+    let s = linked("\"parent\"", None, false);
+    let step = add(&s, &["write the parser"]);
+    let child = add(&s, &["lex", "--parent", &step]);
+    let node = s.proj.todo(&child).project;
+    files_68(&s, "Todo");
+    let out = s.devkit(&["todo", "promote", &step], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let child = s.proj.todo(&child);
+    assert_eq!(child.parent.as_deref(), Some(step.as_str()));
+    assert_eq!(child.project, node);
+    assert_eq!(s.todo_for("o/r#68").parent, None);
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn promote_cancels_the_old_todo_naming_the_key() {
+    let s = linked("", None, false);
+    let step = add(&s, &["write the parser"]);
+    files_68(&s, "Todo");
+    let out = s.devkit(&["todo", "promote", &step], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let old = s.proj.todo(&step);
+    assert_eq!(old.status.kind(), StatusKind::Cancelled);
+    assert_eq!(old.description, "o/r#68");
+    assert_eq!(old.ticket, None);
+    assert_eq!(todos_for(&s, "o/r#68"), 1);
+    let new = s.todo_for("o/r#68");
+    assert_eq!(
+        (new.node(), new.status.kind()),
+        ("proj", StatusKind::Pending)
+    );
+}
+
+#[test]
+fn promote_ticket_links_an_existing_ticket_without_creating() {
+    let s = linked("\"blocking\"", None, false);
+    let step = add(&s, &["write the parser"]);
+    let after = add(&s, &["ship it", "--blocked-by", &step]);
+    let out = s.devkit(&["todo", "promote", &step, "--ticket", "#67"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!s.calls().contains("issue create"), "{}", s.calls());
+    let old = s.proj.todo(&step);
+    assert_eq!(old.status.kind(), StatusKind::Cancelled);
+    assert_eq!(old.description, "o/r#67");
+    assert_eq!(s.proj.todo(&after).blocked_by, [id_of(&s, 67)]);
+    assert_eq!(todos_for(&s, "o/r#67"), 1);
+}
+
+#[test]
+fn promote_of_a_ticket_todo_is_refused() {
+    let s = linked("", None, false);
+    files_68(&s, "Todo");
+    let before = s.todo_for("o/r#65");
+    let out = s.devkit(&["todo", "promote", &id_of(&s, 65)], &AGENT);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("o/r#65") && err.contains("already"), "{err}");
+    assert!(!s.calls().contains("issue create"), "{}", s.calls());
+    assert_eq!(s.todo_for("o/r#65"), before);
+}
+
+#[test]
+fn promote_without_a_required_parent_names_the_likely_parents() {
+    let s = Synced::new(
+        &format!(
+            "{RULES}{STATUSES}\n[ticket.fields.github.parent]\ntype = \"issue\"\nwhere = \
+             \"parent\"\nlevel = \"error\"\n"
+        ),
+        true,
+    );
+    links_show(&s, Some(65), false);
+    assert!(s.sync(&[]).status.success());
+    devkit_common::record::write(&s.proj.path, &devkit_common::record::IssueRecord {
+        issue: "67".into(),
+        slug: "fix".into(),
+        origin: Some(devkit_common::record::RecordOrigin::Setup),
+        ..Default::default()
+    })
+    .unwrap();
+    let step = add(&s, &["write the parser"]);
+    files_68(&s, "Todo");
+    let out = s.devkit(&["todo", "promote", &step], &AGENT);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("--arg parent=o/r#67") && err.contains("--arg parent=o/r#65"),
+        "{err}"
+    );
+    assert!(!s.calls().contains("issue create"), "{}", s.calls());
+    assert_eq!(s.proj.todo(&step).status, Status::Pending);
+}
+
+#[test]
+fn ticket_create_adds_its_todo_when_the_repository_syncs() {
+    let s = linked("", None, false);
+    files_68(&s, "Todo");
+    let out = s.devkit(&["ticket", "create", "--title", "Issue 68"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("https://github.com/o/r/issues/68"),
+        "{}",
+        stdout(&out)
+    );
+    let new = s.todo_for("o/r#68");
+    assert_eq!(
+        (new.node(), new.status.kind()),
+        ("proj", StatusKind::Pending)
+    );
+}
+
+#[test]
+fn ticket_create_prints_the_url_when_the_sync_fails() {
+    let s = linked("", None, false);
+    files_68(&s, "Backlog");
+    let out = s.devkit(&["ticket", "create", "--title", "Issue 68"], &AGENT);
+    assert!(
+        stdout(&out).contains("https://github.com/o/r/issues/68"),
+        "{}",
+        stdout(&out)
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("Backlog") && err.contains("devkit todo sync --ticket o/r#68"),
+        "{err}"
+    );
+    assert!(out.status.success(), "the ticket stands: {err}");
+    assert_eq!(todos_for(&s, "o/r#68"), 0);
+}
+
+#[test]
+fn a_promote_whose_sync_fails_finishes_with_ticket() {
+    let s = linked("", None, false);
+    let step = add(&s, &["write the parser"]);
+    let after = add(&s, &["ship it", "--blocked-by", &step]);
+    files_68(&s, "Backlog");
+    let out = s.devkit(&["todo", "promote", &step], &AGENT);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let short = devkit_todo::short_id(&step);
+    let finish = format!("devkit todo promote {short} --ticket o/r#68");
+    assert!(stderr(&out).contains(&finish), "{}", stderr(&out));
+    assert_eq!(s.proj.todo(&step).status, Status::Pending);
+    assert_eq!(s.proj.todo(&after).blocked_by, std::slice::from_ref(&step));
+
+    files_68(&s, "Todo");
+    let out = s.devkit(&["todo", "promote", &step, "--ticket", "o/r#68"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        s.calls().matches("issue create").count(),
+        1,
+        "{}",
+        s.calls()
+    );
+    assert_eq!(s.proj.todo(&after).blocked_by, [id_of(&s, 68)]);
+    assert_eq!(s.proj.todo(&step).status.kind(), StatusKind::Cancelled);
+}

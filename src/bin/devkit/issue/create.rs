@@ -2,7 +2,7 @@
 //! issue or a Linear ticket with every declared field it was given, and read
 //! the fields back.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result, bail};
 use devkit_common::{
@@ -26,9 +26,42 @@ pub(crate) struct CreateArgs {
     pub fields: FieldArgs,
     pub dir: Option<String>,
     pub config: Option<String>,
+    /// The command filing the ticket, as its messages name it.
+    pub verb: &'static str,
+    /// Values a missing parent field likely takes, each with why: named
+    /// when the field's level refuses the create without one.
+    pub likely_parents: Vec<(String, &'static str)>,
+    /// What to run instead of a retry when the search a failed GitHub create
+    /// asks for finds the issue.
+    pub if_found: Option<String>,
+}
+
+/// A ticket the tracker filed.
+pub(crate) struct Created {
+    /// Its key, as the ticket sync spells it.
+    pub key: String,
+    /// Whether every field given took; the ticket stands either way.
+    pub fields: Result<()>,
 }
 
 pub(crate) fn run(args: CreateArgs) -> Result<()> {
+    let created = create(&args)?;
+    let start = super::start(&args.dir);
+    if let Err(e) = crate::todo::tickets::sync_created(Path::new(&start), &created.key) {
+        eprintln!(
+            "devkit ticket: {key} was created, but its todo did not sync: {e:#}. Run `devkit \
+             todo sync --ticket {key}` once that is fixed; rerunning `ticket create` would file a \
+             second ticket",
+            key = created.key
+        );
+    }
+    created.fields
+}
+
+/// Files the ticket `args` describe, printing its URL as soon as it exists,
+/// then writes and reads back its fields. A failure before the ticket exists
+/// is an error; one after it is in [`Created::fields`].
+pub(crate) fn create(args: &CreateArgs) -> Result<Created> {
     let start = super::start(&args.dir);
     let (sel, cfg, tracker) = super::ticket_tracker("create", &start, args.config.as_deref())?;
     match tracker {
@@ -60,7 +93,12 @@ fn checked<'a>(
     field_write::number_issue_refs(sel.tracker.tracker.as_ref(), decls, &mut resolved)?;
     let caller = devkit_common::caller::caller();
     let report = fields::check(decls, Surface::Create, &resolved, None, caller);
-    field_write::refuse("ticket create", decls, &report)?;
+    field_write::refuse(args.verb, decls, &report).map_err(|e| {
+        match likely_parents(decls, &report, &args.likely_parents) {
+            Some(likely) => anyhow::anyhow!("{e:#}\n{likely}"),
+            None => e,
+        }
+    })?;
     Ok(Checked {
         decls,
         input,
@@ -70,18 +108,40 @@ fn checked<'a>(
     })
 }
 
-fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<()> {
+/// The likely values for a parent field `report` refuses as missing, as
+/// `--arg` flags with why each is likely.
+fn likely_parents(
+    decls: &BTreeMap<String, FieldDecl>,
+    report: &Report,
+    likely: &[(String, &str)],
+) -> Option<String> {
+    let field = report.refused.iter().find_map(|p| match p {
+        fields::Problem::Missing { field }
+            if decls.get(field).and_then(|d| d.r#where.as_ref()) == Some(&Place::Parent) =>
+        {
+            Some(field)
+        }
+        _ => None,
+    })?;
+    let flags: Vec<String> = likely
+        .iter()
+        .map(|(value, why)| format!("--arg {field}={value} ({why})"))
+        .collect();
+    (!flags.is_empty()).then(|| format!("likely: {}", flags.join(", or ")))
+}
+
+fn github(args: &CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<Created> {
     let Checked {
         decls,
         input,
         resolved,
         report,
         caller,
-    } = checked(&args, sel, cfg, TrackerKind::Github)?;
+    } = checked(args, sel, cfg, TrackerKind::Github)?;
 
     let rendered = render::render(
         cfg,
-        "ticket create",
+        args.verb,
         render::Title::Input(&args.title),
         Some(args.body.as_deref().unwrap_or_default()),
         &input.template,
@@ -102,9 +162,13 @@ fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result
     gh.extend(github_fields::create_flags(decls, &resolved));
     let refs: Vec<&str> = gh.iter().map(String::as_str).collect();
     let out = devkit_common::cmd::gh_capture(&refs, repo, start).with_context(|| {
+        let found = match &args.if_found {
+            Some(run) => format!(": if it is there, run `{run}` instead of retrying"),
+            None => ", so a retry does not file it twice".to_string(),
+        };
         format!(
             "`gh issue create` failed, and the issue may have been created anyway: search {} \
-             for the title `{}` before retrying, so a retry does not file it twice",
+             for the title `{}` before retrying{found}",
             repo.slug, rendered.title
         )
     })?;
@@ -116,6 +180,7 @@ fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result
         .trim()
         .to_string();
     println!("{url}");
+    let key = sel.tracker.tracker.ticket_key(&url)?;
 
     let number = field_write::number_of(&url)?;
     let writer = GithubFieldWriter::new(repo.clone(), cfg.github.project.clone(), start);
@@ -132,17 +197,19 @@ fn github(args: CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Result
         &github_fields::on_create(decls),
     );
     field_write::warn(decls, &report);
-    field_write::fail_on(
+    let fields = field_write::fail_on(
         &problems,
         format!(
             "issue #{number} was created ({url}), but the fields above did not take. Set them \
-             with `devkit ticket edit {number} --arg <field>=...`; rerunning `ticket create` \
-             would file a second issue"
+             with `devkit ticket edit {number} --arg <field>=...`; rerunning `{}` would file a \
+             second issue",
+            args.verb
         ),
-    )
+    );
+    Ok(Created { key, fields })
 }
 
-fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
+fn linear(args: &CreateArgs, sel: &Selected, cfg: &Config) -> Result<Created> {
     let team_field = cfg
         .ticket
         .fields
@@ -161,7 +228,7 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
         resolved,
         report,
         caller,
-    } = checked(&args, sel, cfg, TrackerKind::Linear)?;
+    } = checked(args, sel, cfg, TrackerKind::Linear)?;
     let team = resolved
         .fields
         .get(&team_field)
@@ -169,7 +236,8 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
         .and_then(|ids| ids.into_iter().next());
     let Some(team) = team else {
         bail!(
-            "ticket create refused, nothing was written:\n{}",
+            "{} refused, nothing was written:\n{}",
+            args.verb,
             fields::message(decls, &[fields::Problem::Missing { field: team_field }])
         );
     };
@@ -177,7 +245,7 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
 
     let rendered = render::render(
         cfg,
-        "ticket create",
+        args.verb,
         render::Title::Input(&args.title),
         Some(args.body.as_deref().unwrap_or_default()),
         &input.template,
@@ -203,11 +271,13 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
         Origin::This => {}
         Origin::Earlier => eprintln!(
             "note: {ident} already had this create's id, so an earlier run of the same \
-             `ticket create` filed it; no second ticket was filed"
+             `{verb}` filed it; no second ticket was filed",
+            verb = args.verb
         ),
         Origin::Unanswered => eprintln!(
             "note: Linear did not answer the create, but has {ident} under its id: this run or \
-             an earlier run of the same `ticket create` filed it, and no second ticket was filed"
+             an earlier run of the same `{verb}` filed it, and no second ticket was filed",
+            verb = args.verb
         ),
     }
     if created.origin != Origin::This && issue.archived {
@@ -215,11 +285,12 @@ fn linear(args: CreateArgs, sel: &Selected, cfg: &Config) -> Result<()> {
     }
     let (_, problems) = field_write::linear_finish(&writer, issue, decls, &written, &refs, false);
     field_write::warn(decls, &report);
-    field_write::fail_on(
+    let fields = field_write::fail_on(
         &problems,
         format!(
             "{ident} was created, but the fields above did not take. Set them with `devkit \
              ticket edit {ident} --arg <field>=...`"
         ),
-    )
+    );
+    Ok(Created { key: ident, fields })
 }
