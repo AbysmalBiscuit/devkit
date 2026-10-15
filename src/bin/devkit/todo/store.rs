@@ -562,13 +562,15 @@ impl Store {
         }
     }
 
-    /// Whether the store holds what its sync target held: false only for a
-    /// synced replica that has never completed a sync. Ticket todos added
-    /// to such a replica would overwrite the server's at its first sync.
+    /// Whether the store holds what its sync target held: false for a synced
+    /// replica that has never completed a sync, or one whose sync is refused.
+    /// Ticket todos added to such a replica would overwrite the server's at
+    /// its first sync.
     pub(crate) fn replica_pulled(&self) -> bool {
         match self.synced_replica() {
             Ok(Some(replica)) => super::sync::has_pulled(replica.data_dir()),
-            Ok(None) | Err(_) => true,
+            Ok(None) => true,
+            Err(_) => false,
         }
     }
 

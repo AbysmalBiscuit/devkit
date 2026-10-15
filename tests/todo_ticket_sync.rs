@@ -615,6 +615,28 @@ fn a_read_after_the_replica_pulls_syncs_tickets() {
     assert_eq!(s.ticket_queries(), 1, "{}", s.calls());
 }
 
+#[test]
+fn a_replica_found_through_taskdata_with_a_sync_target_syncs_no_tickets() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = format!(
+        "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\nserver_dir = {}\n",
+        toml::Value::String(dir.path().join("server").display().to_string())
+    );
+    let s = two_issues_in(Proj::with_home_config(&config));
+    let replica = dir.path().join("replica");
+    let taskdata = [("TASKDATA", replica.to_str().unwrap())];
+    let out = s.devkit(&["todo", "list"], &taskdata);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = s.devkit(&["todo", "sync", "--tickets-only"], &taskdata);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("tickets not synced"),
+        "{}",
+        stderr(&out)
+    );
+    assert_no_ticket_sync(&s);
+}
+
 const TODO_EVENTS: &str = "
 [ticket.events.todo_start]
 to = \"In progress\"
