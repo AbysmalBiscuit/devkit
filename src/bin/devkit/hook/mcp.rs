@@ -379,10 +379,10 @@ fn names_issues_repo(kind: TrackerKind, cfg: &Config, cwd: &Path, input: &Value)
     }
 }
 
-/// The call's mapped field values as `--arg` text, with each `null` as an
-/// explicit none, and a problem for each value of a JSON type the field
-/// does not take. A `user` given as a tracker login or id becomes its
-/// `[people]` alias.
+/// The call's mapped field values as `--arg` text, with each `null`, and
+/// `[]` for a list field, as an explicit none, and a problem for each value
+/// of a JSON type the field does not take. A `user` given as a tracker login
+/// or id becomes its `[people]` alias.
 fn given(
     rule: &RenderedToolRule,
     decls: &BTreeMap<String, FieldDecl>,
@@ -407,6 +407,10 @@ fn given(
         };
         let text = match value {
             Value::Null => {
+                out.nones.insert(field.clone());
+                continue;
+            }
+            Value::Array(items) if decl.list && items.is_empty() => {
                 out.nones.insert(field.clone());
                 continue;
             }
@@ -442,7 +446,7 @@ fn json_shape(ty: FieldType, list: bool) -> String {
         _ => "a string",
     };
     if list {
-        format!("{one}, an array of them, or null")
+        format!("{one}, an array of them, or null or [] for none")
     } else {
         format!("{one}, or null")
     }
@@ -489,10 +493,10 @@ fn blocks(
         .map(|p| {
             let mut block = fields::message(decls, std::slice::from_ref(p));
             if let Problem::Missing { field } = p {
-                let none = if decls.get(field).is_some_and(FieldDecl::allows_none) {
-                    ", or `null` to leave it empty"
-                } else {
-                    ""
+                let none = match decls.get(field).filter(|d| d.allows_none()) {
+                    Some(d) if d.list => ", or `null` or `[]` to leave it empty",
+                    Some(_) => ", or `null` to leave it empty",
+                    None => "",
                 };
                 block.push_str(&match rule.fields.get(field) {
                     Some(key) => format!("\n  pass `{key}` in this call{none}"),
@@ -878,6 +882,31 @@ level  = "info"
         assert!(
             denied_mentioning(&v, "`team`"),
             "a team never allows none: {v:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_array_is_explicit_none_for_a_list_field_only() {
+        let input = json!({"title": "T", "team": "ENG", "labels": []});
+        assert_eq!(fields(&linear_rule(), LINEAR_FIELDS, input), Verdict::Allow);
+        let v = fields(
+            &linear_rule(),
+            LINEAR_FIELDS,
+            json!({"title": "T", "team": "ENG"}),
+        );
+        assert!(denied_mentioning(&v, "`null` or `[]`"), "{v:?}");
+        let update = json!({"id": "ENG-1", "labels": []});
+        let no_none = LINEAR_FIELDS.replace(
+            "where  = \"labels\"",
+            "where  = \"labels\"\nallow_none = false",
+        );
+        let v = fields(&linear_rule(), &no_none, update);
+        assert!(denied_mentioning(&v, "cannot be left empty"), "{v:?}");
+        let input = json!({"title": "T", "team": "ENG", "labels": ["bug"], "priority": []});
+        let v = fields(&linear_rule(), LINEAR_FIELDS, input);
+        assert!(
+            denied_mentioning(&v, "`priority`") && denied_mentioning(&v, "JSON"),
+            "{v:?}"
         );
     }
 
