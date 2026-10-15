@@ -444,3 +444,14 @@ fn mermaid_keeps_hex_node_ids_and_labels_names() {
         "{out}"
     );
 }
+
+#[test]
+fn a_status_verb_with_no_ids_is_an_error() {
+    let p = Proj::new();
+    let id = added(&p, "one");
+    for verb in ["start", "stop", "done", "undone", "cancel"] {
+        let out = p.devkit(&["todo", verb], &TASKCHAMPION);
+        assert_eq!(out.status.code(), Some(2), "todo {verb}: {}", stderr(&out));
+    }
+    assert_eq!(replica_todo(&p, &id).status.kind(), StatusKind::Pending);
+}

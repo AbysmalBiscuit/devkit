@@ -109,6 +109,7 @@ pub enum TodoCommand {
     /// Mark todos in progress, claiming them for this caller.
     #[command(after_help = PUSH_HELP)]
     Start {
+        #[arg(required = true)]
         ids: Vec<String>,
         /// Start a todo even while a blocker is still open.
         #[arg(long)]
@@ -117,19 +118,27 @@ pub enum TodoCommand {
         overwrite_tracker: bool,
     },
     /// Return todos in progress to pending.
-    Stop { ids: Vec<String> },
+    Stop {
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
     /// Mark todos completed.
     #[command(after_help = PUSH_HELP)]
     Done {
+        #[arg(required = true)]
         ids: Vec<String>,
         #[arg(long, help = OVERWRITE_HELP)]
         overwrite_tracker: bool,
     },
     /// Return completed todos to pending.
-    Undone { ids: Vec<String> },
+    Undone {
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
     /// Drop todos. The record stays, marked cancelled.
     #[command(after_help = PUSH_HELP)]
     Cancel {
+        #[arg(required = true)]
         ids: Vec<String>,
         #[arg(long, help = OVERWRITE_HELP)]
         overwrite_tracker: bool,
@@ -1158,9 +1167,6 @@ fn apply_checked(
     push: Option<&push::StatusPush>,
     edit_for: impl Fn(Todo) -> Result<(bool, Edit)>,
 ) -> Result<Vec<String>> {
-    if ids.is_empty() {
-        bail!("name at least one todo id");
-    }
     let mut checked = Vec::new();
     for id in &ids {
         let todo = resolve_id(store, id)?;
