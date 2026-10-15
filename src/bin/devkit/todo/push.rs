@@ -117,8 +117,9 @@ pub(crate) fn push_status(
             }
             if !confirm(&format!("{key}: {values}. Write over the tracker?")) {
                 let node = todo.node().to_string();
-                super::tickets::sync_one(store, push.cwd, &node, key)?;
-                eprintln!("devkit todo: {key} left as the tracker has it");
+                if super::tickets::sync_ticket(store, push.cwd, &node, key)? {
+                    eprintln!("devkit todo: {key} left as the tracker has it");
+                }
                 return Ok(false);
             }
             true

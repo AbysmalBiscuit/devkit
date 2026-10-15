@@ -27,6 +27,8 @@ use devkit_todo::{
     ticket::{self, Change, SyncPlan},
 };
 
+use super::store::Store;
+
 /// What a ticket sync did.
 pub(crate) struct SyncReport {
     pub added: usize,
@@ -90,6 +92,21 @@ pub(crate) fn sync_tickets(
         }));
     }
     apply_plan(store, &kind, &existing, &plan).map(Some)
+}
+
+/// `devkit todo sync --ticket`'s sync of `key` into `node`: [`sync_one`],
+/// refused while the store's own sync has not completed, and saying on stderr
+/// when the repository has no `[ticket.sync]` rules. Returns whether the
+/// ticket synced.
+pub(crate) fn sync_ticket(store: &Store, cwd: &Path, node: &str, key: &str) -> Result<bool> {
+    if !store.replica_pulled() {
+        anyhow::bail!("ticket {key} not synced: the store's sync did not complete");
+    }
+    let synced = sync_one(store, cwd, node, key)?.is_some();
+    if !synced {
+        eprintln!("devkit todo: no [ticket.sync] rules here; ticket {key} not synced");
+    }
+    Ok(synced)
 }
 
 /// Syncs the one ticket `key` into `node`, the repository node of the

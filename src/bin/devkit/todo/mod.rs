@@ -478,18 +478,10 @@ pub fn run(cli: TodoCli) -> Result<()> {
             if place == Place::Global {
                 bail!("devkit todo sync --ticket runs in a checkout of the ticket's repository");
             }
-            if !store.replica_pulled() {
-                bail!("ticket {key} not synced: the store's sync did not complete");
-            }
             let node = layout.fill("repo", &facts)?;
-            match tickets::sync_one(&store, &cwd, &node, key)? {
-                Some(_) => {
-                    writes = true;
-                    println!("devkit todo: ticket {key} synced");
-                }
-                None => {
-                    eprintln!("devkit todo: no [ticket.sync] rules here; ticket {key} not synced")
-                }
+            if tickets::sync_ticket(&store, &cwd, &node, key)? {
+                writes = true;
+                println!("devkit todo: ticket {key} synced");
             }
         }
         TodoCommand::Sync {
