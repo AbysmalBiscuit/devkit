@@ -8,7 +8,7 @@ use devkit_common::tracker::{
     status::same_status,
     tickets::{CloseReason, TicketStatus},
 };
-use devkit_config::{EventTransition, IssueEvent};
+use devkit_config::{EventTransition, IssueEvent, TrackerKind};
 
 use crate::ticket::status_name;
 
@@ -39,12 +39,12 @@ impl LocalStatus {
         }
     }
 
-    /// How this change closes the ticket's issue on `github`, where `done`
-    /// and `cancel` close it; other trackers close nothing.
-    pub fn closes(self, github: bool) -> Option<CloseReason> {
-        match self {
-            Self::Done if github => Some(CloseReason::Completed),
-            Self::Cancel if github => Some(CloseReason::NotPlanned),
+    /// How this change closes the ticket's issue on `tracker`: on GitHub,
+    /// `done` and `cancel` close it; other trackers close nothing.
+    pub fn closes(self, tracker: TrackerKind) -> Option<CloseReason> {
+        match (self, tracker) {
+            (Self::Done, TrackerKind::Github) => Some(CloseReason::Completed),
+            (Self::Cancel, TrackerKind::Github) => Some(CloseReason::NotPlanned),
             _ => None,
         }
     }
@@ -81,17 +81,17 @@ fn named_from(event: &EventTransition) -> impl Iterator<Item = &str> {
 
 /// What pushing `local` does to a ticket at `current`, whose last synced
 /// status is `baseline`, with `event` the `[ticket.events]` move the change
-/// fires. Statuses use [`status_name`] spelling. On `github`, `done` and
-/// `cancel` also close the issue, so a closed issue is compared by its close
-/// reason and an open one by its project field.
+/// fires on `tracker`. Statuses use [`status_name`] spelling. On GitHub, `done`
+/// and `cancel` also close the issue, so a closed issue is compared by its
+/// close reason and an open one by its project field.
 pub fn status_verdict(
     local: LocalStatus,
     baseline: Option<&str>,
     current: &TicketStatus,
     event: Option<&EventTransition>,
-    github: bool,
+    tracker: TrackerKind,
 ) -> Verdict {
-    let closes = local.closes(github);
+    let closes = local.closes(tracker);
     let name = status_name(current);
     let conflict = || Verdict::Conflict {
         current: name.clone(),
@@ -179,8 +179,8 @@ mod tests {
         }
     }
 
-    const LINEAR: bool = false;
-    const GITHUB: bool = true;
+    const LINEAR: TrackerKind = TrackerKind::Linear;
+    const GITHUB: TrackerKind = TrackerKind::Github;
 
     #[test]
     fn already_at_to_is_already() {

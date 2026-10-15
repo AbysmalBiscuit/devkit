@@ -18,7 +18,7 @@ use devkit_common::{
         tickets::TicketStatus,
     },
 };
-use devkit_config::{PushKind, TrackerKind};
+use devkit_config::PushKind;
 use devkit_todo::{
     Edit, Holder, Todo, TodoStore as _,
     push::{LocalStatus, Verdict, status_verdict},
@@ -68,10 +68,9 @@ pub(crate) fn push_status(
     let selected = tracker::select(None, &push.cwd.to_string_lossy(), None);
     let config = selected.config.unwrap_or_default();
     let tracker = &selected.tracker.tracker;
-    let github = tracker.kind() == TrackerKind::Github;
     let event = push.local.event();
     let transition = config.ticket.events.get(event);
-    let closes = push.local.closes(github);
+    let closes = push.local.closes(tracker.kind());
     if transition.is_none() && closes.is_none() {
         store.apply_unfired(edit)?;
         return Ok(true);
@@ -98,7 +97,7 @@ pub(crate) fn push_status(
         .ticket
         .as_ref()
         .and_then(|t| t.synced_status.as_deref());
-    let verdict = status_verdict(push.local, baseline, &current, transition, github);
+    let verdict = status_verdict(push.local, baseline, &current, transition, tracker.kind());
     let write = match &verdict {
         Verdict::Write => true,
         Verdict::Already | Verdict::NoMove => false,
