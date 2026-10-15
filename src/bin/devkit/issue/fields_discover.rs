@@ -16,8 +16,8 @@ use devkit_common::{
     },
 };
 use devkit_config::{
-    CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS, PendingLayer,
-    TrackerKind,
+    CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS, LayerKind,
+    PendingLayer, TrackerKind,
 };
 use serde::Serialize;
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
@@ -106,7 +106,9 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
 
 /// The file discover writes: `--config`, else `$DEVKIT_CONFIG`, each the
 /// one file the run read, else the nearest tracked `devkit.toml`, else a new
-/// one at the checkout root.
+/// one beside the nearest layer inside the checkout, which a `[config] root =
+/// true` barrier leaves standing where the checkout root's file may be cut
+/// off, else a new one at the checkout root.
 fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
     if let Some(p) = config
         .map(Path::to_path_buf)
@@ -116,10 +118,22 @@ fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
     }
     let main = devkit_common::vcs::main_checkout(start).ok().flatten();
     let layers = devkit_config::project_layers(start, main.as_deref())?;
-    match devkit_config::nearest_tracked(&layers) {
-        Some(p) => Ok(p.to_path_buf()),
-        None => Ok(devkit_common::vcs::checkout_root(start)?.join(devkit_config::CONFIG_FILE)),
+    if let Some(p) = devkit_config::nearest_tracked(&layers) {
+        return Ok(p.to_path_buf());
     }
+    let root = devkit_common::vcs::checkout_root(start)?;
+    let inside = |dir: &Path| match (dir.canonicalize(), root.canonicalize()) {
+        (Ok(dir), Ok(root)) => dir.starts_with(root),
+        _ => false,
+    };
+    let nearest = layers
+        .iter()
+        .rev()
+        .find(|l| l.kind != LayerKind::MainCheckout)
+        .and_then(|l| l.path.parent())
+        .filter(|dir| inside(dir));
+    let dir = nearest.map_or(root, Path::to_path_buf);
+    Ok(dir.join(devkit_config::CONFIG_FILE))
 }
 
 /// Refuse to write `after` to `path` when the config would then fail to
@@ -424,6 +438,58 @@ values = [{ name = "urgent", id = "o0" }]
 level  = "error" # agents must set it
 description = "how soon"
 "#;
+
+    /// A git checkout holding `files`, each a path and its text.
+    fn checkout(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let repo = tempfile::tempdir().unwrap();
+        devkit_git::Git::fixture(repo.path())
+            .args(["init", "-q"])
+            .output()
+            .unwrap();
+        std::fs::create_dir(repo.path().join("app")).unwrap();
+        for (path, text) in files {
+            std::fs::write(repo.path().join(path), text).unwrap();
+        }
+        repo
+    }
+
+    /// The directory discover's file sits in, started from `start`.
+    fn target_dir(start: &Path) -> PathBuf {
+        let file = target(None, start).unwrap();
+        assert_eq!(file.file_name().unwrap(), "devkit.toml");
+        file.parent().unwrap().canonicalize().unwrap()
+    }
+
+    #[test]
+    fn with_no_tracked_layer_the_file_sits_beside_the_nearest_layer() {
+        let repo = checkout(&[
+            ("devkit.toml", ""),
+            ("app/devkit.local.toml", "[config]\nroot = true\n"),
+        ]);
+        assert_eq!(
+            target_dir(&repo.path().join("app")),
+            repo.path().join("app").canonicalize().unwrap(),
+            "not the checkout root's file, which the barrier cuts off"
+        );
+        let bare = checkout(&[]);
+        assert_eq!(
+            target_dir(&bare.path().join("app")),
+            bare.path().canonicalize().unwrap(),
+            "with no layer, the checkout root"
+        );
+        std::fs::write(bare.path().join("app/devkit.local.toml"), "").unwrap();
+        let inner = bare.path().join("app/inner");
+        std::fs::create_dir(&inner).unwrap();
+        devkit_git::Git::fixture(&inner)
+            .args(["init", "-q"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            target_dir(&inner),
+            inner.canonicalize().unwrap(),
+            "a layer above the checkout leaves it the checkout root"
+        );
+    }
 
     #[test]
     fn the_summary_names_fields_it_cannot_write() {
