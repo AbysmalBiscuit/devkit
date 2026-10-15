@@ -122,7 +122,7 @@ impl Relations {
     }
 }
 
-/// Sends a GitHub GraphQL query or mutation, labelled for timing.
+/// Sends a GitHub GraphQL query or mutation.
 type GithubSend = dyn Fn(&str) -> Result<Json> + Send + Sync;
 
 /// Sub-issues and blocked-by links of the issues in one repository.
