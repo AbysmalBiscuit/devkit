@@ -295,19 +295,19 @@ pub(super) fn decide(
 }
 
 /// Hold an issue write `rule` matched to the repository's ticket field
-/// levels, from config, the call's input and the local `origin` remote. A
-/// rule naming no `tracker`, a repository using another tracker or declaring
-/// no fields, and a GitHub call to a repository other than the issues
-/// repository are allowed here. A create carries every field its level
-/// requires; an update is judged on the fields it carries. A value is refused
-/// at every level.
+/// levels, from config, the call's input and `provenance`, the layer each
+/// config key came from. A rule naming no `tracker`, a repository using
+/// another tracker or declaring no fields, and a GitHub call to a repository
+/// other than the issues repository are allowed here. A create carries every
+/// field its level requires; an update is judged on the fields it carries. A
+/// value is refused at every level.
 pub(super) fn field_verdict(
     rule: &RenderedToolRule,
     tool: &str,
     input: &Value,
     cfg: &Config,
     cwd: &Path,
-    origin: &HashMap<String, PathBuf>,
+    provenance: &HashMap<String, PathBuf>,
     caller: Caller,
 ) -> Verdict {
     let Some(kind) = rule.tracker else {
@@ -318,7 +318,7 @@ pub(super) fn field_verdict(
     if decls.is_empty() || other_tracker || !names_issues_repo(kind, cfg, cwd, input) {
         return Verdict::Allow;
     }
-    if let Err(e) = devkit_config::check_ticket_fields(cfg, kind, origin) {
+    if let Err(e) = devkit_config::check_ticket_fields(cfg, kind, provenance) {
         return Verdict::Deny(format!("devkit ticket fields: {e:#}"));
     }
     let (given, mut problems) = given(rule, decls, kind, &cfg.people, input);
