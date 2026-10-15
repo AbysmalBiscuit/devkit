@@ -39,24 +39,26 @@ pub struct Run {
     /// The template args passed with `--arg` and `--arg-file`.
     #[serde(default)]
     pub args: BTreeMap<String, String>,
+    /// The file each arg given with `--arg-file` was read from, `-` for
+    /// stdin. Its value in `args` is the file's contents.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub arg_files: BTreeMap<String, PathBuf>,
     /// The repository's primary checkout, which runs are listed by.
     pub repo: PathBuf,
     /// The worktree the run started in.
     pub worktree: PathBuf,
+    /// The directory the run started in, relative to `worktree`, with `/`
+    /// between components and empty at its root: where the config layers
+    /// it ran under apply. `None` when it could not be read.
+    #[serde(default)]
+    pub dir: Option<String>,
     /// The full commit id checked out when the run started; `None` when it
     /// could not be read, as on a repository with no commits.
     pub head: Option<String>,
     /// The tree had no modified, staged or untracked files when the run
-    /// started and when it ended, the head had not moved, the task ran as
-    /// the committed config defines it ([`Run::committed_definition`]), and
-    /// no `--env` or `--env-file` was given.
+    /// started and when it ended, the head had not moved, and no `--env` or
+    /// `--env-file` was given.
     pub clean: bool,
-    /// The task's definition is the one the repository's committed
-    /// `devkit.toml` layers alone give at HEAD: no local, home, `--config`
-    /// or `$DEVKIT_CONFIG` layer changed it. `false` when that could not be
-    /// determined.
-    #[serde(default)]
-    pub committed_definition: bool,
     /// The names of the variables `--env` and `--env-file` set. Their values
     /// may be secrets, so they are never stored.
     #[serde(default)]
@@ -64,9 +66,20 @@ pub struct Run {
     /// The `--env-file` given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_file: Option<PathBuf>,
-    /// Each command step devrun executed, in order, with the argv it ran.
+    /// Each step devrun executed, in order: a command step with the argv it
+    /// ran, or the app an `up` step brought up.
     #[serde(default)]
     pub steps: Vec<Step>,
+    /// The apps an `up` step found already running from before the run
+    /// started, and did not launch. Such a server may have started at another
+    /// commit, so a run that reused one satisfies no PR gate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reused_servers: Vec<String>,
+    /// The servers a step's `require_live` ran against, each once. They are
+    /// the run's precondition, started before it by design, so they do not
+    /// stop it satisfying a gate; the PR shows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live_servers: Vec<LiveServer>,
     /// The exit code of the program devrun ran, or of a sequence's first
     /// failing step. `None` when it was killed by a signal or never ran.
     pub exit_code: Option<i32>,
@@ -82,22 +95,62 @@ pub struct Run {
 }
 
 impl Run {
-    /// Whether this run proves `task` exited 0 on a clean tree at `sha`.
-    pub fn proves(&self, task: &str, sha: &str) -> bool {
+    /// Whether this run proves `task` exited 0 on a clean tree at `sha`,
+    /// given exactly `args`, whatever servers it used.
+    pub fn proves(&self, task: &str, args: &BTreeMap<String, String>, sha: &str) -> bool {
         self.task == task
             && self.exit_code == Some(0)
             && self.clean
             && self.head.as_deref() == Some(sha)
+            && &self.args == args
+    }
+
+    /// Whether this run satisfies a PR gate on `task` given `args` at
+    /// `sha`: it [`proves`](Self::proves) it, and no `up` step reused a
+    /// server from before it started.
+    pub fn qualifies(&self, task: &str, args: &BTreeMap<String, String>, sha: &str) -> bool {
+        self.proves(task, args, sha) && self.reused_servers.is_empty()
     }
 }
 
-/// One command step of a run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A server a step's `require_live` ran against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveServer {
+    pub app: String,
+    /// When the port registry recorded its server, as RFC 3339 UTC.
+    pub started_at: String,
+}
+
+impl LiveServer {
+    /// `app`'s server, recorded in the port registry at `ts`, in seconds
+    /// since the epoch.
+    pub fn new(app: &str, ts: u64) -> Self {
+        let started = i64::try_from(ts)
+            .ok()
+            .and_then(|s| chrono::DateTime::<chrono::Utc>::from_timestamp(s, 0))
+            .unwrap_or_default()
+            .format("%Y-%m-%dT%H:%M:%SZ");
+        Self {
+            app: app.to_string(),
+            started_at: started.to_string(),
+        }
+    }
+}
+
+/// One step of a run: a command task, or an `up` step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
-    /// The command task the step ran.
+    /// The command task the step ran; empty for an `up` step.
     pub task: String,
-    /// The argv it resolved to.
+    /// The argv it resolved to; empty for an `up` step.
     pub argv: Vec<String>,
+    /// The app an `up` step brought up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub up: Option<String>,
+    /// The port each app its templates reference rendered as, so the step
+    /// can be rendered again from another config with the same ports.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ports: BTreeMap<String, u16>,
 }
 
 /// The directory holding the records.
@@ -163,15 +216,22 @@ impl Ledger {
             .collect())
     }
 
-    /// The latest run in `repo`'s checkouts proving `task` exited 0 on a
-    /// clean tree at exactly `sha`. A run at an ancestor, a prefix of the id,
-    /// a dirty tree or another repository proves nothing.
-    pub fn passed(&self, repo: &Path, task: &str, sha: &str) -> Result<Option<Run>> {
+    /// The latest run in `repo`'s checkouts that [`Run::qualifies`] for
+    /// `task` given `args` at exactly `sha`. A run at an ancestor, a prefix
+    /// of the id, a dirty tree, other args, a reused server or another
+    /// repository does not.
+    pub fn passed(
+        &self,
+        repo: &Path,
+        task: &str,
+        args: &BTreeMap<String, String>,
+        sha: &str,
+    ) -> Result<Option<Run>> {
         Ok(self
             .runs_in(repo)?
             .into_iter()
             .rev()
-            .find(|r| r.proves(task, sha)))
+            .find(|r| r.qualifies(task, args, sha)))
     }
 
     /// Whether `path` names something inside the ledger, however it is
@@ -205,50 +265,56 @@ fn resolve_existing(path: &Path) -> PathBuf {
     }
 }
 
-/// The config the repository's committed `devkit.toml` layers alone give at
-/// `start`: each tracked `devkit.toml` inside `worktree_root` that applies
-/// there, read as HEAD holds it. Local, home, ignored, explicit and
-/// out-of-tree layers are left out.
-pub fn committed_config(worktree_root: &Path, start: &Path) -> Result<devkit_config::Config> {
-    let root = std::fs::canonicalize(worktree_root)
-        .with_context(|| format!("resolving {}", worktree_root.display()))?;
-    let vcs = vcs::Vcs::at(&root);
-    let mut tables = Vec::new();
-    for layer in devkit_config::project_layers(start, None)? {
-        if layer.path.file_name() != Some(std::ffi::OsStr::new(devkit_config::CONFIG_FILE)) {
-            continue;
-        }
-        let Ok(path) = std::fs::canonicalize(&layer.path) else {
-            continue;
-        };
-        let Ok(rel) = path.strip_prefix(&root) else {
-            continue;
-        };
-        let rel: Vec<_> = rel.iter().map(|c| c.to_string_lossy()).collect();
-        let Some(body) = vcs.committed_file(&root, &rel.join("/"))? else {
-            continue;
-        };
-        let body = String::from_utf8(body)
-            .with_context(|| format!("reading the committed {}", path.display()))?;
-        let table: toml::Table = toml::from_str(&body)
-            .with_context(|| format!("parsing the committed {}", path.display()))?;
-        tables.push((path, table));
+/// The tasks the tracked `devkit.toml` layers committed at `rev` give in
+/// `dir`, relative to the repository root with `/` between components: the
+/// root's file and each one in a directory on the way down to `dir`, read
+/// from `rev` through `checkout`, any checkout of the repository. Local,
+/// home, explicit and out-of-tree layers are left out.
+pub fn committed_config(checkout: &Path, rev: &str, dir: &str) -> Result<devkit_config::Config> {
+    let vcs = vcs::Vcs::at(checkout);
+    let mut dirs = vec![String::new()];
+    for part in dir.split('/').filter(|p| !p.is_empty()) {
+        let parent = dirs.last().expect("the root");
+        dirs.push(if parent.is_empty() {
+            part.to_string()
+        } else {
+            format!("{parent}/{part}")
+        });
     }
-    let (merged, ..) = devkit_config::merge_layers(&tables);
-    toml::Value::Table(merged)
-        .try_into()
-        .context("deserializing the committed config")
+    let mut layers = Vec::new();
+    for d in dirs {
+        let path = if d.is_empty() {
+            devkit_config::CONFIG_FILE.to_string()
+        } else {
+            format!("{d}/{}", devkit_config::CONFIG_FILE)
+        };
+        if let Some(text) = vcs.file_at(checkout, rev, &path)? {
+            layers.push((PathBuf::from(path), text));
+        }
+    }
+    devkit_config::Config::tasks_layers(&layers)
+        .with_context(|| format!("reading the devkit.toml layers committed at {rev}"))
+}
+
+/// The servers a run used without launching them.
+#[derive(Debug, Default)]
+pub struct Servers {
+    /// See [`Run::reused_servers`].
+    pub reused: Vec<String>,
+    /// See [`Run::live_servers`].
+    pub live: Vec<LiveServer>,
 }
 
 /// What the start of a run captured about the tree it ran on.
 pub struct Start {
     task: String,
     args: BTreeMap<String, String>,
+    arg_files: BTreeMap<String, PathBuf>,
     repo: PathBuf,
     worktree: PathBuf,
+    dir: Option<String>,
     head: Option<String>,
     clean: bool,
-    committed_definition: bool,
     env: Vec<String>,
     env_file: Option<PathBuf>,
     started_at: String,
@@ -264,28 +330,38 @@ fn tree_state(root: &Path) -> (Option<String>, bool) {
 }
 
 impl Start {
-    /// Capture the tree state for a run of `task` at worktree `root`.
-    /// `committed_definition` says whether the task runs as the committed
-    /// config defines it; `env` names the variables `--env` and `env_file`
-    /// set.
+    /// Capture the tree state for a run of `task` started in `cwd`, inside
+    /// worktree `root`. `arg_files` names the file each `--arg-file` arg was
+    /// read from. `env` names the variables `--env` and `env_file` set.
+    #[allow(clippy::too_many_arguments)]
     pub fn capture(
         root: &Path,
+        cwd: &Path,
         task: &str,
         args: &BTreeMap<String, String>,
-        committed_definition: bool,
+        arg_files: BTreeMap<String, PathBuf>,
         env: Vec<String>,
         env_file: Option<PathBuf>,
     ) -> Self {
         let (head, clean) = tree_state(root);
         let repo = vcs::primary_checkout(root).unwrap_or_else(|_| root.to_path_buf());
+        let worktree = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let dir = std::fs::canonicalize(cwd).ok().and_then(|cwd| {
+            let rel = cwd.strip_prefix(&worktree).ok()?;
+            rel.iter()
+                .map(|c| c.to_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+                .map(|parts| parts.join("/"))
+        });
         Self {
             task: task.to_string(),
             args: args.clone(),
+            arg_files,
             repo: std::fs::canonicalize(&repo).unwrap_or(repo),
-            worktree: std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
+            worktree,
+            dir,
             head,
             clean,
-            committed_definition,
             env,
             env_file,
             started_at: devkit_common::harness_log::now_rfc3339(),
@@ -293,24 +369,33 @@ impl Start {
     }
 
     /// The finished run, re-reading the tree so a run that changed it, or
-    /// whose head moved under it, is not clean.
-    pub fn finish(self, exit_code: Option<i32>, tail: &Tail, steps: Vec<Step>) -> Run {
+    /// whose head moved under it, is not clean. `servers` holds
+    /// [`Run::reused_servers`] and [`Run::live_servers`].
+    pub fn finish(
+        self,
+        exit_code: Option<i32>,
+        tail: &Tail,
+        steps: Vec<Step>,
+        servers: Servers,
+    ) -> Run {
         let (head_after, clean_after) = tree_state(&self.worktree);
         Run {
             clean: self.clean
-                && self.committed_definition
                 && self.env.is_empty()
                 && self.env_file.is_none()
                 && clean_after
                 && head_after == self.head,
-            committed_definition: self.committed_definition,
             env: self.env,
             env_file: self.env_file,
             steps,
+            reused_servers: servers.reused,
+            live_servers: servers.live,
             task: self.task,
             args: self.args,
+            arg_files: self.arg_files,
             repo: self.repo,
             worktree: self.worktree,
+            dir: self.dir,
             head: self.head,
             exit_code,
             started_at: self.started_at,
@@ -485,12 +570,15 @@ mod tests {
             args: BTreeMap::new(),
             repo: "/r".into(),
             worktree: "/r".into(),
+            dir: Some(String::new()),
             head: Some(head.into()),
             clean,
-            committed_definition: clean,
             env: Vec::new(),
             env_file: None,
             steps: Vec::new(),
+            arg_files: BTreeMap::new(),
+            reused_servers: Vec::new(),
+            live_servers: Vec::new(),
             exit_code,
             started_at: "2026-01-01T00:00:00.000Z".into(),
             ended_at: "2026-01-01T00:00:01.000Z".into(),
@@ -502,12 +590,27 @@ mod tests {
     #[test]
     fn only_a_clean_zero_exit_at_the_exact_sha_proves_a_pass() {
         let sha = "0123456789abcdef0123456789abcdef01234567";
-        assert!(run("test", sha, true, Some(0)).proves("test", sha));
-        assert!(!run("test", sha, false, Some(0)).proves("test", sha));
-        assert!(!run("test", sha, true, Some(1)).proves("test", sha));
-        assert!(!run("test", sha, true, None).proves("test", sha));
-        assert!(!run("lint", sha, true, Some(0)).proves("test", sha));
-        assert!(!run("test", sha, true, Some(0)).proves("test", &sha[..12]));
+        let none = BTreeMap::new();
+        assert!(run("test", sha, true, Some(0)).proves("test", &none, sha));
+        assert!(!run("test", sha, false, Some(0)).proves("test", &none, sha));
+        assert!(!run("test", sha, true, Some(1)).proves("test", &none, sha));
+        assert!(!run("test", sha, true, None).proves("test", &none, sha));
+        assert!(!run("lint", sha, true, Some(0)).proves("test", &none, sha));
+        assert!(!run("test", sha, true, Some(0)).proves("test", &none, &sha[..12]));
+    }
+
+    #[test]
+    fn a_pass_proves_only_the_args_it_was_given() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let all = BTreeMap::from([("scope".to_string(), "all".to_string())]);
+        let mut given = run("test", sha, true, Some(0));
+        assert!(given.proves("test", &BTreeMap::new(), sha));
+        assert!(!given.proves("test", &all, sha));
+        given.args = all.clone();
+        assert!(given.proves("test", &all, sha));
+        assert!(!given.proves("test", &BTreeMap::new(), sha));
+        given.args.insert("extra".into(), "1".into());
+        assert!(!given.proves("test", &all, sha));
     }
 
     #[test]

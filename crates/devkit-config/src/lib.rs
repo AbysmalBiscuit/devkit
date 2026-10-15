@@ -1716,7 +1716,28 @@ pub fn default_test_files() -> Vec<String> {
 
 /// The PR gates and how hard each one holds. A gate applies to a PR an
 /// agent opens with `pr create`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
+///
+/// ```
+/// # use devkit_config::{Config, Gate, GateMode};
+/// # let cfg = Config::parse(r#"
+/// [pr.gates]
+/// verify = "require"
+/// verify_task = "verify"
+/// verify_args = { scope = "all" }
+/// # "#).unwrap();
+/// # let gates = cfg.pr.gates.all();
+/// # assert_eq!(gates[1].1, GateMode::Require);
+/// # let Gate::Verify(required) = &gates[1].0 else { panic!() };
+/// # assert_eq!(required.command(), "devrun task verify --arg scope=all");
+/// # let spaced = devkit_config::RequiredTask {
+/// #     task: "verify".into(),
+/// #     args: [("msg".to_string(), "it's  two".to_string())].into(),
+/// # };
+/// # assert_eq!(spaced.command(), r"devrun task verify --arg 'msg=it'\''s  two'");
+/// # assert_eq!(Config::parse("").unwrap().pr.gates.all().len(), 1);
+/// # assert!(Config::parse("[pr.gates]\nverify_task = \" \"\n").is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PrGates {
     /// Flags a test file the branch deletes, a test file with fewer test
@@ -1727,28 +1748,109 @@ pub struct PrGates {
     /// `Test changes:` in the PR body clears the flags. `devkit pr
     /// weakened-tests` runs the same check outside `pr create`.
     pub weakened_tests: GateMode,
+    /// Requires a passing run of `verify_task` with `verify_args`: one the
+    /// run ledger records as exiting 0 on a clean tree at exactly the commit
+    /// the PR opens at. A run at an earlier commit, on a dirty tree or with
+    /// other args does not count. The PR body gets a Verification section
+    /// built from that run, or saying NOT RUN when there is none; a human's
+    /// PR gets the section without being refused. When the PR changes what
+    /// the task executes, as the `devkit.toml` files committed at the merge
+    /// base and at HEAD define it, the section shows the change; the change
+    /// refuses nothing. Off while `verify_task` is unset.
+    pub verify: GateMode,
+    /// The task the `verify` gate requires a passing run of, as `devrun task`
+    /// names it.
+    #[serde(deserialize_with = "non_blank_task")]
+    pub verify_task: Option<String>,
+    /// The template args the `verify` gate's run must have been given with
+    /// `--arg` or `--arg-file`, no more and no fewer.
+    pub verify_args: std::collections::BTreeMap<String, String>,
+}
+
+fn non_blank_task<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let task = String::deserialize(d)?;
+    if task.trim().is_empty() {
+        return Err(serde::de::Error::custom(
+            "verify_task is blank: name a task, or remove the key",
+        ));
+    }
+    Ok(Some(task))
 }
 
 impl PrGates {
-    /// Each gate with its mode, in a stable order.
-    pub fn all(&self) -> [(Gate, GateMode); 1] {
-        let Self { weakened_tests } = *self;
-        [(Gate::WeakenedTests, weakened_tests)]
+    /// Each gate this config can apply, with its mode, in a stable order.
+    /// `verify` is left out while it names no task.
+    pub fn all(&self) -> Vec<(Gate, GateMode)> {
+        let Self {
+            weakened_tests,
+            verify,
+            verify_task,
+            verify_args,
+        } = self;
+        let mut gates = vec![(Gate::WeakenedTests, *weakened_tests)];
+        if let Some(task) = verify_task {
+            let required = RequiredTask {
+                task: task.clone(),
+                args: verify_args.clone(),
+            };
+            gates.push((Gate::Verify(required), *verify));
+        }
+        gates
     }
 }
 
 /// One PR gate, named by its `[pr.gates]` key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Gate {
     WeakenedTests,
+    Verify(RequiredTask),
 }
 
 impl Gate {
     /// The gate's `[pr.gates]` key.
-    pub fn key(self) -> &'static str {
+    pub fn key(&self) -> &'static str {
         match self {
             Self::WeakenedTests => "weakened_tests",
+            Self::Verify(_) => "verify",
         }
+    }
+}
+
+/// The task run the `verify` gate requires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredTask {
+    pub task: String,
+    pub args: std::collections::BTreeMap<String, String>,
+}
+
+impl RequiredTask {
+    /// The `devrun task` command line that makes such a run, each word
+    /// quoted for a POSIX shell where it needs it.
+    pub fn command(&self) -> String {
+        let mut out = format!("devrun task {}", shell_word(&self.task));
+        if !self.args.is_empty() {
+            out.push(' ');
+            out.push_str(&arg_flags(&self.args));
+        }
+        out
+    }
+}
+
+/// `args` as the `--arg` flags that pass them, space separated and quoted
+/// as [`RequiredTask::command`] quotes them; empty for no args.
+pub fn arg_flags(args: &std::collections::BTreeMap<String, String>) -> String {
+    args.iter()
+        .map(|(k, v)| format!("--arg {}", shell_word(&format!("{k}={v}"))))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_word(word: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "_-./:=,@%+".contains(c);
+    if !word.is_empty() && word.chars().all(plain) {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
     }
 }
 
@@ -2712,8 +2814,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub url_env: Option<String>,
     /// This app serves the URL that consumer apps wire to via their `url_env`.
-    /// Exactly one app should be marked. `devrun up` of a consumer brings the
-    /// provider up too.
+    /// Exactly one app should be marked; when several are, the first by name
+    /// serves. `devrun up` of a consumer brings the provider up too.
     #[serde(default)]
     pub provides_url: bool,
     /// Commands run in the app's directory during `workspace setup`, in order.
@@ -2749,6 +2851,47 @@ impl Config {
             .try_into()
             .context("parsing devkit.toml")?;
         Ok(cfg)
+    }
+
+    /// The tables of one layer's text a task's command renders from:
+    /// `[tasks]`, `[apps]`, `[templates]` and `[defaults]`. The rest of the
+    /// layer is not read, so a key this build does not know elsewhere in it
+    /// does not stop the tasks loading.
+    ///
+    /// ```
+    /// # use devkit_config::Config;
+    /// let cfg = Config::tasks_layer("[tasks.t]\nrun = [\"x\"]\n[unknown]\nkey = 1\n").unwrap();
+    /// assert!(cfg.tasks.contains_key("t"));
+    /// ```
+    pub fn tasks_layer(text: &str) -> Result<Self> {
+        let mut table: toml::Table = toml::from_str(text).context("parsing devkit.toml")?;
+        read_renamed_keys(&mut table).context("parsing devkit.toml")?;
+        table.retain(|key, _| matches!(key, "tasks" | "apps" | "templates" | "defaults"));
+        toml::Value::Table(table)
+            .try_into()
+            .context("parsing devkit.toml's tasks")
+    }
+
+    /// [`Config::tasks_layer`] across a stack of layer texts, lowest
+    /// precedence first, each its own directory's `devkit.toml`: the layers
+    /// a `[config] root = true` marker cuts off are dropped, and the rest
+    /// merge as [`merge_layers`] merges them.
+    pub fn tasks_layers(layers: &[(PathBuf, String)]) -> Result<Self> {
+        let mut tables = Vec::with_capacity(layers.len());
+        for (path, text) in layers {
+            let mut table: toml::Table =
+                toml::from_str(text).with_context(|| format!("parsing {}", path.display()))?;
+            if is_root_layer(&table) {
+                tables.clear();
+            }
+            read_renamed_keys(&mut table).with_context(|| format!("parsing {}", path.display()))?;
+            table.retain(|key, _| matches!(key, "tasks" | "apps" | "templates" | "defaults"));
+            tables.push((path.clone(), table));
+        }
+        let (merged, ..) = merge_layers(&tables);
+        toml::Value::Table(merged)
+            .try_into()
+            .context("parsing devkit.toml's tasks")
     }
 }
 
@@ -3562,6 +3705,30 @@ launch = ["doppler", "run", "-c", "dev_local", "--", "nitro", "dev", "--port", "
 url_env = "FOUNDRY_API_BASE_URL"
 static_env = { SUPABASE_JWT_SECRET = "s" }
 "#;
+
+    #[test]
+    fn tasks_layers_merge_deeper_over_shallower_and_stop_at_a_root_marker() {
+        let layer = |path: &str, text: &str| (PathBuf::from(path), text.to_string());
+        let outer = layer(
+            "devkit.toml",
+            "[tasks.a]\nrun = [\"x\"]\n[tasks.b]\nrun = [\"b\"]\n",
+        );
+        let inner = layer("in/devkit.toml", "[tasks.a]\nrun = [\"y\"]\n");
+        let cfg = Config::tasks_layers(&[outer.clone(), inner.clone()]).unwrap();
+        assert_eq!(cfg.tasks["a"].run[0].template(), "y");
+        assert!(cfg.tasks.contains_key("b"));
+
+        let rooted = layer(
+            "in/devkit.toml",
+            "[config]\nroot = true\n[tasks.a]\nrun = [\"y\"]\n",
+        );
+        let cfg = Config::tasks_layers(&[outer, rooted]).unwrap();
+        assert!(
+            !cfg.tasks.contains_key("b"),
+            "the marker cuts off the outer layer"
+        );
+    }
+
     #[test]
     fn worktree_include_parses_and_defaults_empty() {
         let cfg: Config = toml::from_str(

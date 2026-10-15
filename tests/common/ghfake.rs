@@ -392,6 +392,18 @@ github = "sweeper[bot]"
             .expect("spawn devkit issue")
     }
 
+    /// [`Fake::issue_as`] against the checkout at `dir`, such as a linked
+    /// worktree of the project.
+    pub fn issue_as_in(&self, caller: &str, dir: &Path, args: &[&str]) -> std::process::Output {
+        self.devkit_cmd()
+            .args(["issue", "-C"])
+            .arg(dir)
+            .args(args)
+            .env("DEVKIT_CALLER", caller)
+            .output()
+            .expect("spawn devkit issue")
+    }
+
     /// [`Fake::issue_as`] inside the harness session `session`, or outside
     /// any session when it is `None`.
     pub fn issue_in_session(

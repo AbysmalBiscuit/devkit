@@ -207,13 +207,19 @@ pub(crate) enum RunsCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Whether TASK exited 0 on a clean tree at exactly one commit.
+    /// Whether TASK passed on a clean tree at exactly one commit.
     ///
-    /// Only runs in this repository's checkouts count. Exits 0 and prints the
-    /// run for yes, exits 1 for no.
+    /// A run counts when it exited 0 given exactly the `--arg` values passed
+    /// here. Only runs in this repository's checkouts count, and the answer is
+    /// the one `devkit pr create`'s verify gate reaches: a run given other
+    /// args, or none when these name some, is no, as is one whose `up` step
+    /// reused a server already running before it started. Exits 0 and
+    /// prints the run for yes, exits 1 for no.
     Passed {
         /// Task name, as given to `devrun task`.
         task: String,
+        #[command(flatten)]
+        vars: crate::template::VarArgs,
         /// Full commit id to ask about; defaults to this worktree's HEAD. An
         /// abbreviated id or an ancestor's run never matches.
         #[arg(long)]
@@ -493,7 +499,8 @@ pub fn run(cli: RunCli) -> Result<()> {
         } => cmd_up(&cli, &cwd, apps, *role, env, env_file.as_deref(), UpFlags {
             dry_run: *dry_run,
             supervise: *supervise,
-        }),
+        })
+        .map(drop),
         Cmd::Down {
             selectors,
             all,
@@ -566,9 +573,12 @@ pub fn run(cli: RunCli) -> Result<()> {
             RunsCmd::List { task, limit, json } => {
                 cmd_runs_list(&cwd, task.as_deref(), *limit, *json)
             }
-            RunsCmd::Passed { task, sha, json } => {
-                cmd_runs_passed(&cwd, task, sha.as_deref(), *json)
-            }
+            RunsCmd::Passed {
+                task,
+                vars,
+                sha,
+                json,
+            } => cmd_runs_passed(&cwd, task, vars, sha.as_deref(), *json),
         },
     }
 }
@@ -609,8 +619,15 @@ fn cmd_runs_list(cwd: &str, task: Option<&str>, limit: usize, json: bool) -> Res
     Ok(())
 }
 
-fn cmd_runs_passed(cwd: &str, task: &str, sha: Option<&str>, json: bool) -> Result<()> {
+fn cmd_runs_passed(
+    cwd: &str,
+    task: &str,
+    vars: &crate::template::VarArgs,
+    sha: Option<&str>,
+    json: bool,
+) -> Result<()> {
     anyhow::ensure!(!task.trim().is_empty(), "name the task to ask about");
+    let args = vars.parse()?;
     let sha = match sha {
         Some(sha) => sha.trim().to_string(),
         None => {
@@ -620,7 +637,8 @@ fn cmd_runs_passed(cwd: &str, task: &str, sha: Option<&str>, json: bool) -> Resu
         }
     };
     anyhow::ensure!(!sha.is_empty(), "--sha names no commit");
-    let found = devkit_ports::ledger::Ledger::live().passed(&ledger_repo(cwd)?, task, &sha)?;
+    let found =
+        devkit_ports::ledger::Ledger::live().passed(&ledger_repo(cwd)?, task, &args, &sha)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&found)?);
     } else if let Some(run) = &found {
@@ -778,7 +796,7 @@ fn cmd_task(
                 for item in items {
                     match item {
                         SeqItem::Run(plan) => print_plan(plan),
-                        SeqItem::Up(app) => up(app, true)?,
+                        SeqItem::Up(app) => drop(up(app, true)?),
                     }
                 }
             }
@@ -786,18 +804,30 @@ fn cmd_task(
         return Ok(());
     }
 
-    let committed = ledger::committed_config(root_path, Path::new(cwd))
-        .is_ok_and(|c| task::same_definition(&loaded.config, &c, &loaded.catalog, name));
     let start = ledger::Start::capture(
         root_path,
+        Path::new(cwd),
         name,
         &args,
-        committed,
+        vars.arg_files
+            .iter()
+            .filter_map(|pair| pair.split_once('='))
+            .map(|(key, path)| {
+                let path = match path {
+                    "-" => PathBuf::from("-"),
+                    path => Path::new(cwd).join(path),
+                };
+                (key.to_string(), path)
+            })
+            .collect(),
         user.keys().cloned().collect(),
         env_file.map(|f| Path::new(cwd).join(f)),
     );
     let tail = ledger::Tail::new();
     let steps = std::cell::RefCell::new(Vec::new());
+    let live = std::cell::RefCell::new(Vec::<ledger::LiveServer>::new());
+    let mut launched = std::collections::HashSet::new();
+    let mut reused = Vec::new();
     let step = |step_name: &str| -> Result<Option<i32>> {
         let fresh = task::resolve_step(
             &loaded.config,
@@ -808,10 +838,13 @@ fn cmd_task(
             &user,
             &args,
         )?;
+        record_live(&mut live.borrow_mut(), &root, &fresh.require_live);
         eprintln!("-> {}: {}", fresh.name, fresh.argv.join(" "));
         steps.borrow_mut().push(ledger::Step {
             task: fresh.name.clone(),
             argv: fresh.argv.clone(),
+            up: None,
+            ports: fresh.ports.clone(),
         });
         Ok(task::exec(&fresh, &tail)?.code())
     };
@@ -826,7 +859,20 @@ fn cmd_task(
                             return Ok(code);
                         }
                     }
-                    SeqItem::Up(app) => up(app, false)?,
+                    SeqItem::Up(app) => {
+                        // A server an earlier step of this run launched is
+                        // this run's own; only one live before the run began
+                        // may have started at another commit.
+                        steps.borrow_mut().push(ledger::Step {
+                            task: String::new(),
+                            argv: Vec::new(),
+                            up: Some(app.clone()),
+                            ports: Default::default(),
+                        });
+                        let report = up(app, false)?;
+                        reused.extend(report.reused.into_iter().filter(|a| !launched.contains(a)));
+                        launched.extend(report.launched);
+                    }
                 }
             }
             Ok(Some(0))
@@ -836,6 +882,10 @@ fn cmd_task(
         outcome.as_ref().ok().copied().flatten(),
         &tail,
         steps.into_inner(),
+        ledger::Servers {
+            reused,
+            live: live.into_inner(),
+        },
     );
     if let Err(e) = ledger::Ledger::live().record(&run) {
         eprintln!("devrun: the run was not recorded in the run ledger: {e:#}");
@@ -848,6 +898,27 @@ fn cmd_task(
     }
 }
 
+/// Add to `live` each of `apps` not yet in it, with when the port registry
+/// recorded its server under `holder`. `resolve_step` has just checked each
+/// is live, so one that has gone since is left out.
+fn record_live(live: &mut Vec<devkit_ports::ledger::LiveServer>, holder: &str, apps: &[String]) {
+    let apps: Vec<&String> = apps
+        .iter()
+        .filter(|a| !live.iter().any(|s| &s.app == *a))
+        .collect();
+    if apps.is_empty() {
+        return;
+    }
+    let Ok(data) = devkit_ports::registry::snapshot() else {
+        return;
+    };
+    for app in apps {
+        if let Some((_, entry)) = devkit_ports::registry::live_entry(&data, holder, app) {
+            live.push(devkit_ports::ledger::LiveServer::new(app, entry.ts));
+        }
+    }
+}
+
 fn print_plan(plan: &devkit_ports::task::CommandPlan) {
     println!("[{}]", plan.name);
     println!("  cwd:  {}", plan.cwd.display());
@@ -856,6 +927,15 @@ fn print_plan(plan: &devkit_ports::task::CommandPlan) {
     println!("  env:  {}", envs.join(" "));
 }
 
+/// The apps one `devrun up` launched, and those it found already running.
+#[derive(Default)]
+struct UpReport {
+    launched: Vec<String>,
+    reused: Vec<String>,
+}
+
+/// Bring `apps_arg` up and report which apps it launched and which it found
+/// already running.
 fn cmd_up(
     cli: &RunCli,
     cwd: &str,
@@ -864,7 +944,7 @@ fn cmd_up(
     env_pairs: &[String],
     env_file: Option<&str>,
     flags: UpFlags,
-) -> Result<()> {
+) -> Result<UpReport> {
     let UpFlags { dry_run, supervise } = flags;
     #[cfg(not(feature = "daemon"))]
     let _ = supervise;
@@ -984,12 +1064,10 @@ fn cmd_up(
         g
     };
 
-    let provider = catalog
-        .iter()
-        .find(|(_, a)| a.provides_url)
-        .map(|(n, _)| n.clone());
+    let provider = run::url_provider(catalog);
 
     let mut rows: Vec<Row> = Vec::new();
+    let mut report = UpReport::default();
     for (grp_role, holder, base_dir) in &groups {
         let ports =
             run::resolve_ports(catalog, &apps, holder, *grp_role, &cfg.templates.defaults())?;
@@ -997,7 +1075,7 @@ fn cmd_up(
             catalog,
             &apps,
             &ports,
-            provider.as_deref(),
+            provider,
             base_dir,
             *grp_role,
             &user,
@@ -1038,6 +1116,11 @@ fn cmd_up(
             || run::launch(&plans, holder, *grp_role, supervise, true),
         )?;
         for s in statuses {
+            if s.reused {
+                report.reused.push(s.app.clone());
+            } else {
+                report.launched.push(s.app.clone());
+            }
             if s.state != devkit_ports::run::ServerState::Ready
                 && let Some(log) = &s.logfile
             {
@@ -1061,7 +1144,7 @@ fn cmd_up(
     }
 
     print_summary(&rows);
-    Ok(())
+    Ok(report)
 }
 
 /// True if any matched row belongs to a holder other than `current` or the

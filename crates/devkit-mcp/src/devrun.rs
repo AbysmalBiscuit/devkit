@@ -78,15 +78,12 @@ fn up(ctx: &ServerCtx, args: Value) -> Result<Value> {
     let user = a.env.unwrap_or_default();
     let vars = &loaded.config.templates.defaults();
     let ports = run::resolve_ports(catalog, &apps, &a.root, Role::Workspace, vars)?;
-    let provider = catalog
-        .iter()
-        .find(|(_, ap)| ap.provides_url)
-        .map(|(n, _)| n.clone());
+    let provider = run::url_provider(catalog);
     let plans = run::plan_group(
         catalog,
         &apps,
         &ports,
-        provider.as_deref(),
+        provider,
         Path::new(&a.root),
         Role::Workspace,
         &user,

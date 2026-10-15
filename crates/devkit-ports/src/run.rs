@@ -147,6 +147,9 @@ pub struct ServerStatus {
     pub pid: Option<u32>,
     pub logfile: Option<PathBuf>,
     pub state: ServerState,
+    /// [`launch`] found this server already running and did not spawn it.
+    #[serde(skip)]
+    pub reused: bool,
 }
 
 /// Classify from already-probed signals: listening -> Ready; else live pid ->
@@ -188,6 +191,7 @@ pub fn server_rows(data: &Data, only_holder: Option<&str>) -> Vec<ServerStatus> 
             pid: e.pid,
             logfile: e.logfile.clone(),
             state: server_state(*port, e.pid),
+            reused: false,
         });
     }
     rows
@@ -202,14 +206,22 @@ pub fn holder_slug(holder: &str) -> String {
         .to_string()
 }
 
+/// The app consumers wire their `url_env` to: the one marked `provides_url`,
+/// or the first by name when several are, so every plan of the same catalog
+/// picks the same one.
+pub fn url_provider(catalog: &HashMap<String, App>) -> Option<&str> {
+    catalog
+        .iter()
+        .filter(|(_, a)| a.provides_url)
+        .map(|(n, _)| n.as_str())
+        .min()
+}
+
 /// Ensure the URL-providing app (the API) is present whenever a selected app
 /// consumes its URL, so the consumer can be wired. The provider is identified
-/// by config (`provides_url`), not by name.
+/// by config ([`url_provider`]), not by name.
 pub fn ensure_provider(catalog: &HashMap<String, App>, apps: &mut Vec<String>) {
-    let provider = catalog
-        .iter()
-        .find(|(_, a)| a.provides_url)
-        .map(|(n, _)| n.clone());
+    let provider = url_provider(catalog).map(str::to_string);
     let needs_provider = apps
         .iter()
         .any(|a| catalog[a].url_env.is_some() && !catalog[a].provides_url);
@@ -247,6 +259,17 @@ pub fn resolve_ports(
     role: Role,
     variables: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, u16>> {
+    let reqs = wanted_ports(catalog, apps, variables)?;
+    Ok(registry::alloc(holder, &reqs, role)?.into_iter().collect())
+}
+
+/// What [`resolve_ports`] asks the registry for: each app it covers, with
+/// that app's base port.
+pub fn wanted_ports(
+    catalog: &HashMap<String, App>,
+    apps: &[String],
+    variables: &BTreeMap<String, String>,
+) -> Result<Vec<(String, u16)>> {
     let mut names: Vec<String> = apps.to_vec();
     for a in apps {
         let app = &catalog[a];
@@ -265,11 +288,10 @@ pub fn resolve_ports(
             }
         }
     }
-    let reqs: Vec<(String, u16)> = names
+    Ok(names
         .iter()
         .map(|n| (n.clone(), catalog[n].base_port))
-        .collect();
-    Ok(registry::alloc(holder, &reqs, role)?.into_iter().collect())
+        .collect())
 }
 
 /// Build a launch plan per app for one (role, holder) group. `ports` maps each
@@ -475,6 +497,7 @@ fn existing_server(
         pid: Some(pid),
         logfile: e.logfile.clone(),
         state: server_state(plan.port, Some(pid)),
+        reused: true,
     })
 }
 
@@ -552,6 +575,7 @@ pub fn launch(
                 } else {
                     ServerState::Starting
                 },
+                reused: false,
             })
             .collect();
         out.extend(existing);
@@ -566,6 +590,7 @@ pub fn launch(
                 pid: Some(pid),
                 logfile: Some(log),
                 state: server_state(port, Some(pid)),
+                reused: false,
             })
             .collect();
         out.extend(existing);
@@ -614,6 +639,7 @@ fn supervise_via_daemon(
             } else {
                 ServerState::Starting
             },
+            reused: false,
         });
     }
     Ok(out)

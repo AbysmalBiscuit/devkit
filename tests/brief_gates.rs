@@ -71,6 +71,33 @@ fn the_brief_names_each_gate_that_is_on() {
 }
 
 #[test]
+fn the_brief_names_the_run_the_verify_gate_requires() {
+    let gate = "[pr.gates]\nverify_task = \"verify\"\nverify_args = { scope = \"all\" }\n";
+    let body = brief(gate);
+    assert!(
+        body.contains("`verify` (require): refuses the PR"),
+        "{body}"
+    );
+    assert!(
+        body.contains("`devrun task verify --arg scope=all` exited 0 on a clean tree"),
+        "{body}"
+    );
+    assert!(
+        body.contains("any change the PR makes to what the task runs, which refuses nothing"),
+        "{body}"
+    );
+    assert!(
+        body.replace("\n  ", " ")
+            .contains("without its `up` step reusing a server already running before the run"),
+        "{body}"
+    );
+    let body = brief(&format!("{gate}verify = \"advise\"\n"));
+    assert!(body.contains("`verify` (advise): says NOT RUN"), "{body}");
+    let body = brief("[pr.gates]\nverify = \"require\"\n");
+    assert!(!body.contains("`verify`"), "no task, no gate: {body}");
+}
+
+#[test]
 fn the_brief_names_no_gate_when_all_are_off() {
     let body = brief("[pr.gates]\nweakened_tests = \"off\"\n");
     assert!(body.contains("devkit project"), "still a brief: {body}");

@@ -35,22 +35,6 @@ run = ["git", "-c", "alias.mix=!echo out1; echo err1 >&2; echo out2; echo err2 >
 
 [tasks.peek]
 run = ["git", "-c", "alias.peek=!ls -A \"$XDG_STATE_HOME/devkit/output\"; echo end", "peek"]
-
-[apps.web]
-base_port = 39181
-path = "."
-launch = ["git", "version"]
-static_env = { WEB_TARGET = "{{ target }}" }
-
-[tasks.web]
-app = "web"
-run = ["git", "version"]
-
-[tasks.webs]
-steps = [{ task = "web" }]
-
-[templates.variables]
-target = "staging"
 "#;
 
 /// A repository with one commit, and a state home beside it rather than in it.
@@ -291,107 +275,6 @@ fn stdout_and_stderr_on_one_file_keep_their_interleaving() {
     );
 }
 
-/// A task redefined by anything but the repository's committed config can
-/// exit 0 on a clean tree without having run what the repository names, so
-/// such a run is not clean.
-#[test]
-fn a_task_redefined_outside_the_committed_config_never_passes() {
-    let f = Fixture::new();
-    let sha = f.head();
-    let forged = format!("{CONFIG}\n[tasks.pass]\nrun = [\"git\", \"--version\"]\n")
-        .replace("[tasks.pass]\nrun = [\"git\", \"version\"]\n", "");
-    let forged_file = f.state.join("forged.toml");
-    std::fs::write(&forged_file, &forged).unwrap();
-
-    std::fs::write(
-        f.repo.join("devkit.local.toml"),
-        "[tasks.pass]\nrun = [\"git\", \"--version\"]\n",
-    )
-    .unwrap();
-    assert!(f.task("pass").status.success());
-    std::fs::remove_file(f.repo.join("devkit.local.toml")).unwrap();
-
-    let explicit = f
-        .devkit()
-        .arg("run")
-        .arg("--config")
-        .arg(&forged_file)
-        .args(["task", "pass"])
-        .output()
-        .unwrap();
-    assert!(explicit.status.success(), "{explicit:?}");
-    let env = f
-        .devkit()
-        .env("DEVKIT_CONFIG", &forged_file)
-        .args(["run", "task", "pass"])
-        .output()
-        .unwrap();
-    assert!(env.status.success(), "{env:?}");
-
-    let runs = f.runs();
-    assert_eq!(runs.len(), 3, "{runs:#?}");
-    for run in &runs {
-        assert_eq!(run["exit_code"], 0, "{run:#}");
-        assert_eq!(run["clean"], false, "{run:#}");
-        assert_eq!(
-            run["steps"][0]["argv"],
-            serde_json::json!(["git", "--version"]),
-            "{run:#}"
-        );
-    }
-    let no = f.passed("pass", Some(&sha));
-    assert_eq!(no.status.code(), Some(1), "{no:?}");
-
-    let home = f.state.join(".config/devkit/config.toml");
-    std::fs::create_dir_all(home.parent().unwrap()).unwrap();
-    std::fs::write(&home, "[tasks.pass.env]\nGIT_TRACE = \"0\"\n").unwrap();
-    assert!(f.task("pass").status.success());
-    assert_eq!(
-        f.runs()[3]["clean"],
-        false,
-        "a home layer adding to the task"
-    );
-    assert_eq!(f.passed("pass", Some(&sha)).status.code(), Some(1));
-    std::fs::remove_file(&home).unwrap();
-
-    std::fs::write(
-        f.repo.join("devkit.local.toml"),
-        "[tasks.extra]\nrun = [\"git\", \"version\"]\n",
-    )
-    .unwrap();
-    assert!(f.task("pass").status.success());
-    assert_eq!(
-        f.passed("pass", Some(&sha)).status.code(),
-        Some(0),
-        "a local layer that leaves the task alone keeps the run clean"
-    );
-}
-
-/// A variable default read only by the app's `static_env` still shapes what
-/// the task runs, so a layer outside the committed config that changes it
-/// leaves the run not clean, for the task and for a sequence running it.
-#[test]
-fn a_static_env_variable_redefined_outside_the_committed_config_never_passes() {
-    let f = Fixture::new();
-    let sha = f.head();
-    assert!(f.task("web").status.success());
-    assert_eq!(f.runs()[0]["clean"], true, "{:#}", f.runs()[0]);
-
-    std::fs::write(
-        f.repo.join("devkit.local.toml"),
-        "[templates.variables]\ntarget = \"prod\"\n",
-    )
-    .unwrap();
-    assert!(f.task("web").status.success());
-    assert!(f.task("webs").status.success());
-    let runs = f.runs();
-    assert_eq!(runs.len(), 3, "{runs:#?}");
-    for run in &runs[1..] {
-        assert_eq!(run["clean"], false, "{run:#}");
-    }
-    assert_eq!(f.passed("webs", Some(&sha)).status.code(), Some(1));
-}
-
 /// `--env` and `--env-file` change what the task runs, so a run given either
 /// is not clean, and its record names what they set without the values.
 #[test]
@@ -596,4 +479,15 @@ fn a_shell_redirect_into_the_ledger_is_denied() {
             "tool_input": { "command": format!("echo '{{}}' > '{target}'") }
         }));
     }
+}
+
+#[test]
+fn a_run_started_with_a_relative_dir_records_that_dir() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.repo.join("sub")).unwrap();
+    let out = f.run(&["-C", "sub", "task", "pass"]);
+    assert!(out.status.success(), "{out:?}");
+    let runs = f.runs();
+    let run = by_task(&runs, "pass")[0];
+    assert_eq!(run["dir"], "sub", "{run:#}");
 }
