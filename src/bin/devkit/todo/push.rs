@@ -130,7 +130,9 @@ pub(crate) fn push_status(
         moved.with_context(|| match writes.close {
             Some(_) => format!(
                 "ticket {key} closed, but its [ticket.events.{event}] move failed; todo {short} \
-                 is unchanged"
+                 is unchanged. Rerun `devkit todo {} {short}` to finish the move; it needs no \
+                 --overwrite-tracker",
+                push.local.word()
             ),
             None => unchanged(),
         })?;
@@ -188,9 +190,18 @@ impl Conflict<'_> {
 }
 
 /// After a person declines to write over the tracker: syncs `key` into
-/// `node` so its todo takes the tracker's value.
+/// `node` so its todo takes the tracker's value, or, while the store's own
+/// sync has not completed, leaves that to the next sync. Either way the
+/// decline is not an error.
 fn take_tracker_value(store: &Store, cwd: &Path, node: &str, key: &str) -> Result<()> {
-    if super::tickets::sync_ticket(store, cwd, node, key)? {
+    if !store.replica_pulled() {
+        eprintln!(
+            "devkit todo: declined; {key} is left as it is, and takes the tracker's value at the \
+             next sync"
+        );
+        return Ok(());
+    }
+    if super::tickets::sync_ticket(store, cwd, node, key)?.is_some() {
         eprintln!("devkit todo: {key} left as the tracker has it");
     }
     Ok(())

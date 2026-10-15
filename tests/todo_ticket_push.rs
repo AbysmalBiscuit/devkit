@@ -143,8 +143,45 @@ fn done_on_an_issue_already_closed_as_completed_closes_nothing() {
     let out = s.devkit(&["todo", "done", &ticket_id(&s)], &AGENT);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(mutation_at(&s, "closeIssue"), None, "{:?}", s.mutations());
+    let moved = mutation_at(&s, "updateProjectV2ItemFieldValue").expect("status moved");
+    assert!(
+        s.mutations()[moved].contains("\"o2\""),
+        "{:?}",
+        s.mutations()
+    );
     assert_eq!(s.todo_for("o/r#65").status.kind(), StatusKind::Completed);
     assert_eq!(synced_status(&s).as_deref(), Some("closed:completed"));
+}
+
+#[test]
+fn a_move_failing_after_the_close_finishes_on_a_plain_rerun() {
+    let s = pushing(DONE_EVENT, true);
+    s.serve(
+        "graphql_mutation_2.json",
+        r#"{"errors":[{"message":"field write refused"}]}"#,
+    );
+    let out = s.devkit(&["todo", "done", &ticket_id(&s)], &AGENT);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("ticket o/r#65 closed")
+            && err.contains("Rerun `devkit todo done")
+            && err.contains("needs no --overwrite-tracker"),
+        "{err}"
+    );
+    assert_eq!(s.todo_for("o/r#65").status, Status::Pending);
+
+    std::fs::remove_file(s.bin.path().join("graphql_mutation_2.json")).unwrap();
+    tracker_shows(&s, closed("COMPLETED"));
+    let out = s.devkit(&["todo", "done", &ticket_id(&s)], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let moves = s
+        .mutations()
+        .iter()
+        .filter(|m| m.contains("updateProjectV2ItemFieldValue"))
+        .count();
+    assert_eq!(moves, 2, "{:?}", s.mutations());
+    assert_eq!(s.todo_for("o/r#65").status.kind(), StatusKind::Completed);
 }
 
 #[test]
@@ -240,6 +277,47 @@ fn a_conflict_without_a_terminal_fails_instead_of_prompting() {
     );
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
     assert_eq!(s.todo_for("o/r#65").status, Status::Pending);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn declining_before_the_replica_pulled_is_a_decline_not_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let replica = dir.path().join("replica");
+    let config = format!(
+        "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\ndata_dir = {}\nserver_dir = {}\n",
+        toml::Value::String(replica.display().to_string()),
+        toml::Value::String(dir.path().join("server").display().to_string())
+    );
+    let s = Synced::in_proj(
+        Proj::with_home_config(&config),
+        &format!("{PUSH}{RULES}{STATUSES}{DONE_EVENT}"),
+        true,
+    );
+    tracker_shows(&s, at("Todo"));
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let listed = |s: &Synced| -> serde_json::Value {
+        let out = s.devkit(&["todo", "list", "--all", "--json"], &[]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&stdout(&out)).unwrap();
+        rows.into_iter()
+            .find(|row| row["description"].as_str().unwrap().contains("Issue 65"))
+            .unwrap_or_else(|| panic!("no todo for 65: {}", stdout(&out)))
+    };
+    let id = listed(&s)["id"].as_str().unwrap().to_string();
+    std::fs::remove_file(replica.join("sync.pulled")).unwrap();
+    tracker_shows(&s, at("Backlog"));
+    let human = [("DEVKIT_CALLER", "human")];
+    let out = s.devkit_on_a_terminal(&["todo", "done", &id], &human, "n\n");
+    let said = stdout(&out);
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("Write over the tracker?") && said.contains("declined"),
+        "{said}"
+    );
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert_eq!(listed(&s)["status"], "pending");
 }
 
 #[test]
@@ -443,6 +521,11 @@ fn sync_one_takes_the_key_in_any_spelling_the_tracker_reads() {
         let s = with_sub_issue();
         let out = s.sync(&["--ticket", key]);
         assert!(out.status.success(), "{key}: {}", stderr(&out));
+        assert!(
+            stdout(&out).contains("ticket o/r#65 synced"),
+            "{key}: {}",
+            stdout(&out)
+        );
         assert_eq!(
             s.todo_for("o/r#65").status.kind(),
             StatusKind::InProgress,

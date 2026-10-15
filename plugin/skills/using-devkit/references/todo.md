@@ -78,7 +78,7 @@ Before writing, devkit reads the ticket and compares its status with the last sy
 - Ask the user whether to write over the tracker. Pass `--overwrite-tracker` only on their word.
 - To take the tracker's value instead, run `devkit todo sync --ticket <key>`.
 
-A person at a terminal is asked instead, and declining takes the tracker's value. A ticket that cannot be read, or a write that fails, fails the command naming the ticket, with the todo unchanged. With several ticket todos in one command, the first that stops ends it, and the message names the todos done and not done. The read and the write are separate requests, since neither tracker has a conditional write, so a tracker change that lands between them is written over.
+A person at a terminal is asked instead, and declining takes the tracker's value, or leaves it to the next sync while the store's own sync has not completed. A ticket that cannot be read, or a write that fails, fails the command naming the ticket, with the todo unchanged. When a GitHub close lands and the project move after it fails, rerun the same command: the issue reads as already closed, so the rerun only finishes the move, and needs no `--overwrite-tracker`. With several ticket todos in one command, the first that stops ends it, and the message names the todos done and not done. The read and the write are separate requests, since neither tracker has a conditional write, so a tracker change that lands between them is written over.
 
 ## Stopping with open todos
 

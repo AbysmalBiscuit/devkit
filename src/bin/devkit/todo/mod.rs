@@ -480,7 +480,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 bail!("devkit todo sync --ticket runs in a checkout of the ticket's repository");
             }
             let node = layout.fill("repo", &facts)?;
-            if tickets::sync_ticket(&store, &cwd, &node, key)? {
+            if let Some(key) = tickets::sync_ticket(&store, &cwd, &node, key)? {
                 writes = true;
                 println!("devkit todo: ticket {key} synced");
             }
