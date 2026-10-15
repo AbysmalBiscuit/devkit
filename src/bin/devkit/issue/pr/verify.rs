@@ -302,8 +302,7 @@ fn matches_committed(
     }
     for (i, step) in recorded.iter().enumerate() {
         let plan = committed(&step.ports).ok()?;
-        if plan.len() != recorded.len() || plan[i].task != step.task || plan[i].argv != step.argv
-        {
+        if plan.len() != recorded.len() || plan[i].task != step.task || plan[i].argv != step.argv {
             return Some(false);
         }
     }
