@@ -49,14 +49,17 @@ impl Gate {
         }
         let repo = devkit_common::vcs::primary_checkout(dir)?;
         let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
-        let passes: Vec<Run> = ledger
-            .runs_in(&repo)?
-            .into_iter()
-            .rev()
+        let runs: Vec<Run> = ledger.runs_in(&repo)?.into_iter().rev().collect();
+        let passes: Vec<Run> = runs
+            .iter()
             .filter(|r| r.proves_with(&required.task, &required.args, head))
+            .cloned()
             .collect();
         let (run, rejected) = if passes.is_empty() {
-            (None, None)
+            let near = runs.iter().find(|r| {
+                r.task == required.task && r.exit_code == Some(0) && r.head.as_deref() == Some(head)
+            });
+            (None, near.and_then(|r| unproven(&required, r)))
         } else {
             qualifying(dir, merge_base, &required, passes)
         };
@@ -217,6 +220,69 @@ fn qualifying(
         rejected.get_or_insert(why);
     }
     (None, rejected)
+}
+
+/// Why `run`, which exited 0 at the PR's head, does not prove `required`,
+/// and what to do about it; `None` when nothing recorded says why.
+fn unproven(required: &RequiredTask, run: &Run) -> Option<String> {
+    let flags = |args| match devkit_config::arg_flags(args) {
+        none if none.is_empty() => "no `--arg`".to_string(),
+        some => format!("`{some}`"),
+    };
+    let mut why = Vec::new();
+    if run.args != required.args {
+        why.push(format!(
+            "it was given {} where the gate requires {}",
+            flags(&run.args),
+            flags(&required.args)
+        ));
+    }
+    if !run.committed_definition {
+        why.push(if run.uncommitted_layers.is_empty() {
+            "what it ran was not what the committed devkit.toml files define: a config layer \
+             outside them (devkit.local.toml, the home config, `--config` or `$DEVKIT_CONFIG`) \
+             changed it, so run it without that layer"
+                .to_string()
+        } else {
+            format!(
+                "a config layer outside the committed devkit.toml files changed what it ran: \
+                 {}; move that layer aside or commit its change",
+                run.uncommitted_layers
+                    .iter()
+                    .map(|l| format!("`{}`", l.display()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        });
+    }
+    if !run.env.is_empty() || run.env_file.is_some() {
+        let mut given = Vec::new();
+        if !run.env.is_empty() {
+            given.push(format!(
+                "`--env` for {}",
+                run.env
+                    .iter()
+                    .map(|v| format!("`{v}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(file) = &run.env_file {
+            given.push(format!("`--env-file {}`", file.display()));
+        }
+        why.push(format!(
+            "it was given {}, which the committed config does not set, so run it without them",
+            given.join(" and ")
+        ));
+    }
+    if why.is_empty() && !run.clean {
+        why.push(
+            "its tree was not clean: a file was modified, staged or untracked when it started \
+             or ended, or HEAD moved during it"
+                .to_string(),
+        );
+    }
+    (!why.is_empty()).then(|| format!("A run at that commit passed, but {}.", why.join("; and ")))
 }
 
 fn short(rev: &str) -> &str {

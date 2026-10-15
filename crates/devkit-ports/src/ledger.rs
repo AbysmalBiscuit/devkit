@@ -69,6 +69,12 @@ pub struct Run {
     /// it. `false` when that could not be determined.
     #[serde(default)]
     pub committed_definition: bool,
+    /// When the task did not run as the committed config defines it, the
+    /// config layers outside the committed `devkit.toml` files that set a
+    /// task, app or template value it ran under: a local, home, `--config`
+    /// or `$DEVKIT_CONFIG` layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uncommitted_layers: Vec<PathBuf>,
     /// The names of the variables `--env` and `--env-file` set. Their values
     /// may be secrets, so they are never stored.
     #[serde(default)]
@@ -270,6 +276,7 @@ pub struct Start {
     head: Option<String>,
     clean: bool,
     committed_definition: bool,
+    uncommitted_layers: Vec<PathBuf>,
     env: Vec<String>,
     env_file: Option<PathBuf>,
     started_at: String,
@@ -317,6 +324,7 @@ impl Start {
             head,
             clean,
             committed_definition: false,
+            uncommitted_layers: Vec::new(),
             env,
             env_file,
             started_at: devkit_common::harness_log::now_rfc3339(),
@@ -346,10 +354,16 @@ impl Start {
         }
     }
 
-    /// Record whether the task runs as the committed config defines it.
-    pub fn committed_definition(self, committed: bool) -> Self {
+    /// Record whether the task runs as the committed config defines it,
+    /// and when it does not, the layers [`Run::uncommitted_layers`] names.
+    pub fn committed_definition(self, committed: bool, uncommitted_layers: Vec<PathBuf>) -> Self {
         Self {
             committed_definition: committed,
+            uncommitted_layers: if committed {
+                Vec::new()
+            } else {
+                uncommitted_layers
+            },
             ..self
         }
     }
@@ -373,6 +387,7 @@ impl Start {
                 && clean_after
                 && head_after == self.head,
             committed_definition: self.committed_definition,
+            uncommitted_layers: self.uncommitted_layers,
             env: self.env,
             env_file: self.env_file,
             steps,
@@ -562,6 +577,7 @@ mod tests {
             head: Some(head.into()),
             clean,
             committed_definition: clean,
+            uncommitted_layers: Vec::new(),
             env: Vec::new(),
             env_file: None,
             steps: Vec::new(),

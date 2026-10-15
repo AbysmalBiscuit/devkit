@@ -1833,11 +1833,21 @@ impl RequiredTask {
     /// quoted for a POSIX shell where it needs it.
     pub fn command(&self) -> String {
         let mut out = format!("devrun task {}", shell_word(&self.task));
-        for (k, v) in &self.args {
-            out.push_str(&format!(" --arg {}", shell_word(&format!("{k}={v}"))));
+        if !self.args.is_empty() {
+            out.push(' ');
+            out.push_str(&arg_flags(&self.args));
         }
         out
     }
+}
+
+/// `args` as the `--arg` flags that pass them, space separated and quoted
+/// as [`RequiredTask::command`] quotes them; empty for no args.
+pub fn arg_flags(args: &std::collections::BTreeMap<String, String>) -> String {
+    args.iter()
+        .map(|(k, v)| format!("--arg {}", shell_word(&format!("{k}={v}"))))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn shell_word(word: &str) -> String {

@@ -817,7 +817,8 @@ fn cmd_task(
         .is_ok_and(|c| &c.digest() == plan),
         _ => false,
     };
-    let start = start.committed_definition(committed).plan(plan);
+    let outside = uncommitted_layers(&loaded, start.worktree(), start.dir());
+    let start = start.committed_definition(committed, outside).plan(plan);
     let tail = ledger::Tail::new();
     let steps = std::cell::RefCell::new(Vec::new());
     let mut launched = std::collections::HashSet::new();
@@ -878,6 +879,37 @@ fn cmd_task(
         Some(0) => Ok(()),
         code => std::process::exit(code.unwrap_or(1)),
     }
+}
+
+/// The layers of `loaded` other than the committed `devkit.toml` files a
+/// run started in `dir` of `worktree` reads, that set a task, app or
+/// template value.
+fn uncommitted_layers(loaded: &load::Loaded, worktree: &Path, dir: Option<&str>) -> Vec<PathBuf> {
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut committed = vec![worktree.join(devkit_config::CONFIG_FILE)];
+    let mut at = worktree.to_path_buf();
+    for part in dir.unwrap_or_default().split('/').filter(|p| !p.is_empty()) {
+        at.push(part);
+        committed.push(at.join(devkit_config::CONFIG_FILE));
+    }
+    let shaping: std::collections::BTreeSet<PathBuf> = loaded
+        .provenance
+        .origin
+        .iter()
+        .filter(|(key, _)| {
+            ["tasks.", "apps.", "templates."]
+                .iter()
+                .any(|table| key.starts_with(table))
+        })
+        .map(|(_, file)| canon(file))
+        .collect();
+    loaded
+        .provenance
+        .layers
+        .iter()
+        .map(|layer| canon(layer))
+        .filter(|layer| !committed.contains(layer) && shaping.contains(layer))
+        .collect()
 }
 
 fn print_plan(plan: &devkit_ports::task::CommandPlan) {

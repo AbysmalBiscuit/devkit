@@ -144,6 +144,12 @@ fn a_pass_at_an_ancestor_of_head_does_not_satisfy_the_gate() {
     assert_refused(&p);
 }
 
+/// The refusal's stderr, once [`assert_refused`] holds.
+fn refusal(p: &ghfake::Fake) -> String {
+    assert_refused(p);
+    create(p, "agent").1
+}
+
 #[test]
 fn a_pass_on_a_dirty_tree_does_not_satisfy_the_gate() {
     let p = project(GATE);
@@ -151,14 +157,58 @@ fn a_pass_on_a_dirty_tree_does_not_satisfy_the_gate() {
     std::fs::write(&scratch, "uncommitted\n").unwrap();
     verify(&p);
     std::fs::remove_file(&scratch).unwrap();
-    assert_refused(&p);
+    let stderr = refusal(&p);
+    assert!(stderr.contains("tree was not clean"), "says why: {stderr}");
 }
 
 #[test]
 fn a_pass_with_other_args_does_not_satisfy_the_gate() {
     let p = project(GATE);
     task(&p, &["verify", "--arg", "scope=some"]);
-    assert_refused(&p);
+    let stderr = refusal(&p);
+    assert!(
+        stderr.contains("`--arg scope=some`") && stderr.contains("`--arg scope=all`"),
+        "shows the args it ran with and the args required: {stderr}"
+    );
+}
+
+#[test]
+fn a_pass_given_env_does_not_satisfy_the_gate_and_says_so() {
+    let p = project(GATE);
+    task(&p, &[
+        "verify",
+        "--arg",
+        "scope=all",
+        "--env",
+        "GIT_TRACE=0",
+    ]);
+    let stderr = refusal(&p);
+    assert!(
+        stderr.contains("--env") && stderr.contains("`GIT_TRACE`"),
+        "names the variables it was given: {stderr}"
+    );
+}
+
+#[test]
+fn a_pass_under_an_uncommitted_config_layer_is_refused_naming_the_layer() {
+    let p = project(GATE);
+    let exclude = p.project().join(".git/info/exclude");
+    let mut ignored = std::fs::read_to_string(&exclude).unwrap_or_default();
+    ignored.push_str("devkit.local.toml\n");
+    std::fs::write(&exclude, ignored).unwrap();
+    let layer = p.project().join("devkit.local.toml");
+    std::fs::write(&layer, "[tasks.verify.env]\nGIT_TRACE = \"0\"\n").unwrap();
+    verify(&p);
+    let stderr = refusal(&p);
+    assert!(
+        stderr.contains("outside the committed devkit.toml files"),
+        "says why: {stderr}"
+    );
+    let layer = std::fs::canonicalize(&layer).unwrap();
+    assert!(
+        stderr.contains(&layer.display().to_string()),
+        "names the layer: {stderr}"
+    );
 }
 
 #[test]
