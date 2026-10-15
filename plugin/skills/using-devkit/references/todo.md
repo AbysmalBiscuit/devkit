@@ -78,7 +78,22 @@ Before writing, devkit reads the ticket and compares its status with the last sy
 - Ask the user whether to write over the tracker. Pass `--overwrite-tracker` only on their word.
 - To take the tracker's value instead, run `devkit todo sync --ticket <key>`.
 
-A person at a terminal is asked instead, and declining takes the tracker's value. A ticket that cannot be read, or a write that fails, fails the command naming the ticket, with the todo unchanged. With several ticket todos in one command, the first that stops ends it, and the message names the todos done and not done. The read and the write are separate requests, since neither tracker has a conditional write, so a tracker change that lands between them is written over.
+A person at a terminal is asked instead, and declining takes the tracker's value, or leaves it to the next sync while the store's own sync has not completed. A ticket that cannot be read, or a write that fails, fails the command naming the ticket, with the todo unchanged. When a GitHub close lands and the project move after it fails, rerun the same command: the issue reads as already closed, so the rerun only finishes the move, and needs no `--overwrite-tracker`. With several ticket todos in one command, the first that stops ends it, and the message names the todos done and not done. The read and the write are separate requests, since neither tracker has a conditional write, so a tracker change that lands between them is written over.
+
+#### Parents and blocking links
+
+With `"parent"` in `push`, `devkit todo move <ticket todo> --parent <ticket todo>` makes the first ticket a sub-issue of the second (a Linear parent), and `--top` takes it out. With `"blocking"`, `devkit todo block` and `unblock` between two ticket todos add or remove the tracker's blocked-by link (a Linear `blocks` relation). Run them from a checkout of the tickets' repository; the link lands on the tracker before the todo changes. With several blockers in one command, the first that stops ends it, and the message names the blockers done and not done. A link the tracker already has, or already lacks, is written nowhere and the todo still changes.
+
+A tracker that changed the link since the last sync stops the command the same way a status does, naming the tracker's value, the last synced one and the local change: a parent that is a third ticket, or on Linear another relation between the pair (a `related`, a `duplicate`, or a `blocks` the other way), which a new relation would silently replace. Ask the user, and pass `--overwrite-tracker` only on their word.
+
+A move to the parent the todo already has, a block it already has, and an unblock of a link it lacks change only the local todo, from anywhere.
+
+These are refused, and change nothing:
+
+- A link between two ticket todos changed from outside their repository, or in a repository whose `push` does not list `parent` or `blocking`: the next sync would revert it. Change it on the tracker, or from a checkout that opts in.
+- With `"parent"` pushing, in a checkout of the ticket todo's repository, a todo under a ticket todo, by `todo add --parent` or `todo move --parent`: it would be a sub-issue. File one with `devkit ticket create`, or turn a todo into a ticket with `devkit todo promote`. A ticket todo under a todo that is not a ticket todo is refused too.
+
+Links between a ticket todo and any other todo stay local, so `devkit todo add --blocked-by <ticket todo>` and blocking a step on a ticket work as before, and so do links between tickets on two trackers or in two repositories. Moving a ticket todo from a ticket parent to a ticket on another tracker or repository changes only the todo: the tracker keeps the old parent, the command says so, and the next sync restores it.
 
 ## Stopping with open todos
 

@@ -73,6 +73,31 @@ impl Synced {
         env: &[(&str, &str)],
         stdin: &str,
     ) -> std::process::Output {
+        self.with_gh(env, |env| self.proj.devkit_in(dir, args, env, stdin))
+    }
+
+    /// `devkit` run in the checkout through `script`, so its stdin is a
+    /// terminal, fed `input`. Its stderr arrives in the output's stdout.
+    #[cfg(target_os = "linux")]
+    pub fn devkit_on_a_terminal(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+        input: &str,
+    ) -> std::process::Output {
+        let line = std::iter::once(env!("CARGO_BIN_EXE_devkit"))
+            .chain(args.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.with_gh(env, |env| {
+            let script = ["-qec", line.as_str(), "/dev/null"];
+            self.proj
+                .spawn(&self.proj.path, "script", &script, env, input)
+        })
+    }
+
+    /// `f` given `env` and the variables that point `gh` at the fake.
+    fn with_gh<R>(&self, env: &[(&str, &str)], f: impl FnOnce(&[(&str, &str)]) -> R) -> R {
         let path = std::env::join_paths(std::iter::once(self.bin.path().to_path_buf()).chain(
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
@@ -86,7 +111,7 @@ impl Synced {
             ("GITHUB_TOKEN", ""),
         ];
         all.extend_from_slice(env);
-        self.proj.devkit_in(dir, args, &all, stdin)
+        f(&all)
     }
 
     pub fn sync(&self, args: &[&str]) -> std::process::Output {
@@ -148,9 +173,17 @@ pub fn issue(number: u64, option: Option<&str>, blocked_by: &[u64]) -> String {
         .map(|n| format!(r#"{{"number":{n},"repository":{{"nameWithOwner":"o/r"}}}}"#))
         .collect();
     format!(
-        r#"{{"number":{number},"title":"Issue {number}","state":"OPEN","stateReason":null,
+        r#"{{"id":"I_{number}","number":{number},"title":"Issue {number}","state":"OPEN","stateReason":null,
             "parent":null,"blockedBy":{{"nodes":[{}]}},"projectItems":{{"nodes":{items}}}}}"#,
         blockers.join(",")
+    )
+}
+
+/// `issue`, an [`issue`], as a sub-issue of issue `parent`.
+pub fn under(issue: String, parent: u64) -> String {
+    issue.replace(
+        r#""parent":null"#,
+        &format!(r#""parent":{{"id":"I_{parent}","number":{parent},"repository":{{"nameWithOwner":"o/r"}}}}"#),
     )
 }
 

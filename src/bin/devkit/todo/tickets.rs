@@ -96,14 +96,19 @@ pub(crate) fn sync_tickets(
 
 /// `devkit todo sync --ticket`'s sync of `key` into `node`: [`sync_one`],
 /// refused while the store's own sync has not completed, and saying on stderr
-/// when the repository has no `[ticket.sync]` rules. Returns whether the
-/// ticket synced.
-pub(crate) fn sync_ticket(store: &Store, cwd: &Path, node: &str, key: &str) -> Result<bool> {
+/// when the repository has no `[ticket.sync]` rules. Returns the key of the
+/// ticket synced, as the tracker spells it.
+pub(crate) fn sync_ticket(
+    store: &Store,
+    cwd: &Path,
+    node: &str,
+    key: &str,
+) -> Result<Option<String>> {
     if !store.replica_pulled() {
         anyhow::bail!("ticket {key} not synced: the store's sync did not complete");
     }
-    let synced = sync_one(store, cwd, node, key)?.is_some();
-    if !synced {
+    let synced = sync_one(store, cwd, node, key)?.and_then(|todo| todo.ticket.map(|t| t.key));
+    if synced.is_none() {
         eprintln!("devkit todo: no [ticket.sync] rules here; ticket {key} not synced");
     }
     Ok(synced)

@@ -12,7 +12,7 @@ mod tickets;
 #[path = "common/todoenv.rs"]
 mod todoenv;
 
-use devkit_todo::{Status, StatusKind};
+use devkit_todo::{NewTodo, Status, StatusKind, TicketRef, TodoStore as _};
 use tickets::*;
 use todoenv::{Proj, stderr, stdout};
 
@@ -143,8 +143,45 @@ fn done_on_an_issue_already_closed_as_completed_closes_nothing() {
     let out = s.devkit(&["todo", "done", &ticket_id(&s)], &AGENT);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(mutation_at(&s, "closeIssue"), None, "{:?}", s.mutations());
+    let moved = mutation_at(&s, "updateProjectV2ItemFieldValue").expect("status moved");
+    assert!(
+        s.mutations()[moved].contains("\"o2\""),
+        "{:?}",
+        s.mutations()
+    );
     assert_eq!(s.todo_for("o/r#65").status.kind(), StatusKind::Completed);
     assert_eq!(synced_status(&s).as_deref(), Some("closed:completed"));
+}
+
+#[test]
+fn a_move_failing_after_the_close_finishes_on_a_plain_rerun() {
+    let s = pushing(DONE_EVENT, true);
+    s.serve(
+        "graphql_mutation_2.json",
+        r#"{"errors":[{"message":"field write refused"}]}"#,
+    );
+    let out = s.devkit(&["todo", "done", &ticket_id(&s)], &AGENT);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("ticket o/r#65 closed")
+            && err.contains("Rerun `devkit todo done")
+            && err.contains("needs no --overwrite-tracker"),
+        "{err}"
+    );
+    assert_eq!(s.todo_for("o/r#65").status, Status::Pending);
+
+    std::fs::remove_file(s.bin.path().join("graphql_mutation_2.json")).unwrap();
+    tracker_shows(&s, closed("COMPLETED"));
+    let out = s.devkit(&["todo", "done", &ticket_id(&s)], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let moves = s
+        .mutations()
+        .iter()
+        .filter(|m| m.contains("updateProjectV2ItemFieldValue"))
+        .count();
+    assert_eq!(moves, 2, "{:?}", s.mutations());
+    assert_eq!(s.todo_for("o/r#65").status.kind(), StatusKind::Completed);
 }
 
 #[test]
@@ -240,6 +277,47 @@ fn a_conflict_without_a_terminal_fails_instead_of_prompting() {
     );
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
     assert_eq!(s.todo_for("o/r#65").status, Status::Pending);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn declining_before_the_replica_pulled_is_a_decline_not_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let replica = dir.path().join("replica");
+    let config = format!(
+        "[todo]\nbackend = \"taskchampion\"\n[todo.taskchampion]\ndata_dir = {}\nserver_dir = {}\n",
+        toml::Value::String(replica.display().to_string()),
+        toml::Value::String(dir.path().join("server").display().to_string())
+    );
+    let s = Synced::in_proj(
+        Proj::with_home_config(&config),
+        &format!("{PUSH}{RULES}{STATUSES}{DONE_EVENT}"),
+        true,
+    );
+    tracker_shows(&s, at("Todo"));
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let listed = |s: &Synced| -> serde_json::Value {
+        let out = s.devkit(&["todo", "list", "--all", "--json"], &[]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&stdout(&out)).unwrap();
+        rows.into_iter()
+            .find(|row| row["description"].as_str().unwrap().contains("Issue 65"))
+            .unwrap_or_else(|| panic!("no todo for 65: {}", stdout(&out)))
+    };
+    let id = listed(&s)["id"].as_str().unwrap().to_string();
+    std::fs::remove_file(replica.join("sync.pulled")).unwrap();
+    tracker_shows(&s, at("Backlog"));
+    let human = [("DEVKIT_CALLER", "human")];
+    let out = s.devkit_on_a_terminal(&["todo", "done", &id], &human, "n\n");
+    let said = stdout(&out);
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("Write over the tracker?") && said.contains("declined"),
+        "{said}"
+    );
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert_eq!(listed(&s)["status"], "pending");
 }
 
 #[test]
@@ -443,6 +521,11 @@ fn sync_one_takes_the_key_in_any_spelling_the_tracker_reads() {
         let s = with_sub_issue();
         let out = s.sync(&["--ticket", key]);
         assert!(out.status.success(), "{key}: {}", stderr(&out));
+        assert!(
+            stdout(&out).contains("ticket o/r#65 synced"),
+            "{key}: {}",
+            stdout(&out)
+        );
         assert_eq!(
             s.todo_for("o/r#65").status.kind(),
             StatusKind::InProgress,
@@ -458,4 +541,596 @@ fn sync_one_without_rules_does_nothing() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!s.calls().contains("api graphql"), "{}", s.calls());
     assert!(s.proj.todos().is_empty());
+}
+
+/// Issues 65, 66 and 67, with 67 a sub-issue of `parent` when one is given
+/// and 65 blocked by 66 when `blocked`, synced into a repository pushing
+/// `push`, whose writes `gh` accepts.
+fn linked(push: &str, parent: Option<u64>, blocked: bool) -> Synced {
+    let s = Synced::new(
+        &format!("\n[ticket.sync]\npush = [{push}]\n{RULES}{STATUSES}"),
+        true,
+    );
+    s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+    links_show(&s, parent, blocked);
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    s
+}
+
+/// The tracker answering with 67 under `parent` and 65 blocked by 66 when
+/// `blocked`.
+fn links_show(s: &Synced, parent: Option<u64>, blocked: bool) {
+    let i67 = issue(67, Some("Todo"), &[]);
+    let i67 = match parent {
+        Some(p) => under(i67, p),
+        None => i67,
+    };
+    let blockers: &[u64] = if blocked { &[66] } else { &[] };
+    s.serve(
+        "graphql.json",
+        &graphql(
+            &[
+                issue(65, Some("Todo"), blockers),
+                issue(66, Some("Todo"), &[]),
+                i67,
+            ],
+            &OPTIONS,
+        ),
+    );
+}
+
+fn id_of(s: &Synced, n: u64) -> String {
+    s.todo_for(&format!("o/r#{n}")).id
+}
+
+fn parent_of(s: &Synced, n: u64) -> Option<String> {
+    s.todo_for(&format!("o/r#{n}")).parent
+}
+
+#[test]
+fn move_under_a_ticket_makes_a_sub_issue() {
+    let s = linked("\"parent\"", None, false);
+    let out = s.devkit(
+        &["todo", "move", &id_of(&s, 67), "--parent", &id_of(&s, 65)],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(s.mutations().len(), 1, "{:?}", s.mutations());
+    assert!(
+        s.mutations()[0].contains(
+            "addSubIssue(input: {issueId: \"I_65\", subIssueId: \"I_67\", replaceParent: false})"
+        ),
+        "{:?}",
+        s.mutations()
+    );
+    assert_eq!(parent_of(&s, 67), Some(id_of(&s, 65)));
+}
+
+#[test]
+fn move_top_removes_the_tracker_parent() {
+    let s = linked("\"parent\"", Some(65), false);
+    assert_eq!(parent_of(&s, 67), Some(id_of(&s, 65)));
+    let out = s.devkit(&["todo", "move", &id_of(&s, 67), "--top"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(s.mutations().len(), 1, "{:?}", s.mutations());
+    assert!(
+        s.mutations()[0]
+            .contains("removeSubIssue(input: {issueId: \"I_65\", subIssueId: \"I_67\"})"),
+        "{:?}",
+        s.mutations()
+    );
+    assert_eq!(parent_of(&s, 67), None);
+}
+
+#[test]
+fn a_third_parent_on_the_tracker_conflicts() {
+    let s = linked("\"parent\"", None, false);
+    links_show(&s, Some(66), false);
+    let out = s.devkit(
+        &["todo", "move", &id_of(&s, 67), "--parent", &id_of(&s, 65)],
+        &AGENT,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("o/r#67")
+            && err.contains("tracker \"o/r#66\"")
+            && err.contains("last synced \"(none)\"")
+            && err.contains("local \"o/r#65\"")
+            && err.contains("--overwrite-tracker"),
+        "{err}"
+    );
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert_eq!(parent_of(&s, 67), None);
+}
+
+#[test]
+fn overwrite_sends_replace_parent_true() {
+    let s = linked("\"parent\"", None, false);
+    links_show(&s, Some(66), false);
+    let out = s.devkit(
+        &[
+            "todo",
+            "move",
+            &id_of(&s, 67),
+            "--parent",
+            &id_of(&s, 65),
+            "--overwrite-tracker",
+        ],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(s.mutations().len(), 1, "{:?}", s.mutations());
+    assert!(
+        s.mutations()[0].contains(
+            "addSubIssue(input: {issueId: \"I_65\", subIssueId: \"I_67\", replaceParent: true})"
+        ),
+        "{:?}",
+        s.mutations()
+    );
+    assert_eq!(parent_of(&s, 67), Some(id_of(&s, 65)));
+}
+
+#[test]
+fn block_between_tickets_adds_blocked_by() {
+    let s = linked("\"blocking\"", None, false);
+    let out = s.devkit(
+        &["todo", "block", &id_of(&s, 65), "--by", &id_of(&s, 66)],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(s.mutations().len(), 1, "{:?}", s.mutations());
+    assert!(
+        s.mutations()[0]
+            .contains("addBlockedBy(input: {issueId: \"I_65\", blockingIssueId: \"I_66\"})"),
+        "{:?}",
+        s.mutations()
+    );
+    assert_eq!(s.todo_for("o/r#65").blocked_by, [id_of(&s, 66)]);
+
+    let out = s.devkit(
+        &["todo", "unblock", &id_of(&s, 65), "--by", &id_of(&s, 66)],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        s.mutations().len(),
+        1,
+        "the tracker never showed the link: {:?}",
+        s.mutations()
+    );
+    assert!(s.todo_for("o/r#65").blocked_by.is_empty());
+}
+
+#[test]
+fn unblock_of_a_link_the_tracker_lacks_is_already_there() {
+    let s = linked("\"blocking\"", None, true);
+    assert_eq!(s.todo_for("o/r#65").blocked_by, [id_of(&s, 66)]);
+    links_show(&s, None, false);
+    let out = s.devkit(
+        &["todo", "unblock", &id_of(&s, 65), "--by", &id_of(&s, 66)],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert!(s.todo_for("o/r#65").blocked_by.is_empty());
+
+    let s = linked("\"parent\"", Some(65), false);
+    links_show(&s, None, false);
+    let out = s.devkit(&["todo", "move", &id_of(&s, 67), "--top"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert_eq!(parent_of(&s, 67), None);
+}
+
+#[test]
+fn a_relation_edit_outside_the_repository_is_refused() {
+    let s = linked("\"parent\", \"blocking\"", None, false);
+    let other = s.proj.outside().join("other");
+    std::fs::create_dir(&other).unwrap();
+    devkit_git::Git::fixture(&other)
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    std::fs::copy(s.proj.path.join("devkit.toml"), other.join("devkit.toml")).unwrap();
+    let block = ["todo", "block", &id_of(&s, 65), "--by", &id_of(&s, 66)].map(String::from);
+    let parent = ["todo", "move", &id_of(&s, 67), "--parent", &id_of(&s, 65)].map(String::from);
+    for args in [block, parent] {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = s.devkit_in(&other, &args, &AGENT, "");
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("from a checkout of it"),
+            "{args:?}: {}",
+            stderr(&out)
+        );
+    }
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert!(s.todo_for("o/r#65").blocked_by.is_empty());
+    assert_eq!(parent_of(&s, 67), None);
+}
+
+#[test]
+fn a_relation_edit_without_the_opt_in_is_refused() {
+    let s = linked("\"status\"", None, false);
+    let block = ["todo", "block", &id_of(&s, 65), "--by", &id_of(&s, 66)].map(String::from);
+    let parent = ["todo", "move", &id_of(&s, 67), "--parent", &id_of(&s, 65)].map(String::from);
+    for (args, kind) in [(block, "\"blocking\""), (parent, "\"parent\"")] {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = s.devkit(&args, &AGENT);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", stderr(&out));
+        let err = stderr(&out);
+        assert!(
+            err.contains(&format!("{kind} in [ticket.sync] push")) && err.contains("next sync"),
+            "{args:?}: {err}"
+        );
+    }
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert!(s.todo_for("o/r#65").blocked_by.is_empty());
+    assert_eq!(parent_of(&s, 67), None);
+}
+
+#[test]
+fn add_under_a_ticket_is_refused_naming_promote() {
+    let s = linked("\"parent\"", None, false);
+    let before = s.proj.todos().len();
+    let out = s.devkit(
+        &["todo", "add", "a step", "--parent", &id_of(&s, 65)],
+        &AGENT,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("ticket create") && err.contains("todo promote"),
+        "{err}"
+    );
+    assert_eq!(s.proj.todos().len(), before);
+}
+
+#[test]
+fn move_a_step_under_a_ticket_is_refused() {
+    let s = linked("\"parent\"", None, false);
+    let out = s.devkit(&["todo", "add", "a step"], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let step = stdout(&out).trim().to_string();
+    let out = s.devkit(&["todo", "move", &step, "--parent", &id_of(&s, 65)], &AGENT);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("ticket create") && err.contains("todo promote"),
+        "{err}"
+    );
+    let step = s.proj.todos().into_iter().find(|t| t.id.starts_with(&step));
+    assert_eq!(step.unwrap().parent, None);
+
+    let out = s.devkit(&["todo", "add", "another step"], &AGENT);
+    let other = stdout(&out).trim().to_string();
+    let out = s.devkit(
+        &["todo", "move", &id_of(&s, 67), "--parent", &other],
+        &AGENT,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("devkit ticket create") && err.contains("devkit todo promote"),
+        "{err}"
+    );
+    assert_eq!(parent_of(&s, 67), None);
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn a_step_blocked_by_a_ticket_stays_local() {
+    let s = linked("\"parent\", \"blocking\"", None, false);
+    let out = s.devkit(
+        &["todo", "add", "a step", "--blocked-by", &id_of(&s, 65)],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let step = stdout(&out).trim().to_string();
+    let out = s.devkit(&["todo", "block", &step, "--by", &id_of(&s, 66)], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = s.devkit(&["todo", "block", &id_of(&s, 67), "--by", &step], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let step = s
+        .proj
+        .todos()
+        .into_iter()
+        .find(|t| t.id.starts_with(&step))
+        .unwrap();
+    let mut blockers = step.blocked_by.clone();
+    blockers.sort();
+    let mut want = vec![id_of(&s, 65), id_of(&s, 66)];
+    want.sort();
+    assert_eq!(blockers, want);
+    assert_eq!(s.todo_for("o/r#67").blocked_by, [step.id]);
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn linear_block_with_a_related_pair_conflicts() {
+    let linear = linearfake::LinearFake::start();
+    let proj = Proj::new();
+    std::fs::write(
+        proj.path.join("devkit.toml"),
+        format!(
+            "[tracker]\nkind = \"linear\"\n\n[ticket.sync]\npush = [\"blocking\"]\n{RULES}\n\
+             [ticket.sync.statuses]\n\"Todo\" = \"pending\"\n"
+        ),
+    )
+    .unwrap();
+    let node = |id: &str| {
+        serde_json::json!({
+            "identifier": id, "title": format!("Fix {id}"), "state": { "name": "Todo" },
+            "parent": null, "inverseRelations": { "nodes": [] }
+        })
+    };
+    let page = serde_json::json!({ "data": { "issues": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [node("ENG-1"), node("ENG-2")]
+    }}});
+    linear.answer("issues(first: 10", &page.to_string());
+    linear.answer(
+        "teams(first: 10",
+        r#"{"data":{"teams":{"pageInfo":{"hasNextPage":false},"nodes":[
+            {"key":"ENG","states":{"nodes":[{"name":"Todo"}]}}]}}}"#,
+    );
+    linear.answer(
+        "relations(first",
+        r#"{"data":{
+            "b":{"id":"uuid-2","identifier":"ENG-2",
+                 "relations":{"nodes":[{"id":"rel-1","type":"related","relatedIssue":{"identifier":"ENG-1"}}]},
+                 "inverseRelations":{"nodes":[]}},
+            "r":{"id":"uuid-1","identifier":"ENG-1"}}}"#,
+    );
+    linear.answer(
+        "issueRelationCreate",
+        r#"{"data":{"issueRelationCreate":{"success":true}}}"#,
+    );
+    let mut env = linear.env().to_vec();
+    env.push(("DEVKIT_CALLER", "agent"));
+    let out = proj.devkit(&["todo", "sync"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let id = |key: &str| {
+        proj.todos()
+            .into_iter()
+            .find(|t| t.ticket.as_ref().is_some_and(|r| r.key == key))
+            .unwrap_or_else(|| panic!("{key} synced"))
+            .id
+    };
+    let (eng1, eng2) = (id("ENG-1"), id("ENG-2"));
+
+    let out = proj.devkit(&["todo", "block", &eng2, "--by", &eng1], &env);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("ENG-2")
+            && err.contains("tracker \"related\"")
+            && err.contains("--overwrite-tracker"),
+        "{err}"
+    );
+    assert!(linear.sent("issueRelationCreate").is_empty());
+    assert!(proj.todo(&eng2).blocked_by.is_empty());
+
+    let out = proj.devkit(
+        &["todo", "block", &eng2, "--by", &eng1, "--overwrite-tracker"],
+        &env,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let created = linear.sent("issueRelationCreate");
+    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(
+        created[0]["variables"]["input"],
+        serde_json::json!({ "issueId": "uuid-1", "relatedIssueId": "uuid-2", "type": "blocks" })
+    );
+    assert_eq!(proj.todo(&eng2).blocked_by, [eng1]);
+}
+
+/// A checkout of another repository, sharing the todo store and its
+/// `devkit.toml`.
+fn other_checkout(s: &Synced) -> std::path::PathBuf {
+    let other = s.proj.outside().join("other");
+    std::fs::create_dir(&other).unwrap();
+    devkit_git::Git::fixture(&other)
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    std::fs::copy(s.proj.path.join("devkit.toml"), other.join("devkit.toml")).unwrap();
+    other
+}
+
+#[test]
+fn a_link_edit_the_store_already_holds_is_not_refused() {
+    let s = linked("\"status\"", Some(65), true);
+    let other = other_checkout(&s);
+    let (i65, i66, i67) = (id_of(&s, 65), id_of(&s, 66), id_of(&s, 67));
+    let edits = [
+        vec!["todo", "move", &i67, "--parent", &i65, "--order", "2"],
+        vec!["todo", "block", &i65, "--by", &i66],
+        vec!["todo", "unblock", &i66, "--by", &i65],
+    ];
+    let calls = s.calls();
+    for args in &edits {
+        let out = s.devkit(args, &AGENT);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        let out = s.devkit_in(&other, args, &AGENT, "");
+        assert!(out.status.success(), "{args:?} outside: {}", stderr(&out));
+    }
+    assert_eq!(s.calls(), calls, "the tracker was not asked");
+    assert_eq!(parent_of(&s, 67), Some(i65.clone()));
+    assert_eq!(s.todo_for("o/r#67").order, Some(2));
+    assert_eq!(s.todo_for("o/r#65").blocked_by, [i66]);
+    assert!(s.todo_for("o/r#66").blocked_by.is_empty());
+}
+
+#[test]
+fn a_step_already_under_a_ticket_reorders_without_a_refusal() {
+    let s = linked("\"status\"", None, false);
+    let out = s.devkit(
+        &["todo", "add", "a step", "--parent", &id_of(&s, 65)],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let step = stdout(&out).trim().to_string();
+    let toml = s.proj.path.join("devkit.toml");
+    let config = std::fs::read_to_string(&toml).unwrap();
+    std::fs::write(
+        &toml,
+        config.replace("push = [\"status\"]", "push = [\"parent\"]"),
+    )
+    .unwrap();
+    let out = s.devkit(
+        &[
+            "todo",
+            "move",
+            &step,
+            "--parent",
+            &id_of(&s, 65),
+            "--order",
+            "2",
+        ],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let step = s
+        .proj
+        .todos()
+        .into_iter()
+        .find(|t| t.id.starts_with(&step))
+        .unwrap();
+    assert_eq!((step.parent, step.order), (Some(id_of(&s, 65)), Some(2)));
+}
+
+#[test]
+fn a_step_under_a_ticket_of_another_repository_stays_local() {
+    let s = linked("\"parent\"", None, false);
+    let other = other_checkout(&s);
+    let out = s.devkit_in(
+        &other,
+        &["todo", "add", "a step", "--parent", &id_of(&s, 65)],
+        &AGENT,
+        "",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let step = stdout(&out).trim().to_string();
+    let out = s.devkit_in(&other, &["todo", "add", "another step"], &AGENT, "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let moved = stdout(&out).trim().to_string();
+    let out = s.devkit_in(
+        &other,
+        &["todo", "move", &moved, "--parent", &id_of(&s, 66)],
+        &AGENT,
+        "",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let parent = |short: &str| {
+        s.proj
+            .todos()
+            .into_iter()
+            .find(|t| t.id.starts_with(short))
+            .unwrap()
+            .parent
+    };
+    assert_eq!(parent(&step), Some(id_of(&s, 65)));
+    assert_eq!(parent(&moved), Some(id_of(&s, 66)));
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn an_unreadable_issue_is_reported_as_a_read() {
+    let s = linked("\"parent\"", None, false);
+    s.serve(
+        "graphql.json",
+        r#"{"data":{"repository":{"i67":null,"i65":{"id":"I_65"}}},
+            "errors":[{"type":"NOT_FOUND","message":"Could not resolve to an Issue with the number of 67."}]}"#,
+    );
+    let out = s.devkit(
+        &["todo", "move", &id_of(&s, 67), "--parent", &id_of(&s, 65)],
+        &AGENT,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("o/r#67 was not found") && !err.contains("refused the write"),
+        "{err}"
+    );
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+    assert_eq!(parent_of(&s, 67), None);
+}
+
+#[test]
+fn a_block_stopping_partway_names_the_blockers_applied() {
+    let s = linked("\"blocking\"", None, false);
+    let out = s.devkit(&["todo", "add", "a step"], &AGENT);
+    let step = stdout(&out).trim().to_string();
+    s.serve(
+        "graphql.json",
+        &graphql(
+            &[issue(65, Some("Todo"), &[]), issue(66, Some("Todo"), &[])],
+            &OPTIONS,
+        ),
+    );
+    let by = format!("{step},{},{}", id_of(&s, 66), id_of(&s, 67));
+    let out = s.devkit(&["todo", "block", &id_of(&s, 65), "--by", &by], &AGENT);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    let (i66, i67) = (id_of(&s, 66), id_of(&s, 67));
+    assert!(
+        err.contains(&format!("done: {step} {i66}; not done: {i67}"))
+            && err.contains("o/r#67 was not found"),
+        "{err}"
+    );
+    let mut blockers = s.todo_for("o/r#65").blocked_by;
+    blockers.sort();
+    let mut want = vec![
+        s.proj
+            .todos()
+            .into_iter()
+            .find(|t| t.id.starts_with(&step))
+            .unwrap()
+            .id,
+        i66,
+    ];
+    want.sort();
+    assert_eq!(blockers, want);
+}
+
+#[test]
+fn a_link_with_a_ticket_of_another_repository_stays_local() {
+    let s = linked("\"parent\", \"blocking\"", Some(65), false);
+    let foreign = s
+        .proj
+        .store()
+        .add(NewTodo {
+            project: s.todo_for("o/r#65").project,
+            description: "o/x#5".into(),
+            parent: None,
+            order: None,
+            ticket: Some(TicketRef {
+                tracker: "github".into(),
+                key: "o/x#5".into(),
+                synced_status: None,
+            }),
+        })
+        .unwrap();
+    let out = s.devkit(&["todo", "block", &id_of(&s, 65), "--by", &foreign], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        s.todo_for("o/r#65").blocked_by,
+        std::slice::from_ref(&foreign)
+    );
+
+    let out = s.devkit(
+        &["todo", "move", &id_of(&s, 67), "--parent", &foreign],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("o/r#67") && err.contains("o/r#65") && err.contains("next sync"),
+        "{err}"
+    );
+    assert_eq!(parent_of(&s, 67), Some(foreign));
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
 }

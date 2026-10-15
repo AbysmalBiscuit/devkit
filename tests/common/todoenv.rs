@@ -90,7 +90,8 @@ impl Proj {
         self.spawn(dir, env!("CARGO_BIN_EXE_devkit"), args, env, stdin)
     }
 
-    fn spawn(
+    /// `program` run in `dir` as [`Proj::devkit_in`] runs `devkit`.
+    pub fn spawn(
         &self,
         dir: &Path,
         program: &str,

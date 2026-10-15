@@ -18,7 +18,7 @@ use devkit_common::{
     caller::{self, Caller},
     vcs::Checkout,
 };
-use devkit_config::HoldStop;
+use devkit_config::{HoldStop, PushKind};
 use devkit_todo::{
     Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
     activity::{ActivityStore as _, SessionState},
@@ -60,7 +60,9 @@ pub enum TodoCommand {
     Add {
         /// What the todo says. Newlines and tabs collapse to single spaces.
         text: String,
-        /// Nest the todo under this one.
+        /// Nest the todo under this one. With "parent" in [ticket.sync] push,
+        /// not under a ticket todo: file a sub-issue with `devkit ticket
+        /// create` instead.
         #[arg(long)]
         parent: Option<String>,
         /// Position among its siblings, lowest first. Defaults to after the
@@ -79,18 +81,24 @@ pub enum TodoCommand {
         blocked_by: Vec<String>,
     },
     /// Record that a todo waits on others.
+    #[command(after_help = LINK_PUSH_HELP)]
     Block {
         id: String,
         /// The todos it waits on, comma-separated.
         #[arg(long, value_delimiter = ',', required = true)]
         by: Vec<String>,
+        #[arg(long, help = LINK_OVERWRITE_HELP)]
+        overwrite_tracker: bool,
     },
     /// Remove blockers from a todo.
+    #[command(after_help = LINK_PUSH_HELP)]
     Unblock {
         id: String,
         /// The blockers to remove, comma-separated.
         #[arg(long, value_delimiter = ',', required = true)]
         by: Vec<String>,
+        #[arg(long, help = LINK_OVERWRITE_HELP)]
+        overwrite_tracker: bool,
     },
     /// Mark todos in progress, claiming them for this caller.
     #[command(after_help = PUSH_HELP)]
@@ -123,6 +131,7 @@ pub enum TodoCommand {
     /// Replace a todo's text.
     Describe { id: String, text: String },
     /// Nest a todo under another, or change its position.
+    #[command(after_help = LINK_PUSH_HELP)]
     Move {
         id: String,
         /// The new parent. Without it and without `--top` the todo keeps its
@@ -135,6 +144,8 @@ pub enum TodoCommand {
         /// Position among its siblings. Defaults to after the last one.
         #[arg(long)]
         order: Option<i64>,
+        #[arg(long, help = LINK_OVERWRITE_HELP)]
+        overwrite_tracker: bool,
     },
     /// Remove a todo for good. Needs a person at a terminal.
     ///
@@ -226,6 +237,18 @@ const PUSH_HELP: &str = "With \"status\" in [ticket.sync] push, a ticket todo's 
      configure; on GitHub, done and cancel also close the issue. A ticket whose status changed \
      on the tracker since the last sync stops the command, naming both values, and changes \
      nothing. Other todos in the same command change as usual.";
+
+const LINK_OVERWRITE_HELP: &str = "Write a link between ticket todos over a link the tracker \
+     changed since the last sync. Only on the user's word.";
+
+const LINK_PUSH_HELP: &str = "A parent or blocking link between two ticket todos of one tracker \
+     reaches the tickets before the command returns, with \"parent\" or \"blocking\" in \
+     [ticket.sync] push, run from a checkout of their repository: a sub-issue or blocked-by link \
+     on GitHub, a parent or blocks relation on Linear. Without the opt-in, or from elsewhere, \
+     the change is refused, since the next sync would revert it. A tracker link changed since \
+     the last sync stops the command, naming both, and changes nothing. With \"parent\" \
+     pushing, a todo that is not a ticket todo cannot go under a ticket todo, nor a ticket todo \
+     under it. Links with other todos stay local.";
 
 #[derive(Subcommand)]
 pub enum SchemaAction {
@@ -358,6 +381,12 @@ pub fn run(cli: TodoCli) -> Result<()> {
         actor: &actor,
         cwd: &cwd,
     };
+    let link_push = |overwrite| push::LinkPush {
+        overwrite,
+        caller,
+        actor: &actor,
+        cwd: &cwd,
+    };
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
@@ -389,6 +418,14 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     node
                 }
             };
+            if let Some(parent) = parent
+                .as_deref()
+                .map(|p| store.get(p))
+                .transpose()?
+                .flatten()
+            {
+                refuse_under_a_ticket(&store, &parent, &link_push(false))?;
+            }
             let blockers = resolve_ids(&store, &blocked_by)?;
             refuse_cycle(&store, None, &blockers)?;
             let id = store.add(NewTodo {
@@ -413,12 +450,16 @@ pub fn run(cli: TodoCli) -> Result<()> {
             }
             println!("{}", devkit_todo::short_id(&id));
         }
-        TodoCommand::Block { id, by } => block(&store, &id, &by)?,
-        TodoCommand::Unblock { id, by } => {
-            let id = resolve_id(&store, &id)?.id;
-            let by = resolve_ids(&store, &by)?;
-            store.apply(&Edit::Unblock { id, by })?;
-        }
+        TodoCommand::Block {
+            id,
+            by,
+            overwrite_tracker,
+        } => link(&store, &id, &by, true, &link_push(overwrite_tracker))?,
+        TodoCommand::Unblock {
+            id,
+            by,
+            overwrite_tracker,
+        } => link(&store, &id, &by, false, &link_push(overwrite_tracker))?,
         TodoCommand::Start {
             ids,
             force,
@@ -468,7 +509,15 @@ pub fn run(cli: TodoCli) -> Result<()> {
             parent,
             top,
             order,
-        } => move_todo(&store, id, parent, top, order)?,
+            overwrite_tracker,
+        } => move_todo(
+            &store,
+            &id,
+            parent,
+            top,
+            order,
+            &link_push(overwrite_tracker),
+        )?,
         TodoCommand::Sync {
             ticket: Some(key), ..
         } => {
@@ -480,7 +529,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 bail!("devkit todo sync --ticket runs in a checkout of the ticket's repository");
             }
             let node = layout.fill("repo", &facts)?;
-            if tickets::sync_ticket(&store, &cwd, &node, key)? {
+            if let Some(key) = tickets::sync_ticket(&store, &cwd, &node, key)? {
                 writes = true;
                 println!("devkit todo: ticket {key} synced");
             }
@@ -905,13 +954,78 @@ fn resolve_ids(store: &impl TodoStore, ids: &[String]) -> Result<Vec<String>> {
         .collect()
 }
 
-/// Records `by` as blockers of `id`, refusing an edge that would close a cycle.
-fn block(store: &impl TodoStore, id: &str, by: &[String]) -> Result<()> {
-    let id = resolve_id(store, id)?.id;
-    let by = resolve_ids(store, by)?;
-    refuse_cycle(store, Some(&id), &by)?;
-    store.apply(&Edit::Block { id, by })?;
+/// Records `by` as blockers of `id`, or with `add` false removes them,
+/// refusing an edge that would close a cycle. The edges between two ticket
+/// todos that `push` takes to the tracker are written there one by one,
+/// after the others have changed, and the first that fails stops the rest,
+/// naming the blockers done and not done. An edge the todo already has, or
+/// already lacks, stays local.
+fn link(store: &Store, id: &str, by: &[String], add: bool, push: &push::LinkPush) -> Result<()> {
+    let todo = resolve_id(store, id)?;
+    let blockers = by
+        .iter()
+        .map(|b| resolve_id(store, b))
+        .collect::<Result<Vec<_>>>()?;
+    if add {
+        let ids: Vec<String> = blockers.iter().map(|b| b.id.clone()).collect();
+        refuse_cycle(store, Some(&todo.id), &ids)?;
+    }
+    let mut pushed = Vec::new();
+    let mut local = Vec::new();
+    for blocker in blockers {
+        if todo.blocked_by.contains(&blocker.id) == add {
+            local.push(blocker.id);
+            continue;
+        }
+        match push.reaches(store, PushKind::Blocking, &todo, &blocker)? {
+            true => pushed.push(blocker),
+            false => local.push(blocker.id),
+        }
+    }
+    let mut done: Vec<&str> = local.iter().map(|b| devkit_todo::short_id(b)).collect();
+    if !local.is_empty() {
+        let (id, by) = (todo.id.clone(), local.clone());
+        store.apply(&match add {
+            true => Edit::Block { id, by },
+            false => Edit::Unblock { id, by },
+        })?;
+    }
+    for (at, blocker) in pushed.iter().enumerate() {
+        match push::push_block(store, &todo, blocker, add, push) {
+            Ok(true) => done.push(devkit_todo::short_id(&blocker.id)),
+            Ok(false) => {}
+            Err(err) if by.len() == 1 => return Err(err),
+            Err(err) => {
+                let not_done: Vec<&str> = pushed[at..]
+                    .iter()
+                    .map(|b| devkit_todo::short_id(&b.id))
+                    .collect();
+                let done = match done.is_empty() {
+                    true => "(none)".to_string(),
+                    false => done.join(" "),
+                };
+                return Err(err.context(format!("done: {done}; not done: {}", not_done.join(" "))));
+            }
+        }
+    }
     Ok(())
+}
+
+/// Refuses a new child under a ticket todo while its repository pushes
+/// parents, changed from a checkout of that repository: that child is a
+/// sub-issue, made with `ticket create` or `todo promote`. From elsewhere the
+/// child stays local.
+fn refuse_under_a_ticket(store: &Store, parent: &Todo, push: &push::LinkPush) -> Result<()> {
+    match &parent.ticket {
+        Some(ticket) if push.pushes(store, PushKind::Parent, parent) => bail!(
+            "todo {} is ticket {}, and with \"parent\" in [ticket.sync] push a todo under it is \
+             a sub-issue: file one with `devkit ticket create`, or turn an existing todo into a \
+             ticket with `devkit todo promote`",
+            devkit_todo::short_id(&parent.id),
+            ticket.key
+        ),
+        _ => Ok(()),
+    }
 }
 
 /// Refuses when adding `by` to `id` would close a cycle. `id` absent is a
@@ -1030,20 +1144,91 @@ fn apply_checked(
     Ok(marked)
 }
 
+/// Moves `id` under `parent`, to the top level with `top`, or only to
+/// `order`. A ticket todo's move between ticket parents reaches the tracker
+/// as `push` allows; with parents pushing from the ticket todo's
+/// repository, a ticket todo and a todo that is not one never nest under
+/// each other. A move to the parent `id` already has stays local.
 fn move_todo(
-    store: &impl TodoStore,
-    id: String,
+    store: &Store,
+    id: &str,
     parent: Option<String>,
     top: bool,
     order: Option<i64>,
+    push: &push::LinkPush,
 ) -> Result<()> {
     if parent.is_none() && !top {
         let Some(order) = order else {
             bail!("name a new --parent, --top or an --order");
         };
+        let id = id.to_string();
         return store.apply(&Edit::Reorder { id, order }).map(drop);
     }
-    store.apply(&Edit::Move { id, parent, order }).map(drop)
+    let todo = resolve_id(store, id)?;
+    let parent = parent.map(|p| resolve_id(store, &p)).transpose()?;
+    let edit = Edit::Move {
+        id: todo.id.clone(),
+        parent: parent.as_ref().map(|p| p.id.clone()),
+        order,
+    };
+    if parent.as_ref().map(|p| &p.id) == todo.parent.as_ref() {
+        return store.apply(&edit).map(drop);
+    }
+    let Some(ticket) = &todo.ticket else {
+        if let Some(parent) = &parent {
+            refuse_under_a_ticket(store, parent, push)?;
+        }
+        return store.apply(&edit).map(drop);
+    };
+    if let Some(step) = parent.as_ref().filter(|p| p.ticket.is_none())
+        && push.pushes(store, PushKind::Parent, &todo)
+    {
+        bail!(
+            "todo {} is ticket {}, and with \"parent\" in [ticket.sync] push its parent is a \
+             ticket too; todo {step} is not one, so it cannot hold it: turn todo {step} into a \
+             ticket with `devkit todo promote`, or file a new sub-issue with `devkit ticket \
+             create`",
+            devkit_todo::short_id(&todo.id),
+            ticket.key,
+            step = devkit_todo::short_id(&step.id)
+        );
+    }
+    let before = todo
+        .parent
+        .as_deref()
+        .map(|p| store.get(p))
+        .transpose()?
+        .flatten()
+        .filter(|p| p.ticket.as_ref().is_some_and(|t| t.same_tracker(ticket)));
+    if let Some(old) = before.as_ref().and_then(|p| p.ticket.as_ref())
+        && let Some(new) = parent.as_ref().and_then(|p| p.ticket.as_ref())
+        && !new.same_tracker(ticket)
+    {
+        store.apply(&edit)?;
+        eprintln!(
+            "devkit todo: {new} is on another tracker, so {key}'s parent there stays {old}, and \
+             the next sync restores it",
+            new = new.key,
+            key = ticket.key,
+            old = old.key
+        );
+        return Ok(());
+    }
+    let linked = parent
+        .as_ref()
+        .filter(|p| p.ticket.is_some())
+        .or(before.as_ref());
+    match linked {
+        Some(other) if push.reaches(store, PushKind::Parent, &todo, other)? => {
+            let baseline = before
+                .as_ref()
+                .and_then(|p| p.ticket.as_ref())
+                .map(|t| t.key.as_str());
+            let parent = parent.as_ref().filter(|p| p.ticket.is_some());
+            push::push_parent(store, &todo, parent, baseline, &edit, push).map(drop)
+        }
+        _ => store.apply(&edit).map(drop),
+    }
 }
 
 fn list(

@@ -1311,11 +1311,18 @@ pub struct TicketSyncConfig {
     /// completed and `cancel` as not planned. A ticket whose status changed
     /// on the tracker since the last sync stops the command instead, unless
     /// the event's `from` names that status (`"*"` does not count) or
-    /// `--overwrite-tracker` is passed. `"parent"` and `"blocking"` name
-    /// sub-issue and blocking links between tickets; they parse but take no
-    /// action yet. Empty, the default:
-    /// todo changes fire the events in the background and never wait on the
-    /// tracker.
+    /// `--overwrite-tracker` is passed. `"parent"`: `devkit todo move` of a
+    /// ticket todo under another ticket todo, or with `--top` from under
+    /// one, makes or removes the sub-issue link (a Linear `parentId`), and
+    /// a todo that is not a ticket todo can no longer go under a ticket todo,
+    /// nor a ticket todo under it. `"blocking"`: `devkit todo block` and
+    /// `unblock` between two ticket todos add or remove the blocked-by link
+    /// (a Linear `blocks` relation). Either stops on a tracker link that
+    /// changed since the last sync, a third parent or another Linear relation
+    /// on the pair, unless `--overwrite-tracker` is passed. Without them, a
+    /// link change between two ticket todos is refused, since the next sync
+    /// would revert it. Empty, the default: todo changes fire the events in
+    /// the background and never wait on the tracker.
     pub push: Vec<PushKind>,
 }
 
