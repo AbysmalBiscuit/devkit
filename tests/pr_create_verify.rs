@@ -401,10 +401,8 @@ fn a_merge_base_whose_pr_table_does_not_parse_opens_a_humans_pr_ungated() {
     assert_eq!(body(&p), "Adds a thing.");
 }
 
-#[test]
-fn a_base_that_resolves_nowhere_opens_a_humans_pr_ungated_with_a_warning() {
-    let p = project(GATE);
-    let out = p.issue_as("human", &[
+fn create_against_nowhere(p: &ghfake::Fake) -> std::process::Output {
+    p.issue_as("human", &[
         "pr",
         "create",
         "--no-push",
@@ -414,7 +412,23 @@ fn a_base_that_resolves_nowhere_opens_a_humans_pr_ungated_with_a_warning() {
         "feat: a thing",
         "--pr-body",
         "Adds a thing.",
-    ]);
+    ])
+}
+
+#[test]
+fn a_base_that_resolves_nowhere_opens_a_humans_pr_with_no_gates_configured_silently() {
+    let p = project("");
+    let out = create_against_nowhere(&p);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(!stderr.contains("warning"), "{stderr}");
+    assert_eq!(body(&p), "Adds a thing.");
+}
+
+#[test]
+fn a_base_that_resolves_nowhere_opens_a_humans_pr_ungated_with_a_warning() {
+    let p = project(GATE);
+    let out = create_against_nowhere(&p);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{stderr}");
     assert!(

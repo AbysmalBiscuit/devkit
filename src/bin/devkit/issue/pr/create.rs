@@ -7,7 +7,7 @@ use devkit_common::{
     progress::Steps,
     vcs::{Vcs, VersionControl},
 };
-use devkit_config::{IssueEvent, PrCreateState};
+use devkit_config::{Gate as GateKey, GateMode, IssueEvent, PrCreateState};
 use devkit_ports::ledger::Ledger;
 
 use super::{
@@ -192,10 +192,12 @@ impl Gates {
         let (merge_base, cfg) = match (settings, caller) {
             (Ok(Some(settings)), _) => settings,
             (Ok(None), Caller::Human) => {
-                eprintln!(
-                    "warning: opening the PR without its gates: {:#}",
-                    unresolved()
-                );
+                if checkout_gates_a_human(dir) {
+                    eprintln!(
+                        "warning: opening the PR without its gates: {:#}",
+                        unresolved()
+                    );
+                }
                 return Ok(ungated);
             }
             (Err(e), Caller::Human) => {
@@ -224,6 +226,25 @@ impl Gates {
             None => Ok(body),
         }
     }
+}
+
+/// Whether the config this checkout loads turns on a gate that applies to a
+/// human's PR, as the merge base's would when it resolves. A config that does
+/// not load counts as turning one on.
+fn checkout_gates_a_human(dir: &Path) -> bool {
+    let Ok(loaded) = devkit_ports::load::load_quiet(None, dir) else {
+        return true;
+    };
+    loaded
+        .config
+        .pr
+        .gates
+        .all()
+        .into_iter()
+        .any(|(gate, mode)| match gate {
+            GateKey::Verify(_) => mode != GateMode::Off,
+            GateKey::WeakenedTests => false,
+        })
 }
 
 /// Resolve this branch's PR and, when there is none, open one. A reused PR
