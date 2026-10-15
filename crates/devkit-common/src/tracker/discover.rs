@@ -87,6 +87,7 @@ pub fn named(name: &str) -> EnumValue {
         name: name.to_string(),
         id: name.to_string(),
         teams: Vec::new(),
+        aliases: Vec::new(),
     }
 }
 
@@ -184,6 +185,7 @@ pub(crate) fn id_name(v: &Json) -> Option<EnumValue> {
         name: str_of(v, "name")?.to_string(),
         id: str_of(v, "id")?.to_string(),
         teams: Vec::new(),
+        aliases: Vec::new(),
     })
 }
 

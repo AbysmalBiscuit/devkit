@@ -160,6 +160,7 @@ fn add(values: &mut Vec<EnumValue>, id: &str, name: &str, team: &str) {
             name: name.to_string(),
             id: id.to_string(),
             teams: vec![team.to_string()],
+            aliases: Vec::new(),
         }),
     }
 }
@@ -215,6 +216,7 @@ pub fn parse(
             name: key.to_string(),
             id: id.to_string(),
             teams: Vec::new(),
+            aliases: Vec::new(),
         });
         estimates |= str_of(team, "issueEstimationType").is_some_and(|t| t != "notUsed");
         partial_cycles |= unfinished(team.get("cycles"));
@@ -282,6 +284,7 @@ pub fn parse(
                 name: str_of(p, "label")?.to_string(),
                 id: n.to_string(),
                 teams: Vec::new(),
+                aliases: Vec::new(),
             })
         })
         .collect();

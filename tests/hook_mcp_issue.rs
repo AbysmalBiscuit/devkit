@@ -397,7 +397,7 @@ kind = "linear"
 [ticket.fields.linear.team]
 type   = "enum"
 where  = "team"
-values = [{ name = "ENG", id = "t-eng" }]
+values = [{ name = "ENG", id = "t-eng", aliases = ["ENG", "Engineering"] }]
 level  = "error"
 
 [ticket.fields.linear.priority]
@@ -435,7 +435,7 @@ fn fields_project() -> tempfile::TempDir {
 fn a_save_issue_without_priority_is_denied_after_a_valid_render() {
     let p = fields_project();
     let (t, b) = render(p.path(), "S1", "T", "B");
-    let input = json!({"title": t, "description": b, "team": "ENG", "labels": ["bug"]});
+    let input = json!({"title": t, "description": b, "team": "ENG", "labels": ["L1"]});
     let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, input));
     let reason = denial(&out).expect("denied");
     assert!(
@@ -445,7 +445,7 @@ fn a_save_issue_without_priority_is_denied_after_a_valid_render() {
     assert!(!reason.contains("devkit ticket render"), "{reason}");
 
     let input =
-        json!({"title": t, "description": b, "team": "ENG", "priority": 2, "labels": ["bug"]});
+        json!({"title": t, "description": b, "team": "ENG", "priority": 2, "labels": ["L1"]});
     let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, input));
     assert_eq!(denial(&out), None);
 }

@@ -315,6 +315,9 @@ pub enum Naming {
     /// The tracker resolves the name itself, within the issue's team, so a
     /// name several values share passes.
     Tracker,
+    /// The value reaches the tracker as given, so only what the tracker
+    /// itself takes names a value: its id or an alias, never devkit's name.
+    Verbatim,
 }
 
 /// `value` as a person tells it from another value of the same name: its
@@ -332,6 +335,26 @@ fn described(value: &EnumValue) -> String {
     }
 }
 
+/// `value` as a tracker takes it: its id, with its name, teams and aliases
+/// beside it.
+fn as_tracker_takes(value: &EnumValue) -> String {
+    let mut about = Vec::new();
+    if !value.name.eq_ignore_ascii_case(&value.id) {
+        about.push(value.name.clone());
+    }
+    if !value.teams.is_empty() {
+        about.push(format!("teams {}", value.teams.join(", ")));
+    }
+    if !value.aliases.is_empty() {
+        about.push(format!("or {}", value.aliases.join(", ")));
+    }
+    if about.is_empty() {
+        value.id.clone()
+    } else {
+        format!("{} ({})", value.id, about.join("; "))
+    }
+}
+
 /// The value of `decl` that `item` names in `team`.
 fn enum_one<'a>(
     name: &str,
@@ -340,14 +363,28 @@ fn enum_one<'a>(
     team: Option<&str>,
     naming: Naming,
 ) -> Result<&'a EnumValue, String> {
-    let named = decl.enum_values(item);
+    let named = match naming {
+        Naming::Verbatim => decl.tracker_values(item),
+        Naming::Devkit | Naming::Tracker => decl.enum_values(item),
+    };
+    if named.is_empty() && naming == Naming::Verbatim {
+        let by_name = decl.enum_values(item);
+        if !by_name.is_empty() {
+            let ids: Vec<String> = by_name.iter().map(|v| format!("`{}`", v.id)).collect();
+            return Err(format!(
+                "is devkit's name for a value, and this call reaches the tracker unchanged: \
+                 pass {}",
+                ids.join(" or ")
+            ));
+        }
+    }
     let fits: Vec<&EnumValue> = named
         .iter()
         .copied()
         .filter(|v| team.is_none_or(|t| v.in_team(t)))
         .collect();
     match (fits.as_slice(), naming) {
-        ([v], _) | ([v, ..], Naming::Tracker) => Ok(v),
+        ([v], _) | ([v, ..], Naming::Tracker | Naming::Verbatim) => Ok(v),
         ([], _) => match team.filter(|_| !named.is_empty()) {
             Some(team) => {
                 let mut teams: Vec<&str> = named
@@ -626,9 +663,16 @@ fn value_names(decl: &FieldDecl) -> Vec<String> {
         .collect()
 }
 
-/// The values a field takes, as a person passes them.
-fn valid_values(decl: &FieldDecl) -> Option<String> {
+/// The values a field takes, as a caller of `naming` passes them.
+fn valid_values(decl: &FieldDecl, naming: Naming) -> Option<String> {
     match decl.r#type? {
+        FieldType::Enum if naming == Naming::Verbatim => Some(
+            decl.values
+                .iter()
+                .map(as_tracker_takes)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
         FieldType::Enum => Some(value_names(decl).join(", ")),
         FieldType::User => Some("a `[people]` alias".into()),
         FieldType::Number => Some("a number".into()),
@@ -661,6 +705,16 @@ pub fn stale_hint(
 /// and `--none` when the field allows it), its description, its valid values
 /// and its default.
 pub fn message(decls: &BTreeMap<String, FieldDecl>, problems: &[Problem]) -> String {
+    message_for(decls, problems, Naming::Devkit)
+}
+
+/// [`message`], listing each enum's values as a caller of `naming` passes
+/// them.
+pub fn message_for(
+    decls: &BTreeMap<String, FieldDecl>,
+    problems: &[Problem],
+    naming: Naming,
+) -> String {
     let mut out = Vec::new();
     for p in problems {
         let name = p.field();
@@ -690,7 +744,7 @@ pub fn message(decls: &BTreeMap<String, FieldDecl>, problems: &[Problem]) -> Str
             if let Some(d) = decl.description.as_deref() {
                 block.push_str(&crate::required::description_line(name, d));
             }
-            if let Some(v) = valid_values(decl) {
+            if let Some(v) = valid_values(decl, naming) {
                 block.push_str(&format!("\n  values: {v}"));
             }
             if let Some(d) = &decl.default {

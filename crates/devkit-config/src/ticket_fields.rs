@@ -134,8 +134,9 @@ impl FieldDecl {
     }
 
     /// The enum values `raw` names: the one whose id it is exactly, else
-    /// every value whose name it matches case-insensitively, which is
-    /// several when values of different Linear teams share a name.
+    /// every value whose name or one of whose aliases it matches
+    /// case-insensitively, which is several when values of different Linear
+    /// teams share a name.
     pub fn enum_values(&self, raw: &str) -> Vec<&EnumValue> {
         let raw = raw.trim();
         match self.values.iter().find(|v| v.id == raw) {
@@ -143,7 +144,22 @@ impl FieldDecl {
             None => self
                 .values
                 .iter()
-                .filter(|v| v.name.eq_ignore_ascii_case(raw))
+                .filter(|v| v.name.eq_ignore_ascii_case(raw) || v.has_alias(raw))
+                .collect(),
+        }
+    }
+
+    /// The enum values `raw` names as the tracker spells them: the one whose
+    /// id it is exactly, else every value whose id or one of whose aliases it
+    /// matches case-insensitively. A value's `name` is devkit's alone.
+    pub fn tracker_values(&self, raw: &str) -> Vec<&EnumValue> {
+        let raw = raw.trim();
+        match self.values.iter().find(|v| v.id == raw) {
+            Some(v) => vec![v],
+            None => self
+                .values
+                .iter()
+                .filter(|v| v.id.eq_ignore_ascii_case(raw) || v.has_alias(raw))
                 .collect(),
         }
     }
@@ -445,10 +461,12 @@ impl From<Place> for PlaceSpec {
 }
 
 /// One value of an `enum` field.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnumValue {
-    /// What agents pass, matched case-insensitively.
+    /// What agents pass to `ticket create` and `ticket edit`, matched
+    /// case-insensitively. A tracker MCP call reaches the tracker unchanged,
+    /// so it passes `id` or an alias instead.
     pub name: String,
     /// What devkit writes: a label's name, a milestone's title, a project
     /// option's id, a Linear id.
@@ -456,12 +474,22 @@ pub struct EnumValue {
     /// The Linear teams the value is valid in; any team when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub teams: Vec<String>,
+    /// Other spellings the tracker itself takes for the value, matched
+    /// case-insensitively wherever `id` is: a Linear team's key and name.
+    /// `ticket fields discover` writes them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
 }
 
 impl EnumValue {
     /// Whether the value is valid in the team keyed `team`.
     pub fn in_team(&self, team: &str) -> bool {
         self.teams.is_empty() || self.teams.iter().any(|t| t == team)
+    }
+
+    /// Whether `raw` is one of the value's aliases, ignoring case.
+    pub fn has_alias(&self, raw: &str) -> bool {
+        self.aliases.iter().any(|a| a.eq_ignore_ascii_case(raw))
     }
 }
 

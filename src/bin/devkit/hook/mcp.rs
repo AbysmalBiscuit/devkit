@@ -329,7 +329,7 @@ pub(super) fn field_verdict(
         &given,
         &cfg.people,
         team.as_deref(),
-        Naming::Tracker,
+        Naming::Verbatim,
     ) {
         Ok(mut r) => {
             r.fields.extend(users);
@@ -531,7 +531,7 @@ fn blocks(
     problems
         .iter()
         .map(|p| {
-            let mut block = fields::message(decls, std::slice::from_ref(p));
+            let mut block = fields::message_for(decls, std::slice::from_ref(p), Naming::Verbatim);
             if let Problem::Missing { field } = p {
                 let none = match decls.get(field).filter(|d| d.allows_none()) {
                     Some(d) if d.list => ", or `null` or `[]` to leave it empty",
@@ -708,7 +708,10 @@ description = "the release it ships in"
 [ticket.fields.linear.team]
 type   = "enum"
 where  = "team"
-values = [{ name = "ENG", id = "t-eng" }, { name = "OPS", id = "t-ops" }]
+values = [
+  { name = "ENG", id = "t-eng", aliases = ["ENG", "Engineering"] },
+  { name = "OPS", id = "t-ops", aliases = ["OPS", "Operations"] },
+]
 level  = "error"
 
 [ticket.fields.linear.labels]
@@ -917,7 +920,7 @@ level  = "info"
         let v = fields(
             &linear_rule(),
             LINEAR_FIELDS,
-            json!({"title": "T", "team": null, "labels": ["bug"]}),
+            json!({"title": "T", "team": null, "labels": ["L2"]}),
         );
         assert!(
             denied_mentioning(&v, "`team`"),
@@ -942,7 +945,7 @@ level  = "info"
         );
         let v = fields(&linear_rule(), &no_none, update);
         assert!(denied_mentioning(&v, "cannot be left empty"), "{v:?}");
-        let input = json!({"title": "T", "team": "ENG", "labels": ["bug"], "priority": []});
+        let input = json!({"title": "T", "team": "ENG", "labels": ["L2"], "priority": []});
         let v = fields(&linear_rule(), LINEAR_FIELDS, input);
         assert!(
             denied_mentioning(&v, "`priority`") && denied_mentioning(&v, "JSON"),
@@ -952,7 +955,7 @@ level  = "info"
 
     #[test]
     fn a_linear_label_valid_in_any_team_is_accepted() {
-        let input = json!({"title": "T", "team": "OPS", "labels": ["bug", "L2"]});
+        let input = json!({"title": "T", "team": "OPS", "labels": ["L2"]});
         assert_eq!(fields(&linear_rule(), LINEAR_FIELDS, input), Verdict::Allow);
         let input = json!({"title": "T", "team": "OPS", "labels": ["nope"]});
         let v = fields(&linear_rule(), LINEAR_FIELDS, input);
@@ -963,11 +966,11 @@ level  = "info"
     fn a_value_of_the_wrong_json_type_is_refused() {
         for (key, value) in [
             ("team", json!(["ENG"])),
-            ("labels", json!([["bug"]])),
-            ("labels", json!({"name": "bug"})),
+            ("labels", json!([["L2"]])),
+            ("labels", json!({"name": "L2"})),
             ("estimate", json!(true)),
         ] {
-            let mut input = json!({"title": "T", "team": "ENG", "labels": ["bug"]});
+            let mut input = json!({"title": "T", "team": "ENG", "labels": ["L2"]});
             input[key] = value.clone();
             let v = fields(&linear_rule(), LINEAR_FIELDS, input);
             assert!(
@@ -975,7 +978,7 @@ level  = "info"
                 "{key} = {value}: {v:?}"
             );
         }
-        let input = json!({"title": "T", "team": "ENG", "labels": "bug", "estimate": 3});
+        let input = json!({"title": "T", "team": "ENG", "labels": "L2", "estimate": 3});
         assert_eq!(
             fields(&linear_rule(), LINEAR_FIELDS, input),
             Verdict::Allow,
@@ -985,9 +988,9 @@ level  = "info"
 
     #[test]
     fn a_number_names_an_enum_value_by_its_numeric_id() {
-        let input = json!({"title": "T", "team": "ENG", "labels": ["bug"], "priority": 1});
+        let input = json!({"title": "T", "team": "ENG", "labels": ["L2"], "priority": 1});
         assert_eq!(fields(&linear_rule(), LINEAR_FIELDS, input), Verdict::Allow);
-        let input = json!({"title": "T", "team": "ENG", "labels": ["bug"], "priority": 9});
+        let input = json!({"title": "T", "team": "ENG", "labels": ["L2"], "priority": 9});
         let v = fields(&linear_rule(), LINEAR_FIELDS, input);
         assert!(denied_mentioning(&v, "`9`"), "{v:?}");
     }
@@ -1014,13 +1017,13 @@ level  = "info"
 
     #[test]
     fn a_create_scopes_team_bound_values_to_its_team() {
-        let input = json!({"title": "T", "team": "OPS", "labels": ["infra"]});
+        let input = json!({"title": "T", "team": "OPS", "labels": ["L1"]});
         let v = fields(&linear_rule(), LINEAR_FIELDS, input);
         assert!(
-            denied_mentioning(&v, "`infra`") && denied_mentioning(&v, "OPS"),
+            denied_mentioning(&v, "`L1`") && denied_mentioning(&v, "OPS"),
             "{v:?}"
         );
-        let input = json!({"title": "T", "team": "OPS", "labels": ["bug"]});
+        let input = json!({"title": "T", "team": "OPS", "labels": ["L3"]});
         assert_eq!(
             fields(&linear_rule(), &bug_in_each_team(), input),
             Verdict::Allow
@@ -1028,25 +1031,24 @@ level  = "info"
     }
 
     #[test]
-    fn a_name_several_teams_share_passes_with_no_team_known() {
+    fn a_name_several_teams_share_is_refused_naming_each_id() {
         let update = json!({"id": "ENG-1", "labels": ["Bug"]});
-        assert_eq!(
-            fields(&linear_rule(), &bug_in_each_team(), update),
-            Verdict::Allow,
-            "the MCP resolves the name in the issue's team"
-        );
+        let v = fields(&linear_rule(), &bug_in_each_team(), update);
+        assert!(denied_mentioning(&v, "pass `L2` or `L3`"), "{v:?}");
     }
 
     #[test]
-    fn a_denial_shows_the_id_of_each_shared_name() {
+    fn a_denial_lists_each_id_with_its_name_and_teams() {
         let v = fields(
             &linear_rule(),
             &bug_in_each_team(),
             json!({"title": "T", "team": "ENG"}),
         );
         assert!(
-            denied_mentioning(&v, "Bug (id L2, teams ENG), Bug (id L3, teams OPS)")
-                && denied_mentioning(&v, "infra,"),
+            denied_mentioning(
+                &v,
+                "L1 (infra; teams ENG), L2 (Bug; teams ENG), L3 (Bug; teams OPS)"
+            ),
             "{v:?}"
         );
     }
@@ -1087,10 +1089,32 @@ level  = "info"
     }
 
     #[test]
+    fn an_enum_value_is_passed_as_its_tracker_id() {
+        let toml = "[ticket.fields.github.labels]\ntype = \"enum\"\nlist = true\n\
+                    where = \"labels\"\nlevel = \"error\"\n\
+                    values = [{ name = \"urgent\", id = \"Bug\" }, { name = \"docs\", id = \"docs\" }]\n";
+        let rule = with_fields(github(), TrackerKind::Github, &[("labels", "labels")]);
+        let gh = |label: &str| fields(&rule, toml, gh_create(json!({"labels": [label]})));
+        for label in ["Bug", "bug", "docs"] {
+            assert_eq!(gh(label), Verdict::Allow, "{label}");
+        }
+        let v = gh("urgent");
+        assert!(
+            denied_mentioning(&v, "`urgent`") && denied_mentioning(&v, "pass `Bug`"),
+            "a local name reaches the tracker as a label of its own: {v:?}"
+        );
+        let v = gh("nope");
+        assert!(
+            denied_mentioning(&v, "values: Bug (urgent), docs"),
+            "the denial lists what the call takes: {v:?}"
+        );
+    }
+
+    #[test]
     fn a_list_item_holding_a_comma_is_one_value() {
         let toml = LINEAR_FIELDS.replace(
             r#"{ name = "bug", id = "L2" }"#,
-            r#"{ name = "needs, triage", id = "L2" }"#,
+            r#"{ name = "needs, triage", id = "needs, triage" }"#,
         );
         let input = json!({"title": "T", "team": "ENG", "labels": ["needs, triage"]});
         assert_eq!(fields(&linear_rule(), &toml, input), Verdict::Allow);

@@ -464,12 +464,19 @@
       "additionalProperties": false,
       "description": "One value of an `enum` field.",
       "properties": {
+        "aliases": {
+          "description": "Other spellings the tracker itself takes for the value, matched\ncase-insensitively wherever `id` is: a Linear team's key and name.\n`ticket fields discover` writes them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "id": {
           "description": "What devkit writes: a label's name, a milestone's title, a project\noption's id, a Linear id.",
           "type": "string"
         },
         "name": {
-          "description": "What agents pass, matched case-insensitively.",
+          "description": "What agents pass to `ticket create` and `ticket edit`, matched\ncase-insensitively. A tracker MCP call reaches the tracker unchanged,\nso it passes `id` or an alias instead.",
           "type": "string"
         },
         "teams": {

@@ -463,7 +463,7 @@ mod tests {
                 .map(|(name, id)| EnumValue {
                     name: name.to_string(),
                     id: id.to_string(),
-                    teams: Vec::new(),
+                    ..EnumValue::default()
                 })
                 .collect(),
         )
@@ -679,6 +679,7 @@ values = [
             name: name.into(),
             id: id.into(),
             teams: vec!["ENG".into()],
+            ..EnumValue::default()
         };
         let read = Discovered {
             teams_read: vec!["ENG".into()],
