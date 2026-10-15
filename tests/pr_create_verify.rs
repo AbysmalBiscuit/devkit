@@ -733,6 +733,39 @@ fn a_branch_changing_the_tasks_env_in_a_nested_layer_opens_showing_the_change() 
     ]);
 }
 
+/// The required task lives only in a nested layer, and the branch renames
+/// it there and in the root gate: HEAD's task applies in the directory its
+/// run ran from, so the gate requires it and shows the change.
+#[test]
+fn a_branch_renaming_a_nested_layers_required_task_opens_on_heads_task() {
+    let p = project_with_nested_layer(
+        "\n[pr.gates]\nverify_task = \"inner\"\n",
+        "[tasks.inner]\nrun = [\"git\", \"version\"]\n",
+    );
+    let layer = p.project().join("sub/devkit.toml");
+    std::fs::write(&layer, "[tasks.renamed]\nrun = [\"git\", \"version\"]\n").unwrap();
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, toml.replace("\"inner\"", "\"renamed\"")).unwrap();
+    git(&p, &["commit", "-q", "-am", "rename the nested task"]);
+    serve_head(&p);
+    let sub = p.project().join("sub");
+    let out = p.devkit_here(&["run", "-C", sub.to_str().unwrap(), "task", "renamed"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body = opened_body(&p);
+    assert!(body.contains("- Command: `devrun task renamed`"), "{body}");
+    assert!(
+        body.contains(
+            "This PR changes the required run from `devrun task inner` to `devrun task renamed`"
+        ),
+        "{body}"
+    );
+}
+
 /// Tasks reading the template variable `mode`, through their own `env` and
 /// through their app's `static_env`.
 const MODE_READERS: [&str; 2] = [

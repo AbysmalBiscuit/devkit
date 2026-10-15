@@ -55,17 +55,17 @@ impl Gate {
         if mode == GateMode::Off {
             return Ok(None);
         }
-        let (required, moved_from) = match heads_required(dir, head, &required, caller) {
+        let repo = devkit_common::vcs::primary_checkout(dir)?;
+        let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
+        let runs: Vec<Run> = ledger.runs_in(&repo)?.into_iter().rev().collect();
+        let (required, moved_from) = match heads_required(dir, head, &required, caller, &runs) {
             Some(at_head) => (at_head, Some(required)),
             None => (required, None),
         };
-        let repo = devkit_common::vcs::primary_checkout(dir)?;
-        let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
         let run = ledger.passed(&repo, &required.task, &required.args, head)?;
         let rejected = match run {
             Some(_) => None,
             None => {
-                let runs: Vec<Run> = ledger.runs_in(&repo)?.into_iter().rev().collect();
                 match runs
                     .iter()
                     .find(|r| r.proves(&required.task, &required.args, head))
@@ -211,18 +211,34 @@ fn reused_note(required: &RequiredTask, run: &Run) -> String {
 /// longer applies at HEAD: its task does not render there, or does not
 /// take its args from `caller`. A branch can rename the task or a variable
 /// its args name, and no run at HEAD could then take the merge base's.
-/// `None` when the merge base's applies, or HEAD's committed config names
-/// no required run that does.
+/// Each candidate renders in the directory the latest of `runs` (newest
+/// first) proving it at `head` ran from, since a nested layer may define
+/// it, else at the checkout root. `None` when the merge base's applies, or
+/// HEAD's committed config names no required run that does.
 fn heads_required(
     dir: &Path,
     head: &str,
     required: &RequiredTask,
     caller: Caller,
+    runs: &[Run],
 ) -> Option<RequiredTask> {
     let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
     let applies = |r: &RequiredTask| {
-        task::committed_plan(dir, head, "", &root, &r.task, &r.args, &BTreeMap::new())
-            .is_ok_and(|plan| plan.accepts(caller))
+        let run_dir = runs
+            .iter()
+            .find(|run| run.proves(&r.task, &r.args, head))
+            .and_then(|run| run.dir.as_deref())
+            .unwrap_or("");
+        task::committed_plan(
+            dir,
+            head,
+            run_dir,
+            &root,
+            &r.task,
+            &r.args,
+            &BTreeMap::new(),
+        )
+        .is_ok_and(|plan| plan.accepts(caller))
     };
     if applies(required) {
         return None;
