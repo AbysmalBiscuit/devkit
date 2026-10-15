@@ -350,7 +350,7 @@ pub(crate) fn check_claims(
         };
         let store = Store::for_hook(&anchor, cwd);
         edits.into_iter().find_map(|(to, id)| {
-            let todo = store.get(&id).ok()??;
+            let todo = store.resolve(&id).ok()??;
             let Claimed { by } = transition(&todo.status, to, &actor).err()?;
             Some(format!(
                 "devkit todo: todo {} is in progress by {}; pick another todo",
