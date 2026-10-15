@@ -207,14 +207,14 @@ pub(crate) enum RunsCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Whether TASK, given exactly these `--arg` values, exited 0 on a clean
-    /// tree at exactly one commit.
+    /// Whether TASK passed on a clean tree at exactly one commit.
     ///
-    /// Only runs in this repository's checkouts count, and the answer is the
-    /// one `devkit pr create`'s verify gate reaches: a run given other args,
-    /// or none when these name some, is no, as is one whose `up` step reused
-    /// a server already running before it started. Exits 0 and prints the run
-    /// for yes, exits 1 for no.
+    /// A run counts when it exited 0 given exactly the `--arg` values passed
+    /// here. Only runs in this repository's checkouts count, and the answer is
+    /// the one `devkit pr create`'s verify gate reaches: a run given other
+    /// args, or none when these name some, is no, as is one whose `up` step
+    /// reused a server already running before it started. Exits 0 and
+    /// prints the run for yes, exits 1 for no.
     Passed {
         /// Task name, as given to `devrun task`.
         task: String,
