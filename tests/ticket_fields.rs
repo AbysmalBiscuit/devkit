@@ -563,7 +563,10 @@ fn discover_fills_an_error_enum_declared_with_no_values() {
     let mut env = linear.env().to_vec();
     env.push(("DEVKIT_CALLER", "agent"));
     let out = stdout(&fake.issue_with_env(&["fields", "discover", "--team", "ENG"], &env));
-    assert!(out.contains("refreshed [ticket.fields.linear.cycle]"), "{out}");
+    assert!(
+        out.contains("refreshed [ticket.fields.linear.cycle]"),
+        "{out}"
+    );
     let after = std::fs::read_to_string(fake.project().join("devkit.toml")).unwrap();
     let cfg = devkit_config::Config::parse(&after).unwrap();
     let ids: Vec<&str> = cfg.ticket.fields.linear["cycle"]

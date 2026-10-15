@@ -256,9 +256,9 @@ fn summary(kind: TrackerKind, changes: &[Change], found: &Discovered) -> String 
 /// `merged` declares at the same place, or by the same name with no place,
 /// has its `type`, `list`, `where` and `values` refreshed, keeping each
 /// value's declared name; nothing else of it is written. One whose declared
-/// `type` differs from the tracker's is left alone and reported. Any other field is
-/// added at `level = "info"`, unless it is an `enum` the tracker offers no
-/// value of. Comments and layout survive.
+/// `type` differs from the tracker's is left alone and reported. Any other
+/// field is added at `level = "info"`, unless it is an `enum` the tracker
+/// offers no value of. Comments and layout survive.
 pub(crate) fn merge(
     doc: &mut DocumentMut,
     kind: TrackerKind,

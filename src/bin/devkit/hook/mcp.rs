@@ -315,7 +315,10 @@ pub(super) fn field_verdict(
     };
     let decls = cfg.ticket.fields.for_tracker(kind);
     let other_tracker = cfg.tracker.kind.is_some_and(|k| k != kind);
-    if decls.is_empty() || other_tracker || !names_issues_repo(kind, cfg, input, || origin_slug(cwd)) {
+    if decls.is_empty()
+        || other_tracker
+        || !names_issues_repo(kind, cfg, input, || origin_slug(cwd))
+    {
         return Verdict::Allow;
     }
     if let Err(e) = devkit_config::check_ticket_fields(cfg, kind, provenance) {
@@ -514,7 +517,8 @@ fn user(
             id: who.to_string(),
         });
     }
-    Err(match alias.map(|(alias, p)| (alias, fields::person_id(p, kind))) {
+    let identity = alias.map(|(alias, p)| (alias, fields::person_id(p, kind)));
+    Err(match identity {
         Some((_, Some(id))) => format!(
             "is a `[people]` alias, and this call takes the user's {kind} identity: pass `{id}`"
         ),

@@ -38,7 +38,12 @@ const BUILT_IN: &[&str] = &[
 /// page, the fields of each node, and what a note calls its items.
 const LISTS: [(&str, &str, &str, &str); 4] = [
     ("labels", "", "name", "labels"),
-    ("milestones", ", states: [OPEN]", "title number", "open milestones"),
+    (
+        "milestones",
+        ", states: [OPEN]",
+        "title number",
+        "open milestones",
+    ),
     ("assignableUsers", "", "login name", "assignable users"),
     ("issueTypes", "", "id name", "issue types"),
 ];
