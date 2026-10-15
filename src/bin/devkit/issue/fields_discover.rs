@@ -178,6 +178,11 @@ fn summary(kind: TrackerKind, changes: &[Change], found: &Discovered) -> String 
             out.push_str(&format!("  {u}\n"));
         }
     }
+    for f in &found.unwritable {
+        out.push_str(&format!(
+            "not written: the tracker's {f}: devkit cannot set a field of that type\n"
+        ));
+    }
     for t in &found.truncated {
         out.push_str(&format!("note: {t}\n"));
     }
@@ -394,6 +399,19 @@ values = [{ name = "urgent", id = "o0" }]
 level  = "error" # agents must set it
 description = "how soon"
 "#;
+
+    #[test]
+    fn the_summary_names_fields_it_cannot_write() {
+        let found = Discovered {
+            unwritable: vec!["`Sprint` (ITERATION)".into()],
+            ..Discovered::default()
+        };
+        let out = summary(TrackerKind::Github, &[], &found);
+        assert!(
+            out.contains("not written: the tracker's `Sprint` (ITERATION)"),
+            "{out}"
+        );
+    }
 
     #[test]
     fn merge_keeps_comments_and_person_set_keys() {

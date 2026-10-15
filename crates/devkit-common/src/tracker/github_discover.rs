@@ -15,6 +15,22 @@ use crate::{forge::Repo, github::Api};
 /// How many of each list one query reads.
 const PAGE: u32 = 100;
 
+/// The project field types GitHub fills itself rather than someone creating.
+const BUILT_IN: &[&str] = &[
+    "ASSIGNEES",
+    "ISSUE_TYPE",
+    "LABELS",
+    "LINKED_PULL_REQUESTS",
+    "MILESTONE",
+    "PARENT_ISSUE",
+    "REPOSITORY",
+    "REVIEWERS",
+    "SUB_ISSUES_PROGRESS",
+    "TITLE",
+    "TRACKED_BY",
+    "TRACKS",
+];
+
 /// The query reading what [`parse`] needs from `slug` and `project`.
 pub fn query(slug: &str, project: Option<&ProjectRef>) -> String {
     let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
@@ -43,7 +59,8 @@ pub fn query(slug: &str, project: Option<&ProjectRef>) -> String {
 /// The fields a [`query`] response offers. The project field named
 /// `status_field` belongs to `[ticket.events]` and is never offered, nor is a
 /// project field GitHub fills itself (its title, assignees, labels and the
-/// like). Assignable users no `[people]` entry names are reported.
+/// like). Assignable users no `[people]` entry names, and created project
+/// fields of a type devkit cannot write, are reported.
 pub fn parse(
     resp: &Json,
     status_field: &str,
@@ -141,7 +158,11 @@ pub fn parse(
                 "TEXT" => FieldType::String,
                 "NUMBER" => FieldType::Number,
                 "DATE" => FieldType::Date,
-                _ => continue,
+                _ if BUILT_IN.contains(&data) => continue,
+                _ => {
+                    out.unwritable.push(format!("`{name}` ({data})"));
+                    continue;
+                }
             };
             let values = f
                 .get("options")
@@ -218,7 +239,9 @@ mod tests {
                 { "id": "PVTSSF_s", "name": "Status", "dataType": "SINGLE_SELECT", "options": [{ "id": "o1", "name": "Todo" }] },
                 { "id": "PVTSSF_p", "name": "Priority", "dataType": "SINGLE_SELECT", "options": [{ "id": "f75", "name": "P0" }, { "id": "47f", "name": "P1" }] },
                 { "id": "PVTF_e", "name": "Story points", "dataType": "NUMBER" },
-                { "id": "PVTF_l", "name": "Labels", "dataType": "TEXT" }
+                { "id": "PVTF_l", "name": "Labels", "dataType": "TEXT" },
+                { "id": "PVTIF_s", "name": "Sprint", "dataType": "ITERATION" },
+                { "id": "PVTF_r", "name": "Reviewers", "dataType": "REVIEWERS" }
             ] } } }
         } })
     }
@@ -241,6 +264,13 @@ mod tests {
             found.fields.keys()
         );
         assert!(!found.fields.contains_key("status"));
+    }
+
+    #[test]
+    fn a_created_field_of_an_unsupported_type_is_reported_not_written() {
+        let found = parse(&response(), "Status", &people()).unwrap();
+        assert_eq!(found.unwritable, ["`Sprint` (ITERATION)"]);
+        assert!(!found.fields.contains_key("sprint"));
     }
 
     #[test]
