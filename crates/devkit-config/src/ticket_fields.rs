@@ -244,6 +244,15 @@ pub enum Place {
 }
 
 impl Place {
+    /// Whether `self` and `other` are one place: a project field by its id,
+    /// whatever name each gives it.
+    pub fn same_place(&self, other: &Place) -> bool {
+        match (self, other) {
+            (Place::ProjectField { id: x, .. }, Place::ProjectField { id: y, .. }) => x == y,
+            _ => self == other,
+        }
+    }
+
     /// Whether `kind`'s tracker has this place.
     pub fn valid_for(&self, kind: TrackerKind) -> bool {
         use Place::*;
@@ -611,11 +620,7 @@ pub(crate) fn validate(
                 note(cx, kind, name)
             );
         }
-        let same = |a: &Place, b: &Place| match (a, b) {
-            (Place::ProjectField { id: x, .. }, Place::ProjectField { id: y, .. }) => x == y,
-            _ => a == b,
-        };
-        if let Some((other, _)) = places.iter().find(|(_, p)| same(p, place)) {
+        if let Some((other, _)) = places.iter().find(|(_, p)| p.same_place(place)) {
             bail!(
                 "`{key}`{} and `[ticket.fields.{kind}.{other}]` are both written to `{}`; each \
                  place belongs to one field.",

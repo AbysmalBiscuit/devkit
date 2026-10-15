@@ -170,14 +170,6 @@ fn summary(kind: TrackerKind, changes: &[Change], found: &Discovered) -> String 
     out
 }
 
-/// Whether `a` and `b` are one place: a project field by its id.
-fn same_place(a: &Place, b: &Place) -> bool {
-    match (a, b) {
-        (Place::ProjectField { id: x, .. }, Place::ProjectField { id: y, .. }) => x == y,
-        _ => a == b,
-    }
-}
-
 /// Write `found` into `doc`'s `[ticket.fields.<kind>]`. A field any layer of
 /// `merged` declares at the same place, or by the same name with no place,
 /// has its `type`, `list`, `where` and `values` refreshed, keeping each
@@ -202,7 +194,7 @@ pub(crate) fn merge(
         let by_place = declared.iter().find(|(_, d)| {
             d.r#where
                 .as_ref()
-                .is_some_and(|w| same_place(w, &field.r#where))
+                .is_some_and(|w| w.same_place(&field.r#where))
         });
         let by_name = || {
             declared
