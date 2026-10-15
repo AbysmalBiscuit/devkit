@@ -312,6 +312,24 @@ fn a_test_added_in_an_out_of_line_module_is_run_with_the_fix_reverted() {
     );
 }
 
+#[test]
+fn a_repro_task_that_starts_a_server_is_inconclusive_and_not_run() {
+    let p = project(
+        "\n[apps.api]\nbase_port = 39181\npath = \".\"\nlaunch = [\"git\", \"version\"]\n\n\
+         [tasks.repro-up]\nsteps = [{ up = \"api\" }, { task = \"repro\" }]\n\n[pr.gates]\n\
+         repro_task = \"repro-up\"\n",
+        &format!("{FIX}\n{ALWAYS}"),
+    );
+    let body = opened_body(&p);
+    assert!(
+        body.contains("1. The lib is fixed: INCONCLUSIVE")
+            && body.contains("2. The lib reads well: INCONCLUSIVE")
+            && body.contains("`api`"),
+        "{body}"
+    );
+    assert_eq!(repro_runs(&p), Vec::<i64>::new(), "nothing ran");
+}
+
 /// What `git` reports of the caller's worktree, index and worktree list.
 fn snapshot(p: &ghfake::Fake) -> String {
     [

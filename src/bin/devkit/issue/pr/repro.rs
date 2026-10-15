@@ -17,7 +17,7 @@ use devkit_common::{
     test_files::TestFiles,
     vcs::{NewWorktree, Vcs, VersionControl},
 };
-use devkit_config::{Gate as GateKey, GateMode, PrGates, ReproTask};
+use devkit_config::{Gate as GateKey, GateMode, PrGates, ReproTask, Step};
 
 use super::{
     proof::DoneWhen,
@@ -274,7 +274,17 @@ impl Gate {
         if runnable.is_empty() {
             return Ok(out);
         }
-        let ran = self.run(dir, &revert, &runnable)?;
+        let ran = match self.run(dir, &revert, &runnable)? {
+            Ok(ran) => ran,
+            Err(why) => {
+                out.extend(
+                    runnable
+                        .into_iter()
+                        .map(|(i, _)| (i, Outcome::Inconclusive(why.clone()))),
+                );
+                return Ok(out);
+            }
+        };
         self.reverted = revert.restore.into_iter().chain(revert.delete).collect();
         self.reverted.sort();
         self.reverted.dedup();
@@ -294,16 +304,19 @@ impl Gate {
     }
 
     /// Each selector of `runnable` run at HEAD, then with `revert` applied,
-    /// in a throwaway worktree.
+    /// in a throwaway worktree, or why the runs could not be compared.
     fn run(
         &self,
         dir: &Path,
         revert: &Revert,
         runnable: &[(usize, String)],
-    ) -> Result<Vec<(Ran, Ran)>> {
+    ) -> Result<std::result::Result<Vec<(Ran, Ran)>, String>> {
         let steps = Steps::new();
         let worktree = Throwaway::new(dir, &self.head)?;
         let at = &worktree.path();
+        if let Some(why) = self.starts_servers(at) {
+            return Ok(Err(why));
+        }
         let mut heads = Vec::new();
         for (i, selector) in runnable {
             heads.push(steps.during_result(
@@ -321,6 +334,9 @@ impl Gate {
                 _ => {}
             }
         }
+        if let Some(why) = self.starts_servers(at) {
+            return Ok(Err(why));
+        }
         let mut out = Vec::new();
         for ((i, selector), head) in runnable.iter().zip(heads) {
             let base = steps.during_result(
@@ -332,7 +348,34 @@ impl Gate {
             )?;
             out.push((head, base));
         }
-        Ok(out)
+        Ok(Ok(out))
+    }
+
+    /// Why the task, as the config in `at` defines it, cannot be run: it is
+    /// a sequence with an `up` step, whose server the run at HEAD would leave
+    /// running for the run with the fix reverted to reuse, and outlive the
+    /// throwaway worktree. `None` when the config does not load there, so
+    /// the run reports that itself.
+    fn starts_servers(&self, at: &Path) -> Option<String> {
+        let (cfg, _) = devkit_common::config::resolve(None, at).ok()?;
+        let apps: Vec<String> = cfg
+            .tasks
+            .get(&self.task.task)?
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Up(app) => Some(app.clone()),
+                Step::Task(_) => None,
+            })
+            .collect();
+        (!apps.is_empty()).then(|| {
+            format!(
+                "`{}` starts {}, whose server would carry over from the run at HEAD to the run \
+                 with the fix reverted, so neither ran",
+                self.task.task,
+                quoted(&apps)
+            )
+        })
     }
 
     /// `devrun task <repro_task> --arg selector=<selector>` in `at`, which
