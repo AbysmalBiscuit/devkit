@@ -2,13 +2,13 @@
 //! recorded passing on. Only `devrun task` writes the run ledger, so the
 //! record is evidence an agent cannot type into the PR body itself.
 
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Result, bail};
 use devkit_common::caller::Caller;
 use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask};
 use devkit_ports::{
-    ledger::{Ledger, Run},
+    ledger::{Ledger, Run, Step},
     task,
 };
 
@@ -253,44 +253,33 @@ fn definition_change(
 
 /// The steps `run` executed, as the section lists them, and a line saying
 /// so when they differ from what the `devkit.toml` files committed at
-/// `head` define the required task to run, rendered with the run's ports.
-/// A layer outside those files, such as a `devkit.local.toml`, the primary
-/// checkout's config, `--config` or `$DEVKIT_CONFIG`, changes what runs
-/// without dirtying the tree.
+/// `head` define the required task to run. A layer outside those files,
+/// such as a `devkit.local.toml`, the primary checkout's config, `--config`
+/// or `$DEVKIT_CONFIG`, changes what runs without dirtying the tree.
 fn ran_note(dir: &Path, head: &str, run: &Run, required: &RequiredTask) -> String {
-    if run.steps.is_empty() {
-        return String::new();
+    let mut out = String::new();
+    if !run.steps.is_empty() {
+        let lines: Vec<String> = run
+            .steps
+            .iter()
+            .map(|s| format!("{}: {}", s.task, s.argv.join(" ")))
+            .collect();
+        out = format!("\nSteps run:\n{}", leading_block(&lines, "text"));
     }
-    let lines: Vec<String> = run
-        .steps
-        .iter()
-        .map(|s| format!("{}: {}", s.task, s.argv.join(" ")))
-        .collect();
-    let mut out = format!("\nSteps run:\n{}", leading_block(&lines, "text"));
     let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
-    let ports = run
-        .steps
-        .iter()
-        .flat_map(|s| s.ports.iter().map(|(app, port)| (app.clone(), *port)))
-        .collect();
-    let committed = task::committed_plan(
-        dir,
-        head,
-        run.dir.as_deref().unwrap_or(""),
-        &root,
-        &required.task,
-        &required.args,
-        &ports,
-    );
-    let same = |plan: &task::ExecutionPlan| {
-        let committed = plan.commands();
-        committed.len() == run.steps.len()
-            && committed
-                .iter()
-                .zip(&run.steps)
-                .all(|(c, r)| c.task == r.task && c.argv == r.argv)
+    let committed = |ports: &BTreeMap<String, u16>| {
+        task::committed_plan(
+            dir,
+            head,
+            run.dir.as_deref().unwrap_or(""),
+            &root,
+            &required.task,
+            &required.args,
+            ports,
+        )
+        .map(|plan| plan.commands())
     };
-    if committed.is_ok_and(|plan| !same(&plan)) {
+    if matches_committed(&run.steps, committed) == Some(false) {
         out.push_str(&format!(
             "\nAn uncommitted config layer changed what ran: these steps differ from what the \
              `devkit.toml` files committed at HEAD define for `{}`.\n",
@@ -298,6 +287,26 @@ fn ran_note(dir: &Path, head: &str, run: &Run, required: &RequiredTask) -> Strin
         ));
     }
     out
+}
+
+/// Whether `recorded` are the command steps `committed` renders with the
+/// ports they recorded. `None` when the committed config does not render.
+fn matches_committed(
+    recorded: &[Step],
+    committed: impl Fn(&BTreeMap<String, u16>) -> Result<Vec<Step>>,
+) -> Option<bool> {
+    let ports = recorded
+        .iter()
+        .flat_map(|s| s.ports.iter().map(|(app, port)| (app.clone(), *port)))
+        .collect();
+    let plan = committed(&ports).ok()?;
+    Some(
+        plan.len() == recorded.len()
+            && plan
+                .iter()
+                .zip(recorded)
+                .all(|(c, r)| c.task == r.task && c.argv == r.argv),
+    )
 }
 
 /// A fenced block of `lines` tagged `info`: the first lines that fit in

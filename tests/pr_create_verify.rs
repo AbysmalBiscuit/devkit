@@ -929,6 +929,37 @@ fn runs_passed_answers_no_where_the_gate_refuses() {
     assert!(!create(&p, "agent").0, "the gate refuses too");
 }
 
+/// A layer can leave the required task only `up` steps, which record no
+/// command, while HEAD's committed task runs one; the run still differs
+/// from what HEAD defines.
+#[test]
+fn a_run_of_only_up_steps_under_an_uncommitted_layer_says_so() {
+    let p = project(
+        "[apps.srv]\nbase_port = 39204\npath = \".\"\nlaunch = [\"git\", \"version\"]\n\
+         [tasks.ver]\nrun = [\"git\", \"version\"]\n\
+         [tasks.e2e]\nsteps = [{ up = \"srv\" }, { task = \"ver\" }]\n\
+         [pr.gates]\nverify_task = \"e2e\"\n",
+    );
+    let _server = hold_srv(&p, None);
+    let outside = tempfile::tempdir().unwrap();
+    let layer = outside.path().join("devkit.toml");
+    let toml = std::fs::read_to_string(p.project().join("devkit.toml")).unwrap();
+    let only_up = toml.replace(
+        "steps = [{ up = \"srv\" }, { task = \"ver\" }]",
+        "steps = [{ up = \"srv\" }]",
+    );
+    assert_ne!(only_up, toml);
+    std::fs::write(&layer, only_up).unwrap();
+    task(&p, &["--config", layer.to_str().unwrap(), "e2e"]);
+    let body = opened_body(&p);
+    assert!(body.contains("Exit code: 0"), "{body}");
+    assert!(!body.contains("Steps run:"), "{body}");
+    assert!(
+        body.contains("An uncommitted config layer changed what ran"),
+        "{body}"
+    );
+}
+
 #[test]
 fn a_run_whose_up_step_launched_its_server_qualifies() {
     let p = project(UP_VERIFY);
