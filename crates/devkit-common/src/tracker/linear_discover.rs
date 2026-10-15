@@ -165,7 +165,8 @@ fn add(values: &mut Vec<EnumValue>, id: &str, name: &str, team: &str) {
     }
 }
 
-/// The fields a [`gather`] response offers. A team-bound value (a team's
+/// The fields a [`gather`] response offers, an enum the read found empty
+/// included, so a refresh drops its stale values. A team-bound value (a team's
 /// label, cycle, project or project milestone) records the keys of the
 /// teams it is valid in; a workspace label records none. The team field is
 /// read in part, since the read covers only the viewer's or the named
@@ -315,25 +316,19 @@ pub fn parse(
             DiscoveredField::new(FieldType::Number, Place::Estimate),
         );
     }
-    if !cycles.is_empty() {
-        field(
-            "cycle",
-            enumerated(Place::Cycle, cycles).partly(partial_cycles),
-        );
-    }
-    if !projects.is_empty() {
-        field(
-            "project",
-            enumerated(Place::Project, projects).partly(partial_projects),
-        );
-    }
-    if !milestones.is_empty() {
-        field(
-            "project_milestone",
-            enumerated(Place::ProjectMilestone, milestones)
-                .partly(partial_projects || partial_milestones),
-        );
-    }
+    field(
+        "cycle",
+        enumerated(Place::Cycle, cycles).partly(partial_cycles),
+    );
+    field(
+        "project",
+        enumerated(Place::Project, projects).partly(partial_projects),
+    );
+    field(
+        "project_milestone",
+        enumerated(Place::ProjectMilestone, milestones)
+            .partly(partial_projects || partial_milestones),
+    );
     field(
         "due_date",
         DiscoveredField::new(FieldType::Date, Place::DueDate),
@@ -461,6 +456,22 @@ mod tests {
         ]);
         assert!(!found.fields.contains_key("estimate"), "no team estimates");
         assert_eq!(found.unmatched_users, ["u-bob (Bob)"]);
+    }
+
+    #[test]
+    fn an_enum_the_tracker_answers_empty_is_still_offered() {
+        let mut resp = response();
+        for team in resp["data"]["viewer"]["teams"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+        {
+            team["cycles"]["nodes"] = json!([]);
+            team["projects"]["nodes"] = json!([]);
+        }
+        let found = parse(&resp, &[], &people()).unwrap();
+        for field in ["cycle", "project", "project_milestone"] {
+            assert_eq!(found.fields[field].values, [], "{field}");
+        }
     }
 
     #[test]

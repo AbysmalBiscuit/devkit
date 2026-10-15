@@ -239,7 +239,8 @@ fn summary(kind: TrackerKind, changes: &[Change], found: &Discovered) -> String 
 /// `merged` declares at the same place, or by the same name with no place,
 /// has its `type`, `list`, `where` and `values` refreshed, keeping each
 /// value's declared name; nothing else of it is written. Any other field is
-/// added at `level = "info"`. Comments and layout survive.
+/// added at `level = "info"`, unless it is an `enum` the tracker offers no
+/// value of. Comments and layout survive.
 pub(crate) fn merge(
     doc: &mut DocumentMut,
     kind: TrackerKind,
@@ -297,6 +298,7 @@ pub(crate) fn merge(
                 write_facts(entry(doc, kind, target)?, field, &values)?;
                 changes.push(Change::Refreshed(target.clone()));
             }
+            None if field.r#type == FieldType::Enum && field.values.is_empty() => {}
             None if taken(name) => changes.push(Change::NameTaken {
                 field: name.clone(),
                 place: field.r#where.label(),
@@ -716,6 +718,39 @@ values = [
     }
 
     #[test]
+    fn an_empty_enum_drops_stale_values_and_is_never_added() {
+        let cycle = |values: Vec<EnumValue>| {
+            DiscoveredField::new(FieldType::Enum, Place::Cycle).with_values(values)
+        };
+        let repo = "[ticket.fields.linear.cycle]\ntype = \"enum\"\nwhere = \"cycle\"\n\
+                    values = [{ name = \"Cycle 3\", id = \"cyc-3\" }]\n";
+        let (text, changes) = merged_on(
+            TrackerKind::Linear,
+            "",
+            repo,
+            &found(&[("cycle", cycle(vec![]))]),
+        );
+        assert_eq!(changes, [
+            Change::ValueDropped {
+                field: "cycle".into(),
+                value: "Cycle 3".into()
+            },
+            Change::Refreshed("cycle".into())
+        ]);
+        let cfg = Config::parse(&text).unwrap();
+        assert_eq!(cfg.ticket.fields.linear["cycle"].values, [], "{text}");
+
+        let (text, changes) = merged_on(
+            TrackerKind::Linear,
+            "",
+            "",
+            &found(&[("cycle", cycle(vec![]))]),
+        );
+        assert!(changes.is_empty(), "{changes:?}");
+        assert_eq!(text, "");
+    }
+
+    #[test]
     fn an_unchanged_field_leaves_the_file_alone() {
         let (text, changes) = merged("", REPO, &found(&[("priority", priority(&[("P0", "o0")]))]));
         assert!(changes.is_empty(), "{changes:?}");
@@ -744,7 +779,9 @@ values = [
 
     #[test]
     fn a_name_declared_for_another_place_is_not_reused() {
-        let labels = DiscoveredField::new(FieldType::Enum, Place::Labels).list();
+        let labels = DiscoveredField::new(FieldType::Enum, Place::Labels)
+            .list()
+            .with_values(vec![named("bug")]);
         let repo = "[ticket.fields.github.labels]\ntype = \"string\"\nwhere = \"milestone\"\n";
         let (text, changes) = merged("", repo, &found(&[("labels", labels)]));
         assert_eq!(changes, [Change::NameTaken {

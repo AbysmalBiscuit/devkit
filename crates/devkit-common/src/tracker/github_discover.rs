@@ -91,7 +91,9 @@ pub fn query(slug: &str, project: Option<&ProjectRef>) -> String {
     format!("query {{ {} {board} }}", repository(slug, &lists.join(" ")))
 }
 
-/// The fields a [`query`] response offers. The project field named
+/// The fields a [`query`] response offers, an enum the read found empty
+/// included, so a refresh drops its stale values; issue types only where the
+/// owner has them. The project field named
 /// `status_field` belongs to `[ticket.events]` and is never offered, nor is a
 /// project field GitHub fills itself (its title, assignees, labels and the
 /// like). Assignable users no `[people]` entry names, and created project
@@ -145,7 +147,7 @@ pub fn parse(
         &mut out,
     );
     let types: Vec<EnumValue> = nodes(repo, "/issueTypes").filter_map(id_name).collect();
-    if !types.is_empty() {
+    if repo.get("issueTypes").is_some_and(|t| !t.is_null()) {
         field(
             "type",
             DiscoveredField::new(FieldType::Enum, Place::IssueType)
@@ -343,6 +345,17 @@ mod tests {
         let found = parse(&response(), "Status", &people()).unwrap();
         assert_eq!(found.unwritable, ["`Sprint` (ITERATION)"]);
         assert!(!found.fields.contains_key("sprint"));
+    }
+
+    #[test]
+    fn issue_types_are_offered_empty_only_where_the_owner_has_them() {
+        let mut resp = response();
+        resp["data"]["repository"]["issueTypes"]["nodes"] = json!([]);
+        let found = parse(&resp, "Status", &people()).unwrap();
+        assert_eq!(found.fields["type"].values, []);
+        resp["data"]["repository"]["issueTypes"] = Json::Null;
+        let found = parse(&resp, "Status", &people()).unwrap();
+        assert!(!found.fields.contains_key("type"));
     }
 
     #[test]
