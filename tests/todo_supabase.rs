@@ -66,7 +66,10 @@ fn as_session(session: &str) -> [(&'static str, &str); 1] {
 }
 
 fn added(p: &Proj, text: &str, session: &str) -> String {
-    let out = p.devkit(&["todo", "add", "--ids", "short", text], &as_session(session));
+    let out = p.devkit(
+        &["todo", "add", "--ids", "short", text],
+        &as_session(session),
+    );
     assert!(out.status.success(), "{}", stderr(&out));
     stdout(&out).trim().to_string()
 }
