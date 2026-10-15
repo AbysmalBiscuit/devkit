@@ -350,7 +350,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
         return crate::emit_completions(shell, "todo", "todo");
     }
     if let TodoCommand::Context(args) = cli.command {
-        if let Some(text) = context(&args) {
+        if let Some(text) = context(&args, cli.id_style) {
             print!("{text}");
         }
         return Ok(());
@@ -1412,7 +1412,7 @@ pub(crate) fn alacritree_json(todo: &Todo) -> Option<Value> {
 /// The block to inject, or `None` for silence: no payload, no session, a
 /// harness without session nodes, nothing new under `--if-changed`, or any
 /// store failure.
-fn context(args: &ContextArgs) -> Option<String> {
+fn context(args: &ContextArgs, id_style: Option<IdStyle>) -> Option<String> {
     let payload = hook::read_payload(Some(args.harness), HookEvent::SessionStart)?;
     payload.session_id()?;
     let viewer = to_todo_holder(&payload.holder().ok()?);
@@ -1453,7 +1453,8 @@ fn context(args: &ContextArgs) -> Option<String> {
     let nodes = list_nodes(&visible, &todos);
     let graph = Graph::new(&graph_todos);
     let work = fence.work(&todos, false).ok()?;
-    let names = names::names(store.config().ids, &graph_todos, &cwd);
+    let style = id_style.unwrap_or(store.config().ids);
+    let names = names::names(style, &graph_todos, &cwd);
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),

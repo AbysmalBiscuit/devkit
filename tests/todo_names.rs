@@ -355,6 +355,37 @@ fn the_flag_overrides_the_config() {
 }
 
 #[test]
+fn the_flag_overrides_the_config_in_the_injected_lists() {
+    let p = Proj::with_home_config("[todo]\nids = \"name\"\n");
+    let id = added(&p, "one");
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": p.path,
+        "source": "startup",
+    })
+    .to_string();
+    let injected = |style: &str| {
+        let args = [
+            "todo",
+            "context",
+            "--harness",
+            "claude-code",
+            "--ids",
+            style,
+        ];
+        let out = p.devkit_in(&p.path, &args, &TASKCHAMPION, &payload);
+        assert!(out.status.success(), "{}", stderr(&out));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let full = injected("full");
+    assert!(full.contains(&format!("one ({id})")), "{full}");
+    let short = injected("short");
+    assert!(short.contains(&format!("one ({})", &id[..8])), "{short}");
+    assert!(!short.contains(&id), "{short}");
+}
+
+#[test]
 fn builtin_ids_show_whole() {
     let p = Proj::new();
     ok(p.devkit(&["todo", "add", "one"], &S1));
