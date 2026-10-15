@@ -41,12 +41,7 @@ pub(crate) struct Filing {
 
 /// What to promote `id` to: `ticket`, an existing ticket's key, or else a
 /// ticket filed from `filing` with the todo's text as its title.
-pub(crate) fn promote(
-    at: &Promote,
-    id: &str,
-    ticket: Option<&str>,
-    filing: Filing,
-) -> Result<()> {
+pub(crate) fn promote(at: &Promote, id: &str, ticket: Option<&str>, filing: Filing) -> Result<()> {
     let store = at.store;
     let old = super::resolve_id(store, id)?;
     let short = devkit_todo::short_id(&old.id).to_string();
