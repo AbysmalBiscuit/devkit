@@ -9,6 +9,7 @@ pr_proof_variable = "proof"
 # the repository cannot be derived from it. Both are spelled out instead.
 [github]
 issues_repo = "AbysmalBiscuit/devkit"
+project = 3
 
 [forge]
 kind = "github"
