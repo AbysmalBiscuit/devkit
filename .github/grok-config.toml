@@ -1,0 +1,11 @@
+[models]
+default = "grok-4.7"
+default_reasoning_effort = "xhigh"
+
+# Quoted: [model.grok-4.7] is a nested table, so grok never sees the override.
+[model."grok-4.7"]
+context_window = 500000
+context_windows = [500000, 256000]
+
+[features]
+subagent_model_inheritance = true
