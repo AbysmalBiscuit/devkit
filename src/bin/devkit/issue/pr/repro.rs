@@ -128,6 +128,9 @@ struct Revert {
     delete: Vec<String>,
     /// Changed paths holding both test and source changes.
     mixed: Vec<String>,
+    /// Changed Rust files a `#[path]` attribute reaches, which could be test
+    /// modules the check does not resolve.
+    reached: Vec<String>,
     /// Rust files holding both, each with the text that keeps its test
     /// modules and reverts its source.
     splice: Vec<(String, String)>,
@@ -260,6 +263,17 @@ impl Gate {
                     "holds"
                 } else {
                     "hold"
+                },
+            ))
+        } else if !revert.reached.is_empty() {
+            Some(format!(
+                "{} {} a `#[path]` attribute, so the check cannot tell whether reverting it \
+                 would revert tests",
+                quoted(&revert.reached),
+                if revert.reached.len() == 1 {
+                    "is a module file reached through"
+                } else {
+                    "are module files reached through"
                 },
             ))
         } else if revert.restore.is_empty() && revert.delete.is_empty() && revert.splice.is_empty()
@@ -684,7 +698,33 @@ fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result
         Ok(tests.matches(path)
             || test_module_file(path, tests, &|p: &str| vcs.file_at(dir, rev, p))?)
     };
-    for change in vcs.changed_files(dir, merge_base, head)? {
+    let changes = vcs.changed_files(dir, merge_base, head)?;
+    let rust_changed = changes
+        .iter()
+        .flat_map(|c| [&c.old, &c.new])
+        .flatten()
+        .any(|p| p.ends_with(".rs"));
+    let targets = |rev: &str| -> Result<Vec<PathTarget>> {
+        if !rust_changed {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for file in vcs.files_containing(dir, rev, "#[path")? {
+            if let Some(text) = vcs
+                .file_at(dir, rev, &file)?
+                .filter(|_| file.ends_with(".rs"))
+            {
+                out.extend(path_targets(&file, &text));
+            }
+        }
+        Ok(out)
+    };
+    let (targets_was, targets_now) = (targets(merge_base)?, targets(head)?);
+    let reached = |targets: &[PathTarget], p: &Option<String>| {
+        p.as_ref()
+            .is_some_and(|p| targets.iter().any(|t| t.reaches(p)))
+    };
+    for change in changes {
         let old = match change.old {
             Some(p) if !is_test(merge_base, &p)? => Some(p),
             _ => None,
@@ -696,6 +736,10 @@ fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result
         let Some(label) = new.clone().or_else(|| old.clone()) else {
             continue;
         };
+        if reached(&targets_was, &old) || reached(&targets_now, &new) {
+            out.reached.push(label);
+            continue;
+        }
         let read = |rev: &str, p: &Option<String>| -> Result<Option<String>> {
             match p {
                 Some(p) => vcs.file_at(dir, rev, p),
@@ -727,6 +771,7 @@ fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result
         }
     }
     out.mixed.sort();
+    out.reached.sort();
     // A path both restored and deleted, as by a rename onto a path the branch
     // also recreates, ends at its merge-base contents.
     out.delete.retain(|d| !out.restore.contains(d));
@@ -796,6 +841,48 @@ fn declared_in_tests(
         }
     }
     Ok(false)
+}
+
+/// Where a `mod` declaration's `#[path]` attribute leads.
+#[derive(Debug, PartialEq, Eq)]
+enum PathTarget {
+    /// The module file it resolves to.
+    File(String),
+    /// A file of this name somewhere, as the inline modules around the
+    /// declaration could not be read.
+    Named(String),
+}
+
+impl PathTarget {
+    fn reaches(&self, path: &str) -> bool {
+        match self {
+            PathTarget::File(file) => file == path,
+            PathTarget::Named(name) => split_last(path).1 == name,
+        }
+    }
+}
+
+/// Where the `#[path]` attributes on the `mod x;` declarations in `file`,
+/// whose text is `text`, lead.
+fn path_targets(file: &str, text: &str) -> Vec<PathTarget> {
+    let (dir, base) = split_last(file);
+    let children = match base {
+        "mod.rs" | "lib.rs" | "main.rs" => dir.to_string(),
+        _ => file.trim_end_matches(".rs").to_string(),
+    };
+    mod_declarations(text)
+        .into_iter()
+        .filter_map(|d| {
+            let attr = d.path?;
+            Some(match d.inline {
+                Some(inline) if inline.is_empty() => PathTarget::File(joined(dir, &attr)),
+                Some(inline) => {
+                    PathTarget::File(joined(&format!("{children}/{}", inline.join("/")), &attr))
+                }
+                None => PathTarget::Named(split_last(&joined("", &attr)).1.to_string()),
+            })
+        })
+        .collect()
 }
 
 /// `path` split at its last `/`: the directory, empty at the root, and the
@@ -1522,6 +1609,24 @@ mod tests {
         ] {
             assert!(!test_module_in(&[("src/lib.rs", decl)], module), "{decl}");
         }
+    }
+
+    #[test]
+    fn a_path_attribute_leads_from_its_declarations_directory() {
+        let decls = "#[path = \"../x/a.rs\"]\nmod a;\nmod outer {\n    #[path = \"b.rs\"]\n    \
+                     mod b;\n}\nfn f() {\n  if x {\n    #[path = \"deep/c.rs\"]\n    mod c;\n  \
+                     }\n}\nmod d;\n";
+        let want = |children: &str| {
+            vec![
+                PathTarget::File("x/a.rs".into()),
+                PathTarget::File(format!("{children}/outer/b.rs")),
+                PathTarget::Named("c.rs".into()),
+            ]
+        };
+        assert_eq!(path_targets("src/lib.rs", decls), want("src"));
+        assert_eq!(path_targets("src/shell.rs", decls), want("src/shell"));
+        assert!(PathTarget::Named("c.rs".into()).reaches("anywhere/c.rs"));
+        assert!(!PathTarget::File("x/a.rs".into()).reaches("y/x/a.rs"));
     }
 
     #[test]

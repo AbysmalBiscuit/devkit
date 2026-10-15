@@ -278,6 +278,46 @@ fn a_fix_updating_a_test_module_declared_in_an_inline_module_keeps_it() {
 }
 
 #[test]
+fn a_module_file_a_path_attribute_reaches_is_inconclusive_and_kept() {
+    let fake = project(GATE, "");
+    git(&fake, &["checkout", "-q", "main"]);
+    write(
+        &fake,
+        "src/shell.rs",
+        "fn f() {}\n\n#[cfg(test)]\n#[path = \"checks/shell_cases.rs\"]\nmod tests;\n",
+    );
+    write(
+        &fake,
+        "src/checks/shell_cases.rs",
+        "// expects: lib: broken\n",
+    );
+    git(&fake, &["add", "-A"]);
+    git(&fake, &[
+        "commit",
+        "-q",
+        "-m",
+        "a module tested through a path",
+    ]);
+    git(&fake, &["checkout", "-q", "-"]);
+    git(&fake, &["rebase", "-q", "main"]);
+    write(&fake, "src/checks/shell_cases.rs", "// expects the fix\n");
+    write(&fake, "tests/old.txt", "lib: fixed\nexpects: lib: broken\n");
+    git(&fake, &["add", "-A"]);
+    git(&fake, &["commit", "-q", "-m", "update the expectation"]);
+    fake.serve_pr_at(&PR, git(&fake, &["rev-parse", "HEAD"]).trim());
+    fake.serve_issue(
+        "Why.\n\n## Done when\n\n- [ ] The lib is fixed (proof: repro tests/old.txt)\n",
+    );
+    let body = opened_body(&fake);
+    assert!(body.contains("INCONCLUSIVE"), "{body}");
+    assert!(
+        body.contains("`src/checks/shell_cases.rs`"),
+        "names the file: {body}"
+    );
+    assert_eq!(repro_runs(&fake), Vec::<i64>::new(), "nothing is reverted");
+}
+
+#[test]
 fn a_test_module_whose_end_is_unclear_is_inconclusive() {
     let p = project(GATE, FIX);
     let module = |expect: &str| {
