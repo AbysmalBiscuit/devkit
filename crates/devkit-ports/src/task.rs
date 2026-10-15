@@ -1688,7 +1688,8 @@ mod tests {
             &Ports::Base,
             "seq",
             &BTreeMap::new(),
-        ).unwrap();
+        )
+        .unwrap();
         let PlannedStep::Up { launches, .. } = &plan.steps[0] else {
             panic!("an up step plans launches");
         };

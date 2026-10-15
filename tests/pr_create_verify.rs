@@ -526,7 +526,10 @@ fn a_merge_base_whose_pr_table_does_not_parse_opens_a_humans_pr_ungated() {
     let p = project_with_a_broken_base_pr_table("");
     let (ok, stderr) = create(&p, "human");
     assert!(ok, "{stderr}");
-    assert!(!stderr.contains("warning"), "no gate binds a human: {stderr}");
+    assert!(
+        !stderr.contains("warning"),
+        "no gate binds a human: {stderr}"
+    );
     assert_eq!(body(&p), "Adds a thing.");
 }
 
