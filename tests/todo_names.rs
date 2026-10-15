@@ -199,3 +199,43 @@ fn an_ambiguous_name_names_each_match_and_changes_nothing() {
     assert!(err.contains(&s.todo_for("x/y#66").id), "{err}");
     assert_eq!(s.todo_for("x/y#66").status.kind(), StatusKind::InProgress);
 }
+
+#[test]
+fn a_purged_blocker_numbered_like_tickets_names_none_of_them() {
+    let s = Synced::new(&format!("{RULES}{STATUSES}"), true);
+    for text in ["one", "two", "three", "four", "five"] {
+        ok(s.devkit(&["todo", "add", text], &S1));
+    }
+    ok(s.devkit(&["todo", "block", "5", "--by", "3"], &S1));
+    ok(s.devkit(&["todo", "purge", "3"], &[("DEVKIT_CALLER", "human")]));
+    s.serve(
+        "graphql.json",
+        &graphql(&[issue(3, Some("Todo"), &[])], &OPTIONS),
+    );
+    ok(s.sync(&[]));
+    s.proj
+        .store()
+        .add(devkit_todo::NewTodo {
+            description: "Elsewhere".into(),
+            project: Some("proj".into()),
+            parent: None,
+            order: None,
+            ticket: Some(devkit_todo::TicketRef {
+                tracker: "github".into(),
+                key: "x/y#3".into(),
+                synced_status: None,
+            }),
+        })
+        .unwrap();
+    std::fs::remove_file(s.proj.path.join("devkit.toml")).unwrap();
+    let out = s.devkit(&["todo", "ready"], &S1);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let ready = String::from_utf8_lossy(&out.stdout);
+    for text in ["one", "two", "four", "five"] {
+        assert_eq!(ready.matches(text).count(), 1, "{text}: {ready}");
+    }
+    for key in ["o/r#3", "x/y#3"] {
+        let ticket = s.todo_for(key).id;
+        assert!(!s.proj.todo("5").blocked_by.contains(&ticket), "{key}");
+    }
+}

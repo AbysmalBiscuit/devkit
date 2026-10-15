@@ -45,7 +45,7 @@ pub(crate) struct SyncReport {
 /// is still pending or in progress, so a close or a reassignment reaches its
 /// todo. Adds land before edits, which name todos by ticket.
 pub(crate) fn sync_tickets(
-    store: &Store,
+    store: &impl TodoStore,
     cwd: &Path,
     node: &str,
     dry_run: bool,
@@ -145,7 +145,12 @@ pub(crate) fn sync_created(dir: &Path, key: &str) -> Result<()> {
 /// and returns its todo; `None` when the repository has no `[ticket.sync]`
 /// rules, which queries no tracker. The ticket's parent and blockers link
 /// to the todos already synced for them.
-pub(crate) fn sync_one(store: &Store, cwd: &Path, node: &str, key: &str) -> Result<Option<Todo>> {
+pub(crate) fn sync_one(
+    store: &impl TodoStore,
+    cwd: &Path,
+    node: &str,
+    key: &str,
+) -> Result<Option<Todo>> {
     let selected = tracker::select(None, &cwd.to_string_lossy(), None);
     let Some(config) = selected.config.filter(|c| !c.ticket.sync.rules.is_empty()) else {
         return Ok(None);
@@ -183,7 +188,12 @@ pub(crate) fn sync_one(store: &Store, cwd: &Path, node: &str, key: &str) -> Resu
 }
 
 /// Lands `plan`, made from `existing`, the todos on its node.
-fn apply_plan(store: &Store, kind: &str, existing: &[Todo], plan: &SyncPlan) -> Result<SyncReport> {
+fn apply_plan(
+    store: &impl TodoStore,
+    kind: &str,
+    existing: &[Todo],
+    plan: &SyncPlan,
+) -> Result<SyncReport> {
     let planned_on: HashMap<String, &Todo> = existing
         .iter()
         .filter_map(|t| {
@@ -200,7 +210,7 @@ fn apply_plan(store: &Store, kind: &str, existing: &[Todo], plan: &SyncPlan) -> 
 /// `planned_on` was read is skipped: the change made while the tracker
 /// answered wins.
 fn apply(
-    store: &Store,
+    store: &impl TodoStore,
     plan: &SyncPlan,
     planned_on: &HashMap<String, &Todo>,
 ) -> Result<SyncReport> {
@@ -246,7 +256,7 @@ fn apply(
 /// Whether the todo `seen` describes now holds another value in `store` for
 /// the status or description `change` sets, or is gone; false for a change
 /// that sets neither.
-fn moved_since(store: &Store, seen: &Todo, change: &Change) -> Result<bool> {
+fn moved_since(store: &impl TodoStore, seen: &Todo, change: &Change) -> Result<bool> {
     let field_moved: fn(&Todo, &Todo) -> bool = match change {
         Change::SetStatus(_) => |now, seen| now.status != seen.status,
         Change::Describe(_) => |now, seen| now.description != seen.description,
@@ -255,7 +265,7 @@ fn moved_since(store: &Store, seen: &Todo, change: &Change) -> Result<bool> {
         }
     };
     Ok(store
-        .get_exact(&seen.id)?
+        .get(&seen.id)?
         .is_none_or(|now| field_moved(&now, seen)))
 }
 
@@ -339,7 +349,7 @@ pub(crate) fn spawn_if_stale(cwd: &Path, node: &str, config: &TicketSyncConfig) 
 /// when another holds `node`'s lock or the sync is no longer due, and a
 /// failure is recorded, holding off the next attempt, rather than returned.
 pub(crate) fn sync_in_background(
-    store: &Store,
+    store: &impl TodoStore,
     cwd: &Path,
     node: &str,
     config: &TicketSyncConfig,
