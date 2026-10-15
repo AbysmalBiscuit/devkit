@@ -313,7 +313,8 @@ pub enum Naming {
     /// narrowed to one by the ticket's team, or given as an id.
     Devkit,
     /// The tracker resolves the name itself, within the issue's team, so a
-    /// name several values share passes while the team is unknown.
+    /// name several team-bound values share passes while the team is
+    /// unknown.
     Tracker,
     /// The value reaches the tracker as given, so only what the tracker
     /// itself takes names a value: its id or an alias, never devkit's name.
@@ -423,7 +424,12 @@ fn enum_one<'a>(
         .filter(|v| team.is_none_or(|t| t.admits(v)))
         .collect();
     match (fits.as_slice(), naming, team) {
-        ([v], ..) | ([v, ..], Naming::Tracker | Naming::Verbatim, None) => Ok(v),
+        ([v], ..) => Ok(v),
+        ([v, ..], Naming::Tracker | Naming::Verbatim, None)
+            if fits.iter().all(|v| !v.teams.is_empty()) =>
+        {
+            Ok(v)
+        }
         ([], ..) => match team.filter(|_| !named.is_empty()) {
             Some(team) => {
                 let mut teams: Vec<&str> = named

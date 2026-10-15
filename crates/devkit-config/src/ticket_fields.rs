@@ -133,35 +133,40 @@ impl FieldDecl {
             .fold(self.level, FieldLevel::max)
     }
 
-    /// The enum values `raw` names: the one whose id it is exactly, else
-    /// every value whose name or one of whose aliases it matches
-    /// case-insensitively, which is several when values of different Linear
-    /// teams share a name.
+    /// The enum values `raw` names: every value whose id it is exactly, with
+    /// every value it is an alias of, else every value whose name or one of
+    /// whose aliases it matches case-insensitively, which is several when
+    /// values of different Linear teams share a name.
     pub fn enum_values(&self, raw: &str) -> Vec<&EnumValue> {
         let raw = raw.trim();
-        match self.values.iter().find(|v| v.id == raw) {
-            Some(v) => vec![v],
-            None => self
-                .values
-                .iter()
-                .filter(|v| v.name.eq_ignore_ascii_case(raw) || v.has_alias(raw))
-                .collect(),
-        }
+        self.by_id_or(raw, |v| {
+            v.name.eq_ignore_ascii_case(raw) || v.has_alias(raw)
+        })
     }
 
-    /// The enum values `raw` names as the tracker spells them: the one whose
-    /// id it is exactly, else every value whose id or one of whose aliases it
-    /// matches case-insensitively. A value's `name` is devkit's alone.
+    /// The enum values `raw` names as the tracker spells them: every value
+    /// whose id it is exactly, with every value it is an alias of, else every
+    /// value whose id or one of whose aliases it matches case-insensitively.
+    /// A value's `name` is devkit's alone.
     pub fn tracker_values(&self, raw: &str) -> Vec<&EnumValue> {
         let raw = raw.trim();
-        match self.values.iter().find(|v| v.id == raw) {
-            Some(v) => vec![v],
-            None => self
-                .values
-                .iter()
-                .filter(|v| v.id.eq_ignore_ascii_case(raw) || v.has_alias(raw))
-                .collect(),
-        }
+        self.by_id_or(raw, |v| v.id.eq_ignore_ascii_case(raw) || v.has_alias(raw))
+    }
+
+    /// The values `raw` is the exact id or an alias of when it is some
+    /// value's exact id, else the values `loosely` matches.
+    fn by_id_or(&self, raw: &str, loosely: impl Fn(&EnumValue) -> bool) -> Vec<&EnumValue> {
+        let exact = self.values.iter().any(|v| v.id == raw);
+        self.values
+            .iter()
+            .filter(|v| {
+                if exact {
+                    v.id == raw || v.has_alias(raw)
+                } else {
+                    loosely(v)
+                }
+            })
+            .collect()
     }
 }
 

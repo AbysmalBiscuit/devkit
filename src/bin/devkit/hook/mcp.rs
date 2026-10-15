@@ -1283,4 +1283,31 @@ level  = "info"
         let v = fields(&linear_rule(), &toml, input);
         assert!(denied_mentioning(&v, "`needs`"), "{v:?}");
     }
+
+    #[test]
+    fn a_token_one_value_has_as_id_and_another_as_alias_is_refused() {
+        let toml = GITHUB_FIELDS
+            .replace("level       = \"error\"", "level       = \"none\"")
+            .replace(
+            r#"values = [{ name = "v1", id = "v1" }]"#,
+            r#"values = [{ name = "3", id = "3", aliases = ["5"] }, { name = "3.1", id = "3.1", aliases = ["3"] }]"#,
+        );
+        let call = |milestone: Value| {
+            fields(
+                &github_rule(),
+                &toml,
+                gh_create(json!({"labels": ["bug"], "milestone": milestone})),
+            )
+        };
+        for token in [json!("3"), json!(3)] {
+            let v = call(token.clone());
+            assert!(
+                denied_mentioning(&v, "names several values of `milestone`")
+                    && denied_mentioning(&v, "3 (id 3), 3.1 (id 3.1)"),
+                "{token}: {v:?}"
+            );
+        }
+        assert_eq!(call(json!(5)), Verdict::Allow);
+        assert_eq!(call(json!("3.1")), Verdict::Allow);
+    }
 }
