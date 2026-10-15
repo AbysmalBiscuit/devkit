@@ -46,9 +46,6 @@ def quote: "> " + (rtrimstr("\n") | gsub("\n"; "\n> "));
         ([$findings[] | "- \(priority | badge) \(.title) (\(location))"] | join("\n"))
       else
         ([$findings[] | detail] | join("\n\n---\n\n"))
-      end),
-     (if $findings == [] then empty else
-       "<sub>P0: breaks every input, blocks release. P1: fix before merge. P2: fix eventually. P3: nice to have.</sub>"
       end)
    ] | join("\n\n")),
    comments: (if $inline then [$findings[] | comment] else [] end)}
