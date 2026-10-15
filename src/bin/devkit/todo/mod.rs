@@ -1011,9 +1011,10 @@ fn apply_checked(
                     .iter()
                     .map(|(todo, ..)| devkit_todo::short_id(&todo.id))
                     .collect();
-                let done = match changed.is_empty() {
-                    true => "(none)".to_string(),
-                    false => changed.join(" "),
+                let done = if changed.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    changed.join(" ")
                 };
                 return Err(err.context(format!("done: {done}; not done: {}", not_done.join(" "))));
             }
