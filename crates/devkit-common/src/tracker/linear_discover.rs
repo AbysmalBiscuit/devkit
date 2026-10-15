@@ -11,7 +11,8 @@ use devkit_config::{EnumValue, FieldType, Person, Place};
 use serde_json::{Value as Json, json};
 
 use super::discover::{
-    Discovered, DiscoveredField, id_name, nodes, partly, read_all, str_of, unfinished,
+    Discovered, DiscoveredField, id_name_taken_by_name, nodes, partly, read_all, spellings, str_of,
+    unfinished,
 };
 
 /// How many of a list one request reads: Linear's largest page.
@@ -151,8 +152,9 @@ fn gather(asked: &[String], post: &mut Post<'_>) -> Result<Json> {
 }
 
 /// Add a value valid in `team` to `values`, or `team` to the value of the
-/// same id already there.
-fn add(values: &mut Vec<EnumValue>, id: &str, name: &str, team: &str) {
+/// same id already there. Linear takes the value by its id or by each of
+/// `taken`, which become its aliases.
+fn add(values: &mut Vec<EnumValue>, id: &str, name: &str, taken: &[&str], team: &str) {
     match values.iter_mut().find(|v| v.id == id) {
         Some(v) if !v.teams.iter().any(|t| t == team) => v.teams.push(team.to_string()),
         Some(_) => {}
@@ -160,7 +162,7 @@ fn add(values: &mut Vec<EnumValue>, id: &str, name: &str, team: &str) {
             name: name.to_string(),
             id: id.to_string(),
             teams: vec![team.to_string()],
-            aliases: Vec::new(),
+            aliases: spellings(id, taken.iter().copied()),
         }),
     }
 }
@@ -237,21 +239,21 @@ pub fn parse(
         ));
         for c in nodes(team, "/cycles") {
             let Some(cid) = str_of(c, "id") else { continue };
-            let name = match (
-                str_of(c, "name").filter(|n| !n.is_empty()),
-                c["number"].as_u64(),
-            ) {
+            let given = str_of(c, "name").filter(|n| !n.is_empty());
+            let number = c["number"].as_u64().map(|n| n.to_string());
+            let name = match (given, &number) {
                 (Some(n), _) => n.to_string(),
                 (None, Some(n)) => format!("Cycle {n}"),
                 (None, None) => cid.to_string(),
             };
-            add(&mut cycles, cid, &name, key);
+            let taken: Vec<&str> = given.into_iter().chain(number.as_deref()).collect();
+            add(&mut cycles, cid, &name, &taken, key);
         }
         for p in nodes(team, "/projects") {
             let (Some(pid), Some(pname)) = (str_of(p, "id"), str_of(p, "name")) else {
                 continue;
             };
-            add(&mut projects, pid, pname, key);
+            add(&mut projects, pid, pname, &[pname], key);
             partial_milestones |= unfinished(p.get("projectMilestones"));
             let what = format!("milestones of project {pname}");
             if let Some(t) = partly(p.get("projectMilestones"), &what)
@@ -261,7 +263,7 @@ pub fn parse(
             }
             for m in nodes(p, "/projectMilestones") {
                 if let (Some(mid), Some(mname)) = (str_of(m, "id"), str_of(m, "name")) {
-                    add(&mut milestones, mid, mname, key);
+                    add(&mut milestones, mid, mname, &[mname], key);
                 }
             }
         }
@@ -275,7 +277,7 @@ pub fn parse(
             }
             Some(EnumValue {
                 teams: team.map(String::from).into_iter().collect(),
-                ..id_name(l)?
+                ..id_name_taken_by_name(l)?
             })
         })
         .collect();

@@ -1116,7 +1116,7 @@ level  = "info"
         let v = call("Platform");
         assert!(
             denied_mentioning(&v, "`Platform`")
-                && denied_mentioning(&v, "t-eng (ENG; or ENG, Engineering)"),
+                && denied_mentioning(&v, "t-eng (ENG; or Engineering)"),
             "{v:?}"
         );
     }

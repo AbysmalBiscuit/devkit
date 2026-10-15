@@ -10,8 +10,8 @@ use devkit_config::{EnumValue, FieldType, Person, Place, ProjectRef};
 use serde_json::Value as Json;
 
 use super::discover::{
-    Discovered, DiscoveredField, field_name, follow, id_name, named, nodes, partly, str_of,
-    unfinished,
+    Discovered, DiscoveredField, field_name, follow, id_name, id_name_taken_by_name, named, nodes,
+    partly, spellings, str_of, unfinished,
 };
 use crate::{forge::Repo, github::Api};
 
@@ -38,7 +38,7 @@ const BUILT_IN: &[&str] = &[
 /// page, the fields of each node, and what a note calls its items.
 const LISTS: [(&str, &str, &str, &str); 4] = [
     ("labels", "", "name", "labels"),
-    ("milestones", ", states: [OPEN]", "title", "open milestones"),
+    ("milestones", ", states: [OPEN]", "title number", "open milestones"),
     ("assignableUsers", "", "login name", "assignable users"),
     ("issueTypes", "", "id name", "issue types"),
 ];
@@ -131,8 +131,14 @@ pub fn parse(
         &mut out,
     );
     let milestones: Vec<EnumValue> = nodes(repo, "/milestones")
-        .filter_map(|n| str_of(n, "title"))
-        .map(named)
+        .filter_map(|n| {
+            let title = str_of(n, "title")?;
+            let number = n["number"].as_u64().map(|n| n.to_string());
+            Some(EnumValue {
+                aliases: spellings(title, number.as_deref()),
+                ..named(title)
+            })
+        })
         .collect();
     field(
         "milestone",
@@ -146,7 +152,9 @@ pub fn parse(
         DiscoveredField::new(FieldType::User, Place::Assignees).list(),
         &mut out,
     );
-    let types: Vec<EnumValue> = nodes(repo, "/issueTypes").filter_map(id_name).collect();
+    let types: Vec<EnumValue> = nodes(repo, "/issueTypes")
+        .filter_map(id_name_taken_by_name)
+        .collect();
     if repo.get("issueTypes").is_some_and(|t| !t.is_null()) {
         field(
             "type",
@@ -301,7 +309,7 @@ mod tests {
         json!({ "data": {
             "repository": {
                 "labels": { "pageInfo": { "hasNextPage": false }, "nodes": [{ "name": "bug" }, { "name": "area:todo" }] },
-                "milestones": { "pageInfo": { "hasNextPage": false }, "nodes": [{ "title": "v1" }] },
+                "milestones": { "pageInfo": { "hasNextPage": false }, "nodes": [{ "title": "v1", "number": 3 }] },
                 "assignableUsers": { "pageInfo": { "hasNextPage": true }, "nodes": [
                     { "login": "LevValle", "name": "Lev" },
                     { "login": "octo", "name": "Octo Cat" }
@@ -406,6 +414,17 @@ mod tests {
         assert_eq!(p.values[1].id, "47f");
         assert!(found.fields["labels"].list);
         assert_eq!(found.fields["type"].values[0].id, "IT_bug");
+        assert_eq!(
+            found.fields["type"].values[0].aliases,
+            ["Bug"],
+            "issue_write takes a type by its name"
+        );
+        let v1 = &found.fields["milestone"].values[0];
+        assert_eq!(
+            (v1.id.as_str(), v1.aliases.as_slice()),
+            ("v1", &["3".to_string()][..]),
+            "`gh` takes a milestone by its title, issue_write by its number"
+        );
         assert_eq!(found.unmatched_users, ["octo (Octo Cat)"]);
         assert_eq!(found.truncated, [
             "only the first 2 assignable users were read"

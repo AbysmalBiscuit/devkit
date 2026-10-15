@@ -471,3 +471,75 @@ fn a_name_several_values_share_is_listed_with_each_id() {
         "{out}"
     );
 }
+
+/// Run `devkit hook pre-tool-use` in `fake`'s project on a Linear MCP
+/// `save_issue` call of `input` in session `S1`, returning the denial's
+/// reason, or `None` for an allow.
+fn linear_mcp_denial(fake: &ghfake::Fake, input: serde_json::Value) -> Option<String> {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "S1",
+        "cwd": fake.project(),
+        "tool_name": "mcp__claude_ai_Linear__save_issue",
+        "tool_input": input,
+    });
+    let out = fake.devkit_with_stdin(
+        &["hook", "pre-tool-use", "--harness", "claude-code"],
+        payload.to_string().as_bytes(),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    (v["hookSpecificOutput"]["permissionDecision"] == "deny").then(|| {
+        v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    })
+}
+
+#[test]
+fn discovered_linear_labels_pass_the_mcp_gate_by_their_names() {
+    let fake = ghfake::Fake::without_pr(
+        "[tracker]\nkind = \"linear\"\n\n[harness.issue_tools.linear]\n\
+         servers = [\"*linear*\"]\ntools = [\"save_issue\"]\nabsent = [\"id\"]\n\
+         title = \"title\"\nbody = \"description\"\ntracker = \"linear\"\n\
+         fields = { team = \"team\", labels = [\"labels\", \"addLabels\"] }\n",
+    );
+    let linear = linearfake::LinearFake::start();
+    serve_eng(&linear, "[]");
+    let mut env = linear.env().to_vec();
+    env.push(("DEVKIT_CALLER", "agent"));
+    stdout(&fake.issue_with_env(&["fields", "discover", "--team", "ENG"], &env));
+    let rendered = stdout(&fake.issue_in_session("agent", Some("S1"), &[
+        "render", "--title", "T", "--body", "B",
+    ]));
+    let rendered: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    let call = |labels_key: &str, label: &str| {
+        serde_json::json!({
+            "title": rendered["title"],
+            "description": rendered["body"],
+            "team": "Engineering",
+            labels_key: [label],
+        })
+    };
+    for (key, label) in [
+        ("labels", "bug"),
+        ("labels", "Infra"),
+        ("addLabels", "bug"),
+        ("labels", "L2"),
+    ] {
+        assert_eq!(
+            linear_mcp_denial(&fake, call(key, label)),
+            None,
+            "{key} = [{label}]"
+        );
+    }
+    let reason = linear_mcp_denial(&fake, call("labels", "nope")).expect("denied");
+    assert!(reason.contains("`nope`"), "{reason}");
+}

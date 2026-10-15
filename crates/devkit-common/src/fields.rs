@@ -345,8 +345,14 @@ fn as_tracker_takes(value: &EnumValue) -> String {
     if !value.teams.is_empty() {
         about.push(format!("teams {}", value.teams.join(", ")));
     }
-    if !value.aliases.is_empty() {
-        about.push(format!("or {}", value.aliases.join(", ")));
+    let others: Vec<&str> = value
+        .aliases
+        .iter()
+        .map(String::as_str)
+        .filter(|a| !a.eq_ignore_ascii_case(&value.name))
+        .collect();
+    if !others.is_empty() {
+        about.push(format!("or {}", others.join(", ")));
     }
     if about.is_empty() {
         value.id.clone()

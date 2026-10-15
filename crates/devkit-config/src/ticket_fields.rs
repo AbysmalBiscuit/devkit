@@ -476,8 +476,8 @@ pub struct EnumValue {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub teams: Vec<String>,
     /// Other spellings the tracker itself takes for the value, matched
-    /// case-insensitively wherever `id` is: a Linear team's key and name.
-    /// `ticket fields discover` writes them.
+    /// case-insensitively wherever `id` is, such as a Linear team's key and
+    /// name or a label's name. `ticket fields discover` writes them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
 }

@@ -465,7 +465,7 @@
       "description": "One value of an `enum` field.",
       "properties": {
         "aliases": {
-          "description": "Other spellings the tracker itself takes for the value, matched\ncase-insensitively wherever `id` is: a Linear team's key and name.\n`ticket fields discover` writes them.",
+          "description": "Other spellings the tracker itself takes for the value, matched\ncase-insensitively wherever `id` is, such as a Linear team's key and\nname or a label's name. `ticket fields discover` writes them.",
           "items": {
             "type": "string"
           },

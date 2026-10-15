@@ -189,6 +189,33 @@ pub(crate) fn id_name(v: &Json) -> Option<EnumValue> {
     })
 }
 
+/// [`id_name`] for a value the tracker also takes by its name, which it
+/// records as an alias, so a tracker MCP call may pass it.
+pub(crate) fn id_name_taken_by_name(v: &Json) -> Option<EnumValue> {
+    let value = id_name(v)?;
+    Some(EnumValue {
+        aliases: spellings(&value.id, [value.name.as_str()]),
+        ..value
+    })
+}
+
+/// The spellings in `names` that differ from `id` and from each other,
+/// ignoring case: the aliases a value the tracker takes by `id` and by each
+/// of `names` records.
+pub(crate) fn spellings<'a>(id: &str, names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in names {
+        let name = name.trim();
+        if !name.is_empty()
+            && !name.eq_ignore_ascii_case(id)
+            && !out.iter().any(|o| o.eq_ignore_ascii_case(name))
+        {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
