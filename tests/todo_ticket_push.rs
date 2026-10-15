@@ -812,6 +812,11 @@ fn move_a_step_under_a_ticket_is_refused() {
         &AGENT,
     );
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("devkit ticket create") && err.contains("devkit todo promote"),
+        "{err}"
+    );
     assert_eq!(parent_of(&s, 67), None);
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
 }

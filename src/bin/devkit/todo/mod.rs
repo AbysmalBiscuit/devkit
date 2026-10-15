@@ -1158,10 +1158,12 @@ fn move_todo(
     {
         bail!(
             "todo {} is ticket {}, and with \"parent\" in [ticket.sync] push its parent is a \
-             ticket too; todo {} is not one, so it cannot hold it",
+             ticket too; todo {step} is not one, so it cannot hold it: turn todo {step} into a \
+             ticket with `devkit todo promote`, or file a new sub-issue with `devkit ticket \
+             create`",
             devkit_todo::short_id(&todo.id),
             ticket.key,
-            devkit_todo::short_id(&step.id)
+            step = devkit_todo::short_id(&step.id)
         );
     }
     let before = todo
