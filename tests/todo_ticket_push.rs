@@ -204,6 +204,29 @@ fn overwrite_tracker_writes_over_a_conflict() {
 }
 
 #[test]
+fn overwrite_recloses_an_issue_closed_as_not_planned_as_completed() {
+    let s = pushing("", true);
+    s.serve(
+        "graphql_mutation.json",
+        r#"{"data":{"closeIssue":{"issue":{"state":"CLOSED","stateReason":"COMPLETED"}}}}"#,
+    );
+    tracker_shows(&s, closed("NOT_PLANNED"));
+    let out = s.devkit(
+        &["todo", "done", "--overwrite-tracker", &ticket_id(&s)],
+        &AGENT,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let close = mutation_at(&s, "closeIssue").expect("closeIssue sent");
+    assert!(
+        s.mutations()[close].contains("stateReason: COMPLETED"),
+        "{:?}",
+        s.mutations()
+    );
+    assert_eq!(s.todo_for("o/r#65").status.kind(), StatusKind::Completed);
+    assert_eq!(synced_status(&s).as_deref(), Some("closed:completed"));
+}
+
+#[test]
 fn a_conflict_without_a_terminal_fails_instead_of_prompting() {
     let s = pushing(DONE_EVENT, true);
     tracker_shows(&s, at("Backlog"));
