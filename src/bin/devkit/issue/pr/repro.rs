@@ -153,6 +153,7 @@ impl Gate {
         if mode == GateMode::Off {
             return Ok(None);
         }
+        prune_stale(dir);
         let mut gate = Self {
             mode,
             caller,
@@ -550,20 +551,45 @@ impl Gate {
     }
 }
 
-/// A detached worktree at a commit, removed when dropped.
+/// A detached worktree at a commit, removed when dropped. It lives in a
+/// holder directory under [`throwaway_root`] beside a `lock` file it holds
+/// locked while in use, so [`prune_stale`] can tell a leaked one from one
+/// another `pr create` is running.
 struct Throwaway {
     main: PathBuf,
+    /// Declared before `holder` so the lock is released before the holder
+    /// directory is deleted, which Windows refuses while the file is open.
+    _lock: std::fs::File,
     holder: tempfile::TempDir,
+}
+
+/// The prefix of each throwaway worktree's holder directory.
+const HOLDER_PREFIX: &str = "devkit-repro-";
+
+/// Where throwaway worktrees go: under devkit's state directory, since a
+/// build in one can outgrow a tmpfs `$TMPDIR`.
+fn throwaway_root() -> PathBuf {
+    devkit_common::paths::state_dir().join("repro")
 }
 
 impl Throwaway {
     fn new(dir: &Path, head: &str) -> Result<Self> {
         let main = devkit_common::vcs::primary_checkout(dir)?;
+        let root = throwaway_root();
+        std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
         let holder = tempfile::Builder::new()
-            .prefix("devkit-repro-")
-            .tempdir()
+            .prefix(HOLDER_PREFIX)
+            .tempdir_in(&root)
             .context("creating a directory for the throwaway worktree")?;
-        let worktree = Self { main, holder };
+        let lock = std::fs::File::create(holder.path().join("lock"))
+            .context("creating the throwaway worktree's lock")?;
+        lock.lock()
+            .context("locking the throwaway worktree's lock")?;
+        let worktree = Self {
+            main,
+            _lock: lock,
+            holder,
+        };
         Vcs::at(dir)
             .create_worktree(&NewWorktree {
                 main: &worktree.main,
@@ -582,11 +608,56 @@ impl Throwaway {
 
 impl Drop for Throwaway {
     fn drop(&mut self) {
-        let vcs = Vcs::at(&self.main);
-        if vcs.remove_worktree(&self.main, &self.path(), true).is_err() {
-            let _ = std::fs::remove_dir_all(self.path());
-            let _ = vcs.prune(&self.main);
+        remove_worktree(&self.main, &self.path());
+    }
+}
+
+fn remove_worktree(main: &Path, path: &Path) {
+    let vcs = Vcs::at(main);
+    if vcs.remove_worktree(main, path, true).is_err() {
+        let _ = std::fs::remove_dir_all(path);
+        let _ = vcs.prune(main);
+    }
+}
+
+/// Removes the throwaway worktrees of `dir`'s repository that an earlier
+/// `pr create` leaked, as when it was interrupted: those whose holder's
+/// lock no process holds. A failure leaves the worktree for the next try.
+pub(crate) fn prune_stale(dir: &Path) {
+    let Ok(root) = throwaway_root().canonicalize() else {
+        return;
+    };
+    let vcs = Vcs::at(dir);
+    let Ok(Some(worktrees)) = vcs.worktrees(dir) else {
+        return;
+    };
+    let Ok(main) = devkit_common::vcs::primary_checkout(dir) else {
+        return;
+    };
+    for worktree in worktrees {
+        let Some(holder) = worktree.path.parent().and_then(|h| h.canonicalize().ok()) else {
+            continue;
+        };
+        let ours = holder.parent() == Some(root.as_path())
+            && holder
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(HOLDER_PREFIX));
+        if !ours {
+            continue;
         }
+        let Ok(lock) = std::fs::OpenOptions::new()
+            .write(true)
+            .open(holder.join("lock"))
+        else {
+            continue;
+        };
+        if lock.try_lock().is_err() {
+            continue;
+        }
+        remove_worktree(&main, &worktree.path);
+        drop(lock);
+        let _ = std::fs::remove_dir_all(&holder);
     }
 }
 

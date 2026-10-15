@@ -330,6 +330,65 @@ fn a_repro_task_that_starts_a_server_is_inconclusive_and_not_run() {
     assert_eq!(repro_runs(&p), Vec::<i64>::new(), "nothing ran");
 }
 
+/// Where `devkit` keeps the repro check's throwaway worktrees.
+fn repro_root(p: &ghfake::Fake) -> std::path::PathBuf {
+    p.state().join("devkit").join("repro")
+}
+
+#[test]
+fn the_throwaway_worktree_lives_in_the_state_dir_and_is_removed() {
+    let p = project(GATE, FIX);
+    opened_body(&p);
+    let out = p.devkit_here(&["run", "runs", "list", "--task", "repro", "--json"]);
+    let runs: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let root = repro_root(&p).canonicalize().unwrap();
+    let worktrees: Vec<std::path::PathBuf> = runs
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["worktree"].as_str().unwrap().into())
+        .collect();
+    assert_eq!(worktrees.len(), 2, "{runs}");
+    for worktree in worktrees {
+        assert!(
+            worktree.starts_with(&root),
+            "{} in {}",
+            worktree.display(),
+            root.display()
+        );
+        assert!(!worktree.exists(), "{} is removed", worktree.display());
+    }
+}
+
+#[test]
+fn a_stale_throwaway_worktree_is_pruned_and_one_in_use_is_kept() {
+    let p = project(GATE, FIX);
+    let add = |name: &str| {
+        let holder = repro_root(&p).join(name);
+        std::fs::create_dir_all(&holder).unwrap();
+        let lock = std::fs::File::create(holder.join("lock")).unwrap();
+        let worktree = holder.join("repro");
+        git(&p, &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            worktree.to_str().unwrap(),
+            "HEAD",
+        ]);
+        (holder, lock)
+    };
+    let (stale, _) = add("devkit-repro-stale");
+    let (live, lock) = add("devkit-repro-live");
+    lock.lock().unwrap();
+    opened_body(&p);
+    let listed = git(&p, &["worktree", "list", "--porcelain"]);
+    assert!(!listed.contains("devkit-repro-stale"), "{listed}");
+    assert!(!stale.exists(), "{}", stale.display());
+    assert!(listed.contains("devkit-repro-live"), "{listed}");
+    assert!(live.join("repro").exists());
+}
+
 /// What `git` reports of the caller's worktree, index and worktree list.
 fn snapshot(p: &ghfake::Fake) -> String {
     [
