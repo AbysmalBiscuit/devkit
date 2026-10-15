@@ -207,13 +207,19 @@ pub(crate) enum RunsCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Whether TASK exited 0 on a clean tree at exactly one commit.
+    /// Whether TASK, given exactly these `--arg` values, exited 0 on a clean
+    /// tree at exactly one commit.
     ///
-    /// Only runs in this repository's checkouts count. Exits 0 and prints the
-    /// run for yes, exits 1 for no.
+    /// Only runs in this repository's checkouts count, and the answer is the
+    /// one `devkit pr create`'s verify gate reaches: a run given other args,
+    /// or none when these name some, is no, as is one whose `up` step reused
+    /// a server already running before it started. Exits 0 and prints the run
+    /// for yes, exits 1 for no.
     Passed {
         /// Task name, as given to `devrun task`.
         task: String,
+        #[command(flatten)]
+        vars: crate::template::VarArgs,
         /// Full commit id to ask about; defaults to this worktree's HEAD. An
         /// abbreviated id or an ancestor's run never matches.
         #[arg(long)]
@@ -567,9 +573,12 @@ pub fn run(cli: RunCli) -> Result<()> {
             RunsCmd::List { task, limit, json } => {
                 cmd_runs_list(&cwd, task.as_deref(), *limit, *json)
             }
-            RunsCmd::Passed { task, sha, json } => {
-                cmd_runs_passed(&cwd, task, sha.as_deref(), *json)
-            }
+            RunsCmd::Passed {
+                task,
+                vars,
+                sha,
+                json,
+            } => cmd_runs_passed(&cwd, task, vars, sha.as_deref(), *json),
         },
     }
 }
@@ -610,8 +619,15 @@ fn cmd_runs_list(cwd: &str, task: Option<&str>, limit: usize, json: bool) -> Res
     Ok(())
 }
 
-fn cmd_runs_passed(cwd: &str, task: &str, sha: Option<&str>, json: bool) -> Result<()> {
+fn cmd_runs_passed(
+    cwd: &str,
+    task: &str,
+    vars: &crate::template::VarArgs,
+    sha: Option<&str>,
+    json: bool,
+) -> Result<()> {
     anyhow::ensure!(!task.trim().is_empty(), "name the task to ask about");
+    let args = vars.parse()?;
     let sha = match sha {
         Some(sha) => sha.trim().to_string(),
         None => {
@@ -621,7 +637,8 @@ fn cmd_runs_passed(cwd: &str, task: &str, sha: Option<&str>, json: bool) -> Resu
         }
     };
     anyhow::ensure!(!sha.is_empty(), "--sha names no commit");
-    let found = devkit_ports::ledger::Ledger::live().passed(&ledger_repo(cwd)?, task, &sha)?;
+    let found =
+        devkit_ports::ledger::Ledger::live().passed(&ledger_repo(cwd)?, task, &args, &sha)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&found)?);
     } else if let Some(run) = &found {

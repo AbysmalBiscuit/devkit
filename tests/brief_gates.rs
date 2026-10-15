@@ -86,6 +86,11 @@ fn the_brief_names_the_run_the_verify_gate_requires() {
         body.contains("any change the PR makes to what the task runs, which refuses nothing"),
         "{body}"
     );
+    assert!(
+        body.replace("\n  ", " ")
+            .contains("without its `up` step reusing a server already running before the run"),
+        "{body}"
+    );
     let body = brief(&format!("{gate}verify = \"advise\"\n"));
     assert!(body.contains("`verify` (advise): says NOT RUN"), "{body}");
     let body = brief("[pr.gates]\nverify = \"require\"\n");

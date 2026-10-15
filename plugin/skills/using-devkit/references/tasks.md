@@ -25,11 +25,12 @@ The ledger lives in devkit's state directory, outside every worktree, where `dev
 
 ```sh
 devrun runs list                              # this repository's runs, oldest first (--task NAME, --limit N, --json with tails)
-devrun runs passed <task>                     # did <task> exit 0 on a clean tree at HEAD? exit 0 = yes, 1 = no
+devrun runs passed <task>                     # did <task>, given no --arg, exit 0 on a clean tree at HEAD? exit 0 = yes, 1 = no
+devrun runs passed <task> --arg k=v           # the same for a run given exactly these args
 devrun runs passed <task> --sha <full-id>     # the same question for another commit
 ```
 
-`passed` answers yes only for a run in one of this repository's checkouts at exactly that commit id: a run at an ancestor, an abbreviated id, a dirty tree or a non-zero exit is no. `--json` prints the proving run, or `null`. To claim a check passed, cite `devrun runs passed`, not your own reading of the output.
+`passed` answers yes only for a run in one of this repository's checkouts at exactly that commit id, given exactly the `--arg` values passed to it: a run at an ancestor, an abbreviated id, a dirty tree, a non-zero exit, other args, or an `up` step that reused a server already running before the run is no. It is the same answer `devkit pr create`'s verify gate reaches. `--json` prints the proving run, or `null`. To claim a check passed, cite `devrun runs passed`, not your own reading of the output.
 
 ## Args
 

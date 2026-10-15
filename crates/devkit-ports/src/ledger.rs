@@ -90,18 +90,21 @@ pub struct Run {
 }
 
 impl Run {
-    /// Whether this run proves `task` exited 0 on a clean tree at `sha`.
-    pub fn proves(&self, task: &str, sha: &str) -> bool {
+    /// Whether this run proves `task` exited 0 on a clean tree at `sha`,
+    /// given exactly `args`, whatever servers it used.
+    pub fn proves(&self, task: &str, args: &BTreeMap<String, String>, sha: &str) -> bool {
         self.task == task
             && self.exit_code == Some(0)
             && self.clean
             && self.head.as_deref() == Some(sha)
+            && &self.args == args
     }
 
-    /// Whether this run proves `task` exited 0 on a clean tree at `sha`,
-    /// given exactly `args`.
-    pub fn proves_with(&self, task: &str, args: &BTreeMap<String, String>, sha: &str) -> bool {
-        self.proves(task, sha) && &self.args == args
+    /// Whether this run satisfies a PR gate on `task` given `args` at
+    /// `sha`: it [`proves`](Self::proves) it, and no `up` step reused a
+    /// server from before it started.
+    pub fn qualifies(&self, task: &str, args: &BTreeMap<String, String>, sha: &str) -> bool {
+        self.proves(task, args, sha) && self.reused_servers.is_empty()
     }
 }
 
@@ -205,15 +208,22 @@ impl Ledger {
             .collect())
     }
 
-    /// The latest run in `repo`'s checkouts proving `task` exited 0 on a
-    /// clean tree at exactly `sha`. A run at an ancestor, a prefix of the id,
-    /// a dirty tree or another repository proves nothing.
-    pub fn passed(&self, repo: &Path, task: &str, sha: &str) -> Result<Option<Run>> {
+    /// The latest run in `repo`'s checkouts that [`Run::qualifies`] for
+    /// `task` given `args` at exactly `sha`. A run at an ancestor, a prefix
+    /// of the id, a dirty tree, other args, a reused server or another
+    /// repository does not.
+    pub fn passed(
+        &self,
+        repo: &Path,
+        task: &str,
+        args: &BTreeMap<String, String>,
+        sha: &str,
+    ) -> Result<Option<Run>> {
         Ok(self
             .runs_in(repo)?
             .into_iter()
             .rev()
-            .find(|r| r.proves(task, sha)))
+            .find(|r| r.qualifies(task, args, sha)))
     }
 
     /// Whether `path` names something inside the ledger, however it is
@@ -566,12 +576,13 @@ mod tests {
     #[test]
     fn only_a_clean_zero_exit_at_the_exact_sha_proves_a_pass() {
         let sha = "0123456789abcdef0123456789abcdef01234567";
-        assert!(run("test", sha, true, Some(0)).proves("test", sha));
-        assert!(!run("test", sha, false, Some(0)).proves("test", sha));
-        assert!(!run("test", sha, true, Some(1)).proves("test", sha));
-        assert!(!run("test", sha, true, None).proves("test", sha));
-        assert!(!run("lint", sha, true, Some(0)).proves("test", sha));
-        assert!(!run("test", sha, true, Some(0)).proves("test", &sha[..12]));
+        let none = BTreeMap::new();
+        assert!(run("test", sha, true, Some(0)).proves("test", &none, sha));
+        assert!(!run("test", sha, false, Some(0)).proves("test", &none, sha));
+        assert!(!run("test", sha, true, Some(1)).proves("test", &none, sha));
+        assert!(!run("test", sha, true, None).proves("test", &none, sha));
+        assert!(!run("lint", sha, true, Some(0)).proves("test", &none, sha));
+        assert!(!run("test", sha, true, Some(0)).proves("test", &none, &sha[..12]));
     }
 
     #[test]
@@ -579,13 +590,13 @@ mod tests {
         let sha = "0123456789abcdef0123456789abcdef01234567";
         let all = BTreeMap::from([("scope".to_string(), "all".to_string())]);
         let mut given = run("test", sha, true, Some(0));
-        assert!(given.proves_with("test", &BTreeMap::new(), sha));
-        assert!(!given.proves_with("test", &all, sha));
+        assert!(given.proves("test", &BTreeMap::new(), sha));
+        assert!(!given.proves("test", &all, sha));
         given.args = all.clone();
-        assert!(given.proves_with("test", &all, sha));
-        assert!(!given.proves_with("test", &BTreeMap::new(), sha));
+        assert!(given.proves("test", &all, sha));
+        assert!(!given.proves("test", &BTreeMap::new(), sha));
         given.args.insert("extra".into(), "1".into());
-        assert!(!given.proves_with("test", &all, sha));
+        assert!(!given.proves("test", &all, sha));
     }
 
     #[test]

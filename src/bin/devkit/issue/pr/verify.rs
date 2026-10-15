@@ -54,25 +54,26 @@ impl Gate {
         }
         let repo = devkit_common::vcs::primary_checkout(dir)?;
         let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
-        let runs: Vec<Run> = ledger.runs_in(&repo)?.into_iter().rev().collect();
-        let passes: Vec<Run> = runs
-            .iter()
-            .filter(|r| r.proves_with(&required.task, &required.args, head))
-            .cloned()
-            .collect();
-        let (run, rejected) = match passes.iter().find(|r| r.reused_servers.is_empty()) {
-            Some(run) => (Some(run.clone()), None),
-            None => match passes.first() {
-                Some(reused) => (None, Some(reused_note(&required, reused))),
-                None => {
-                    let near = runs.iter().find(|r| {
-                        r.task == required.task
-                            && r.exit_code == Some(0)
-                            && r.head.as_deref() == Some(head)
-                    });
-                    (None, near.and_then(|r| unproven(&required, r)))
+        let run = ledger.passed(&repo, &required.task, &required.args, head)?;
+        let rejected = match run {
+            Some(_) => None,
+            None => {
+                let runs: Vec<Run> = ledger.runs_in(&repo)?.into_iter().rev().collect();
+                match runs
+                    .iter()
+                    .find(|r| r.proves(&required.task, &required.args, head))
+                {
+                    Some(reused) => Some(reused_note(&required, reused)),
+                    None => runs
+                        .iter()
+                        .find(|r| {
+                            r.task == required.task
+                                && r.exit_code == Some(0)
+                                && r.head.as_deref() == Some(head)
+                        })
+                        .and_then(|r| unproven(&required, r)),
                 }
-            },
+            }
         };
         let run_dir = run.as_ref().and_then(|r| r.dir.as_deref()).unwrap_or("");
         let change = definition_change(dir, merge_base, head, run_dir, &required);

@@ -888,6 +888,32 @@ fn a_run_against_a_require_live_server_qualifies_naming_the_server() {
     );
 }
 
+/// `devrun runs passed <args>`'s exit status: whether the ledger holds a
+/// run the gate would accept.
+fn runs_passed(p: &ghfake::Fake, args: &[&str]) -> bool {
+    let mut argv = vec!["run", "runs", "passed"];
+    argv.extend_from_slice(args);
+    p.devkit_here(&argv).status.success()
+}
+
+#[test]
+fn runs_passed_answers_no_where_the_gate_refuses() {
+    let p = project(UP_VERIFY);
+    let _server = hold_srv(&p, Some(std::process::id()));
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    task(&p, &["verify", "--arg", "scope=some"]);
+    assert!(
+        !runs_passed(&p, &["e2e", "--arg", "scope=all"]),
+        "a run that reused a server"
+    );
+    assert!(
+        !runs_passed(&p, &["verify", "--arg", "scope=all"]),
+        "a run given other args"
+    );
+    assert!(runs_passed(&p, &["verify", "--arg", "scope=some"]));
+    assert!(!create(&p, "agent").0, "the gate refuses too");
+}
+
 #[test]
 fn a_run_whose_up_step_launched_its_server_qualifies() {
     let p = project(UP_VERIFY);

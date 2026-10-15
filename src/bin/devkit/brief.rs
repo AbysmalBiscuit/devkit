@@ -1036,8 +1036,9 @@ fn gate_line(gate: &config::Gate, on: GateOn) -> String {
             };
             format!(
                 "{effect} unless `{}` exited 0 on a clean tree at exactly the HEAD being \
-                 pushed; the PR body shows that run and any change the PR makes to what the \
-                 task runs, which refuses nothing",
+                 pushed, without its `up` step reusing a server already running before the \
+                 run (`devrun down` it and rerun); the PR body shows that run and any change \
+                 the PR makes to what the task runs, which refuses nothing",
                 required.command()
             )
         }
