@@ -772,25 +772,27 @@ fn declared_in_tests(
     if name.is_empty() {
         return Ok(false);
     }
-    for declarer in declarers(dir) {
-        let Some(text) = read(&declarer)? else {
-            continue;
-        };
-        let (declarer_dir, _) = split_last(&declarer);
-        let declarations: Vec<ModDeclaration> = mod_declarations(&text)
-            .into_iter()
-            .filter(|d| match &d.path {
-                Some(attr) => joined(declarer_dir, attr) == path,
-                None => d.name == name,
-            })
-            .collect();
-        if declarations.iter().any(|d| d.test_only) {
-            return Ok(true);
-        }
-        if !declarations.is_empty()
-            && (tests.matches(&declarer) || declared_in_tests(&declarer, tests, read, depth - 1)?)
-        {
-            return Ok(true);
+    let components: Vec<&str> = dir.split('/').filter(|c| !c.is_empty()).collect();
+    for k in (0..=components.len()).rev() {
+        let parent = components[..k].join("/");
+        let inline = &components[k..];
+        for declarer in declarers(&parent) {
+            let Some(text) = read(&declarer)? else {
+                continue;
+            };
+            let declarations: Vec<ModDeclaration> = mod_declarations(&text)
+                .into_iter()
+                .filter(|d| d.resolves_to(path, name, &declarer, &parent, inline))
+                .collect();
+            if declarations.iter().any(|d| d.test_only) {
+                return Ok(true);
+            }
+            if !declarations.is_empty()
+                && (tests.matches(&declarer)
+                    || declared_in_tests(&declarer, tests, read, depth - 1)?)
+            {
+                return Ok(true);
+            }
         }
     }
     Ok(false)
@@ -843,8 +845,37 @@ struct ModDeclaration {
     name: String,
     /// Its `#[path]` attribute's value.
     path: Option<String>,
-    /// Whether a `#[cfg]` on it holds only in test builds.
+    /// The inline modules it sits in, outermost first, or `None` when what
+    /// encloses it could not be read.
+    inline: Option<Vec<String>>,
+    /// Whether a `#[cfg]` on it or on an inline module around it holds only
+    /// in test builds.
     test_only: bool,
+}
+
+impl ModDeclaration {
+    /// Whether this declaration, in the file `declarer` whose child modules
+    /// live in `children`, resolves to `path`: the module file named `name`
+    /// under the inline modules `inline` there. A declaration whose
+    /// enclosing modules could not be read matches by name alone.
+    fn resolves_to(
+        &self,
+        path: &str,
+        name: &str,
+        declarer: &str,
+        children: &str,
+        inline: &[&str],
+    ) -> bool {
+        let (declarer_dir, _) = split_last(declarer);
+        match (&self.path, &self.inline) {
+            (Some(attr), Some(enclosing)) if !enclosing.is_empty() => {
+                joined(&format!("{children}/{}", enclosing.join("/")), attr) == path
+            }
+            (Some(attr), _) => joined(declarer_dir, attr) == path,
+            (None, Some(enclosing)) => self.name == name && enclosing == inline,
+            (None, None) => self.name == name,
+        }
+    }
 }
 
 /// The `mod x;` declarations in `text`, with the attributes on their line
@@ -861,37 +892,100 @@ fn mod_declarations(text: &str) -> Vec<ModDeclaration> {
         else {
             continue;
         };
-        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        if !is_identifier(name) {
             continue;
         }
-        for above in lines[..at].iter().rev().map(|l| l.trim()) {
-            if above.starts_with("//") {
-                continue;
-            }
-            let (found, rest) = attributes(above);
-            if found.is_empty() || !rest.is_empty() {
-                break;
-            }
-            attrs.extend(found);
-        }
+        attrs.extend(attributes_above(&lines, at));
+        let inline = enclosing(&lines, at);
         let mut decl = ModDeclaration {
             name: name.to_string(),
             path: None,
-            test_only: false,
+            test_only: inline.as_ref().is_some_and(|(_, test_only)| *test_only),
+            inline: inline.map(|(names, _)| names),
         };
         for attr in attrs {
-            if let Some((predicate, "")) = attr.strip_prefix("cfg(").and_then(balanced) {
+            if let Some(predicate) = cfg_predicate(attr) {
                 decl.test_only |= only_in_tests(predicate);
-            } else if let Some(value) = attr
-                .strip_prefix("path")
-                .and_then(|a| a.trim_start().strip_prefix('='))
-            {
-                decl.path = Some(value.trim().trim_matches('"').to_string());
+            } else if let Some(value) = path_value(attr) {
+                decl.path = Some(value);
             }
         }
         out.push(decl);
     }
     out
+}
+
+fn is_identifier(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// The predicate of a `cfg(...)` attribute.
+fn cfg_predicate(attr: &str) -> Option<&str> {
+    match attr.strip_prefix("cfg(").and_then(balanced) {
+        Some((predicate, "")) => Some(predicate),
+        _ => None,
+    }
+}
+
+/// The value of a `path = "..."` attribute.
+fn path_value(attr: &str) -> Option<String> {
+    attr.strip_prefix("path")
+        .and_then(|a| a.trim_start().strip_prefix('='))
+        .map(|value| value.trim().trim_matches('"').to_string())
+}
+
+/// The attributes on the attribute lines directly above `lines[at]`,
+/// comments between them skipped.
+fn attributes_above<'a>(lines: &[&'a str], at: usize) -> Vec<&'a str> {
+    let mut attrs = Vec::new();
+    for above in lines[..at].iter().rev().map(|l| l.trim()) {
+        if above.starts_with("//") {
+            continue;
+        }
+        let (found, rest) = attributes(above);
+        if found.is_empty() || !rest.is_empty() {
+            break;
+        }
+        attrs.extend(found);
+    }
+    attrs
+}
+
+/// The inline modules around `lines[at]`, outermost first, and whether a
+/// `#[cfg]` on any of them holds only in test builds. Each is the nearest
+/// line above that is indented less, so formatted code is assumed; `None`
+/// when such a line is not a plain `mod x {`, or one carries `#[path]`.
+fn enclosing(lines: &[&str], at: usize) -> Option<(Vec<String>, bool)> {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let (mut names, mut test_only) = (Vec::new(), false);
+    let (mut width, mut below) = (indent(lines[at]), at);
+    while width > 0 {
+        let (opener, line) = lines[..below].iter().enumerate().rev().find(|(_, l)| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with("//") && indent(l) < width
+        })?;
+        let (mut attrs, rest) = attributes(line.trim());
+        let name = strip_visibility(rest)
+            .strip_prefix("mod ")?
+            .trim_end()
+            .strip_suffix('{')?
+            .trim();
+        if !is_identifier(name) {
+            return None;
+        }
+        attrs.extend(attributes_above(lines, opener));
+        for attr in attrs {
+            if let Some(predicate) = cfg_predicate(attr) {
+                test_only |= only_in_tests(predicate);
+            } else if path_value(attr).is_some() {
+                return None;
+            }
+        }
+        names.push(name.to_string());
+        (width, below) = (indent(line), opener);
+    }
+    names.reverse();
+    Some((names, test_only))
 }
 
 /// The outer attributes leading `line`, each without its `#[` and `]`, and
@@ -1387,6 +1481,47 @@ mod tests {
             )],
             "src/a/checks.rs"
         ));
+    }
+
+    #[test]
+    fn a_module_declared_inside_inline_modules_resolves_through_them() {
+        for (declarer, decl, module) in [
+            (
+                "src/lib.rs",
+                "mod outer {\n    #[cfg(test)]\n    mod tests;\n}\n",
+                "src/outer/tests.rs",
+            ),
+            (
+                "src/a.rs",
+                "pub mod b {\n    mod c {\n        #[cfg(test)] mod tests;\n    }\n}\n",
+                "src/a/b/c/tests.rs",
+            ),
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\nmod outer {\n    mod helpers;\n}\n",
+                "src/outer/helpers.rs",
+            ),
+            (
+                "src/lib.rs",
+                "mod outer {\n    #[cfg(test)]\n    #[path = \"checks.rs\"]\n    mod tests;\n}\n",
+                "src/outer/checks.rs",
+            ),
+        ] {
+            assert!(test_module_in(&[(declarer, decl)], module), "{decl}");
+        }
+        for (decl, module) in [
+            ("mod outer {\n    mod tests;\n}\n", "src/outer/tests.rs"),
+            (
+                "mod outer {\n    #[cfg(test)]\n    mod tests;\n}\n",
+                "src/tests.rs",
+            ),
+            (
+                "#[cfg(test)]\nmod outer {\n    mod helpers;\n}\nmod helpers;\n",
+                "src/helpers.rs",
+            ),
+        ] {
+            assert!(!test_module_in(&[("src/lib.rs", decl)], module), "{decl}");
+        }
     }
 
     #[test]

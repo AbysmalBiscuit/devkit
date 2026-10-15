@@ -243,6 +243,41 @@ fn a_fix_updating_an_out_of_line_test_module_keeps_that_module() {
 }
 
 #[test]
+fn a_fix_updating_a_test_module_declared_in_an_inline_module_keeps_it() {
+    let fake = project(GATE, "");
+    git(&fake, &["checkout", "-q", "main"]);
+    write(
+        &fake,
+        "src/lib.rs",
+        "mod outer {\n    #[cfg(test)]\n    mod tests;\n}\n",
+    );
+    write(&fake, "src/outer/tests.rs", "// expects: lib: broken\n");
+    git(&fake, &["add", "-A"]);
+    git(&fake, &[
+        "commit",
+        "-q",
+        "-m",
+        "an inline module tested out of line",
+    ]);
+    git(&fake, &["checkout", "-q", "-"]);
+    git(&fake, &["rebase", "-q", "main"]);
+    write(&fake, "src/outer/tests.rs", "// expects the fix\n");
+    write(&fake, "tests/old.txt", "lib: fixed\nexpects: lib: broken\n");
+    git(&fake, &["add", "-A"]);
+    git(&fake, &["commit", "-q", "-m", "update the expectation"]);
+    fake.serve_pr_at(&PR, git(&fake, &["rev-parse", "HEAD"]).trim());
+    fake.serve_issue(
+        "Why.\n\n## Done when\n\n- [ ] The lib is fixed (proof: repro tests/old.txt)\n",
+    );
+    let body = opened_body(&fake);
+    assert!(body.contains("PASSED"), "{body}");
+    assert!(
+        !body.contains("`src/outer/tests.rs`"),
+        "the test module is not reverted: {body}"
+    );
+}
+
+#[test]
 fn a_test_module_whose_end_is_unclear_is_inconclusive() {
     let p = project(GATE, FIX);
     let module = |expect: &str| {
