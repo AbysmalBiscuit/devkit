@@ -300,10 +300,11 @@ pub fn issue_type_mutation(issue_id: &str, type_id: Option<&str>) -> String {
     )
 }
 
-/// Make `child` a sub-issue of `parent`, moving it from any other parent.
-pub fn add_sub_issue_mutation(parent: &str, child: &str) -> String {
+/// Make `child` a sub-issue of `parent`; with `replace`, moving it from any
+/// other parent, else failing while it has one.
+pub fn add_sub_issue_mutation(parent: &str, child: &str, replace: bool) -> String {
     format!(
-        "mutation {{ addSubIssue(input: {{issueId: {p}, subIssueId: {c}, replaceParent: true}}) {{ issue {{ id }} }} }}",
+        "mutation {{ addSubIssue(input: {{issueId: {p}, subIssueId: {c}, replaceParent: {replace}}}) {{ issue {{ id }} }} }}",
         p = Json::from(parent),
         c = Json::from(child),
     )
@@ -382,7 +383,7 @@ pub fn delete_item_mutation(project: &str, item: &str) -> String {
 
 /// Fail on any error in a mutation's response, a scope error with its
 /// remedy: a mutation that names an id GitHub cannot resolve did not take.
-fn check_mutation(resp: &Json, source: TokenSource) -> Result<()> {
+pub(super) fn check_mutation(resp: &Json, source: TokenSource) -> Result<()> {
     if let Some(e) = scope_error(resp, source) {
         return Err(e);
     }
@@ -633,7 +634,7 @@ impl GithubFieldWriter {
                 (Some(w), Some((n, _))) if *w == n.to_string() => {}
                 (Some(w), _) => {
                     let parent = self.node(before, w)?;
-                    self.mutate(&add_sub_issue_mutation(&parent, &before.issue_id))?;
+                    self.mutate(&add_sub_issue_mutation(&parent, &before.issue_id, true))?;
                 }
                 (None, Some((_, parent))) => {
                     self.mutate(&remove_sub_issue_mutation(parent, &before.issue_id))?;
@@ -850,7 +851,7 @@ where = { project_field = "PVTF_e", name = "Estimate" }
             "{add}"
         );
         assert!(blocked_by_mutation("I_42", "I_13", false).contains("removeBlockedBy("));
-        let parent = add_sub_issue_mutation("I_12", "I_42");
+        let parent = add_sub_issue_mutation("I_12", "I_42", true);
         assert!(
             parent.contains(
                 "addSubIssue(input: {issueId: \"I_12\", subIssueId: \"I_42\", replaceParent: true})"
