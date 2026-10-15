@@ -167,7 +167,7 @@ fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: 
         return rendered;
     }
     match devkit_common::config::resolve_in(checkout, None, cwd) {
-        Ok((cfg, prov)) => field_verdict(rule, tool, input, &cfg, &prov.origin, Caller::Agent),
+        Ok((cfg, prov)) => field_verdict(rule, tool, input, &cfg, cwd, &prov.origin, Caller::Agent),
         Err(e) => Verdict::Deny(format!(
             "devkit ticket fields: this `{tool}` call writes a ticket, and devkit.toml, which \
              declares the ticket fields it must carry, does not load: {e:#}"
@@ -295,16 +295,17 @@ pub(super) fn decide(
 }
 
 /// Hold an issue write `rule` matched to the repository's ticket field
-/// levels, from config and the call's input alone. A rule naming no
-/// `tracker`, a repository using another tracker or declaring no fields, and
-/// a GitHub call to a repository other than `[github] issues_repo` are
-/// allowed here. A create carries every field its level requires; an update
+/// levels, from config, the call's input and the local `origin` remote. A
+/// rule naming no `tracker`, a repository using another tracker or declaring
+/// no fields, and a GitHub call to a repository other than the issues
+/// repository are allowed here. A create carries every field its level requires; an update
 /// is judged on the fields it carries. A value is refused at every level.
 pub(super) fn field_verdict(
     rule: &RenderedToolRule,
     tool: &str,
     input: &Value,
     cfg: &Config,
+    cwd: &Path,
     origin: &HashMap<String, PathBuf>,
     caller: Caller,
 ) -> Verdict {
@@ -313,7 +314,7 @@ pub(super) fn field_verdict(
     };
     let decls = cfg.ticket.fields.for_tracker(kind);
     let other_tracker = cfg.tracker.kind.is_some_and(|k| k != kind);
-    if decls.is_empty() || other_tracker || !names_issues_repo(kind, cfg, input) {
+    if decls.is_empty() || other_tracker || !names_issues_repo(kind, cfg, cwd, input) {
         return Verdict::Allow;
     }
     if let Err(e) = devkit_config::check_ticket_fields(cfg, kind, origin) {
@@ -350,21 +351,22 @@ pub(super) fn field_verdict(
 }
 
 /// Whether a call to `kind` writes the repository's own tickets: on GitHub,
-/// a call naming an `owner`/`repo` other than `[github] issues_repo` does
-/// not.
-fn names_issues_repo(kind: TrackerKind, cfg: &Config, input: &Value) -> bool {
-    let Some(repo) = cfg
-        .github
-        .issues_repo
-        .as_deref()
-        .filter(|_| kind == TrackerKind::Github)
-    else {
+/// a call naming an `owner`/`repo` other than the issues repository, which
+/// is `[github] issues_repo` or else the `origin` remote's, does not. With
+/// neither, every call is checked.
+fn names_issues_repo(kind: TrackerKind, cfg: &Config, cwd: &Path, input: &Value) -> bool {
+    if kind != TrackerKind::Github {
+        return true;
+    }
+    let part = |k: &str| input.get(k).and_then(Value::as_str);
+    let (Some(owner), Some(name)) = (part("owner"), part("repo")) else {
         return true;
     };
-    let part = |k: &str| input.get(k).and_then(Value::as_str);
-    match (part("owner"), part("repo")) {
-        (Some(owner), Some(name)) => repo.eq_ignore_ascii_case(&format!("{owner}/{name}")),
-        _ => true,
+    let resolved =
+        devkit_common::forge::resolve(&cfg.forge, &cfg.github, &cwd.to_string_lossy(), None);
+    match resolved.repos.issues() {
+        Ok(repo) => repo.slug.eq_ignore_ascii_case(&format!("{owner}/{name}")),
+        Err(_) => true,
     }
 }
 
@@ -712,12 +714,17 @@ level  = "info"
     }
 
     fn fields(rule: &RenderedToolRule, toml: &str, input: Value) -> Verdict {
+        fields_in(tempfile::tempdir().unwrap().path(), rule, toml, input)
+    }
+
+    fn fields_in(dir: &Path, rule: &RenderedToolRule, toml: &str, input: Value) -> Verdict {
         let cfg = devkit_config::Config::parse(toml).unwrap();
         field_verdict(
             rule,
             "issue_write",
             &input,
             &cfg,
+            dir,
             &HashMap::new(),
             Caller::Agent,
         )
@@ -807,6 +814,38 @@ level  = "info"
         same["owner"] = json!("ACME");
         assert!(matches!(
             fields(&github_rule(), GITHUB_FIELDS, same),
+            Verdict::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn without_issues_repo_the_origin_names_the_repo_checked() {
+        let toml = GITHUB_FIELDS.replace("issues_repo = \"acme/app\"\n", "");
+        let dir = tempfile::tempdir().unwrap();
+        let mut other = gh_create(json!({}));
+        other["repo"] = json!("other");
+        assert!(
+            matches!(
+                fields_in(dir.path(), &github_rule(), &toml, other.clone()),
+                Verdict::Deny(_)
+            ),
+            "with no issues repository to compare against, every call is checked"
+        );
+        for args in [
+            &["init", "-q"][..],
+            &["remote", "add", "origin", "git@github.com:acme/app.git"],
+        ] {
+            devkit_git::Git::fixture(dir.path())
+                .args(args.iter().copied())
+                .output()
+                .unwrap();
+        }
+        assert_eq!(
+            fields_in(dir.path(), &github_rule(), &toml, other),
+            Verdict::Allow
+        );
+        assert!(matches!(
+            fields_in(dir.path(), &github_rule(), &toml, gh_create(json!({}))),
             Verdict::Deny(_)
         ));
     }
