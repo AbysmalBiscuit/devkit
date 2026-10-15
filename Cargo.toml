@@ -27,6 +27,10 @@ serde_json.workspace = true
 schemars.workspace = true
 rpassword.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
+# The diff `ticket fields discover` shows before writing, and the collapsed
+# one a test shows when the committed JSON schema drifts.
+similar = "2"
 fd-lock.workspace = true
 interprocess.workspace = true
 chrono.workspace = true
@@ -57,8 +61,6 @@ strum.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-# A collapsed diff when the committed JSON schema drifts from the config types.
-similar = "2"
 devkit-common = { workspace = true, features = ["test-support"] }
 devkit-git = { workspace = true, features = ["test-support"] }
 devkit-supabase = { workspace = true, features = ["test-support"] }

@@ -14,6 +14,7 @@ mod end;
 pub(crate) mod event;
 mod field_write;
 mod fields;
+mod fields_discover;
 mod hooks;
 mod info;
 mod info_cache;
@@ -306,12 +307,15 @@ pub(crate) enum TicketCmd {
     /// values given (error refuses a ticket without it, warning reports it),
     /// its values, default and description. A field whose level and every
     /// `when` entry are `none` is left out. Reads config only.
+    #[command(args_conflicts_with_subcommands = true)]
     Fields {
         /// Emit JSON instead of text.
         #[arg(long)]
         json: bool,
         #[command(flatten)]
         vars: VarArgs,
+        #[command(subcommand)]
+        cmd: Option<FieldsCmd>,
     },
     /// Move the issue's tracker status as [ticket.events] configures EVENT.
     ///
@@ -778,6 +782,33 @@ fn ticket_tracker(
     Ok((sel, cfg, tracker))
 }
 
+/// `ticket fields` verbs.
+#[derive(Subcommand, Debug, PartialEq)]
+pub(crate) enum FieldsCmd {
+    /// Write the fields the tracker offers into the repository's devkit.toml.
+    ///
+    /// Reads the tracker once: on GitHub the issues repository's labels, open
+    /// milestones, assignable users and issue types, and the fields of
+    /// [github] project; on Linear your teams (or those --team names) with
+    /// their labels, cycles, projects and project milestones, the priority
+    /// scale, estimates and the workspace's users. A field any config layer
+    /// declares has its type, list, where and values refreshed, and keeps
+    /// every other key a person set; a new field is added at level "info".
+    /// The status field is never added. Comments and layout are kept. Users
+    /// no [people] entry names are reported, not written. A person sees the
+    /// diff and confirms it; an agent's run writes without asking.
+    Discover {
+        /// Write without asking. Needed for a person's run without a
+        /// terminal.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Linear only: read this team, by key (`ENG`), instead of your
+        /// teams. Repeatable.
+        #[arg(long, value_name = "KEY")]
+        team: Vec<String>,
+    },
+}
+
 /// Carry out `action`. `shim_name` is the name a completion script is
 /// registered under.
 pub fn run((globals, action): (Globals, Action), shim_name: &'static str) -> Result<()> {
@@ -836,7 +867,20 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             dir,
             config,
         }),
-        TicketCmd::Fields { json, vars } => fields::run(fields::FieldsArgs {
+        TicketCmd::Fields {
+            cmd: Some(FieldsCmd::Discover { yes, team }),
+            ..
+        } => fields_discover::run(fields_discover::DiscoverArgs {
+            yes,
+            teams: team,
+            dir,
+            config,
+        }),
+        TicketCmd::Fields {
+            json,
+            vars,
+            cmd: None,
+        } => fields::run(fields::FieldsArgs {
             json,
             vars,
             dir,
