@@ -88,6 +88,17 @@ fn move_parent_takes_a_word_name() {
 }
 
 #[test]
+fn move_order_takes_a_word_name() {
+    let p = Proj::new();
+    let id = added(&p, "one");
+    ok(p.devkit(
+        &["todo", "move", &word_name(&id).unwrap(), "--order", "7"],
+        &TASKCHAMPION,
+    ));
+    assert_eq!(replica_todo(&p, &id).order, Some(7));
+}
+
+#[test]
 fn add_parent_takes_a_word_name() {
     let p = Proj::new();
     let parent = added(&p, "parent");

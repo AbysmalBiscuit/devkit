@@ -1218,7 +1218,7 @@ fn move_todo(
         let Some(order) = order else {
             bail!("name a new --parent, --top or an --order");
         };
-        let id = id.to_string();
+        let id = resolve_id(store, id)?.id;
         return store.apply(&Edit::Reorder { id, order }).map(drop);
     }
     let todo = resolve_id(store, id)?;
