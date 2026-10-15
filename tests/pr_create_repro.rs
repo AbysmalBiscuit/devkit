@@ -401,6 +401,31 @@ fn a_check_that_cannot_run_says_not_run_and_opens_the_pr() {
     );
 }
 
+#[test]
+fn a_fix_and_its_test_in_one_rust_file_are_checked_red_to_green() {
+    let p = project(GATE, "");
+    let calc = |answer: &str, test: &str| {
+        format!(
+            "// two: {answer}\nfn f() -> u8 {{ 2 }}\n\n#[cfg(test)]\nmod tests {{\n    // {test}\n}}\n"
+        )
+    };
+    git(&p, &["checkout", "-q", "main"]);
+    write(&p, "src/calc.rs", &calc("no", "old"));
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "a calculator"]);
+    git(&p, &["checkout", "-q", "-"]);
+    git(&p, &["rebase", "-q", "main"]);
+    write(&p, "src/calc.rs", &calc("yes", "new"));
+    write(&p, "tests/calc.txt", "two: yes\n");
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "fix the calculator"]);
+    p.serve_pr_at(&PR, git(&p, &["rev-parse", "HEAD"]).trim());
+    p.serve_issue("Why.\n\n## Done when\n\n- [ ] Two is right (proof: repro tests/calc.txt)\n");
+    let body = opened_body(&p);
+    assert!(body.contains("1. Two is right: PASSED"), "{body}");
+    assert!(body.contains("`src/calc.rs`"), "{body}");
+}
+
 /// What `git` reports of the caller's worktree, index and worktree list.
 fn snapshot(p: &ghfake::Fake) -> String {
     [

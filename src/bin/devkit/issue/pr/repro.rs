@@ -128,6 +128,9 @@ struct Revert {
     delete: Vec<String>,
     /// Changed paths holding both test and source changes.
     mixed: Vec<String>,
+    /// Rust files holding both, each with the text that keeps its test
+    /// modules and reverts its source.
+    splice: Vec<(String, String)>,
 }
 
 impl Gate {
@@ -259,7 +262,8 @@ impl Gate {
                     "hold"
                 },
             ))
-        } else if revert.restore.is_empty() && revert.delete.is_empty() {
+        } else if revert.restore.is_empty() && revert.delete.is_empty() && revert.splice.is_empty()
+        {
             Some("the branch changes no non-test path, so there is no fix to revert".into())
         } else {
             None
@@ -286,7 +290,12 @@ impl Gate {
                 return Ok(out);
             }
         };
-        self.reverted = revert.restore.into_iter().chain(revert.delete).collect();
+        self.reverted = revert
+            .restore
+            .into_iter()
+            .chain(revert.delete)
+            .chain(revert.splice.into_iter().map(|(path, _)| path))
+            .collect();
         self.reverted.sort();
         self.reverted.dedup();
         out.extend(
@@ -327,6 +336,10 @@ impl Gate {
         }
         let vcs = Vcs::at(at);
         vcs.restore_paths(at, &self.merge_base, &revert.restore)?;
+        for (path, text) in &revert.splice {
+            std::fs::write(at.join(path), text)
+                .with_context(|| format!("reverting the source of {path} in {}", at.display()))?;
+        }
         for path in &revert.delete {
             match std::fs::remove_file(at.join(path)) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -694,7 +707,14 @@ fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result
         match split(&label, before.as_deref(), after.as_deref()) {
             Split::Tests => continue,
             Split::Both => {
-                out.mixed.push(label);
+                let spliced = match (&before, &after, Lang::of(&label)) {
+                    (Some(b), Some(a), Some(Lang::Rust)) if old == new => splice(b, a),
+                    _ => None,
+                };
+                match spliced {
+                    Some(text) => out.splice.push((label, text)),
+                    None => out.mixed.push(label),
+                }
                 continue;
             }
             Split::Source => {}
@@ -956,23 +976,59 @@ fn split(path: &str, before: Option<&str>, after: Option<&str>) -> Split {
 /// test module's closing line is not found, or a test attribute follows it
 /// before the next test module, so the split is unknown.
 fn rust_parts(text: &str) -> Option<(String, String)> {
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let (mut source, mut tests) = (String::new(), String::new());
+    for (is_test, chunk) in rust_segments(text)? {
+        if is_test {
+            tests.push_str(&chunk);
+        } else {
+            source.push_str(&chunk);
+        }
+    }
+    Some((source, tests))
+}
+
+/// `text` as its runs of source lines and of test-module lines, in order,
+/// each marked whether it is tests. `None` when [`rust_parts`] gives none.
+fn rust_segments(text: &str) -> Option<Vec<(bool, String)>> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut out: Vec<(bool, String)> = Vec::new();
+    let mut push = |is_test: bool, part: &[&str]| match out.last_mut() {
+        Some((kind, chunk)) if *kind == is_test => chunk.extend(part.iter().copied()),
+        _ => out.push((is_test, part.concat())),
+    };
     let mut i = 0;
     while i < lines.len() {
         match test_module(&lines, i) {
             Module::Ends(end) => {
-                tests.extend(lines[i..=end].iter().copied());
+                push(true, &lines[i..=end]);
                 i = end + 1;
             }
             Module::Absent => {
-                source.push_str(lines[i]);
+                push(false, &lines[i..=i]);
                 i += 1;
             }
             Module::Unbounded => return None,
         }
     }
-    Some((source, tests))
+    Some(out)
+}
+
+/// `before`'s source with `after`'s test modules in their places: the file
+/// with only its source change reverted. `None` when either side cannot be
+/// split, or the two do not lay out source and test modules alike, so where
+/// each test module goes is unclear.
+fn splice(before: &str, after: &str) -> Option<String> {
+    let (was, now) = (rust_segments(before)?, rust_segments(after)?);
+    let kinds = |s: &[(bool, String)]| s.iter().map(|(k, _)| *k).collect::<Vec<_>>();
+    if kinds(&was) != kinds(&now) {
+        return None;
+    }
+    Some(
+        was.into_iter()
+            .zip(now)
+            .map(|((is_test, source), (_, tests))| if is_test { tests } else { source })
+            .collect(),
+    )
 }
 
 /// Whether a test module starts at `lines[at]`, and where it ends.
@@ -1384,6 +1440,24 @@ mod tests {
                    {\n    #[tokio::test]\n    async fn u() {}\n}\n\nfn f() -> u8 { 1 }\n";
         let fixed = two.replace("{ 1 }", "{ 2 }");
         assert_eq!(split("a.rs", Some(two), Some(&fixed)), Split::Source);
+    }
+
+    #[test]
+    fn a_splice_keeps_head_tests_over_base_source_or_gives_up() {
+        let module = |body: &str| format!("#[cfg(test)]\nmod tests {{\n    {body}\n}}\n");
+        let before = format!("fn f() -> u8 {{ 1 }}\n\n{}\nfn g() {{}}\n", module("old"));
+        let after = format!(
+            "fn f() -> u8 {{ 2 }}\n\n{}\nfn g() {{ h() }}\n",
+            module("new")
+        );
+        assert_eq!(
+            splice(&before, &after).as_deref(),
+            Some(format!("fn f() -> u8 {{ 1 }}\n\n{}\nfn g() {{}}\n", module("new")).as_str())
+        );
+        let moved = format!("{}\nfn f() -> u8 {{ 2 }}\n", module("new"));
+        assert_eq!(splice(&before, &moved), None, "the layout changed");
+        let unclosed = "fn f() -> u8 { 2 }\n\n#[cfg(test)]\nmod tests {\n    new\n";
+        assert_eq!(splice(&before, unclosed), None, "the end is unknown");
     }
 
     fn ran(exit: i32) -> Ran {
