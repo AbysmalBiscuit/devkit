@@ -83,6 +83,21 @@ pub(crate) fn promote(
             (created.key, created.fields)
         }
     };
+    let linked = link(at, &old, ticket, key);
+    if linked.is_err()
+        && let Err(e) = &fields
+    {
+        eprintln!("devkit todo: {e:#}");
+    }
+    linked.and(fields)
+}
+
+/// Links `old` to ticket `key`: syncs the ticket's todo, moves `old`'s
+/// blocking edges to it, and cancels `old` with the key as its text.
+/// `ticket` is the key the caller named, absent when the promote filed it.
+fn link(at: &Promote, old: &Todo, ticket: Option<&str>, key: String) -> Result<()> {
+    let store = at.store;
+    let short = devkit_todo::short_id(&old.id);
     let unfinished = || {
         format!(
             "ticket {key} stands, and todo {short} is not promoted yet: finish with `devkit todo \
@@ -95,7 +110,7 @@ pub(crate) fn promote(
             Some(_) => format!("todo {short} is unchanged"),
             None => unfinished(),
         })?;
-    rewire(at, &old, &new).with_context(unfinished)?;
+    rewire(at, old, &new).with_context(unfinished)?;
     let key = new.ticket.as_ref().map_or(key, |t| t.key.clone());
     store.apply(&Edit::Describe {
         id: old.id.clone(),
@@ -110,7 +125,7 @@ pub(crate) fn promote(
         "devkit todo: todo {short} is now ticket {key}, todo {}",
         devkit_todo::short_id(&new.id)
     );
-    fields
+    Ok(())
 }
 
 /// Moves every blocking edge of `old` to `new`: each todo `old` blocks is
