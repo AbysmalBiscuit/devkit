@@ -2,6 +2,7 @@
 //! `[todo] backend` names.
 
 pub(crate) mod hold;
+pub(crate) mod promote;
 pub(crate) mod push;
 pub(crate) mod queue;
 pub(crate) mod store;
@@ -130,6 +131,27 @@ pub enum TodoCommand {
     },
     /// Replace a todo's text.
     Describe { id: String, text: String },
+    /// File a todo as a ticket, or link it to an existing one.
+    ///
+    /// The ticket's title is the todo's text; body and field args are as for
+    /// `ticket create`. Its todo comes from syncing it, so [ticket.sync] rules
+    /// are needed. Blocking edges move to that todo, and the old todo is
+    /// cancelled with the ticket's key as its text; its children stay put.
+    Promote {
+        id: String,
+        /// Link this existing ticket instead of filing one, by its key or as
+        /// the tracker reads an issue (`#65`, `65`, its URL). The recovery
+        /// after a promote whose create may have gone through.
+        #[arg(long, value_name = "KEY", conflicts_with_all = ["body", "args", "arg_files", "none"])]
+        ticket: Option<String>,
+        /// Issue body, the `input` of the `ticket_body` template.
+        #[arg(long)]
+        body: Option<String>,
+        #[command(flatten)]
+        vars: crate::template::VarArgs,
+        #[command(flatten)]
+        fields: crate::template::FieldArgs,
+    },
     /// Nest a todo under another, or change its position.
     #[command(after_help = LINK_PUSH_HELP)]
     Move {
@@ -504,6 +526,36 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 description: text,
             })?;
         }
+        TodoCommand::Promote {
+            id,
+            ticket,
+            body,
+            vars,
+            fields,
+        } => {
+            if place == Place::Global {
+                bail!("devkit todo promote runs in a checkout of the ticket's repository");
+            }
+            let ticket = ticket.as_deref().map(str::trim);
+            if ticket.is_some_and(str::is_empty) {
+                bail!("--ticket needs a ticket key, such as owner/repo#65 or ENG-123");
+            }
+            let node = layout.fill("repo", &facts)?;
+            let at = promote::Promote {
+                store: &store,
+                checkout: &checkout,
+                layout: &layout,
+                node: &node,
+                actor: &actor,
+                push: &link_push(false),
+            };
+            promote::promote(&at, &id, ticket, promote::Filing {
+                body,
+                vars,
+                fields,
+                dir: cwd.to_string_lossy().into_owned(),
+            })?
+        }
         TodoCommand::Move {
             id,
             parent,
@@ -614,12 +666,18 @@ pub fn run(cli: TodoCli) -> Result<()> {
         }
     }
     if writes {
-        if let Some(replica) = store.queued_replica() {
-            crate::hook::todo::drain(replica.data_dir());
-        }
-        store.spawn_sync(&cwd);
+        after_write(&store, &cwd);
     }
     Ok(())
+}
+
+/// After a command changed `store` from `cwd`: lands the hook writes queued
+/// meanwhile and starts a background sync.
+pub(crate) fn after_write(store: &Store, cwd: &Path) {
+    if let Some(replica) = store.queued_replica() {
+        crate::hook::todo::drain(replica.data_dir());
+    }
+    store.spawn_sync(cwd);
 }
 
 /// Starts a background ticket sync from `cwd` when the repository's last one
@@ -1148,7 +1206,9 @@ fn apply_checked(
 /// `order`. A ticket todo's move between ticket parents reaches the tracker
 /// as `push` allows; with parents pushing from the ticket todo's
 /// repository, a ticket todo and a todo that is not one never nest under
-/// each other. A move to the parent `id` already has stays local.
+/// each other. A ticket todo under a ticket parent never moves under a
+/// ticket of another tracker or repository, which the next sync would undo.
+/// A move to the parent `id` already has stays local.
 fn move_todo(
     store: &Store,
     id: &str,
@@ -1204,15 +1264,15 @@ fn move_todo(
         && let Some(new) = parent.as_ref().and_then(|p| p.ticket.as_ref())
         && !new.same_tracker(ticket)
     {
-        store.apply(&edit)?;
-        eprintln!(
-            "devkit todo: {new} is on another tracker, so {key}'s parent there stays {old}, and \
-             the next sync restores it",
+        bail!(
+            "todo {} is ticket {key}, a sub-issue of {old}; {new} is a ticket of another \
+             tracker or repository, so it cannot become {key}'s parent there, and the next sync \
+             would put {key} back under {old}. Change {key}'s parent on the tracker instead",
+            devkit_todo::short_id(&todo.id),
             new = new.key,
             key = ticket.key,
             old = old.key
         );
-        return Ok(());
     }
     let linked = parent
         .as_ref()

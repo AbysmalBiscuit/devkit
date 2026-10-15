@@ -114,6 +114,30 @@ pub(crate) fn sync_ticket(
     Ok(synced)
 }
 
+/// After `ticket create` filed `key` from `dir`: syncs it into the
+/// repository node of the checkout at `dir`, which gives it its todo.
+/// Nothing syncs outside a repository or in one without `[ticket.sync]`
+/// rules.
+pub(crate) fn sync_created(dir: &Path, key: &str) -> Result<()> {
+    let checkout = Checkout::at(dir);
+    let place = node::place_of(&checkout)?;
+    if place == node::Place::Global {
+        return Ok(());
+    }
+    let cwd = checkout.dir();
+    let store = Store::for_cli(cwd)?;
+    if store.ticket().sync.rules.is_empty() {
+        return Ok(());
+    }
+    let actor = super::actor_from_env(devkit_common::caller::caller(), |key| {
+        std::env::var(key).ok()
+    });
+    let node = Layout::new(store.config())?.fill("repo", &Facts::new(&place, None, &actor))?;
+    sync_ticket(&store, cwd, &node, key)?;
+    super::after_write(&store, cwd);
+    Ok(())
+}
+
 /// Syncs the one ticket `key`, in any spelling [`tracker::Tracker::ticket_key`]
 /// reads, into `node`, the repository node of the
 /// checkout at `cwd`, reading no other ticket and running no rule search,

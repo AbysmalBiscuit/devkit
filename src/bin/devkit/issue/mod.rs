@@ -7,7 +7,7 @@ use devkit::completions::Shell;
 use crate::template::{FieldArgs, VarArgs};
 
 pub(crate) mod checkout;
-mod create;
+pub(crate) mod create;
 mod dashboard;
 mod edit;
 mod end;
@@ -840,6 +840,9 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             fields,
             dir,
             config,
+            verb: "ticket create",
+            likely_parents: Vec::new(),
+            if_found: None,
         }),
         TicketCmd::Edit {
             issue,
