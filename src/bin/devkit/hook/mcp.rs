@@ -389,7 +389,9 @@ fn given(
         let scalar = |v: &Value| match v {
             Value::String(s) if ty == FieldType::User => Some(alias(people, kind, s)),
             Value::String(s) => Some(s.clone()),
-            Value::Number(n) if ty == FieldType::Number => Some(n.to_string()),
+            Value::Number(n) if matches!(ty, FieldType::Number | FieldType::Enum) => {
+                Some(n.to_string())
+            }
             _ => None,
         };
         let text = match value {
@@ -425,7 +427,7 @@ fn given(
 /// The JSON a field's input key takes.
 fn json_shape(ty: FieldType, list: bool) -> String {
     let one = match ty {
-        FieldType::Number => "a number or a string",
+        FieldType::Number | FieldType::Enum => "a number or a string",
         _ => "a string",
     };
     if list {
@@ -851,9 +853,8 @@ level  = "info"
     #[test]
     fn a_value_of_the_wrong_json_type_is_refused() {
         for (key, value) in [
-            ("priority", json!(1)),
             ("team", json!(["ENG"])),
-            ("labels", json!([1])),
+            ("labels", json!([["bug"]])),
             ("labels", json!({"name": "bug"})),
             ("estimate", json!(true)),
         ] {
@@ -871,6 +872,15 @@ level  = "info"
             Verdict::Allow,
             "a string for a list is one value, a number for a number field"
         );
+    }
+
+    #[test]
+    fn a_number_names_an_enum_value_by_its_numeric_id() {
+        let input = json!({"title": "T", "team": "ENG", "labels": ["bug"], "priority": 1});
+        assert_eq!(fields(&linear_rule(), LINEAR_FIELDS, input), Verdict::Allow);
+        let input = json!({"title": "T", "team": "ENG", "labels": ["bug"], "priority": 9});
+        let v = fields(&linear_rule(), LINEAR_FIELDS, input);
+        assert!(denied_mentioning(&v, "`9`"), "{v:?}");
     }
 
     #[test]
