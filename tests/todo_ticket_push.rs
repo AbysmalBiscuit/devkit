@@ -1344,6 +1344,30 @@ fn promote_without_blocking_pushed_warns_the_ticket_edge_is_lost_at_sync() {
 }
 
 #[test]
+fn promote_filed_under_another_repository_names_the_issue_and_the_recovery() {
+    let s = linked("", None, false);
+    let step = add(&s, &["write the parser"]);
+    files_68(&s, "Todo");
+    s.serve(
+        "issue_create.txt",
+        "https://github.com/o/renamed/issues/68\n",
+    );
+    let out = s.devkit(&["todo", "promote", &step], &AGENT);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(
+        err.contains("https://github.com/o/renamed/issues/68")
+            && err.contains("second")
+            && err.contains(&format!(
+                "devkit todo promote {} --ticket",
+                devkit_todo::short_id(&step)
+            )),
+        "{err}"
+    );
+    assert_eq!(s.proj.todo(&step).status.kind(), StatusKind::Pending);
+}
+
+#[test]
 fn promote_of_a_closed_todo_is_refused() {
     let s = linked("", None, false);
     files_68(&s, "Todo");

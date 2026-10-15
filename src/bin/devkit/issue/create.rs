@@ -180,9 +180,21 @@ fn github(args: &CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Resul
         .trim()
         .to_string();
     println!("{url}");
-    let key = sel.tracker.tracker.ticket_key(&url)?;
+    let unread = || {
+        let recover = args
+            .if_found
+            .as_ref()
+            .map(|run| format!("; run `{run}` once that is fixed"))
+            .unwrap_or_default();
+        format!(
+            "the issue was created at {url}, but devkit cannot read it from that URL. Rerunning \
+             `{}` would file a second issue{recover}",
+            args.verb
+        )
+    };
+    let key = sel.tracker.tracker.ticket_key(&url).with_context(unread)?;
 
-    let number = field_write::number_of(&url)?;
+    let number = field_write::number_of(&url).with_context(unread)?;
     let writer = GithubFieldWriter::new(repo.clone(), cfg.github.project.clone(), start);
     let written = fields::Resolved {
         nones: Default::default(),
