@@ -786,17 +786,6 @@ fn ticket_tracker(
 #[derive(Subcommand, Debug, PartialEq)]
 pub(crate) enum FieldsCmd {
     /// Write the fields the tracker offers into the repository's devkit.toml.
-    ///
-    /// Reads the tracker once: on GitHub the issues repository's labels, open
-    /// milestones, assignable users and issue types, and the fields of
-    /// [github] project; on Linear your teams (or those --team names) with
-    /// their labels, cycles, projects and project milestones, the priority
-    /// scale, estimates and the workspace's users. A field any config layer
-    /// declares has its type, list, where and values refreshed, and keeps
-    /// every other key a person set; a new field is added at level "info".
-    /// The status field is never added. Comments and layout are kept. Users
-    /// no [people] entry names are reported, not written. A person sees the
-    /// diff and confirms it; an agent's run writes without asking.
     Discover {
         /// Write without asking. Needed for a person's run without a
         /// terminal.
