@@ -1121,18 +1121,44 @@ fn a_link_with_a_ticket_of_another_repository_stays_local() {
         std::slice::from_ref(&foreign)
     );
 
-    let out = s.devkit(
-        &["todo", "move", &id_of(&s, 67), "--parent", &foreign],
-        &AGENT,
-    );
-    assert!(out.status.success(), "{}", stderr(&out));
-    let err = stderr(&out);
-    assert!(
-        err.contains("o/r#67") && err.contains("o/r#65") && err.contains("next sync"),
-        "{err}"
-    );
-    assert_eq!(parent_of(&s, 67), Some(foreign));
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn a_move_from_a_ticket_parent_to_another_repositorys_ticket_is_refused() {
+    for push in ["\"parent\"", "\"status\""] {
+        let s = linked(push, Some(65), false);
+        let foreign = s
+            .proj
+            .store()
+            .add(NewTodo {
+                project: s.todo_for("o/r#65").project,
+                description: "o/x#5".into(),
+                parent: None,
+                order: None,
+                ticket: Some(TicketRef {
+                    tracker: "github".into(),
+                    key: "o/x#5".into(),
+                    synced_status: None,
+                }),
+            })
+            .unwrap();
+        let out = s.devkit(
+            &["todo", "move", &id_of(&s, 67), "--parent", &foreign],
+            &AGENT,
+        );
+        assert_eq!(out.status.code(), Some(1), "{push}: {}", stderr(&out));
+        let err = stderr(&out);
+        assert!(
+            err.contains("o/r#67")
+                && err.contains("o/r#65")
+                && err.contains("o/x#5 is a ticket of another repository")
+                && err.contains("next sync"),
+            "{push}: {err}"
+        );
+        assert_eq!(parent_of(&s, 67), Some(id_of(&s, 65)), "{push}");
+        assert!(s.mutations().is_empty(), "{push}: {:?}", s.mutations());
+    }
 }
 
 #[test]

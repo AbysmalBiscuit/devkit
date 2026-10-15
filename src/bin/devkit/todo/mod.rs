@@ -1148,7 +1148,9 @@ fn apply_checked(
 /// `order`. A ticket todo's move between ticket parents reaches the tracker
 /// as `push` allows; with parents pushing from the ticket todo's
 /// repository, a ticket todo and a todo that is not one never nest under
-/// each other. A move to the parent `id` already has stays local.
+/// each other. A ticket todo under a ticket parent never moves under a
+/// ticket of another tracker or repository, which the next sync would undo.
+/// A move to the parent `id` already has stays local.
 fn move_todo(
     store: &Store,
     id: &str,
@@ -1204,15 +1206,15 @@ fn move_todo(
         && let Some(new) = parent.as_ref().and_then(|p| p.ticket.as_ref())
         && !new.same_tracker(ticket)
     {
-        store.apply(&edit)?;
-        eprintln!(
-            "devkit todo: {new} is on another tracker, so {key}'s parent there stays {old}, and \
-             the next sync restores it",
+        bail!(
+            "todo {} is ticket {key}, a sub-issue of {old}; {new} is a ticket of another \
+             repository, so it cannot become {key}'s parent there, and the next sync would put \
+             {key} back under {old}. Change {key}'s parent on the tracker instead",
+            devkit_todo::short_id(&todo.id),
             new = new.key,
             key = ticket.key,
             old = old.key
         );
-        return Ok(());
     }
     let linked = parent
         .as_ref()
