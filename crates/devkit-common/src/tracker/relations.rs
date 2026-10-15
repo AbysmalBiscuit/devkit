@@ -20,7 +20,38 @@ use crate::{
     github::Api,
 };
 
+/// Reads and writes one tracker's links between tickets.
+#[ambassador::delegatable_trait]
+pub trait TicketLinks {
+    /// Reads `child`'s parent, and the ids a write making `target` its parent
+    /// needs.
+    fn read_parent(&self, child: &str, target: Option<&str>) -> Result<ParentRead>;
+
+    /// Makes `child` a sub-issue of `to`, or of nothing, from the parent
+    /// `read` found. On GitHub a child moving between parents leaves the old
+    /// one first, so `addSubIssue` sends `replaceParent: false` and fails
+    /// rather than take the child from a parent set since the read; with
+    /// `replace` it sends `true` and takes it from whatever parent it has.
+    /// Linear sets the parent in one write and ignores `replace`.
+    fn set_parent(
+        &self,
+        read: &ParentRead,
+        child: &str,
+        to: Option<&str>,
+        replace: bool,
+    ) -> Result<()>;
+
+    /// Reads what links `blocked` and `blocker` on the tracker.
+    fn read_pair(&self, blocked: &str, blocker: &str) -> Result<PairRead>;
+
+    /// Adds, or with `add` false removes, the link recording that the
+    /// blocker `read` names blocks its ticket.
+    fn set_blocked(&self, read: &PairRead, add: bool) -> Result<()>;
+}
+
 /// The ticket links of the tracker `kind` names.
+#[derive(ambassador::Delegate)]
+#[delegate(TicketLinks)]
 pub enum Relations {
     Github(GithubRelations),
     Linear(LinearRelations),
@@ -73,52 +104,6 @@ impl ParentRead {
             .get(key)
             .map(String::as_str)
             .with_context(|| format!("the tracker has no ticket {key} it can read"))
-    }
-}
-
-impl Relations {
-    /// Reads `child`'s parent, and the ids a write making `target` its parent
-    /// needs.
-    pub fn read_parent(&self, child: &str, target: Option<&str>) -> Result<ParentRead> {
-        match self {
-            Relations::Github(g) => g.read_parent(child, target),
-            Relations::Linear(l) => l.read_parent(child, target),
-        }
-    }
-
-    /// Makes `child` a sub-issue of `to`, or of nothing, from the parent
-    /// `read` found. On GitHub a child moving between parents leaves the old
-    /// one first, so `addSubIssue` sends `replaceParent: false` and fails
-    /// rather than take the child from a parent set since the read; with
-    /// `replace` it sends `true` and takes it from whatever parent it has.
-    pub fn set_parent(
-        &self,
-        read: &ParentRead,
-        child: &str,
-        to: Option<&str>,
-        replace: bool,
-    ) -> Result<()> {
-        match self {
-            Relations::Github(g) => g.set_parent(read, child, to, replace),
-            Relations::Linear(l) => l.set_parent(read, child, to),
-        }
-    }
-
-    /// Reads what links `blocked` and `blocker` on the tracker.
-    pub fn read_pair(&self, blocked: &str, blocker: &str) -> Result<PairRead> {
-        match self {
-            Relations::Github(g) => g.read_pair(blocked, blocker),
-            Relations::Linear(l) => l.read_pair(blocked, blocker),
-        }
-    }
-
-    /// Adds, or with `add` false removes, the link recording that the
-    /// blocker `read` names blocks its ticket.
-    pub fn set_blocked(&self, read: &PairRead, add: bool) -> Result<()> {
-        match self {
-            Relations::Github(g) => g.set_blocked(read, add),
-            Relations::Linear(l) => l.set_blocked(read, add),
-        }
     }
 }
 
@@ -198,7 +183,9 @@ impl GithubRelations {
         let number = v["number"].as_u64()?;
         Some(super::github_tickets::ticket_key(repo, number))
     }
+}
 
+impl TicketLinks for GithubRelations {
     fn read_parent(&self, child: &str, target: Option<&str>) -> Result<ParentRead> {
         let child_n = self.number(child)?;
         let mut numbers = vec![child_n];
@@ -335,7 +322,9 @@ impl LinearRelations {
         );
         Ok(())
     }
+}
 
+impl TicketLinks for LinearRelations {
     fn read_parent(&self, child: &str, target: Option<&str>) -> Result<ParentRead> {
         let mut parts = vec![format!(
             "c: issue(id: \"{}\") {{ id identifier parent {{ id identifier }} }}",
@@ -361,7 +350,13 @@ impl LinearRelations {
         Ok(ParentRead { current, ids })
     }
 
-    fn set_parent(&self, read: &ParentRead, child: &str, to: Option<&str>) -> Result<()> {
+    fn set_parent(
+        &self,
+        read: &ParentRead,
+        child: &str,
+        to: Option<&str>,
+        _replace: bool,
+    ) -> Result<()> {
         let parent = to.map(|t| read.id(t)).transpose()?;
         self.mutate(
             UPDATE_MUTATION,
@@ -644,7 +639,7 @@ mod tests {
         ]);
         let read = writer.read_parent("ENG-2", None).unwrap();
         assert_eq!(read.current.as_deref(), Some("ENG-1"));
-        writer.set_parent(&read, "ENG-2", None).unwrap();
+        writer.set_parent(&read, "ENG-2", None, false).unwrap();
         assert_eq!(
             sent.lock().unwrap()[1]["variables"],
             json!({ "id": "uuid-2", "input": { "parentId": null } })
@@ -663,7 +658,9 @@ mod tests {
         ]);
         let read = writer.read_parent("ENG-2", Some("ENG-1")).unwrap();
         assert_eq!(read.current, None);
-        writer.set_parent(&read, "ENG-2", Some("ENG-1")).unwrap();
+        writer
+            .set_parent(&read, "ENG-2", Some("ENG-1"), false)
+            .unwrap();
         assert_eq!(
             sent.lock().unwrap()[1]["variables"],
             json!({ "id": "uuid-2", "input": { "parentId": "uuid-1" } })

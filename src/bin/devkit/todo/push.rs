@@ -15,7 +15,7 @@ use devkit_common::{
     caller::Caller,
     tracker::{
         self, github_status,
-        relations::{self, Relations},
+        relations::{self, Relations, TicketLinks as _},
         status::{self, StatusWriter as _},
     },
 };
