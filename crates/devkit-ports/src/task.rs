@@ -764,6 +764,14 @@ struct PlanLine {
 }
 
 impl ExecutionPlan {
+    /// Whether `devrun task` takes the plan's args from `caller`.
+    pub fn accepts(&self, caller: Caller) -> bool {
+        match caller {
+            Caller::Human => self.accepts[0],
+            Caller::Agent => self.accepts[1],
+        }
+    }
+
     /// Each step's task and argv, or the app an `up` step brings up, in
     /// order, as a run records them.
     pub fn commands(&self) -> Vec<crate::ledger::Step> {

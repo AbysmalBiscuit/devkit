@@ -52,6 +52,10 @@ impl Gate {
         if mode == GateMode::Off {
             return Ok(None);
         }
+        let (required, moved_from) = match heads_required(dir, head, &required, caller) {
+            Some(at_head) => (at_head, Some(required)),
+            None => (required, None),
+        };
         let repo = devkit_common::vcs::primary_checkout(dir)?;
         let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
         let run = ledger.passed(&repo, &required.task, &required.args, head)?;
@@ -76,7 +80,14 @@ impl Gate {
             }
         };
         let run_dir = run.as_ref().and_then(|r| r.dir.as_deref()).unwrap_or("");
-        let change = definition_change(dir, merge_base, head, run_dir, &required);
+        let change = definition_change(
+            dir,
+            merge_base,
+            head,
+            run_dir,
+            moved_from.as_ref().unwrap_or(&required),
+            &required,
+        );
         let ran = run
             .as_ref()
             .map(|r| ran_note(dir, head, r, &required))
@@ -193,35 +204,85 @@ fn reused_note(required: &RequiredTask, run: &Run) -> String {
     )
 }
 
-/// The note on what the PR changes in what the required task runs: the
-/// task as the `devkit.toml` layers committed at `merge_base` define it for
-/// a run started in `run_dir`, against the same at `head`, both rendered
-/// for the checkout at `dir`. No other layer enters either side, so an
-/// uncommitted edit, the primary checkout's config, the home config or a
-/// `devkit.local.toml` shows as no change. `None` when nothing differs.
+/// HEAD's committed required run, when the merge base's `required` no
+/// longer applies at HEAD: its task does not render there, or does not
+/// take its args from `caller`. A branch can rename the task or a variable
+/// its args name, and no run at HEAD could then take the merge base's.
+/// `None` when the merge base's applies, or HEAD's committed config names
+/// no required run that does.
+fn heads_required(
+    dir: &Path,
+    head: &str,
+    required: &RequiredTask,
+    caller: Caller,
+) -> Option<RequiredTask> {
+    let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let applies = |r: &RequiredTask| {
+        task::committed_plan(dir, head, "", &root, &r.task, &r.args, &BTreeMap::new())
+            .is_ok_and(|plan| plan.accepts(caller))
+    };
+    if applies(required) {
+        return None;
+    }
+    let gates = super::weakened::config_at(dir, head).ok()?.gates;
+    let at_head = gates.all().into_iter().find_map(|(gate, _)| match gate {
+        GateKey::Verify(r) => Some(r),
+        GateKey::WeakenedTests => None,
+    })?;
+    applies(&at_head).then_some(at_head)
+}
+
+/// The note on what the PR changes in what the required run executes:
+/// `at_base` as the `devkit.toml` layers committed at `merge_base` define
+/// it for a run started in `run_dir`, against `required` as those
+/// committed at `head` do, both rendered for the checkout at `dir`. No
+/// other layer enters either side, so an uncommitted edit, the primary
+/// checkout's config, the home config or a `devkit.local.toml` shows as no
+/// change. `None` when nothing differs.
 fn definition_change(
     dir: &Path,
     merge_base: &str,
     head: &str,
     run_dir: &str,
+    at_base: &RequiredTask,
     required: &RequiredTask,
 ) -> Option<String> {
     let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
     let base_ports = Default::default();
-    let plan = |rev| {
-        task::committed_plan(
-            dir,
-            rev,
-            run_dir,
-            &root,
-            &required.task,
-            &required.args,
-            &base_ports,
-        )
+    let plan = |rev, r: &RequiredTask| {
+        task::committed_plan(dir, rev, run_dir, &root, &r.task, &r.args, &base_ports)
     };
-    let task = &required.task;
+    let moved = (at_base != required).then(|| {
+        format!(
+            "\nThis PR changes the required run from `{}` to `{}`: the merge base's no longer \
+             applies at HEAD, so the gate takes HEAD's committed `verify_task` and \
+             `verify_args`.\n",
+            at_base.command(),
+            required.command()
+        )
+    });
+    let change = changed_plan(
+        merge_base,
+        &required.task,
+        plan(merge_base, at_base),
+        plan(head, required),
+    );
+    match moved {
+        None => change,
+        Some(moved) => Some(moved + &change.unwrap_or_default()),
+    }
+}
+
+/// The note on how the plan at `merge_base` differs from the one at HEAD,
+/// either of which may have failed to render. `None` when they match.
+fn changed_plan(
+    merge_base: &str,
+    task: &str,
+    at_base: Result<task::ExecutionPlan>,
+    at_head: Result<task::ExecutionPlan>,
+) -> Option<String> {
     let base = short(merge_base);
-    let lines = match (plan(merge_base), plan(head)) {
+    let lines = match (at_base, at_head) {
         (Ok(at_base), Ok(at_head)) => task::plan_diff(&at_base, &at_head),
         (Err(_), Err(e)) => {
             return Some(format!(

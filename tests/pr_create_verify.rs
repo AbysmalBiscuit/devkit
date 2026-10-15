@@ -314,6 +314,38 @@ fn assert_shows_change(body: &str, task: &str, lines: &[&str]) {
     }
 }
 
+/// The merge base's `verify_args` name a variable HEAD's task no longer
+/// reads, so no run at HEAD can take them; the gate requires HEAD's
+/// committed task and args instead, and shows the change.
+#[test]
+fn a_branch_renaming_the_required_variable_opens_on_heads_args() {
+    let p = project(GATE);
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        toml.replace("{{ scope }}", "{{ level }}")
+            .replace("verify_args = { scope", "verify_args = { level"),
+    )
+    .unwrap();
+    git(&p, &["commit", "-q", "-am", "rename the variable"]);
+    serve_head(&p);
+    task(&p, &["verify", "--arg", "level=all"]);
+    let body = opened_body(&p);
+    assert!(body.contains("Exit code: 0"), "{body}");
+    assert!(
+        body.contains("- Command: `devrun task verify --arg level=all`"),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            "This PR changes the required run from `devrun task verify --arg scope=all` to \
+             `devrun task verify --arg level=all`"
+        ),
+        "{body}"
+    );
+}
+
 #[test]
 fn a_branch_redefining_the_required_task_opens_showing_the_change() {
     let p = project(GATE);
