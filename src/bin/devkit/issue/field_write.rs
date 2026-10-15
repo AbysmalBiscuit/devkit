@@ -10,7 +10,7 @@ use devkit_common::{
     tracker::{
         Tracker,
         github_fields::{GithubFieldWriter, IssueFields},
-        linear_fields::{LinearFieldWriter, LinearIssue, written_ids},
+        linear_fields::{IssueRef, LinearFieldWriter, LinearIssue, written_ids},
     },
 };
 use devkit_config::{FieldDecl, Place, TrackerKind};
@@ -181,7 +181,7 @@ pub(crate) fn linear_finish(
     before: LinearIssue,
     decls: &BTreeMap<String, FieldDecl>,
     resolved: &Resolved,
-    refs: &BTreeMap<String, String>,
+    refs: &BTreeMap<String, IssueRef>,
     stale: bool,
 ) -> (LinearIssue, Vec<String>) {
     let mut problems = Vec::new();
@@ -211,7 +211,7 @@ pub(crate) fn linear_finish(
     } else {
         before
     };
-    for (field, reads) in LinearFieldWriter::verify(decls, resolved, &after) {
+    for (field, reads) in LinearFieldWriter::verify(decls, resolved, refs, &after) {
         if !failed.contains(&field) {
             problems.push(format!(
                 "`{field}`{} reads back as {reads}",

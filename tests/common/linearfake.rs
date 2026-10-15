@@ -90,6 +90,26 @@ impl LinearFake {
     }
 }
 
+/// What Linear answers a query nothing was registered for: for a read of an
+/// issue by its identifier, the error it gives an identifier no issue has.
+fn unanswered(query: &str) -> String {
+    let alias = query
+        .split_once(": issue(id: ")
+        .and_then(|(head, _)| head.rsplit([' ', '{']).next());
+    match alias {
+        Some(alias) => serde_json::json!({
+            "data": null,
+            "errors": [{
+                "message": "Entity not found: Issue",
+                "path": [alias],
+                "extensions": { "code": "INVALID_INPUT", "userPresentableMessage": "Could not find referenced Issue." }
+            }]
+        })
+        .to_string(),
+        None => r#"{"errors":[{"message":"linearfake: no answer"}]}"#.into(),
+    }
+}
+
 fn serve(shared: &Shared, stream: TcpStream) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut stream = stream;
@@ -126,12 +146,7 @@ fn serve(shared: &Shared, stream: TcpStream) -> std::io::Result<()> {
             .iter()
             .find(|(needle, _)| query.contains(needle.as_str()) || text.contains(needle.as_str()))
             .map(|(_, a)| a.clone())
-            .unwrap_or_else(|| {
-                Some((
-                    200,
-                    r#"{"errors":[{"message":"linearfake: no answer"}]}"#.into(),
-                ))
-            });
+            .unwrap_or_else(|| Some((200, unanswered(&query))));
         let Some((status, reply)) = reply else {
             return Ok(());
         };

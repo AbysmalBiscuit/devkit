@@ -79,11 +79,28 @@ pub enum Lookup<'a> {
     None,
 }
 
-fn by_identifier(id: &str) -> Result<String> {
+/// The `TEAM-NUMBER` form Linear's `issue(id:)` takes, which finds an issue
+/// by an identifier from before a move to another team, and archived or
+/// trashed issues too.
+fn identifier(id: &str) -> Result<String> {
     let (team, num) = parse_id(id).with_context(|| format!("`{id}` is not a Linear issue id"))?;
-    Ok(format!(
-        "filter: {{ team: {{ key: {{ eq: \"{team}\" }} }}, number: {{ eq: {num} }} }}"
-    ))
+    Ok(format!("{team}-{num}"))
+}
+
+/// The aliases of the issues Linear does not have, when every error in
+/// `resp` is the one `issue(id:)` gives an identifier no issue has. An empty
+/// list when the errors name no alias.
+fn issues_not_found(resp: &Json) -> Option<Vec<String>> {
+    let errors = resp.get("errors")?.as_array().filter(|e| !e.is_empty())?;
+    errors
+        .iter()
+        .all(|e| e["message"] == "Entity not found: Issue")
+        .then(|| {
+            errors
+                .iter()
+                .filter_map(|e| e.pointer("/path/0")?.as_str().map(String::from))
+                .collect()
+        })
 }
 
 /// One query reading the issue `lookup` names and the ids of the issues
@@ -91,13 +108,10 @@ fn by_identifier(id: &str) -> Result<String> {
 pub fn read_query(lookup: Lookup<'_>, refs: &BTreeSet<String>) -> Result<String> {
     let mut parts = Vec::new();
     match lookup {
-        Lookup::Identifier(id) => {
-            let (team, num) =
-                parse_id(id).with_context(|| format!("`{id}` is not a Linear issue id"))?;
-            parts.push(format!(
-                "issue: issue(id: \"{team}-{num}\") {{ {ISSUE_FIELDS} }}"
-            ))
-        }
+        Lookup::Identifier(id) => parts.push(format!(
+            "issue: issue(id: \"{}\") {{ {ISSUE_FIELDS} }}",
+            identifier(id)?
+        )),
         Lookup::Uuid(u) => parts.push(format!(
             "issue: issues(filter: {{ id: {{ eq: \"{u}\" }} }}, includeArchived: true) {{ nodes {{ {ISSUE_FIELDS} }} }}"
         )),
@@ -105,8 +119,8 @@ pub fn read_query(lookup: Lookup<'_>, refs: &BTreeSet<String>) -> Result<String>
     }
     for (i, r) in refs.iter().enumerate() {
         parts.push(format!(
-            "ref{i}: issues({}) {{ nodes {{ id identifier }} }}",
-            by_identifier(r)?
+            "ref{i}: issue(id: \"{}\") {{ id identifier }}",
+            identifier(r)?
         ));
     }
     Ok(format!("query {{ {} }}", parts.join(" ")))
@@ -162,18 +176,34 @@ pub fn parse_issue(resp: &Json) -> Result<Option<LinearIssue>> {
     }))
 }
 
-/// Identifier to id for each reference a [`read_query`] response resolved.
-pub fn parse_refs(resp: &Json) -> BTreeMap<String, String> {
-    resp["data"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .filter(|(k, _)| k.starts_with("ref"))
-        .filter_map(|(_, v)| {
-            let n = v.pointer("/nodes/0")?;
-            Some((text(n, "/identifier")?, text(n, "/id")?))
+/// An issue a parent or blocked-by field names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueRef {
+    pub id: String,
+    /// Its identifier now, which differs from the one asked for after a move
+    /// to another team.
+    pub identifier: String,
+}
+
+/// Each of `asked`, the references a [`read_query`] read in order, that its
+/// response resolved, keyed by the identifier asked for.
+pub fn parse_refs(resp: &Json, asked: &BTreeSet<String>) -> BTreeMap<String, IssueRef> {
+    asked
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| {
+            let n = resp.pointer(&format!("/data/ref{i}"))?;
+            Some((r.clone(), IssueRef {
+                id: text(n, "/id")?,
+                identifier: text(n, "/identifier")?,
+            }))
         })
         .collect()
+}
+
+/// The identifier `asked` has now, as `refs` resolved it.
+fn now<'a>(refs: &'a BTreeMap<String, IssueRef>, asked: &'a str) -> &'a str {
+    refs.get(asked).map_or(asked, |r| r.identifier.as_str())
 }
 
 fn number_text(n: f64) -> String {
@@ -323,7 +353,7 @@ fn whole(place: &Place, raw: &str) -> Result<i64> {
 fn input_entry(
     place: &Place,
     want: &[String],
-    refs: &BTreeMap<String, String>,
+    refs: &BTreeMap<String, IssueRef>,
 ) -> Result<Option<(&'static str, Json)>> {
     let first = want.first();
     let id = |key: &'static str| Ok(Some((key, first.map_or(Json::Null, |v| json!(v)))));
@@ -351,10 +381,10 @@ fn input_entry(
         ))),
         Place::Parent => match first {
             Some(p) => {
-                let id = refs
+                let issue = refs
                     .get(p)
                     .with_context(|| format!("Linear has no issue {p}"))?;
-                Ok(Some(("parentId", json!(id))))
+                Ok(Some(("parentId", json!(issue.id))))
             }
             None => Ok(Some(("parentId", Json::Null))),
         },
@@ -372,7 +402,7 @@ fn input_entry(
 fn field_inputs(
     decls: &BTreeMap<String, FieldDecl>,
     resolved: &Resolved,
-    refs: &BTreeMap<String, String>,
+    refs: &BTreeMap<String, IssueRef>,
 ) -> Result<Map<String, Json>> {
     let mut out = Map::new();
     for (name, values) in resolved.written() {
@@ -397,7 +427,7 @@ pub fn create_input(
     body: &str,
     decls: &BTreeMap<String, FieldDecl>,
     resolved: &Resolved,
-    refs: &BTreeMap<String, String>,
+    refs: &BTreeMap<String, IssueRef>,
 ) -> Result<Json> {
     let given = Resolved {
         fields: resolved.fields.clone(),
@@ -421,7 +451,7 @@ pub fn update_input(
     body: Option<&str>,
     decls: &BTreeMap<String, FieldDecl>,
     resolved: &Resolved,
-    refs: &BTreeMap<String, String>,
+    refs: &BTreeMap<String, IssueRef>,
 ) -> Result<Json> {
     let mut input = field_inputs(decls, resolved, refs)?;
     if let Some(t) = title {
@@ -504,11 +534,9 @@ impl LinearFieldWriter {
         }
     }
 
-    fn call(&self, query: &str, variables: Json, detail: &str) -> Result<Json> {
-        graphql_errors((self.post)(
-            json!({ "query": query, "variables": variables }),
-            detail,
-        )?)
+    /// Linear's answer to `query`, its errors left for the caller to read.
+    fn query(&self, query: &str, detail: &str) -> Result<Json> {
+        (self.post)(json!({ "query": query, "variables": {} }), detail)
     }
 
     fn mutate(&self, query: &str, variables: Json, op: &str) -> Result<()> {
@@ -528,12 +556,21 @@ impl LinearFieldWriter {
 
     /// The id of each issue `refs` names, refusing one Linear does not have.
     /// Makes no request when `refs` is empty.
-    pub fn refs(&self, refs: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
+    pub fn refs(&self, refs: &BTreeSet<String>) -> Result<BTreeMap<String, IssueRef>> {
         if refs.is_empty() {
             return Ok(BTreeMap::new());
         }
-        let found =
-            parse_refs(&self.call(&read_query(Lookup::None, refs)?, json!({}), "issue refs")?);
+        let resp = self.query(&read_query(Lookup::None, refs)?, "issue refs")?;
+        if let Some(aliases) = issues_not_found(&resp) {
+            let named: Vec<&str> = refs
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| aliases.is_empty() || aliases.contains(&format!("ref{i}")))
+                .map(|(_, r)| r.as_str())
+                .collect();
+            bail!("Linear has no issue {}", named.join(", "));
+        }
+        let found = parse_refs(&graphql_errors(resp)?, refs);
         let missing: Vec<&str> = refs
             .iter()
             .filter(|r| !found.contains_key(*r))
@@ -548,11 +585,11 @@ impl LinearFieldWriter {
     }
 
     fn lookup(&self, lookup: Lookup<'_>) -> Result<Option<LinearIssue>> {
-        parse_issue(&self.call(
-            &read_query(lookup, &BTreeSet::new())?,
-            json!({}),
-            "issue fields",
-        )?)
+        let resp = self.query(&read_query(lookup, &BTreeSet::new())?, "issue fields")?;
+        if issues_not_found(&resp).is_some() {
+            return Ok(None);
+        }
+        parse_issue(&graphql_errors(resp)?)
     }
 
     /// Read what issue `identifier` holds at every place devkit writes. The
@@ -636,10 +673,10 @@ impl LinearFieldWriter {
         &self,
         issue: &LinearIssue,
         want: &[String],
-        refs: &BTreeMap<String, String>,
+        refs: &BTreeMap<String, IssueRef>,
     ) -> Result<()> {
         for w in want {
-            if issue.blocked_by.iter().any(|(id, _)| id == w) {
+            if issue.blocked_by.iter().any(|(id, _)| id == now(refs, w)) {
                 continue;
             }
             let blocker = refs
@@ -647,12 +684,12 @@ impl LinearFieldWriter {
                 .with_context(|| format!("Linear has no issue {w}"))?;
             self.mutate(
                 RELATE_MUTATION,
-                json!({ "input": blocks_input(blocker, &issue.uuid) }),
+                json!({ "input": blocks_input(&blocker.id, &issue.uuid) }),
                 "issueRelationCreate",
             )?;
         }
         for (id, relation) in &issue.blocked_by {
-            if !want.contains(id) {
+            if !want.iter().any(|w| now(refs, w) == id) {
                 self.mutate(
                     UNRELATE_MUTATION,
                     json!({ "id": relation }),
@@ -664,11 +701,13 @@ impl LinearFieldWriter {
     }
 
     /// Each field of `resolved` whose read-back `after` differs from what was
-    /// written, with what it reads as. A list compares as a set, and a
-    /// `--none` field must read empty.
+    /// written, with what it reads as. A list compares as a set, a `--none`
+    /// field must read empty, and an issue named by an identifier from before
+    /// a move compares as the identifier `refs` resolved it to.
     pub fn verify(
         decls: &BTreeMap<String, FieldDecl>,
         resolved: &Resolved,
+        refs: &BTreeMap<String, IssueRef>,
         after: &LinearIssue,
     ) -> Vec<(String, String)> {
         let mut out = Vec::new();
@@ -677,7 +716,11 @@ impl LinearFieldWriter {
                 continue;
             };
             let Some(place) = &decl.r#where else { continue };
-            let want = held(place, written_ids(values));
+            let mut ids = written_ids(values);
+            if matches!(place, Place::Parent | Place::BlockedBy) {
+                ids = ids.iter().map(|w| now(refs, w).to_string()).collect();
+            }
+            let want = held(place, ids);
             let have = held(place, after.ids(place));
             if want != have {
                 let reads: Vec<String> = have.iter().map(|id| value_name(decl, id)).collect();
@@ -840,8 +883,8 @@ linear = "user-ada"
         );
         let id = create_id("team-eng", "T", "B");
         let refs = BTreeMap::from([
-            ("ENG-1".to_string(), "uuid-eng-1".to_string()),
-            ("ENG-2".to_string(), "uuid-eng-2".to_string()),
+            ("ENG-1".to_string(), issue_ref("uuid-eng-1", "ENG-1")),
+            ("ENG-2".to_string(), issue_ref("uuid-eng-2", "ENG-2")),
         ]);
         let input = create_input(id, "T", "B", &config().ticket.fields.linear, &r, &refs).unwrap();
         assert_eq!(
@@ -967,6 +1010,13 @@ linear = "user-ada"
         );
     }
 
+    fn issue_ref(id: &str, identifier: &str) -> IssueRef {
+        IssueRef {
+            id: id.into(),
+            identifier: identifier.into(),
+        }
+    }
+
     fn bail_err(msg: &str) -> Result<Json> {
         Err(anyhow::anyhow!("{msg}"))
     }
@@ -980,7 +1030,7 @@ linear = "user-ada"
             "ENG-3".to_string(),
             "rel-3".to_string()
         )]);
-        let refs = BTreeMap::from([("ENG-2".to_string(), "uuid-eng-2".to_string())]);
+        let refs = BTreeMap::from([("ENG-2".to_string(), issue_ref("uuid-eng-2", "ENG-2"))]);
         let (writer, sent) = scripted(vec![
             Ok(json!({ "data": { "issueRelationCreate": { "success": true } } })),
             Ok(json!({ "data": { "issueRelationDelete": { "success": true } } })),
@@ -1045,7 +1095,8 @@ linear = "user-ada"
             .unwrap()
             .unwrap();
         let r = resolved(&[("priority", "urgent"), ("estimate", "3")], &["milestone"]);
-        let off = LinearFieldWriter::verify(&cfg.ticket.fields.linear, &r, &issue);
+        let off =
+            LinearFieldWriter::verify(&cfg.ticket.fields.linear, &r, &BTreeMap::new(), &issue);
         assert_eq!(off, [("priority".to_string(), "high".to_string())]);
     }
 }

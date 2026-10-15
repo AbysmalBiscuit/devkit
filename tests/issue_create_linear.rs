@@ -533,3 +533,102 @@ fn a_linear_create_without_a_key_is_refused_before_any_request() {
     assert!(stderr(&out).contains("LINEAR_API_KEY"), "{}", stderr(&out));
     assert!(linear.bodies().is_empty());
 }
+
+/// [`FIELDS`] with a parent and a blocked-by field.
+fn relations() -> String {
+    format!(
+        "{FIELDS}\n[ticket.fields.linear.parent]\ntype  = \"issue\"\nwhere = \"parent\"\n\n\
+         [ticket.fields.linear.blocked_by]\ntype  = \"issue\"\nlist  = true\nwhere = \"blocked_by\"\n"
+    )
+}
+
+/// A [`read`]-shaped answer whose ticket has the parent `identifier`.
+fn with_parent(read: &str, identifier: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(read).unwrap();
+    v["data"]["issue"]["nodes"][0]["parent"] = serde_json::json!({ "identifier": identifier });
+    v.to_string()
+}
+
+#[test]
+fn a_parent_given_by_its_identifier_from_before_a_team_move_resolves() {
+    let fake = project(&relations());
+    let linear = LinearFake::start();
+    linear.answer(ENG_42, &by_identifier(&read(&[], 2)));
+    linear.answer(
+        r#"ref0: issue(id: "ENG-41")"#,
+        r#"{"data":{"ref0":{"id":"uuid-41","identifier":"OPS-9"}}}"#,
+    );
+    linear.answer(
+        "includeArchived: true",
+        &with_parent(&read(&[], 2), "OPS-9"),
+    );
+    linear.answer("issueUpdate(", UPDATED);
+    let out = run(&fake, &linear, &[
+        "edit",
+        "ENG-42",
+        "--arg",
+        "parent=ENG-41",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        linear.sent("issueUpdate(")[0]["variables"]["input"],
+        serde_json::json!({ "parentId": "uuid-41" })
+    );
+}
+
+#[test]
+fn a_parent_that_is_archived_resolves() {
+    let fake = project(&relations());
+    let linear = LinearFake::start();
+    linear.answer(
+        r#"ref0: issue(id: "ENG-40")"#,
+        r#"{"data":{"ref0":{"id":"uuid-40","identifier":"ENG-40","archivedAt":"2026-10-01T00:00:00.000Z"}}}"#,
+    );
+    linear.answer("issueCreate(", CREATED);
+    linear.answer("issue: issues(", &with_parent(&read(&[], 0), "ENG-40"));
+    let out = run(&fake, &linear, &[
+        "create",
+        "--title",
+        "T",
+        "--arg",
+        "parent=ENG-40",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        linear.sent("issueCreate(")[0]["variables"]["input"]["parentId"],
+        "uuid-40"
+    );
+}
+
+#[test]
+fn an_unknown_identifier_is_named_as_missing() {
+    let fake = project(&relations());
+    let linear = LinearFake::start();
+    linear.answer(ENG_42, &by_identifier(&read(&[], 2)));
+    let out = run(&fake, &linear, &[
+        "edit",
+        "ENG-42",
+        "--arg",
+        "parent=ENG-99",
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("Linear has no issue ENG-99"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(linear.sent("issueUpdate(").is_empty());
+
+    let out = run(&fake, &linear, &[
+        "edit",
+        "ENG-98",
+        "--arg",
+        "priority=urgent",
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("Linear has no issue ENG-98"),
+        "{}",
+        stderr(&out)
+    );
+}
