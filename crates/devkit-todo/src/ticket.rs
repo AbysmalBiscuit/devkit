@@ -19,11 +19,16 @@ use crate::{Edit, Holder, NewTodo, StatusKind, TicketRef, Todo, one_line};
 /// The text a ticket's todo carries: `#65 Add sync` on GitHub, `SWE-123 Fix
 /// the plate loader` elsewhere.
 pub fn todo_text(tracker: &str, key: &str, title: &str) -> String {
-    let key = match tracker {
+    one_line(&format!("{} {title}", key_prefix(tracker, key)))
+}
+
+/// The form of `key` a ticket todo's text starts with: `#65` for a GitHub
+/// key, the key itself otherwise.
+pub fn key_prefix(tracker: &str, key: &str) -> String {
+    match tracker {
         "github" => format!("#{}", key.rsplit('#').next().unwrap_or(key)),
         _ => key.to_string(),
-    };
-    one_line(&format!("{key} {title}"))
+    }
 }
 
 /// The name a ticket todo records as its ticket's last synced status: the

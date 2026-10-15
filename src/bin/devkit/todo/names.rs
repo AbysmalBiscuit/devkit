@@ -4,6 +4,7 @@ use std::path::Path;
 
 use devkit_common::tracker::{self, TrackerKind};
 use devkit_todo::names::TrackerKey;
+pub(crate) use devkit_todo::names::Names;
 
 /// The [`TrackerKey`] of the checkout at `cwd`, reading a GitHub issue's
 /// short form or URL against the issues repository it names; `None` when its

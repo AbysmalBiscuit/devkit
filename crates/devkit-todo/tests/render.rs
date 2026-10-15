@@ -1,10 +1,16 @@
 //! Plan and Mermaid text, rendered from todos built directly.
 
+use devkit_config::IdStyle;
 use devkit_todo::{
     Holder, Status, Todo,
     graph::Graph,
+    names::Names,
     render::{self, Notes, TicketWork},
 };
+
+fn short() -> Names {
+    Names::plain(IdStyle::Short)
+}
 
 fn todo(id: &str, text: &str, status: Status, blocked_by: &[&str]) -> Todo {
     Todo {
@@ -36,7 +42,7 @@ fn plan_text_names_batches_critical_path_and_cycle() {
         todo("4", "back", Status::Pending, &["3"]),
     ];
     let plan = Graph::new(&todos).plan(|_| true, None);
-    let text = render::render_plan("r.main", &plan, TicketWork::none());
+    let text = render::render_plan("r.main", &plan, TicketWork::none(), &short());
     assert_eq!(
         text,
         "\
@@ -61,7 +67,7 @@ fn mermaid_has_one_subgraph_per_batch_and_escapes_quotes() {
         todo("2", "then", Status::Pending, &["1"]),
     ];
     let plan = Graph::new(&todos).plan(|_| true, None);
-    let text = render::render_mermaid(&plan);
+    let text = render::render_mermaid(&plan, &short());
     assert_eq!(
         text,
         "\
@@ -85,6 +91,7 @@ fn shown(todos: &[Todo], show: &dyn Fn(&Todo) -> bool) -> String {
         graph: &graph,
         show_ready: show,
         work: TicketWork::none(),
+        names: &short(),
     };
     render::render_lists(&["r.main".into()], todos, &Holder::new("S"), &notes)
 }
@@ -111,6 +118,7 @@ fn a_blocker_off_the_listing_is_named_with_its_node() {
         graph: &graph,
         show_ready: &|_| false,
         work: TicketWork::none(),
+        names: &short(),
     };
     let text = render::render_lists(&["r.main".into()], &listed, &Holder::new("S"), &notes);
     assert!(
@@ -137,7 +145,7 @@ fn plan_escapes_control_characters_in_the_holder() {
         &[],
     )];
     let plan = Graph::new(&todos).plan(|_| true, None);
-    let text = render::render_plan("r.main", &plan, TicketWork::none());
+    let text = render::render_plan("r.main", &plan, TicketWork::none(), &short());
     assert!(
         text.contains("in progress: S\\u{1b}]0;owned\\u{7}\\u{202e}\n"),
         "{text}"
@@ -152,7 +160,7 @@ fn mermaid_draws_cycle_members_and_their_edges() {
         todo("4", "back", Status::Pending, &["3"]),
     ];
     let plan = Graph::new(&todos).plan(|_| true, None);
-    let text = render::render_mermaid(&plan);
+    let text = render::render_mermaid(&plan, &short());
     assert_eq!(
         text,
         "\
@@ -187,6 +195,7 @@ fn a_ticket_todo_shows_its_open_work_count() {
         graph: &graph,
         show_ready: &|_| false,
         work: &work,
+        names: &short(),
     };
     let text = render::render_lists(&["r.main".into()], &todos, &Holder::new("S"), &notes);
     assert_eq!(
@@ -194,7 +203,7 @@ fn a_ticket_todo_shows_its_open_work_count() {
         "## r.main\n- [ ] #65 Add sync (1, 3 open)\n- [ ] a todo of its own (2)\n"
     );
     let plan = graph.plan(|_| true, None);
-    let text = render::render_plan("r.main", &plan, &work);
+    let text = render::render_plan("r.main", &plan, &work, &short());
     let line = text.lines().find(|l| l.contains("#65")).unwrap();
     assert!(line.ends_with("ready, 3 open"), "{text}");
 }

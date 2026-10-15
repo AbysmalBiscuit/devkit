@@ -20,7 +20,7 @@ use devkit_common::{
     caller::{self, Caller},
     vcs::Checkout,
 };
-use devkit_config::{HoldStop, PushKind};
+use devkit_config::{HoldStop, IdStyle, PushKind};
 use devkit_todo::{
     Claimed, Edit, Filter, Holder, NewTodo, NodeMatch, Status, StatusKind, Todo, TodoStore,
     activity::{ActivityStore as _, SessionState},
@@ -875,10 +875,10 @@ fn plan(
         .ticket_root(fence.facts, fence.store.config().ready_outside_ticket)
         .unwrap_or_else(|| fence.facts.values.get("repo").cloned().unwrap_or_default());
     let text = if mermaid {
-        render::render_mermaid(&plan)
+        render::render_mermaid(&plan, &names::Names::plain(IdStyle::Short))
     } else {
         let work = fence.work(&offered, expand)?;
-        render::render_plan(&root, &plan, &work)
+        render::render_plan(&root, &plan, &work, &names::Names::plain(IdStyle::Short))
     };
     print!("{text}");
     Ok(())
@@ -1335,6 +1335,7 @@ fn list(
         graph: &graph,
         show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
         work: &work,
+        names: &names::Names::plain(IdStyle::Short),
     };
     print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
     Ok(())
@@ -1434,6 +1435,7 @@ fn context(args: &ContextArgs) -> Option<String> {
         graph: &graph,
         show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
         work: &work,
+        names: &names::Names::plain(IdStyle::Short),
     };
     let mut lists = render::render_lists(&nodes, &todos, &viewer, &notes);
     let own_open = todos.iter().any(|t| {
