@@ -251,8 +251,12 @@ pub struct CommandRule {
 /// pre-tool-use hook allows only when `devkit ticket render` (an issue) or
 /// `devkit pr render` (a PR) produced them in the same agent session.
 ///
+/// An issue entry naming its `tracker` also holds the call to that tracker's
+/// `[ticket.fields]` levels, reading each field's values from the input keys
+/// `fields` maps it to.
+///
 /// ```
-/// # use devkit_config::RenderedToolRule;
+/// # use devkit_config::{RenderedToolRule, TrackerKind};
 /// # use serde_json::json;
 /// # let doc: toml::Table = toml::from_str(r#"
 /// [harness.issue_tools.linear]
@@ -262,6 +266,8 @@ pub struct CommandRule {
 /// title      = "title"
 /// body       = "description"
 /// body_patch = ["patch"]
+/// tracker    = "linear"
+/// fields     = { labels = ["labels", "addLabels"], priority = "priority", team = "team" }
 ///
 /// [harness.issue_tools.github]
 /// servers = ["*github*"]
@@ -269,6 +275,8 @@ pub struct CommandRule {
 /// equals  = { method = "create" }
 /// title   = "title"
 /// body    = "body"
+/// tracker = "github"
+/// fields  = { labels = "labels", assignees = "assignees" }
 ///
 /// [harness.pr_tools.github-create]
 /// servers = ["*github*"]
@@ -288,6 +296,9 @@ pub struct CommandRule {
 /// # };
 /// # assert!(rule("issue_tools", "linear").matches(Some("claude.ai Linear"), "save_issue"));
 /// # assert!(rule("issue_tools", "github").is_create(&json!({"method": "create"})));
+/// # assert_eq!(rule("issue_tools", "linear").tracker, Some(TrackerKind::Linear));
+/// # assert_eq!(rule("issue_tools", "linear").fields["priority"].keys(), ["priority"]);
+/// # assert_eq!(rule("issue_tools", "linear").fields["labels"].keys(), ["labels", "addLabels"]);
 /// # let create = rule("pr_tools", "github-create");
 /// # assert!(!create.matches(Some("github"), "update_pull_request"));
 /// # assert!(create.is_create(&json!({"pullNumber": 5})));
@@ -324,6 +335,44 @@ pub struct RenderedToolRule {
     /// `false` turns off an entry a parent layer declared.
     #[serde(default = "enabled_default")]
     pub enabled: bool,
+    /// The tracker an `issue_tools` entry writes to. Its
+    /// `[ticket.fields.<tracker>]` levels then apply to the call, unless
+    /// `[tracker] kind` names another tracker or, on GitHub, the call's
+    /// `owner`/`repo` is not `[github] issues_repo`. Without it the call gets
+    /// the render check alone.
+    #[serde(default)]
+    pub tracker: Option<crate::TrackerKind>,
+    /// Ticket field name to the input key that carries its value, as the
+    /// tracker names it: a string, an array of strings for a list, a number
+    /// for a `number` field, or `null` for a field left empty on purpose. An
+    /// array of keys maps a field the tool sets under several, such as
+    /// Linear's `labels` and `addLabels`: each key the call carries is
+    /// checked, and any one sets the field on a create. Leave a key that
+    /// only removes values (`removeLabels`) unmapped, since removing a value
+    /// cannot break a level. A declared field with no key here cannot be set
+    /// by the tool, so at `error` it denies every create. Map a key only when
+    /// it takes the value as the field records it: GitHub's `issue_write`
+    /// takes a milestone's number, and a `milestone` field records its title.
+    #[serde(default)]
+    pub fields: BTreeMap<String, InputKeys>,
+}
+
+/// The input keys of one ticket field: one key, or an array of keys.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum InputKeys {
+    One(String),
+    Several(Vec<String>),
+}
+
+impl InputKeys {
+    /// The keys, in the order written.
+    pub fn keys(&self) -> &[String] {
+        match self {
+            InputKeys::One(key) => std::slice::from_ref(key),
+            InputKeys::Several(keys) => keys,
+        }
+    }
 }
 
 impl RenderedToolRule {

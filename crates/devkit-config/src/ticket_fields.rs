@@ -95,8 +95,8 @@ pub struct FieldDecl {
     /// Required once the layers are merged.
     pub r#where: Option<Place>,
     /// For `enum`: each value's `name`, which agents pass and match
-    /// case-insensitively, and its tracker `id`, which devkit writes. A higher
-    /// layer replaces the list whole.
+    /// case-insensitively, and its tracker `id`, which devkit writes and agents
+    /// may pass instead. A higher layer replaces the list whole.
     pub values: Vec<EnumValue>,
     /// How a ticket missing this field is treated: `error` refuses it,
     /// `warning` reports it after the write, `info` and `none` say nothing.
@@ -133,14 +133,40 @@ impl FieldDecl {
             .fold(self.level, FieldLevel::max)
     }
 
-    /// The enum value `raw` names: a case-insensitive name match, else an
-    /// exact id.
-    pub fn enum_value(&self, raw: &str) -> Option<&EnumValue> {
+    /// The enum values `raw` names: every value whose id it is exactly, with
+    /// every value it is an alias of, else every value whose name or one of
+    /// whose aliases it matches case-insensitively, which is several when
+    /// values of different Linear teams share a name.
+    pub fn enum_values(&self, raw: &str) -> Vec<&EnumValue> {
         let raw = raw.trim();
+        self.by_id_or(raw, |v| {
+            v.name.eq_ignore_ascii_case(raw) || v.has_alias(raw)
+        })
+    }
+
+    /// The enum values `raw` names as the tracker spells them: every value
+    /// whose id it is exactly, with every value it is an alias of, else every
+    /// value whose id or one of whose aliases it matches case-insensitively.
+    /// A value's `name` is devkit's alone.
+    pub fn tracker_values(&self, raw: &str) -> Vec<&EnumValue> {
+        let raw = raw.trim();
+        self.by_id_or(raw, |v| v.id.eq_ignore_ascii_case(raw) || v.has_alias(raw))
+    }
+
+    /// The values `raw` is the exact id or an alias of when it is some
+    /// value's exact id, else the values `loosely` matches.
+    fn by_id_or(&self, raw: &str, loosely: impl Fn(&EnumValue) -> bool) -> Vec<&EnumValue> {
+        let exact = self.values.iter().any(|v| v.id == raw);
         self.values
             .iter()
-            .find(|v| v.name.eq_ignore_ascii_case(raw))
-            .or_else(|| self.values.iter().find(|v| v.id == raw))
+            .filter(|v| {
+                if exact {
+                    v.id == raw || v.has_alias(raw)
+                } else {
+                    loosely(v)
+                }
+            })
+            .collect()
     }
 }
 
@@ -244,6 +270,15 @@ pub enum Place {
 }
 
 impl Place {
+    /// Whether `self` and `other` are one place: a project field by its id,
+    /// whatever name each gives it.
+    pub fn same_place(&self, other: &Place) -> bool {
+        match (self, other) {
+            (Place::ProjectField { id: x, .. }, Place::ProjectField { id: y, .. }) => x == y,
+            _ => self == other,
+        }
+    }
+
     /// Whether `kind`'s tracker has this place.
     pub fn valid_for(&self, kind: TrackerKind) -> bool {
         use Place::*;
@@ -431,17 +466,35 @@ impl From<Place> for PlaceSpec {
 }
 
 /// One value of an `enum` field.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnumValue {
-    /// What agents pass, matched case-insensitively.
+    /// What agents pass to `ticket create` and `ticket edit`, matched
+    /// case-insensitively. A tracker MCP call reaches the tracker unchanged,
+    /// so it passes `id` or an alias instead.
     pub name: String,
     /// What devkit writes: a label's name, a milestone's title, a project
     /// option's id, a Linear id.
     pub id: String,
-    /// The Linear teams the value is valid in; any team when empty.
+    /// The Linear teams the value is valid in, each by the team value's
+    /// name, id or one of its aliases; any team when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub teams: Vec<String>,
+    /// Other spellings the tracker itself takes for the value, matched
+    /// case-insensitively wherever `id` is, such as a Linear team's key and
+    /// name or a label's name. `ticket fields discover` writes them; a
+    /// hand-written value needs aliases for the spellings a tracker MCP
+    /// takes (a GitHub issue type's name, a milestone's number, a Linear
+    /// value's name), or an MCP call naming it that way is refused.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+}
+
+impl EnumValue {
+    /// Whether `raw` is one of the value's aliases, ignoring case.
+    pub fn has_alias(&self, raw: &str) -> bool {
+        self.aliases.iter().any(|a| a.eq_ignore_ascii_case(raw))
+    }
 }
 
 /// One conditional level.
@@ -602,20 +655,7 @@ pub(crate) fn validate(
             };
             writable.map_err(|why| anyhow::anyhow!("`{key}`{} {why}", note(cx, kind, name)))?;
         }
-        if ty == FieldType::Enum && decl.values.is_empty() && decl.max_level() == FieldLevel::Error
-        {
-            bail!(
-                "`{key}`{} is an `enum` with no `values` that can reach `error`, so no value \
-                 could satisfy it. List the tracker's values under `values` in `{key}`, or \
-                 lower its level.",
-                note(cx, kind, name)
-            );
-        }
-        let same = |a: &Place, b: &Place| match (a, b) {
-            (Place::ProjectField { id: x, .. }, Place::ProjectField { id: y, .. }) => x == y,
-            _ => a == b,
-        };
-        if let Some((other, _)) = places.iter().find(|(_, p)| same(p, place)) {
+        if let Some((other, _)) = places.iter().find(|(_, p)| p.same_place(place)) {
             bail!(
                 "`{key}`{} and `[ticket.fields.{kind}.{other}]` are both written to `{}`; each \
                  place belongs to one field.",
@@ -624,6 +664,31 @@ pub(crate) fn validate(
             );
         }
         places.push((name, place));
+    }
+    Ok(())
+}
+
+/// Refuse an `enum` in `decls` with no `values` that can reach `error`,
+/// which no ticket could satisfy, naming `ticket fields discover`, which
+/// fills its values in.
+pub(crate) fn reject_unfilled(
+    kind: TrackerKind,
+    decls: &BTreeMap<String, FieldDecl>,
+    cx: &FieldContext<'_>,
+) -> Result<()> {
+    for (name, decl) in decls {
+        if decl.r#type == Some(FieldType::Enum)
+            && decl.values.is_empty()
+            && decl.max_level() == FieldLevel::Error
+        {
+            let key = format!("[ticket.fields.{kind}.{name}]");
+            bail!(
+                "`{key}`{} is an `enum` with no `values` that can reach `error`, so no value \
+                 could satisfy it. Run `devkit ticket fields discover` to list the tracker's \
+                 values under `values` in `{key}`, or lower its level.",
+                note(cx, kind, name)
+            );
+        }
     }
     Ok(())
 }

@@ -6,13 +6,16 @@ use anyhow::Result;
 pub use devkit_config::TrackerKind;
 use serde::{Deserialize, Serialize};
 
+pub mod discover;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;
 pub mod github;
+pub mod github_discover;
 pub mod github_fields;
 pub mod github_status;
 pub mod github_tickets;
 pub mod linear;
+pub mod linear_discover;
 pub mod linear_fields;
 pub mod linear_status;
 pub mod linear_tickets;
@@ -22,7 +25,7 @@ mod select;
 pub mod status;
 pub mod tickets;
 
-pub use select::{Selected, select};
+pub use select::{Selected, select, select_unfilled};
 
 /// Where an issue sits in its tracker's workflow. Linear's `state.type`
 /// vocabulary, adopted as devkit's own because the status verdict, the triage

@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Result, anyhow, bail};
 use devkit_common::{
     caller::Caller,
-    fields::{self, Given, Resolved},
+    fields::{self, Given, Naming, Resolved},
     required::Missing,
 };
 /// The names the issue templates' render contexts supply, which no `--arg`
@@ -133,7 +133,7 @@ pub(crate) fn ticket_args(
     };
     for (k, v) in vars.parse()? {
         if decls.contains_key(&k) {
-            out.fields.values.insert(k, v);
+            out.fields.values.insert(k, v.into());
         } else if declared.contains(&k) {
             out.template.insert(k, v);
         } else {
@@ -155,9 +155,10 @@ pub(crate) fn resolve_fields(
     kind: TrackerKind,
     decls: &BTreeMap<String, FieldDecl>,
     given: &Given,
+    naming: Naming,
 ) -> Result<Resolved> {
     let team = fields::team(decls, given);
-    fields::resolve(decls, kind, given, &cfg.people, team.as_deref())
+    fields::resolve(decls, kind, given, &cfg.people, team.as_deref(), naming)
         .map_err(|problems| anyhow!("{}", fields::message(decls, &problems)))
 }
 
@@ -248,7 +249,7 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
         &start,
     )?;
     let input = ticket_args(cfg, &args.vars, &FieldArgs::default(), decls)?;
-    let resolved = resolve_fields(cfg, kind, decls, &input.fields)?;
+    let resolved = resolve_fields(cfg, kind, decls, &input.fields, Naming::Tracker)?;
     let rendered = render(
         cfg,
         "ticket render",

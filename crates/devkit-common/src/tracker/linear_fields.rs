@@ -816,7 +816,7 @@ linear = "user-ada"
         let given = Given {
             values: values
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .map(|(k, v)| (k.to_string(), (*v).into()))
                 .collect(),
             nones: nones.iter().map(|n| n.to_string()).collect(),
         };
@@ -826,6 +826,7 @@ linear = "user-ada"
             &given,
             &cfg.people,
             Some("ENG"),
+            crate::fields::Naming::Devkit,
         )
         .unwrap()
     }

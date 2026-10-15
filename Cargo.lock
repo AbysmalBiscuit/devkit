@@ -557,6 +557,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]

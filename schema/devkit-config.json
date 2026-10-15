@@ -464,16 +464,23 @@
       "additionalProperties": false,
       "description": "One value of an `enum` field.",
       "properties": {
+        "aliases": {
+          "description": "Other spellings the tracker itself takes for the value, matched\ncase-insensitively wherever `id` is, such as a Linear team's key and\nname or a label's name. `ticket fields discover` writes them; a\nhand-written value needs aliases for the spellings a tracker MCP\ntakes (a GitHub issue type's name, a milestone's number, a Linear\nvalue's name), or an MCP call naming it that way is refused.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "id": {
           "description": "What devkit writes: a label's name, a milestone's title, a project\noption's id, a Linear id.",
           "type": "string"
         },
         "name": {
-          "description": "What agents pass, matched case-insensitively.",
+          "description": "What agents pass to `ticket create` and `ticket edit`, matched\ncase-insensitively. A tracker MCP call reaches the tracker unchanged,\nso it passes `id` or an alias instead.",
           "type": "string"
         },
         "teams": {
-          "description": "The Linear teams the value is valid in; any team when empty.",
+          "description": "The Linear teams the value is valid in, each by the team value's\nname, id or one of its aliases; any team when empty.",
           "items": {
             "type": "string"
           },
@@ -582,7 +589,7 @@
         },
         "values": {
           "default": [],
-          "description": "For `enum`: each value's `name`, which agents pass and match\ncase-insensitively, and its tracker `id`, which devkit writes. A higher\nlayer replaces the list whole.",
+          "description": "For `enum`: each value's `name`, which agents pass and match\ncase-insensitively, and its tracker `id`, which devkit writes and agents\nmay pass instead. A higher layer replaces the list whole.",
           "items": {
             "$ref": "#/$defs/EnumValue"
           },
@@ -939,6 +946,20 @@
         }
       },
       "type": "object"
+    },
+    "InputKeys": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "The input keys of one ticket field: one key, or an array of keys."
     },
     "LayerMarker": {
       "description": "The `[config]` table. Read straight off the raw layer by `is_root_layer`\nrather than through `Config`, because it decides which layers exist before\nthere is a merged config to deserialize; this type exists so the published\nJSON Schema can still describe it.\n\n```toml\n[config]\nroot = true\n```",
@@ -1553,7 +1574,7 @@
       ]
     },
     "RenderedToolRule": {
-      "description": "One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits issues or PRs, whose title and body the\npre-tool-use hook allows only when `devkit ticket render` (an issue) or\n`devkit pr render` (a PR) produced them in the same agent session.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-create]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\"]\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-update]\nservers = [\"*github*\"]\ntools   = [\"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
+      "description": "One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits issues or PRs, whose title and body the\npre-tool-use hook allows only when `devkit ticket render` (an issue) or\n`devkit pr render` (a PR) produced them in the same agent session.\n\nAn issue entry naming its `tracker` also holds the call to that tracker's\n`[ticket.fields]` levels, reading each field's values from the input keys\n`fields` maps it to.\n\n```toml\n[harness.issue_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\ntracker    = \"linear\"\nfields     = { labels = [\"labels\", \"addLabels\"], priority = \"priority\", team = \"team\" }\n\n[harness.issue_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\ntracker = \"github\"\nfields  = { labels = \"labels\", assignees = \"assignees\" }\n\n[harness.pr_tools.github-create]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\"]\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-update]\nservers = [\"*github*\"]\ntools   = [\"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
       "properties": {
         "absent": {
           "default": [],
@@ -1588,6 +1609,14 @@
           "description": "Input keys that must equal the given string for the call to count as a\ncreate.",
           "type": "object"
         },
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/InputKeys"
+          },
+          "default": {},
+          "description": "Ticket field name to the input key that carries its value, as the\ntracker names it: a string, an array of strings for a list, a number\nfor a `number` field, or `null` for a field left empty on purpose. An\narray of keys maps a field the tool sets under several, such as\nLinear's `labels` and `addLabels`: each key the call carries is\nchecked, and any one sets the field on a create. Leave a key that\nonly removes values (`removeLabels`) unmapped, since removing a value\ncannot break a level. A declared field with no key here cannot be set\nby the tool, so at `error` it denies every create. Map a key only when\nit takes the value as the field records it: GitHub's `issue_write`\ntakes a milestone's number, and a `milestone` field records its title.",
+          "type": "object"
+        },
         "servers": {
           "default": [],
           "description": "MCP server names this entry covers, matched case-insensitively; `*`\nmatches any run of characters. Empty matches any server.",
@@ -1607,6 +1636,18 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "tracker": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrackerKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The tracker an `issue_tools` entry writes to. Its\n`[ticket.fields.<tracker>]` levels then apply to the call, unless\n`[tracker] kind` names another tracker or, on GitHub, the call's\n`owner`/`repo` is not `[github] issues_repo`. Without it the call gets\nthe render check alone."
         }
       },
       "required": [

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 use devkit_common::{
     caller::Caller,
-    fields::{self, Report, Resolved, Surface},
+    fields::{self, Naming, Report, Resolved, Surface},
     tracker::{
         Selected,
         github_fields::{self, GithubFieldWriter},
@@ -56,7 +56,7 @@ fn checked<'a>(
     let decls = cfg.ticket.fields.for_tracker(kind);
     let input = render::ticket_args(cfg, &args.vars, &args.fields, decls)?;
     let given = input.fields.with_defaults(decls);
-    let mut resolved = render::resolve_fields(cfg, kind, decls, &given)?;
+    let mut resolved = render::resolve_fields(cfg, kind, decls, &given, Naming::Devkit)?;
     field_write::number_issue_refs(sel.tracker.tracker.as_ref(), decls, &mut resolved)?;
     let caller = devkit_common::caller::caller();
     let report = fields::check(decls, Surface::Create, &resolved, None, caller);

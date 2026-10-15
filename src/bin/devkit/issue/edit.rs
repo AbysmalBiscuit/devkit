@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, anyhow};
 use devkit_common::{
-    fields::{self, Current, Resolved, Surface},
+    fields::{self, Current, Naming, Resolved, Surface},
     tracker::{
         Selected,
         github_fields::GithubFieldWriter,
@@ -103,7 +103,13 @@ fn github(args: EditArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<(
     let caller = devkit_common::caller::caller();
     let decls = cfg.ticket.fields.for_tracker(TrackerKind::Github);
     let input = render::ticket_args(cfg, &args.vars, &args.fields, decls)?;
-    let mut resolved = render::resolve_fields(cfg, TrackerKind::Github, decls, &input.fields)?;
+    let mut resolved = render::resolve_fields(
+        cfg,
+        TrackerKind::Github,
+        decls,
+        &input.fields,
+        Naming::Devkit,
+    )?;
     field_write::number_issue_refs(tracker.as_ref(), decls, &mut resolved)?;
     let has_fields = !resolved.fields.is_empty() || !resolved.nones.is_empty();
     let rewrites_text = args.body.is_some() || args.title.is_some();
@@ -199,6 +205,7 @@ fn linear(args: EditArgs, sel: &Selected, cfg: &Config) -> Result<()> {
         &input.fields,
         &cfg.people,
         team.as_deref(),
+        Naming::Devkit,
     )
     .map_err(|problems| anyhow!("{}", fields::message(decls, &problems)))?;
     field_write::number_issue_refs(sel.tracker.tracker.as_ref(), decls, &mut resolved)?;
