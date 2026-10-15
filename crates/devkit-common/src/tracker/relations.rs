@@ -28,11 +28,12 @@ pub trait TicketLinks {
     fn read_parent(&self, child: &str, target: Option<&str>) -> Result<ParentRead>;
 
     /// Makes `child` a sub-issue of `to`, or of nothing, from the parent
-    /// `read` found. On GitHub a child moving between parents leaves the old
-    /// one first, so `addSubIssue` sends `replaceParent: false` and fails
-    /// rather than take the child from a parent set since the read; with
-    /// `replace` it sends `true` and takes it from whatever parent it has.
-    /// Linear sets the parent in one write and ignores `replace`.
+    /// `read` found. On GitHub a child `read` found under no parent gets
+    /// `addSubIssue` with `replaceParent: false`, which fails rather than
+    /// take it from a parent set since the read, and with `replace` sends
+    /// `true`. A child moving between parents is added with `true`, one
+    /// write that never leaves it without a parent. Linear sets the parent
+    /// in one write and ignores `replace`.
     fn set_parent(
         &self,
         read: &ParentRead,
@@ -225,24 +226,24 @@ impl TicketLinks for GithubRelations {
         replace: bool,
     ) -> Result<()> {
         let child_id = read.id(child)?;
-        if let Some(from) = read.current.as_deref().filter(|_| to.is_none() || !replace)
-            && Some(from) != to
-        {
-            (self.send)(&github_fields::remove_sub_issue_mutation(
+        match (read.current.as_deref(), to) {
+            (Some(from), None) => (self.send)(&github_fields::remove_sub_issue_mutation(
                 read.id(from)?,
                 child_id,
             ))
-            .with_context(|| format!("removing {child} from {from}'s sub-issues"))?;
+            .with_context(|| format!("removing {child} from {from}'s sub-issues"))
+            .map(drop),
+            (from, Some(to)) if from != Some(to) => {
+                (self.send)(&github_fields::add_sub_issue_mutation(
+                    read.id(to)?,
+                    child_id,
+                    replace || from.is_some(),
+                ))
+                .with_context(|| format!("making {child} a sub-issue of {to}"))
+                .map(drop)
+            }
+            _ => Ok(()),
         }
-        if let Some(to) = to.filter(|t| read.current.as_deref() != Some(*t)) {
-            (self.send)(&github_fields::add_sub_issue_mutation(
-                read.id(to)?,
-                child_id,
-                replace,
-            ))
-            .with_context(|| format!("making {child} a sub-issue of {to}"))?;
-        }
-        Ok(())
     }
 
     fn read_pair(&self, blocked: &str, blocker: &str) -> Result<PairRead> {
@@ -520,22 +521,16 @@ mod tests {
     }
 
     #[test]
-    fn a_move_between_parents_leaves_the_old_one_first() {
+    fn a_move_between_parents_replaces_the_old_one_in_one_write() {
         let (writer, sent) = github(issues_with_parent(Some(66)));
         let read = writer.read_parent("o/r#67", Some("o/r#65")).unwrap();
         writer
             .set_parent(&read, "o/r#67", Some("o/r#65"), false)
             .unwrap();
-        let sent = mutations(&sent);
-        assert_eq!(sent.len(), 2, "{sent:?}");
-        assert!(
-            sent[0].contains("removeSubIssue(input: {issueId: \"I_66\", subIssueId: \"I_67\"})"),
-            "{sent:?}"
-        );
-        assert!(
-            sent[1].contains("issueId: \"I_65\", subIssueId: \"I_67\", replaceParent: false"),
-            "{sent:?}"
-        );
+        assert_eq!(mutations(&sent), [
+            "mutation { addSubIssue(input: {issueId: \"I_65\", subIssueId: \"I_67\", \
+             replaceParent: true}) { issue { id } } }"
+        ]);
     }
 
     #[test]
