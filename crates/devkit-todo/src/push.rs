@@ -8,7 +8,7 @@ use devkit_common::tracker::{
     status::same_status,
     tickets::{CloseReason, TicketStatus},
 };
-use devkit_config::EventTransition;
+use devkit_config::{EventTransition, IssueEvent};
 
 use crate::ticket::status_name;
 
@@ -18,6 +18,36 @@ pub enum LocalStatus {
     Start,
     Done,
     Cancel,
+}
+
+impl LocalStatus {
+    /// The `[ticket.events]` move this change fires.
+    pub fn event(self) -> IssueEvent {
+        match self {
+            Self::Start => IssueEvent::TodoStart,
+            Self::Done => IssueEvent::TodoDone,
+            Self::Cancel => IssueEvent::TodoCancel,
+        }
+    }
+
+    /// The todo verb that makes this change.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Done => "done",
+            Self::Cancel => "cancel",
+        }
+    }
+
+    /// How this change closes the ticket's issue on `github`, where `done`
+    /// and `cancel` close it; other trackers close nothing.
+    pub fn closes(self, github: bool) -> Option<CloseReason> {
+        match self {
+            Self::Done if github => Some(CloseReason::Completed),
+            Self::Cancel if github => Some(CloseReason::NotPlanned),
+            _ => None,
+        }
+    }
 }
 
 /// What a push does.
@@ -61,11 +91,7 @@ pub fn status_verdict(
     event: Option<&EventTransition>,
     github: bool,
 ) -> Verdict {
-    let closes = match local {
-        LocalStatus::Done if github => Some(CloseReason::Completed),
-        LocalStatus::Cancel if github => Some(CloseReason::NotPlanned),
-        _ => None,
-    };
+    let closes = local.closes(github);
     let name = status_name(current);
     let conflict = || Verdict::Conflict {
         current: name.clone(),

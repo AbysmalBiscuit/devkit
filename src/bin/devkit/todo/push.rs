@@ -15,10 +15,10 @@ use devkit_common::{
     tracker::{
         self, github_status,
         status::{self, StatusWriter as _},
-        tickets::{CloseReason, TicketStatus},
+        tickets::TicketStatus,
     },
 };
-use devkit_config::{IssueEvent, PushKind, TrackerKind};
+use devkit_config::{PushKind, TrackerKind};
 use devkit_todo::{
     Edit, Holder, Todo, TodoStore as _,
     push::{LocalStatus, Verdict, status_verdict},
@@ -49,22 +49,6 @@ impl StatusPush<'_> {
                     .is_some()
             })
     }
-
-    fn event(&self) -> IssueEvent {
-        match self.local {
-            LocalStatus::Start => IssueEvent::TodoStart,
-            LocalStatus::Done => IssueEvent::TodoDone,
-            LocalStatus::Cancel => IssueEvent::TodoCancel,
-        }
-    }
-
-    fn word(&self) -> &'static str {
-        match self.local {
-            LocalStatus::Start => "start",
-            LocalStatus::Done => "done",
-            LocalStatus::Cancel => "cancel",
-        }
-    }
 }
 
 /// Moves `todo`'s ticket as `push` asks, then applies `edit`, the todo's own
@@ -85,13 +69,9 @@ pub(crate) fn push_status(
     let config = selected.config.unwrap_or_default();
     let tracker = &selected.tracker.tracker;
     let github = tracker.kind() == TrackerKind::Github;
-    let event = push.event();
+    let event = push.local.event();
     let transition = config.ticket.events.get(event);
-    let closes = match push.local {
-        LocalStatus::Done if github => Some(CloseReason::Completed),
-        LocalStatus::Cancel if github => Some(CloseReason::NotPlanned),
-        _ => None,
-    };
+    let closes = push.local.closes(github);
     if transition.is_none() && closes.is_none() {
         store.apply_unfired(edit)?;
         return Ok(true);
@@ -126,7 +106,7 @@ pub(crate) fn push_status(
         Verdict::Conflict { current, baseline } => {
             let values = format!(
                 "tracker {current:?}, last synced {baseline:?}, local {}",
-                push.word()
+                push.local.word()
             );
             if push.caller != Caller::Human || !std::io::stdin().is_terminal() {
                 bail!(
