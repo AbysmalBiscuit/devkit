@@ -474,9 +474,10 @@ fn json_shape(ty: FieldType, list: bool) -> String {
 }
 
 /// A user as a tracker MCP takes it: the identity on `kind` of a `[people]`
-/// entry, ignoring case. Linear resolves `me` and an email address itself,
-/// so those pass unchecked. A bare alias is refused naming the identity to
-/// send, since the tracker would read it as an identity of its own.
+/// entry, ignoring case. Linear resolves `me`, an email address and a
+/// display name itself, so anything but a user id passes there unchecked. A
+/// bare `[people]` alias is refused naming the identity to send, since the
+/// tracker would read it as a user of its own.
 fn user(
     people: &HashMap<String, Person>,
     kind: TrackerKind,
@@ -493,22 +494,35 @@ fn user(
     if let Some(v) = known {
         return Ok(v);
     }
-    if kind == TrackerKind::Linear && (who == "me" || who.contains('@')) {
+    let alias = people
+        .iter()
+        .find(|(alias, _)| alias.eq_ignore_ascii_case(who));
+    if kind == TrackerKind::Linear && alias.is_none() && !is_uuid(who) {
         return Ok(fields::Value::User {
             alias: who.to_string(),
             id: who.to_string(),
         });
     }
-    Err(match people.get(who).map(|p| fields::person_id(p, kind)) {
-        Some(Some(id)) => format!(
+    Err(match alias.map(|(alias, p)| (alias, fields::person_id(p, kind))) {
+        Some((_, Some(id))) => format!(
             "is a `[people]` alias, and this call takes the user's {kind} identity: pass `{id}`"
         ),
-        Some(None) => format!(
+        Some((alias, None)) => format!(
             "is a `[people]` alias with no `{kind}` identity; add `{kind} = \"...\"` to \
-             `[people.{who}]`"
+             `[people.{alias}]`"
         ),
         None => format!("is not the {kind} identity of any `[people]` entry"),
     })
+}
+
+/// Whether `s` is a UUID, the shape of a Linear id.
+fn is_uuid(s: &str) -> bool {
+    let groups: Vec<&str> = s.split('-').collect();
+    groups.len() == 5
+        && groups
+            .iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(g, n)| g.len() == n && g.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 fn field_denial(
@@ -1101,6 +1115,28 @@ level  = "info"
         }
         let v = lin("ada");
         assert!(denied_mentioning(&v, "pass `u-ada`"), "{v:?}");
+    }
+
+    #[test]
+    fn a_linear_user_passes_by_the_display_name_linear_resolves() {
+        let toml = "[people.ada]\nlinear = \"0b7c4a52-9d1e-4f3a-8c6b-2e5d7f9a1c30\"\n\
+                    [ticket.fields.linear.assignee]\ntype = \"user\"\n\
+                    where = \"assignee\"\nlevel = \"error\"\n";
+        let rule = with_fields(linear(), TrackerKind::Linear, &[("assignee", "assignee")]);
+        let lin = |who: &str| fields(&rule, toml, json!({"title": "T", "assignee": who}));
+        for who in ["Grace Hopper", "grace"] {
+            assert_eq!(lin(who), Verdict::Allow, "{who}");
+        }
+        let v = lin("Ada");
+        assert!(
+            denied_mentioning(&v, "pass `0b7c4a52-9d1e-4f3a-8c6b-2e5d7f9a1c30`"),
+            "a `[people]` alias still names the identity to pass: {v:?}"
+        );
+        let v = lin("6f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a00");
+        assert!(
+            denied_mentioning(&v, "6f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a00"),
+            "a user id no `[people]` entry records: {v:?}"
+        );
     }
 
     #[test]
