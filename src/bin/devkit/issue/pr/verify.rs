@@ -124,6 +124,12 @@ impl Gate {
             command = self.required.command(),
             head = self.head,
         );
+        for server in &run.live_servers {
+            out.push_str(&format!(
+                "- Against live server `{}`, started {}\n",
+                server.app, server.started_at
+            ));
+        }
         match run.tail.as_deref() {
             Some(lines) if !lines.is_empty() => out.push_str(&output_tail(lines)),
             Some(_) => out.push_str("\nThe run printed nothing.\n"),
@@ -154,13 +160,13 @@ impl Gate {
 }
 
 /// Why `run`, which passed at the PR's head with the required args, does
-/// not qualify: it used a server already running before it started, which
-/// may have started at another commit.
+/// not qualify: its `up` step reused a server already running before it
+/// started, which may have started at another commit.
 fn reused_note(required: &RequiredTask, run: &Run) -> String {
     format!(
-        "A run at that commit passed, but it reused the server already running for {apps}, \
-         through an `up` step or `require_live`, which may have started at an earlier commit: \
-         stop it with `devrun down {names}` and run `{command}` again.",
+        "A run at that commit passed, but its `up` step reused the server already running for \
+         {apps}, which may have started at an earlier commit: stop it with `devrun down \
+         {names}` and run `{command}` again.",
         apps = run
             .reused_servers
             .iter()

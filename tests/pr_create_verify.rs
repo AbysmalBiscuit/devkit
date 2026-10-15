@@ -774,6 +774,11 @@ fn hold_srv(p: &ghfake::Fake, pid: Option<u32>) -> std::net::TcpListener {
 /// With `pid`, the row is a live server the run reuses; without, a
 /// reservation an `up` step launches into.
 fn hold(p: &ghfake::Fake, app: &str, pid: Option<u32>) -> std::net::TcpListener {
+    hold_since(p, app, pid, devkit_ports::registry::now())
+}
+
+/// [`hold`], with the row recorded at `ts`, in seconds since the epoch.
+fn hold_since(p: &ghfake::Fake, app: &str, pid: Option<u32>, ts: u64) -> std::net::TcpListener {
     use devkit_ports::registry::{self, Data, Entry, Role};
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -791,7 +796,7 @@ fn hold(p: &ghfake::Fake, app: &str, pid: Option<u32>) -> std::net::TcpListener 
         role: Role::Workspace,
         pid,
         logfile: None,
-        ts: registry::now(),
+        ts,
     });
     let dir = p.state().join("devkit");
     std::fs::create_dir_all(&dir).unwrap();
@@ -812,24 +817,21 @@ fn a_run_whose_up_step_reused_a_live_server_is_refused() {
     assert!(!opened(&p), "{}", p.calls());
 }
 
-/// A server `require_live` needs was running before the run began, so it
-/// may have started at an earlier commit, as a reused `up` server may.
+/// A server `require_live` needs is the run's precondition, started before
+/// it by design, so the run qualifies and its section names the server.
 #[test]
-fn a_run_needing_a_server_live_from_before_it_is_refused() {
+fn a_run_against_a_require_live_server_qualifies_naming_the_server() {
     let p = project(&format!(
         "{LIVE_READER}\n[pr.gates]\nverify_task = \"live\"\n"
     ));
-    let _server = hold(&p, "api", Some(std::process::id()));
+    let _server = hold_since(&p, "api", Some(std::process::id()), 1_760_000_000);
     task(&p, &["live"]);
-    let (ok, stderr) = create(&p, "agent");
-    assert!(!ok, "{stderr}");
-    assert!(stderr.contains("reused"), "says why: {stderr}");
-    assert!(stderr.contains("`api`"), "names the server: {stderr}");
+    let body = opened_body(&p);
+    assert!(body.contains("Exit code: 0"), "{body}");
     assert!(
-        stderr.contains("devrun down --app api"),
-        "says how to fix: {stderr}"
+        body.contains("Against live server `api`, started 2025-10-09T08:53:20Z"),
+        "{body}"
     );
-    assert!(!opened(&p), "{}", p.calls());
 }
 
 #[test]

@@ -357,12 +357,17 @@ pub fn holder_alive(holder: &str) -> bool {
 /// whose pid is set and alive. The pid probe keeps the answer correct even on
 /// an unpruned view; keep calls outside `with_lock`.
 pub fn live_port(data: &Data, holder: &str, app: &str) -> Option<u16> {
+    live_entry(data, holder, app).map(|(port, _)| port)
+}
+
+/// [`live_port`] with its registry row.
+pub fn live_entry<'a>(data: &'a Data, holder: &str, app: &str) -> Option<(u16, &'a Entry)> {
     data.entries.iter().find_map(|(port, e)| {
         (e.holder == holder
             && e.app == app
             && e.role == Role::Workspace
             && e.pid.is_some_and(pid_alive))
-        .then_some(*port)
+        .then_some((*port, e))
     })
 }
 

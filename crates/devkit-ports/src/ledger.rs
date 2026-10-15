@@ -65,12 +65,16 @@ pub struct Run {
     /// Each command step devrun executed, in order, with the argv it ran.
     #[serde(default)]
     pub steps: Vec<Step>,
-    /// The apps running from before the run started that it used without
-    /// launching: found by an `up` step, or required live by a step's
-    /// `require_live`. Such a server may have started at another commit, so
-    /// a run that reused one satisfies no PR gate.
+    /// The apps an `up` step found already running from before the run
+    /// started, and did not launch. Such a server may have started at another
+    /// commit, so a run that reused one satisfies no PR gate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reused_servers: Vec<String>,
+    /// The servers a step's `require_live` ran against, each once. They are
+    /// the run's precondition, started before it by design, so they do not
+    /// stop it satisfying a gate; the PR shows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live_servers: Vec<LiveServer>,
     /// The exit code of the program devrun ran, or of a sequence's first
     /// failing step. `None` when it was killed by a signal or never ran.
     pub exit_code: Option<i32>,
@@ -98,6 +102,30 @@ impl Run {
     /// given exactly `args`.
     pub fn proves_with(&self, task: &str, args: &BTreeMap<String, String>, sha: &str) -> bool {
         self.proves(task, sha) && &self.args == args
+    }
+}
+
+/// A server a step's `require_live` ran against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveServer {
+    pub app: String,
+    /// When the port registry recorded its server, as RFC 3339 UTC.
+    pub started_at: String,
+}
+
+impl LiveServer {
+    /// `app`'s server, recorded in the port registry at `ts`, in seconds
+    /// since the epoch.
+    pub fn new(app: &str, ts: u64) -> Self {
+        let started = i64::try_from(ts)
+            .ok()
+            .and_then(|s| chrono::DateTime::<chrono::Utc>::from_timestamp(s, 0))
+            .unwrap_or_default()
+            .format("%Y-%m-%dT%H:%M:%SZ");
+        Self {
+            app: app.to_string(),
+            started_at: started.to_string(),
+        }
     }
 }
 
@@ -246,6 +274,15 @@ pub fn committed_config(checkout: &Path, rev: &str, dir: &str) -> Result<devkit_
         .with_context(|| format!("reading the devkit.toml layers committed at {rev}"))
 }
 
+/// The servers a run used without launching them.
+#[derive(Debug, Default)]
+pub struct Servers {
+    /// See [`Run::reused_servers`].
+    pub reused: Vec<String>,
+    /// See [`Run::live_servers`].
+    pub live: Vec<LiveServer>,
+}
+
 /// What the start of a run captured about the tree it ran on.
 pub struct Start {
     task: String,
@@ -306,14 +343,14 @@ impl Start {
     }
 
     /// The finished run, re-reading the tree so a run that changed it, or
-    /// whose head moved under it, is not clean. `reused_servers` is
-    /// [`Run::reused_servers`].
+    /// whose head moved under it, is not clean. `servers` holds
+    /// [`Run::reused_servers`] and [`Run::live_servers`].
     pub fn finish(
         self,
         exit_code: Option<i32>,
         tail: &Tail,
         steps: Vec<Step>,
-        reused_servers: Vec<String>,
+        servers: Servers,
     ) -> Run {
         let (head_after, clean_after) = tree_state(&self.worktree);
         Run {
@@ -325,7 +362,8 @@ impl Start {
             env: self.env,
             env_file: self.env_file,
             steps,
-            reused_servers,
+            reused_servers: servers.reused,
+            live_servers: servers.live,
             task: self.task,
             args: self.args,
             repo: self.repo,
@@ -512,6 +550,7 @@ mod tests {
             env_file: None,
             steps: Vec::new(),
             reused_servers: Vec::new(),
+            live_servers: Vec::new(),
             exit_code,
             started_at: "2026-01-01T00:00:00.000Z".into(),
             ended_at: "2026-01-01T00:00:01.000Z".into(),
