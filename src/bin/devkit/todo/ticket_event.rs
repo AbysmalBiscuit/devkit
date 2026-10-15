@@ -128,7 +128,9 @@ pub(crate) fn fire_current(
         .join("ticket-event")
         .join(format!("{}.lock", devkit_common::slug::slugify(todo)));
     devkit_common::store::with_file_lock(&lock, || {
-        let current = Store::for_cli(dir)?.get_exact(todo)?.map(|t| t.status.kind());
+        let current = Store::for_cli(dir)?
+            .get_exact(todo)?
+            .map(|t| t.status.kind());
         if current.is_none() || current != firing_status(event) {
             return Ok(format!(
                 "{issue}: todo {todo} has left the status that fires {event}; skipped"
