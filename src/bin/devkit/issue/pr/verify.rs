@@ -289,24 +289,25 @@ fn ran_note(dir: &Path, head: &str, run: &Run, required: &RequiredTask) -> Strin
     out
 }
 
-/// Whether `recorded` are the command steps `committed` renders with the
-/// ports they recorded. `None` when the committed config does not render.
+/// Whether `recorded` are the command steps `committed` renders, each
+/// rendered with the ports that step recorded, since two steps can
+/// resolve one app to different ports. `None` when the committed config
+/// does not render.
 fn matches_committed(
     recorded: &[Step],
     committed: impl Fn(&BTreeMap<String, u16>) -> Result<Vec<Step>>,
 ) -> Option<bool> {
-    let ports = recorded
-        .iter()
-        .flat_map(|s| s.ports.iter().map(|(app, port)| (app.clone(), *port)))
-        .collect();
-    let plan = committed(&ports).ok()?;
-    Some(
-        plan.len() == recorded.len()
-            && plan
-                .iter()
-                .zip(recorded)
-                .all(|(c, r)| c.task == r.task && c.argv == r.argv),
-    )
+    if recorded.is_empty() {
+        return committed(&BTreeMap::new()).ok().map(|c| c.is_empty());
+    }
+    for (i, step) in recorded.iter().enumerate() {
+        let plan = committed(&step.ports).ok()?;
+        if plan.len() != recorded.len() || plan[i].task != step.task || plan[i].argv != step.argv
+        {
+            return Some(false);
+        }
+    }
+    Some(true)
 }
 
 /// A fenced block of `lines` tagged `info`: the first lines that fit in
@@ -452,6 +453,29 @@ fn fence(lines: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn step(task: &str, app_port: u16) -> Step {
+        Step {
+            task: task.into(),
+            argv: vec![task.into(), app_port.to_string()],
+            ports: BTreeMap::from([("srv".to_string(), app_port)]),
+        }
+    }
+
+    /// Renders `first` and `second`, each reading `srv`'s port, the way a
+    /// committed sequence would.
+    fn sequence(ports: &BTreeMap<String, u16>) -> Result<Vec<Step>> {
+        let port = ports.get("srv").copied().unwrap_or(1);
+        Ok(vec![step("first", port), step("second", port)])
+    }
+
+    #[test]
+    fn steps_that_resolved_one_app_to_different_ports_match_the_committed_plan() {
+        let recorded = [step("first", 4001), step("second", 4002)];
+        assert_eq!(matches_committed(&recorded, sequence), Some(true));
+        let changed = [step("first", 4001), step("third", 4002)];
+        assert_eq!(matches_committed(&changed, sequence), Some(false));
+    }
 
     #[test]
     fn a_blank_body_becomes_the_section_alone() {
