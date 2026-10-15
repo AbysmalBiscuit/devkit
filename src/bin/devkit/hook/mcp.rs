@@ -3,11 +3,21 @@
 //! produced in the same agent session, and a PR write through a forge's MCP
 //! tool only when they are text `devkit pr render` produced.
 
-use std::{collections::BTreeMap, io::Write, path::Path, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use anyhow::Result;
-use devkit_common::{caller::Caller, harness, required, vcs::Checkout};
-use devkit_config::RenderedToolRule;
+use devkit_common::{
+    caller::Caller,
+    fields::{self, Given, Problem, Resolved, Surface},
+    harness, required,
+    vcs::Checkout,
+};
+use devkit_config::{Config, FieldDecl, FieldType, Person, RenderedToolRule, TrackerKind};
 use pabal::Tool;
 use serde_json::Value;
 
@@ -53,6 +63,8 @@ pub(super) const PR: Gate = Gate {
 #[derive(Debug, PartialEq)]
 pub(super) enum Verdict {
     Allow,
+    /// Allow, with a report the agent should read.
+    AllowWith(String),
     Deny(String),
 }
 
@@ -83,6 +95,11 @@ pub(super) fn guard(payload: &Payload, checkout: &Checkout, cwd: &Path) -> Resul
     match outcome {
         Ok(Verdict::Deny(reason)) => print_envelope(&payload::deny(payload.harness(), &reason)),
         Ok(Verdict::Allow) => {}
+        Ok(Verdict::AllowWith(report)) => {
+            if let Some(answer) = payload.pre_tool_use_context(&report) {
+                print_envelope(&answer);
+            }
+        }
         Err(_) if matched.get().is_some() => {
             print_envelope(&payload::deny(payload.harness(), PANIC_REASON))
         }
@@ -142,10 +159,20 @@ fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: 
         session_seen: receipt::session_dir(&root, gate.kind, session).is_dir(),
     };
     let server = server.unwrap_or(tool);
-    decide(rule, server, tool, input, &ctx, &|field, text| {
+    let rendered = decide(rule, server, tool, input, &ctx, &|field, text| {
         receipt::has(&root, gate.kind, session, field, text)
     })
-    .unwrap_or_else(|e| Verdict::Deny(format!("devkit render guard: {e:#}")))
+    .unwrap_or_else(|e| Verdict::Deny(format!("devkit render guard: {e:#}")));
+    if rendered != Verdict::Allow || gate.kind != Kind::Issue || rule.tracker.is_none() {
+        return rendered;
+    }
+    match devkit_common::config::resolve_in(checkout, None, cwd) {
+        Ok((cfg, prov)) => field_verdict(rule, tool, input, &cfg, &prov.origin, Caller::Agent),
+        Err(e) => Verdict::Deny(format!(
+            "devkit ticket fields: this `{tool}` call writes a ticket, and devkit.toml, which \
+             declares the ticket fields it must carry, does not load: {e:#}"
+        )),
+    }
 }
 
 /// The `--arg`s the templates of `kind` require of an agent, as a sentence to
@@ -267,9 +294,217 @@ pub(super) fn decide(
     Ok(Verdict::Allow)
 }
 
+/// Hold an issue write `rule` matched to the repository's ticket field
+/// levels, from config and the call's input alone. A rule naming no
+/// `tracker`, a repository using another tracker or declaring no fields, and
+/// a GitHub call to a repository other than `[github] issues_repo` are
+/// allowed here. A create carries every field its level requires; an update
+/// is judged on the fields it carries. A value is refused at every level.
+pub(super) fn field_verdict(
+    rule: &RenderedToolRule,
+    tool: &str,
+    input: &Value,
+    cfg: &Config,
+    origin: &HashMap<String, PathBuf>,
+    caller: Caller,
+) -> Verdict {
+    let Some(kind) = rule.tracker else {
+        return Verdict::Allow;
+    };
+    let decls = cfg.ticket.fields.for_tracker(kind);
+    let other_tracker = cfg.tracker.kind.is_some_and(|k| k != kind);
+    if decls.is_empty() || other_tracker || !names_issues_repo(kind, cfg, input) {
+        return Verdict::Allow;
+    }
+    if let Err(e) = devkit_config::check_ticket_fields(cfg, kind, origin) {
+        return Verdict::Deny(format!("devkit ticket fields: {e:#}"));
+    }
+    let (given, mut problems) = given(rule, decls, kind, &cfg.people, input);
+    let resolved = match fields::resolve(decls, kind, &given, &cfg.people, None) {
+        Ok(r) => r,
+        Err(more) => {
+            problems.extend(more);
+            Resolved::default()
+        }
+    };
+    if !problems.is_empty() {
+        return Verdict::Deny(field_denial(rule, tool, kind, decls, &problems));
+    }
+    let surface = if rule.is_create(input) {
+        Surface::McpCreate
+    } else {
+        Surface::McpUpdate
+    };
+    let report = fields::check(decls, surface, &resolved, None, caller);
+    if !report.refused.is_empty() {
+        return Verdict::Deny(field_denial(rule, tool, kind, decls, &report.refused));
+    }
+    if !report.warned.is_empty() {
+        return Verdict::AllowWith(format!(
+            "devkit ticket fields: this `{tool}` call leaves out warning-level fields of \
+             [ticket.fields.{kind}].\n{}",
+            blocks(rule, tool, decls, &report.warned)
+        ));
+    }
+    Verdict::Allow
+}
+
+/// Whether a call to `kind` writes the repository's own tickets: on GitHub,
+/// a call naming an `owner`/`repo` other than `[github] issues_repo` does
+/// not.
+fn names_issues_repo(kind: TrackerKind, cfg: &Config, input: &Value) -> bool {
+    let Some(repo) = cfg
+        .github
+        .issues_repo
+        .as_deref()
+        .filter(|_| kind == TrackerKind::Github)
+    else {
+        return true;
+    };
+    let part = |k: &str| input.get(k).and_then(Value::as_str);
+    match (part("owner"), part("repo")) {
+        (Some(owner), Some(name)) => repo.eq_ignore_ascii_case(&format!("{owner}/{name}")),
+        _ => true,
+    }
+}
+
+/// The call's mapped field values as `--arg` text, with each `null` as an
+/// explicit none, and a problem for each value of a JSON type the field
+/// does not take. A `user` given as a tracker login or id becomes its
+/// `[people]` alias.
+fn given(
+    rule: &RenderedToolRule,
+    decls: &BTreeMap<String, FieldDecl>,
+    kind: TrackerKind,
+    people: &HashMap<String, Person>,
+    input: &Value,
+) -> (Given, Vec<Problem>) {
+    let mut out = Given::default();
+    let mut problems = Vec::new();
+    for (field, key) in &rule.fields {
+        let (Some(decl), Some(value)) = (decls.get(field), input.get(key.as_str())) else {
+            continue;
+        };
+        let ty = decl.r#type.unwrap_or(FieldType::String);
+        let scalar = |v: &Value| match v {
+            Value::String(s) if ty == FieldType::User => Some(alias(people, kind, s)),
+            Value::String(s) => Some(s.clone()),
+            Value::Number(n) if ty == FieldType::Number => Some(n.to_string()),
+            _ => None,
+        };
+        let text = match value {
+            Value::Null => {
+                out.nones.insert(field.clone());
+                continue;
+            }
+            Value::Array(items) if decl.list => items
+                .iter()
+                .map(scalar)
+                .collect::<Option<Vec<_>>>()
+                .map(|v| v.join(",")),
+            Value::Array(_) => None,
+            v => scalar(v),
+        };
+        match text {
+            Some(t) => {
+                out.values.insert(field.clone(), t);
+            }
+            None => problems.push(Problem::Invalid {
+                field: field.clone(),
+                value: value.to_string(),
+                reason: format!(
+                    "is not a JSON value `{field}` takes: {} under `{key}`",
+                    json_shape(ty, decl.list)
+                ),
+            }),
+        }
+    }
+    (out, problems)
+}
+
+/// The JSON a field's input key takes.
+fn json_shape(ty: FieldType, list: bool) -> String {
+    let one = match ty {
+        FieldType::Number => "a number or a string",
+        _ => "a string",
+    };
+    if list {
+        format!("{one}, an array of them, or null")
+    } else {
+        format!("{one}, or null")
+    }
+}
+
+/// The `[people]` alias whose identity on `kind` is `who`, ignoring case,
+/// else `who` itself.
+fn alias(people: &HashMap<String, Person>, kind: TrackerKind, who: &str) -> String {
+    if people.contains_key(who) {
+        return who.to_string();
+    }
+    people
+        .iter()
+        .find(|(_, p)| {
+            let id = match kind {
+                TrackerKind::Github => p.github.as_deref(),
+                TrackerKind::Linear => p.linear.as_deref(),
+                TrackerKind::None => None,
+            };
+            id.is_some_and(|id| id.eq_ignore_ascii_case(who))
+        })
+        .map_or_else(|| who.to_string(), |(a, _)| a.clone())
+}
+
+fn field_denial(
+    rule: &RenderedToolRule,
+    tool: &str,
+    kind: TrackerKind,
+    decls: &BTreeMap<String, FieldDecl>,
+    problems: &[Problem],
+) -> String {
+    format!(
+        "devkit ticket fields: this `{tool}` call does not satisfy [ticket.fields.{kind}].\n{}\n\
+         `devkit ticket create` and `devkit ticket edit` set every declared field, each as \
+         `--arg <field>=...`; `devkit ticket fields` lists them.",
+        blocks(rule, tool, decls, problems)
+    )
+}
+
+/// The shared message for each problem, followed for a missing field by the
+/// input key that sets it in this call, or by `ticket create` when the tool
+/// has none.
+fn blocks(
+    rule: &RenderedToolRule,
+    tool: &str,
+    decls: &BTreeMap<String, FieldDecl>,
+    problems: &[Problem],
+) -> String {
+    problems
+        .iter()
+        .map(|p| {
+            let mut block = fields::message(decls, std::slice::from_ref(p));
+            if let Problem::Missing { field } = p {
+                let none = if decls.get(field).is_some_and(FieldDecl::allows_none) {
+                    ", or `null` to leave it empty"
+                } else {
+                    ""
+                };
+                block.push_str(&match rule.fields.get(field) {
+                    Some(key) => format!("\n  pass `{key}` in this call{none}"),
+                    None => format!(
+                        "\n  `{tool}` cannot set `{field}`: file the ticket with \
+                         `devkit ticket create --arg {field}=...` instead"
+                    ),
+                });
+            }
+            block
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     use serde_json::json;
 
@@ -390,5 +625,277 @@ mod tests {
         )
         .unwrap();
         assert!(denied_mentioning(&v, "differs"), "{v:?}");
+    }
+
+    const GITHUB_FIELDS: &str = r#"
+[github]
+issues_repo = "acme/app"
+project = 7
+
+[ticket.fields.github.priority]
+type        = "enum"
+where       = { project_field = "PVTSSF_p", name = "Priority" }
+values      = [{ name = "P0", id = "f75ad846" }, { name = "P1", id = "47fc9ee4" }]
+default     = "P1"
+level       = "error"
+description = "P0 drop everything, P1 this cycle"
+
+[ticket.fields.github.labels]
+type   = "string"
+list   = true
+where  = "labels"
+level  = "error"
+
+[ticket.fields.github.milestone]
+type   = "enum"
+where  = "milestone"
+values = [{ name = "v1", id = "v1" }]
+level  = "warning"
+description = "the release it ships in"
+"#;
+
+    const LINEAR_FIELDS: &str = r#"
+[ticket.fields.linear.team]
+type   = "enum"
+where  = "team"
+values = [{ name = "ENG", id = "t-eng" }, { name = "OPS", id = "t-ops" }]
+level  = "error"
+
+[ticket.fields.linear.labels]
+type   = "enum"
+list   = true
+where  = "labels"
+values = [{ name = "infra", id = "L1", teams = ["ENG"] }, { name = "bug", id = "L2" }]
+level  = "error"
+
+[ticket.fields.linear.estimate]
+type  = "number"
+where = "estimate"
+level = "info"
+
+[ticket.fields.linear.priority]
+type   = "enum"
+where  = "priority"
+values = [{ name = "Urgent", id = "1" }, { name = "Low", id = "4" }]
+level  = "info"
+"#;
+
+    fn with_fields(
+        mut rule: RenderedToolRule,
+        tracker: TrackerKind,
+        map: &[(&str, &str)],
+    ) -> RenderedToolRule {
+        rule.tracker = Some(tracker);
+        rule.fields = map
+            .iter()
+            .map(|(f, k)| (f.to_string(), k.to_string()))
+            .collect();
+        rule
+    }
+
+    fn github_rule() -> RenderedToolRule {
+        with_fields(github(), TrackerKind::Github, &[
+            ("labels", "labels"),
+            ("milestone", "milestone"),
+        ])
+    }
+
+    fn linear_rule() -> RenderedToolRule {
+        with_fields(linear(), TrackerKind::Linear, &[
+            ("team", "team"),
+            ("labels", "labels"),
+            ("estimate", "estimate"),
+            ("priority", "priority"),
+        ])
+    }
+
+    fn fields(rule: &RenderedToolRule, toml: &str, input: Value) -> Verdict {
+        let cfg = devkit_config::Config::parse(toml).unwrap();
+        field_verdict(
+            rule,
+            "issue_write",
+            &input,
+            &cfg,
+            &HashMap::new(),
+            Caller::Agent,
+        )
+    }
+
+    fn gh_create(extra: Value) -> Value {
+        let mut v =
+            json!({"method": "create", "owner": "acme", "repo": "app", "title": "T", "body": "B"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    }
+
+    #[test]
+    fn create_missing_an_error_field_denies_naming_it_and_the_ticket_create_flag() {
+        let v = fields(
+            &github_rule(),
+            GITHUB_FIELDS,
+            gh_create(json!({"milestone": "v1"})),
+        );
+        let Verdict::Deny(reason) = v else {
+            panic!("{v:?}")
+        };
+        assert!(reason.contains("`labels`"), "{reason}");
+        assert!(reason.contains("pass `labels` in this call"), "{reason}");
+        assert!(reason.contains("--arg labels="), "{reason}");
+        assert!(reason.contains("devkit ticket create"), "{reason}");
+    }
+
+    #[test]
+    fn a_field_with_no_mapped_key_is_always_missing_on_create() {
+        let input = gh_create(json!({"labels": ["bug"], "milestone": "v1", "priority": "P0"}));
+        let v = fields(&github_rule(), GITHUB_FIELDS, input);
+        let Verdict::Deny(reason) = v else {
+            panic!("{v:?}")
+        };
+        assert!(reason.contains("`priority`"), "{reason}");
+        assert!(
+            reason.contains("`issue_write` cannot set `priority`")
+                && reason.contains("devkit ticket create")
+                && reason.contains("--arg priority="),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("default: P1"),
+            "a default is named, not applied: {reason}"
+        );
+        assert!(!reason.contains("`labels`"), "{reason}");
+    }
+
+    #[test]
+    fn warning_allows_with_context() {
+        let decls = GITHUB_FIELDS.replace("level       = \"error\"", "level       = \"info\"");
+        let v = fields(
+            &github_rule(),
+            &decls,
+            gh_create(json!({"labels": ["bug"]})),
+        );
+        let Verdict::AllowWith(report) = v else {
+            panic!("{v:?}")
+        };
+        assert!(report.contains("`milestone`"), "{report}");
+        assert!(report.contains("the release it ships in"), "{report}");
+        assert_eq!(
+            fields(
+                &github_rule(),
+                &decls,
+                gh_create(json!({"labels": ["bug"], "milestone": "V1"}))
+            ),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn a_call_to_another_repo_gets_no_field_check() {
+        let mut input = gh_create(json!({}));
+        input["repo"] = json!("other");
+        assert_eq!(fields(&github_rule(), GITHUB_FIELDS, input), Verdict::Allow);
+        let elsewhere = GITHUB_FIELDS.replace("[github]", "[tracker]\nkind = \"linear\"\n[github]");
+        assert_eq!(
+            fields(&github_rule(), &elsewhere, gh_create(json!({}))),
+            Verdict::Allow,
+            "[tracker] kind names another tracker"
+        );
+        let mut same = gh_create(json!({}));
+        same["owner"] = json!("ACME");
+        assert!(matches!(
+            fields(&github_rule(), GITHUB_FIELDS, same),
+            Verdict::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn a_rule_without_tracker_gets_no_field_check() {
+        assert_eq!(
+            fields(&github(), GITHUB_FIELDS, gh_create(json!({}))),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn null_is_explicit_none() {
+        let input = json!({"title": "T", "team": "ENG", "labels": null});
+        assert_eq!(fields(&linear_rule(), LINEAR_FIELDS, input), Verdict::Allow);
+        let no_none = LINEAR_FIELDS.replace(
+            "where  = \"labels\"",
+            "where  = \"labels\"\nallow_none = false",
+        );
+        let input = json!({"title": "T", "team": "ENG", "labels": null});
+        let v = fields(&linear_rule(), &no_none, input);
+        assert!(denied_mentioning(&v, "cannot be left empty"), "{v:?}");
+        let v = fields(
+            &linear_rule(),
+            LINEAR_FIELDS,
+            json!({"title": "T", "team": null, "labels": ["bug"]}),
+        );
+        assert!(
+            denied_mentioning(&v, "`team`"),
+            "a team never allows none: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_linear_label_valid_in_any_team_is_accepted() {
+        let input = json!({"title": "T", "team": "OPS", "labels": ["infra", "L2"]});
+        assert_eq!(fields(&linear_rule(), LINEAR_FIELDS, input), Verdict::Allow);
+        let input = json!({"title": "T", "team": "OPS", "labels": ["nope"]});
+        let v = fields(&linear_rule(), LINEAR_FIELDS, input);
+        assert!(denied_mentioning(&v, "`nope`"), "{v:?}");
+    }
+
+    #[test]
+    fn a_value_of_the_wrong_json_type_is_refused() {
+        for (key, value) in [
+            ("priority", json!(1)),
+            ("team", json!(["ENG"])),
+            ("labels", json!([1])),
+            ("labels", json!({"name": "bug"})),
+            ("estimate", json!(true)),
+        ] {
+            let mut input = json!({"title": "T", "team": "ENG", "labels": ["bug"]});
+            input[key] = value.clone();
+            let v = fields(&linear_rule(), LINEAR_FIELDS, input);
+            assert!(
+                denied_mentioning(&v, &format!("`{key}`")) && denied_mentioning(&v, "JSON"),
+                "{key} = {value}: {v:?}"
+            );
+        }
+        let input = json!({"title": "T", "team": "ENG", "labels": "bug", "estimate": 3});
+        assert_eq!(
+            fields(&linear_rule(), LINEAR_FIELDS, input),
+            Verdict::Allow,
+            "a string for a list is one value, a number for a number field"
+        );
+    }
+
+    #[test]
+    fn an_update_checks_only_what_it_carries() {
+        let update = json!({"id": "ENG-1", "estimate": "lots"});
+        let v = fields(&linear_rule(), LINEAR_FIELDS, update);
+        assert!(denied_mentioning(&v, "not a number"), "{v:?}");
+        let update = json!({"id": "ENG-1", "estimate": 2});
+        assert_eq!(
+            fields(&linear_rule(), LINEAR_FIELDS, update),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn a_user_matches_by_alias_login_or_id() {
+        let toml = "[people.lev]\ngithub = \"LevValle\"\n\
+                    [ticket.fields.github.assignees]\ntype = \"user\"\nlist = true\n\
+                    where = \"assignees\"\nlevel = \"error\"\n";
+        let rule = with_fields(github(), TrackerKind::Github, &[("assignees", "assignees")]);
+        for who in ["lev", "levvalle"] {
+            let input = gh_create(json!({"assignees": [who]}));
+            assert_eq!(fields(&rule, toml, input), Verdict::Allow, "{who}");
+        }
+        let v = fields(&rule, toml, gh_create(json!({"assignees": ["ghost"]})));
+        assert!(denied_mentioning(&v, "ghost"), "{v:?}");
     }
 }

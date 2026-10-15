@@ -389,3 +389,102 @@ fn a_create_missing_its_body_is_told_to_add_it() {
     assert!(reason.contains("no `description`"), "{reason}");
     assert!(!reason.contains("differs"), "{reason}");
 }
+
+const FIELDS: &str = r#"
+[tracker]
+kind = "linear"
+
+[ticket.fields.linear.team]
+type   = "enum"
+where  = "team"
+values = [{ name = "ENG", id = "t-eng" }]
+level  = "error"
+
+[ticket.fields.linear.priority]
+type        = "number"
+where       = "priority"
+level       = "error"
+description = "1 urgent to 4 low"
+
+[ticket.fields.linear.labels]
+type   = "enum"
+values = [{ name = "bug", id = "L1" }]
+list   = true
+where  = "labels"
+level  = "warning"
+"#;
+
+/// [`CONFIG`] with its Linear MCP rule holding calls to [`FIELDS`].
+fn fields_config() -> String {
+    let rule = CONFIG.replace(
+        "body_patch = [\"patch\"]\n",
+        "body_patch = [\"patch\"]\ntracker = \"linear\"\n\
+         fields = { team = \"team\", priority = \"priority\", labels = \"labels\" }\n",
+    );
+    assert_ne!(rule, CONFIG);
+    format!("{rule}\n{FIELDS}")
+}
+
+fn fields_project() -> tempfile::TempDir {
+    let p = project();
+    std::fs::write(p.path().join("devkit.toml"), fields_config()).unwrap();
+    p
+}
+
+#[test]
+fn a_save_issue_without_priority_is_denied_after_a_valid_render() {
+    let p = fields_project();
+    let (t, b) = render(p.path(), "S1", "T", "B");
+    let input = json!({"title": t, "description": b, "team": "ENG", "labels": ["bug"]});
+    let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, input));
+    let reason = denial(&out).expect("denied");
+    assert!(
+        reason.contains("`priority`") && reason.contains("1 urgent to 4 low"),
+        "{reason}"
+    );
+    assert!(!reason.contains("devkit ticket render"), "{reason}");
+
+    let input =
+        json!({"title": t, "description": b, "team": "ENG", "priority": 2, "labels": ["bug"]});
+    let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, input));
+    assert_eq!(denial(&out), None);
+}
+
+#[test]
+fn a_missing_warning_field_reaches_the_agent_as_context() {
+    let p = fields_project();
+    let (t, b) = render(p.path(), "S1", "T", "B");
+    let input = json!({"title": t, "description": b, "team": "ENG", "priority": 2});
+    let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, input));
+    let v: Value = serde_json::from_slice(&out.stdout).expect("one JSON envelope");
+    let hso = &v["hookSpecificOutput"];
+    assert_ne!(hso["permissionDecision"], "deny", "{v}");
+    let context = hso["additionalContext"].as_str().unwrap_or_default();
+    assert!(context.contains("`labels`"), "{v}");
+}
+
+#[test]
+fn a_broken_config_denies_once_a_rule_matched() {
+    let p = fields_project();
+    let (t, b) = render(p.path(), "S1", "T", "B");
+    let broken = format!(
+        "{}\n[ticket.fields.linear.cycle]\ntype = \"enum\"\nwhere = \"cycle\"\n\
+         level = \"error\"\n",
+        fields_config()
+    );
+    std::fs::write(p.path().join("devkit.toml"), broken).unwrap();
+    let input = json!({"title": t, "description": b, "team": "ENG", "priority": 2});
+    let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, input));
+    let reason = denial(&out).expect("denied");
+    assert!(
+        reason.contains("does not load") && reason.contains("cycle"),
+        "{reason}"
+    );
+
+    let unrelated = json!({"file": "src/main.rs"});
+    let out = pre_tool_use(
+        p.path(),
+        &claude(p.path(), "S1", "mcp__mcpls__get_hover", unrelated),
+    );
+    assert_eq!(denial(&out), None, "an unmatched call stays allowed");
+}
