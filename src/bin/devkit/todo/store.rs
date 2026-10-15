@@ -570,15 +570,14 @@ impl Store {
         self.origin.as_ref()
     }
 
-    /// The todo that `input`, typed by a caller, names: the one whose full
-    /// stored id it is, else the one it names as
-    /// [`devkit_todo::names::resolve`] reads it. Only a full stored id wins
-    /// outright: a todo the backend finds by uuid prefix is one more
-    /// candidate, so a prefix that also reads as another todo's ticket is
-    /// ambiguous.
+    /// The todo that `input`, typed by a caller, names: the one the backend
+    /// finds by its stored id or a uuid prefix of 8 or more characters, else
+    /// the one it names as [`devkit_todo::names::resolve`] reads it. What the
+    /// backend finds wins outright, so the short id a listing prints always
+    /// reads back to its todo, even when it is all digits and a GitHub
+    /// ticket has that number.
     pub(crate) fn resolve(&self, input: &str) -> Result<Option<Todo>> {
-        let stored = self.store.get(input)?;
-        if let Some(todo) = stored.filter(|t| t.id.eq_ignore_ascii_case(input)) {
+        if let Some(todo) = self.store.get(input)? {
             return Ok(Some(todo));
         }
         let mut listing = self.listing.lock().unwrap_or_else(PoisonError::into_inner);

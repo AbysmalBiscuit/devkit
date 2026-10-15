@@ -235,21 +235,15 @@ fn an_ambiguous_name_names_each_match_and_changes_nothing() {
 }
 
 #[test]
-fn a_uuid_prefix_that_is_also_a_ticket_number_is_ambiguous() {
+fn a_printed_short_id_resolves_even_when_it_reads_as_a_ticket_number() {
     let s = Synced::new(RULES, false);
-    let (prefix, elsewhere, numbered) = prefix_like_a_ticket(&s, 8);
-    let out = s.devkit(&["todo", "start", &prefix], &TASKCHAMPION);
-    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
-    let err = stderr(&out);
-    assert!(
-        err.contains(&format!("todo name {prefix} is ambiguous")),
-        "{err}"
+    let (short_id, elsewhere, numbered) = prefix_like_a_ticket(&s, 8);
+    ok(s.devkit(&["todo", "start", &short_id], &TASKCHAMPION));
+    assert_eq!(
+        replica_todo(&s.proj, &elsewhere).status.kind(),
+        StatusKind::InProgress
     );
-    assert!(err.contains(&elsewhere[..8]), "{err}");
-    assert!(err.contains(&numbered[..8]), "{err}");
-    for id in [elsewhere, numbered] {
-        assert_eq!(replica_todo(&s.proj, &id).status, Status::Pending);
-    }
+    assert_eq!(replica_todo(&s.proj, &numbered).status, Status::Pending);
 }
 
 #[test]
