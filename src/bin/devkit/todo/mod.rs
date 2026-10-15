@@ -149,6 +149,11 @@ pub enum TodoCommand {
         /// what a read starts when the last ticket sync is stale.
         #[arg(long, hide = true, conflicts_with = "dry_run")]
         tickets_only: bool,
+        /// Sync only this ticket, by its key (`owner/repo#65`, `ENG-123`),
+        /// reading no other and not the store's sync target. A ticket no
+        /// rule selects is brought in too.
+        #[arg(long, value_name = "KEY", conflicts_with_all = ["background", "dry_run", "tickets_only"])]
+        ticket: Option<String>,
     },
     /// Set whose stop this session's open todos hold, or print the mode.
     ///
@@ -416,10 +421,35 @@ pub fn run(cli: TodoCli) -> Result<()> {
             order,
         } => move_todo(&store, id, parent, top, order)?,
         TodoCommand::Sync {
+            ticket: Some(key), ..
+        } => {
+            let key = key.trim();
+            if key.is_empty() {
+                bail!("--ticket needs a ticket key, such as owner/repo#65 or ENG-123");
+            }
+            if place == Place::Global {
+                bail!("devkit todo sync --ticket runs in a checkout of the ticket's repository");
+            }
+            if !store.replica_pulled() {
+                bail!("ticket {key} not synced: the store's sync did not complete");
+            }
+            let node = layout.fill("repo", &facts)?;
+            match tickets::sync_one(&store, &cwd, &node, key)? {
+                Some(_) => {
+                    writes = true;
+                    println!("devkit todo: ticket {key} synced");
+                }
+                None => {
+                    eprintln!("devkit todo: no [ticket.sync] rules here; ticket {key} not synced")
+                }
+            }
+        }
+        TodoCommand::Sync {
             background,
             dry_run,
             result_file,
             tickets_only,
+            ticket: None,
         } => {
             let replica = if tickets_only {
                 None
