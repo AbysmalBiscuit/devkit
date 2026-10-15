@@ -46,6 +46,13 @@ pub(crate) enum Change {
     /// A tracker field not added, because its name is declared for another
     /// place, or is a template variable or a name devkit supplies.
     NameTaken { field: String, place: String },
+    /// A declared field left alone because its declared `type` is not the
+    /// one the tracker offers at that place.
+    TypeKept {
+        field: String,
+        declared: FieldType,
+        offered: FieldType,
+    },
 }
 
 pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
@@ -207,6 +214,16 @@ fn summary(kind: TrackerKind, changes: &[Change], found: &Discovered) -> String 
                 "kept `{value}` in [ticket.fields.{kind}.{field}] unchecked: the tracker's list \
                  was read only in part\n"
             ),
+            Change::TypeKept {
+                field,
+                declared,
+                offered,
+            } => format!(
+                "not refreshed: [ticket.fields.{kind}.{field}] declares `type = \"{}\"`, and the \
+                 tracker offers that place as `{}`; change the type by hand to take its values\n",
+                declared.as_str(),
+                offered.as_str()
+            ),
             Change::NameTaken { field, place } => format!(
                 "not added: the tracker's `{place}` would be [ticket.fields.{kind}.{field}], \
                  whose name is taken by another field, a template variable or devkit; declare \
@@ -238,7 +255,8 @@ fn summary(kind: TrackerKind, changes: &[Change], found: &Discovered) -> String 
 /// Write `found` into `doc`'s `[ticket.fields.<kind>]`. A field any layer of
 /// `merged` declares at the same place, or by the same name with no place,
 /// has its `type`, `list`, `where` and `values` refreshed, keeping each
-/// value's declared name; nothing else of it is written. Any other field is
+/// value's declared name; nothing else of it is written. One whose declared
+/// `type` differs from the tracker's is left alone and reported. Any other field is
 /// added at `level = "info"`, unless it is an `enum` the tracker offers no
 /// value of. Comments and layout survive.
 pub(crate) fn merge(
@@ -268,6 +286,13 @@ pub(crate) fn merge(
                 .filter(|(_, d)| d.r#where.is_none())
         };
         match by_place.or_else(by_name) {
+            Some((target, decl)) if decl.r#type.is_some_and(|t| t != field.r#type) => {
+                changes.push(Change::TypeKept {
+                    field: target.clone(),
+                    declared: decl.r#type.unwrap_or(FieldType::String),
+                    offered: field.r#type,
+                });
+            }
             Some((target, decl)) => {
                 let values = refreshed_values(decl, field, &found.teams_read);
                 for unseen in decl
@@ -748,6 +773,29 @@ values = [
         );
         assert!(changes.is_empty(), "{changes:?}");
         assert_eq!(text, "");
+    }
+
+    #[test]
+    fn a_declared_type_is_kept_and_the_mismatch_reported() {
+        let repo = "[ticket.fields.github.tags]\ntype = \"string\"\nlist = true\n\
+                    where = \"labels\"\nlevel = \"warning\"\n";
+        let labels = DiscoveredField::new(FieldType::Enum, Place::Labels)
+            .list()
+            .with_values(vec![named("bug")]);
+        let (text, changes) = merged("", repo, &found(&[("labels", labels)]));
+        assert_eq!(text, repo, "the hand-written field is left alone");
+        assert_eq!(changes, [Change::TypeKept {
+            field: "tags".into(),
+            declared: FieldType::String,
+            offered: FieldType::Enum,
+        }]);
+        let summary = summary(TrackerKind::Github, &changes, &Discovered::default());
+        assert!(
+            summary.contains("[ticket.fields.github.tags]")
+                && summary.contains("string")
+                && summary.contains("enum"),
+            "{summary}"
+        );
     }
 
     #[test]
