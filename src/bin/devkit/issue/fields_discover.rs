@@ -751,6 +751,24 @@ values = [
     }
 
     #[test]
+    fn a_refresh_writes_the_aliases_the_tracker_takes() {
+        let repo = "[ticket.fields.linear.team]\ntype = \"enum\"\nwhere = \"team\"\n\
+                    values = [{ name = \"eng\", id = \"t-eng\" }]\n";
+        let team =
+            DiscoveredField::new(FieldType::Enum, Place::Team).with_values(vec![EnumValue {
+                name: "ENG".into(),
+                id: "t-eng".into(),
+                aliases: vec!["ENG".into(), "Engineering".into()],
+                ..EnumValue::default()
+            }]);
+        let (text, _) = merged_on(TrackerKind::Linear, "", repo, &found(&[("team", team)]));
+        let cfg = Config::parse(&text).unwrap();
+        let value = &cfg.ticket.fields.linear["team"].values[0];
+        assert_eq!(value.name, "eng", "the declared name stays");
+        assert_eq!(value.aliases, ["ENG", "Engineering"], "{text}");
+    }
+
+    #[test]
     fn an_unchanged_field_leaves_the_file_alone() {
         let (text, changes) = merged("", REPO, &found(&[("priority", priority(&[("P0", "o0")]))]));
         assert!(changes.is_empty(), "{changes:?}");

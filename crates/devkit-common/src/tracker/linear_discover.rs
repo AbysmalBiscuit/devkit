@@ -166,13 +166,14 @@ fn add(values: &mut Vec<EnumValue>, id: &str, name: &str, team: &str) {
 }
 
 /// The fields a [`gather`] response offers, an enum the read found empty
-/// included, so a refresh drops its stale values. A team-bound value (a team's
-/// label, cycle, project or project milestone) records the keys of the
-/// teams it is valid in; a workspace label records none. The team field is
-/// read in part, since the read covers only the viewer's or the named
-/// teams. The workflow state
-/// belongs to `[ticket.events]` and is never offered. `asked` is the teams
-/// `--team` named, each of which must be found.
+/// included, so a refresh drops its stale values. A team is named by its
+/// key, with its key and name as the aliases Linear also takes for it. A
+/// team-bound value (a team's label, cycle, project or project milestone)
+/// records the keys of the teams it is valid in; a workspace label records
+/// none. The team field is read in part, since the read covers only the
+/// viewer's or the named teams. The workflow state belongs to
+/// `[ticket.events]` and is never offered. `asked` is the teams `--team`
+/// named, each of which must be found.
 pub fn parse(
     resp: &Json,
     asked: &[String],
@@ -213,11 +214,15 @@ pub fn parse(
         let (Some(id), Some(key)) = (str_of(team, "id"), str_of(team, "key")) else {
             continue;
         };
+        let mut aliases = vec![key.to_string()];
+        if let Some(name) = str_of(team, "name").filter(|n| !n.eq_ignore_ascii_case(key)) {
+            aliases.push(name.to_string());
+        }
         team_values.push(EnumValue {
             name: key.to_string(),
             id: id.to_string(),
             teams: Vec::new(),
-            aliases: Vec::new(),
+            aliases,
         });
         estimates |= str_of(team, "issueEstimationType").is_some_and(|t| t != "notUsed");
         partial_cycles |= unfinished(team.get("cycles"));
@@ -375,9 +380,9 @@ mod tests {
 
     use super::*;
 
-    fn team(id: &str, key: &str, project: Json) -> Json {
+    fn team(id: &str, key: &str, name: &str, project: Json) -> Json {
         json!({
-            "id": id, "key": key, "name": key, "issueEstimationType": "notUsed",
+            "id": id, "key": key, "name": name, "issueEstimationType": "notUsed",
             "cycles": { "nodes": [{ "id": format!("cyc-{key}"), "number": 3, "name": null }] },
             "projects": { "nodes": [project] },
             "states": { "nodes": [{ "id": "st-1", "name": "Todo", "type": "unstarted" }] }
@@ -389,8 +394,8 @@ mod tests {
             "projectMilestones": { "nodes": [{ "id": "ms-1", "name": "Beta" }] } });
         json!({ "data": {
             "viewer": { "teams": { "pageInfo": { "hasNextPage": false }, "nodes": [
-                team("t-eng", "ENG", shared.clone()),
-                team("t-ops", "OPS", shared)
+                team("t-eng", "ENG", "Engineering", shared.clone()),
+                team("t-ops", "OPS", "OPS", shared)
             ] } },
             "issueLabels": { "pageInfo": { "hasNextPage": false }, "nodes": [
                 { "id": "L1", "name": "infra", "isGroup": false, "team": { "key": "ENG" } },
@@ -472,6 +477,20 @@ mod tests {
         for field in ["cycle", "project", "project_milestone"] {
             assert_eq!(found.fields[field].values, [], "{field}");
         }
+    }
+
+    #[test]
+    fn a_team_records_its_key_and_name_as_aliases() {
+        let found = parse(&response(), &[], &people()).unwrap();
+        let aliases: Vec<(&str, &[String])> = found.fields["team"]
+            .values
+            .iter()
+            .map(|v| (v.id.as_str(), v.aliases.as_slice()))
+            .collect();
+        assert_eq!(aliases, [
+            ("t-eng", &s(&["ENG", "Engineering"])[..]),
+            ("t-ops", &s(&["OPS"])[..]),
+        ]);
     }
 
     #[test]

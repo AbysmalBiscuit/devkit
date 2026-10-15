@@ -1104,6 +1104,24 @@ level  = "info"
     }
 
     #[test]
+    fn a_linear_team_passes_as_its_name_key_or_id() {
+        let call = |team: &str| {
+            let input = json!({"title": "T", "team": team, "labels": ["L2"]});
+            fields(&linear_rule(), LINEAR_FIELDS, input)
+        };
+        for team in ["Engineering", "ENG", "t-eng"] {
+            assert_eq!(call(team), Verdict::Allow, "{team}");
+        }
+        assert!(matches!(call("  "), Verdict::Deny(_)), "a blank team");
+        let v = call("Platform");
+        assert!(
+            denied_mentioning(&v, "`Platform`")
+                && denied_mentioning(&v, "t-eng (ENG; or ENG, Engineering)"),
+            "{v:?}"
+        );
+    }
+
+    #[test]
     fn every_input_key_a_field_maps_to_is_checked() {
         let rule: RenderedToolRule = toml::from_str(
             "servers = [\"*linear*\"]\ntools = [\"save_issue\"]\nabsent = [\"id\"]\n\
