@@ -186,6 +186,25 @@ fn an_agent_writes_without_asking() {
 }
 
 #[test]
+fn discover_writes_the_config_devkit_config_names() {
+    let fake = fields_fake();
+    fake.serve_graphql(DISCOVERED);
+    let before = devkit_toml(&fake);
+    let named = fake.state().join("named.toml");
+    std::fs::write(&named, &before).unwrap();
+    stdout(&fake.issue_with_env(&["fields", "discover"], &[
+        ("DEVKIT_CALLER", "agent"),
+        ("DEVKIT_CONFIG", named.to_str().unwrap()),
+    ]));
+    let written = std::fs::read_to_string(&named).unwrap();
+    assert!(
+        written.contains("[ticket.fields.github.labels]"),
+        "{written}"
+    );
+    assert_eq!(devkit_toml(&fake), before, "the project file is untouched");
+}
+
+#[test]
 fn a_human_without_a_terminal_must_pass_yes() {
     let fake = fields_fake();
     fake.serve_graphql(DISCOVERED);

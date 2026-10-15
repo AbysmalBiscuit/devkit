@@ -4,7 +4,7 @@
 
 use std::{
     io::{IsTerminal, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
@@ -75,10 +75,7 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
              none. Set `[tracker] kind` in devkit.toml."
         ),
     };
-    let path = match config {
-        Some(p) => p.to_path_buf(),
-        None => devkit_common::vcs::checkout_root(Path::new(&start))?.join("devkit.toml"),
-    };
+    let path = target(config, Path::new(&start))?;
     let before = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -104,6 +101,24 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
     std::fs::write(&path, &after).with_context(|| format!("writing {}", path.display()))?;
     println!("wrote {}; review it with `git diff`", path.display());
     Ok(())
+}
+
+/// The file discover writes: `--config`, else `$DEVKIT_CONFIG`, each the
+/// one file the run read, else the nearest tracked `devkit.toml`, else a new
+/// one at the checkout root.
+fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
+    if let Some(p) = config
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("DEVKIT_CONFIG").map(PathBuf::from))
+    {
+        return Ok(p);
+    }
+    let main = devkit_common::vcs::main_checkout(start).ok().flatten();
+    let layers = devkit_config::project_layers(start, main.as_deref())?;
+    match devkit_config::nearest_tracked(&layers) {
+        Some(p) => Ok(p.to_path_buf()),
+        None => Ok(devkit_common::vcs::checkout_root(start)?.join(devkit_config::CONFIG_FILE)),
+    }
 }
 
 /// Whether to write: an agent always writes, a human after `--yes` or a
