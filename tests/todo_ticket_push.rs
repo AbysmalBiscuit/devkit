@@ -1116,7 +1116,10 @@ fn a_link_with_a_ticket_of_another_repository_stays_local() {
         .unwrap();
     let out = s.devkit(&["todo", "block", &id_of(&s, 65), "--by", &foreign], &AGENT);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(s.todo_for("o/r#65").blocked_by, std::slice::from_ref(&foreign));
+    assert_eq!(
+        s.todo_for("o/r#65").blocked_by,
+        std::slice::from_ref(&foreign)
+    );
 
     let out = s.devkit(
         &["todo", "move", &id_of(&s, 67), "--parent", &foreign],
