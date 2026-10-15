@@ -85,11 +85,7 @@ impl LinkPush<'_> {
             return Ok(false);
         }
         let (a, b) = (&a.key, &b.key);
-        let inside = store.origin().is_some_and(|origin| {
-            super::ticket_event::root_on(origin, written.node(), store.config(), self.actor)
-                .is_some()
-        });
-        if !inside {
+        if !self.inside(store, written) {
             bail!(
                 "{a} and {b} are tickets of {}; change their link from a checkout of it, where \
                  it reaches the tracker, or the next sync reverts it",
@@ -105,6 +101,21 @@ impl LinkPush<'_> {
             );
         }
         Ok(true)
+    }
+
+    /// Whether a ticket todo with `kind` pushing reaches its tracker from
+    /// here: `ticket` is a ticket todo of the repository the command runs in,
+    /// and that repository's `[ticket.sync] push` names `kind`.
+    pub(crate) fn pushes(&self, store: &Store, kind: PushKind, ticket: &Todo) -> bool {
+        ticket.ticket.is_some() && store.ticket().sync.pushes(kind) && self.inside(store, ticket)
+    }
+
+    /// Whether `todo` is on the repository of the checkout the command runs
+    /// in, whose config is the one the store read.
+    fn inside(&self, store: &Store, todo: &Todo) -> bool {
+        store.origin().is_some_and(|origin| {
+            super::ticket_event::root_on(origin, todo.node(), store.config(), self.actor).is_some()
+        })
     }
 
     fn conflict<'a>(&self, key: &'a str, values: &'a str) -> Conflict<'a> {

@@ -926,3 +926,51 @@ fn linear_block_with_a_related_pair_conflicts() {
     );
     assert_eq!(proj.todo(&eng2).blocked_by, [eng1]);
 }
+
+/// A checkout of another repository, sharing the todo store and its
+/// `devkit.toml`.
+fn other_checkout(s: &Synced) -> std::path::PathBuf {
+    let other = s.proj.outside().join("other");
+    std::fs::create_dir(&other).unwrap();
+    devkit_git::Git::fixture(&other)
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    std::fs::copy(s.proj.path.join("devkit.toml"), other.join("devkit.toml")).unwrap();
+    other
+}
+
+#[test]
+fn a_step_under_a_ticket_of_another_repository_stays_local() {
+    let s = linked("\"parent\"", None, false);
+    let other = other_checkout(&s);
+    let out = s.devkit_in(
+        &other,
+        &["todo", "add", "a step", "--parent", &id_of(&s, 65)],
+        &AGENT,
+        "",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let step = stdout(&out).trim().to_string();
+    let out = s.devkit_in(&other, &["todo", "add", "another step"], &AGENT, "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let moved = stdout(&out).trim().to_string();
+    let out = s.devkit_in(
+        &other,
+        &["todo", "move", &moved, "--parent", &id_of(&s, 66)],
+        &AGENT,
+        "",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let parent = |short: &str| {
+        s.proj
+            .todos()
+            .into_iter()
+            .find(|t| t.id.starts_with(short))
+            .unwrap()
+            .parent
+    };
+    assert_eq!(parent(&step), Some(id_of(&s, 65)));
+    assert_eq!(parent(&moved), Some(id_of(&s, 66)));
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}

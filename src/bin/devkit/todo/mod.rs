@@ -424,7 +424,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                 .transpose()?
                 .flatten()
             {
-                refuse_under_a_ticket(&store, &parent)?;
+                refuse_under_a_ticket(&store, &parent, &link_push(false))?;
             }
             let blockers = resolve_ids(&store, &blocked_by)?;
             refuse_cycle(&store, None, &blockers)?;
@@ -990,11 +990,12 @@ fn link(store: &Store, id: &str, by: &[String], add: bool, push: &push::LinkPush
 }
 
 /// Refuses a new child under a ticket todo while its repository pushes
-/// parents: that child is a sub-issue, made with `ticket create` or `todo
-/// promote`.
-fn refuse_under_a_ticket(store: &Store, parent: &Todo) -> Result<()> {
+/// parents, changed from a checkout of that repository: that child is a
+/// sub-issue, made with `ticket create` or `todo promote`. From elsewhere the
+/// child stays local.
+fn refuse_under_a_ticket(store: &Store, parent: &Todo, push: &push::LinkPush) -> Result<()> {
     match &parent.ticket {
-        Some(ticket) if store.ticket().sync.pushes(PushKind::Parent) => bail!(
+        Some(ticket) if push.pushes(store, PushKind::Parent, parent) => bail!(
             "todo {} is ticket {}, and with \"parent\" in [ticket.sync] push a todo under it is \
              a sub-issue: file one with `devkit ticket create`, or turn an existing todo into a \
              ticket with `devkit todo promote`",
@@ -1123,8 +1124,9 @@ fn apply_checked(
 
 /// Moves `id` under `parent`, to the top level with `top`, or only to
 /// `order`. A ticket todo's move between ticket parents reaches the tracker
-/// as `push` allows; with parents pushing, a ticket todo and a todo that is
-/// not one never nest under each other.
+/// as `push` allows; with parents pushing from the ticket todo's
+/// repository, a ticket todo and a todo that is not one never nest under
+/// each other.
 fn move_todo(
     store: &Store,
     id: &str,
@@ -1149,12 +1151,12 @@ fn move_todo(
     };
     let Some(ticket) = &todo.ticket else {
         if let Some(parent) = &parent {
-            refuse_under_a_ticket(store, parent)?;
+            refuse_under_a_ticket(store, parent, push)?;
         }
         return store.apply(&edit).map(drop);
     };
     if let Some(step) = parent.as_ref().filter(|p| p.ticket.is_none())
-        && store.ticket().sync.pushes(PushKind::Parent)
+        && push.pushes(store, PushKind::Parent, &todo)
     {
         bail!(
             "todo {} is ticket {}, and with \"parent\" in [ticket.sync] push its parent is a \
