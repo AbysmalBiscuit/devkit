@@ -6,9 +6,7 @@
 //! letters, less every word spelled only with hex letters, sorted, the first
 //! 4096.
 
-use std::sync::LazyLock;
-
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, sync::LazyLock};
 
 use devkit_config::IdStyle;
 

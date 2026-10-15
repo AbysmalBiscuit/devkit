@@ -320,3 +320,127 @@ fn a_purged_blocker_numbered_like_tickets_names_none_of_them() {
     let ticket = s.todo_for("o/r#3").id;
     assert!(!s.proj.todo("5").blocked_by.contains(&ticket));
 }
+
+fn listed(p: &Proj, args: &[&str], env: &[(&str, &str)]) -> String {
+    let out = p.devkit(args, env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn ready_and_plan_show_word_names_by_default() {
+    let p = Proj::new();
+    let id = added(&p, "one");
+    let name = word_name(&id).unwrap();
+    for command in ["ready", "plan"] {
+        let out = listed(&p, &["todo", command], &TASKCHAMPION);
+        assert!(out.contains(&name), "{command}: {out}");
+        assert!(!out.contains(&id[..8]), "{command}: {out}");
+    }
+}
+
+#[test]
+fn the_flag_overrides_the_config() {
+    let p = Proj::with_home_config("[todo]\nids = \"short\"\n");
+    let id = added(&p, "one");
+    let ready = |extra: &[&str]| listed(&p, &[&["todo", "ready"], extra].concat(), &TASKCHAMPION);
+    assert_eq!(ready(&[]), format!("{}  one  *\n", &id[..8]));
+    assert_eq!(ready(&["--ids", "full"]), format!("{id}  one  *\n"));
+    assert_eq!(
+        ready(&["--ids", "name"]),
+        format!("{}  one  *\n", word_name(&id).unwrap())
+    );
+    let refused = p.devkit(&["todo", "ready", "--ids", "hex"], &TASKCHAMPION);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+}
+
+#[test]
+fn builtin_ids_show_whole() {
+    let p = Proj::new();
+    ok(p.devkit(&["todo", "add", "one"], &S1));
+    for style in ["name", "short", "full"] {
+        let out = listed(&p, &["todo", "ready", "--ids", style], &S1);
+        assert_eq!(out, "1  one  *\n", "{style}");
+    }
+}
+
+#[test]
+fn add_prints_the_name() {
+    let p = Proj::new();
+    let out = listed(&p, &["todo", "add", "one"], &TASKCHAMPION);
+    let id = replica(&p)[0].id.clone();
+    assert_eq!(out, format!("{}\n", word_name(&id).unwrap()));
+}
+
+#[test]
+fn ticket_rows_show_the_key_once() {
+    let s = two_issues();
+    ok(s.sync(&[]));
+    devkit_common::record::write(&s.proj.path, &devkit_common::record::IssueRecord {
+        issue: "66".into(),
+        slug: "fix".into(),
+        origin: Some(devkit_common::record::RecordOrigin::Setup),
+        ..Default::default()
+    })
+    .unwrap();
+    let plan = listed(&s.proj, &["todo", "plan"], &S1);
+    assert!(plan.contains("o #66  Issue 66"), "{plan}");
+    assert!(!plan.contains("#66 #66"), "{plan}");
+    let ready = listed(&s.proj, &["todo", "ready"], &S1);
+    assert!(ready.contains("#66  Issue 66"), "{ready}");
+    assert!(!ready.contains("#66 #66"), "{ready}");
+    let list = listed(&s.proj, &["todo", "list"], &S1);
+    assert!(list.contains("- [ ] Issue 65 (#65"), "{list}");
+    let full = listed(&s.proj, &["todo", "list", "--ids", "full"], &S1);
+    let id = s.todo_for("o/r#65").id;
+    assert!(
+        full.contains(&format!("- [ ] #65 Issue 65 ({id}")),
+        "{full}"
+    );
+}
+
+#[test]
+fn another_repos_ticket_shows_its_full_key() {
+    let s = two_issues();
+    ok(s.sync(&[]));
+    s.proj
+        .store()
+        .add(devkit_todo::NewTodo {
+            description: "#7 Elsewhere".into(),
+            project: Some("other".into()),
+            parent: None,
+            order: None,
+            ticket: Some(devkit_todo::TicketRef {
+                tracker: "github".into(),
+                key: "x/y#7".into(),
+                synced_status: None,
+            }),
+        })
+        .unwrap();
+    let list = listed(&s.proj, &["todo", "list", "--all"], &S1);
+    assert!(list.contains("- [ ] Elsewhere (x/y#7"), "{list}");
+    assert!(list.contains("- [ ] Issue 66 (#66"), "{list}");
+    assert!(!list.contains("(#7"), "{list}");
+}
+
+#[test]
+fn list_json_keeps_full_ids() {
+    let p = Proj::new();
+    let id = added(&p, "one");
+    let out = listed(&p, &["todo", "list", "--json"], &TASKCHAMPION);
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+    assert_eq!(rows[0]["id"], id.as_str());
+    assert_eq!(rows[0]["description"], "one");
+}
+
+#[test]
+fn mermaid_keeps_hex_node_ids_and_labels_names() {
+    let p = Proj::new();
+    let id = added(&p, "one");
+    let out = listed(&p, &["todo", "plan", "--mermaid"], &TASKCHAMPION);
+    let name = word_name(&id).unwrap();
+    assert!(
+        out.contains(&format!("t{}[\"{name}: one\"]", &id[..8])),
+        "{out}"
+    );
+}

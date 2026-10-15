@@ -456,9 +456,10 @@ pub fn digest(lists: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use devkit_config::IdStyle;
+
     use super::*;
     use crate::{Holder, Status, Todo};
-    use devkit_config::IdStyle;
 
     fn todo(id: &str, text: &str, parent: Option<&str>, order: i64, status: Status) -> Todo {
         Todo {
@@ -703,7 +704,10 @@ mod tests {
         let plan = graph.plan(|_| true, None);
         let out = render_mermaid(&plan, &named(&todos));
         let word = crate::names::word_name(UUID).unwrap();
-        assert!(out.contains(&format!("t96432cd6[\"{word}: plain\"]")), "{out}");
+        assert!(
+            out.contains(&format!("t96432cd6[\"{word}: plain\"]")),
+            "{out}"
+        );
         assert!(out.contains("t1234abcd[\"#65: Issue 65\"]"), "{out}");
     }
 

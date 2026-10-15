@@ -46,6 +46,10 @@ use crate::hook::{
 
 #[derive(Args)]
 pub struct TodoCli {
+    /// How listings name todos: `name`, `short` or `full`. Overrides
+    /// [todo] ids for this command.
+    #[arg(long = "ids", global = true, value_name = "STYLE", value_parser = id_styles())]
+    pub id_style: Option<IdStyle>,
     #[command(subcommand)]
     pub command: TodoCommand,
 }
@@ -396,6 +400,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     if refreshes {
         refresh_tickets(&store, &cwd, &layout, &facts);
     }
+    let style = cli.id_style.unwrap_or(store.config().ids);
     let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
     let status_push = |local, overwrite| push::StatusPush {
         local,
@@ -413,13 +418,13 @@ pub fn run(cli: TodoCli) -> Result<()> {
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
-        TodoCommand::List(args) => list(&fence, &args, &cwd, &role, &actor)?,
-        TodoCommand::Ready => ready(&fence)?,
+        TodoCommand::List(args) => list(&fence, &args, &cwd, &role, &actor, style)?,
+        TodoCommand::Ready => ready(&fence, style)?,
         TodoCommand::Plan {
             agents,
             mermaid,
             expand,
-        } => plan(&fence, agents, mermaid, expand)?,
+        } => plan(&fence, agents, mermaid, expand, style)?,
         TodoCommand::Add {
             text,
             parent,
@@ -467,7 +472,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     Err(purge) => Err(err.context(purge)),
                 };
             }
-            println!("{}", devkit_todo::short_id(&id));
+            println!("{}", names::Names::plain(style).id(&id));
         }
         TodoCommand::Block {
             id,
@@ -683,6 +688,12 @@ fn refresh_tickets(store: &Store, cwd: &Path, layout: &Layout, facts: &Facts) {
     }
 }
 
+/// The id display styles by name.
+fn id_styles() -> impl clap::builder::TypedValueParser<Value = IdStyle> {
+    clap::builder::PossibleValuesParser::new(IdStyle::VARIANTS)
+        .map(|name| name.parse::<IdStyle>().expect("a listed style parses"))
+}
+
 /// The hold modes by name, `true` and `false` left to the config.
 fn hold_modes() -> impl clap::builder::TypedValueParser<Value = HoldStop> {
     clap::builder::PossibleValuesParser::new(HoldStop::VARIANTS)
@@ -843,8 +854,9 @@ fn offered_todos(fence: &Fence) -> Result<Vec<Todo>> {
 }
 
 /// Prints the frontier, critical-path todos first.
-fn ready(fence: &Fence) -> Result<()> {
+fn ready(fence: &Fence, style: IdStyle) -> Result<()> {
     let offered = offered_todos(fence)?;
+    let names = names::names(style, &offered, fence.checkout.dir());
     let plan = ticket_plan(fence, &offered, None);
     for todo in plan.frontier() {
         let mark = if plan.critical.iter().any(|on| on.id == todo.id) {
@@ -854,8 +866,8 @@ fn ready(fence: &Fence) -> Result<()> {
         };
         println!(
             "{}  {}{mark}",
-            devkit_todo::short_id(&todo.id),
-            devkit_common::ui::printable(&todo.description)
+            devkit_common::ui::printable(&names.id(&todo.id)),
+            devkit_common::ui::printable(names.text(todo))
         );
     }
     Ok(())
@@ -867,18 +879,20 @@ fn plan(
     agents: Option<std::num::NonZeroUsize>,
     mermaid: bool,
     expand: bool,
+    style: IdStyle,
 ) -> Result<()> {
     let offered = offered_todos(fence)?;
+    let names = names::names(style, &offered, fence.checkout.dir());
     let plan = ticket_plan(fence, &offered, agents);
     let root = fence
         .layout
         .ticket_root(fence.facts, fence.store.config().ready_outside_ticket)
         .unwrap_or_else(|| fence.facts.values.get("repo").cloned().unwrap_or_default());
     let text = if mermaid {
-        render::render_mermaid(&plan, &names::Names::plain(IdStyle::Short))
+        render::render_mermaid(&plan, &names)
     } else {
         let work = fence.work(&offered, expand)?;
-        render::render_plan(&root, &plan, &work, &names::Names::plain(IdStyle::Short))
+        render::render_plan(&root, &plan, &work, &names)
     };
     print!("{text}");
     Ok(())
@@ -1290,6 +1304,7 @@ fn list(
     cwd: &Path,
     role: &ResolvedRole,
     viewer: &Holder,
+    style: IdStyle,
 ) -> Result<()> {
     let (store, layout, facts) = (fence.store, fence.layout, fence.facts);
     let filter = match (&args.scope, &args.node, &args.subtree, args.all) {
@@ -1331,11 +1346,12 @@ fn list(
     let graph = Graph::new(&graph_todos);
     let own = &role.node;
     let work = fence.work(&todos, args.expand)?;
+    let names = names::names(style, &graph_todos, cwd);
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
         work: &work,
-        names: &names::Names::plain(IdStyle::Short),
+        names: &names,
     };
     print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
     Ok(())
@@ -1431,11 +1447,12 @@ fn context(args: &ContextArgs) -> Option<String> {
     let nodes = list_nodes(&visible, &todos);
     let graph = Graph::new(&graph_todos);
     let work = fence.work(&todos, false).ok()?;
+    let names = names::names(store.config().ids, &graph_todos, &cwd);
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
         work: &work,
-        names: &names::Names::plain(IdStyle::Short),
+        names: &names,
     };
     let mut lists = render::render_lists(&nodes, &todos, &viewer, &notes);
     let own_open = todos.iter().any(|t| {
