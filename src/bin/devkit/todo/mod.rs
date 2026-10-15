@@ -5,7 +5,8 @@ pub(crate) mod hold;
 pub(crate) mod queue;
 pub(crate) mod store;
 pub(crate) mod sync;
-mod tickets;
+pub(crate) mod ticket_event;
+pub(crate) mod tickets;
 
 use std::{cell::LazyCell, collections::BTreeSet, path::Path};
 
@@ -129,10 +130,10 @@ pub enum TodoCommand {
     ///
     /// Only a taskchampion store with a sync target syncs. A failure is
     /// reported on stderr and exits 0: changes stay saved and sync with the
-    /// next write. With `[ticket.sync]` rules, the tickets they select then
-    /// become one todo each on the repository's node, reading the tracker
-    /// and never writing to it; a ticket in a status the map does not name
-    /// fails the sync and changes nothing.
+    /// next write, and no tickets sync that run. With `[ticket.sync]` rules,
+    /// the tickets they select then become one todo each on the repository's
+    /// node, reading the tracker and never writing to it; a ticket in a
+    /// status the map does not name fails the sync and changes nothing.
     #[command(after_help = sync::hold_help())]
     Sync {
         #[arg(long, hide = true, help = sync::background_help())]
@@ -144,6 +145,10 @@ pub enum TodoCommand {
         /// the sync passes, to learn its own result.
         #[arg(long, hide = true)]
         result_file: Option<std::path::PathBuf>,
+        /// Sync only the repo's tickets, not the store. With `--background`,
+        /// what a read starts when the last ticket sync is stale.
+        #[arg(long, hide = true, conflicts_with = "dry_run")]
+        tickets_only: bool,
     },
     /// Set whose stop this session's open todos hold, or print the mode.
     ///
@@ -165,6 +170,9 @@ pub enum TodoCommand {
         action: SchemaAction,
     },
     /// Print the todos that can start now, critical path first.
+    ///
+    /// In a worktree whose `workspace setup` record names a synced ticket,
+    /// the ticket's todo is offered beside the workspace's own.
     Ready,
     /// Print the open todos as batches, and the critical path through them.
     Plan {
@@ -172,8 +180,11 @@ pub enum TodoCommand {
         #[arg(long)]
         agents: Option<std::num::NonZeroUsize>,
         /// Print the batches as Mermaid flowchart source.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "expand")]
         mermaid: bool,
+        /// List each synced ticket's open workspace todos under it.
+        #[arg(long)]
+        expand: bool,
     },
     /// Print the todo block a hook injects.
     ///
@@ -240,6 +251,9 @@ pub struct ListArgs {
     pub json: bool,
     #[arg(long, help = sync::list_sync_help())]
     pub sync: bool,
+    /// List each synced ticket's open workspace todos under it.
+    #[arg(long, conflicts_with = "json")]
+    pub expand: bool,
 }
 
 pub fn run(cli: TodoCli) -> Result<()> {
@@ -298,14 +312,25 @@ pub fn run(cli: TodoCli) -> Result<()> {
             | TodoCommand::Plan { .. }
             | TodoCommand::Sync { .. }
     );
+    let refreshes = match &cli.command {
+        TodoCommand::List(args) => !args.sync,
+        TodoCommand::Ready | TodoCommand::Plan { .. } => true,
+        _ => false,
+    };
+    if refreshes {
+        refresh_tickets(&store, &cwd, &layout, &facts);
+    }
+    let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
     match cli.command {
         TodoCommand::Scope => println!("{}", role.node),
         TodoCommand::Role { .. } => println!("Role `{}`, writing to `{}`.", role.name, role.node),
-        TodoCommand::List(args) => list(&store, &args, &cwd, &layout, &facts, &role, &actor)?,
-        TodoCommand::Ready => ready(&store, &layout, &facts, &role.name)?,
-        TodoCommand::Plan { agents, mermaid } => {
-            plan(&store, &layout, &facts, &role.name, agents, mermaid)?
-        }
+        TodoCommand::List(args) => list(&fence, &args, &cwd, &role, &actor)?,
+        TodoCommand::Ready => ready(&fence)?,
+        TodoCommand::Plan {
+            agents,
+            mermaid,
+            expand,
+        } => plan(&fence, agents, mermaid, expand)?,
         TodoCommand::Add {
             text,
             parent,
@@ -376,24 +401,8 @@ pub fn run(cli: TodoCli) -> Result<()> {
         TodoCommand::Stop { ids } | TodoCommand::Undone { ids } => {
             let _closed = set_status(&store, ids, StatusKind::Pending, &actor)?;
         }
-        TodoCommand::Done { ids } => finish(
-            &store,
-            &layout,
-            &facts,
-            &role.name,
-            ids,
-            StatusKind::Completed,
-            &actor,
-        )?,
-        TodoCommand::Cancel { ids } => finish(
-            &store,
-            &layout,
-            &facts,
-            &role.name,
-            ids,
-            StatusKind::Cancelled,
-            &actor,
-        )?,
+        TodoCommand::Done { ids } => finish(&fence, ids, StatusKind::Completed, &actor)?,
+        TodoCommand::Cancel { ids } => finish(&fence, ids, StatusKind::Cancelled, &actor)?,
         TodoCommand::Describe { id, text } => {
             store.apply(&Edit::Describe {
                 id,
@@ -410,23 +419,46 @@ pub fn run(cli: TodoCli) -> Result<()> {
             background,
             dry_run,
             result_file,
+            tickets_only,
         } => {
-            let replica = Store::sync_replica(&cwd)?;
-            if let Some(replica) = replica.as_ref().filter(|_| !dry_run) {
-                sync::run(replica, background, result_file.as_deref())?;
-            }
-            let tickets = match (background, &place) {
-                (true, _) | (false, Place::Global) => None,
-                (false, _) => {
+            let replica = if tickets_only {
+                None
+            } else {
+                Store::sync_replica(&cwd)?
+            };
+            let replica_current = match replica.as_ref().filter(|_| !dry_run) {
+                Some(replica) => sync::run(replica, background, result_file.as_deref())?,
+                None => dry_run || store.replica_pulled(),
+            };
+            // Tickets merged into a replica that missed the server's changes
+            // would overwrite them at the next sync.
+            let tickets = match (background, tickets_only, &place) {
+                (_, _, Place::Global) | (true, false, _) => None,
+                (true, true, _) if !replica_current => None,
+                (true, true, _) => {
                     let node = layout.fill("repo", &facts)?;
-                    tickets::sync_tickets(&store, &cwd, &node, dry_run)?
+                    tickets::sync_in_background(&store, &cwd, &node, &store.ticket().sync)?
+                }
+                (false, ..) if !replica_current => {
+                    eprintln!("devkit todo: tickets not synced: the store's sync did not complete");
+                    None
+                }
+                (false, ..) => {
+                    let node = layout.fill("repo", &facts)?;
+                    let report = tickets::sync_tickets(&store, &cwd, &node, dry_run)?;
+                    if report.is_some() && !dry_run {
+                        tickets::record_success(&node);
+                    }
+                    report
                 }
             };
             match tickets {
                 Some(report) if !dry_run => {
                     let changed = report.added + report.changed > 0;
-                    match replica.as_ref().filter(|_| changed) {
-                        Some(replica) => sync::run(replica, false, result_file.as_deref())?,
+                    match replica.as_ref().filter(|_| changed && !background) {
+                        Some(replica) => {
+                            sync::run(replica, false, result_file.as_deref())?;
+                        }
                         None => writes = changed,
                     }
                     println!(
@@ -435,7 +467,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     );
                 }
                 Some(_) => {}
-                None if replica.is_none() && !background => {
+                None if replica.is_none() && !background && !tickets_only => {
                     eprintln!("devkit todo: this todo store has no sync target")
                 }
                 None => {}
@@ -468,6 +500,14 @@ pub fn run(cli: TodoCli) -> Result<()> {
         store.spawn_sync(&cwd);
     }
     Ok(())
+}
+
+/// Starts a background ticket sync from `cwd` when the repository's last one
+/// is older than `[ticket.sync] max_age_secs`, without waiting for it.
+fn refresh_tickets(store: &Store, cwd: &Path, layout: &Layout, facts: &Facts) {
+    if let Ok(node) = layout.fill("repo", facts) {
+        tickets::spawn_if_stale(cwd, &node, &store.ticket().sync);
+    }
 }
 
 /// The hold modes by name, `true` and `false` left to the config.
@@ -579,21 +619,14 @@ fn start(
 }
 
 /// Completes or cancels `ids`, then names the offered todos that became ready.
-fn finish(
-    store: &Store,
-    layout: &Layout,
-    facts: &Facts,
-    role: &str,
-    ids: Vec<String>,
-    to: StatusKind,
-    actor: &Holder,
-) -> Result<()> {
-    let before = offered_ids(store, layout, facts, role)?;
+fn finish(fence: &Fence, ids: Vec<String>, to: StatusKind, actor: &Holder) -> Result<()> {
+    let store = fence.store;
+    let before = offered_ids(fence)?;
     let closed = set_status(store, ids, to, actor)?;
     if !store.config().print_unblocked || closed.is_empty() {
         return Ok(());
     }
-    let offered = offered_todos(store, layout, facts, role)?;
+    let offered = offered_todos(&fence.reread())?;
     let graph = Graph::new(&offered);
     let ready = graph.unblocked_by(&closed.iter().map(String::as_str).collect::<Vec<_>>());
     let names = ready
@@ -609,35 +642,30 @@ fn finish(
 }
 
 /// Full ids the ticket fence offers, before a change.
-fn offered_ids(
-    store: &Store,
-    layout: &Layout,
-    facts: &Facts,
-    role: &str,
-) -> Result<BTreeSet<String>> {
-    Ok(layout
-        .fence(store.list(&Filter::all())?)
+fn offered_ids(fence: &Fence) -> Result<BTreeSet<String>> {
+    Ok(offered_todos(fence)?
         .into_iter()
-        .filter(|todo| offered_here(store, layout, facts, role, todo))
+        .filter(|todo| fence.offers(todo))
         .map(|todo| todo.id)
         .collect())
 }
 
 /// The todos the ticket fence offers this caller, with the blockers the
 /// listing itself does not hold.
-fn offered_todos(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<Vec<Todo>> {
-    let offered = layout
-        .fence(store.list(&Filter::all())?)
+fn offered_todos(fence: &Fence) -> Result<Vec<Todo>> {
+    let offered = fence
+        .layout
+        .fence(fence.todos()?.to_vec())
         .into_iter()
-        .filter(|todo| offered_here(store, layout, facts, role, todo))
+        .filter(|todo| fence.offers(todo))
         .collect();
-    graph::with_blockers(store, offered)
+    graph::with_blockers(fence.store, offered)
 }
 
 /// Prints the frontier, critical-path todos first.
-fn ready(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<()> {
-    let offered = offered_todos(store, layout, facts, role)?;
-    let plan = ticket_plan(store, layout, facts, role, &offered, None);
+fn ready(fence: &Fence) -> Result<()> {
+    let offered = offered_todos(fence)?;
+    let plan = ticket_plan(fence, &offered, None);
     for todo in plan.frontier() {
         let mark = if plan.critical.iter().any(|on| on.id == todo.id) {
             "  *"
@@ -655,22 +683,22 @@ fn ready(store: &Store, layout: &Layout, facts: &Facts, role: &str) -> Result<()
 
 /// Prints the ticket's batches, or their Mermaid source.
 fn plan(
-    store: &Store,
-    layout: &Layout,
-    facts: &Facts,
-    role: &str,
+    fence: &Fence,
     agents: Option<std::num::NonZeroUsize>,
     mermaid: bool,
+    expand: bool,
 ) -> Result<()> {
-    let offered = offered_todos(store, layout, facts, role)?;
-    let plan = ticket_plan(store, layout, facts, role, &offered, agents);
-    let root = layout
-        .ticket_root(facts, store.config().ready_outside_ticket)
-        .unwrap_or_else(|| facts.values.get("repo").cloned().unwrap_or_default());
+    let offered = offered_todos(fence)?;
+    let plan = ticket_plan(fence, &offered, agents);
+    let root = fence
+        .layout
+        .ticket_root(fence.facts, fence.store.config().ready_outside_ticket)
+        .unwrap_or_else(|| fence.facts.values.get("repo").cloned().unwrap_or_default());
     let text = if mermaid {
         render::render_mermaid(&plan)
     } else {
-        render::render_plan(&root, &plan)
+        let work = fence.work(&offered, expand)?;
+        render::render_plan(&root, &plan, &work)
     };
     print!("{text}");
     Ok(())
@@ -678,26 +706,110 @@ fn plan(
 
 /// The plan over the todos the ticket fence offers.
 fn ticket_plan<'a>(
-    store: &Store,
-    layout: &Layout,
-    facts: &Facts,
-    role: &str,
+    fence: &Fence,
     offered: &'a [Todo],
     cap: Option<std::num::NonZeroUsize>,
 ) -> devkit_todo::graph::Plan<'a> {
     // Blockers fetched for status sit in `offered` and are not members.
-    Graph::new(offered).plan(|todo| offered_here(store, layout, facts, role, todo), cap)
+    Graph::new(offered).plan(|todo| fence.offers(todo), cap)
 }
 
-/// Whether the ticket fence offers `todo` to this caller: the ticket's nodes,
-/// or the caller's own default listing when there is no ticket.
-fn offered_here(store: &Store, layout: &Layout, facts: &Facts, role: &str, todo: &Todo) -> bool {
-    let wide = store.config().ready_outside_ticket;
-    match layout.ticket_root(facts, wide) {
-        Some(root) => layout.offered(todo.project.as_deref(), &root, facts, role),
-        None => layout
-            .visible(facts, role)
-            .is_ok_and(|filter| filter.matches(todo.project.as_deref())),
+/// What a caller is offered: the ticket's nodes, or the caller's own default
+/// listing when there is no ticket, and the synced ticket the caller's
+/// worktree record names.
+struct Fence<'a> {
+    store: &'a Store,
+    layout: &'a Layout,
+    facts: &'a Facts,
+    role: &'a str,
+    checkout: &'a Checkout,
+    /// Every todo in the store, read once.
+    todos: std::cell::OnceCell<Vec<Todo>>,
+    /// The ticket todos worktrees of this repository record, read once.
+    workspaces: std::cell::OnceCell<Vec<tickets::TicketWorkspace>>,
+}
+
+impl<'a> Fence<'a> {
+    fn new(
+        store: &'a Store,
+        layout: &'a Layout,
+        facts: &'a Facts,
+        role: &'a str,
+        checkout: &'a Checkout,
+    ) -> Self {
+        Self {
+            store,
+            layout,
+            facts,
+            role,
+            checkout,
+            todos: std::cell::OnceCell::new(),
+            workspaces: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// This fence over the store as it stands now, for a caller that changed
+    /// it. A todo's status leaves the ticket workspaces as they were.
+    fn reread(&self) -> Self {
+        Self {
+            todos: std::cell::OnceCell::new(),
+            workspaces: self.workspaces.clone(),
+            ..*self
+        }
+    }
+
+    /// Every todo in the store.
+    fn todos(&self) -> Result<&[Todo]> {
+        if let Some(todos) = self.todos.get() {
+            return Ok(todos);
+        }
+        let todos = self.store.list(&Filter::all())?;
+        Ok(self.todos.get_or_init(|| todos))
+    }
+
+    /// The ticket todos worktrees of this repository record. A store that
+    /// cannot be read has none.
+    fn workspaces(&self) -> &[tickets::TicketWorkspace] {
+        self.workspaces.get_or_init(|| {
+            let todos = self.todos().unwrap_or_default();
+            if !todos.iter().any(|t| t.ticket.is_some()) {
+                return Vec::new();
+            }
+            tickets::ticket_workspaces(self.checkout, self.layout, todos)
+        })
+    }
+
+    /// Whether the fence offers `todo` to this caller.
+    fn offers(&self, todo: &Todo) -> bool {
+        let wide = self.store.config().ready_outside_ticket;
+        match self.layout.ticket_root(self.facts, wide) {
+            Some(root) => {
+                self.layout
+                    .offered(todo.project.as_deref(), &root, self.facts, self.role)
+                    || self
+                        .workspaces()
+                        .iter()
+                        .any(|w| w.here && w.todo == todo.id)
+            }
+            None => self
+                .layout
+                .visible(self.facts, self.role)
+                .is_ok_and(|filter| filter.matches(todo.project.as_deref())),
+        }
+    }
+
+    /// The work under each synced ticket among `shown`, each ticket's todos
+    /// listed when `expand`.
+    fn work(&self, shown: &[Todo], expand: bool) -> Result<render::TicketWork> {
+        let workspaces: Vec<_> = self
+            .workspaces()
+            .iter()
+            .filter(|w| shown.iter().any(|t| t.id == w.todo))
+            .collect();
+        if workspaces.is_empty() {
+            return Ok(render::TicketWork::default());
+        }
+        Ok(tickets::ticket_work(&workspaces, self.todos()?, expand))
     }
 }
 
@@ -822,14 +934,13 @@ fn move_todo(
 }
 
 fn list(
-    store: &Store,
+    fence: &Fence,
     args: &ListArgs,
     cwd: &Path,
-    layout: &Layout,
-    facts: &Facts,
     role: &ResolvedRole,
     viewer: &Holder,
 ) -> Result<()> {
+    let (store, layout, facts) = (fence.store, fence.layout, fence.facts);
     let filter = match (&args.scope, &args.node, &args.subtree, args.all) {
         (Some(scope), ..) => Filter::exact([layout.fill(scope, facts)?]),
         (_, Some(n), ..) => Filter::exact([n.clone()]),
@@ -847,12 +958,12 @@ fn list(
                 "devkit todo: sync still running after {} seconds; listing what this machine has",
                 sync::FRESH_WAIT.as_secs()
             ),
-            SyncOutcome::Done | SyncOutcome::NoTarget => {}
+            SyncOutcome::Done | SyncOutcome::NoTarget => refresh_tickets(store, cwd, layout, facts),
         }
     }
     let todos = if args.all || args.subtree.is_some() {
         layout
-            .fence(store.list(&Filter::all())?)
+            .fence(fence.todos()?.to_vec())
             .into_iter()
             .filter(|todo| filter.matches(todo.project.as_deref()))
             .collect()
@@ -868,12 +979,11 @@ fn list(
     let nodes = list_nodes(&filter, &todos);
     let graph = Graph::new(&graph_todos);
     let own = &role.node;
+    let work = fence.work(&todos, args.expand)?;
     let notes = render::Notes {
         graph: &graph,
-        show_ready: &|todo| {
-            offered_here(store, layout, facts, &role.name, todo)
-                && (!facts.subagent || todo.node() == own)
-        },
+        show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
+        work: &work,
     };
     print!("{}", render::render_full(&nodes, &todos, viewer, &notes));
     Ok(())
@@ -952,26 +1062,27 @@ fn context(args: &ContextArgs) -> Option<String> {
     if at_start && let SyncOutcome::Refused(reason) = store.sync(&cwd, sync::FRESH_WAIT) {
         eprintln!("devkit todo: {reason}; listing local todos");
     }
-    let all = store.list(&Filter::all()).ok()?;
+    refresh_tickets(&store, &cwd, &layout, &facts);
+    let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
+    let all = fence.todos().ok()?;
     let todos: Vec<Todo> = all
         .iter()
         .filter(|t| visible.matches(t.project.as_deref()))
         .cloned()
         .collect();
     let graph_todos = graph::with_blockers(&store, todos.clone()).ok()?;
-    let siblings = layout.fence(all).into_iter().filter(|t| {
+    let siblings = layout.fence(all.to_vec()).into_iter().filter(|t| {
         filter.matches(t.project.as_deref())
             && !visible.matches(t.project.as_deref())
             && layout.is_other_session(t.node(), &facts)
     });
     let nodes = list_nodes(&visible, &todos);
     let graph = Graph::new(&graph_todos);
+    let work = fence.work(&todos, false).ok()?;
     let notes = render::Notes {
         graph: &graph,
-        show_ready: &|todo| {
-            offered_here(&store, &layout, &facts, &role.name, todo)
-                && (!facts.subagent || todo.node() == own)
-        },
+        show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
+        work: &work,
     };
     let mut lists = render::render_lists(&nodes, &todos, &viewer, &notes);
     let own_open = todos.iter().any(|t| {

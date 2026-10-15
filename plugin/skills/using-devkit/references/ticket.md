@@ -7,7 +7,7 @@ ticket render --title T [--body B] [--arg k=v] [--arg-file k=path]
 ticket create --title T [--body B] [--arg k=v] [--arg-file k=path] [--none FIELD]
 ticket edit <number|ID|URL> [--body B] [--title T] [--arg k=v] [--arg-file k=path] [--none FIELD]
 ticket fields [--arg k=v] [--json]
-ticket event <setup|start|pr_open> [ID|URL]
+ticket event <setup|start|pr_open|todo_start|todo_done> [ID|URL]
 ticket dashboard [--chart bar|line] [--bucket B] [--mode M] [--aggregate cumulative|period] [--all-roles] [--author gh] [--no-plots] [--no-cache]
 ```
 
@@ -59,8 +59,12 @@ On Linear a value restricted to some teams (a label or cycle whose declared valu
 | `setup` | as `workspace setup`'s last step, after the `after_worktree_create` hooks | the worktree it creates, when it names a tracker issue |
 | `start` | in the background, when the first agent session starts in the worktree | `workspace setup` worktrees only, never `devkit pr checkout` ones, so a reviewer's session cannot pull a ticket back from review |
 | `pr_open` | when `devkit pr create` opens the PR or finds one already open | any worktree whose record names a tracker issue |
+| `todo_start` | in the background, when the todo `devkit todo sync` brought in for the ticket becomes in progress | a checkout of the ticket's repository; from anywhere else the ticket is not moved and a warning names it |
+| `todo_done` | in the background, when that todo becomes completed | as `todo_start` |
 
-Each event fires once per worktree. The worktree's `.devkit/issue.toml` records it before the tracker is asked, and a failed move keeps that record, so a tracker that is down costs one missed move rather than a retry on every session. `workspace end` removes the record, and the marks go with it. `setup` and `pr_open` print a failed move as a warning and the command still succeeds. The background `start` run appends its outcome or error to `.devkit/issue-event.log` in the worktree.
+`setup`, `start` and `pr_open` each fire once per worktree. The worktree's `.devkit/issue.toml` records it before the tracker is asked, and a failed move keeps that record, so a tracker that is down costs one missed move rather than a retry on every session. `workspace end` removes the record, and the marks go with it. `setup` and `pr_open` print a failed move as a warning and the command still succeeds. The background `start` run appends its outcome or error to `.devkit/issue-event.log` in the worktree.
+
+`todo_start` and `todo_done` fire on every change into that status, by an agent, a person or a harness's task tool, and never on a change sync makes as the `tracker` holder, so sync and the events cannot move a ticket back and forth. A harness task names its ticket as `references/todo.md` describes. Their background run skips the move once the todo has left the status that fired it, so a todo started and finished quickly ends with the ticket moved for `todo_done`. It appends its outcome or error to `ticket-event.log` in devkit's state directory, and a failed move leaves the todo as it is.
 
 `ticket event <event> [ID|URL]` reruns one event by hand, for the worktree's own ticket when no id is given: it retries a failed move or shows its error, whatever the record says. It prints what it did: the move, that the ticket is already there, or that its status is not in `from`. `devkit doctor`'s `issue_events` row lists each transition. On GitHub it also checks the project, its status field and every status name, which proves the token can read the project but not that it can write: a token with only `read:project` passes the row and fails on the first move. On Linear it only lists them, since a team's states are known once an issue is read, so an unknown name surfaces on the first move.
 

@@ -35,6 +35,17 @@ pub enum StatusKind {
     Cancelled,
 }
 
+impl StatusKind {
+    /// Whether a todo of this kind is still to be done, so it holds its
+    /// dependents and counts as open work.
+    pub fn is_open(self) -> bool {
+        match self {
+            Self::Pending | Self::InProgress => true,
+            Self::Completed | Self::Cancelled => false,
+        }
+    }
+}
+
 impl Status {
     pub fn kind(&self) -> StatusKind {
         match self {

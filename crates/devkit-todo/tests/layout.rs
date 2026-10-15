@@ -254,3 +254,28 @@ fn template_read_keeps_literal_prefixes_suffixes_and_closed_harness() {
     assert!(template.read("repo-r.job-feat-other.S").is_none());
     assert!(template.read("repo-r.job--codex.S").is_none());
 }
+
+#[test]
+fn a_ticket_todo_is_inside_the_fence_without_an_anchor() {
+    let layout = Layout::new(&Config::parse("").unwrap().todo).unwrap();
+    let todo = |id: &str, ticket: Option<&str>| devkit_todo::Todo {
+        ticket: ticket.map(|key| devkit_todo::TicketRef {
+            tracker: "github".into(),
+            key: key.into(),
+            synced_status: Some("Todo".into()),
+        }),
+        id: id.into(),
+        description: id.into(),
+        status: devkit_todo::Status::Pending,
+        parent: None,
+        order: None,
+        project: Some("r".into()),
+        entry: None,
+        modified: None,
+        blocked_by: Vec::new(),
+    };
+    let kept = layout.fence(vec![todo("ticket", Some("o/r#65")), todo("plain", None)]);
+    assert_eq!(kept.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), [
+        "ticket"
+    ]);
+}

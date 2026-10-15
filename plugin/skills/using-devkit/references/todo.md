@@ -55,10 +55,18 @@ With `[ticket.sync]` rules in the repository's `devkit.toml`, `devkit todo sync`
 - A GitHub issue's status is its option in `[github] project`'s status field, `""` when it has none or no project is configured. A closed issue maps to completed, or to cancelled when closed as not planned or as a duplicate, whatever the map says.
 - A ticket's blockers become blocking edges and its parent ticket becomes its todo's parent, when both tickets are synced.
 - A ticket in a status the map does not name, or a map entry naming a status the tracker lacks (on Linear, one no team has), fails the sync naming each, and nothing is written.
-- A ticket todo's status changes only when its ticket's status moved since the last sync, so a todo you started stays yours while its ticket stands still.
+- A ticket todo's status changes only when its ticket's status moved since the last sync, so a todo you started stays yours while its ticket stands still. A status or text you give a ticket todo while a sync waits on the tracker survives that sync.
 - Sync changes a status as the `tracker` holder, and any agent or person may start a todo the tracker holds. When the ticket closes or moves to a finished status, sync finishes or cancels its todo even while an agent holds it.
 - A ticket keeps one todo, on every backend: a second sync adds nothing.
 - `devkit todo sync --dry-run` prints each change it would make and writes nothing.
+
+Ticket todos stay current without anyone running sync:
+
+- `devkit todo list`, `ready`, `plan` and the injected lists start a background ticket sync when the repository's last one is older than `[ticket.sync] max_age_secs`. They never wait for it: they show what the store holds now, and the next read shows what the sync brought. One sync runs per repository at a time, and a failed one holds off the next for the same age. A synced taskchampion replica syncs no tickets until it has completed a sync of its own, so tickets never land on a replica that has not pulled the server's lists. `devkit todo sync` syncs now.
+- In a worktree whose `workspace setup` record names a synced ticket, `ready` and `plan` offer that ticket's todo beside the workspace's own todos.
+- A ticket todo whose worktree is on this machine shows `<n> open` in lists, plans and injected lists: the open todos in its workspace. `devkit todo list --expand` and `devkit todo plan --expand` list those todos under it, each with its node.
+- Starting a ticket todo or finishing it moves the ticket's tracker status as `[ticket.events] todo_start` and `todo_done` configure (`references/ticket.md`), in the background. Run the command from a checkout of the ticket's repository: from anywhere else the todo still changes, the ticket stays where it was, and a warning names it.
+- A native task or plan step whose text names an open ticket todo of the repository, by the ticket's key (`o/r#65`, `SWE-123`), as `#65`, or by the todo's own text, is that ticket's todo rather than a new one: starting and completing the task moves the ticket, and deleting the task or dropping the step leaves the ticket's todo as it is.
 
 ## Stopping with open todos
 
@@ -119,7 +127,7 @@ The replica directory resolves from `[todo.taskchampion] data_dir`, then `TASKDA
 
 `DEVKIT_TODO_BACKEND=taskchampion` chooses it without a config change, so a container sets it next to the sync credentials and keeps loading the project's `devkit.toml`. It accepts the same values as `[todo] backend` and wins over it. `devkit doctor` shows the backend in effect and where it came from.
 
-Replicas discovered through `TASKDATA` or taskrc stay local, even when a devkit sync target is configured. Set `[todo.taskchampion] data_dir` explicitly to allow devkit to sync that replica, including all tasks it holds. Local writes and lists still work without that opt-in; `list --sync` reports the refusal and lists local todos. The default replica under devkit's state directory can sync without `data_dir`.
+Replicas discovered through `TASKDATA` or taskrc stay local, even when a devkit sync target is configured. Set `[todo.taskchampion] data_dir` explicitly to allow devkit to sync that replica, including all tasks it holds. Local writes and lists still work without that opt-in; `list --sync` reports the refusal and lists local todos. Such a replica syncs no tickets, since it never pulls the server's lists. The default replica under devkit's state directory can sync without `data_dir`.
 
 An eligible replica syncs to the first of these that applies, or stays local:
 
@@ -141,7 +149,7 @@ When it syncs:
 - After every write, in a background `devkit todo sync` process. The write is saved locally first, so a failed sync loses nothing, and no hook waits on the network. After a failure, background syncs hold off before the next attempt, for the time `devkit todo sync -h` states, so a server that is down costs an occasional attempt rather than one per write.
 - At session start, before the lists are injected, so a new container sees where the last one stopped. `devkit todo list --sync` does the same. Each waits a bounded time, which `devkit todo list -h` states; past that, the sync carries on by itself and you get what this machine has.
 - A session's end releases its claims locally and leaves the push to a background sync, so a harness that caps the hook's run cannot cut it short.
-- `devkit todo sync` syncs now. It reports a replica sync failure and exits 0. A failed [ticket sync](#tracker-tickets) exits non-zero.
+- `devkit todo sync` syncs now. It reports a replica sync failure and exits 0, syncing no tickets that run. A failed [ticket sync](#tracker-tickets) exits non-zero.
 
 Other injections and plain `devkit todo list` read the local replica, which holds this machine's own writes.
 

@@ -11,7 +11,10 @@
 //! - Hold: a stop is refused, once per unchanged list, while the agent has open
 //!   todos.
 
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::Result;
 use devkit_command::{Analysis, Dialect, Invocation};
@@ -45,6 +48,7 @@ use crate::todo::{
     hold::{self as hold_mode, HOLD_VAR},
     queue::{self, Deferred},
     store::{BACKEND_VAR, Store},
+    tickets,
 };
 
 /// The harnesses whose sessions name a todo node.
@@ -228,6 +232,7 @@ pub(crate) fn hold(
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|_| false,
+        work: render::TicketWork::none(),
     };
     let lists = render::render_lists(&nodes, &open, &holder, &notes);
     let reason = format!(
@@ -403,7 +408,7 @@ pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
         eprintln!("{}", global_notice(&cwd));
     }
     let entry = || Deferred::Capture {
-        mirror: mirror.clone(),
+        mirror: Box::new(mirror.clone()),
     };
     report(record_write(&store, entry, || mirror.apply(&store)));
     // A capture can fail after some of its writes committed.
@@ -429,8 +434,10 @@ pub(crate) fn drain(dir: &Path) -> usize {
 /// was resolved with: the checkout may have changed branch or gone since.
 fn apply_deferred(dir: &Path, entry: &Deferred) -> Result<()> {
     match entry {
-        Deferred::Capture { mirror } => mirror.apply(&Store::queued_at(dir)),
-        Deferred::Release { holder } => Store::queued_at(dir)
+        Deferred::Capture { mirror } => {
+            mirror.apply(&Store::queued_at(dir, mirror.origin.as_deref()))
+        }
+        Deferred::Release { holder } => Store::queued_at(dir, None)
             .apply(&Edit::ReleaseAll {
                 holder: holder.clone(),
             })
@@ -439,7 +446,9 @@ fn apply_deferred(dir: &Path, entry: &Deferred) -> Result<()> {
 }
 
 /// A native tool call as a hook resolved it: the tool, whose ids it uses,
-/// who acted, and the node its session writes to.
+/// who acted, the node its session writes to, the repository node its ticket
+/// todos are on, and the checkout the hook ran in, which a ticket event
+/// fires from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Mirror {
     tool: String,
@@ -448,6 +457,10 @@ pub(crate) struct Mirror {
     session: Holder,
     actor: Holder,
     node: String,
+    #[serde(default)]
+    repo: Option<String>,
+    #[serde(default)]
+    origin: Option<PathBuf>,
     input: Value,
     response: Value,
 }
@@ -463,8 +476,10 @@ impl Mirror {
         let (Some(session), Ok(actor)) = (payload.session_holder(), payload.holder()) else {
             return None;
         };
-        let (_, _, role) = resolve_role(payload, checkout, store, &to_todo_holder(&actor))?;
+        let (layout, facts, role) =
+            resolve_role(payload, checkout, store, &to_todo_holder(&actor))?;
         let node = role.node;
+        let repo = layout.fill("repo", &facts).ok();
         let raw = payload.raw();
         Some(Self {
             tool: tool.to_string(),
@@ -472,6 +487,8 @@ impl Mirror {
             session: to_todo_holder(&session),
             actor: to_todo_holder(&actor),
             node,
+            repo,
+            origin: Some(checkout.dir().to_path_buf()),
             input: raw["tool_input"].clone(),
             response: raw["tool_response"].clone(),
         })
@@ -495,6 +512,7 @@ impl Mirror {
             session: self.session.clone(),
             actor: self.actor.clone(),
             node: self.node.clone(),
+            repo: self.repo.clone(),
             store,
             map: NativeMap::at(devkit_todo::state_dir()),
         };
@@ -512,14 +530,32 @@ impl Mirror {
 }
 
 /// What mirroring a native call needs: whose ids it uses, who acted, the
-/// node its session writes to, and the store.
+/// node its session writes to, the repository node, and the store.
 struct Capture<'a> {
     harness: Harness,
     session: Holder,
     actor: Holder,
     node: String,
+    repo: Option<String>,
     store: &'a Store,
     map: NativeMap,
+}
+
+impl Capture<'_> {
+    /// The todos on the repository node, among which a new native task or
+    /// step finds the ticket todo it names.
+    fn repo_todos(&self) -> Result<Vec<Todo>> {
+        match &self.repo {
+            Some(repo) => self.store.list(&Filter::exact([repo.clone()])),
+            None => Ok(Vec::new()),
+        }
+    }
+}
+
+/// The open ticket todo among `repo_todos` that `text` names, which a new
+/// native task or step maps to instead of adding a todo.
+fn ticket_named(repo_todos: &[Todo], text: &str) -> Option<String> {
+    tickets::named_ticket(repo_todos, text).map(|t| t.id.clone())
 }
 
 /// The harness tools capture mirrors.
@@ -572,13 +608,16 @@ fn task_create(c: &Capture<'_>, input: &Value, response: &Value) -> Result<()> {
     else {
         return Ok(());
     };
-    let id = c.store.add(NewTodo {
-        ticket: None,
-        project: Some(c.node.clone()),
-        description: subject.to_string(),
-        parent: None,
-        order: None,
-    })?;
+    let id = match ticket_named(&c.repo_todos()?, subject) {
+        Some(ticket) => ticket,
+        None => c.store.add(NewTodo {
+            ticket: None,
+            project: Some(c.node.clone()),
+            description: subject.to_string(),
+            parent: None,
+            order: None,
+        })?,
+    };
     c.map.record(c.harness, &c.session, native, &id)
 }
 
@@ -589,16 +628,20 @@ fn task_update(c: &Capture<'_>, input: &Value) -> Result<()> {
     let Some(id) = c.map.lookup(c.harness, &c.actor, native)? else {
         return Ok(());
     };
-    if let Some(subject) = input["subject"].as_str() {
-        let current = c.store.get(&id)?;
-        if current.is_some_and(|t| t.description != devkit_todo::one_line(subject)) {
-            c.store.apply(&Edit::Describe {
-                id: id.clone(),
-                description: subject.to_string(),
-            })?;
-        }
+    let current = c.store.get(&id)?;
+    let ticket = current.as_ref().is_some_and(|t| t.ticket.is_some());
+    if let Some(subject) = input["subject"].as_str()
+        && !ticket
+        && current.is_some_and(|t| t.description != devkit_todo::one_line(subject))
+    {
+        c.store.apply(&Edit::Describe {
+            id: id.clone(),
+            description: subject.to_string(),
+        })?;
     }
-    if let Some(to) = input["status"].as_str().and_then(native_status) {
+    if let Some(to) = input["status"].as_str().and_then(native_status)
+        && !(ticket && to == StatusKind::Cancelled)
+    {
         c.store.apply(&Edit::SetStatus {
             id: id.clone(),
             to,
@@ -681,20 +724,29 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
     for step in &snapshot {
         todos.extend(c.store.get(&step.todo)?);
     }
+    // A ticket todo's status also moves with its tracker, so a step naming
+    // one changes it only when the tool's own status for the step changed:
+    // resending a plan never undoes what a sync did.
     let previous: Vec<Mirrored> = snapshot
         .into_iter()
-        .filter_map(|MirroredStep { text, todo }| {
-            let status = todos.iter().find(|t| t.id == todo)?.status.kind();
+        .filter_map(|MirroredStep { text, todo, status }| {
+            let current = todos.iter().find(|t| t.id == todo)?;
+            let status = match status {
+                Some(sent) if current.ticket.is_some() => sent,
+                _ => current.status.kind(),
+            };
             Some(Mirrored { text, todo, status })
         })
         .collect();
+    let is_ticket = |id: &str| todos.iter().any(|t| t.id == id && t.ticket.is_some());
     // The list follows its session, so open steps left on the node the
-    // session last wrote to move to the one it writes to now.
+    // session last wrote to move to the one it writes to now. A ticket todo
+    // stays on its repository node.
     for prev in &previous {
         let open = matches!(prev.status, StatusKind::Pending | StatusKind::InProgress);
-        let elsewhere = todos
-            .iter()
-            .any(|t| t.id == prev.todo && t.project.as_deref() != Some(c.node.as_str()));
+        let elsewhere = todos.iter().any(|t| {
+            t.id == prev.todo && t.ticket.is_none() && t.project.as_deref() != Some(c.node.as_str())
+        });
         if open && elsewhere {
             c.store.apply(&Edit::Relocate {
                 id: prev.todo.clone(),
@@ -718,18 +770,28 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
     // A step whose cancel was refused stays in the snapshot, so the next call
     // retries it instead of forgetting the todo while it is still open.
     let mut uncancelled = Vec::new();
+    let mut repo_todos = None;
     for change in changes {
         match change {
             Change::Add { index } => {
                 let step = &next[index];
-                let id = c.store.add(NewTodo {
-                    ticket: None,
-                    project: Some(c.node.clone()),
-                    description: step.text.clone(),
-                    parent: None,
-                    order: Some(index as i64 * ORDER_GAP),
-                })?;
-                if step.status != StatusKind::Pending {
+                if repo_todos.is_none() {
+                    repo_todos = Some(c.repo_todos()?);
+                }
+                let ticket = ticket_named(repo_todos.as_deref().unwrap_or_default(), &step.text);
+                let id = match &ticket {
+                    Some(ticket) => ticket.clone(),
+                    None => c.store.add(NewTodo {
+                        ticket: None,
+                        project: Some(c.node.clone()),
+                        description: step.text.clone(),
+                        parent: None,
+                        order: Some(index as i64 * ORDER_GAP),
+                    })?,
+                };
+                if step.status != StatusKind::Pending
+                    && !(ticket.is_some() && step.status == StatusKind::Cancelled)
+                {
                     apply(Edit::SetStatus {
                         id: id.clone(),
                         to: step.status,
@@ -738,6 +800,10 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
                 }
                 ids[index] = Some(id);
             }
+            Change::Status {
+                todo,
+                to: StatusKind::Cancelled,
+            } if is_ticket(&todo) => {}
             Change::Status { todo, to } => {
                 apply(Edit::SetStatus {
                     id: todo,
@@ -745,6 +811,9 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
                     actor: c.actor.clone(),
                 });
             }
+            // Dropping a ticket's step forgets it; only the ticket closes
+            // its todo.
+            Change::Cancel { todo } if is_ticket(&todo) => {}
             Change::Cancel { todo } => {
                 let cancelled = apply(Edit::SetStatus {
                     id: todo.clone(),
@@ -755,9 +824,11 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
                     uncancelled.push(MirroredStep {
                         text: prev.text.clone(),
                         todo,
+                        status: Some(prev.status),
                     });
                 }
             }
+            Change::Reorder { todo, .. } if is_ticket(&todo) => {}
             Change::Reorder { todo, order } => {
                 apply(Edit::Reorder { id: todo, order });
             }
@@ -770,6 +841,7 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
             Some(MirroredStep {
                 text: step.text,
                 todo: id?,
+                status: Some(step.status),
             })
         })
         .chain(uncancelled)

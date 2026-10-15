@@ -33,7 +33,7 @@ impl<'a> Graph<'a> {
             .blocked_by
             .iter()
             .filter_map(|id| self.get(id))
-            .filter(|blocker| is_open(&blocker.status.kind()))
+            .filter(|blocker| blocker.status.kind().is_open())
             .collect();
         blockers.sort_by(|a, b| a.id.cmp(&b.id));
         blockers
@@ -96,7 +96,7 @@ impl<'a> Graph<'a> {
         let members: Vec<&Todo> = self
             .todos
             .iter()
-            .filter(|todo| is_open(&todo.status.kind()) && offered(todo))
+            .filter(|todo| todo.status.kind().is_open() && offered(todo))
             .collect();
         let is_member = |id: &str| members.iter().any(|todo| todo.id == id);
         // A started todo is already running, so its own blockers no longer
@@ -431,14 +431,6 @@ impl<'a> Plan<'a> {
                     .collect()
             })
             .unwrap_or_default()
-    }
-}
-
-/// Whether a blocker of this kind still holds its dependents.
-fn is_open(kind: &StatusKind) -> bool {
-    match kind {
-        StatusKind::Pending | StatusKind::InProgress => true,
-        StatusKind::Completed | StatusKind::Cancelled => false,
     }
 }
 

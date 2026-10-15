@@ -1,7 +1,8 @@
 //! Syncing a taskchampion replica, only ever inside a `devkit todo sync`
 //! process that nothing in devkit kills. `sync.lock` beside the replica is
 //! held by the process syncing, `sync.pending` marks writes the server has
-//! not seen, and `sync.failed` holds the last failure's reason.
+//! not seen, `sync.failed` holds the last failure's reason, and
+//! `sync.pulled` marks a replica that has completed a sync.
 
 use std::{
     ffi::OsStr,
@@ -29,6 +30,16 @@ fn pending_path(data_dir: &Path) -> PathBuf {
 
 fn failed_path(data_dir: &Path) -> PathBuf {
     data_dir.join("sync.failed")
+}
+
+fn pulled_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("sync.pulled")
+}
+
+/// Whether the replica in `data_dir` has completed a sync, and so holds
+/// what the server held then.
+pub(crate) fn has_pulled(data_dir: &Path) -> bool {
+    pulled_path(data_dir).exists()
 }
 
 /// Records that the replica has a write the server has not seen.
@@ -72,22 +83,24 @@ pub(crate) fn failure_text(reason: &str) -> String {
 /// `result`, when given, receives this invocation's own failure reason, so a
 /// caller waiting on this process learns its result even when another sync
 /// fails meanwhile; `sync.failed` only holds off background attempts.
+///
+/// Returns whether this invocation synced the replica.
 pub(crate) fn run(
     store: &TaskchampionStore,
     background: bool,
     result: Option<&Path>,
-) -> Result<()> {
+) -> Result<bool> {
     let dir = store.data_dir();
     sweep_results(dir);
     if background && failed_recently(dir) {
-        return Ok(());
+        return Ok(false);
     }
     loop {
         let mut lock = devkit_common::store::open_lock(&lock_path(dir))?;
         let guard = if background {
             match lock.try_write() {
                 Ok(guard) => guard,
-                Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(()),
+                Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(false),
                 Err(e) => return Err(e.into()),
             }
         } else {
@@ -108,6 +121,7 @@ pub(crate) fn run(
                 break false;
             }
             let _ = fs::remove_file(failed_path(dir));
+            let _ = File::create(pulled_path(dir));
             // Hook writes queued behind this sync's lock go out on a rerun.
             if crate::hook::todo::drain(dir) > 0 {
                 mark_pending(dir);
@@ -120,7 +134,7 @@ pub(crate) fn run(
         // A write that landed after the last check could find the lock still
         // held and leave its marker to this process.
         if !(succeeded && pending_path(dir).exists()) {
-            return Ok(());
+            return Ok(succeeded);
         }
     }
 }

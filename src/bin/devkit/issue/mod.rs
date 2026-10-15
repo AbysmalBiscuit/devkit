@@ -11,7 +11,7 @@ mod create;
 mod dashboard;
 mod edit;
 mod end;
-mod event;
+pub(crate) mod event;
 mod field_write;
 mod fields;
 mod hooks;
@@ -316,8 +316,8 @@ pub(crate) enum TicketCmd {
     /// Move the issue's tracker status as [ticket.events] configures EVENT.
     ///
     /// Reads the status and moves it to the event's `to` when it is in the
-    /// event's `from`. setup, start and pr_open already fire on their own;
-    /// this reruns one, to retry a failed move or see its error.
+    /// event's `from`. Every event already fires on its own; this reruns
+    /// one, to retry a failed move or see its error.
     Event {
         /// The event whose transition to apply.
         event: event::EventArg,
@@ -327,6 +327,11 @@ pub(crate) enum TicketCmd {
         /// The background run the SessionStart hook spawns writes here.
         #[arg(long, value_name = "FILE", hide = true)]
         log_file: Option<PathBuf>,
+        /// The todo whose status change fired this run. The move is skipped
+        /// once that todo has left the status that fires EVENT, and runs for
+        /// one todo go one at a time.
+        #[arg(long, value_name = "ID", hide = true)]
+        todo: Option<String>,
     },
     /// Combined at-a-glance view plus issue/PR/commit timelines.
     Dashboard {
@@ -840,12 +845,14 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             event,
             issue,
             log_file,
+            todo,
         } => event::run(
             Path::new(&start(&dir)),
             config.as_deref().map(Path::new),
             event,
             issue.as_deref(),
             log_file.as_deref(),
+            todo.as_deref(),
         ),
         TicketCmd::Dashboard {
             bucket,

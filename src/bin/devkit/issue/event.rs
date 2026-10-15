@@ -23,6 +23,10 @@ pub(crate) enum EventArg {
     Start,
     #[value(name = "pr_open")]
     PrOpen,
+    #[value(name = "todo_start")]
+    TodoStart,
+    #[value(name = "todo_done")]
+    TodoDone,
 }
 
 impl From<EventArg> for IssueEvent {
@@ -31,6 +35,8 @@ impl From<EventArg> for IssueEvent {
             EventArg::Setup => IssueEvent::Setup,
             EventArg::Start => IssueEvent::Start,
             EventArg::PrOpen => IssueEvent::PrOpen,
+            EventArg::TodoStart => IssueEvent::TodoStart,
+            EventArg::TodoDone => IssueEvent::TodoDone,
         }
     }
 }
@@ -95,9 +101,16 @@ pub(crate) fn run(
     event: EventArg,
     issue: Option<&str>,
     log_file: Option<&Path>,
+    todo: Option<&str>,
 ) -> Result<()> {
     let event = IssueEvent::from(event);
-    let fired = fire(dir, config, event, issue).with_context(|| format!("ticket event {event}"));
+    let fired = match (todo, issue) {
+        (Some(todo), Some(issue)) => {
+            crate::todo::ticket_event::fire_current(dir, config, event, issue, todo)
+        }
+        _ => fire(dir, config, event, issue),
+    }
+    .with_context(|| format!("ticket event {event}"));
     if let Some(path) = log_file {
         let line = match &fired {
             Ok(line) => line.clone(),

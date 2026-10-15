@@ -9,7 +9,7 @@ use anyhow::Result;
 use devkit_common::store;
 use serde::{Deserialize, Serialize};
 
-use crate::{Holder, node::Harness};
+use crate::{Holder, StatusKind, node::Harness};
 
 const VERSION: u32 = 1;
 const SEP: char = '\u{1f}';
@@ -60,6 +60,10 @@ fn id_key(harness: Harness, holder: &str, native: &str) -> String {
 pub struct MirroredStep {
     pub text: String,
     pub todo: String,
+    /// The status the tool last sent for the step; `None` in a snapshot
+    /// recorded before steps kept it.
+    #[serde(default)]
+    pub status: Option<StatusKind>,
 }
 
 pub struct NativeMap {
@@ -208,6 +212,7 @@ mod tests {
         let steps = vec![MirroredStep {
             text: "a".to_string(),
             todo: "1".to_string(),
+            status: Some(StatusKind::Pending),
         }];
         map.set_snapshot(Harness::Codex, &Holder::new("S"), steps.clone())
             .unwrap();
