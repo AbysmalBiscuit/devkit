@@ -1091,10 +1091,11 @@ fn a_queued_capture_keeps_the_node_it_was_made_on() {
     );
 }
 
-/// A todo command lists the repository's worktrees once, however many of
-/// its config, its list's name and its sync target read them.
+/// A todo command lists the repository's worktrees and reads its `origin`
+/// at most once, however many of its config, its list's name, its sync
+/// target and its forge read them.
 #[test]
-fn a_todo_command_lists_the_worktrees_once() {
+fn a_todo_command_reads_its_worktrees_and_origin_once() {
     let shared = Shared::new();
     let trace = gittrace::GitTrace::new();
     let traced = [(gittrace::GitTrace::VAR, trace.dir().to_str().unwrap())];
@@ -1107,5 +1108,7 @@ fn a_todo_command_lists_the_worktrees_once() {
         let calls = trace.take();
         let listings = calls.iter().filter(|c| *c == "worktree list --porcelain");
         assert_eq!(listings.count(), 1, "{command:?}: {calls:#?}");
+        let origin = calls.iter().filter(|c| *c == "remote get-url origin");
+        assert!(origin.count() <= 1, "{command:?}: {calls:#?}");
     }
 }
