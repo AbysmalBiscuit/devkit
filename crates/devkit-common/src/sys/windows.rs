@@ -4,10 +4,15 @@
 use std::{
     collections::{HashMap, HashSet},
     mem::size_of,
+    net::{Ipv4Addr, SocketAddr},
+    os::windows::io::AsRawSocket,
+    time::Duration,
 };
 
+use socket2::{Domain, Socket, Type};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+    Networking::WinSock::{SIO_TCP_INITIAL_RTO, SOCKET, TCP_INITIAL_RTO_PARAMETERS, WSAIoctl},
     System::{
         Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent},
         Diagnostics::ToolHelp::{
@@ -29,6 +34,40 @@ const STILL_ACTIVE: u32 = 259;
 /// New process group: insulates the child from the parent console's Ctrl-C and
 /// makes it independently addressable by `GenerateConsoleCtrlEvent`.
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+/// `TCP_INITIAL_RTO_PARAMETERS` values as `mstcpip.h` defines them:
+/// `(USHORT)-1` keeps the default RTT and `(UCHAR)-2` stops SYN
+/// retransmission. windows-sys types both constants as `u16`.
+const UNSPECIFIED_RTT: u16 = u16::MAX;
+const NO_SYN_RETRANSMISSIONS: u8 = 0xfe;
+
+pub(super) fn localhost_accepts(port: u16, timeout: Duration) -> bool {
+    let Ok(socket) = Socket::new(Domain::IPV4, Type::STREAM, None) else {
+        return false;
+    };
+    let params = TCP_INITIAL_RTO_PARAMETERS {
+        Rtt: UNSPECIFIED_RTT,
+        MaxSynRetransmissions: NO_SYN_RETRANSMISSIONS,
+    };
+    let mut returned = 0u32;
+    // SAFETY: a synchronous call on an open socket with a live input buffer of
+    // the length passed. A failure keeps the defaults: slower, never wrong.
+    unsafe {
+        WSAIoctl(
+            socket.as_raw_socket() as SOCKET,
+            SIO_TCP_INITIAL_RTO,
+            (&raw const params).cast(),
+            size_of::<TCP_INITIAL_RTO_PARAMETERS>() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+            None,
+        );
+    }
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    socket.connect_timeout(&addr.into(), timeout).is_ok()
+}
 
 pub(super) fn process_alive(pid: u32) -> bool {
     if pid == 0 {

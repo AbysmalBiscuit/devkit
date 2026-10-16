@@ -11,7 +11,10 @@ mod imp;
 #[path = "windows.rs"]
 mod imp;
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// Whether this daemon can enforce a hard cgroup-v2 memory cap.
 #[derive(Debug)]
@@ -120,6 +123,14 @@ pub fn tree_rss_bytes(root: u32) -> u64 {
 /// Parent process id, on platforms that expose one.
 pub fn parent_pid() -> Option<u32> {
     imp::parent_pid()
+}
+
+/// True if something accepts a TCP connection on `127.0.0.1:port` within
+/// `timeout`. A port nothing listens on answers at once on every platform,
+/// where Windows would otherwise retransmit the refused SYN until `timeout`
+/// runs out.
+pub fn localhost_accepts(port: u16, timeout: Duration) -> bool {
+    imp::localhost_accepts(port, timeout)
 }
 
 /// The controlling terminal's name, when stdin is attached to one.

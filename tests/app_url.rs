@@ -3,7 +3,11 @@
 //! run` directly (not the `devrun` shim). Uses an isolated HOME/XDG_STATE_HOME
 //! so the port registry never touches the real one.
 
-use std::{path::Path, process::Command};
+use std::{
+    path::Path,
+    process::Command,
+    time::{Duration, Instant},
+};
 
 fn devkit_run() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
@@ -153,6 +157,21 @@ fn status_shows_each_apps_rendered_url() {
     assert!(
         stdout.contains("http://localhost:39260"),
         "default url not shown in status: {stdout}"
+    );
+}
+
+/// `status` probes every port in each app's stray-scan band, so a probe of a
+/// port nothing listens on has to answer at once, Windows included.
+#[test]
+fn status_over_bands_nothing_listens_on_answers_promptly() {
+    let dir = setup();
+    let started = Instant::now();
+    let out = run_in(dir.path(), &["status"]);
+    let took = started.elapsed();
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        took < Duration::from_secs(5),
+        "status took {took:?} to scan three 64-port bands"
     );
 }
 

@@ -330,10 +330,7 @@ mod tests {
     }
 }
 
-use std::{
-    net::{SocketAddr, TcpStream},
-    time::Duration,
-};
+use std::time::Duration;
 
 /// True if something accepts a connection on localhost:port.
 ///
@@ -343,8 +340,7 @@ use std::{
 /// port free. Connecting detects an accepting server identically on every
 /// platform.
 pub fn listening(port: u16) -> bool {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+    devkit_common::sys::localhost_accepts(port, Duration::from_millis(200))
 }
 pub fn pid_alive(pid: u32) -> bool {
     devkit_common::sys::process_alive(pid)

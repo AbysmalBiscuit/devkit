@@ -1,8 +1,16 @@
 //! Unix implementations of the primitives declared in `super`.
 
-use std::collections::{HashMap, HashSet};
 #[cfg(target_os = "linux")]
 use std::fs;
+use std::{
+    collections::{HashMap, HashSet},
+    net::{Ipv4Addr, SocketAddr, TcpStream},
+    time::Duration,
+};
+
+pub(super) fn localhost_accepts(port: u16, timeout: Duration) -> bool {
+    TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), timeout).is_ok()
+}
 
 pub(super) fn process_alive(pid: u32) -> bool {
     use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
