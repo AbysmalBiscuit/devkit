@@ -26,7 +26,7 @@ When other sessions on your workspace left pending todos, the injected context s
 
 ## Ids and claims
 
-Ids are in parentheses in the injected lists and in `devkit todo list`, and every message naming a todo uses the same name. `devkit todo add` prints the new one. By default a ticket todo shows its key: `#65` where the checkout's GitHub tracker reads `#65` back to that ticket, else the full key. `#` starts a shell comment, so `devkit todo start #65` reaches devkit with no id: type a GitHub ticket's `#N` as the bare number `N`.
+Ids are in parentheses in the injected lists and in `devkit todo list`, and every message naming a todo uses the same name. `devkit todo add` prints the new one. By default a ticket todo shows its key: `#65` where the checkout's GitHub tracker reads `#65` back to that ticket, else the full key. `#` starts a shell comment, so `devkit todo start #65` reaches devkit with no id: quote a GitHub ticket's key, `devkit todo start '#65'`, or give its full key `owner/repo#65`.
 
 `[todo] ids` picks how ids are shown, and `--ids <style>` on any `devkit todo` command overrides it for that command. The injected lists, the stop hook and `devkit activity` follow `[todo] ids`. `devkit schema` describes the styles. Every style's names are accepted as input, and `list --json` keeps the stored ids.
 

@@ -41,7 +41,7 @@ fn session_start_injects_the_guide_and_lists() {
     assert!(text.contains("- [ ] one (1)"), "{text}");
     assert!(text.contains("Ids are in parentheses"), "{text}");
     assert!(
-        text.contains("type a GitHub ticket's `#N` as the bare number `N`"),
+        text.contains("quote a GitHub ticket's key, `devkit todo start '#65'`, or give its full key `owner/repo#65`"),
         "{text}"
     );
     assert!(text.contains("`#` starts a shell comment"), "{text}");
