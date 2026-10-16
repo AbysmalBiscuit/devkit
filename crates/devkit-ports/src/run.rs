@@ -1125,13 +1125,12 @@ mod tests {
         let logdir = tempfile::tempdir().unwrap();
         let tmp = logdir.path().join("run.log");
         let mut argv = py;
-        // Inline accept-loop listener rather than `-m http.server`:
-        // http.server's `server_bind` resolves the bound address with
-        // `socket.getfqdn()`, a reverse-DNS lookup that stalls ~35s on
-        // hosts without reverse resolution (macOS GitHub runners) —
-        // past this test's 10s readiness poll. The poll only needs a
-        // TCP accept on IPv4 loopback.
+        // An accept loop rather than `-m http.server`, whose reverse-DNS
+        // lookup stalls ~35s on macOS runners. `-X importtime` logs how far
+        // Python got when the server never listens.
         argv.extend([
+            "-X".to_string(),
+            "importtime".to_string(),
             "-u".to_string(),
             "-c".to_string(),
             format!(
@@ -1147,7 +1146,10 @@ mod tests {
             app: "web".into(),
             port,
             argv,
-            cwd: std::env::temp_dir(),
+            // `-c` puts the working directory first on `sys.path`, so
+            // imports would otherwise scan everything in the shared temp
+            // directory.
+            cwd: logdir.path().to_path_buf(),
             env: BTreeMap::new(),
             log: tmp.clone(),
             url: format!("http://localhost:{port}"),
@@ -1157,7 +1159,7 @@ mod tests {
         let out = launch(&[plan], "/w-launch-test", Role::Workspace, false, false).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].port, port);
-        assert!(out[0].pid.is_some());
+        let pid = out[0].pid.expect("a spawned server has a pid");
         assert!(
             matches!(out[0].state, ServerState::Starting | ServerState::Ready),
             "freshly spawned server is starting (or already ready), got {:?}",
@@ -1173,18 +1175,21 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        let running = registry::pid_alive(pid);
+        let log = std::fs::read_to_string(&tmp).unwrap_or_else(|e| format!("unreadable: {e}"));
+
+        devkit_common::supervise::stop(pid);
+        let _ = registry::release("/w-launch-test", None);
         assert!(
             ready,
-            "server never started listening on {port}; its log:\n{}",
-            std::fs::read_to_string(&tmp).unwrap_or_else(|e| format!("unreadable: {e}"))
+            "server never started listening on {port}; process {pid} {} at the deadline; its \
+             log, with Python's import timeline:\n{log}",
+            if running {
+                "was still running"
+            } else {
+                "had exited"
+            }
         );
-
-        // Cleanup: stop the spawned pid and release the reservation.
-        if let Some(pid) = out[0].pid {
-            devkit_common::supervise::stop(pid);
-        }
-        let _ = registry::release("/w-launch-test", None);
-        let _ = std::fs::remove_file(&tmp);
     }
 
     fn entry(app: &str, holder: &str, role: Role, pid: Option<u32>) -> registry::Entry {
