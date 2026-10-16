@@ -1,6 +1,9 @@
 //! The git processes a command starts, read from git's own trace2 event
 //! files. Setting [`GitTrace::VAR`] to [`GitTrace::dir`] on one command makes
 //! every git it starts, directly or through a child, write a file there.
+//!
+//! Each test binary that includes this module uses a different part of it.
+#![allow(dead_code)]
 
 use std::{collections::BTreeMap, path::Path};
 

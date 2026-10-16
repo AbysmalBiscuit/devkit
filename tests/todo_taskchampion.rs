@@ -1,6 +1,8 @@
 //! `devkit todo` and the todo hooks on the taskchampion backend, chosen by
 //! `DEVKIT_TODO_BACKEND` as a container chooses it.
 
+#[path = "common/gittrace.rs"]
+mod gittrace;
 #[path = "common/syncserver.rs"]
 mod syncserver;
 #[path = "common/todoenv.rs"]
@@ -1082,4 +1084,23 @@ fn a_queued_capture_keeps_the_node_it_was_made_on() {
         alpha.project.as_deref(),
         Some(format!("proj.main.claude-{SESSION}").as_str())
     );
+}
+
+/// A todo command lists the repository's worktrees once, however many of
+/// its config, its list's name and its sync target read them.
+#[test]
+fn a_todo_command_lists_the_worktrees_once() {
+    let shared = Shared::new();
+    let trace = gittrace::GitTrace::new();
+    let traced = [(gittrace::GitTrace::VAR, trace.dir().to_str().unwrap())];
+    for command in [
+        &["todo", "list", "--node", "proj.main"][..],
+        &["todo", "sync"][..],
+    ] {
+        let out = shared.p.devkit(command, &traced);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let calls = trace.take();
+        let listings = calls.iter().filter(|c| *c == "worktree list --porcelain");
+        assert_eq!(listings.count(), 1, "{command:?}: {calls:#?}");
+    }
 }
