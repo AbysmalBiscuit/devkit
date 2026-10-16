@@ -428,6 +428,40 @@ fn force_takes_over_a_foreign_binary() {
     );
 }
 
+/// Windows refuses to delete a file another process holds without delete
+/// sharing, as a virus scanner does for a moment after a file is executed,
+/// and the pass has just executed each stale name to probe it. A brief hold
+/// must not fail the pass.
+#[cfg(windows)]
+#[test]
+fn waits_out_a_brief_hold_on_a_stale_name() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+    let (dir, exe) = staged();
+    let stale = shim_path(dir.path(), "ticket");
+    std::fs::write(&stale, b"stale").expect("write stale ticket");
+    let hold = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&stale)
+        .expect("hold the stale ticket");
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(1));
+        drop(hold);
+    });
+    let out = run(&exe, &["install-links", "--force"]);
+    release.join().expect("release the hold");
+    assert!(
+        out.status.success(),
+        "install-links failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        shimtest::same_inode(&exe, &stale),
+        "ticket should now be a hardlink to devkit"
+    );
+}
+
 /// Running install-links again once every shim is already the right hardlink
 /// must be a no-op that reports it, not a remove-and-relink cycle.
 #[test]
