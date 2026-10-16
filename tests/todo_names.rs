@@ -495,6 +495,15 @@ fn a_quoted_hash_key_resolves() {
     assert_eq!(s.todo_for("o/r#66").status.kind(), StatusKind::InProgress);
     ok(s.devkit(&["todo", "stop", "66"], &S1));
     assert_eq!(s.todo_for("o/r#66").status, Status::Pending);
+    for name in ["#", "#abc", "#999"] {
+        let out = s.devkit(&["todo", "start", name], &S1);
+        assert_eq!(out.status.code(), Some(1), "{name:?}");
+        assert!(
+            stderr(&out).contains(&format!("no todo {name}")),
+            "{name:?}: {}",
+            stderr(&out)
+        );
+    }
 }
 
 /// Two todos on the replica, the second blocked by the first, with their
