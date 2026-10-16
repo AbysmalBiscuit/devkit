@@ -4,10 +4,10 @@
 //! Every reader loads the whole [`RuleIndex`] and filters it in memory, so
 //! the file keeps each file and rule as JSON in index order, beside a `meta`
 //! row naming the source kind, repository, remote and revision it holds. A
-//! refresh replaces everything in one transaction, so a reader sees the
-//! whole old index or the whole new one. A file whose format, kind,
-//! repository or remote is not this cache's reads as no cache, and the next
-//! refresh replaces it.
+//! refresh replaces everything in one WAL-mode transaction, so a reader sees
+//! the whole old index or the whole new one and never waits on a refresh.
+//! A file whose format, kind, repository or remote is not this cache's reads
+//! as no cache, and the next refresh replaces it.
 
 use std::{
     path::{Path, PathBuf},
@@ -22,8 +22,8 @@ use crate::model::{Rule, RuleFile, RuleIndex};
 /// The layout this version of devkit reads and writes.
 const FORMAT: i64 = 1;
 
-/// How long a connection waits on another's lock: a reader on a refresh,
-/// or one refresh on another.
+/// How long a connection waits on another's lock, chiefly one refresh on
+/// another.
 const BUSY: Duration = Duration::from_secs(2);
 
 const LAYOUT: &str = "
@@ -130,7 +130,7 @@ impl RuleCache {
         }
         let mut conn = Connection::open(&self.path).with_context(writing)?;
         conn.busy_timeout(BUSY).with_context(writing)?;
-        conn.pragma_update(None, "journal_mode", "DELETE")
+        conn.pragma_update(None, "journal_mode", "WAL")
             .with_context(writing)?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
