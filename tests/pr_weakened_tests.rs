@@ -130,104 +130,152 @@ fn assert_flags(changes: &[(&str, Option<&str>)], path: &str, rule: &str) {
     );
 }
 
+/// Asserts the branch rewriting `path` with `from` replaced by `to` fails,
+/// naming `path` and `rule`.
+fn assert_edit_flags(path: &str, text: &str, from: &str, to: &str, rule: &str) {
+    assert!(text.contains(from), "{from}");
+    assert_flags(&[(path, Some(&text.replace(from, to)))], path, rule);
+}
+
+/// Asserts the branch writing `changes` over the suite passes.
+fn assert_passes(changes: &[(&str, Option<&str>)]) {
+    let (ok, out) = Repo::new(&suite(), changes).check(&[]);
+    assert!(ok, "{changes:?}: {out}");
+    assert!(out.contains("no weakened tests"), "{out}");
+}
+
 #[test]
-fn each_rule_fires_on_a_diff_that_breaks_it() {
+fn a_deleted_test_file_is_flagged() {
     assert_flags(
         &[("tests/math.rs", None)],
         "tests/math.rs",
         "deleted-test-file",
     );
-    assert_flags(
-        &[(
-            "tests/math.rs",
-            Some(&RUST.replace("#[test]\nfn subtracts", "fn subtracts")),
-        )],
+}
+
+#[test]
+fn a_rust_test_losing_its_attribute_is_fewer_tests() {
+    assert_edit_flags(
         "tests/math.rs",
+        RUST,
+        "#[test]\nfn subtracts",
+        "fn subtracts",
         "fewer-tests",
     );
-    assert_flags(
-        &[(
-            "web/add.test.ts",
-            Some(&JS.replace("  it(\"adds negatives\"", "  // it(\"adds negatives\"")),
-        )],
+}
+
+#[test]
+fn a_commented_out_js_test_is_fewer_tests() {
+    assert_edit_flags(
         "web/add.test.ts",
+        JS,
+        "  it(\"adds negatives\"",
+        "  // it(\"adds negatives\"",
         "fewer-tests",
     );
-    assert_flags(
-        &[(
-            "pkg/test_models.py",
-            Some(&PY.replace("def test_negatives", "def negatives")),
-        )],
+}
+
+#[test]
+fn a_renamed_python_test_is_fewer_tests() {
+    assert_edit_flags(
         "pkg/test_models.py",
+        PY,
+        "def test_negatives",
+        "def negatives",
         "fewer-tests",
     );
-    assert_flags(
-        &[(
-            "tests/math.rs",
-            Some(&RUST.replace("    assert!(sub(0, 0) == 0);\n", "")),
-        )],
+}
+
+#[test]
+fn a_removed_rust_assertion_is_fewer_assertions() {
+    assert_edit_flags(
         "tests/math.rs",
+        RUST,
+        "    assert!(sub(0, 0) == 0);\n",
+        "",
         "fewer-assertions",
     );
-    assert_flags(
-        &[(
-            "pkg/test_models.py",
-            Some(&PY.replace("    assert add(-1, -2) == -3\n", "    add(-1, -2)\n")),
-        )],
+}
+
+#[test]
+fn a_python_assert_turned_into_a_call_is_fewer_assertions() {
+    assert_edit_flags(
         "pkg/test_models.py",
+        PY,
+        "    assert add(-1, -2) == -3\n",
+        "    add(-1, -2)\n",
         "fewer-assertions",
     );
-    assert_flags(
-        &[(
-            "tests/math.rs",
-            Some(&RUST.replace("#[test]\nfn subtracts", "#[test]\n#[ignore]\nfn subtracts")),
-        )],
+}
+
+#[test]
+fn an_ignored_rust_test_is_more_skips() {
+    assert_edit_flags(
         "tests/math.rs",
+        RUST,
+        "#[test]\nfn subtracts",
+        "#[test]\n#[ignore]\nfn subtracts",
         "more-skips",
     );
-    assert_flags(
-        &[(
-            "web/add.test.ts",
-            Some(&JS.replace("it(\"adds negatives\"", "it.skip(\"adds negatives\"")),
-        )],
+}
+
+#[test]
+fn a_skipped_js_test_is_more_skips() {
+    assert_edit_flags(
         "web/add.test.ts",
+        JS,
+        "it(\"adds negatives\"",
+        "it.skip(\"adds negatives\"",
         "more-skips",
     );
-    assert_flags(
-        &[(
-            "pkg/test_models.py",
-            Some(&PY.replace(
-                "def test_negatives",
-                "@pytest.mark.skip(reason=\"flaky\")\ndef test_negatives",
-            )),
-        )],
+}
+
+#[test]
+fn a_skipped_python_test_is_more_skips() {
+    assert_edit_flags(
         "pkg/test_models.py",
+        PY,
+        "def test_negatives",
+        "@pytest.mark.skip(reason=\"flaky\")\ndef test_negatives",
         "more-skips",
     );
-    assert_flags(
-        &[(
-            "tests/math.rs",
-            Some(&RUST.replace("assert_eq!(add(1, 2), 3);", "assert!(true);")),
-        )],
+}
+
+#[test]
+fn a_rust_assert_true_is_a_tautology() {
+    assert_edit_flags(
         "tests/math.rs",
+        RUST,
+        "assert_eq!(add(1, 2), 3);",
+        "assert!(true);",
         "tautology",
     );
-    assert_flags(
-        &[(
-            "web/add.test.ts",
-            Some(&JS.replace("expect(add(1, 2)).toBe(3);", "expect(true).toBe(true);")),
-        )],
+}
+
+#[test]
+fn a_js_expect_true_is_a_tautology() {
+    assert_edit_flags(
         "web/add.test.ts",
+        JS,
+        "expect(add(1, 2)).toBe(3);",
+        "expect(true).toBe(true);",
         "tautology",
     );
-    assert_flags(
-        &[(
-            "pkg/test_models.py",
-            Some(&PY.replace("assert add(1, 2) == 3", "assert True")),
-        )],
+}
+
+#[test]
+fn a_python_assert_true_is_a_tautology() {
+    assert_edit_flags(
         "pkg/test_models.py",
+        PY,
+        "assert add(1, 2) == 3",
+        "assert True",
         "tautology",
     );
+}
+
+#[test]
+fn a_new_test_comparing_a_value_to_itself_is_a_tautology() {
     assert_flags(
         &[(
             "tests/new.rs",
@@ -239,53 +287,67 @@ fn each_rule_fires_on_a_diff_that_breaks_it() {
 }
 
 #[test]
-fn an_unchanged_or_growing_suite_raises_no_flag() {
-    for changes in [
-        vec![],
-        vec![(
-            "src/add.rs",
-            Some("pub fn add(a: i32, b: i32) -> i32 { b + a }\n"),
-        )],
-        vec![(
-            "tests/math.rs",
-            Some(&*format!(
-                "{RUST}\n#[test]\nfn zero() {{\n    assert_eq!(add(0, 0), 0);\n}}\n"
-            )),
-        )],
-        vec![(
-            "web/more.test.ts",
-            Some("it(\"new\", () => { expect(add(1, 1)).toBe(2); });\n"),
-        )],
-    ] {
-        let repo = Repo::new(&suite(), &changes);
-        let (ok, out) = repo.check(&[]);
-        assert!(ok, "{changes:?}: {out}");
-        assert!(out.contains("no weakened tests"), "{out}");
-    }
+fn an_unchanged_suite_raises_no_flag() {
+    assert_passes(&[]);
 }
 
 #[test]
-fn skip_if_todo_and_only_added_to_an_existing_file_are_each_flagged() {
-    for (from, to, rule) in [
-        (
-            "it(\"adds negatives\"",
-            "it.skipIf(process.env.CI)(\"adds negatives\"",
-            "more-skips",
-        ),
-        (
-            "it(\"adds negatives\", () => {\n    expect(add(-1, -2)).toBe(-3);\n  });",
-            "it(\"adds negatives\", () => {\n    expect(add(-1, -2)).toBe(-3);\n  });\n  it.todo(\"adds floats\");",
-            "more-skips",
-        ),
-        ("it(\"adds\"", "it.only(\"adds\"", "focused-test"),
-    ] {
-        assert!(JS.contains(from), "{from}");
-        assert_flags(
-            &[("web/add.test.ts", Some(&JS.replace(from, to)))],
-            "web/add.test.ts",
-            rule,
-        );
-    }
+fn a_change_outside_the_tests_raises_no_flag() {
+    assert_passes(&[(
+        "src/add.rs",
+        Some("pub fn add(a: i32, b: i32) -> i32 { b + a }\n"),
+    )]);
+}
+
+#[test]
+fn a_test_added_to_an_existing_file_raises_no_flag() {
+    assert_passes(&[(
+        "tests/math.rs",
+        Some(&format!(
+            "{RUST}\n#[test]\nfn zero() {{\n    assert_eq!(add(0, 0), 0);\n}}\n"
+        )),
+    )]);
+}
+
+#[test]
+fn a_new_test_file_raises_no_flag() {
+    assert_passes(&[(
+        "web/more.test.ts",
+        Some("it(\"new\", () => { expect(add(1, 1)).toBe(2); });\n"),
+    )]);
+}
+
+#[test]
+fn a_js_skip_if_is_more_skips() {
+    assert_edit_flags(
+        "web/add.test.ts",
+        JS,
+        "it(\"adds negatives\"",
+        "it.skipIf(process.env.CI)(\"adds negatives\"",
+        "more-skips",
+    );
+}
+
+#[test]
+fn a_js_todo_added_to_an_existing_file_is_more_skips() {
+    assert_edit_flags(
+        "web/add.test.ts",
+        JS,
+        "it(\"adds negatives\", () => {\n    expect(add(-1, -2)).toBe(-3);\n  });",
+        "it(\"adds negatives\", () => {\n    expect(add(-1, -2)).toBe(-3);\n  });\n  it.todo(\"adds floats\");",
+        "more-skips",
+    );
+}
+
+#[test]
+fn a_js_only_is_a_focused_test() {
+    assert_edit_flags(
+        "web/add.test.ts",
+        JS,
+        "it(\"adds\"",
+        "it.only(\"adds\"",
+        "focused-test",
+    );
 }
 
 #[test]
