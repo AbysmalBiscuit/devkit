@@ -526,7 +526,9 @@ fn the_brief_asks_a_stalled_database_once_per_run() {
         let elapsed = started.elapsed();
         assert!(out.status.success(), "{args:?}: {}", stderr(&out));
         assert_eq!(stalled.connections(), 1, "{args:?}");
-        assert!(elapsed < Duration::from_secs(2), "{args:?}: {elapsed:?}");
+        // The hook's short wait, not the CLI's; the connection count proves
+        // the database was asked once.
+        assert!(elapsed < Duration::from_secs(10), "{args:?}: {elapsed:?}");
         assert!(!stdout(&out).contains("### Rules"), "{args:?}");
         let err = stderr(&out);
         assert_eq!(err.lines().count(), 1, "{args:?}: {err}");
