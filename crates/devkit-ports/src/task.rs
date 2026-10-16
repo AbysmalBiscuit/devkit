@@ -14,7 +14,7 @@ use devkit_common::{
     record,
     required::{ensure_supplied, missing_args, required_of},
     template,
-    vcs::{Vcs, VersionControl},
+    vcs::{Checkout, Worktree},
 };
 use devkit_config::{Config, Required, RunAction, RunArg, Step, TaskConfig};
 
@@ -467,18 +467,16 @@ fn check_args(
 /// source stays undefined rather than empty.
 fn variables(
     cfg: &Config,
-    worktree_root: &Path,
+    worktree: &Worktree,
     args: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut vars = cfg.templates.defaults();
-    if let Some(r) = record::read(worktree_root) {
+    if let Some(r) = record::read(&worktree.path) {
         vars.insert("ticket".into(), r.issue.clone());
         vars.insert("issue".into(), r.issue);
         vars.insert("slug".into(), r.slug);
     }
-    if let Ok(branch) = Vcs::at(worktree_root).branch(worktree_root) {
-        vars.insert("branch".into(), branch);
-    }
+    vars.insert("branch".into(), worktree.branch.clone());
     vars.extend(args.iter().map(|(k, v)| (k.clone(), v.clone())));
     vars
 }
@@ -493,7 +491,7 @@ fn variables(
 pub fn resolve(
     cfg: &Config,
     catalog: &HashMap<String, App>,
-    worktree_root: &Path,
+    worktree: &Worktree,
     holder: &str,
     name: &str,
     user_env: &BTreeMap<String, String>,
@@ -503,7 +501,8 @@ pub fn resolve(
     let v = view(cfg, catalog, name)?;
     let checked = v.runnable()?;
     check_args(cfg, name, &checked.reads, args, caller)?;
-    let vars = variables(cfg, worktree_root, args);
+    let vars = variables(cfg, worktree, args);
+    let worktree_root = worktree.path.as_path();
     let command = |name: &str, t: &TaskConfig| {
         resolve_command(
             &vars,
@@ -687,7 +686,7 @@ fn resolve_command(
 pub fn resolve_step(
     cfg: &Config,
     catalog: &HashMap<String, App>,
-    worktree_root: &Path,
+    worktree: &Worktree,
     holder: &str,
     name: &str,
     user_env: &BTreeMap<String, String>,
@@ -698,11 +697,11 @@ pub fn resolve_step(
         v.runnable()?.kind == TaskKind::Command,
         "task `{name}` is not a command task"
     );
-    let vars = variables(cfg, worktree_root, args);
+    let vars = variables(cfg, worktree, args);
     resolve_command(
         &vars,
         catalog,
-        worktree_root,
+        &worktree.path,
         &Ports::Registry { holder, live: true },
         name,
         v.task,
@@ -949,12 +948,12 @@ fn relative(path: &Path, root: &Path) -> String {
     }
 }
 
-/// The [`ExecutionPlan`] of task `name` given `args` at `worktree_root`,
+/// The [`ExecutionPlan`] of task `name` given `args` in `worktree`,
 /// rendered by the code `devrun task` and `devrun up` run it through.
 fn execution_plan(
     cfg: &Config,
     catalog: &HashMap<String, App>,
-    worktree_root: &Path,
+    worktree: &Worktree,
     ports: &Ports<'_>,
     name: &str,
     args: &BTreeMap<String, String>,
@@ -963,7 +962,8 @@ fn execution_plan(
     let checked = v.runnable()?;
     let accepts = [Caller::Human, Caller::Agent]
         .map(|caller| check_args(cfg, name, &checked.reads, args, caller).is_ok());
-    let vars = variables(cfg, worktree_root, args);
+    let vars = variables(cfg, worktree, args);
+    let worktree_root = worktree.path.as_path();
     let command = |step: &str, t: &TaskConfig| -> Result<PlannedStep> {
         let plan = resolve_command(
             &vars,
@@ -1068,24 +1068,17 @@ fn planned_up(
 /// or a `devkit.local.toml`. `checkout` is any checkout of the repository.
 /// An app in `ports` renders as that port, any other as its base port.
 pub fn committed_plan(
-    checkout: &Path,
+    checkout: &Checkout,
     rev: &str,
     dir: &str,
-    worktree_root: &Path,
+    worktree: &Worktree,
     name: &str,
     args: &BTreeMap<String, String>,
     ports: &BTreeMap<String, u16>,
 ) -> Result<ExecutionPlan> {
     let cfg = crate::ledger::committed_config(checkout, rev, dir)?;
     let (catalog, _) = crate::apps::catalog(&cfg, &crate::load::path_to_project(&cfg)?)?;
-    execution_plan(
-        &cfg,
-        &catalog,
-        worktree_root,
-        &Ports::Given(ports),
-        name,
-        args,
-    )
+    execution_plan(&cfg, &catalog, worktree, &Ports::Given(ports), name, args)
 }
 
 /// The argv `run` of command task `name` renders to.
@@ -1249,6 +1242,15 @@ mod tests {
     use devkit_config::{Config, Step, TaskConfig};
 
     use super::*;
+
+    fn wt() -> Worktree {
+        Worktree {
+            path: PathBuf::from("/wt"),
+            branch: "main".into(),
+            bare: false,
+            locked: false,
+        }
+    }
 
     #[test]
     fn tasks_text_renders_rows_or_hint() {
@@ -1480,35 +1482,14 @@ mod tests {
         let u = BTreeMap::new();
         let rows = list(&cfg, &cat, Caller::Agent);
         for row in &rows {
-            let resolved = resolve(
-                &cfg,
-                &cat,
-                Path::new("/wt"),
-                "/wt",
-                &row.name,
-                &u,
-                &u,
-                Caller::Agent,
-            );
+            let resolved = resolve(&cfg, &cat, &wt(), "/wt", &row.name, &u, &u, Caller::Agent);
             match (&row.kind, resolved) {
                 (Ok(_), Ok(_)) => assert_eq!(row.name, "seq"),
                 (Err(why), Err(e)) => assert_eq!(why, &format!("{e:#}"), "{}", row.name),
                 (kind, resolved) => panic!("{}: listed {kind:?}, resolved {resolved:?}", row.name),
             }
         }
-        assert!(
-            resolve(
-                &cfg,
-                &cat,
-                Path::new("/wt"),
-                "/wt",
-                "missing",
-                &u,
-                &u,
-                Caller::Agent
-            )
-            .is_err()
-        );
+        assert!(resolve(&cfg, &cat, &wt(), "/wt", "missing", &u, &u, Caller::Agent).is_err());
     }
 
     #[test]
@@ -1522,7 +1503,7 @@ mod tests {
         let r = resolve(
             &cfg,
             &api_catalog(),
-            Path::new("/wt"),
+            &wt(),
             "/wt",
             "seq",
             &BTreeMap::new(),
@@ -1606,7 +1587,7 @@ mod tests {
         let err = resolve(
             &cfg,
             &api_catalog(),
-            Path::new("/wt"),
+            &wt(),
             "/wt",
             "t",
             &BTreeMap::new(),
@@ -1627,7 +1608,7 @@ mod tests {
         let err = resolve_step(
             &cfg,
             &api_catalog(),
-            Path::new("/wt"),
+            &wt(),
             "/wt",
             "seq",
             &BTreeMap::new(),
@@ -1653,7 +1634,7 @@ mod tests {
         let err = resolve(
             &cfg,
             &cat,
-            Path::new("/wt"),
+            &wt(),
             "/wt",
             "t",
             &BTreeMap::new(),
@@ -1696,7 +1677,7 @@ mod tests {
         let plan = execution_plan(
             &cfg,
             &cat,
-            Path::new("/wt"),
+            &wt(),
             &Ports::Given(&BTreeMap::new()),
             "seq",
             &BTreeMap::new(),
@@ -1718,7 +1699,7 @@ mod tests {
         let err = resolve(
             &cfg,
             &api_catalog(),
-            Path::new("/wt"),
+            &wt(),
             "/wt",
             "t",
             &BTreeMap::new(),

@@ -3,8 +3,9 @@
 //! [`devkit_git::Git`] is only for what is git by definition.
 
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use ambassador::Delegate;
@@ -127,6 +128,9 @@ pub fn derived_worktree_root(primary: &Path) -> Option<PathBuf> {
 pub struct Checkout {
     start: PathBuf,
     resolved: Arc<OnceLock<Resolved>>,
+    /// Files read at a full object id, which names the same contents for as
+    /// long as the repository has it.
+    files: Arc<Mutex<HashMap<(String, String), Option<String>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +152,7 @@ impl Checkout {
         Self {
             start: start.to_path_buf(),
             resolved: Arc::default(),
+            files: Arc::default(),
         }
     }
 
@@ -219,6 +224,41 @@ impl Checkout {
         r.here.map(|i| &r.worktrees[i])
     }
 
+    /// [`Checkout::here`], or why there is none, as [`checkout_root`]
+    /// reports it.
+    pub fn worktree(&self) -> Result<&Worktree> {
+        if let Some(e) = self.error() {
+            anyhow::bail!("{e}");
+        }
+        self.here()
+            .with_context(|| format!("not inside a repository: {}", self.start.display()))
+    }
+
+    /// The checkout the repository's worktrees hang off, as
+    /// [`primary_checkout`] names it.
+    pub fn primary(&self) -> Option<&Path> {
+        self.main_checkout().or_else(|| self.root())
+    }
+
+    /// [`VersionControl::file_at`] from the directory this was resolved
+    /// from, asked once per file when `rev` is a full object id.
+    pub fn file_at(&self, rev: &str, path: &str) -> Result<Option<String>> {
+        let read = || Vcs::at(&self.start).file_at(&self.start, rev, path);
+        if !is_object_id(rev) {
+            return read();
+        }
+        let key = (rev.to_string(), path.to_string());
+        if let Some(known) = self.files.lock().expect("file cache").get(&key) {
+            return Ok(known.clone());
+        }
+        let text = read()?;
+        self.files
+            .lock()
+            .expect("file cache")
+            .insert(key, text.clone());
+        Ok(text)
+    }
+
     /// The working tree containing `dir`, which can sit in any worktree of
     /// this repository or in none of them.
     ///
@@ -240,6 +280,11 @@ impl Checkout {
             .all(|d| r.vcs.ownership(d) == Ownership::Unowned)
             .then_some(root)
     }
+}
+
+/// A full SHA-1 or SHA-256 object id, which no ref can move.
+fn is_object_id(rev: &str) -> bool {
+    matches!(rev.len(), 40 | 64) && rev.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// The index of the deepest non-bare worktree containing `dir`, measuring

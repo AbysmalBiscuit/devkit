@@ -21,7 +21,7 @@ use std::{
 use anyhow::{Context, Result};
 use devkit_common::{
     paths,
-    vcs::{self, Changes, VersionControl},
+    vcs::{self, Changes, Checkout, VersionControl},
 };
 use serde::{Deserialize, Serialize};
 
@@ -270,8 +270,11 @@ fn resolve_existing(path: &Path) -> PathBuf {
 /// root's file and each one in a directory on the way down to `dir`, read
 /// from `rev` through `checkout`, any checkout of the repository. Local,
 /// home, explicit and out-of-tree layers are left out.
-pub fn committed_config(checkout: &Path, rev: &str, dir: &str) -> Result<devkit_config::Config> {
-    let vcs = vcs::Vcs::at(checkout);
+pub fn committed_config(
+    checkout: &Checkout,
+    rev: &str,
+    dir: &str,
+) -> Result<devkit_config::Config> {
     let mut dirs = vec![String::new()];
     for part in dir.split('/').filter(|p| !p.is_empty()) {
         let parent = dirs.last().expect("the root");
@@ -288,7 +291,7 @@ pub fn committed_config(checkout: &Path, rev: &str, dir: &str) -> Result<devkit_
         } else {
             format!("{d}/{}", devkit_config::CONFIG_FILE)
         };
-        if let Some(text) = vcs.file_at(checkout, rev, &path)? {
+        if let Some(text) = checkout.file_at(rev, &path)? {
             layers.push((PathBuf::from(path), text));
         }
     }
@@ -331,11 +334,12 @@ fn tree_state(root: &Path) -> (Option<String>, bool) {
 
 impl Start {
     /// Capture the tree state for a run of `task` started in `cwd`, inside
-    /// worktree `root`. `arg_files` names the file each `--arg-file` arg was
-    /// read from. `env` names the variables `--env` and `env_file` set.
+    /// `checkout`'s worktree. `arg_files` names the file each `--arg-file`
+    /// arg was read from. `env` names the variables `--env` and `env_file`
+    /// set.
     #[allow(clippy::too_many_arguments)]
     pub fn capture(
-        root: &Path,
+        checkout: &Checkout,
         cwd: &Path,
         task: &str,
         args: &BTreeMap<String, String>,
@@ -343,8 +347,9 @@ impl Start {
         env: Vec<String>,
         env_file: Option<PathBuf>,
     ) -> Self {
+        let root = checkout.root().unwrap_or(checkout.dir());
         let (head, clean) = tree_state(root);
-        let repo = vcs::primary_checkout(root).unwrap_or_else(|_| root.to_path_buf());
+        let repo = checkout.primary().unwrap_or(root).to_path_buf();
         let worktree = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let dir = std::fs::canonicalize(cwd).ok().and_then(|cwd| {
             let rel = cwd.strip_prefix(&worktree).ok()?;
