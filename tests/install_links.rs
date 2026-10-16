@@ -60,17 +60,13 @@ fn run(exe: &std::path::Path, args: &[&str]) -> Output {
     })
 }
 
-/// A throwaway directory holding a copy of the built binary, so a linking pass
-/// never touches the real CARGO_HOME. Bind the guard for as long as the path is
-/// used, or the directory is gone before the test runs anything.
+/// A throwaway directory beside the built binary holding a hardlink to it, so
+/// a linking pass never touches the real CARGO_HOME. Bind the guard for as
+/// long as the path is used.
 ///
-/// Staged beside the `devkit` binary, like `shimtest::linked`: a hardlink
-/// cannot cross a filesystem boundary, and the system temp dir and the build
-/// output are not guaranteed to share one (GitHub's Windows runners check the
-/// workspace out on `D:` while `%TEMP%` resolves under `C:`). The binary is
-/// *copied* rather than hardlinked, though — several tests here replace or
-/// delete the staged executable, which through a hardlink would clobber the
-/// build output itself.
+/// A copy would cost every test a scan: Windows checks each new executable
+/// before its first run, one at a time. Replace or delete the staged name;
+/// never write into it, which writes the build output.
 fn staged() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::Builder::new()
         .prefix("links")
@@ -85,7 +81,7 @@ fn staged() -> (tempfile::TempDir, std::path::PathBuf) {
     } else {
         "devkit"
     });
-    std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &exe).expect("stage devkit");
+    std::fs::hard_link(env!("CARGO_BIN_EXE_devkit"), &exe).expect("stage devkit");
     (dir, exe)
 }
 
@@ -208,11 +204,12 @@ fn replaces_an_existing_devkit_binary() {
 #[test]
 fn replaces_a_real_devkit_binary_at_every_shim_name() {
     let (dir, exe) = staged();
+    let old = dir.path().join("old-devkit");
+    std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &old).expect("stage an old devkit");
     let mut stale_paths = Vec::new();
     for name in SHIMS {
         let stale = shim_path(dir.path(), name);
-        std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &stale)
-            .unwrap_or_else(|e| panic!("stage a stale {name}: {e}"));
+        std::fs::hard_link(&old, &stale).unwrap_or_else(|e| panic!("stage a stale {name}: {e}"));
         stale_paths.push((name, stale));
     }
     let out = run(&exe, &["install-links"]);
