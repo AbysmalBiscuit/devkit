@@ -39,6 +39,12 @@ fn session_start_injects_the_guide_and_lists() {
         "{text}"
     );
     assert!(text.contains("- [ ] one (1)"), "{text}");
+    assert!(text.contains("Ids are in parentheses"), "{text}");
+    assert!(
+        text.contains("type a GitHub ticket's `#N` as the bare number `N`"),
+        "{text}"
+    );
+    assert!(text.contains("`#` starts a shell comment"), "{text}");
 }
 
 #[test]

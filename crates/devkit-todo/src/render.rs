@@ -442,7 +442,8 @@ pub fn guide(own_node: &str) -> String {
          Otherwise use `devkit todo add \"<text>\"` (prints the id), `devkit todo start <id>`, \
          `devkit todo done <id>` and `devkit todo cancel <id>`.\n\
          - A sub-agent claims a todo with `devkit todo start <id>` before working on it.\n\
-         - Ids are in parentheses.\n"
+         - Ids are in parentheses. `#` starts a shell comment, so type a GitHub ticket's \
+         `#N` as the bare number `N`.\n"
     )
 }
 
