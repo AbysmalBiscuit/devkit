@@ -94,3 +94,44 @@ fn copy_tree(from: &Path, to: &Path) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STEPS: &[Step] = &[
+        Step::Git(&["init", "-q", "-b", "main"]),
+        Step::Write("f.txt", "x"),
+        Step::Git(&["add", "."]),
+        Step::Git(&["commit", "-qm", "init"]),
+    ];
+
+    /// Deletes every file under `dir` and keeps the directories, as
+    /// `Swatinem/rust-cache` leaves `target/tmp` when it saves the target.
+    fn keep_only_directories(dir: &Path) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                keep_only_directories(&path);
+            } else {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_template_emptied_to_its_directories_is_rebuilt() {
+        let root = tempfile::tempdir().unwrap();
+        Template::of(root.path(), STEPS);
+        keep_only_directories(root.path());
+
+        let template = Template::of(root.path(), STEPS);
+        let copy = tempfile::tempdir().unwrap();
+        template.copy_to(copy.path());
+        let head = Git::fixture(copy.path())
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert_eq!(head.trim(), template.head());
+    }
+}
