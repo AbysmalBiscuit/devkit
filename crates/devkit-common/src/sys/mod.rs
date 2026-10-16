@@ -99,7 +99,7 @@ pub fn detach(cmd: &mut std::process::Command) {
 /// this process: a caller that reads this process's output to its end is not
 /// held open by the child. On Windows a spawn inherits every inheritable
 /// handle, this process's own stdio included, so those stop being inheritable
-/// first, and the child gets no console.
+/// first, and the child's console has no window.
 pub fn spawn_background(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
     use std::process::Stdio;
     cmd.stdin(Stdio::null())
@@ -192,6 +192,39 @@ mod tests {
         assert_eq!(fmt_pid(12345, &mut buf), b"12345");
         // pid_t max on Linux is 2^22, but format the full i32 range to be safe.
         assert_eq!(fmt_pid(2147483647, &mut buf), b"2147483647");
+    }
+
+    /// Set to a file path, this binary's `background_child_console_probe`
+    /// writes whether it has a console and whether that console shows a
+    /// window, as `<has console> <has window>`.
+    #[cfg(windows)]
+    const CONSOLE_PROBE_ENV: &str = "DEVKIT_TEST_CONSOLE_PROBE";
+
+    #[cfg(windows)]
+    #[test]
+    fn background_child_console_probe() {
+        use windows_sys::Win32::System::Console::{GetConsoleCP, GetConsoleWindow};
+        let Some(out) = std::env::var_os(CONSOLE_PROBE_ENV) else {
+            return;
+        };
+        // SAFETY: both calls take no arguments and only read process state.
+        let (console, window) = unsafe { (GetConsoleCP() != 0, !GetConsoleWindow().is_null()) };
+        std::fs::write(out, format!("{console} {window}")).unwrap();
+    }
+
+    /// A background child spawns git and other console programs. Without a
+    /// console of its own, Windows gives each of them a new console window.
+    #[cfg(windows)]
+    #[test]
+    fn a_background_child_has_a_console_with_no_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("probe");
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "sys::tests::background_child_console_probe"])
+            .env(CONSOLE_PROBE_ENV, &out);
+        let mut child = spawn_background(&mut cmd).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "true false");
     }
 
     /// Windows refuses symlink creation without Developer Mode or admin, and

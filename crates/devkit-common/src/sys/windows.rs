@@ -113,8 +113,9 @@ pub(super) fn detach(cmd: &mut std::process::Command) {
     cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
-/// No console for the child, which has null stdio anyway.
-const DETACHED_PROCESS: u32 = 0x0000_0008;
+/// A console with no window. A child with no console at all would give each
+/// console program it runs, git among them, a window of its own.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Windows spawns with `bInheritHandles`, so every inheritable handle in this
 /// process reaches the child, this process's stdio among them: a parent's
@@ -138,7 +139,7 @@ pub(super) fn detach_background(cmd: &mut std::process::Command) {
             }
         }
     }
-    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 pub(super) fn reap_owned(pid: u32) -> bool {
