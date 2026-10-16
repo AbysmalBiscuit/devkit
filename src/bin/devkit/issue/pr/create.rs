@@ -238,7 +238,7 @@ impl Gates {
             &Ledger::live(),
         )?;
         let repro = repro::Gate::read(
-            dir,
+            checkout,
             &merge_base,
             &cfg.gates,
             &cfg.test_files,
