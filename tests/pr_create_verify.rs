@@ -1104,7 +1104,8 @@ fn a_run_whose_second_up_step_reuses_the_server_its_first_launched_qualifies() {
 }
 
 /// A run reads the commit and the tree state once before the task and once
-/// after; every other question a run and a gated `pr create` ask of git is
+/// after, and the gate reads `devkit.toml` once at the merge base and once
+/// at HEAD; every other question a run and a gated `pr create` ask of git is
 /// asked once.
 #[test]
 fn a_run_and_its_gated_pr_ask_git_each_question_once() {
@@ -1143,8 +1144,11 @@ fn a_run_and_its_gated_pr_ask_git_each_question_once() {
         String::from_utf8_lossy(&out.stderr)
     );
     let calls = trace.take();
-    assert!(
-        gittrace::GitTrace::repeated(&calls).is_empty(),
+    // Each read names its object on standard input, which the trace leaves
+    // out, so the two reads show as one call made twice.
+    assert_eq!(
+        gittrace::GitTrace::repeated(&calls),
+        [("cat-file --batch", 2)].into(),
         "{calls:#?}"
     );
 }
