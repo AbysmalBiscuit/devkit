@@ -128,10 +128,12 @@ pub fn derived_worktree_root(primary: &Path) -> Option<PathBuf> {
 pub struct Checkout {
     start: PathBuf,
     resolved: Arc<OnceLock<Resolved>>,
-    /// Files read at a full object id, which names the same contents for as
-    /// long as the repository has it.
-    files: Arc<Mutex<HashMap<(String, String), Option<String>>>>,
+    files: Arc<Mutex<FilesAt>>,
 }
+
+/// Files read at a full object id, which names the same contents for as long
+/// as the repository has it, by revision and path.
+type FilesAt = HashMap<(String, String), Option<String>>;
 
 #[derive(Debug, Clone)]
 struct Resolved {
