@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.14.23](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.22...v0.14.23) (2026-10-16)
+
+
+### Features
+
+* **pr:** check repro items red to green ([#383](https://github.com/AbysmalBiscuit/devkit/issues/383)) ([2df9708](https://github.com/AbysmalBiscuit/devkit/commit/2df9708f0f05ba5e3c259b9c1d4528f266b1ef6c))
+* **pr:** flag weakened tests between base and head ([#358](https://github.com/AbysmalBiscuit/devkit/issues/358)) ([370a637](https://github.com/AbysmalBiscuit/devkit/commit/370a63705c6ac73bb131cbfee3d905b594ac2112))
+* **pr:** require a passing verify run at HEAD ([#375](https://github.com/AbysmalBiscuit/devkit/issues/375)) ([e557d03](https://github.com/AbysmalBiscuit/devkit/commit/e557d03ebeced7680b263b4bbfa5dc529afd4617))
+* **tasks:** record every devrun task run ([#357](https://github.com/AbysmalBiscuit/devkit/issues/357)) ([c64ebff](https://github.com/AbysmalBiscuit/devkit/commit/c64ebffaed2c4639d05508ce98515ff7ebb22b98))
+* **ticket:** check ticket fields on MCP writes and discover them ([#377](https://github.com/AbysmalBiscuit/devkit/issues/377)) ([d0e753d](https://github.com/AbysmalBiscuit/devkit/commit/d0e753daea5df109f3ffe1a5e0aaf42d0b032780))
+* **ticket:** create and edit Linear tickets ([#376](https://github.com/AbysmalBiscuit/devkit/issues/376)) ([37a0289](https://github.com/AbysmalBiscuit/devkit/commit/37a028914d395831fd411d2dae9aac9cb6420860))
+* **ticket:** declare ticket fields and write them on GitHub ([#366](https://github.com/AbysmalBiscuit/devkit/issues/366)) ([8f74838](https://github.com/AbysmalBiscuit/devkit/commit/8f74838cb77d2571d1de53c2c4b833866cf9c9f9))
+* **todo:** install a todo shim for devkit todo ([#353](https://github.com/AbysmalBiscuit/devkit/issues/353)) ([d9dfb2f](https://github.com/AbysmalBiscuit/devkit/commit/d9dfb2fe928c979d51493a6d58fc1c8e599855da))
+* **todo:** name todos readably in messages ([#391](https://github.com/AbysmalBiscuit/devkit/issues/391)) ([0cb1e29](https://github.com/AbysmalBiscuit/devkit/commit/0cb1e29ab2bcfb3ad54c2d1bf74775122144bc31))
+* **todo:** promote a todo to a ticket ([#388](https://github.com/AbysmalBiscuit/devkit/issues/388)) ([8f961ae](https://github.com/AbysmalBiscuit/devkit/commit/8f961aeb04685cbb50cc541cdbe4dad449be0f43))
+* **todo:** push ticket parents and blockers ([#384](https://github.com/AbysmalBiscuit/devkit/issues/384)) ([a14d187](https://github.com/AbysmalBiscuit/devkit/commit/a14d187eea76e82807c3e3903f70750a8d5e65c8))
+* **todo:** push ticket status changes to the tracker ([#381](https://github.com/AbysmalBiscuit/devkit/issues/381)) ([06fdaf2](https://github.com/AbysmalBiscuit/devkit/commit/06fdaf269abb3ff2fe705163640addc3437df2df))
+* **todo:** refresh tickets and move them on todo changes ([#367](https://github.com/AbysmalBiscuit/devkit/issues/367)) ([c6e7566](https://github.com/AbysmalBiscuit/devkit/commit/c6e756649baa7c624833d409afa1987d9a061b40))
+* **todo:** resolve ticket keys and word names as ids ([#389](https://github.com/AbysmalBiscuit/devkit/issues/389)) ([e161dfb](https://github.com/AbysmalBiscuit/devkit/commit/e161dfb1475aeb1d8fac1e14036b6affc9fb6833))
+* **todo:** show readable todo names in listings ([#390](https://github.com/AbysmalBiscuit/devkit/issues/390)) ([362aad5](https://github.com/AbysmalBiscuit/devkit/commit/362aad58610a05bd5256a4dff2114dabab320e96))
+* **todo:** sync GitHub tickets into the todo store ([#359](https://github.com/AbysmalBiscuit/devkit/issues/359)) ([8a897af](https://github.com/AbysmalBiscuit/devkit/commit/8a897af2253bf4009c500e38dd99ae755cd47755))
+* **tracker:** sync Linear tickets into the todo store ([#369](https://github.com/AbysmalBiscuit/devkit/issues/369)) ([916bad4](https://github.com/AbysmalBiscuit/devkit/commit/916bad43a1ce5d417ec64a361b20c0b65605503b))
+
+
+### Bug Fixes
+
+* **deps:** bump rustls to 0.23.46 ([#361](https://github.com/AbysmalBiscuit/devkit/issues/361)) ([4bf0dc0](https://github.com/AbysmalBiscuit/devkit/commit/4bf0dc0e3068f73067a0efc5fc78ba38b39374fe))
+* **git:** rebuild fixture templates the CI cache emptied ([#396](https://github.com/AbysmalBiscuit/devkit/issues/396)) ([577479f](https://github.com/AbysmalBiscuit/devkit/commit/577479fdad3998b6a1fb1844da2c1a7fbdb3bbf0))
+* **rules:** readers no longer wait on a cache refresh ([#394](https://github.com/AbysmalBiscuit/devkit/issues/394)) ([5d9ca92](https://github.com/AbysmalBiscuit/devkit/commit/5d9ca92af210dc5061a89aa54f1e4c54fbdfd810))
+* windows probe, console and stdio defects slowing CI ([#393](https://github.com/AbysmalBiscuit/devkit/issues/393)) ([2ba4653](https://github.com/AbysmalBiscuit/devkit/commit/2ba46538e5533bc17ccf47340243403cf121e222))
+
 ## [0.14.22](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.21...v0.14.22) (2026-10-14)
 
 
