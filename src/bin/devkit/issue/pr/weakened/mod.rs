@@ -10,7 +10,7 @@ use std::{fmt, path::Path};
 use anyhow::{Context, Result, bail};
 use devkit_common::{
     test_files::TestFiles,
-    vcs::{Vcs, VersionControl},
+    vcs::{Checkout, Vcs, VersionControl},
 };
 use devkit_config::{CONFIG_FILE, GateMode, PrConfig};
 use scan::{Counts, Lang};
@@ -161,8 +161,8 @@ pub(crate) fn merge_base(dir: &Path, base: &str) -> Result<Option<String>> {
 
 /// `[pr]` as the `devkit.toml` at the root of revision `rev` has it, the
 /// defaults when that revision has none.
-pub(crate) fn config_at(dir: &Path, rev: &str) -> Result<PrConfig> {
-    match Vcs::at(dir).file_at(dir, rev, CONFIG_FILE)? {
+pub(crate) fn config_at(checkout: &Checkout, rev: &str) -> Result<PrConfig> {
+    match checkout.file_at(rev, CONFIG_FILE)? {
         Some(text) => PrConfig::from_layer(&text)
             .with_context(|| format!("reading {CONFIG_FILE} at {}", short(rev))),
         None => Ok(PrConfig::default()),
@@ -263,7 +263,7 @@ pub(crate) fn run(dir: &Path, base: &str, head: &str, body_file: Option<&Path>) 
         None => None,
     };
     let merge_base = vcs.merge_base(dir, base, head)?;
-    let cfg = config_at(dir, &merge_base)?;
+    let cfg = config_at(&Checkout::at(dir), &merge_base)?;
     let flags = check(dir, &merge_base, head, &TestFiles::new(&cfg.test_files)?)?;
     if flags.is_empty() {
         println!(

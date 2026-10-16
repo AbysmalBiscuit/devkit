@@ -263,7 +263,7 @@ fn link_one(exe: &Path, shim: Shim, dest: &Path, force: bool) -> Outcome {
         if !force && let Judgement::Foreign(reason) = is_devkit_binary(dest, shim).judgement {
             return Outcome::SkippedForeign(reason);
         }
-        if let Err(e) = std::fs::remove_file(dest) {
+        if let Err(e) = remove_stale(dest) {
             return Outcome::Failed(format!("removing {}: {e}", dest.display()));
         }
         return match std::fs::hard_link(exe, dest) {
@@ -274,6 +274,29 @@ fn link_one(exe: &Path, shim: Shim, dest: &Path, force: bool) -> Outcome {
     match std::fs::hard_link(exe, dest) {
         Ok(()) => Outcome::Created,
         Err(e) => Outcome::Failed(format!("linking {}: {e}", dest.display())),
+    }
+}
+
+/// How long `remove_stale` waits out another process's hold on the file.
+const HOLD_WAIT: Duration = Duration::from_secs(3);
+
+/// Remove `path`, waiting out a brief sharing violation. Windows reports one
+/// while another process holds the file without delete sharing, as a virus
+/// scanner does just after the file runs, and the probe has just run it.
+fn remove_stale(path: &Path) -> std::io::Result<()> {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    let deadline = Instant::now() + HOLD_WAIT;
+    loop {
+        match std::fs::remove_file(path) {
+            Err(e)
+                if cfg!(windows)
+                    && e.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            result => return result,
+        }
     }
 }
 

@@ -985,7 +985,7 @@ fn gates_on(root: &Path, config: &config::Config) -> Vec<(config::Gate, GateOn)>
         weakened::merge_base(root, &config.defaults.pr_base)
             .ok()
             .flatten()
-            .and_then(|base| weakened::config_at(root, &base).ok())
+            .and_then(|base| weakened::config_at(&Checkout::at(root), &base).ok())
             .map_or_else(|| config.pr.gates.clone(), |pr| pr.gates)
     });
     gates

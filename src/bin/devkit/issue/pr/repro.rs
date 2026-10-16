@@ -15,7 +15,7 @@ use devkit_common::{
     caller::Caller,
     progress::Steps,
     test_files::TestFiles,
-    vcs::{NewWorktree, Vcs, VersionControl},
+    vcs::{Checkout, NewWorktree, Vcs, VersionControl},
 };
 use devkit_config::{Gate as GateKey, GateMode, PrGates, ReproTask, Step};
 
@@ -107,7 +107,7 @@ pub(crate) struct Gate {
     head: String,
     merge_base: String,
     /// The checkout the PR is opened from.
-    dir: PathBuf,
+    checkout: Checkout,
     /// The `test_files` globs the merge base's config sets.
     test_files: Vec<String>,
     /// The issue's `Done when` items.
@@ -142,7 +142,7 @@ impl Gate {
     /// or the worktree's issue lists no items. Nothing runs until
     /// [`Gate::apply`].
     pub(crate) fn read(
-        dir: &Path,
+        checkout: &Checkout,
         merge_base: &str,
         gates: &PrGates,
         test_files: &[String],
@@ -159,14 +159,14 @@ impl Gate {
         if mode == GateMode::Off {
             return Ok(None);
         }
-        prune_stale(dir);
+        prune_stale(checkout);
         let mut gate = Self {
             mode,
             caller,
             task,
             head: head.to_string(),
             merge_base: merge_base.to_string(),
-            dir: dir.to_path_buf(),
+            checkout: checkout.clone(),
             test_files: test_files.to_vec(),
             texts: Vec::new(),
             reverted: Vec::new(),
@@ -187,7 +187,7 @@ impl Gate {
             return Ok(());
         }
         let texts = std::mem::take(&mut self.texts);
-        let dir = self.dir.clone();
+        let checkout = self.checkout.clone();
         let marked: Vec<(usize, Option<String>)> = texts
             .iter()
             .enumerate()
@@ -206,7 +206,7 @@ impl Gate {
             .collect();
         if !marked.is_empty() {
             let tests = TestFiles::new(&self.test_files)?;
-            match self.check(&dir, &tests, &marked) {
+            match self.check(&checkout, &tests, &marked) {
                 Ok(found) => {
                     for (i, outcome) in found {
                         outcomes[i] = outcome;
@@ -236,11 +236,11 @@ impl Gate {
     /// selector it names.
     fn check(
         &mut self,
-        dir: &Path,
+        checkout: &Checkout,
         tests: &TestFiles,
         marked: &[(usize, Option<String>)],
     ) -> Result<Vec<(usize, Outcome)>> {
-        let revert = revert(dir, &self.merge_base, &self.head, tests)?;
+        let revert = revert(checkout, &self.merge_base, &self.head, tests)?;
         let mut out = Vec::new();
         let mut runnable = Vec::new();
         for (i, selector) in marked {
@@ -293,7 +293,7 @@ impl Gate {
         if runnable.is_empty() {
             return Ok(out);
         }
-        let ran = match self.run(dir, &revert, &runnable)? {
+        let ran = match self.run(checkout, &revert, &runnable)? {
             Ok(ran) => ran,
             Err(why) => {
                 out.extend(
@@ -331,14 +331,15 @@ impl Gate {
     /// in a throwaway worktree, or why the runs could not be compared.
     fn run(
         &self,
-        dir: &Path,
+        checkout: &Checkout,
         revert: &Revert,
         runnable: &[(usize, String)],
     ) -> Result<std::result::Result<Vec<(Ran, Ran)>, String>> {
         let steps = Steps::new();
-        let worktree = Throwaway::new(dir, &self.head)?;
+        let worktree = Throwaway::new(checkout, &self.head)?;
         let at = &worktree.path();
-        if let Some(why) = self.starts_servers(at) {
+        let throwaway = Checkout::at(at);
+        if let Some(why) = self.starts_servers(&throwaway) {
             return Ok(Err(why));
         }
         let mut heads = Vec::new();
@@ -362,7 +363,7 @@ impl Gate {
                 _ => {}
             }
         }
-        if let Some(why) = self.starts_servers(at) {
+        if let Some(why) = self.starts_servers(&throwaway) {
             return Ok(Err(why));
         }
         let mut out = Vec::new();
@@ -384,8 +385,8 @@ impl Gate {
     /// running for the run with the fix reverted to reuse, and outlive the
     /// throwaway worktree. `None` when the config does not load there, so
     /// the run reports that itself.
-    fn starts_servers(&self, at: &Path) -> Option<String> {
-        let (cfg, _) = devkit_common::config::resolve(None, at).ok()?;
+    fn starts_servers(&self, at: &Checkout) -> Option<String> {
+        let (cfg, _) = devkit_common::config::resolve_in(at, None, at.dir()).ok()?;
         let apps: Vec<String> = cfg
             .tasks
             .get(&self.task.task)?
@@ -600,8 +601,9 @@ fn throwaway_root() -> PathBuf {
 }
 
 impl Throwaway {
-    fn new(dir: &Path, head: &str) -> Result<Self> {
-        let main = devkit_common::vcs::primary_checkout(dir)?;
+    fn new(checkout: &Checkout, head: &str) -> Result<Self> {
+        let here = checkout.worktree()?;
+        let main = checkout.primary().unwrap_or(&here.path).to_path_buf();
         let root = throwaway_root();
         std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
         let holder = tempfile::Builder::new()
@@ -617,7 +619,7 @@ impl Throwaway {
             _lock: lock,
             holder,
         };
-        Vcs::at(dir)
+        Vcs::at(checkout.dir())
             .create_worktree(&NewWorktree {
                 main: &worktree.main,
                 path: &worktree.path(),
@@ -647,21 +649,18 @@ fn remove_worktree(main: &Path, path: &Path) {
     }
 }
 
-/// Removes the throwaway worktrees of `dir`'s repository that an earlier
-/// `pr create` leaked, as when it was interrupted: those whose holder's
-/// lock no process holds. A failure leaves the worktree for the next try.
-pub(crate) fn prune_stale(dir: &Path) {
+/// Removes the throwaway worktrees of `checkout`'s repository that an
+/// earlier `pr create` leaked, as when it was interrupted: those whose
+/// holder's lock no process holds. A failure leaves the worktree for the
+/// next try.
+pub(crate) fn prune_stale(checkout: &Checkout) {
     let Ok(root) = throwaway_root().canonicalize() else {
         return;
     };
-    let vcs = Vcs::at(dir);
-    let Ok(Some(worktrees)) = vcs.worktrees(dir) else {
+    let Some(main) = checkout.primary() else {
         return;
     };
-    let Ok(main) = devkit_common::vcs::primary_checkout(dir) else {
-        return;
-    };
-    for worktree in worktrees {
+    for worktree in checkout.worktrees() {
         let Some(holder) = worktree.path.parent().and_then(|h| h.canonicalize().ok()) else {
             continue;
         };
@@ -682,7 +681,7 @@ pub(crate) fn prune_stale(dir: &Path) {
         if lock.try_lock().is_err() {
             continue;
         }
-        remove_worktree(&main, &worktree.path);
+        remove_worktree(main, &worktree.path);
         drop(lock);
         let _ = std::fs::remove_dir_all(&holder);
     }
@@ -691,12 +690,13 @@ pub(crate) fn prune_stale(dir: &Path) {
 /// What reverting the branch's non-test changes between `merge_base` and
 /// `head` takes. A changed file whose change is all inline tests is left
 /// alone, as a test file is.
-fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result<Revert> {
+fn revert(checkout: &Checkout, merge_base: &str, head: &str, tests: &TestFiles) -> Result<Revert> {
+    let dir = checkout.dir();
     let vcs = Vcs::at(dir);
     let mut out = Revert::default();
     let is_test = |rev: &str, path: &str| -> Result<bool> {
         Ok(tests.matches(path)
-            || test_module_file(path, tests, &|p: &str| vcs.file_at(dir, rev, p))?)
+            || test_module_file(path, tests, &|p: &str| checkout.file_at(rev, p))?)
     };
     let changes = vcs.changed_files(dir, merge_base, head)?;
     let rust_changed = changes
@@ -710,8 +710,8 @@ fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result
         }
         let mut out = Vec::new();
         for file in vcs.files_containing(dir, rev, "#[path")? {
-            if let Some(text) = vcs
-                .file_at(dir, rev, &file)?
+            if let Some(text) = checkout
+                .file_at(rev, &file)?
                 .filter(|_| file.ends_with(".rs"))
             {
                 out.extend(path_targets(&file, &text));
@@ -742,7 +742,7 @@ fn revert(dir: &Path, merge_base: &str, head: &str, tests: &TestFiles) -> Result
         }
         let read = |rev: &str, p: &Option<String>| -> Result<Option<String>> {
             match p {
-                Some(p) => vcs.file_at(dir, rev, p),
+                Some(p) => checkout.file_at(rev, p),
                 None => Ok(None),
             }
         };

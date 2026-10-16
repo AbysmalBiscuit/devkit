@@ -604,6 +604,7 @@ dependencies = [
  "same-file",
  "serde",
  "serde_json",
+ "socket2",
  "strum 0.27.2",
  "supports-hyperlinks",
  "tempfile",

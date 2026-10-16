@@ -17,6 +17,8 @@
 
 use std::{path::Path, process::Command};
 
+use devkit_git::template::{Step, Template};
+
 /// A project the PR commands can run in, wired to a `gh` that answers from
 /// fixtures and logs every argument vector it is handed.
 pub struct Fake {
@@ -72,27 +74,9 @@ impl Fake {
     fn build(extra_defaults: &str, prs: &[Pr], origin: Option<&str>) -> Self {
         let project = tempfile::tempdir().expect("project dir");
         let git = || devkit_git::Git::fixture(project.path());
-        git()
-            .args(["init", "-q", "-b", "lev/eng-1-fix"])
-            .output()
-            .expect("git init");
-        std::fs::write(project.path().join("README"), "x").expect("write README");
-        git().args(["add", "-A"]).output().expect("git add");
-        git()
-            .args(["commit", "-q", "-m", "init"])
-            .output()
-            .expect("git commit");
-        // `pr create` reads its gates at the merge base with the PR base.
-        git()
-            .args(["branch", "main"])
-            .output()
-            .expect("git branch main");
-        let head = git()
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .expect("git rev-parse")
-            .trim()
-            .to_string();
+        let template = Template::of(Path::new(env!("CARGO_TARGET_TMPDIR")), &TEMPLATE);
+        template.copy_to(project.path());
+        let head = template.head();
         let github = match origin {
             Some(url) => {
                 git()
@@ -440,10 +424,20 @@ github = "sweeper[bot]"
     /// Run `devkit ARGS` from the project directory, against the fake `gh`,
     /// with no Linear key to validate or detect.
     pub fn devkit_here(&self, args: &[&str]) -> std::process::Output {
+        self.devkit_here_with_env(args, &[])
+    }
+
+    /// [`Fake::devkit_here`] with each of `env` set.
+    pub fn devkit_here_with_env(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> std::process::Output {
         self.devkit_cmd()
             .current_dir(self.project.path())
             .env_remove("LINEAR_API_KEY")
             .args(args)
+            .envs(env.iter().copied())
             .output()
             .expect("spawn devkit")
     }
@@ -528,6 +522,16 @@ fn rest_pr_json(pr: &Pr, head: &str) -> String {
         author = pr.author,
     )
 }
+
+/// What every [`Fake`] project's repository holds before its `devkit.toml`.
+const TEMPLATE: [Step; 5] = [
+    Step::Write("README", "x"),
+    Step::Git(&["init", "-q", "-b", "lev/eng-1-fix"]),
+    Step::Git(&["add", "-A"]),
+    Step::Git(&["commit", "-q", "-m", "init"]),
+    // `pr create` reads its gates at the merge base with the PR base.
+    Step::Git(&["branch", "main"]),
+];
 
 /// Copy the `ghfake` example binary into `bin_dir` under the name `gh`, so a
 /// `PATH` carrying that directory resolves it the way `Command::new("gh")`

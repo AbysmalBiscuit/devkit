@@ -52,6 +52,8 @@ devkit-git = { workspace = true, features = ["test-support"] }
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
 
-# Win32 process primitives (handles, Toolhelp, console control).
+# Win32 process primitives (handles, Toolhelp, console control) and the socket
+# option a port probe sets before it connects.
 [target.'cfg(windows)'.dependencies]
+socket2.workspace = true
 windows-sys.workspace = true

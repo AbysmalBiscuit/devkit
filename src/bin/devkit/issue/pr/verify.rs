@@ -2,13 +2,13 @@
 //! recorded passing on. Only `devrun task` writes the run ledger, so the
 //! record is evidence an agent cannot type into the PR body itself.
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{Result, bail};
-use devkit_common::caller::Caller;
+use devkit_common::{
+    caller::Caller,
+    vcs::{Checkout, Worktree},
+};
 use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask};
 use devkit_ports::{
     ledger::{Ledger, Run, Step},
@@ -34,12 +34,12 @@ pub(crate) struct Gate {
 }
 
 impl Gate {
-    /// The gate `gates` configures for a PR opened at `head` from the
-    /// checkout at `dir`, or `None` when it is off or names no task. A
-    /// branch that changes what the required task runs since `merge_base`
-    /// is not refused for it: the Verification section shows the change.
+    /// The gate `gates` configures for a PR opened at `head` from
+    /// `checkout`, or `None` when it is off or names no task. A branch that
+    /// changes what the required task runs since `merge_base` is not refused
+    /// for it: the Verification section shows the change.
     pub(crate) fn read(
-        dir: &Path,
+        checkout: &Checkout,
         merge_base: &str,
         gates: &PrGates,
         head: &str,
@@ -55,10 +55,12 @@ impl Gate {
         if mode == GateMode::Off {
             return Ok(None);
         }
-        let repo = devkit_common::vcs::primary_checkout(dir)?;
+        let worktree = checkout.worktree()?;
+        let repo = checkout.primary().unwrap_or(&worktree.path).to_path_buf();
         let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
         let runs: Vec<Run> = ledger.runs_in(&repo)?.into_iter().rev().collect();
-        let (required, moved_from) = match heads_required(dir, head, &required, caller, &runs) {
+        let at_head = heads_required(checkout, worktree, head, &required, caller, &runs);
+        let (required, moved_from) = match at_head {
             Some(at_head) => (at_head, Some(required)),
             None => (required, None),
         };
@@ -84,7 +86,8 @@ impl Gate {
         };
         let run_dir = run.as_ref().and_then(|r| r.dir.as_deref()).unwrap_or("");
         let change = definition_change(
-            dir,
+            checkout,
+            worktree,
             merge_base,
             head,
             run_dir,
@@ -93,7 +96,7 @@ impl Gate {
         );
         let ran = run
             .as_ref()
-            .map(|r| ran_note(dir, head, r, &required))
+            .map(|r| ran_note(checkout, worktree, head, r, &required))
             .unwrap_or_default();
         Ok(Some(Self {
             mode,
@@ -216,13 +219,13 @@ fn reused_note(required: &RequiredTask, run: &Run) -> String {
 /// it, else at the checkout root. `None` when the merge base's applies, or
 /// HEAD's committed config names no required run that does.
 fn heads_required(
-    dir: &Path,
+    checkout: &Checkout,
+    worktree: &Worktree,
     head: &str,
     required: &RequiredTask,
     caller: Caller,
     runs: &[Run],
 ) -> Option<RequiredTask> {
-    let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
     let applies = |r: &RequiredTask| {
         let run_dir = runs
             .iter()
@@ -230,10 +233,10 @@ fn heads_required(
             .and_then(|run| run.dir.as_deref())
             .unwrap_or("");
         task::committed_plan(
-            dir,
+            checkout,
             head,
             run_dir,
-            &root,
+            worktree,
             &r.task,
             &r.args,
             &BTreeMap::new(),
@@ -243,7 +246,7 @@ fn heads_required(
     if applies(required) {
         return None;
     }
-    let gates = super::weakened::config_at(dir, head).ok()?.gates;
+    let gates = super::weakened::config_at(checkout, head).ok()?.gates;
     let at_head = gates.all().into_iter().find_map(|(gate, _)| match gate {
         GateKey::Verify(r) => Some(r),
         GateKey::WeakenedTests | GateKey::Repro(_) => None,
@@ -254,22 +257,30 @@ fn heads_required(
 /// The note on what the PR changes in what the required run executes:
 /// `at_base` as the `devkit.toml` layers committed at `merge_base` define
 /// it for a run started in `run_dir`, against `required` as those
-/// committed at `head` do, both rendered for the checkout at `dir`. No
-/// other layer enters either side, so an uncommitted edit, the primary
-/// checkout's config, the home config or a `devkit.local.toml` shows as no
-/// change. `None` when nothing differs.
+/// committed at `head` do, both rendered for `worktree`. No other layer
+/// enters either side, so an uncommitted edit, the primary checkout's
+/// config, the home config or a `devkit.local.toml` shows as no change.
+/// `None` when nothing differs.
 fn definition_change(
-    dir: &Path,
+    checkout: &Checkout,
+    worktree: &Worktree,
     merge_base: &str,
     head: &str,
     run_dir: &str,
     at_base: &RequiredTask,
     required: &RequiredTask,
 ) -> Option<String> {
-    let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
     let base_ports = Default::default();
     let plan = |rev, r: &RequiredTask| {
-        task::committed_plan(dir, rev, run_dir, &root, &r.task, &r.args, &base_ports)
+        task::committed_plan(
+            checkout,
+            rev,
+            run_dir,
+            worktree,
+            &r.task,
+            &r.args,
+            &base_ports,
+        )
     };
     let moved = (at_base != required).then(|| {
         format!(
@@ -336,7 +347,13 @@ fn changed_plan(
 /// `head` define the required task to run. A layer outside those files,
 /// such as a `devkit.local.toml`, the primary checkout's config, `--config`
 /// or `$DEVKIT_CONFIG`, changes what runs without dirtying the tree.
-fn ran_note(dir: &Path, head: &str, run: &Run, required: &RequiredTask) -> String {
+fn ran_note(
+    checkout: &Checkout,
+    worktree: &Worktree,
+    head: &str,
+    run: &Run,
+    required: &RequiredTask,
+) -> String {
     let mut out = String::new();
     if !run.steps.is_empty() {
         let lines: Vec<String> = run
@@ -349,13 +366,12 @@ fn ran_note(dir: &Path, head: &str, run: &Run, required: &RequiredTask) -> Strin
             .collect();
         out = format!("\nSteps run:\n{}", leading_block(&lines, "text"));
     }
-    let root = devkit_common::vcs::checkout_root(dir).unwrap_or_else(|_| dir.to_path_buf());
     let committed = |ports: &BTreeMap<String, u16>| {
         task::committed_plan(
-            dir,
+            checkout,
             head,
             run.dir.as_deref().unwrap_or(""),
-            &root,
+            worktree,
             &required.task,
             &required.args,
             ports,

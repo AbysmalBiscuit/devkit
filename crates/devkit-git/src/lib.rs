@@ -12,10 +12,12 @@
 
 mod backend;
 mod commit;
+#[cfg(any(test, feature = "test-support"))]
+pub mod template;
 
 use std::{
     ffi::OsStr,
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
@@ -64,6 +66,7 @@ pub struct Git {
     args: Vec<String>,
     timeout: Duration,
     cwd: Option<PathBuf>,
+    input: Option<Vec<u8>>,
 }
 
 impl Git {
@@ -104,6 +107,7 @@ impl Git {
             args: Vec::new(),
             timeout: TIMEOUT,
             cwd: None,
+            input: None,
         }
     }
 
@@ -137,6 +141,13 @@ impl Git {
     /// Set one of git's own behavior variables, e.g. `GIT_NO_LAZY_FETCH`.
     pub fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
         self.command.env(key, value);
+        self
+    }
+
+    /// Feed `input` to git on standard input, which is otherwise empty.
+    pub fn input(mut self, input: impl Into<Vec<u8>>) -> Self {
+        self.command.stdin(Stdio::piped());
+        self.input = Some(input.into());
         self
     }
 
@@ -211,6 +222,14 @@ impl Git {
             .spawn()
             .with_context(|| format!("failed to spawn `{command_line}`"))?;
 
+        // Written on its own thread for the reason the output is drained on
+        // others: a child that fills its stdout pipe stops reading stdin.
+        let stdin_writer = self.input.take().map(|input| {
+            let mut stdin = child.stdin.take().expect("stdin is piped in `input`");
+            thread::spawn(move || {
+                let _ = stdin.write_all(&input);
+            })
+        });
         let mut stdout_pipe = child.stdout.take().expect("stdout is piped in `bare`");
         let mut stderr_pipe = child.stderr.take().expect("stderr is piped in `bare`");
         let stdout_reader = thread::spawn(move || {
@@ -246,6 +265,9 @@ impl Git {
             thread::sleep(Duration::from_millis(1));
         };
 
+        if let Some(writer) = stdin_writer {
+            let _ = writer.join();
+        }
         let stdout = stdout_reader
             .join()
             .map_err(|_| anyhow::anyhow!("git stdout reader thread panicked"))?;

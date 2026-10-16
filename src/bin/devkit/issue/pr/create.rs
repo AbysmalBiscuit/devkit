@@ -5,7 +5,7 @@ use devkit_common::{
     caller::Caller,
     forge::{self, Forge, NewPr, PrLocator},
     progress::Steps,
-    vcs::{Vcs, VersionControl},
+    vcs::{Checkout, Vcs, VersionControl},
 };
 use devkit_config::{Gate as GateKey, GateMode, IssueEvent, PrCreateState};
 use devkit_ports::ledger::Ledger;
@@ -159,6 +159,8 @@ pub(crate) struct Ensure<'a, G> {
     /// `pr_body`: reading them needs the PR base at hand, which a run reusing
     /// a PR does not.
     pub gates: G,
+    /// The worktree's root, where its record is kept.
+    pub toplevel: &'a Path,
 }
 
 /// The PR gates one `pr create` applies to the PR it opens.
@@ -180,12 +182,13 @@ impl Gates {
     /// The repro gate checks the `Done when` items `items` returns, `None`
     /// when the worktree has no issue.
     pub(crate) fn read(
-        dir: &Path,
+        checkout: &Checkout,
         base: &str,
         head: &str,
         caller: Caller,
         items: impl FnOnce() -> Result<Option<Vec<DoneWhen>>>,
     ) -> Result<Self> {
+        let dir = checkout.dir();
         let ungated = Self {
             weakened: None,
             verify: None,
@@ -193,7 +196,7 @@ impl Gates {
         };
         let settings = weakened::merge_base(dir, base).and_then(|merge_base| {
             merge_base
-                .map(|mb| weakened::config_at(dir, &mb).map(|cfg| (mb, cfg)))
+                .map(|mb| weakened::config_at(checkout, &mb).map(|cfg| (mb, cfg)))
                 .transpose()
         });
         let unresolved = || {
@@ -226,10 +229,16 @@ impl Gates {
             Caller::Agent => Some(weakened::Gate::check(dir, &merge_base, &cfg)?),
             Caller::Human => None,
         };
-        let verify =
-            verify::Gate::read(dir, &merge_base, &cfg.gates, head, caller, &Ledger::live())?;
+        let verify = verify::Gate::read(
+            checkout,
+            &merge_base,
+            &cfg.gates,
+            head,
+            caller,
+            &Ledger::live(),
+        )?;
         let repro = repro::Gate::read(
-            dir,
+            checkout,
             &merge_base,
             &cfg.gates,
             &cfg.test_files,
@@ -365,8 +374,7 @@ where
     };
 
     if args.existing.record.is_some() {
-        let toplevel = devkit_common::vcs::checkout_root(Path::new(start))?;
-        resolved.pr_open_claimed = devkit_common::record::update(&toplevel, |rec| {
+        resolved.pr_open_claimed = devkit_common::record::update(args.toplevel, |rec| {
             let Some(rec) = rec else { return false };
             rec.pr = Some(resolved.locator.clone());
             args.claim_pr_open && rec.claim(IssueEvent::PrOpen)
@@ -377,8 +385,10 @@ where
 
 pub fn run(args: Args) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
+    let here = Path::new(&start);
+    let checkout = Checkout::at(here);
     let loaded =
-        devkit_ports::load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
+        devkit_ports::load::load_in(&checkout, args.config.as_deref().map(Path::new), here)?;
     let people = &loaded.config.people;
     let forge = forge::resolve(&loaded.config.forge, &loaded.config.github, &start, None);
     check_attachments(forge.forge.as_ref(), Path::new(&start), &args.attach)?;
@@ -386,9 +396,8 @@ pub fn run(args: Args) -> Result<()> {
     let caller = devkit_common::caller::caller();
     let vars = values("pr create", &loaded.config, &args.vars, caller)?;
 
-    let here = Path::new(&start);
-    let vcs = Vcs::at(here);
-    let branch = vcs.branch(here)?;
+    let worktree = checkout.worktree()?;
+    let branch = worktree.branch.clone();
     guard_branch(&branch)?;
 
     let explicit: Vec<Target> = args
@@ -401,8 +410,8 @@ pub fn run(args: Args) -> Result<()> {
         eprintln!("warning: {w}");
     }
 
-    let toplevel = devkit_common::vcs::checkout_root(Path::new(&start))?;
-    let record = devkit_common::record::read_on(&toplevel, &branch);
+    let toplevel = worktree.path.as_path();
+    let record = devkit_common::record::read_on(toplevel, &branch);
 
     let tracker_issue = record.as_ref().and_then(|r| r.tracker_issue());
     gate_proof(
@@ -418,7 +427,7 @@ pub fn run(args: Args) -> Result<()> {
         .base
         .clone()
         .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
-    let head = vcs.revision(here)?;
+    let head = Vcs::at(here).revision(here)?;
     let gate_base = base.clone();
     let gate_head = head.clone();
     let gate_issue = tracker_issue.clone();
@@ -433,13 +442,13 @@ pub fn run(args: Args) -> Result<()> {
         })?;
         Ok(Some(done_when_entries(&details.description)))
     };
-    let gates = move || Gates::read(here, &gate_base, &gate_head, caller, items);
+    let gates = || Gates::read(&checkout, &gate_base, &gate_head, caller, items);
 
     let texts = Texts::new(
         &loaded.config.templates,
         record.as_ref(),
         &branch,
-        &toplevel,
+        toplevel,
         vars,
         args.pr_title,
         args.pr_body,
@@ -486,6 +495,7 @@ pub fn run(args: Args) -> Result<()> {
         steps: &steps,
         claim_pr_open: tracker_issue.is_some() && loaded.config.ticket.events.pr_open.is_some(),
         gates,
+        toplevel,
     })?;
 
     println!("{}", resolved.url);

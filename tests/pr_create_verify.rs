@@ -3,6 +3,8 @@
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
+#[path = "common/gittrace.rs"]
+mod gittrace;
 
 const TASKS: &str = r#"
 [tasks.verify]
@@ -1099,4 +1101,54 @@ fn a_run_whose_second_up_step_reuses_the_server_its_first_launched_qualifies() {
     let (ok, stderr) = create(&p, "agent");
     assert!(ok, "{stderr}");
     assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
+}
+
+/// A run reads the commit and the tree state once before the task and once
+/// after, and the gate reads `devkit.toml` once at the merge base and once
+/// at HEAD; every other question a run and a gated `pr create` ask of git is
+/// asked once.
+#[test]
+fn a_run_and_its_gated_pr_ask_git_each_question_once() {
+    let p = project(GATE);
+    let trace = gittrace::GitTrace::new();
+    let traced = (gittrace::GitTrace::VAR, trace.dir().to_str().unwrap());
+
+    let out = p.devkit_here_with_env(&["run", "task", "verify", "--arg", "scope=all"], &[traced]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let calls = trace.take();
+    assert_eq!(
+        gittrace::GitTrace::repeated(&calls),
+        [("rev-parse HEAD", 2), ("status --porcelain", 2)].into(),
+        "{calls:#?}"
+    );
+
+    let out = p.issue_with_env(
+        &[
+            "pr",
+            "create",
+            "--no-push",
+            "--pr-title",
+            "feat: a thing",
+            "--pr-body",
+            "Adds a thing.",
+        ],
+        &[("DEVKIT_CALLER", "agent"), traced],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let calls = trace.take();
+    // Each read names its object on standard input, which the trace leaves
+    // out, so the two reads show as one call made twice.
+    assert_eq!(
+        gittrace::GitTrace::repeated(&calls),
+        [("cat-file --batch", 2)].into(),
+        "{calls:#?}"
+    );
 }

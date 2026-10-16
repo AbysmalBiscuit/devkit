@@ -25,6 +25,15 @@ pub fn scrub_identity(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
+/// Unsets the XDG homes a test leaves to `HOME`, so the child keeps its data,
+/// config and cache under the test's `HOME` instead of the developer's.
+pub fn scrub_xdg_homes(cmd: &mut Command) -> &mut Command {
+    for var in ["XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 /// A `Command` for `exe` whose `HOME` and `XDG_STATE_HOME` point at a fresh
 /// temp dir. Bind the guard for as long as the command runs.
 ///
@@ -33,7 +42,8 @@ pub fn scrub_identity(cmd: &mut Command) -> &mut Command {
 pub fn isolated(exe: impl AsRef<OsStr>) -> (tempfile::TempDir, Command) {
     let home = tempfile::tempdir().expect("temp home");
     let mut cmd = Command::new(exe);
-    cmd.env("HOME", home.path())
+    scrub_xdg_homes(&mut cmd)
+        .env("HOME", home.path())
         .env("XDG_STATE_HOME", home.path())
         .env("DEVKIT_SKIP_AUTOLINK", "1");
     (home, cmd)

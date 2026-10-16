@@ -1,6 +1,8 @@
 //! `devkit todo` and the todo hooks on the taskchampion backend, chosen by
 //! `DEVKIT_TODO_BACKEND` as a container chooses it.
 
+#[path = "common/gittrace.rs"]
+mod gittrace;
 #[path = "common/syncserver.rs"]
 mod syncserver;
 #[path = "common/todoenv.rs"]
@@ -711,16 +713,21 @@ fn session_end_pushes_the_release() {
         Status::InProgress { .. }
     ));
 
+    // A sync that completes leaves `sync.pulled`, so waiting on it leaves the
+    // server to the sync under test.
+    let pulled = replica_dir(&shared.p).join("sync.pulled");
+    assert!(!pulled.exists());
     let out = shared.p.hook(
         "session-end",
         "claude-code",
         &json!({"session_id": "s1", "cwd": shared.p.path}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    poll_until(Duration::from_secs(30), "the release on the server", || {
-        other.sync_once().unwrap();
-        other.get(&id).unwrap().unwrap().status == Status::Pending
+    poll_until(Duration::from_secs(30), "the session's sync", || {
+        pulled.exists()
     });
+    other.sync_once().unwrap();
+    assert_eq!(other.get(&id).unwrap().unwrap().status, Status::Pending);
 }
 
 #[test]
@@ -1082,4 +1089,26 @@ fn a_queued_capture_keeps_the_node_it_was_made_on() {
         alpha.project.as_deref(),
         Some(format!("proj.main.claude-{SESSION}").as_str())
     );
+}
+
+/// A todo command lists the repository's worktrees and reads its `origin`
+/// at most once, however many of its config, its list's name, its sync
+/// target and its forge read them.
+#[test]
+fn a_todo_command_reads_its_worktrees_and_origin_once() {
+    let shared = Shared::new();
+    let trace = gittrace::GitTrace::new();
+    let traced = [(gittrace::GitTrace::VAR, trace.dir().to_str().unwrap())];
+    for command in [
+        &["todo", "list", "--node", "proj.main"][..],
+        &["todo", "sync"][..],
+    ] {
+        let out = shared.p.devkit(command, &traced);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let calls = trace.take();
+        let listings = calls.iter().filter(|c| *c == "worktree list --porcelain");
+        assert_eq!(listings.count(), 1, "{command:?}: {calls:#?}");
+        let origin = calls.iter().filter(|c| *c == "remote get-url origin");
+        assert!(origin.count() <= 1, "{command:?}: {calls:#?}");
+    }
 }

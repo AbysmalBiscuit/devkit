@@ -4,6 +4,8 @@
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
+#[path = "common/gittrace.rs"]
+mod gittrace;
 
 /// A "test runner" that passes when a line of the test file the selector
 /// names appears under `src/`, and exits 128 when the file does not exist.
@@ -133,6 +135,43 @@ fn a_fix_that_turns_its_repro_red_to_green_opens_with_both_runs_in_the_body() {
     let codes = repro_runs(&p);
     assert_eq!(codes.len(), 2, "both runs land in the ledger: {codes:?}");
     assert!(codes.contains(&0) && codes.contains(&1), "{codes:?}");
+}
+
+#[test]
+fn a_repro_check_lists_the_worktrees_once_per_checkout() {
+    let p = project(GATE, FIX);
+    let trace = gittrace::GitTrace::new();
+    let out = p.issue_with_env(
+        &[
+            "pr",
+            "create",
+            "--no-push",
+            "--pr-title",
+            "fix: the lib",
+            "--pr-body",
+            "Fixes the lib.",
+        ],
+        &[
+            ("DEVKIT_CALLER", "agent"),
+            (gittrace::GitTrace::VAR, trace.dir().to_str().unwrap()),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let calls = trace.take();
+    // One listing for the caller's checkout, one for the throwaway worktree,
+    // and one in each of the two repro runs there.
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| *c == "worktree list --porcelain")
+            .count(),
+        4,
+        "{calls:#?}"
+    );
 }
 
 /// The exit codes of the repro runs the project's ledger holds.

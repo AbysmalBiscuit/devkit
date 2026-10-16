@@ -667,17 +667,17 @@ impl Store {
         }
     }
 
-    /// The config a CLI call in `cwd` reads: `None` when there is none
+    /// The config a CLI call in `checkout` reads: `None` when there is none
     /// anywhere, as in a cloud session.
-    pub(crate) fn cli_config(cwd: &Path) -> Result<Option<TodoConfig>> {
-        Ok(Self::cli_config_with_provenance(cwd)?.map(|(config, _)| config))
+    pub(crate) fn cli_config(checkout: &Checkout) -> Result<Option<TodoConfig>> {
+        Ok(Self::cli_config_with_provenance(checkout)?.map(|(config, _)| config))
     }
 
     /// [`Self::cli_config`] with the provenance of the resolved layers.
     pub(crate) fn cli_config_with_provenance(
-        cwd: &Path,
+        checkout: &Checkout,
     ) -> Result<Option<(TodoConfig, Provenance)>> {
-        match devkit_common::config::resolve(None, cwd) {
+        match devkit_common::config::resolve_in(checkout, None, checkout.dir()) {
             Ok((config, provenance)) => Ok(Some((config.todo, provenance))),
             Err(e) if e.downcast_ref::<NoConfig>().is_some() => Ok(None),
             Err(e) => Err(e),
@@ -688,8 +688,8 @@ impl Store {
     /// backend the effective one. No config anywhere is the default config; a
     /// config that fails to load or an unknown `DEVKIT_TODO_BACKEND` is an
     /// error.
-    fn effective_cli_config(cwd: &Path) -> Result<(TodoConfig, TicketConfig)> {
-        let config = match devkit_common::config::resolve(None, cwd) {
+    fn effective_cli_config(checkout: &Checkout) -> Result<(TodoConfig, TicketConfig)> {
+        let config = match devkit_common::config::resolve_in(checkout, None, checkout.dir()) {
             Ok((config, _)) => Some(config),
             Err(e) if e.downcast_ref::<NoConfig>().is_some() => None,
             Err(e) => return Err(e),
@@ -699,13 +699,18 @@ impl Store {
 
     /// The store a CLI call in `cwd` uses.
     pub(crate) fn for_cli(cwd: &Path) -> Result<Self> {
-        let (config, ticket) = Self::effective_cli_config(cwd)?;
-        Ok(Self::open(&config, ticket, Opener::Cli, Checkout::at(cwd)))
+        Self::for_cli_in(&Checkout::at(cwd))
+    }
+
+    /// [`Self::for_cli`] against a checkout the caller has already resolved.
+    pub(crate) fn for_cli_in(checkout: &Checkout) -> Result<Self> {
+        let (config, ticket) = Self::effective_cli_config(checkout)?;
+        Ok(Self::open(&config, ticket, Opener::Cli, checkout.clone()))
     }
 
     /// The activity log a CLI call in `cwd` reads.
     pub(crate) fn activity_for_cli(cwd: &Path) -> Result<Activity> {
-        let (config, _) = Self::effective_cli_config(cwd)?;
+        let (config, _) = Self::effective_cli_config(&Checkout::at(cwd))?;
         Ok(Activity::of(&config, Opener::Cli))
     }
 
@@ -719,7 +724,7 @@ impl Store {
     /// functions it created. Only the postgres backend reaches the database
     /// directly; every other backend is refused.
     pub(crate) fn update_schema(cwd: &Path) -> Result<(String, Vec<String>)> {
-        let (config, _) = Self::effective_cli_config(cwd)?;
+        let (config, _) = Self::effective_cli_config(&Checkout::at(cwd))?;
         match config.backend {
             TodoBackend::Postgres => {
                 let db = database(&config.postgres, Opener::Cli);
@@ -778,12 +783,12 @@ impl Store {
         store
     }
 
-    /// The replica `devkit todo sync` in `cwd` syncs, its target resolved:
-    /// `None` for another backend or when no target resolves. Some but not
-    /// all server credentials, or a client id that is not a UUID, is an
-    /// error naming the variables.
-    pub(crate) fn sync_replica(cwd: &Path) -> Result<Option<TaskchampionStore>> {
-        let config = Self::cli_config(cwd)?;
+    /// The replica `devkit todo sync` in `checkout` syncs, its target
+    /// resolved: `None` for another backend or when no target resolves. Some
+    /// but not all server credentials, or a client id that is not a UUID, is
+    /// an error naming the variables.
+    pub(crate) fn sync_replica(checkout: &Checkout) -> Result<Option<TaskchampionStore>> {
+        let config = Self::cli_config(checkout)?;
         let env = std::env::var(BACKEND_VAR).ok();
         let (backend, _) = effective_backend(config.as_ref(), env.as_deref())?;
         if backend != TodoBackend::Taskchampion {

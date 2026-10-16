@@ -1,8 +1,16 @@
 //! Unix implementations of the primitives declared in `super`.
 
-use std::collections::{HashMap, HashSet};
 #[cfg(target_os = "linux")]
 use std::fs;
+use std::{
+    collections::{HashMap, HashSet},
+    net::{Ipv4Addr, SocketAddr, TcpStream},
+    time::Duration,
+};
+
+pub(super) fn localhost_accepts(port: u16, timeout: Duration) -> bool {
+    TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), timeout).is_ok()
+}
 
 pub(super) fn process_alive(pid: u32) -> bool {
     use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
@@ -42,10 +50,19 @@ pub(super) fn detach(cmd: &mut std::process::Command) {
     }
 }
 
+pub(super) type BackgroundChild = std::process::Child;
+
 /// Unix closes every descriptor but the null stdio on exec, so a detached
 /// child holds nothing of its parent's.
-pub(super) fn detach_background(cmd: &mut std::process::Command) {
+pub(super) fn spawn_background(
+    cmd: &mut std::process::Command,
+) -> std::io::Result<BackgroundChild> {
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     detach(cmd);
+    cmd.spawn()
 }
 
 pub(super) fn reap_owned(pid: u32) -> bool {

@@ -1,5 +1,7 @@
 #[path = "common/shimtest.rs"]
 mod shimtest;
+#[path = "common/testenv.rs"]
+mod testenv;
 
 #[cfg(unix)]
 use std::process::Stdio;
@@ -43,6 +45,14 @@ fn retry_on_busy<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> T {
     }
 }
 
+/// A `Command` for the devkit at `exe` that keeps every home under the `HOME`
+/// the test sets.
+fn devkit(exe: &std::path::Path) -> Command {
+    let mut cmd = Command::new(exe);
+    testenv::scrub_xdg_homes(&mut cmd);
+    cmd
+}
+
 /// Run `install-links` (with `args` appended) against `exe`, isolated to a
 /// throwaway `HOME`/`XDG_STATE_HOME`. `links::run` takes the `links.lock`
 /// gate and writes the `links-version` stamp itself now (so a manual run
@@ -52,7 +62,7 @@ fn retry_on_busy<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> T {
 fn run(exe: &std::path::Path, args: &[&str]) -> Output {
     let state = tempfile::tempdir().expect("state dir");
     retry_on_busy(|| {
-        Command::new(exe)
+        devkit(exe)
             .args(args)
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -60,17 +70,13 @@ fn run(exe: &std::path::Path, args: &[&str]) -> Output {
     })
 }
 
-/// A throwaway directory holding a copy of the built binary, so a linking pass
-/// never touches the real CARGO_HOME. Bind the guard for as long as the path is
-/// used, or the directory is gone before the test runs anything.
+/// A throwaway directory beside the built binary holding a hardlink to it, so
+/// a linking pass never touches the real CARGO_HOME. Bind the guard for as
+/// long as the path is used.
 ///
-/// Staged beside the `devkit` binary, like `shimtest::linked`: a hardlink
-/// cannot cross a filesystem boundary, and the system temp dir and the build
-/// output are not guaranteed to share one (GitHub's Windows runners check the
-/// workspace out on `D:` while `%TEMP%` resolves under `C:`). The binary is
-/// *copied* rather than hardlinked, though — several tests here replace or
-/// delete the staged executable, which through a hardlink would clobber the
-/// build output itself.
+/// A copy would cost every test a scan: Windows checks each new executable
+/// before its first run, one at a time. Replace or delete the staged name;
+/// never write into it, which writes the build output.
 fn staged() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::Builder::new()
         .prefix("links")
@@ -85,7 +91,7 @@ fn staged() -> (tempfile::TempDir, std::path::PathBuf) {
     } else {
         "devkit"
     });
-    std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &exe).expect("stage devkit");
+    std::fs::hard_link(env!("CARGO_BIN_EXE_devkit"), &exe).expect("stage devkit");
     (dir, exe)
 }
 
@@ -208,11 +214,12 @@ fn replaces_an_existing_devkit_binary() {
 #[test]
 fn replaces_a_real_devkit_binary_at_every_shim_name() {
     let (dir, exe) = staged();
+    let old = dir.path().join("old-devkit");
+    std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &old).expect("stage an old devkit");
     let mut stale_paths = Vec::new();
     for name in SHIMS {
         let stale = shim_path(dir.path(), name);
-        std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &stale)
-            .unwrap_or_else(|e| panic!("stage a stale {name}: {e}"));
+        std::fs::hard_link(&old, &stale).unwrap_or_else(|e| panic!("stage a stale {name}: {e}"));
         stale_paths.push((name, stale));
     }
     let out = run(&exe, &["install-links"]);
@@ -421,6 +428,40 @@ fn force_takes_over_a_foreign_binary() {
     );
 }
 
+/// Windows refuses to delete a file another process holds without delete
+/// sharing, as a virus scanner does for a moment after a file is executed,
+/// and the pass has just executed each stale name to probe it. A brief hold
+/// must not fail the pass.
+#[cfg(windows)]
+#[test]
+fn waits_out_a_brief_hold_on_a_stale_name() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+    let (dir, exe) = staged();
+    let stale = shim_path(dir.path(), "ticket");
+    std::fs::write(&stale, b"stale").expect("write stale ticket");
+    let hold = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&stale)
+        .expect("hold the stale ticket");
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(1));
+        drop(hold);
+    });
+    let out = run(&exe, &["install-links", "--force"]);
+    release.join().expect("release the hold");
+    assert!(
+        out.status.success(),
+        "install-links failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        shimtest::same_inode(&exe, &stale),
+        "ticket should now be a hardlink to devkit"
+    );
+}
+
 /// Running install-links again once every shim is already the right hardlink
 /// must be a no-op that reports it, not a remove-and-relink cycle.
 #[test]
@@ -472,7 +513,7 @@ fn probes_never_consume_the_callers_stdin() {
 
     let state = tempfile::tempdir().expect("state dir");
     let mut child = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("install-links")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -503,7 +544,7 @@ fn first_run_links_automatically() {
     let (dir, exe) = staged();
     let state = tempfile::tempdir().expect("state dir");
     let out = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -525,7 +566,7 @@ fn automatic_linking_never_claims_a_foreign_name() {
     let foreign = shim_path(dir.path(), "issue");
     std::fs::write(&foreign, b"#!/bin/sh\necho not devkit\n").expect("write foreign issue");
     retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -547,7 +588,7 @@ fn second_run_writes_this_versions_stamp() {
     let state = tempfile::tempdir().expect("state dir");
     for _ in 0..2 {
         retry_on_busy(|| {
-            Command::new(&exe)
+            devkit(&exe)
                 .arg("doctor")
                 .env("HOME", state.path())
                 .env("XDG_STATE_HOME", state.path())
@@ -582,7 +623,7 @@ fn stamped_run_skips_relinking_work() {
     let (dir, exe) = staged();
     let state = tempfile::tempdir().expect("state dir");
     retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -596,7 +637,7 @@ fn stamped_run_skips_relinking_work() {
     std::fs::remove_file(&lock).expect("remove links.lock to detect a reopen");
 
     retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -628,7 +669,7 @@ fn probe_flag_never_triggers_linking() {
     let (dir, exe) = staged();
     let state = tempfile::tempdir().expect("state dir");
     let out = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("--devkit-shim-probe")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -670,7 +711,7 @@ fn a_contended_gate_is_skipped_without_blocking() {
     // its exit code — a real config problem in the ambient cwd can make
     // `doctor` exit non-zero on its own merits, which is irrelevant here.
     let out = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .args(["doctor", "--json"])
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -702,7 +743,7 @@ fn same_version_reinstall_relinks() {
     let (dir, exe) = staged();
     let state = tempfile::tempdir().expect("state dir");
     retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -733,7 +774,7 @@ fn same_version_reinstall_relinks() {
         .expect("bump mtime");
 
     retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -775,7 +816,7 @@ fn a_skipped_foreign_name_still_completes_the_pass() {
     let foreign = shim_path(dir.path(), "issue");
     std::fs::write(&foreign, b"#!/bin/sh\necho not devkit\n").expect("write foreign issue");
     retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -805,7 +846,7 @@ fn a_failed_pass_is_partial_and_retries_once_the_cooldown_elapses() {
     let state = tempfile::tempdir().expect("state dir");
     let doctor = |state: &std::path::Path| {
         retry_on_busy(|| {
-            Command::new(&exe)
+            devkit(&exe)
                 .arg("doctor")
                 .env("HOME", state)
                 .env("XDG_STATE_HOME", state)
@@ -872,7 +913,7 @@ fn skip_autolink_env_prevents_linking() {
     let (dir, exe) = staged();
     let state = tempfile::tempdir().expect("state dir");
     retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -914,7 +955,7 @@ fn install_links_hard_errors_when_the_gate_is_contended() {
     let _held = gate.try_write().expect("hold the gate for the test");
 
     let out = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("install-links")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -948,7 +989,7 @@ fn install_links_falls_open_on_an_unusable_state_dir() {
     let blocked = home.path().join("state-home-is-a-file");
     std::fs::write(&blocked, b"").expect("occupy the state home with a file");
     let out = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("install-links")
             .env("HOME", home.path())
             .env("XDG_STATE_HOME", &blocked)
@@ -991,7 +1032,7 @@ fn doctor_report(exe: &std::path::Path) -> Output {
 fn doctor_report_in(exe: &std::path::Path, home: &std::path::Path) -> Output {
     let cwd = tempfile::tempdir().expect("cwd outside any project");
     retry_on_busy(|| {
-        Command::new(exe)
+        devkit(exe)
             .arg("doctor")
             .current_dir(cwd.path())
             .env("HOME", home)
@@ -1010,6 +1051,33 @@ fn doctor_row<'a>(text: &'a str, key: &str) -> &'a str {
     text.lines()
         .find(|l| l.split_whitespace().nth(1) == Some(key))
         .unwrap_or_else(|| panic!("no doctor row for {key}: {text}"))
+}
+
+/// A developer's `XDG_DATA_HOME` holds their docs cache, which doctor walks
+/// whole: a test child reaching it reads the developer's files, slowly.
+#[test]
+fn a_test_child_never_reads_the_developers_data_home() {
+    let developer = tempfile::tempdir().expect("developer data home");
+    std::fs::create_dir_all(developer.path().join("devkit/docs/some-lib"))
+        .expect("seed a docs cache");
+    let (_dir, exe) = staged();
+    let home = tempfile::tempdir().expect("home");
+    let cwd = tempfile::tempdir().expect("cwd outside any project");
+    let mut cmd = Command::new(&exe);
+    cmd.env("XDG_DATA_HOME", developer.path());
+    let out = testenv::scrub_xdg_homes(&mut cmd)
+        .arg("doctor")
+        .current_dir(cwd.path())
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .output()
+        .expect("run doctor");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        doctor_row(&text, "docs_cache").contains("empty"),
+        "doctor read the developer's docs cache: {text}"
+    );
 }
 
 /// The mitigation the design named for its top risk — a stale binary from
@@ -1100,7 +1168,7 @@ fn doctor_never_relinks_through_a_probe() {
     let (dir, exe) = staged();
     let state = tempfile::tempdir().expect("state dir");
     let linked = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("install-links")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -1122,7 +1190,7 @@ fn doctor_never_relinks_through_a_probe() {
 
     let cwd = tempfile::tempdir().expect("cwd outside any project");
     retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("doctor")
             .current_dir(cwd.path())
             .env("HOME", state.path())
@@ -1180,7 +1248,7 @@ fn full_help_still_links_the_old_names() {
     let (dir, exe) = staged();
     let state = tempfile::tempdir().expect("state dir");
     let out = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("--help")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
@@ -1201,7 +1269,7 @@ fn full_help_still_links_the_old_names() {
 /// excludes file inside the test's own directories.
 fn install(exe: &std::path::Path, home: &std::path::Path, xdg: Option<&std::path::Path>) -> Output {
     let out = retry_on_busy(|| {
-        let mut cmd = Command::new(exe);
+        let mut cmd = devkit(exe);
         cmd.arg("install")
             .env("HOME", home)
             .env("XDG_STATE_HOME", home.join("state"))
@@ -1322,7 +1390,7 @@ fn install_fails_without_touching_an_unreadable_excludes_file() {
     std::fs::write(&excludes, &latin1).expect("seed excludes");
 
     let out = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("install")
             .env("HOME", home.path())
             .env("XDG_STATE_HOME", home.path().join("state"))
@@ -1382,7 +1450,7 @@ fn install_resolves_home_through_userprofile() {
     let gitconfig = profile.path().join("gitconfig");
     std::fs::write(&gitconfig, "").expect("empty gitconfig");
     let out = retry_on_busy(|| {
-        Command::new(&exe)
+        devkit(&exe)
             .arg("install")
             .env_remove("HOME")
             .env("USERPROFILE", profile.path())

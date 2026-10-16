@@ -68,13 +68,21 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}${{ matrix.partition && format(', {0}', matrix.partition) || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 15 || 10 }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest]
+        # One job running every test nears the timeout on these runners.
+        include:
+          - { os: macos-latest, partition: 1/2 }
+          - { os: macos-latest, partition: 2/2 }
+          - { os: windows-latest, partition: 1/4 }
+          - { os: windows-latest, partition: 2/4 }
+          - { os: windows-latest, partition: 3/4 }
+          - { os: windows-latest, partition: 4/4 }
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -91,14 +99,18 @@ jobs:
           task --version
           task --version | awk -F. '{ exit !($1 > 3 || ($1 == 3 && $2 >= 5)) }'
       - name: Test workspace
-        run: cargo nextest run --workspace --no-fail-fast
+        run: cargo nextest run --workspace --no-fail-fast ${{ matrix.partition && format('--partition count:{0}', matrix.partition) || '' }}
       # nextest does not run doctests. The workspace has none today, so this
       # guards against a future one being silently skipped; one platform is
       # enough for that.
       - name: Doc tests
         if: matrix.os == 'ubuntu-latest'
         run: cargo test --workspace --doc
+      # Skipped on Windows to keep its job short, which leaves the Windows
+      # side of the daemon feature's cfg split unbuilt with the feature off.
+      # One partition per platform builds it.
       - name: Build without default features
+        if: matrix.os != 'windows-latest' && matrix.partition != '2/2'
         run: cargo build --workspace --no-default-features
 
   postgres:

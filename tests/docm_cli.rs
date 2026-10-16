@@ -11,15 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use devkit_git::template::{Step, Template};
+
 const READY: Duration = Duration::from_secs(60);
 const CONTENTION: Duration = Duration::from_secs(30);
-
-fn git(cwd: &Path, args: &[&str]) {
-    devkit_git::Git::fixture(cwd)
-        .args(args.iter().copied())
-        .output()
-        .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
-}
 
 /// A fresh temp directory, with every symlink on the way to it resolved, plus
 /// the guard that removes it. macOS puts `TMPDIR` under a `/var` ->
@@ -38,17 +33,20 @@ fn temp_root() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// A repo on branch `main` with tags v1.0.0 and v1.1.0.
+const FIXTURE: [Step; 9] = [
+    Step::Git(&["init", "-b", "main"]),
+    Step::Write("src/lib.rs", "// v1"),
+    Step::Git(&["add", "."]),
+    Step::Git(&["commit", "-m", "v1"]),
+    Step::Git(&["tag", "v1.0.0"]),
+    Step::Write("src/lib.rs", "// v2"),
+    Step::Git(&["add", "."]),
+    Step::Git(&["commit", "-m", "v2"]),
+    Step::Git(&["tag", "v1.1.0"]),
+];
+
 fn fixture_repo(dir: &Path) {
-    std::fs::create_dir_all(dir.join("src")).unwrap();
-    git(dir, &["init", "-b", "main"]);
-    std::fs::write(dir.join("src/lib.rs"), "// v1").unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-m", "v1"]);
-    git(dir, &["tag", "v1.0.0"]);
-    std::fs::write(dir.join("src/lib.rs"), "// v2").unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-m", "v2"]);
-    git(dir, &["tag", "v1.1.0"]);
+    Template::of(Path::new(env!("CARGO_TARGET_TMPDIR")), &FIXTURE).copy_to(dir);
 }
 
 struct Env {

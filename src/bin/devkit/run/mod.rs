@@ -11,7 +11,7 @@ use devkit_common::{
     disk::human_size,
     progress::Steps,
     supervise, ui,
-    vcs::{Vcs, VersionControl},
+    vcs::{Checkout, Vcs, VersionControl},
 };
 use devkit_ports::{
     load,
@@ -754,7 +754,12 @@ fn cmd_task(
     };
 
     let caller = devkit_common::caller::caller();
-    let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
+    let checkout = Checkout::at(Path::new(cwd));
+    let loaded = load::load_in(
+        &checkout,
+        cli.config.as_deref().map(Path::new),
+        Path::new(cwd),
+    )?;
     let Some(name) = name else {
         let rows = task::list(&loaded.config, &loaded.catalog, caller);
         print!("{}", task::tasks_text(&rows));
@@ -763,18 +768,18 @@ fn cmd_task(
 
     let user = parse_user_env(env_pairs, env_file)?;
     let args = vars.parse()?;
-    let root = toplevel(cwd)?;
+    let worktree = checkout.worktree()?;
+    let root = worktree.path.to_string_lossy().into_owned();
     let resolved = task::resolve(
         &loaded.config,
         &loaded.catalog,
-        Path::new(&root),
+        worktree,
         &root,
         name,
         &user,
         &args,
         caller,
     )?;
-    let root_path = Path::new(&root);
     let up = |app: &String, dry_run: bool| {
         cmd_up(
             cli,
@@ -805,7 +810,7 @@ fn cmd_task(
     }
 
     let start = ledger::Start::capture(
-        root_path,
+        &checkout,
         Path::new(cwd),
         name,
         &args,
@@ -832,7 +837,7 @@ fn cmd_task(
         let fresh = task::resolve_step(
             &loaded.config,
             &loaded.catalog,
-            root_path,
+            worktree,
             &root,
             step_name,
             &user,

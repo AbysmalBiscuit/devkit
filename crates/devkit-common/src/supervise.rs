@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     fs::{self, File},
-    net::TcpStream,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -63,11 +62,7 @@ pub fn spawn_detached(
 /// health-probe thread fires once per cycle, so both judge "accepting
 /// connections" identically.
 pub fn probe_port(port: u16) -> bool {
-    TcpStream::connect_timeout(
-        &(std::net::Ipv4Addr::LOCALHOST, port).into(),
-        Duration::from_millis(300),
-    )
-    .is_ok()
+    crate::sys::localhost_accepts(port, Duration::from_millis(300))
 }
 
 /// Poll localhost:port until it accepts a TCP connection or times out.

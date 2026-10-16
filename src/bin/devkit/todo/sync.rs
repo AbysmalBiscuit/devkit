@@ -9,11 +9,12 @@ use std::{
     fs::{self, File},
     io::ErrorKind,
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::Command,
     time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::Result;
+use devkit_common::sys::BackgroundChild;
 use devkit_todo_taskchampion::TaskchampionStore;
 
 /// How long a failed sync holds off background attempts, so a server that is
@@ -181,7 +182,7 @@ pub(crate) enum SyncOutcome {
 /// Starts `devkit todo sync` detached from this process, in `cwd` so it
 /// resolves the same store. It holds none of this process's handles, so it
 /// never writes to a terminal or keeps a caller's pipe open.
-fn start_sync(cwd: &Path, extra: &[&OsStr]) -> Result<Child> {
+fn start_sync(cwd: &Path, extra: &[&OsStr]) -> Result<BackgroundChild> {
     let mut cmd = Command::new(std::env::current_exe()?);
     cmd.args(["todo", "sync"]).args(extra).current_dir(cwd);
     Ok(devkit_common::sys::spawn_background(&mut cmd)?)
