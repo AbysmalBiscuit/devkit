@@ -15,10 +15,12 @@ concurrency:
 jobs:
   review:
     name: Grok review
-    # Fork PRs get no secrets, so Grok could not authenticate.
+    # Fork PRs get no secrets, so Grok could not authenticate. Release PRs
+    # only bump versions and the changelog, so they get no review.
     if: >-
       !github.event.pull_request.draft &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !startsWith(github.event.pull_request.head.ref, 'release-please--')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
