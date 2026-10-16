@@ -2,7 +2,7 @@
 //! `[todo] backend` names.
 
 pub(crate) mod hold;
-mod names;
+pub(crate) mod names;
 pub(crate) mod promote;
 pub(crate) mod push;
 pub(crate) mod queue;
@@ -378,7 +378,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let checkout = anchor(Checkout::at(&here), &roles, &actor)?;
     let cwd = checkout.dir().to_path_buf();
     let place = node::place_of(&checkout)?;
-    let store = Store::for_cli(&cwd)?;
+    let store = Store::for_cli(&cwd)?.with_id_style(cli.id_style);
     let layout = Layout::new(store.config())?;
     let facts = Facts::new(&place, session.as_ref(), &actor);
     if let TodoCommand::Role { name: Some(name) } = &cli.command {
@@ -409,7 +409,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     if refreshes {
         refresh_tickets(&store, &cwd, &layout, &facts);
     }
-    let style = cli.id_style.unwrap_or(store.config().ids);
+    let style = store.config().ids;
     let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
     let status_push = |local, overwrite| push::StatusPush {
         local,
@@ -779,15 +779,13 @@ fn start(
             };
             let open = graph.open_blockers(&todo);
             if !open.is_empty() {
-                let names = open
+                let names = store.names(&listed);
+                let blockers = open
                     .iter()
-                    .map(|blocker| devkit_todo::short_id(&blocker.id))
+                    .map(|blocker| names.id(&blocker.id))
                     .collect::<Vec<_>>()
                     .join(", ");
-                bail!(
-                    "todo {} is blocked by {names}",
-                    devkit_todo::short_id(&todo.id)
-                );
+                bail!("todo {} is blocked by {blockers}", names.id(&todo.id));
             }
         }
     }
@@ -829,14 +827,15 @@ fn finish(
     let offered = offered_todos(&fence.reread())?;
     let graph = Graph::new(&offered);
     let ready = graph.unblocked_by(&closed.iter().map(String::as_str).collect::<Vec<_>>());
-    let names = ready
+    let names = store.names(&offered);
+    let unblocked = ready
         .iter()
         .filter(|todo| before.contains(&todo.id))
-        .map(|todo| devkit_todo::short_id(&todo.id))
+        .map(|todo| names.id(&todo.id))
         .collect::<Vec<_>>()
         .join(" ");
-    if !names.is_empty() {
-        println!("unblocked: {names}");
+    if !unblocked.is_empty() {
+        println!("unblocked: {unblocked}");
     }
     Ok(())
 }
@@ -1046,6 +1045,7 @@ fn link(store: &Store, id: &str, by: &[String], add: bool, push: &push::LinkPush
         let ids: Vec<String> = blockers.iter().map(|b| b.id.clone()).collect();
         refuse_cycle(store, Some(&todo.id), &ids)?;
     }
+    let names = store.names(&blockers);
     let mut pushed = Vec::new();
     let mut local = Vec::new();
     for blocker in blockers {
@@ -1058,7 +1058,7 @@ fn link(store: &Store, id: &str, by: &[String], add: bool, push: &push::LinkPush
             false => local.push(blocker.id),
         }
     }
-    let mut done: Vec<&str> = local.iter().map(|b| devkit_todo::short_id(b)).collect();
+    let mut done: Vec<_> = local.iter().map(|b| names.id(b)).collect();
     if !local.is_empty() {
         let (id, by) = (todo.id.clone(), local.clone());
         store.apply(&match add {
@@ -1068,14 +1068,11 @@ fn link(store: &Store, id: &str, by: &[String], add: bool, push: &push::LinkPush
     }
     for (at, blocker) in pushed.iter().enumerate() {
         match push::push_block(store, &todo, blocker, add, push) {
-            Ok(true) => done.push(devkit_todo::short_id(&blocker.id)),
+            Ok(true) => done.push(names.id(&blocker.id)),
             Ok(false) => {}
             Err(err) if by.len() == 1 => return Err(err),
             Err(err) => {
-                let not_done: Vec<&str> = pushed[at..]
-                    .iter()
-                    .map(|b| devkit_todo::short_id(&b.id))
-                    .collect();
+                let not_done: Vec<_> = pushed[at..].iter().map(|b| names.id(&b.id)).collect();
                 let done = match done.is_empty() {
                     true => "(none)".to_string(),
                     false => done.join(" "),
@@ -1097,7 +1094,7 @@ fn refuse_under_a_ticket(store: &Store, parent: &Todo, push: &push::LinkPush) ->
             "todo {} is ticket {}, and with \"parent\" in [ticket.sync] push a todo under it is \
              a sub-issue: file one with `devkit ticket create`, or turn an existing todo into a \
              ticket with `devkit todo promote`",
-            devkit_todo::short_id(&parent.id),
+            store.names(std::slice::from_ref(parent)).id(&parent.id),
             ticket.key
         ),
         _ => Ok(()),
@@ -1106,7 +1103,7 @@ fn refuse_under_a_ticket(store: &Store, parent: &Todo, push: &push::LinkPush) ->
 
 /// Refuses when adding `by` to `id` would close a cycle. `id` absent is a
 /// todo not added yet, so only a blocker naming itself can cycle.
-fn refuse_cycle(store: &impl TodoStore, id: Option<&str>, by: &[String]) -> Result<()> {
+fn refuse_cycle(store: &Store, id: Option<&str>, by: &[String]) -> Result<()> {
     let Some(id) = id else {
         return Ok(());
     };
@@ -1114,19 +1111,20 @@ fn refuse_cycle(store: &impl TodoStore, id: Option<&str>, by: &[String]) -> Resu
     let Some(cycle) = graph::cycle_through(&todos, id, by) else {
         return Ok(());
     };
-    let names = cycle
+    let names = store.names(&todos);
+    let cycle = cycle
         .iter()
-        .map(|id| devkit_todo::short_id(id))
+        .map(|id| names.id(id))
         .collect::<Vec<_>>()
         .join(" -> ");
     let blockers = by
         .iter()
-        .map(|id| devkit_todo::short_id(id))
+        .map(|id| names.id(id))
         .collect::<Vec<_>>()
         .join(", ");
     bail!(
-        "blocking {} on {blockers} would close the cycle {names}",
-        devkit_todo::short_id(id)
+        "blocking {} on {blockers} would close the cycle {cycle}",
+        names.id(id)
     );
 }
 
@@ -1173,6 +1171,8 @@ fn apply_checked(
         let (keep, edit) = edit_for(todo.clone())?;
         checked.push((todo, keep, edit));
     }
+    let todos: Vec<Todo> = checked.iter().map(|(todo, ..)| todo.clone()).collect();
+    let names = store.names(&todos);
     let (pushed, local): (Vec<_>, Vec<_>) = checked
         .into_iter()
         .partition(|(todo, ..)| push.is_some_and(|push| push.pushes(store, todo)));
@@ -1180,7 +1180,7 @@ fn apply_checked(
     let mut changed = Vec::new();
     for (todo, keep, edit) in local {
         store.apply(&edit)?;
-        changed.push(devkit_todo::short_id(&todo.id).to_string());
+        changed.push(names.id(&todo.id).into_owned());
         if keep {
             marked.push(todo.id);
         }
@@ -1193,9 +1193,9 @@ fn apply_checked(
             Ok(applied) => applied,
             Err(err) if ids.len() == 1 => return Err(err),
             Err(err) => {
-                let not_done: Vec<&str> = pushed[at..]
+                let not_done: Vec<_> = pushed[at..]
                     .iter()
-                    .map(|(todo, ..)| devkit_todo::short_id(&todo.id))
+                    .map(|(todo, ..)| names.id(&todo.id))
                     .collect();
                 let done = if changed.is_empty() {
                     "(none)".to_string()
@@ -1206,7 +1206,7 @@ fn apply_checked(
             }
         };
         if applied {
-            changed.push(devkit_todo::short_id(&todo.id).to_string());
+            changed.push(names.id(&todo.id).into_owned());
             if *keep {
                 marked.push(todo.id.clone());
             }
@@ -1256,14 +1256,15 @@ fn move_todo(
     if let Some(step) = parent.as_ref().filter(|p| p.ticket.is_none())
         && push.pushes(store, PushKind::Parent, &todo)
     {
+        let names = store.names(&[todo.clone(), step.clone()]);
         bail!(
             "todo {} is ticket {}, and with \"parent\" in [ticket.sync] push its parent is a \
              ticket too; todo {step} is not one, so it cannot hold it: turn todo {step} into a \
              ticket with `devkit todo promote`, or file a new sub-issue with `devkit ticket \
              create`",
-            devkit_todo::short_id(&todo.id),
+            names.id(&todo.id),
             ticket.key,
-            step = devkit_todo::short_id(&step.id)
+            step = names.id(&step.id)
         );
     }
     let before = todo
@@ -1281,7 +1282,7 @@ fn move_todo(
             "todo {} is ticket {key}, a sub-issue of {old}; {new} is a ticket of another \
              tracker or repository, so it cannot become {key}'s parent there, and the next sync \
              would put {key} back under {old}. Change {key}'s parent on the tracker instead",
-            devkit_todo::short_id(&todo.id),
+            store.names(std::slice::from_ref(&todo)).id(&todo.id),
             new = new.key,
             key = ticket.key,
             old = old.key

@@ -14,8 +14,8 @@ use devkit_common::{
     vcs::Checkout,
 };
 use devkit_config::{
-    Config, NoConfig, PostgresConfig, Provenance, SupabaseConfig, TaskchampionConfig, TicketConfig,
-    TodoBackend, TodoConfig, expand_tilde,
+    Config, IdStyle, NoConfig, PostgresConfig, Provenance, SupabaseConfig, TaskchampionConfig,
+    TicketConfig, TodoBackend, TodoConfig, expand_tilde,
 };
 use devkit_todo::{
     Edit, Filter, NewTodo, StatusChange, Todo, TodoStore,
@@ -30,7 +30,7 @@ use devkit_todo_taskchampion::{
 };
 use serde::{Deserialize, de::IntoDeserializer};
 
-use super::sync::SyncOutcome;
+use super::{names::Names, sync::SyncOutcome};
 use crate::secret::{Secret, global_ca_file, global_setting};
 pub(crate) use crate::secret::{SecretLookup, doppler_scope};
 
@@ -568,6 +568,23 @@ impl Store {
     /// The checkout the store was opened from, which ticket events fire in.
     pub(crate) fn origin(&self) -> Option<&Checkout> {
         self.origin.as_ref()
+    }
+
+    /// This store with its `[todo] ids` replaced by `style`, when given.
+    pub(crate) fn with_id_style(mut self, style: Option<IdStyle>) -> Self {
+        if let Some(style) = style {
+            self.config.ids = style;
+        }
+        self
+    }
+
+    /// The names `todos` show under `[todo] ids` for a caller in the
+    /// checkout the store was opened from.
+    pub(crate) fn names(&self, todos: &[Todo]) -> Names {
+        match &self.origin {
+            Some(origin) => super::names::names(self.config.ids, todos, origin.dir()),
+            None => Names::new(self.config.ids, todos, |ticket| ticket.key.clone()),
+        }
     }
 
     /// The todo that `input`, typed by a caller, names: the one the backend

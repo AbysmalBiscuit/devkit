@@ -233,7 +233,7 @@ pub(crate) fn hold(
         graph: &graph,
         show_ready: &|_| false,
         work: render::TicketWork::none(),
-        names: &devkit_todo::names::Names::plain(devkit_config::IdStyle::Short),
+        names: &store.names(&todos),
     };
     let lists = render::render_lists(&nodes, &open, &holder, &notes);
     let reason = format!(

@@ -44,25 +44,28 @@ pub(crate) struct Filing {
 pub(crate) fn promote(at: &Promote, id: &str, ticket: Option<&str>, filing: Filing) -> Result<()> {
     let store = at.store;
     let old = super::resolve_id(store, id)?;
-    let short = devkit_todo::short_id(&old.id).to_string();
+    let name = store
+        .names(std::slice::from_ref(&old))
+        .id(&old.id)
+        .into_owned();
     if let Some(t) = &old.ticket {
         bail!(
-            "todo {short} is already ticket {}; promote takes a todo without a ticket",
+            "todo {name} is already ticket {}; promote takes a todo without a ticket",
             t.key
         );
     }
     if !old.status.kind().is_open() {
-        bail!("todo {short} not promoted: it is closed, and promote takes an open todo");
+        bail!("todo {name} not promoted: it is closed, and promote takes an open todo");
     }
     transition(&old.status, StatusKind::Cancelled, at.actor)?;
     if store.ticket().sync.rules.is_empty() {
         bail!(
-            "todo {short} not promoted: a ticket's todo comes from syncing it, and this \
+            "todo {name} not promoted: a ticket's todo comes from syncing it, and this \
              repository has no [ticket.sync] rules"
         );
     }
     if !store.replica_pulled() {
-        bail!("todo {short} not promoted: the store's sync did not complete");
+        bail!("todo {name} not promoted: the store's sync did not complete");
     }
     let (key, fields) = match ticket {
         Some(key) => (key.to_string(), Ok(())),
@@ -76,7 +79,7 @@ pub(crate) fn promote(at: &Promote, id: &str, ticket: Option<&str>, filing: Fili
                 config: None,
                 verb: "todo promote",
                 likely_parents: likely_parents(at),
-                if_found: Some(format!("devkit todo promote {short} --ticket <number>")),
+                if_found: Some(format!("devkit todo promote {name} --ticket <number>")),
             })?;
             (created.key, created.fields)
         }
@@ -95,17 +98,20 @@ pub(crate) fn promote(at: &Promote, id: &str, ticket: Option<&str>, filing: Fili
 /// `ticket` is the key the caller named, absent when the promote filed it.
 fn link(at: &Promote, old: &Todo, ticket: Option<&str>, key: String) -> Result<()> {
     let store = at.store;
-    let short = devkit_todo::short_id(&old.id);
+    let name = store
+        .names(std::slice::from_ref(old))
+        .id(&old.id)
+        .into_owned();
     let unfinished = || {
         format!(
-            "ticket {key} stands, and todo {short} is not promoted yet: finish with `devkit todo \
-             promote {short} --ticket {key}`"
+            "ticket {key} stands, and todo {name} is not promoted yet: finish with `devkit todo \
+             promote {name} --ticket {key}`"
         )
     };
     let new = tickets::sync_one(store, at.checkout.dir(), at.node, &key)
         .and_then(|todo| todo.with_context(|| format!("no todo synced for {key}")))
         .with_context(|| match ticket {
-            Some(_) => format!("todo {short} is unchanged"),
+            Some(_) => format!("todo {name} is unchanged"),
             None => unfinished(),
         })?;
     rewire(at, old, &new).with_context(unfinished)?;
@@ -120,8 +126,8 @@ fn link(at: &Promote, old: &Todo, ticket: Option<&str>, key: String) -> Result<(
         actor: at.actor.clone(),
     })?;
     println!(
-        "devkit todo: todo {short} is now ticket {key}, todo {}",
-        devkit_todo::short_id(&new.id)
+        "devkit todo: todo {name} is now ticket {key}, todo {}",
+        store.names(std::slice::from_ref(&new)).id(&new.id)
     );
     Ok(())
 }
@@ -167,15 +173,16 @@ fn block(at: &Promote, blocked: &Todo, blocker: &Todo) -> Result<()> {
     if let Some(cycle) =
         graph::cycle_through(&todos, &blocked.id, std::slice::from_ref(&blocker.id))
     {
+        let names = at.store.names(&todos);
         let cycle = cycle
             .iter()
-            .map(|id| devkit_todo::short_id(id))
+            .map(|id| names.id(id))
             .collect::<Vec<_>>()
             .join(" -> ");
         eprintln!(
             "devkit todo: {} blocks {} skipped: it would close the cycle {cycle}",
-            name(blocker),
-            name(blocked)
+            names.id(&blocker.id),
+            names.id(&blocked.id)
         );
         return Ok(());
     }
@@ -198,13 +205,6 @@ fn block(at: &Promote, blocked: &Todo, blocker: &Todo) -> Result<()> {
         );
     }
     Ok(())
-}
-
-/// A todo as a message names it: its ticket's key, else its short id.
-fn name(todo: &Todo) -> &str {
-    todo.ticket
-        .as_ref()
-        .map_or_else(|| devkit_todo::short_id(&todo.id), |t| t.key.as_str())
 }
 
 /// The values a promoted ticket's parent likely takes: the ticket this

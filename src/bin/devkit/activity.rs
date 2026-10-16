@@ -12,6 +12,8 @@ use devkit_todo::activity::{
 };
 use serde::Serialize;
 
+use crate::todo::{names::Names, store::Store};
+
 #[derive(Args)]
 pub struct ActivityCli {
     /// Start of the range: a date (2026-10-01, midnight UTC) or an RFC 3339
@@ -39,7 +41,11 @@ fn parse_time(s: &str) -> Result<DateTime<Utc>> {
 /// own now, the database's on a shared log, so no reader's clock decides
 /// what the report shows.
 pub fn run(cli: ActivityCli) -> Result<()> {
-    let log = crate::todo::store::Store::activity_for_cli(&std::env::current_dir()?)?;
+    let cwd = std::env::current_dir()?;
+    let log = Store::activity_for_cli(&cwd)?;
+    let style = Store::cli_config(&cwd)?
+        .map(|config| config.ids)
+        .unwrap_or_default();
     let activity = log.read_now()?;
     let now = activity.as_of;
     let range = Range {
@@ -51,7 +57,7 @@ pub fn run(cli: ActivityCli) -> Result<()> {
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print!("{}", report.text());
+        print!("{}", report.text(&Names::plain(style)));
     }
     Ok(())
 }
@@ -222,7 +228,7 @@ impl Report {
         }
     }
 
-    fn text(&self) -> String {
+    fn text(&self, names: &Names) -> String {
         let mut out = format!("activity {} to {}\n", stamp(self.since), stamp(self.until));
         if self.sessions.is_empty() && self.todos.is_empty() {
             out.push_str("\nnothing recorded in this range\n");
@@ -269,7 +275,7 @@ impl Report {
                     held.intervals.iter().map(|i| i.holder.as_str()).collect();
                 holders.dedup();
                 t.add_row([
-                    printable(devkit_todo::short_id(&held.todo)).into_owned(),
+                    printable(&names.id(&held.todo)).into_owned(),
                     printable(&held.node).into_owned(),
                     duration(held.seconds),
                     printable(&holders.join(", ")).into_owned(),
@@ -341,7 +347,7 @@ mod tests {
         let nodes: Vec<&str> = todo.intervals.iter().map(|i| i.node.as_str()).collect();
         assert_eq!(nodes, ["r.first", "r.later"]);
         assert_eq!(todo.node, "r.later");
-        let text = report.text();
+        let text = report.text(&Names::plain(devkit_config::IdStyle::Short));
         assert!(
             text.contains("r.later") && !text.contains("r.first"),
             "{text}"

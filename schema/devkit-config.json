@@ -2506,7 +2506,7 @@
         "ids": {
           "$ref": "#/$defs/IdStyle",
           "default": "name",
-          "description": "How listings name each todo. `name` shows a ticket todo's tracker\nkey (`#65` where the caller's tracker reads it back, `owner/repo#65`\nelsewhere, `SWE-123`), any other uuid todo's word name\n(`brave-otter`), and an id that is not a uuid whole. `short` shows\nthe tracker key, the first 8 hex characters of any other uuid, and a\nnon-uuid id whole. `full` shows every stored id whole. Commands take\nevery one of these forms as a todo id whatever the style, `devkit\ntodo --ids` overrides it for one command, and JSON output always\ncarries full ids."
+          "description": "How listings and messages name each todo, the stop hook's and\n`devkit activity`'s included. `name` shows a ticket todo's tracker\nkey (`#65` where the caller's tracker reads it back, `owner/repo#65`\nelsewhere, `SWE-123`), any other uuid todo's word name\n(`brave-otter`), and an id that is not a uuid whole. `short` shows\nthe tracker key, the first 8 hex characters of any other uuid, and a\nnon-uuid id whole. `full` shows every stored id whole. Commands take\nevery one of these forms as a todo id whatever the style, `devkit\ntodo --ids` overrides it for one command, and JSON output always\ncarries full ids."
         },
         "postgres": {
           "$ref": "#/$defs/PostgresConfig",
