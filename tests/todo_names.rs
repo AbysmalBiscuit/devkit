@@ -560,28 +560,42 @@ fn a_cycle_refusal_names_the_todos() {
 
 #[test]
 fn the_stop_hook_names_open_todos_as_the_config_says() {
-    let p = Proj::with_home_config("[todo]\nhold_stop = \"always\"\n");
-    let id = added(&p, "one");
-    let payload = serde_json::json!({
-        "hook_event_name": "Stop",
-        "session_id": "s1",
-        "stop_hook_active": false,
-        "cwd": p.path,
-    });
-    let out = p.hook_with("stop", "claude-code", &payload, &TASKCHAMPION);
-    assert!(out.status.success(), "{}", stderr(&out));
-    let reason = String::from_utf8_lossy(&out.stdout);
-    let want = format!("one ({})", word_name(&id).unwrap());
-    assert!(reason.contains(&want), "{reason}");
+    for ids in ["", "ids = \"short\"\n"] {
+        let p = Proj::with_home_config(&format!("[todo]\nhold_stop = \"always\"\n{ids}"));
+        let id = added(&p, "one");
+        let payload = serde_json::json!({
+            "hook_event_name": "Stop",
+            "session_id": "s1",
+            "stop_hook_active": false,
+            "cwd": p.path,
+        });
+        let out = p.hook_with("stop", "claude-code", &payload, &TASKCHAMPION);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let reason = String::from_utf8_lossy(&out.stdout);
+        let name = if ids.is_empty() {
+            word_name(&id).unwrap()
+        } else {
+            id[..8].to_string()
+        };
+        assert!(reason.contains(&format!("one ({name})")), "{ids}: {reason}");
+    }
 }
 
 #[test]
 fn activity_names_held_todos_as_the_config_says() {
-    let p = Proj::new();
-    let id = added(&p, "one");
-    ok(p.devkit(&["todo", "start", &id], &TASKCHAMPION));
-    ok(p.devkit(&["todo", "done", &id], &TASKCHAMPION));
-    let report = listed(&p, &["activity"], &TASKCHAMPION);
-    assert!(report.contains(&word_name(&id).unwrap()), "{report}");
-    assert!(!report.contains(&id[..8]), "{report}");
+    for ids in ["", "[todo]\nids = \"short\"\n"] {
+        let p = Proj::with_home_config(ids);
+        let id = added(&p, "one");
+        ok(p.devkit(&["todo", "start", &id], &TASKCHAMPION));
+        ok(p.devkit(&["todo", "done", &id], &TASKCHAMPION));
+        let report = listed(&p, &["activity"], &TASKCHAMPION);
+        let (shown, hidden) = (word_name(&id).unwrap(), id[..8].to_string());
+        let (shown, hidden) = if ids.is_empty() {
+            (shown, hidden)
+        } else {
+            (hidden, shown)
+        };
+        assert!(report.contains(&shown), "{ids}: {report}");
+        assert!(!report.contains(&hidden), "{ids}: {report}");
+    }
 }
