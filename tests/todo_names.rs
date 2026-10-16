@@ -506,6 +506,28 @@ fn a_quoted_hash_key_resolves() {
     }
 }
 
+#[test]
+fn a_quoted_hash_key_names_the_ticket_over_a_same_numbered_todo() {
+    let s = two_issues();
+    let store = s.proj.store();
+    for n in 1..=66 {
+        store
+            .add(devkit_todo::NewTodo {
+                description: format!("local {n}"),
+                project: Some("proj".into()),
+                parent: None,
+                order: None,
+                ticket: None,
+            })
+            .unwrap();
+    }
+    ok(s.sync(&[]));
+    assert_eq!(s.proj.todo("66").description, "local 66");
+    ok(s.devkit(&["todo", "start", "#66"], &S1));
+    assert_eq!(s.todo_for("o/r#66").status.kind(), StatusKind::InProgress);
+    assert_eq!(s.proj.todo("66").status, Status::Pending);
+}
+
 /// Two todos on the replica, the second blocked by the first, with their
 /// full ids.
 fn blocked_pair(p: &Proj) -> (String, String) {
