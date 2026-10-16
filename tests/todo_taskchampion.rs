@@ -717,23 +717,16 @@ fn session_end_pushes_the_release() {
     // server to the sync under test.
     let pulled = replica_dir(&shared.p).join("sync.pulled");
     assert!(!pulled.exists());
-    let started = Instant::now();
     let out = shared.p.hook(
         "session-end",
         "claude-code",
         &json!({"session_id": "s1", "cwd": shared.p.path}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let hooked = started.elapsed();
     poll_until(Duration::from_secs(30), "the session's sync", || {
         pulled.exists()
     });
-    let synced = started.elapsed();
     other.sync_once().unwrap();
-    eprintln!(
-        "diagnostic: hook {hooked:?}, sync landed {synced:?}, other synced {:?}",
-        started.elapsed()
-    );
     assert_eq!(other.get(&id).unwrap().unwrap().status, Status::Pending);
 }
 

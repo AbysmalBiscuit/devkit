@@ -3,8 +3,3 @@
 [[profile.default.overrides]]
 filter = 'package(devkit-todo-supabase) & (test(=reads_without_the_blocking_column_list_todos_without_edges) | test(=reads_without_the_ticket_columns_list_todos_without_tickets))'
 threads-required = "num-test-threads"
-
-# Temporary: prints the session sync's timings on CI.
-[[profile.default.overrides]]
-filter = 'binary(todo_taskchampion) & test(=session_end_pushes_the_release)'
-success-output = "immediate"
