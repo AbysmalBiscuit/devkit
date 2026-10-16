@@ -2,16 +2,23 @@
 //! Win32 API (`windows-sys`).
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
+    ffi::{OsStr, OsString},
+    io,
     mem::size_of,
     net::{Ipv4Addr, SocketAddr},
-    os::windows::io::AsRawSocket,
+    os::windows::{
+        ffi::OsStrExt,
+        io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle},
+        process::ExitStatusExt,
+    },
+    process::{Command, ExitStatus},
     time::Duration,
 };
 
 use socket2::{Domain, Socket, Type};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+    Foundation::{CloseHandle, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT},
     Networking::WinSock::{SIO_TCP_INITIAL_RTO, SOCKET, TCP_INITIAL_RTO_PARAMETERS, WSAIoctl},
     System::{
         Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent},
@@ -21,9 +28,10 @@ use windows_sys::Win32::{
         },
         ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
         Threading::{
-            GetCurrentProcessId, GetExitCodeProcess, OpenProcess,
-            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
-            TerminateProcess,
+            CREATE_UNICODE_ENVIRONMENT, CreateProcessW, GetCurrentProcessId, GetExitCodeProcess,
+            INFINITE, OpenProcess, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_TERMINATE, PROCESS_VM_READ, STARTUPINFOW, TerminateProcess,
+            WaitForSingleObject,
         },
     },
 };
@@ -118,10 +126,151 @@ pub(super) fn detach(cmd: &mut std::process::Command) {
 /// console program it runs, git among them, a window of its own.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-pub(super) fn detach_background(cmd: &mut std::process::Command) {
-    use std::os::windows::process::CommandExt;
-    keep_stdio_from_children();
-    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+/// A child [`spawn_background`] started.
+pub(super) struct BackgroundChild(OwnedHandle);
+
+impl BackgroundChild {
+    pub(super) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.wait_for(0)
+    }
+
+    pub(super) fn wait(&mut self) -> io::Result<ExitStatus> {
+        self.wait_for(INFINITE)
+            .map(|status| status.expect("an infinite wait ends with the exit"))
+    }
+
+    fn wait_for(&self, millis: u32) -> io::Result<Option<ExitStatus>> {
+        let handle = self.0.as_raw_handle();
+        // SAFETY: `handle` is this child's process handle, open while `self`
+        // lives; both calls only read it.
+        unsafe {
+            match WaitForSingleObject(handle, millis) {
+                WAIT_OBJECT_0 => {
+                    let mut code = 0;
+                    if GetExitCodeProcess(handle, &mut code) == 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(Some(ExitStatus::from_raw(code)))
+                }
+                WAIT_TIMEOUT => Ok(None),
+                _ => Err(io::Error::last_os_error()),
+            }
+        }
+    }
+}
+
+/// Starts `cmd` with no handle of this process. std's spawn passes the child
+/// every inheritable handle, those this process's own parent passed down
+/// included, and a process cannot list those to withhold them one by one.
+/// The child's stdio is its own console, which has no window.
+pub(super) fn spawn_background(cmd: &Command) -> io::Result<BackgroundChild> {
+    let mut command_line = command_line(cmd);
+    let environment = environment_block(cmd);
+    let directory = cmd.get_current_dir().map(|dir| wide(dir.as_os_str()));
+    // SAFETY: zeroed is the documented initial state of both structs.
+    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup.cb = size_of::<STARTUPINFOW>() as u32;
+    let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: every pointer is either null or into a buffer that outlives the
+    // call, and the strings are NUL-terminated UTF-16.
+    let created = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            command_line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+            environment
+                .as_ref()
+                .map_or(std::ptr::null(), |block| block.as_ptr().cast()),
+            directory
+                .as_ref()
+                .map_or(std::ptr::null(), |dir| dir.as_ptr()),
+            &startup,
+            &mut info,
+        )
+    };
+    if created == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateProcessW returned both handles open and owned by the
+    // caller.
+    unsafe {
+        CloseHandle(info.hThread);
+        Ok(BackgroundChild(OwnedHandle::from_raw_handle(info.hProcess)))
+    }
+}
+
+fn wide(s: &OsStr) -> Vec<u16> {
+    s.encode_wide().chain([0]).collect()
+}
+
+/// The program and arguments as one command line, each quoted the way the
+/// Microsoft C runtime splits them back apart.
+fn command_line(cmd: &Command) -> Vec<u16> {
+    let mut line = Vec::new();
+    append_arg(&mut line, cmd.get_program(), true);
+    for arg in cmd.get_args() {
+        line.push(u16::from(b' '));
+        append_arg(&mut line, arg, false);
+    }
+    line.push(0);
+    line
+}
+
+fn append_arg(line: &mut Vec<u16>, arg: &OsStr, force_quotes: bool) {
+    let [quote, backslash] = [u16::from(b'"'), u16::from(b'\\')];
+    let quoted = force_quotes
+        || arg.is_empty()
+        || arg
+            .encode_wide()
+            .any(|c| c == u16::from(b' ') || c == u16::from(b'\t'));
+    if quoted {
+        line.push(quote);
+    }
+    let mut backslashes = 0;
+    for c in arg.encode_wide() {
+        if c == backslash {
+            backslashes += 1;
+        } else {
+            if c == quote {
+                line.extend(std::iter::repeat_n(backslash, backslashes + 1));
+            }
+            backslashes = 0;
+        }
+        line.push(c);
+    }
+    if quoted {
+        line.extend(std::iter::repeat_n(backslash, backslashes));
+        line.push(quote);
+    }
+}
+
+/// This process's environment with `cmd`'s changes applied, as the block
+/// `CreateProcessW` takes, or `None` when `cmd` changes nothing.
+fn environment_block(cmd: &Command) -> Option<Vec<u16>> {
+    cmd.get_envs().next()?;
+    let mut vars: BTreeMap<OsString, (OsString, OsString)> = std::env::vars_os()
+        .map(|(key, value)| (key.to_ascii_uppercase(), (key, value)))
+        .collect();
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(value) => {
+                vars.insert(key.to_ascii_uppercase(), (key.to_owned(), value.to_owned()))
+            }
+            None => vars.remove(&key.to_ascii_uppercase()),
+        };
+    }
+    let mut block = Vec::new();
+    for (key, value) in vars.values() {
+        block.extend(key.encode_wide());
+        block.push(u16::from(b'='));
+        block.extend(value.encode_wide());
+        block.push(0);
+    }
+    block.push(0);
+    Some(block)
 }
 
 /// Windows spawns with `bInheritHandles`, so every inheritable handle in this

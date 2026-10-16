@@ -97,18 +97,27 @@ pub fn detach(cmd: &mut std::process::Command) {
     imp::detach(cmd)
 }
 
-/// Spawns `cmd` detached as [`detach`] does, with null stdio and no handle of
-/// this process: a caller that reads this process's output to its end is not
-/// held open by the child. On Windows a spawn inherits every inheritable
-/// handle, this process's own stdio included, so those stop being inheritable
-/// first, and the child's console has no window.
-pub fn spawn_background(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
-    use std::process::Stdio;
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    imp::detach_background(cmd);
-    cmd.spawn()
+/// Spawns `cmd` detached as [`detach`] does, holding no handle of this
+/// process, its stdio included: a caller that reads this process's output to
+/// its end is not held open by the child. On Windows the child's console has
+/// no window.
+pub fn spawn_background(cmd: &mut std::process::Command) -> std::io::Result<BackgroundChild> {
+    imp::spawn_background(cmd).map(BackgroundChild)
+}
+
+/// A child [`spawn_background`] started.
+pub struct BackgroundChild(imp::BackgroundChild);
+
+impl BackgroundChild {
+    /// The child's exit status, if it has exited.
+    pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.0.try_wait()
+    }
+
+    /// Waits for the child to exit.
+    pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.0.wait()
+    }
 }
 
 /// Non-blocking reap/poll of an owned child. Returns `true` once it has exited.
@@ -254,6 +263,60 @@ mod tests {
         let mut child = spawn_background(&mut cmd).unwrap();
         assert!(child.wait().unwrap().success());
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "true false");
+    }
+
+    /// Set to a file path, `background_child_wait_probe` runs until that file
+    /// is gone, for at most fifteen seconds.
+    #[cfg(windows)]
+    const WAIT_PROBE_ENV: &str = "DEVKIT_TEST_WAIT_PROBE";
+
+    #[cfg(windows)]
+    #[test]
+    fn background_child_wait_probe() {
+        let Some(marker) = std::env::var_os(WAIT_PROBE_ENV) else {
+            return;
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while Path::new(&marker).exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// A process holds handles its own parent passed down, a caller's output
+    /// pipe among them. A background child given one keeps that caller
+    /// waiting for end of file until the child exits.
+    #[cfg(windows)]
+    #[test]
+    fn a_background_child_holds_no_handle_its_parent_inherited() {
+        use std::{io::Read, os::windows::io::AsRawHandle};
+
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("running");
+        std::fs::write(&marker, "").unwrap();
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        // SAFETY: only sets a flag on a handle this test owns.
+        unsafe {
+            SetHandleInformation(
+                writer.as_raw_handle(),
+                HANDLE_FLAG_INHERIT,
+                HANDLE_FLAG_INHERIT,
+            )
+        };
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "sys::tests::background_child_wait_probe"])
+            .env(WAIT_PROBE_ENV, &marker);
+        let mut child = spawn_background(&mut cmd).unwrap();
+        drop(writer);
+        let start = std::time::Instant::now();
+        reader.read_to_end(&mut Vec::new()).unwrap();
+        let took = start.elapsed();
+        std::fs::remove_file(&marker).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(
+            took < Duration::from_secs(5),
+            "the background child held the pipe for {took:?}"
+        );
     }
 
     /// Windows refuses symlink creation without Developer Mode or admin, and
