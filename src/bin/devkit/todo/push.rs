@@ -163,12 +163,8 @@ pub(crate) fn push_parent(
     let target = parent
         .and_then(|p| p.ticket.as_ref())
         .map(|t| t.key.as_str());
-    let unchanged = || {
-        format!(
-            "ticket {key}: todo {} is unchanged",
-            devkit_todo::short_id(&child.id)
-        )
-    };
+    let child_name = store.name(child);
+    let unchanged = || format!("ticket {key}: todo {child_name} is unchanged");
     let relations = push.relations().with_context(unchanged)?;
     let read = relations.read_parent(key, target).with_context(unchanged)?;
     let replace = match parent_verdict(baseline, read.current.as_deref(), target) {
@@ -251,8 +247,8 @@ pub(crate) fn push_status(
     push: &StatusPush,
 ) -> Result<bool> {
     let key = &todo.ticket.as_ref().context("not a ticket todo")?.key;
-    let short = devkit_todo::short_id(&todo.id);
-    let unchanged = || format!("ticket {key}: todo {short} is unchanged");
+    let name = store.name(todo);
+    let unchanged = || format!("ticket {key}: todo {name} is unchanged");
     let selected = tracker::select(None, &push.cwd.to_string_lossy(), None);
     let config = selected.config.unwrap_or_default();
     let tracker = &selected.tracker.tracker;
@@ -318,8 +314,8 @@ pub(crate) fn push_status(
         };
         moved.with_context(|| match writes.close {
             Some(_) => format!(
-                "ticket {key} closed, but its [ticket.events.{event}] move failed; todo {short} \
-                 is unchanged. Rerun `devkit todo {} {short}` to finish the move; it needs no \
+                "ticket {key} closed, but its [ticket.events.{event}] move failed; todo {name} \
+                 is unchanged. Rerun `devkit todo {} {key}` to finish the move; it needs no \
                  --overwrite-tracker",
                 push.local.word()
             ),

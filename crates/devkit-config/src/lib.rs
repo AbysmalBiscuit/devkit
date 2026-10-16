@@ -213,7 +213,8 @@ pub struct TodoConfig {
     /// `devkit todo hold` overrides both for one session.
     #[schemars(with = "todo::HoldStopSpelling")]
     pub hold_stop: HoldStop,
-    /// How listings name each todo. `name` shows a ticket todo's tracker
+    /// How listings and messages name each todo, the stop hook's and
+    /// `devkit activity`'s included. `name` shows a ticket todo's tracker
     /// key (`#65` where the caller's tracker reads it back, `owner/repo#65`
     /// elsewhere, `SWE-123`), any other uuid todo's word name
     /// (`brave-otter`), and an id that is not a uuid whole. `short` shows

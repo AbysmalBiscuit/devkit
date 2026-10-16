@@ -486,3 +486,160 @@ fn a_status_verb_with_no_ids_is_an_error() {
     }
     assert_eq!(replica_todo(&p, &id).status.kind(), StatusKind::Pending);
 }
+
+#[test]
+fn a_quoted_hash_key_resolves() {
+    let s = two_issues();
+    ok(s.sync(&[]));
+    ok(s.devkit(&["todo", "start", "#66"], &S1));
+    assert_eq!(s.todo_for("o/r#66").status.kind(), StatusKind::InProgress);
+    ok(s.devkit(&["todo", "stop", "66"], &S1));
+    assert_eq!(s.todo_for("o/r#66").status, Status::Pending);
+    for name in ["#", "#abc", "#999"] {
+        let out = s.devkit(&["todo", "start", name], &S1);
+        assert_eq!(out.status.code(), Some(1), "{name:?}");
+        assert!(
+            stderr(&out).contains(&format!("no todo {name}")),
+            "{name:?}: {}",
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
+fn a_quoted_hash_key_names_the_ticket_over_a_same_numbered_todo() {
+    let s = two_issues();
+    let store = s.proj.store();
+    for n in 1..=66 {
+        store
+            .add(devkit_todo::NewTodo {
+                description: format!("local {n}"),
+                project: Some("proj".into()),
+                parent: None,
+                order: None,
+                ticket: None,
+            })
+            .unwrap();
+    }
+    ok(s.sync(&[]));
+    assert_eq!(s.proj.todo("66").description, "local 66");
+    ok(s.devkit(&["todo", "start", "#66"], &S1));
+    assert_eq!(s.todo_for("o/r#66").status.kind(), StatusKind::InProgress);
+    assert_eq!(s.proj.todo("66").status, Status::Pending);
+}
+
+/// Two todos on the replica, the second blocked by the first, with their
+/// full ids.
+fn blocked_pair(p: &Proj) -> (String, String) {
+    let first = added(p, "first");
+    let name = word_name(&first).unwrap();
+    let out = p.devkit(
+        &["todo", "add", "second", "--blocked-by", &name],
+        &TASKCHAMPION,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    (
+        first,
+        replica(p)
+            .into_iter()
+            .find(|t| t.description == "second")
+            .unwrap()
+            .id,
+    )
+}
+
+#[test]
+fn a_blocked_start_names_the_todos() {
+    let p = Proj::new();
+    let (first, second) = blocked_pair(&p);
+    let out = p.devkit(&["todo", "start", &second], &TASKCHAMPION);
+    assert!(!out.status.success());
+    let want = format!(
+        "todo {} is blocked by {}",
+        word_name(&second).unwrap(),
+        word_name(&first).unwrap()
+    );
+    assert!(stderr(&out).contains(&want), "{}", stderr(&out));
+}
+
+#[test]
+fn unblocked_names_the_todo() {
+    let p = Proj::new();
+    let (first, second) = blocked_pair(&p);
+    let out = listed(&p, &["todo", "done", &first], &TASKCHAMPION);
+    assert_eq!(out, format!("unblocked: {}\n", word_name(&second).unwrap()));
+    let p = Proj::new();
+    let (first, second) = blocked_pair(&p);
+    let out = listed(
+        &p,
+        &["todo", "done", &first, "--ids", "short"],
+        &TASKCHAMPION,
+    );
+    assert_eq!(out, format!("unblocked: {}\n", &second[..8]));
+}
+
+#[test]
+fn a_cycle_refusal_names_the_todos() {
+    let p = Proj::new();
+    let (first, second) = blocked_pair(&p);
+    let out = p.devkit(&["todo", "block", &first, "--by", &second], &TASKCHAMPION);
+    assert!(!out.status.success());
+    let (first, second) = (word_name(&first).unwrap(), word_name(&second).unwrap());
+    let want = format!("blocking {first} on {second} would close the cycle");
+    assert!(stderr(&out).contains(&want), "{}", stderr(&out));
+}
+
+#[test]
+fn the_stop_hook_names_open_todos_as_the_config_says() {
+    for ids in ["", "ids = \"short\"\n"] {
+        let p = Proj::with_home_config(&format!("[todo]\nhold_stop = \"always\"\n{ids}"));
+        let id = added(&p, "one");
+        let payload = serde_json::json!({
+            "hook_event_name": "Stop",
+            "session_id": "s1",
+            "stop_hook_active": false,
+            "cwd": p.path,
+        });
+        let out = p.hook_with("stop", "claude-code", &payload, &TASKCHAMPION);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let reason = String::from_utf8_lossy(&out.stdout);
+        let name = if ids.is_empty() {
+            word_name(&id).unwrap()
+        } else {
+            id[..8].to_string()
+        };
+        assert!(reason.contains(&format!("one ({name})")), "{ids}: {reason}");
+    }
+}
+
+#[test]
+fn activity_names_a_held_ticket_todo_by_its_key() {
+    let s = two_issues();
+    ok(s.sync(&[]));
+    ok(s.devkit(&["todo", "start", "66"], &S1));
+    ok(s.devkit(&["todo", "stop", "66"], &S1));
+    let out = s.devkit(&["activity"], &S1);
+    ok(out.clone());
+    let report = String::from_utf8_lossy(&out.stdout);
+    let held = report.split("todos held").nth(1).unwrap_or_default();
+    assert!(held.contains("#66"), "{report}");
+}
+
+#[test]
+fn activity_names_held_todos_as_the_config_says() {
+    for ids in ["", "[todo]\nids = \"short\"\n"] {
+        let p = Proj::with_home_config(ids);
+        let id = added(&p, "one");
+        ok(p.devkit(&["todo", "start", &id], &TASKCHAMPION));
+        ok(p.devkit(&["todo", "done", &id], &TASKCHAMPION));
+        let report = listed(&p, &["activity"], &TASKCHAMPION);
+        let (shown, hidden) = (word_name(&id).unwrap(), id[..8].to_string());
+        let (shown, hidden) = if ids.is_empty() {
+            (shown, hidden)
+        } else {
+            (hidden, shown)
+        };
+        assert!(report.contains(&shown), "{ids}: {report}");
+        assert!(!report.contains(&hidden), "{ids}: {report}");
+    }
+}

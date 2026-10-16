@@ -165,7 +165,7 @@ fn a_move_failing_after_the_close_finishes_on_a_plain_rerun() {
     let err = stderr(&out);
     assert!(
         err.contains("ticket o/r#65 closed")
-            && err.contains("Rerun `devkit todo done")
+            && err.contains("Rerun `devkit todo done o/r#65`")
             && err.contains("needs no --overwrite-tracker"),
         "{err}"
     );
@@ -173,7 +173,7 @@ fn a_move_failing_after_the_close_finishes_on_a_plain_rerun() {
 
     std::fs::remove_file(s.bin.path().join("graphql_mutation_2.json")).unwrap();
     tracker_shows(&s, closed("COMPLETED"));
-    let out = s.devkit(&["todo", "done", &ticket_id(&s)], &AGENT);
+    let out = s.devkit(&["todo", "done", "o/r#65"], &AGENT);
     assert!(out.status.success(), "{}", stderr(&out));
     let moves = s
         .mutations()
@@ -348,9 +348,8 @@ fn steps_commit_even_when_a_ticket_conflicts() {
     let out = s.devkit(&["todo", "done", &ticket, &step], &AGENT);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let err = stderr(&out);
-    let short = devkit_todo::short_id(&ticket);
     assert!(
-        err.contains(&format!("done: {step}")) && err.contains(&format!("not done: {short}")),
+        err.contains(&format!("done: {step}; not done: #65")),
         "{err}"
     );
     let step = s.proj.todos().into_iter().find(|t| t.id.starts_with(&step));
@@ -1108,9 +1107,8 @@ fn a_block_stopping_partway_names_the_blockers_applied() {
     let out = s.devkit(&["todo", "block", &id_of(&s, 65), "--by", &by], &AGENT);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let err = stderr(&out);
-    let (i66, i67) = (id_of(&s, 66), id_of(&s, 67));
     assert!(
-        err.contains(&format!("done: {step} {i66}; not done: {i67}"))
+        err.contains(&format!("done: {step} #66; not done: #67"))
             && err.contains("o/r#67 was not found"),
         "{err}"
     );
@@ -1123,7 +1121,7 @@ fn a_block_stopping_partway_names_the_blockers_applied() {
             .find(|t| t.id.starts_with(&step))
             .unwrap()
             .id,
-        i66,
+        id_of(&s, 66),
     ];
     want.sort();
     assert_eq!(blockers, want);
@@ -1527,7 +1525,7 @@ fn promote_skips_an_edge_that_would_close_a_cycle() {
     assert!(out.status.success(), "{}", stderr(&out));
     let err = stderr(&out);
     assert!(
-        err.contains("o/r#65 blocks o/r#66") && err.contains("cycle"),
+        err.contains("#65 blocks #66 skipped: it would close the cycle #66 -> #65 -> #66"),
         "{err}"
     );
     assert!(s.todo_for("o/r#66").blocked_by.is_empty());
