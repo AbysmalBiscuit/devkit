@@ -142,6 +142,21 @@ fn at_state_dir_names_the_file_by_kind_and_repository() {
     );
 }
 
+/// A reader reads the whole old index straight through a refresh that has
+/// not committed, rather than waiting on it.
+#[test]
+fn a_refresh_in_progress_does_not_hold_up_a_reader() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = cache(dir.path(), "a");
+    cache.write(Write::Replace, 1, &index()).unwrap();
+    let mut refresh = rusqlite::Connection::open(cache.path()).unwrap();
+    let tx = refresh
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Exclusive)
+        .unwrap();
+    tx.execute_batch("DROP TABLE rules").unwrap();
+    assert_eq!(value(&cache.read().unwrap().unwrap()), value(&index()));
+}
+
 /// Whether `e` is SQLite giving up on a lock another writer held past the
 /// busy timeout, which leaves the cache as it was.
 fn is_busy(e: &anyhow::Error) -> bool {
