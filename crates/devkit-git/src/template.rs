@@ -29,46 +29,33 @@ pub struct Template {
 impl Template {
     /// The template `steps` build in an empty directory, under `root`. The
     /// first process to ask builds it; one that finishes after another has
-    /// keeps the other's.
+    /// keeps the other's. A directory without `head`, which a cache that saves
+    /// directories but not their files leaves behind, is passed over for the
+    /// next number.
     pub fn of(root: &Path, steps: &[Step]) -> Self {
         let mut hasher = DefaultHasher::new();
         steps.hash(&mut hasher);
         let name = format!("git-template-{:016x}", hasher.finish());
-        let template = Self {
-            dir: root.join(&name),
-        };
-        if template.dir.join("head").exists() {
-            return template;
-        }
-        let building = root.join(format!("{name}.{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&building);
-        let repo = building.join("repo");
-        std::fs::create_dir_all(&repo).expect("template repo");
-        for step in steps {
-            match step {
-                Step::Write(path, text) => {
-                    let path = repo.join(path);
-                    std::fs::create_dir_all(path.parent().expect("a file's parent"))
-                        .expect("template file's directory");
-                    std::fs::write(path, text).expect("write template file");
-                }
-                Step::Git(args) => {
-                    Git::fixture(&repo)
-                        .args(args.iter().copied())
-                        .output()
-                        .unwrap_or_else(|e| panic!("git {args:?}: {e:#}"));
-                }
+        let mut n = 0u32;
+        loop {
+            let dir = root.join(format!("{name}-{n}"));
+            if dir.join("head").exists() {
+                return Self { dir };
             }
+            if !dir.exists() {
+                let built = root.join(format!("{name}-{n}.{}", std::process::id()));
+                build(&built, steps);
+                if std::fs::rename(&built, &dir).is_ok() {
+                    return Self { dir };
+                }
+                if dir.join("head").exists() {
+                    let _ = std::fs::remove_dir_all(&built);
+                    return Self { dir };
+                }
+                return Self { dir: built };
+            }
+            n += 1;
         }
-        let head = Git::fixture(&repo)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .unwrap_or_default();
-        std::fs::write(building.join("head"), head.trim()).expect("write template head");
-        if std::fs::rename(&building, &template.dir).is_err() {
-            let _ = std::fs::remove_dir_all(&building);
-        }
-        template
     }
 
     /// The commit the template's HEAD names, empty when it has none.
@@ -82,6 +69,34 @@ impl Template {
     }
 }
 
+/// Runs `steps` in `dir/repo` and records the commit they leave in `dir/head`.
+fn build(dir: &Path, steps: &[Step]) {
+    let _ = std::fs::remove_dir_all(dir);
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).expect("template repo");
+    for step in steps {
+        match step {
+            Step::Write(path, text) => {
+                let path = repo.join(path);
+                std::fs::create_dir_all(path.parent().expect("a file's parent"))
+                    .expect("template file's directory");
+                std::fs::write(path, text).expect("write template file");
+            }
+            Step::Git(args) => {
+                Git::fixture(&repo)
+                    .args(args.iter().copied())
+                    .output()
+                    .unwrap_or_else(|e| panic!("git {args:?}: {e:#}"));
+            }
+        }
+    }
+    let head = Git::fixture(&repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap_or_default();
+    std::fs::write(dir.join("head"), head.trim()).expect("write template head");
+}
+
 fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).expect("copy template dir");
     for entry in std::fs::read_dir(from).expect("read template") {
@@ -92,5 +107,46 @@ fn copy_tree(from: &Path, to: &Path) {
         } else {
             std::fs::copy(entry.path(), &target).expect("copy template file");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STEPS: &[Step] = &[
+        Step::Git(&["init", "-q", "-b", "main"]),
+        Step::Write("f.txt", "x"),
+        Step::Git(&["add", "."]),
+        Step::Git(&["commit", "-qm", "init"]),
+    ];
+
+    /// Deletes every file under `dir` and keeps the directories, as
+    /// `Swatinem/rust-cache` leaves `target/tmp` when it saves the target.
+    fn keep_only_directories(dir: &Path) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                keep_only_directories(&path);
+            } else {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn a_template_emptied_to_its_directories_is_rebuilt() {
+        let root = tempfile::tempdir().unwrap();
+        Template::of(root.path(), STEPS);
+        keep_only_directories(root.path());
+
+        let template = Template::of(root.path(), STEPS);
+        let copy = tempfile::tempdir().unwrap();
+        template.copy_to(copy.path());
+        let head = Git::fixture(copy.path())
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert_eq!(head.trim(), template.head());
     }
 }
