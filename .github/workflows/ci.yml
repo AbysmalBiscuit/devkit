@@ -79,8 +79,10 @@ jobs:
         include:
           - { os: macos-latest, partition: 1/2 }
           - { os: macos-latest, partition: 2/2 }
-          - { os: windows-latest, partition: 1/2 }
-          - { os: windows-latest, partition: 2/2 }
+          - { os: windows-latest, partition: 1/4 }
+          - { os: windows-latest, partition: 2/4 }
+          - { os: windows-latest, partition: 3/4 }
+          - { os: windows-latest, partition: 4/4 }
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
