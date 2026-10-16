@@ -73,6 +73,10 @@ jobs:
           cache-target: true
           target-restore-fallback: true
           save-cache: true
+      # The action's Windows install probe starts the daemon before the cache
+      # restore, so it misses every restored entry until restarted.
+      - if: runner.os == 'Windows'
+        run: zccache stop && zccache start
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Saves the caches; a composite action has no post step to do it.
       - if: always()
@@ -108,6 +112,10 @@ jobs:
           cache-target: true
           target-restore-fallback: true
           save-cache: ${{ (!matrix.partition || startsWith(matrix.partition, '1/')) && 'true' || 'false' }}
+      # The action's Windows install probe starts the daemon before the cache
+      # restore, so it misses every restored entry until restarted.
+      - if: runner.os == 'Windows'
+        run: zccache stop && zccache start
       - uses: taiki-e/install-action@nextest
       # The taskwarrior todo tests run against taskwarrior 3.5 or later, the
       # release built on the taskchampion devkit embeds, which Homebrew ships.
