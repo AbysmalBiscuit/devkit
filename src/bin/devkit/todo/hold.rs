@@ -4,6 +4,7 @@
 use std::{fmt, path::Path};
 
 use anyhow::{Context, Result, bail};
+use devkit_common::vcs::Checkout;
 use devkit_config::{HoldStop, TodoConfig};
 use devkit_todo::{Holder, hold::mode_path, node};
 
@@ -75,7 +76,7 @@ pub(crate) fn effective(
 /// fails to load is an error.
 fn declared_config(cwd: &Path) -> Result<Option<TodoConfig>> {
     Ok(
-        Store::cli_config_with_provenance(cwd)?.and_then(|(config, provenance)| {
+        Store::cli_config_with_provenance(&Checkout::at(cwd))?.and_then(|(config, provenance)| {
             provenance
                 .origin
                 .contains_key("todo.hold_stop")

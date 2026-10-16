@@ -378,7 +378,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let checkout = anchor(Checkout::at(&here), &roles, &actor)?;
     let cwd = checkout.dir().to_path_buf();
     let place = node::place_of(&checkout)?;
-    let store = Store::for_cli(&cwd)?.with_id_style(cli.id_style);
+    let store = Store::for_cli_in(&checkout)?.with_id_style(cli.id_style);
     let layout = Layout::new(store.config())?;
     let facts = Facts::new(&place, session.as_ref(), &actor);
     if let TodoCommand::Role { name: Some(name) } = &cli.command {
@@ -607,7 +607,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
             let replica = if tickets_only {
                 None
             } else {
-                Store::sync_replica(&cwd)?
+                Store::sync_replica(&checkout)?
             };
             let replica_current = match replica.as_ref().filter(|_| !dry_run) {
                 Some(replica) => sync::run(replica, background, result_file.as_deref())?,
@@ -626,6 +626,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
                     eprintln!("devkit todo: tickets not synced: the store's sync did not complete");
                     None
                 }
+                (false, ..) if store.ticket().sync.rules.is_empty() => None,
                 (false, ..) => {
                     let node = layout.fill("repo", &facts)?;
                     let report = tickets::sync_tickets(&store, &cwd, &node, dry_run)?;
