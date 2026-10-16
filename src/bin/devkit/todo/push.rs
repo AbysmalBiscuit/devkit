@@ -163,10 +163,7 @@ pub(crate) fn push_parent(
     let target = parent
         .and_then(|p| p.ticket.as_ref())
         .map(|t| t.key.as_str());
-    let child_name = store
-        .names(std::slice::from_ref(child))
-        .id(&child.id)
-        .into_owned();
+    let child_name = store.name(child);
     let unchanged = || format!("ticket {key}: todo {child_name} is unchanged");
     let relations = push.relations().with_context(unchanged)?;
     let read = relations.read_parent(key, target).with_context(unchanged)?;
@@ -250,10 +247,7 @@ pub(crate) fn push_status(
     push: &StatusPush,
 ) -> Result<bool> {
     let key = &todo.ticket.as_ref().context("not a ticket todo")?.key;
-    let name = store
-        .names(std::slice::from_ref(todo))
-        .id(&todo.id)
-        .into_owned();
+    let name = store.name(todo);
     let unchanged = || format!("ticket {key}: todo {name} is unchanged");
     let selected = tracker::select(None, &push.cwd.to_string_lossy(), None);
     let config = selected.config.unwrap_or_default();

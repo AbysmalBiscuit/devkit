@@ -587,6 +587,13 @@ impl Store {
         }
     }
 
+    /// The name `todo` shows on its own under `[todo] ids`.
+    pub(crate) fn name(&self, todo: &Todo) -> String {
+        self.names(std::slice::from_ref(todo))
+            .id(&todo.id)
+            .into_owned()
+    }
+
     /// The todo that `input`, typed by a caller, names: the one the backend
     /// finds by its stored id or a uuid prefix of 8 or more characters, else
     /// the one it names as [`devkit_todo::names::resolve`] reads it. What the

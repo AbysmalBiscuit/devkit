@@ -1094,7 +1094,7 @@ fn refuse_under_a_ticket(store: &Store, parent: &Todo, push: &push::LinkPush) ->
             "todo {} is ticket {}, and with \"parent\" in [ticket.sync] push a todo under it is \
              a sub-issue: file one with `devkit ticket create`, or turn an existing todo into a \
              ticket with `devkit todo promote`",
-            store.names(std::slice::from_ref(parent)).id(&parent.id),
+            store.name(parent),
             ticket.key
         ),
         _ => Ok(()),
@@ -1282,7 +1282,7 @@ fn move_todo(
             "todo {} is ticket {key}, a sub-issue of {old}; {new} is a ticket of another \
              tracker or repository, so it cannot become {key}'s parent there, and the next sync \
              would put {key} back under {old}. Change {key}'s parent on the tracker instead",
-            store.names(std::slice::from_ref(&todo)).id(&todo.id),
+            store.name(&todo),
             new = new.key,
             key = ticket.key,
             old = old.key

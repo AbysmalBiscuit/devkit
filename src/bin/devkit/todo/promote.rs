@@ -44,10 +44,7 @@ pub(crate) struct Filing {
 pub(crate) fn promote(at: &Promote, id: &str, ticket: Option<&str>, filing: Filing) -> Result<()> {
     let store = at.store;
     let old = super::resolve_id(store, id)?;
-    let name = store
-        .names(std::slice::from_ref(&old))
-        .id(&old.id)
-        .into_owned();
+    let name = store.name(&old);
     if let Some(t) = &old.ticket {
         bail!(
             "todo {name} is already ticket {}; promote takes a todo without a ticket",
@@ -98,10 +95,7 @@ pub(crate) fn promote(at: &Promote, id: &str, ticket: Option<&str>, filing: Fili
 /// `ticket` is the key the caller named, absent when the promote filed it.
 fn link(at: &Promote, old: &Todo, ticket: Option<&str>, key: String) -> Result<()> {
     let store = at.store;
-    let name = store
-        .names(std::slice::from_ref(old))
-        .id(&old.id)
-        .into_owned();
+    let name = store.name(old);
     let unfinished = || {
         format!(
             "ticket {key} stands, and todo {name} is not promoted yet: finish with `devkit todo \
@@ -127,7 +121,7 @@ fn link(at: &Promote, old: &Todo, ticket: Option<&str>, key: String) -> Result<(
     })?;
     println!(
         "devkit todo: todo {name} is now ticket {key}, todo {}",
-        store.names(std::slice::from_ref(&new)).id(&new.id)
+        store.name(&new)
     );
     Ok(())
 }
