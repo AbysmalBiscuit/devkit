@@ -29,46 +29,33 @@ pub struct Template {
 impl Template {
     /// The template `steps` build in an empty directory, under `root`. The
     /// first process to ask builds it; one that finishes after another has
-    /// keeps the other's.
+    /// keeps the other's. A directory without `head`, which a cache that saves
+    /// directories but not their files leaves behind, is passed over for the
+    /// next number.
     pub fn of(root: &Path, steps: &[Step]) -> Self {
         let mut hasher = DefaultHasher::new();
         steps.hash(&mut hasher);
         let name = format!("git-template-{:016x}", hasher.finish());
-        let template = Self {
-            dir: root.join(&name),
-        };
-        if template.dir.join("head").exists() {
-            return template;
-        }
-        let building = root.join(format!("{name}.{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&building);
-        let repo = building.join("repo");
-        std::fs::create_dir_all(&repo).expect("template repo");
-        for step in steps {
-            match step {
-                Step::Write(path, text) => {
-                    let path = repo.join(path);
-                    std::fs::create_dir_all(path.parent().expect("a file's parent"))
-                        .expect("template file's directory");
-                    std::fs::write(path, text).expect("write template file");
-                }
-                Step::Git(args) => {
-                    Git::fixture(&repo)
-                        .args(args.iter().copied())
-                        .output()
-                        .unwrap_or_else(|e| panic!("git {args:?}: {e:#}"));
-                }
+        let mut n = 0u32;
+        loop {
+            let dir = root.join(format!("{name}-{n}"));
+            if dir.join("head").exists() {
+                return Self { dir };
             }
+            if !dir.exists() {
+                let built = root.join(format!("{name}-{n}.{}", std::process::id()));
+                build(&built, steps);
+                if std::fs::rename(&built, &dir).is_ok() {
+                    return Self { dir };
+                }
+                if dir.join("head").exists() {
+                    let _ = std::fs::remove_dir_all(&built);
+                    return Self { dir };
+                }
+                return Self { dir: built };
+            }
+            n += 1;
         }
-        let head = Git::fixture(&repo)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .unwrap_or_default();
-        std::fs::write(building.join("head"), head.trim()).expect("write template head");
-        if std::fs::rename(&building, &template.dir).is_err() {
-            let _ = std::fs::remove_dir_all(&building);
-        }
-        template
     }
 
     /// The commit the template's HEAD names, empty when it has none.
@@ -80,6 +67,34 @@ impl Template {
     pub fn copy_to(&self, to: &Path) {
         copy_tree(&self.dir.join("repo"), to);
     }
+}
+
+/// Runs `steps` in `dir/repo` and records the commit they leave in `dir/head`.
+fn build(dir: &Path, steps: &[Step]) {
+    let _ = std::fs::remove_dir_all(dir);
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).expect("template repo");
+    for step in steps {
+        match step {
+            Step::Write(path, text) => {
+                let path = repo.join(path);
+                std::fs::create_dir_all(path.parent().expect("a file's parent"))
+                    .expect("template file's directory");
+                std::fs::write(path, text).expect("write template file");
+            }
+            Step::Git(args) => {
+                Git::fixture(&repo)
+                    .args(args.iter().copied())
+                    .output()
+                    .unwrap_or_else(|e| panic!("git {args:?}: {e:#}"));
+            }
+        }
+    }
+    let head = Git::fixture(&repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap_or_default();
+    std::fs::write(dir.join("head"), head.trim()).expect("write template head");
 }
 
 fn copy_tree(from: &Path, to: &Path) {
