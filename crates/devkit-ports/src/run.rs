@@ -1173,7 +1173,11 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        assert!(ready, "server never started listening");
+        assert!(
+            ready,
+            "server never started listening on {port}; its log:\n{}",
+            std::fs::read_to_string(&tmp).unwrap_or_else(|e| format!("unreadable: {e}"))
+        );
 
         // Cleanup: stop the spawned pid and release the reservation.
         if let Some(pid) = out[0].pid {
