@@ -1,9 +1,9 @@
 name: CodeQL
 
+# Not on pull requests: the Rust analysis holds a runner for minutes, and
+# the account's concurrent-job cap is shared with CI.
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   schedule:
     - cron: '16 4 * * 2'
