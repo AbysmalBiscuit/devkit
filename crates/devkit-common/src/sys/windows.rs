@@ -110,6 +110,7 @@ pub(super) fn terminate(pid: u32) {
 
 pub(super) fn detach(cmd: &mut std::process::Command) {
     use std::os::windows::process::CommandExt;
+    keep_stdio_from_children();
     cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
@@ -117,14 +118,18 @@ pub(super) fn detach(cmd: &mut std::process::Command) {
 /// console program it runs, git among them, a window of its own.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// Windows spawns with `bInheritHandles`, so every inheritable handle in this
-/// process reaches the child, this process's stdio among them: a parent's
-/// reader would then wait for the child to exit before it sees end of file.
-/// std duplicates a handle it passes as inherited stdio, so clearing the
-/// flag on the originals changes nothing for other spawns.
 pub(super) fn detach_background(cmd: &mut std::process::Command) {
     use std::os::windows::process::CommandExt;
+    keep_stdio_from_children();
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+}
 
+/// Windows spawns with `bInheritHandles`, so every inheritable handle in this
+/// process reaches the child, this process's stdio among them: a parent's
+/// reader would then wait for a detached child to exit before it sees end of
+/// file. std duplicates a handle it passes as inherited stdio, so clearing
+/// the flag on the originals changes nothing for other spawns.
+fn keep_stdio_from_children() {
     use windows_sys::Win32::{
         Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation},
         System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
@@ -139,7 +144,6 @@ pub(super) fn detach_background(cmd: &mut std::process::Command) {
             }
         }
     }
-    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 pub(super) fn reap_owned(pid: u32) -> bool {

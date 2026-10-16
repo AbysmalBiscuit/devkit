@@ -89,8 +89,10 @@ pub fn terminate(pid: u32) {
     imp::terminate(pid)
 }
 
-/// Configure `cmd` to start detached from the caller's session/process group.
-/// Must be called before `spawn`.
+/// Configure `cmd` to start detached from the caller's session/process group,
+/// holding none of this process's stdio, so a caller reading this process's
+/// output to its end is not held open by the child. Must be called before
+/// `spawn`.
 pub fn detach(cmd: &mut std::process::Command) {
     imp::detach(cmd)
 }
