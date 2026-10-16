@@ -90,10 +90,8 @@ jobs:
           brew install task
           task --version
           task --version | awk -F. '{ exit !($1 > 3 || ($1 == 3 && $2 >= 5)) }'
-      # A Windows test spends most of its time waiting on the processes it
-      # spawns, each slow to start there, so more tests run than it has CPUs.
       - name: Test workspace
-        run: cargo nextest run --workspace --no-fail-fast ${{ matrix.os == 'windows-latest' && '--test-threads 8' || '' }}
+        run: cargo nextest run --workspace --no-fail-fast
       # nextest does not run doctests. The workspace has none today, so this
       # guards against a future one being silently skipped; one platform is
       # enough for that.
