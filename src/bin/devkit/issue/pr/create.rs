@@ -448,7 +448,7 @@ pub fn run(args: Args) -> Result<()> {
         &loaded.config.templates,
         record.as_ref(),
         &branch,
-        &toplevel,
+        toplevel,
         vars,
         args.pr_title,
         args.pr_body,
