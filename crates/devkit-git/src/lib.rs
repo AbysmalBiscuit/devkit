@@ -12,6 +12,8 @@
 
 mod backend;
 mod commit;
+#[cfg(any(test, feature = "test-support"))]
+pub mod template;
 
 use std::{
     ffi::OsStr,

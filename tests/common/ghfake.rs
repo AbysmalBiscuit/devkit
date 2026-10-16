@@ -20,6 +20,8 @@ use std::{
     process::Command,
 };
 
+use devkit_git::template::{Step, Template};
+
 /// A project the PR commands can run in, wired to a `gh` that answers from
 /// fixtures and logs every argument vector it is handed.
 pub struct Fake {
@@ -75,9 +77,9 @@ impl Fake {
     fn build(extra_defaults: &str, prs: &[Pr], origin: Option<&str>) -> Self {
         let project = tempfile::tempdir().expect("project dir");
         let git = || devkit_git::Git::fixture(project.path());
-        let template = template();
-        copy_tree(&template.join("repo"), project.path());
-        let head = std::fs::read_to_string(template.join("head")).expect("template head");
+        let template = Template::of(Path::new(env!("CARGO_TARGET_TMPDIR")), &TEMPLATE);
+        template.copy_to(project.path());
+        let head = template.head();
         let github = match origin {
             Some(url) => {
                 git()
@@ -524,67 +526,15 @@ fn rest_pr_json(pr: &Pr, head: &str) -> String {
     )
 }
 
-/// What every [`Fake`] project's repository holds before its `devkit.toml`:
-/// `README`, committed by these git steps.
-const TEMPLATE_STEPS: [&[&str]; 4] = [
-    &["init", "-q", "-b", "lev/eng-1-fix"],
-    &["add", "-A"],
-    &["commit", "-q", "-m", "init"],
+/// What every [`Fake`] project's repository holds before its `devkit.toml`.
+const TEMPLATE: [Step; 5] = [
+    Step::Write("README", "x"),
+    Step::Git(&["init", "-q", "-b", "lev/eng-1-fix"]),
+    Step::Git(&["add", "-A"]),
+    Step::Git(&["commit", "-q", "-m", "init"]),
     // `pr create` reads its gates at the merge base with the PR base.
-    &["branch", "main"],
+    Step::Git(&["branch", "main"]),
 ];
-
-/// A directory holding `repo`, the repository [`TEMPLATE_STEPS`] build, and
-/// `head`, its commit. nextest runs each test in a process of its own, so the
-/// template is built once on disk, under a name its steps decide, and each
-/// project copies it rather than spawning git for every step.
-fn template() -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"));
-    let mut hasher = std::hash::DefaultHasher::new();
-    std::hash::Hash::hash(&format!("{TEMPLATE_STEPS:?}"), &mut hasher);
-    let done = root.join(format!(
-        "ghfake-template-{:016x}",
-        std::hash::Hasher::finish(&hasher)
-    ));
-    if done.join("head").exists() {
-        return done;
-    }
-    std::fs::create_dir_all(root).expect("target tmp dir");
-    let building = tempfile::tempdir_in(root).expect("template dir").keep();
-    let repo = building.join("repo");
-    std::fs::create_dir(&repo).expect("template repo");
-    std::fs::write(repo.join("README"), "x").expect("write README");
-    for step in TEMPLATE_STEPS {
-        devkit_git::Git::fixture(&repo)
-            .args(step.iter().copied())
-            .output()
-            .unwrap_or_else(|e| panic!("git {step:?}: {e:#}"));
-    }
-    let head = devkit_git::Git::fixture(&repo)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .expect("git rev-parse");
-    std::fs::write(building.join("head"), head.trim()).expect("write template head");
-    // A process that finished first leaves its template in place.
-    if std::fs::rename(&building, &done).is_err() {
-        let _ = std::fs::remove_dir_all(&building);
-    }
-    done
-}
-
-/// Copies every file under `from` into `to`, which exists.
-fn copy_tree(from: &Path, to: &Path) {
-    for entry in std::fs::read_dir(from).expect("read template") {
-        let entry = entry.expect("template entry");
-        let target = to.join(entry.file_name());
-        if entry.file_type().expect("template entry type").is_dir() {
-            std::fs::create_dir(&target).expect("copy template dir");
-            copy_tree(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), &target).expect("copy template file");
-        }
-    }
-}
 
 /// Copy the `ghfake` example binary into `bin_dir` under the name `gh`, so a
 /// `PATH` carrying that directory resolves it the way `Command::new("gh")`

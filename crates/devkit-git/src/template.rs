@@ -1,0 +1,96 @@
+//! Fixture repositories built once and copied into each test.
+//!
+//! nextest runs each test in a process of its own, so a fixture every test
+//! builds the same way costs its git spawns once per test. A [`Template`] is
+//! built once on disk, under a name its steps decide, and each test copies it
+//! instead.
+
+use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    path::{Path, PathBuf},
+};
+
+use crate::Git;
+
+/// One step building a template repository.
+#[derive(Debug, Hash)]
+pub enum Step<'a> {
+    /// Write the text to the file at the path, relative to the repository.
+    Write(&'a str, &'a str),
+    /// Run [`Git::fixture`] with these arguments in the repository.
+    Git(&'a [&'a str]),
+}
+
+/// A repository that a list of [`Step`]s built.
+pub struct Template {
+    dir: PathBuf,
+}
+
+impl Template {
+    /// The template `steps` build in an empty directory, under `root`. The
+    /// first process to ask builds it; one that finishes after another has
+    /// keeps the other's.
+    pub fn of(root: &Path, steps: &[Step]) -> Self {
+        let mut hasher = DefaultHasher::new();
+        steps.hash(&mut hasher);
+        let name = format!("git-template-{:016x}", hasher.finish());
+        let template = Self {
+            dir: root.join(&name),
+        };
+        if template.dir.join("head").exists() {
+            return template;
+        }
+        let building = root.join(format!("{name}.{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&building);
+        let repo = building.join("repo");
+        std::fs::create_dir_all(&repo).expect("template repo");
+        for step in steps {
+            match step {
+                Step::Write(path, text) => {
+                    let path = repo.join(path);
+                    std::fs::create_dir_all(path.parent().expect("a file's parent"))
+                        .expect("template file's directory");
+                    std::fs::write(path, text).expect("write template file");
+                }
+                Step::Git(args) => {
+                    Git::fixture(&repo)
+                        .args(args.iter().copied())
+                        .output()
+                        .unwrap_or_else(|e| panic!("git {args:?}: {e:#}"));
+                }
+            }
+        }
+        let head = Git::fixture(&repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap_or_default();
+        std::fs::write(building.join("head"), head.trim()).expect("write template head");
+        if std::fs::rename(&building, &template.dir).is_err() {
+            let _ = std::fs::remove_dir_all(&building);
+        }
+        template
+    }
+
+    /// The commit the template's HEAD names, empty when it has none.
+    pub fn head(&self) -> String {
+        std::fs::read_to_string(self.dir.join("head")).expect("read template head")
+    }
+
+    /// Copies the repository into `to`, creating it when missing.
+    pub fn copy_to(&self, to: &Path) {
+        copy_tree(&self.dir.join("repo"), to);
+    }
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("copy template dir");
+    for entry in std::fs::read_dir(from).expect("read template") {
+        let entry = entry.expect("template entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("template entry type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("copy template file");
+        }
+    }
+}
