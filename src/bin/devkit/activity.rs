@@ -7,8 +7,9 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use clap::Args;
 use devkit_common::ui::printable;
-use devkit_todo::activity::{
-    Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, SessionState, stamp,
+use devkit_todo::{
+    Filter, TodoStore,
+    activity::{Activity, ActivityStore, ClaimEnd, Interval, Run, RunEnd, SessionState, stamp},
 };
 use serde::Serialize;
 
@@ -42,8 +43,8 @@ fn parse_time(s: &str) -> Result<DateTime<Utc>> {
 /// what the report shows.
 pub fn run(cli: ActivityCli) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let (log, style) = Store::activity_for_cli(&cwd)?;
-    let activity = log.read_now()?;
+    let store = Store::for_cli(&cwd)?;
+    let activity = store.activity().read_now()?;
     let now = activity.as_of;
     let range = Range {
         since: cli.since.unwrap_or(now - TimeDelta::days(7)),
@@ -54,7 +55,11 @@ pub fn run(cli: ActivityCli) -> Result<()> {
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        print!("{}", report.text(&Names::plain(style)));
+        let names = store.list(&Filter::all()).map_or_else(
+            |_| Names::plain(store.config().ids),
+            |todos| store.names(&todos),
+        );
+        print!("{}", report.text(&names));
     }
     Ok(())
 }

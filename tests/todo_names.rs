@@ -591,6 +591,19 @@ fn the_stop_hook_names_open_todos_as_the_config_says() {
 }
 
 #[test]
+fn activity_names_a_held_ticket_todo_by_its_key() {
+    let s = two_issues();
+    ok(s.sync(&[]));
+    ok(s.devkit(&["todo", "start", "66"], &S1));
+    ok(s.devkit(&["todo", "stop", "66"], &S1));
+    let out = s.devkit(&["activity"], &S1);
+    ok(out.clone());
+    let report = String::from_utf8_lossy(&out.stdout);
+    let held = report.split("todos held").nth(1).unwrap_or_default();
+    assert!(held.contains("#66"), "{report}");
+}
+
+#[test]
 fn activity_names_held_todos_as_the_config_says() {
     for ids in ["", "[todo]\nids = \"short\"\n"] {
         let p = Proj::with_home_config(ids);
