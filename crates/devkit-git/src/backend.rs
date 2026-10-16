@@ -183,19 +183,25 @@ impl VersionControl for GitBackend {
 
     fn file_at(&self, dir: &Path, rev: &str, path: &str) -> Result<Option<String>> {
         let object = format!("{rev}:{path}");
-        if !Git::at(dir)
-            .args(["cat-file", "-e", "--end-of-options", &object])
-            .success()?
-        {
+        // The batch protocol reads one object name per line.
+        if object.contains('\n') {
+            return file_at_named(dir, &object);
+        }
+        let out = Git::at(dir)
+            .args(["cat-file", "--batch"])
+            .input(format!("{object}\n"))
+            .output()?;
+        let (header, rest) = out.split_once('\n').unwrap_or((&out, ""));
+        if header.ends_with(" missing") || header.ends_with(" ambiguous") {
             return Ok(None);
         }
-        let out = Git::at(dir).args(["cat-file", "blob", &object]).wait()?;
+        let kind = header.split(' ').nth(1);
         anyhow::ensure!(
-            out.status.success(),
-            "`git cat-file blob {object}` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            kind == Some("blob"),
+            "`{object}` names a {}, not a file",
+            kind.unwrap_or("nothing git reports")
         );
-        Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+        Ok(Some(rest.strip_suffix('\n').unwrap_or(rest).to_string()))
     }
 
     fn files_containing(&self, dir: &Path, rev: &str, needle: &str) -> Result<Vec<String>> {
@@ -357,6 +363,24 @@ impl VersionControl for GitBackend {
     fn commit(&self, dir: &Path, selection: &Selection<'_>, message: &str) -> Result<String> {
         super::commit::commit(dir, selection, message)
     }
+}
+
+/// [`VersionControl::file_at`] for an object name the batch protocol cannot
+/// carry: whether it exists, then what it holds.
+fn file_at_named(dir: &Path, object: &str) -> Result<Option<String>> {
+    if !Git::at(dir)
+        .args(["cat-file", "-e", "--end-of-options", object])
+        .success()?
+    {
+        return Ok(None);
+    }
+    let out = Git::at(dir).args(["cat-file", "blob", object]).wait()?;
+    anyhow::ensure!(
+        out.status.success(),
+        "`git cat-file blob {object}` failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
 /// `git diff --name-status -z` output: a status field, then one path, or two
@@ -618,6 +642,11 @@ mod tests {
             GitBackend.file_at(repo.path(), "HEAD", "keep.txt").unwrap(),
             None
         );
+        assert_eq!(
+            GitBackend.file_at(repo.path(), "nope", "f.txt").unwrap(),
+            None
+        );
+        assert!(GitBackend.file_at(repo.path(), "HEAD", "").is_err());
         assert!(GitBackend.has_revision(repo.path(), "main").unwrap());
         assert!(!GitBackend.has_revision(repo.path(), "nope").unwrap());
     }
