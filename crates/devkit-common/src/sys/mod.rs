@@ -202,6 +202,10 @@ mod tests {
     #[cfg(windows)]
     const CONSOLE_PROBE_ENV: &str = "DEVKIT_TEST_CONSOLE_PROBE";
 
+    /// Set, the probe runs itself as a plain child and lets that child report.
+    #[cfg(windows)]
+    const CONSOLE_RELAY_ENV: &str = "DEVKIT_TEST_CONSOLE_RELAY";
+
     #[cfg(windows)]
     #[test]
     fn background_child_console_probe() {
@@ -209,6 +213,15 @@ mod tests {
         let Some(out) = std::env::var_os(CONSOLE_PROBE_ENV) else {
             return;
         };
+        if std::env::var_os(CONSOLE_RELAY_ENV).is_some() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "sys::tests::background_child_console_probe"])
+                .env_remove(CONSOLE_RELAY_ENV)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
         // SAFETY: both calls take no arguments and only read process state.
         let (console, window) = unsafe { (GetConsoleCP() != 0, !GetConsoleWindow().is_null()) };
         std::fs::write(out, format!("{console} {window}")).unwrap();
@@ -224,6 +237,20 @@ mod tests {
         let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
         cmd.args(["--exact", "sys::tests::background_child_console_probe"])
             .env(CONSOLE_PROBE_ENV, &out);
+        let mut child = spawn_background(&mut cmd).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "true false");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_program_a_background_child_runs_gets_no_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("probe");
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "sys::tests::background_child_console_probe"])
+            .env(CONSOLE_PROBE_ENV, &out)
+            .env(CONSOLE_RELAY_ENV, "1");
         let mut child = spawn_background(&mut cmd).unwrap();
         assert!(child.wait().unwrap().success());
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "true false");
