@@ -219,7 +219,7 @@ One distinct todo is `Some`, none is `None`, and more is the error `todo name {i
 
 - [ ] **Step 4: Run** `cargo nextest run --workspace --no-fail-fast`. For a test failing only because it asserts the old 8-hex display on a uuid backend: when the test is about the printed id, assert the word name; otherwise pass `--ids short`. Any other failure is a bug in this task. Re-run until PASS.
 
-- [ ] **Step 5: Agent text.** In `render::guide`, replace `- Ids are in parentheses.` with a line saying ids are in parentheses, and that a GitHub ticket's `#N` is typed as the bare number `N` because `#` starts a shell comment. In `references/todo.md`, state the same rule and add one short paragraph on `--ids` and `[todo] ids` that points at `devkit schema` for the styles. Update guide-text assertions in `tests/todo_context.rs` if any.
+- [ ] **Step 5: Agent text.** In `render::guide`, replace `- Ids are in parentheses.` with a line saying ids are in parentheses, and that a GitHub ticket's `#N` is typed quoted (`'#65'`) or as its full key, because `#` starts a shell comment and a bare number loses to an equal builtin id. In `references/todo.md`, state the same rule and add one short paragraph on `--ids` and `[todo] ids` that points at `devkit schema` for the styles. Update guide-text assertions in `tests/todo_context.rs` if any.
 
 - [ ] **Step 6: Gate**: nextest, doctests, clippy, fmt. Expected: all PASS. Optional and billed: `devrun task eval --arg eval_case=brief` checks agents still read the guide correctly.
 

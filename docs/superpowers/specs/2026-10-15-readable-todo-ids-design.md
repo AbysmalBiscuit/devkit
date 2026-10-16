@@ -65,7 +65,7 @@ The tracker key is the name. A Linear key renders as `SWE-123`. A GitHub key ren
 
 Since the description already starts with the key, a row strips the prefix `todo_text` writes for that tracker and key (`"#65 "` for GitHub, `"SWE-123 "` for Linear), so the key is not printed twice. A description that does not start with that prefix (re-described by hand) prints whole.
 
-`#` starts a comment in bash and fish, so `devkit todo start #65` reaches devkit as `devkit todo start`. The bare number is the typed spelling of `#N`, and input already accepts it. `render::guide`, the text injected ahead of every agent's lists, and `plugin/skills/using-devkit/references/todo.md` both say so. The display keeps `#65`, matching the description and the tracker.
+`#` starts a comment in bash and fish, so `devkit todo start #65` reaches devkit as `devkit todo start`, and the status verbs refuse to run with no id. The typed spelling of `#N` is the quoted key `'#65'` or the full key `owner/repo#65`. The bare number is still accepted, but on the builtin store an exact stored id wins, so `65` names todo 65 when one exists rather than ticket #65. `render::guide`, the text injected ahead of every agent's lists, and `plugin/skills/using-devkit/references/todo.md` both say to quote the key or give it in full. The display keeps `#65`, matching the description and the tracker.
 
 ### Word names
 
@@ -122,7 +122,7 @@ The requester set the goals, the config key with a flag override, both word name
 - Input accepts every form whatever the style; an exact stored id wins outright.
 - Word-name collisions show as-is and fail as input with a list of matches.
 - The key prefix `todo_text` writes is stripped from a ticket todo's description in rows.
-- A GitHub key shows short only where it resolves back short; the bare number is its typed spelling.
+- A GitHub key shows short only where it resolves back short; it is typed quoted (`'#65'`) or in full, since a bare number loses to an equal builtin id.
 - The resolver lives in the CLI `Store` wrapper's `get` and searches the whole store, read once per command.
 
 ## Left to the builder
