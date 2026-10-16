@@ -15,10 +15,7 @@
 //! this module via `#[path]` and use different subsets of it.
 #![allow(dead_code)]
 
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{path::Path, process::Command};
 
 use devkit_git::template::{Step, Template};
 
