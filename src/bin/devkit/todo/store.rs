@@ -703,12 +703,11 @@ impl Store {
         Ok(Self::open(&config, ticket, Opener::Cli, Checkout::at(cwd)))
     }
 
-    /// The activity log a CLI call in `cwd` reads.
-    pub(crate) fn activity_for_cli(cwd: &Path) -> Result<Activity> {
-        Ok(Activity::of(
-            &Self::effective_cli_config(cwd)?.0,
-            Opener::Cli,
-        ))
+    /// The activity log a CLI call in `cwd` reads, and the `[todo] ids`
+    /// style its todos show under.
+    pub(crate) fn activity_for_cli(cwd: &Path) -> Result<(Activity, IdStyle)> {
+        let (config, _) = Self::effective_cli_config(cwd)?;
+        Ok((Activity::of(&config, Opener::Cli), config.ids))
     }
 
     /// Runs devkit's schema on the todo database a CLI call in `cwd` names,

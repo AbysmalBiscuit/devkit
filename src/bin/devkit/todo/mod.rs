@@ -500,7 +500,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
         } => {
             let activity = LazyCell::new(|| {
                 Store::activity_for_cli(&cwd)
-                    .and_then(|log| log.read_now())
+                    .and_then(|(log, _)| log.read_now())
                     .ok()
             });
             let gone = |holder: &Holder| {

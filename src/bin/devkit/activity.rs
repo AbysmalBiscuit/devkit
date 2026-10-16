@@ -42,10 +42,7 @@ fn parse_time(s: &str) -> Result<DateTime<Utc>> {
 /// what the report shows.
 pub fn run(cli: ActivityCli) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let log = Store::activity_for_cli(&cwd)?;
-    let style = Store::cli_config(&cwd)?
-        .map(|config| config.ids)
-        .unwrap_or_default();
+    let (log, style) = Store::activity_for_cli(&cwd)?;
     let activity = log.read_now()?;
     let now = activity.as_of;
     let range = Range {
