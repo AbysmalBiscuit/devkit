@@ -52,7 +52,9 @@ jobs:
   clippy:
     name: clippy (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    timeout-minutes: 15
+    env:
+      CARGO_INCREMENTAL: 0
     strategy:
       fail-fast: false
       matrix:
@@ -64,13 +66,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: zackees/zccache@1.15.4
+        with:
+          zccache-version: 1.15.4
+          shared-key: clippy
+          cache-target: true
+          target-restore-fallback: true
+          save-cache: true
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Saves the caches; a composite action has no post step to do it.
+      - if: always()
+        uses: zackees/zccache/action/cleanup@1.15.4
 
   test:
     name: test (${{ matrix.os }}${{ matrix.partition && format(', {0}', matrix.partition) || '' }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 15 || 10 }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
+    env:
+      CARGO_INCREMENTAL: 0
     strategy:
       fail-fast: false
       matrix:
@@ -86,7 +99,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # Partitions on one OS build the same artifacts, so the first one saves
+      # the caches for all of them.
+      - uses: zackees/zccache@1.15.4
+        with:
+          zccache-version: 1.15.4
+          shared-key: test
+          cache-target: true
+          target-restore-fallback: true
+          save-cache: ${{ (!matrix.partition || startsWith(matrix.partition, '1/')) && 'true' || 'false' }}
       - uses: taiki-e/install-action@nextest
       # The taskwarrior todo tests run against taskwarrior 3.5 or later, the
       # release built on the taskchampion devkit embeds, which Homebrew ships.
@@ -112,6 +133,8 @@ jobs:
       - name: Build without default features
         if: matrix.os != 'windows-latest' && matrix.partition != '2/2'
         run: cargo build --workspace --no-default-features
+      - if: always()
+        uses: zackees/zccache/action/cleanup@1.15.4
 
   postgres:
     name: postgres todo backend and rules source
