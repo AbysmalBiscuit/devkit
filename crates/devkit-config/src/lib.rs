@@ -1882,7 +1882,8 @@ pub struct PrGates {
     /// finds, such as a changed file holding both test and source changes,
     /// an item with no marker, or a check that could not run, is shown in
     /// the PR body's Verification section and refuses nothing. A human's PR
-    /// is never refused. Off while `repro_task` is unset.
+    /// is never refused. `devkit pr repro` runs the same check outside
+    /// `pr create`. Off while `repro_task` is unset.
     pub repro: GateMode,
     /// The task the `repro` gate runs each selector through, as `devrun
     /// task` names it. It takes the selector as the template variable

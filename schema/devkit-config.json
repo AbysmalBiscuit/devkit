@@ -1408,7 +1408,7 @@
         "repro": {
           "$ref": "#/$defs/GateMode",
           "default": "require",
-          "description": "Checks each `Done when` item of the worktree's issue that ends\n`(proof: repro <selector>)` red to green: in a throwaway worktree at\nHEAD with every changed non-test path restored to the merge base,\n`repro_task` given `--arg selector=<selector>` must fail, and at HEAD\nit must pass. `require` refuses an agent's PR when a selector passes\nwith the fix reverted or matches no test; anything else the check\nfinds, such as a changed file holding both test and source changes,\nan item with no marker, or a check that could not run, is shown in\nthe PR body's Verification section and refuses nothing. A human's PR\nis never refused. Off while `repro_task` is unset."
+          "description": "Checks each `Done when` item of the worktree's issue that ends\n`(proof: repro <selector>)` red to green: in a throwaway worktree at\nHEAD with every changed non-test path restored to the merge base,\n`repro_task` given `--arg selector=<selector>` must fail, and at HEAD\nit must pass. `require` refuses an agent's PR when a selector passes\nwith the fix reverted or matches no test; anything else the check\nfinds, such as a changed file holding both test and source changes,\nan item with no marker, or a check that could not run, is shown in\nthe PR body's Verification section and refuses nothing. A human's PR\nis never refused. `devkit pr repro` runs the same check outside\n`pr create`. Off while `repro_task` is unset."
         },
         "repro_no_tests_exit": {
           "default": null,

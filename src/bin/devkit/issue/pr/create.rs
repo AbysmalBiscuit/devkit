@@ -163,6 +163,17 @@ pub(crate) struct Ensure<'a, G> {
     pub toplevel: &'a Path,
 }
 
+/// What [`Gates::load`] found: the gates, or why the merge base could not
+/// supply them.
+pub(crate) enum GateLoad {
+    Ready(Gates),
+    /// `ungated` is what a human's PR opens with.
+    Unread {
+        reason: anyhow::Error,
+        ungated: Gates,
+    },
+}
+
 /// The PR gates one `pr create` applies to the PR it opens.
 pub(crate) struct Gates {
     weakened: Option<weakened::Gate>,
@@ -188,6 +199,30 @@ impl Gates {
         caller: Caller,
         items: impl FnOnce() -> Result<Option<Vec<DoneWhen>>>,
     ) -> Result<Self> {
+        match Self::load(checkout, base, head, caller, items)? {
+            GateLoad::Ready(gates) => Ok(gates),
+            GateLoad::Unread { reason, ungated } => {
+                if caller == Caller::Human {
+                    if checkout_gates_a_human(checkout.dir()) {
+                        eprintln!("warning: opening the PR without its gates: {reason:#}");
+                    }
+                    return Ok(ungated);
+                }
+                Err(reason)
+            }
+        }
+    }
+
+    /// The gates as [`Self::read`] resolves them, with an unread merge base
+    /// returned rather than turned into a warning. `pr repro` prints that
+    /// reason itself.
+    pub(crate) fn load(
+        checkout: &Checkout,
+        base: &str,
+        head: &str,
+        caller: Caller,
+        items: impl FnOnce() -> Result<Option<Vec<DoneWhen>>>,
+    ) -> Result<GateLoad> {
         let dir = checkout.dir();
         let ungated = Self {
             weakened: None,
@@ -199,31 +234,19 @@ impl Gates {
                 .map(|mb| weakened::config_at(checkout, &mb).map(|cfg| (mb, cfg)))
                 .transpose()
         });
-        let unresolved = || {
-            anyhow!(
-                "the PR gates read their settings from the merge base with `{base}`, and \
-                 neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
-            )
-        };
-        let (merge_base, cfg) = match (settings, caller) {
-            (Ok(Some(settings)), _) => settings,
-            (Ok(None), Caller::Human) => {
-                if checkout_gates_a_human(dir) {
-                    eprintln!(
-                        "warning: opening the PR without its gates: {:#}",
-                        unresolved()
-                    );
-                }
-                return Ok(ungated);
+        let unresolved = anyhow!(
+            "the PR gates read their settings from the merge base with `{base}`, and \
+             neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
+        );
+        let (merge_base, cfg) = match settings {
+            Ok(Some(settings)) => settings,
+            Ok(None) => {
+                return Ok(GateLoad::Unread {
+                    reason: unresolved,
+                    ungated,
+                });
             }
-            (Err(e), Caller::Human) => {
-                if checkout_gates_a_human(dir) {
-                    eprintln!("warning: opening the PR without its gates: {e:#}");
-                }
-                return Ok(ungated);
-            }
-            (Ok(None), Caller::Agent) => return Err(unresolved()),
-            (Err(e), Caller::Agent) => return Err(e),
+            Err(reason) => return Ok(GateLoad::Unread { reason, ungated }),
         };
         let weakened = match caller {
             Caller::Agent => Some(weakened::Gate::check(dir, &merge_base, &cfg)?),
@@ -246,11 +269,15 @@ impl Gates {
             caller,
             items,
         )?;
-        Ok(Self {
+        Ok(GateLoad::Ready(Self {
             weakened,
             verify,
             repro,
-        })
+        }))
+    }
+
+    pub(crate) fn repro(self) -> Option<repro::Gate> {
+        self.repro
     }
 
     fn apply(self, body: String) -> Result<String> {
@@ -267,6 +294,58 @@ impl Gates {
             None => Ok(body),
         }
     }
+}
+
+/// The inputs both `pr create` and `pr repro` pass to [`Gates::load`]: the
+/// base from `--base` or `defaults.pr_base`, HEAD, and the worktree issue's
+/// `Done when` items.
+pub(crate) struct GateInputs {
+    pub base: String,
+    pub head: String,
+    pub items: Box<dyn FnOnce() -> Result<Option<Vec<DoneWhen>>>>,
+}
+
+/// `base` is `--base` when the command was given one.
+pub(crate) fn gate_inputs(
+    checkout: &Checkout,
+    loaded: &devkit_ports::load::Loaded,
+    repos: &devkit_common::forge::Repos,
+    base: Option<&str>,
+) -> Result<GateInputs> {
+    let dir = checkout.dir();
+    let worktree = checkout.worktree()?;
+    let record = devkit_common::record::read_on(&worktree.path, &worktree.branch);
+    let issue = record.and_then(|r| r.tracker_issue());
+    let head = Vcs::at(dir).revision(dir)?;
+    let base = base
+        .map(str::to_string)
+        .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
+    let kind = loaded.config.tracker.kind;
+    let repos = repos.clone();
+    let dir = dir.to_path_buf();
+    Ok(GateInputs {
+        base,
+        head,
+        items: Box::new(move || done_when_items(&dir, kind, &repos, issue.as_deref())),
+    })
+}
+
+/// The `Done when` items of `issue`, `None` when the worktree has none.
+fn done_when_items(
+    dir: &Path,
+    kind: Option<devkit_config::TrackerKind>,
+    repos: &devkit_common::forge::Repos,
+    issue: Option<&str>,
+) -> Result<Option<Vec<DoneWhen>>> {
+    let Some(issue) = issue else {
+        return Ok(None);
+    };
+    let tracker = devkit_common::tracker::resolve(kind, dir, repos);
+    let details = tracker
+        .tracker
+        .details(issue)?
+        .with_context(|| format!("no issue {issue} in the {} tracker", tracker.tracker.kind()))?;
+    Ok(Some(done_when_entries(&details.description)))
 }
 
 /// Whether the config this checkout loads turns on a gate that applies to a
@@ -423,26 +502,10 @@ pub fn run(args: Args) -> Result<()> {
         &vars,
     )?;
 
-    let base = args
-        .base
-        .clone()
-        .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
-    let head = Vcs::at(here).revision(here)?;
-    let gate_base = base.clone();
-    let gate_head = head.clone();
-    let gate_issue = tracker_issue.clone();
-    let (config, repos) = (&loaded.config, &forge.repos);
-    let items = move || -> Result<Option<Vec<DoneWhen>>> {
-        let Some(issue) = gate_issue else {
-            return Ok(None);
-        };
-        let tracker = devkit_common::tracker::resolve(config.tracker.kind, here, repos);
-        let details = tracker.tracker.details(&issue)?.with_context(|| {
-            format!("no issue {issue} in the {} tracker", tracker.tracker.kind())
-        })?;
-        Ok(Some(done_when_entries(&details.description)))
-    };
-    let gates = || Gates::read(&checkout, &gate_base, &gate_head, caller, items);
+    let inputs = gate_inputs(&checkout, &loaded, &forge.repos, args.base.as_deref())?;
+    let base = inputs.base.clone();
+    let head = inputs.head.clone();
+    let gates = || Gates::read(&checkout, &inputs.base, &inputs.head, caller, inputs.items);
 
     let texts = Texts::new(
         &loaded.config.templates,

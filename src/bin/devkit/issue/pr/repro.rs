@@ -18,6 +18,7 @@ use devkit_common::{
     vcs::{Checkout, NewWorktree, Vcs, VersionControl},
 };
 use devkit_config::{Gate as GateKey, GateMode, PrGates, ReproTask, Step};
+use serde::Serialize;
 
 use super::{
     proof::DoneWhen,
@@ -429,8 +430,80 @@ impl Gate {
             .map(str::to_string)
             .collect();
         Ok(Ran {
-            exit: status.code(),
+            exit: signalled_exit(status),
             output,
+        })
+    }
+
+    /// Runs the check and reports each item. `refused` is whether the
+    /// `require` strength would refuse an agent's PR for these results.
+    pub(crate) fn report(mut self) -> Result<Report> {
+        self.evaluate()?;
+        let refused = !self.refused_items().is_empty();
+        let items = self
+            .items
+            .iter()
+            .map(|item| Reported {
+                number: item.number,
+                title: item.title.clone(),
+                verdict: self.item_verdict(item),
+                head_exit: exit_of(item, true),
+                reverted_exit: exit_of(item, false),
+                text: self.render_item(item),
+            })
+            .collect();
+        Ok(Report {
+            items,
+            text: self.render(),
+            refused,
+        })
+    }
+
+    /// Each item an agent's PR under `require` is refused for, as the
+    /// refusal names it. Empty for a human, for `advise` or `off`, and when
+    /// nothing refuses.
+    fn refused_items(&self) -> Vec<String> {
+        if self.mode != GateMode::Require || self.caller != Caller::Agent {
+            return Vec::new();
+        }
+        self.items
+            .iter()
+            .filter_map(|item| match &item.outcome {
+                Outcome::Ran {
+                    selector,
+                    base,
+                    head,
+                } => {
+                    let verdict = Verdict::of(base, head, self.task.no_tests_exit);
+                    verdict.refuses().then(|| {
+                        format!(
+                            "  {}. {}: `{}` {}",
+                            item.number,
+                            item.title,
+                            self.task.command(selector),
+                            self.verdict_text(verdict, base, head)
+                        )
+                    })
+                }
+                Outcome::Unmarked
+                | Outcome::Done
+                | Outcome::Inconclusive(_)
+                | Outcome::Error(_) => None,
+            })
+            .collect()
+    }
+
+    fn item_verdict(&self, item: &Item) -> Option<&'static str> {
+        let (base, head) = match &item.outcome {
+            Outcome::Ran { base, head, .. } => (base, head),
+            Outcome::Inconclusive(_) => return Some("INCONCLUSIVE"),
+            Outcome::Unmarked | Outcome::Done | Outcome::Error(_) => return None,
+        };
+        Some(match Verdict::of(base, head, self.task.no_tests_exit) {
+            Verdict::Passed => "PASSED",
+            Verdict::PassesReverted | Verdict::NoTests => "FAILED",
+            Verdict::NoTestsReverted => "INCONCLUSIVE",
+            Verdict::FailsAtHead => "FAILS AT HEAD",
         })
     }
 
@@ -441,42 +514,15 @@ impl Gate {
     /// runs here, so a PR another gate refuses first never pays for it.
     pub(crate) fn apply(mut self, body: String, verification: bool) -> Result<String> {
         self.evaluate()?;
-        if let (GateMode::Require, Caller::Agent) = (self.mode, self.caller) {
-            let refused: Vec<String> = self
-                .items
-                .iter()
-                .filter_map(|item| match &item.outcome {
-                    Outcome::Ran {
-                        selector,
-                        base,
-                        head,
-                    } => {
-                        let verdict = Verdict::of(base, head, self.task.no_tests_exit);
-                        verdict.refuses().then(|| {
-                            format!(
-                                "  {}. {}: `{}` {}",
-                                item.number,
-                                item.title,
-                                self.task.command(selector),
-                                self.verdict_text(verdict, base, head)
-                            )
-                        })
-                    }
-                    Outcome::Unmarked
-                    | Outcome::Done
-                    | Outcome::Inconclusive(_)
-                    | Outcome::Error(_) => None,
-                })
-                .collect();
-            if !refused.is_empty() {
-                bail!(
-                    "refusing to open the PR: the `repro` gate needs each item marked `(proof: \
+        let refused = self.refused_items();
+        if !refused.is_empty() {
+            bail!(
+                "refusing to open the PR: the `repro` gate needs each item marked `(proof: \
                      repro <selector>)` to name a test that fails with the branch's non-test \
                      changes reverted and passes at HEAD:\n{}\n\
                      Point each selector at a test that fails without the fix, then retry",
-                    refused.join("\n")
-                );
-            }
+                refused.join("\n")
+            );
         }
         let body = body.trim_end();
         let heading = if verification {
@@ -1388,6 +1434,150 @@ fn title(item: &str) -> &str {
         Some(_) => item[..item.rfind("(proof:").expect("proof_of found it")].trim_end(),
         None => item.trim_end(),
     }
+}
+
+/// One item of a [`Report`], as `--json` prints it.
+#[derive(Debug, Serialize)]
+pub(crate) struct Reported {
+    number: usize,
+    title: String,
+    /// `PASSED`, `FAILED`, `FAILS AT HEAD` or `INCONCLUSIVE` for an item the
+    /// check judged, and absent for one it did not run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verdict: Option<&'static str>,
+    /// The exit code of the run at HEAD. Absent when the selector did not
+    /// run, and `signal` when the run was killed.
+    #[serde(skip_serializing_if = "ExitCode::is_absent")]
+    head_exit: ExitCode,
+    /// The exit code of the run with the fix reverted. Absent when the
+    /// selector did not run, and `signal` when the run was killed.
+    #[serde(skip_serializing_if = "ExitCode::is_absent")]
+    reverted_exit: ExitCode,
+    /// The item as the text report prints it.
+    text: String,
+}
+
+/// What [`Gate::report`] found: each item, the text the command prints, and
+/// whether the `require` strength would refuse the PR.
+pub(crate) struct Report {
+    items: Vec<Reported>,
+    text: String,
+    refused: bool,
+}
+
+impl Report {
+    fn print(&self, json: bool) {
+        if json {
+            for item in &self.items {
+                println!(
+                    "{}",
+                    serde_json::to_string(item).expect("a report item serializes")
+                );
+            }
+            return;
+        }
+        print!("{}", self.text);
+    }
+}
+
+/// One run's exit as `--json` prints it: a number, `signal` when the run
+/// was killed, or absent when the selector did not run.
+#[derive(Debug, Clone, Copy)]
+enum ExitCode {
+    Absent,
+    Code(i32),
+    Signal,
+}
+
+impl ExitCode {
+    fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+
+    fn of(ran: Option<Option<i32>>) -> Self {
+        match ran {
+            None => Self::Absent,
+            Some(None) => Self::Signal,
+            Some(Some(code)) => Self::Code(code),
+        }
+    }
+}
+
+impl Serialize for ExitCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Absent => serializer.serialize_none(),
+            Self::Code(code) => serializer.serialize_i32(*code),
+            Self::Signal => serializer.serialize_str("signal"),
+        }
+    }
+}
+
+/// The exit code of one of an item's runs: the HEAD run when `head`, else
+/// the run with the fix reverted. Absent when the selector did not run.
+fn exit_of(item: &Item, head: bool) -> ExitCode {
+    let Outcome::Ran { base, head: at, .. } = &item.outcome else {
+        return ExitCode::Absent;
+    };
+    ExitCode::of(Some(if head { at.exit } else { base.exit }))
+}
+
+/// `pr repro`: the repro gate's check on its own, for the current
+/// worktree's branch. Prints each item's verdict and exits nonzero exactly
+/// when the `require` strength would refuse the PR. Touches no forge.
+pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool, base: Option<&str>) -> Result<()> {
+    let checkout = Checkout::at(dir);
+    let loaded = devkit_ports::load::load_in(&checkout, config.map(Path::new), dir)?;
+    let caller = devkit_common::caller::caller();
+    let repos = devkit_common::forge::resolve(
+        &loaded.config.forge,
+        &loaded.config.github,
+        &dir.display().to_string(),
+        None,
+    )
+    .repos;
+    let inputs = super::create::gate_inputs(&checkout, &loaded, &repos, base)?;
+    let loaded_gates =
+        super::create::Gates::load(&checkout, &inputs.base, &inputs.head, caller, inputs.items)?;
+    let gates = match loaded_gates {
+        super::create::GateLoad::Ready(gates) => gates,
+        super::create::GateLoad::Unread { reason, .. } => {
+            if caller == Caller::Human {
+                println!("{reason:#}");
+                return Ok(());
+            }
+            return Err(reason);
+        }
+    };
+    let Some(gate) = gates.repro() else {
+        println!("no repro check: the gate is off, or this worktree's issue lists no items");
+        return Ok(());
+    };
+    let report = gate.report()?;
+    let refused = report.refused;
+    report.print(json);
+    if refused {
+        bail!(
+            "the `repro` gate would refuse the PR: an item marked `(proof: repro <selector>)` \
+             passes with the fix reverted or matches no test"
+        );
+    }
+    Ok(())
+}
+
+/// `status` as a run's exit. `devrun` exits with the child's raw wait
+/// status, so a death by signal still has its signal bit set and reads as
+/// no exit code. A code the program itself exited with stays that code,
+/// including one above 128.
+fn signalled_exit(status: std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if status.signal().is_some() {
+            return None;
+        }
+    }
+    status.code()
 }
 
 fn exited(ran: &Ran) -> String {

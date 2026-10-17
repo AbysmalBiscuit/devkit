@@ -30,7 +30,7 @@ Before running a project build, profiling flow, or verification command by hand,
 | `references/templates.md` | text for a tool devkit does not send to (a Linear update, a Jira comment, a release note), a branch or worktree named by the project's template, or a PR body or Slack message to read before it goes out |
 | `references/commit.md` | committing: named paths, part of a file, or a new message for the last commit, without disturbing what other sessions staged |
 | `references/workspace.md` | starting a workspace for an issue or a slug, binding the checkout you were given, triage, tearing down |
-| `references/pr.md` | opening a PR, its text without opening it, editing an open PR, attaching proof, checking out a PR to review, requesting or finishing review, forges |
+| `references/pr.md` | opening a PR, its text without opening it, editing an open PR, attaching proof, checking a repro before the PR, checking out a PR to review, requesting or finishing review, forges |
 | `references/ticket.md` | writing a tracker ticket or its text for a tracker MCP, moving a ticket's status, the dashboard |
 | `references/config.md` | writing or changing a `devkit.toml`: how layers merge, reading a table's rules before editing it, checking the edit |
 | `references/rules.md` | rules injected on a write or at session start, `devkit rules query` or edits, injected rules missing or a rules warning on stderr, or rules kept in a SQLite store or the shared Postgres store |
