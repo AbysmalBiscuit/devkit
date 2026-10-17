@@ -296,6 +296,58 @@ impl Gates {
     }
 }
 
+/// The inputs both `pr create` and `pr repro` pass to [`Gates::load`]: the
+/// base from `--base` or `defaults.pr_base`, HEAD, and the worktree issue's
+/// `Done when` items.
+pub(crate) struct GateInputs {
+    pub base: String,
+    pub head: String,
+    pub items: Box<dyn FnOnce() -> Result<Option<Vec<DoneWhen>>>>,
+}
+
+/// `base` is `--base` when the command was given one.
+pub(crate) fn gate_inputs(
+    checkout: &Checkout,
+    loaded: &devkit_ports::load::Loaded,
+    repos: &devkit_common::forge::Repos,
+    base: Option<&str>,
+) -> Result<GateInputs> {
+    let dir = checkout.dir();
+    let worktree = checkout.worktree()?;
+    let record = devkit_common::record::read_on(&worktree.path, &worktree.branch);
+    let issue = record.and_then(|r| r.tracker_issue());
+    let head = Vcs::at(dir).revision(dir)?;
+    let base = base
+        .map(str::to_string)
+        .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
+    let kind = loaded.config.tracker.kind;
+    let repos = repos.clone();
+    let dir = dir.to_path_buf();
+    Ok(GateInputs {
+        base,
+        head,
+        items: Box::new(move || done_when_items(&dir, kind, &repos, issue.as_deref())),
+    })
+}
+
+/// The `Done when` items of `issue`, `None` when the worktree has none.
+fn done_when_items(
+    dir: &Path,
+    kind: Option<devkit_config::TrackerKind>,
+    repos: &devkit_common::forge::Repos,
+    issue: Option<&str>,
+) -> Result<Option<Vec<DoneWhen>>> {
+    let Some(issue) = issue else {
+        return Ok(None);
+    };
+    let tracker = devkit_common::tracker::resolve(kind, dir, repos);
+    let details = tracker
+        .tracker
+        .details(issue)?
+        .with_context(|| format!("no issue {issue} in the {} tracker", tracker.tracker.kind()))?;
+    Ok(Some(done_when_entries(&details.description)))
+}
+
 /// Whether the config this checkout loads turns on a gate that applies to a
 /// human's PR, as the merge base's would when it resolves. A config that does
 /// not load counts as turning one on.
@@ -450,26 +502,10 @@ pub fn run(args: Args) -> Result<()> {
         &vars,
     )?;
 
-    let base = args
-        .base
-        .clone()
-        .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
-    let head = Vcs::at(here).revision(here)?;
-    let gate_base = base.clone();
-    let gate_head = head.clone();
-    let gate_issue = tracker_issue.clone();
-    let (config, repos) = (&loaded.config, &forge.repos);
-    let items = move || -> Result<Option<Vec<DoneWhen>>> {
-        let Some(issue) = gate_issue else {
-            return Ok(None);
-        };
-        let tracker = devkit_common::tracker::resolve(config.tracker.kind, here, repos);
-        let details = tracker.tracker.details(&issue)?.with_context(|| {
-            format!("no issue {issue} in the {} tracker", tracker.tracker.kind())
-        })?;
-        Ok(Some(done_when_entries(&details.description)))
-    };
-    let gates = || Gates::read(&checkout, &gate_base, &gate_head, caller, items);
+    let inputs = gate_inputs(&checkout, &loaded, &forge.repos, args.base.as_deref())?;
+    let base = inputs.base.clone();
+    let head = inputs.head.clone();
+    let gates = || Gates::read(&checkout, &inputs.base, &inputs.head, caller, inputs.items);
 
     let texts = Texts::new(
         &loaded.config.templates,

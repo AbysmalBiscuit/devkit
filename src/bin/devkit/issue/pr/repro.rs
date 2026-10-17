@@ -1528,32 +1528,17 @@ fn exit_of(item: &Item, head: bool) -> ExitCode {
 pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool, base: Option<&str>) -> Result<()> {
     let checkout = Checkout::at(dir);
     let loaded = devkit_ports::load::load_in(&checkout, config.map(Path::new), dir)?;
-    let configured = &loaded.config.defaults.pr_base;
-    let base = base.unwrap_or(configured);
     let caller = devkit_common::caller::caller();
-    let worktree = checkout.worktree()?;
-    let record = devkit_common::record::read_on(&worktree.path, &worktree.branch);
-    let issue = record.as_ref().and_then(|r| r.tracker_issue());
-    let head = Vcs::at(dir).revision(dir)?;
-    let config = &loaded.config;
     let repos = devkit_common::forge::resolve(
-        &config.forge,
-        &config.github,
+        &loaded.config.forge,
+        &loaded.config.github,
         &dir.display().to_string(),
         None,
     )
     .repos;
-    let items = || -> Result<Option<Vec<DoneWhen>>> {
-        let Some(issue) = issue else {
-            return Ok(None);
-        };
-        let tracker = devkit_common::tracker::resolve(config.tracker.kind, dir, &repos);
-        let details = tracker.tracker.details(&issue)?.with_context(|| {
-            format!("no issue {issue} in the {} tracker", tracker.tracker.kind())
-        })?;
-        Ok(Some(super::proof::done_when_entries(&details.description)))
-    };
-    let loaded_gates = super::create::Gates::load(&checkout, base, &head, caller, items)?;
+    let inputs = super::create::gate_inputs(&checkout, &loaded, &repos, base)?;
+    let loaded_gates =
+        super::create::Gates::load(&checkout, &inputs.base, &inputs.head, caller, inputs.items)?;
     let gates = match loaded_gates {
         super::create::GateLoad::Ready(gates) => gates,
         super::create::GateLoad::Unread { reason, .. } => {
