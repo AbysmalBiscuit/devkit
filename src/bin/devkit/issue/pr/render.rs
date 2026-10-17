@@ -31,6 +31,93 @@ pub(super) fn require_pr_title(title: &str) -> Result<()> {
     Ok(())
 }
 
+/// Refuse a summary that writes a heading the `pr_body` template emits itself
+/// on any of its branches: the body would carry that heading twice, and a
+/// section the template keeps for someone else, such as a human's TL;DR,
+/// would be filled from the summary. Taken from the template source rather
+/// than a render, since a branch this caller's render skips still emits its
+/// heading for another caller.
+pub(crate) fn refuse_template_headings(tmpls: &Templates, summary: &str) -> Result<()> {
+    let emitted = template_headings(tmpls.pr_body());
+    let repeated: Vec<String> = summary_headings(summary)
+        .into_iter()
+        .filter(|h| emitted.contains(h))
+        .map(|h| format!("`{h}`"))
+        .collect();
+    if repeated.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "--pr-body writes {}, a heading the pr_body template emits itself. Drop it from \
+         the summary: the template fills its own sections from their --arg values \
+         (`devkit template show pr_body` lists them)",
+        repeated.join(", ")
+    )
+}
+
+/// The headings a template's literal text holds, across every branch. A
+/// heading line whose text runs on into an expression is skipped, since its
+/// full text is known only once rendered. Text right after a tag counts as a
+/// line start, because the tag may render a newline.
+fn template_headings(source: &str) -> Vec<String> {
+    let mut headings = Vec::new();
+    let mut rest = source;
+    loop {
+        let open = ["{{", "{%", "{#"].iter().filter_map(|o| rest.find(o)).min();
+        let (text, tag) = match open {
+            Some(i) => (&rest[..i], Some(&rest[i..])),
+            None => (rest, None),
+        };
+        let runs_into_expression = tag.is_some_and(|t| t.starts_with("{{"));
+        let lines: Vec<&str> = text.split('\n').collect();
+        for (i, line) in lines.iter().enumerate() {
+            if i + 1 == lines.len() && runs_into_expression {
+                continue;
+            }
+            headings.extend(heading(line));
+        }
+        let Some(tag) = tag else { break };
+        let close = match &tag[..2] {
+            "{{" => "}}",
+            "{%" => "%}",
+            _ => "#}",
+        };
+        match tag[2..].find(close) {
+            Some(j) => rest = &tag[2 + j + close.len()..],
+            None => break,
+        }
+    }
+    headings
+}
+
+/// The ATX headings of a markdown summary, outside its fenced code blocks.
+fn summary_headings(summary: &str) -> Vec<String> {
+    let mut fenced = false;
+    let mut headings = Vec::new();
+    for line in summary.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+        } else if !fenced {
+            headings.extend(heading(line));
+        }
+    }
+    headings
+}
+
+/// `line` as an ATX heading, its marker and text separated by one space, or
+/// `None` when it is not one. Indentation is ignored: a template that trims
+/// its input turns an indented first line into a heading.
+fn heading(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let level = trimmed.bytes().take_while(|b| *b == b'#').count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+    let text = trimmed[level..].strip_prefix([' ', '\t'])?.trim();
+    (!text.is_empty()).then(|| format!("{} {text}", &trimmed[..level]))
+}
+
 /// The required args the `pr_title` and `pr_body` templates read that `given`
 /// does not supply.
 pub(crate) fn missing(
@@ -144,6 +231,9 @@ pub(crate) fn run(args: Args) -> Result<()> {
         &args.vars,
         devkit_common::caller::caller(),
     )?;
+    if let Some(summary) = &args.pr_body {
+        refuse_template_headings(&loaded.config.templates, summary)?;
+    }
 
     let branch = Vcs::at(here).branch(here)?;
     let toplevel = devkit_common::vcs::checkout_root(here)?;
