@@ -81,7 +81,8 @@ pub struct Run {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub live_servers: Vec<LiveServer>,
     /// The exit code of the program devrun ran, or of a sequence's first
-    /// failing step. `None` when it was killed by a signal or never ran.
+    /// failing step. A death by signal is 128 plus the signal number. `None`
+    /// when the step never ran.
     pub exit_code: Option<i32>,
     pub started_at: String,
     pub ended_at: String,
