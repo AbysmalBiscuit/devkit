@@ -615,11 +615,16 @@ pub(crate) enum PrCmd {
     /// `FAILS AT HEAD` or `INCONCLUSIVE`) with both runs' exit codes.
     /// Exits nonzero exactly when `[pr.gates] repro = "require"` would
     /// refuse the PR. Touches no forge, and leaves this worktree and its
-    /// index unchanged. `--json` prints one object per item.
+    /// index unchanged. `--json` prints one object per item. `--base`
+    /// names the PR base, as on `pr create`; without it the check uses
+    /// `defaults.pr_base`.
     Repro {
         /// Print one JSON object per item instead of the text report.
         #[arg(long)]
         json: bool,
+        /// PR base branch, instead of the configured baseline ref.
+        #[arg(long)]
+        base: Option<String>,
     },
     /// Flag tests a branch weakened since its merge base with BASE.
     ///
@@ -1058,7 +1063,12 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             dir,
             config,
         }),
-        PrCmd::Repro { json } => pr::repro::run(Path::new(&start(&dir)), config.as_deref(), json),
+        PrCmd::Repro { json, base } => pr::repro::run(
+            Path::new(&start(&dir)),
+            config.as_deref(),
+            json,
+            base.as_deref(),
+        ),
         PrCmd::WeakenedTests {
             base,
             head,
