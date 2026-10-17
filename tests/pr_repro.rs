@@ -293,6 +293,7 @@ fn a_missing_issue_or_merge_base_names_what_is_missing() {
 /// A task whose shell kills itself, committed before the branch so the
 /// reverted run uses it too. A task the branch itself changes is restored
 /// with the fix, and the reverted run would not be the killed one.
+#[cfg(unix)]
 const KILL: &str = r#"
 [tracker]
 kind = "github"
