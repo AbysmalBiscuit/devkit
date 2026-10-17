@@ -163,6 +163,17 @@ pub(crate) struct Ensure<'a, G> {
     pub toplevel: &'a Path,
 }
 
+/// What [`Gates::load`] found: the gates, or why the merge base could not
+/// supply them.
+pub(crate) enum GateLoad {
+    Ready(Gates),
+    /// `ungated` is what a human's PR opens with.
+    Unread {
+        reason: anyhow::Error,
+        ungated: Gates,
+    },
+}
+
 /// The PR gates one `pr create` applies to the PR it opens.
 pub(crate) struct Gates {
     weakened: Option<weakened::Gate>,
@@ -188,6 +199,30 @@ impl Gates {
         caller: Caller,
         items: impl FnOnce() -> Result<Option<Vec<DoneWhen>>>,
     ) -> Result<Self> {
+        match Self::load(checkout, base, head, caller, items)? {
+            GateLoad::Ready(gates) => Ok(gates),
+            GateLoad::Unread { reason, ungated } => {
+                if caller == Caller::Human {
+                    if checkout_gates_a_human(checkout.dir()) {
+                        eprintln!("warning: opening the PR without its gates: {reason:#}");
+                    }
+                    return Ok(ungated);
+                }
+                Err(reason)
+            }
+        }
+    }
+
+    /// The gates as [`Self::read`] resolves them, with an unread merge base
+    /// returned rather than turned into a warning. `pr repro` prints that
+    /// reason itself.
+    pub(crate) fn load(
+        checkout: &Checkout,
+        base: &str,
+        head: &str,
+        caller: Caller,
+        items: impl FnOnce() -> Result<Option<Vec<DoneWhen>>>,
+    ) -> Result<GateLoad> {
         let dir = checkout.dir();
         let ungated = Self {
             weakened: None,
@@ -199,31 +234,18 @@ impl Gates {
                 .map(|mb| weakened::config_at(checkout, &mb).map(|cfg| (mb, cfg)))
                 .transpose()
         });
-        let unresolved = || {
-            anyhow!(
-                "the PR gates read their settings from the merge base with `{base}`, and \
-                 neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
-            )
-        };
-        let (merge_base, cfg) = match (settings, caller) {
-            (Ok(Some(settings)), _) => settings,
-            (Ok(None), Caller::Human) => {
-                if checkout_gates_a_human(dir) {
-                    eprintln!(
-                        "warning: opening the PR without its gates: {:#}",
-                        unresolved()
-                    );
-                }
-                return Ok(ungated);
+        let unresolved = anyhow!(
+            "the PR gates read their settings from the merge base with `{base}`, and              neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
+        );
+        let (merge_base, cfg) = match settings {
+            Ok(Some(settings)) => settings,
+            Ok(None) => {
+                return Ok(GateLoad::Unread {
+                    reason: unresolved,
+                    ungated,
+                });
             }
-            (Err(e), Caller::Human) => {
-                if checkout_gates_a_human(dir) {
-                    eprintln!("warning: opening the PR without its gates: {e:#}");
-                }
-                return Ok(ungated);
-            }
-            (Ok(None), Caller::Agent) => return Err(unresolved()),
-            (Err(e), Caller::Agent) => return Err(e),
+            Err(reason) => return Ok(GateLoad::Unread { reason, ungated }),
         };
         let weakened = match caller {
             Caller::Agent => Some(weakened::Gate::check(dir, &merge_base, &cfg)?),
@@ -246,11 +268,15 @@ impl Gates {
             caller,
             items,
         )?;
-        Ok(Self {
+        Ok(GateLoad::Ready(Self {
             weakened,
             verify,
             repro,
-        })
+        }))
+    }
+
+    pub(crate) fn repro(self) -> Option<repro::Gate> {
+        self.repro
     }
 
     fn apply(self, body: String) -> Result<String> {
