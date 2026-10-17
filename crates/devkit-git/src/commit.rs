@@ -62,7 +62,14 @@ pub(crate) fn commit(dir: &Path, selection: &Selection<'_>, message: &str) -> Re
         }
         Selection::Amend => report(
             Git::at(dir)
-                .args(["commit", "--amend", "--only", "-m", message])
+                .args([
+                    "commit",
+                    "--amend",
+                    "--only",
+                    "--cleanup=verbatim",
+                    "-m",
+                    message,
+                ])
                 .timeout(SLOW_TIMEOUT)
                 .wait()?,
         ),
@@ -314,7 +321,7 @@ fn commit_locked(
     let wrappers = write_wrappers(&scratch, &state)?;
     held.retain = true;
     let out = private(top, &candidate, &wrappers)?
-        .args(["commit", "-m", message])
+        .args(["commit", "--cleanup=verbatim", "-m", message])
         .timeout(SLOW_TIMEOUT)
         .wait()?;
     let proposed = fs::read_to_string(&state.proposed).ok();

@@ -189,6 +189,7 @@ pub fn commit_message(
     message: &CommitMessage<'_>,
     given: &BTreeMap<String, String>,
     caller: Caller,
+    amend: bool,
 ) -> Result<String> {
     render_commit_parts(
         cfg,
@@ -197,6 +198,7 @@ pub fn commit_message(
         message,
         given,
         caller,
+        amend,
     )
 }
 
@@ -208,32 +210,48 @@ fn render_commit_parts(
     message: &CommitMessage<'_>,
     given: &BTreeMap<String, String>,
     caller: Caller,
+    amend: bool,
 ) -> Result<String> {
-    let coauthors = message.coauthors.join("; ");
-    let stand_in = (message.coauthors.is_empty()
-        && cfg.templates.commit_message.is_none()
-        && devkit_common::required::is_required(cfg, None, "coauthors", caller))
-    .then(|| agent_author(start, caller))
-    .transpose()?
-    .flatten();
-    let supplied = stand_in
-        .as_deref()
+    let coauthors = message
+        .coauthors
+        .iter()
+        .filter(|c| !c.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
+    // An agent author meets the requirement without a trailer. The stand-in
+    // is empty so the built-in template emits no Co-authored-by line, and
+    // the supplied body is left as the caller wrote it.
+    let agent = coauthors.is_empty()
+        && builtin_commit_message(cfg)
+        && devkit_common::required::is_required(cfg, None, "coauthors", caller)
+        && agent_author(start, caller, amend)?.is_some();
+    let supplied = agent
+        .then_some("")
         .or((!coauthors.is_empty()).then_some(coauthors.as_str()));
     let parts = [message.subject, message.body, supplied];
-    let mut text = render_commit_message(cfg, start, parts, given, caller, what)?;
-    if stand_in.is_some() {
-        text = drop_coauthor_trailers(&text);
-    }
-    Ok(text)
+    render_commit_message(cfg, start, parts, given, caller, what)
+}
+
+/// The exemption applies only to the unchanged built-in `commit_message`.
+/// A `[templates].commit_message` override and a custom template of that
+/// name still require `--coauthor`.
+fn builtin_commit_message(cfg: &Config) -> bool {
+    cfg.templates.commit_message.is_none() && !cfg.templates.custom.contains_key(COMMIT_MESSAGE)
 }
 
 /// The git author when it is the agent, as `Name <email>`. A person's author
-/// and a human caller get `None`.
-fn agent_author(start: &Path, caller: Caller) -> Result<Option<String>> {
+/// and a human caller get `None`. An amend keeps the existing commit's
+/// author, so that author is the one checked.
+fn agent_author(start: &Path, caller: Caller, amend: bool) -> Result<Option<String>> {
     if caller != Caller::Agent {
         return Ok(None);
     }
-    let Some((name, email)) = Vcs::at(start).author(start)? else {
+    let Some((name, email)) = (if amend {
+        Vcs::at(start).head_author(start)?
+    } else {
+        Vcs::at(start).author(start)?
+    }) else {
         return Ok(None);
     };
     if !agent_email(&email) {
@@ -242,36 +260,34 @@ fn agent_author(start: &Path, caller: Caller) -> Result<Option<String>> {
     Ok(Some(format!("{} <{}>", name.trim(), email.trim())))
 }
 
-/// A GitHub bot address, the form a harness uses when it authors a commit
-/// itself (`123+name[bot]@users.noreply.github.com`). A person's address,
-/// including `users.noreply.github.com` without `[bot]`, is not one.
+/// Addresses an agent harness records when it authors a commit itself, and
+/// that have no GitHub bot form: Claude and Codex.
+const AGENT_EMAILS: [&str; 2] = ["noreply@anthropic.com", "noreply@openai.com"];
+
+/// A GitHub bot address, or one of [`AGENT_EMAILS`]. The bot form is a
+/// numeric id, `+`, a nonempty name, and a terminal `[bot]`, at
+/// `users.noreply.github.com`.
 fn agent_email(email: &str) -> bool {
-    let Some((local, host)) = email.trim().rsplit_once('@') else {
+    let email = email.trim();
+    if AGENT_EMAILS
+        .iter()
+        .any(|known| email.eq_ignore_ascii_case(known))
+    {
+        return true;
+    }
+    let Some((local, host)) = email.rsplit_once('@') else {
         return false;
     };
-    host.eq_ignore_ascii_case("users.noreply.github.com") && local.contains("[bot]")
-}
-
-/// The message without `Co-authored-by` trailers, and without a blank line
-/// that existed only to hold them.
-fn drop_coauthor_trailers(message: &str) -> String {
-    let kept: Vec<&str> = message
-        .lines()
-        .filter(|line| {
-            !line
-                .trim()
-                .to_ascii_lowercase()
-                .starts_with("co-authored-by:")
-        })
-        .collect();
-    let mut text = kept.join("\n");
-    while text.contains("\n\n\n") {
-        text = text.replace("\n\n\n", "\n\n");
+    if !host.eq_ignore_ascii_case("users.noreply.github.com") {
+        return false;
     }
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text
+    let Some((id, rest)) = local.split_once('+') else {
+        return false;
+    };
+    let Some(name) = rest.strip_suffix("[bot]") else {
+        return false;
+    };
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) && !name.is_empty()
 }
 
 /// Whether `devkit commit` can leave out `part`: every part but the subject,
@@ -443,7 +459,7 @@ pub fn render(
             );
         }
         let what = format!("template `{name}`");
-        return render_commit_parts(cfg, start, (&what, names), parts, given, caller);
+        return render_commit_parts(cfg, start, (&what, names), parts, given, caller, false);
     }
     let [subject, body, coauthor] = COMMIT_PARTS.map(|(_, flag)| names.part(flag));
     ensure!(

@@ -289,8 +289,19 @@ pub trait VersionControl {
     /// configured.
     fn user_email(&self, dir: &::std::path::Path) -> ::anyhow::Result<::std::string::String>;
 
-    /// The author a new commit in `dir` would record (`GIT_AUTHOR_*`, else `user.name` and `user.email`), or `Ok(None)` when either half is unset.
+    /// The author a new commit in `dir` would record (`GIT_AUTHOR_*`, else
+    /// `user.name` and `user.email`), or `Ok(None)` when either half is unset.
     fn author(
+        &self,
+        dir: &::std::path::Path,
+    ) -> ::anyhow::Result<Option<(::std::string::String, ::std::string::String)>> {
+        let _ = dir;
+        Ok(None)
+    }
+
+    /// The author of the commit `HEAD` names, or `Ok(None)` when there is no
+    /// commit. An amend keeps this author.
+    fn head_author(
         &self,
         dir: &::std::path::Path,
     ) -> ::anyhow::Result<Option<(::std::string::String, ::std::string::String)>> {
