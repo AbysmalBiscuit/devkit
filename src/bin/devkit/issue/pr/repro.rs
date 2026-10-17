@@ -1536,19 +1536,36 @@ pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool, base: Option<&st
     let loaded = devkit_ports::load::load_in(&checkout, config.map(Path::new), dir)?;
     let configured = &loaded.config.defaults.pr_base;
     let base = base.unwrap_or(configured);
-    let Some(merge_base) = super::weakened::merge_base(dir, base)? else {
-        bail!(
+    let caller = devkit_common::caller::caller();
+    let unresolved = || {
+        anyhow::anyhow!(
             "the repro check reads its settings from the merge base with `{base}`, and neither \
              `origin/{base}` nor `{base}` is a commit here: fetch it, pass --base, or set \
              defaults.pr_base"
-        );
+        )
     };
-    let cfg = super::weakened::config_at(&checkout, &merge_base)?;
+    let settings = super::weakened::merge_base(dir, base).and_then(|merge_base| {
+        merge_base
+            .map(|mb| super::weakened::config_at(&checkout, &mb).map(|cfg| (mb, cfg)))
+            .transpose()
+    });
+    let (merge_base, cfg) = match (settings, caller) {
+        (Ok(Some(settings)), _) => settings,
+        (Ok(None), Caller::Human) => {
+            println!("{}", unresolved());
+            return Ok(());
+        }
+        (Err(e), Caller::Human) => {
+            println!("{e:#}");
+            return Ok(());
+        }
+        (Ok(None), Caller::Agent) => return Err(unresolved()),
+        (Err(e), Caller::Agent) => return Err(e),
+    };
     let worktree = checkout.worktree()?;
     let record = devkit_common::record::read_on(&worktree.path, &worktree.branch);
     let issue = record.as_ref().and_then(|r| r.tracker_issue());
     let head = Vcs::at(dir).revision(dir)?;
-    let caller = devkit_common::caller::caller();
     let config = &loaded.config;
     let repos = devkit_common::forge::resolve(
         &config.forge,

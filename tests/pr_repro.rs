@@ -448,3 +448,58 @@ fn a_real_exit_above_128_stays_that_code_and_refuses_when_it_names_no_test() {
     assert_eq!(item["reverted_exit"], 143, "{item}");
     assert!(!stdout.contains("signal"), "{stdout}");
 }
+
+fn caller_repro(p: &ghfake::Fake, caller: &str) -> (bool, String, String) {
+    let out = p.devkit_here_with_env(&["pr", "repro"], &[("DEVKIT_CALLER", caller)]);
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn a_human_exits_zero_when_the_check_cannot_read_its_settings() {
+    let no_base = project(GATE, FIX);
+    git(&no_base, &["branch", "-D", "main"]);
+    let (ok, stdout, stderr) = caller_repro(&no_base, "human");
+    let text = format!("{stdout}{stderr}");
+    assert!(ok, "a human with no base exits zero: {text}");
+    assert!(
+        text.contains("neither `origin/main` nor `main` is a commit here"),
+        "{text}"
+    );
+
+    let (ok, stdout, stderr) = caller_repro(&no_base, "agent");
+    assert!(!ok, "an agent with no base still fails: {stdout}{stderr}");
+
+    let broken = project(GATE, FIX);
+    let config = broken.project().join("devkit.toml");
+    let good = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, "this is not toml\n").unwrap();
+    git(&broken, &["add", "-A"]);
+    git(&broken, &["commit", "-q", "--amend", "--no-edit"]);
+    git(&broken, &["branch", "-f", "main", "HEAD"]);
+    std::fs::write(&config, good).unwrap();
+    git(&broken, &["add", "-A"]);
+    git(&broken, &[
+        "commit",
+        "-q",
+        "-m",
+        "restore a readable config at HEAD",
+    ]);
+    let (ok, stdout, stderr) = caller_repro(&broken, "human");
+    let text = format!("{stdout}{stderr}");
+    assert!(ok, "a human with an unreadable config exits zero: {text}");
+    assert!(text.contains("reading devkit.toml"), "{text}");
+
+    let (ok, stdout, stderr) = caller_repro(&broken, "agent");
+    assert!(
+        !ok,
+        "an agent with an unreadable config still fails: {stdout}{stderr}"
+    );
+    assert!(
+        format!("{stdout}{stderr}").contains("reading devkit.toml"),
+        "{stdout}{stderr}"
+    );
+}
