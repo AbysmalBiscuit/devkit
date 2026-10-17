@@ -298,8 +298,8 @@ pub fn resolve_at(global_path: Option<&Path>, checkout: &Checkout, cwd: &Path) -
 
 /// Combine the global table, the project layers and the env override.
 ///
-/// The global table is passed separately rather than read by index: with no
-/// global config, index 0 of `resolve_rules` is a project layer. `layers` is a
+/// The global table is passed separately rather than read by index: index 0 of
+/// `resolve_rules` is not necessarily the global config. `layers` is a
 /// thunk because reading them runs git and walks the filesystem.
 pub fn resolve_from(
     global: Option<&LogSection>,
