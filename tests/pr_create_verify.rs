@@ -74,16 +74,18 @@ fn verify(p: &ghfake::Fake) {
     task(p, &["verify", "--arg", "scope=all"]);
 }
 
+const CREATE: [&str; 7] = [
+    "pr",
+    "create",
+    "--no-push",
+    "--pr-title",
+    "feat: a thing",
+    "--pr-body",
+    "Adds a thing.",
+];
+
 fn create(p: &ghfake::Fake, caller: &str) -> (bool, String) {
-    let out = p.issue_as(caller, &[
-        "pr",
-        "create",
-        "--no-push",
-        "--pr-title",
-        "feat: a thing",
-        "--pr-body",
-        "Adds a thing.",
-    ]);
+    let out = p.issue_as(caller, &CREATE);
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -115,6 +117,16 @@ fn assert_refused(p: &ghfake::Fake) {
 fn an_agent_with_no_passing_run_at_head_is_refused_naming_the_task_and_sha() {
     let p = project(GATE);
     assert_refused(&p);
+}
+
+#[test]
+fn a_human_override_inside_a_harness_session_is_still_gated() {
+    let p = project(GATE);
+    let out = p.issue_in_session("human", Some("S"), &CREATE);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("`verify`"), "names the task: {stderr}");
+    assert!(!opened(&p), "{}", p.calls());
 }
 
 #[test]

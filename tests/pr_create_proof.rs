@@ -173,6 +173,30 @@ fn a_human_caller_is_not_gated() {
     assert!(p.opened());
 }
 
+#[test]
+fn a_human_override_inside_a_harness_session_is_still_gated() {
+    let p = project();
+    p.fake.record_issue("7");
+    p.fake.serve_issue(ISSUE);
+
+    let out = p.fake.issue_in_session("human", Some("S"), &[
+        "pr",
+        "create",
+        "--pr-title",
+        "feat: a thing",
+        "--arg",
+        "proof=covered no item by number",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("1. A gap is refused (proof: test)"),
+        "the proof gate refused: {stderr}"
+    );
+    assert!(!p.pushed(), "nothing is pushed");
+    assert!(!p.opened(), "{}", p.fake.calls());
+}
+
 /// `pr checkout` records `UNKNOWN` when the PR names no issue, which leaves
 /// nothing to ask the tracker about.
 #[test]

@@ -1677,7 +1677,7 @@
       "type": "object"
     },
     "Required": {
-      "description": "Who must supply an `--arg` even though a default exists. `Never` is the\nabsence of a marking, not a licence to omit: the derived rule (an arg with\nno default is required) is a floor this enum sits on top of and cannot\nlower. `Never` is therefore meaningful only as a task-level override of a\nvariable-level marking. Who counts as an agent is `DEVKIT_CALLER`, then a\nharness session variable, then a non-terminal stdin.",
+      "description": "Who must supply an `--arg` even though a default exists. `Never` is the\nabsence of a marking, not a licence to omit: the derived rule (an arg with\nno default is required) is a floor this enum sits on top of and cannot\nlower. `Never` is therefore meaningful only as a task-level override of a\nvariable-level marking. Who counts as an agent is `DEVKIT_CALLER`, then a\nharness session variable, then a non-terminal stdin; a harness session\nvariable outranks `DEVKIT_CALLER=human`.",
       "enum": [
         "never",
         "humans",

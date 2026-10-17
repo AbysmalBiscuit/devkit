@@ -2559,7 +2559,8 @@ const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
 /// no default is required) is a floor this enum sits on top of and cannot
 /// lower. `Never` is therefore meaningful only as a task-level override of a
 /// variable-level marking. Who counts as an agent is `DEVKIT_CALLER`, then a
-/// harness session variable, then a non-terminal stdin.
+/// harness session variable, then a non-terminal stdin; a harness session
+/// variable outranks `DEVKIT_CALLER=human`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Required {
