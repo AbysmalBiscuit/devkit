@@ -617,7 +617,9 @@ pub(crate) enum PrCmd {
     /// refuse the PR. Touches no forge, and leaves this worktree and its
     /// index unchanged. `--json` prints one object per item. `--base`
     /// names the PR base, as on `pr create`; without it the check uses
-    /// `defaults.pr_base`.
+    /// `defaults.pr_base`. When the merge base cannot supply the gate
+    /// settings, a human gets the reason printed and exits zero, and an
+    /// agent gets an error.
     Repro {
         /// Print one JSON object per item instead of the text report.
         #[arg(long)]
