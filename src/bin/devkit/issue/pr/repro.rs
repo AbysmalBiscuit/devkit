@@ -439,8 +439,7 @@ impl Gate {
     /// `require` strength would refuse an agent's PR for these results.
     pub(crate) fn report(mut self) -> Result<Report> {
         self.evaluate()?;
-        let refused =
-            self.mode == GateMode::Require && self.caller == Caller::Agent && self.refuses();
+        let refused = !self.refused_items().is_empty();
         let items = self
             .items
             .iter()
@@ -460,16 +459,38 @@ impl Gate {
         })
     }
 
-    /// Whether an agent's PR under `require` is refused for these results.
-    fn refuses(&self) -> bool {
-        self.items.iter().any(|item| match &item.outcome {
-            Outcome::Ran { base, head, .. } => {
-                Verdict::of(base, head, self.task.no_tests_exit).refuses()
-            }
-            Outcome::Unmarked | Outcome::Done | Outcome::Inconclusive(_) | Outcome::Error(_) => {
-                false
-            }
-        })
+    /// Each item an agent's PR under `require` is refused for, as the
+    /// refusal names it. Empty for a human, for `advise` or `off`, and when
+    /// nothing refuses.
+    fn refused_items(&self) -> Vec<String> {
+        if self.mode != GateMode::Require || self.caller != Caller::Agent {
+            return Vec::new();
+        }
+        self.items
+            .iter()
+            .filter_map(|item| match &item.outcome {
+                Outcome::Ran {
+                    selector,
+                    base,
+                    head,
+                } => {
+                    let verdict = Verdict::of(base, head, self.task.no_tests_exit);
+                    verdict.refuses().then(|| {
+                        format!(
+                            "  {}. {}: `{}` {}",
+                            item.number,
+                            item.title,
+                            self.task.command(selector),
+                            self.verdict_text(verdict, base, head)
+                        )
+                    })
+                }
+                Outcome::Unmarked
+                | Outcome::Done
+                | Outcome::Inconclusive(_)
+                | Outcome::Error(_) => None,
+            })
+            .collect()
     }
 
     fn item_verdict(&self, item: &Item) -> Option<&'static str> {
@@ -493,42 +514,15 @@ impl Gate {
     /// runs here, so a PR another gate refuses first never pays for it.
     pub(crate) fn apply(mut self, body: String, verification: bool) -> Result<String> {
         self.evaluate()?;
-        if let (GateMode::Require, Caller::Agent) = (self.mode, self.caller) {
-            let refused: Vec<String> = self
-                .items
-                .iter()
-                .filter_map(|item| match &item.outcome {
-                    Outcome::Ran {
-                        selector,
-                        base,
-                        head,
-                    } => {
-                        let verdict = Verdict::of(base, head, self.task.no_tests_exit);
-                        verdict.refuses().then(|| {
-                            format!(
-                                "  {}. {}: `{}` {}",
-                                item.number,
-                                item.title,
-                                self.task.command(selector),
-                                self.verdict_text(verdict, base, head)
-                            )
-                        })
-                    }
-                    Outcome::Unmarked
-                    | Outcome::Done
-                    | Outcome::Inconclusive(_)
-                    | Outcome::Error(_) => None,
-                })
-                .collect();
-            if !refused.is_empty() {
-                bail!(
-                    "refusing to open the PR: the `repro` gate needs each item marked `(proof: \
+        let refused = self.refused_items();
+        if !refused.is_empty() {
+            bail!(
+                "refusing to open the PR: the `repro` gate needs each item marked `(proof: \
                      repro <selector>)` to name a test that fails with the branch's non-test \
                      changes reverted and passes at HEAD:\n{}\n\
                      Point each selector at a test that fails without the fix, then retry",
-                    refused.join("\n")
-                );
-            }
+                refused.join("\n")
+            );
         }
         let body = body.trim_end();
         let heading = if verification {
@@ -1537,31 +1531,6 @@ pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool, base: Option<&st
     let configured = &loaded.config.defaults.pr_base;
     let base = base.unwrap_or(configured);
     let caller = devkit_common::caller::caller();
-    let unresolved = || {
-        anyhow::anyhow!(
-            "the repro check reads its settings from the merge base with `{base}`, and neither \
-             `origin/{base}` nor `{base}` is a commit here: fetch it, pass --base, or set \
-             defaults.pr_base"
-        )
-    };
-    let settings = super::weakened::merge_base(dir, base).and_then(|merge_base| {
-        merge_base
-            .map(|mb| super::weakened::config_at(&checkout, &mb).map(|cfg| (mb, cfg)))
-            .transpose()
-    });
-    let (merge_base, cfg) = match (settings, caller) {
-        (Ok(Some(settings)), _) => settings,
-        (Ok(None), Caller::Human) => {
-            println!("{}", unresolved());
-            return Ok(());
-        }
-        (Err(e), Caller::Human) => {
-            println!("{e:#}");
-            return Ok(());
-        }
-        (Ok(None), Caller::Agent) => return Err(unresolved()),
-        (Err(e), Caller::Agent) => return Err(e),
-    };
     let worktree = checkout.worktree()?;
     let record = devkit_common::record::read_on(&worktree.path, &worktree.branch);
     let issue = record.as_ref().and_then(|r| r.tracker_issue());
@@ -1584,16 +1553,18 @@ pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool, base: Option<&st
         })?;
         Ok(Some(super::proof::done_when_entries(&details.description)))
     };
-    let Some(gate) = Gate::read(
-        &checkout,
-        &merge_base,
-        &cfg.gates,
-        &cfg.test_files,
-        &head,
-        caller,
-        items,
-    )?
-    else {
+    let loaded_gates = super::create::Gates::load(&checkout, base, &head, caller, items)?;
+    let gates = match loaded_gates {
+        super::create::GateLoad::Ready(gates) => gates,
+        super::create::GateLoad::Unread { reason, .. } => {
+            if caller == Caller::Human {
+                println!("{reason:#}");
+                return Ok(());
+            }
+            return Err(reason);
+        }
+    };
+    let Some(gate) = gates.repro() else {
         println!("no repro check: the gate is off, or this worktree's issue lists no items");
         return Ok(());
     };
