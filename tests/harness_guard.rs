@@ -778,6 +778,10 @@ fn gh_pr_create_outside_a_devkit_project_is_left_alone() {
         .args(["init", "-q", "-b", "main"])
         .output()
         .unwrap();
-    let out = run_hook(dir.path(), home.path(), &claude_payload("gh pr create --fill"));
+    let out = run_hook(
+        dir.path(),
+        home.path(),
+        &claude_payload("gh pr create --fill"),
+    );
     assert!(!denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
 }
