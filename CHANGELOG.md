@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.24](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.23...v0.14.24) (2026-10-17)
+
+
+### Features
+
+* **pr:** run the repro check on its own ([#403](https://github.com/AbysmalBiscuit/devkit/issues/403)) ([9231d6f](https://github.com/AbysmalBiscuit/devkit/commit/9231d6f9a65bd14b1347111e1bd696c6ffc9033c))
+
 ## [0.14.23](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.22...v0.14.23) (2026-10-16)
 
 
