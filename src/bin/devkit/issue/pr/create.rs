@@ -235,7 +235,8 @@ impl Gates {
                 .transpose()
         });
         let unresolved = anyhow!(
-            "the PR gates read their settings from the merge base with `{base}`, and              neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
+            "the PR gates read their settings from the merge base with `{base}`, and \
+             neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
         );
         let (merge_base, cfg) = match settings {
             Ok(Some(settings)) => settings,
