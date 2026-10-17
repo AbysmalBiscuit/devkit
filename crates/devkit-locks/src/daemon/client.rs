@@ -22,7 +22,7 @@ fn shake(mut c: Client) -> Option<Client> {
 /// Connect to an already-running daemon's lock socket; `None` if none is up or
 /// the handshake fails. Never autostarts.
 pub fn try_existing() -> Option<Client> {
-    shake(daemon::connect(&paths::lock_socket_file())?)
+    shake(daemon::connect(&paths::lock_socket_file().ok()?)?)
 }
 
 #[cfg(test)]

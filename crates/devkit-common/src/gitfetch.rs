@@ -44,14 +44,14 @@ fn ttl_secs() -> u64 {
 
 /// Marker file for a `(cwd, remote)` fetch target, keyed by a hash of both so
 /// two repos sharing a basename don't collide.
-fn marker_path(cwd: &str, remote: &str) -> PathBuf {
+fn marker_path(cwd: &str, remote: &str) -> Result<PathBuf> {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     cwd.hash(&mut h);
     0u8.hash(&mut h); // separator so ("ab","c") != ("a","bc")
     remote.hash(&mut h);
-    paths::cache_dir()
+    Ok(paths::cache_dir()?
         .join("fetch")
-        .join(format!("{:016x}", h.finish()))
+        .join(format!("{:016x}", h.finish())))
 }
 
 /// Whether the marker at `path` still counts as fresh at `now`. `ttl == 0` is
@@ -100,7 +100,7 @@ fn fetch_gated(
 /// fetched within the TTL. Returns `Ok(())` whether it fetched or reused a
 /// fresh fetch.
 pub fn fetch(remote: &str, cwd: &str) -> Result<()> {
-    let marker = marker_path(cwd, remote);
+    let marker = marker_path(cwd, remote)?;
     fetch_gated(&marker, ttl_secs(), now_secs(), || {
         let repo = Path::new(cwd);
         Vcs::at(repo).fetch(repo, remote)
@@ -234,11 +234,11 @@ mod tests {
 
     #[test]
     fn marker_path_distinguishes_targets() {
-        let a = marker_path("/repo/one", "origin");
-        let b = marker_path("/repo/two", "origin");
-        let c = marker_path("/repo/one", "upstream");
+        let a = marker_path("/repo/one", "origin").unwrap();
+        let b = marker_path("/repo/two", "origin").unwrap();
+        let c = marker_path("/repo/one", "upstream").unwrap();
         assert_ne!(a, b);
         assert_ne!(a, c);
-        assert_eq!(a, marker_path("/repo/one", "origin"));
+        assert_eq!(a, marker_path("/repo/one", "origin").unwrap());
     }
 }

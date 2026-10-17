@@ -152,9 +152,13 @@ fn project_keys_of(
 /// Fail-soft and lock-free: an unreadable registry reads as no rows, because a
 /// session-start summary must not fail on the cache's state.
 fn resolved_here(keys: &[PathBuf], cache_root: Option<&Path>) -> HashMap<String, String> {
-    let cache_root = cache_root
-        .map(Path::to_path_buf)
-        .unwrap_or_else(crate::cache::docs_root);
+    let cache_root = match cache_root {
+        Some(root) => root.to_path_buf(),
+        None => match crate::cache::docs_root() {
+            Ok(root) => root,
+            Err(_) => return HashMap::new(),
+        },
+    };
 
     crate::refs::RefStore::at(&cache_root)
         .snapshot()

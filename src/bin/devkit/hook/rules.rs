@@ -46,26 +46,30 @@ use super::{payload::Payload, print_envelope};
 /// Hashing the complete raw holder id rather than sanitizing it: dropping
 /// disallowed characters is lossy, and two holders differing only in what was
 /// dropped would share one set.
-pub fn fired_path(holder: &str) -> PathBuf {
+pub fn fired_path(holder: &str) -> anyhow::Result<PathBuf> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     holder.hash(&mut hasher);
-    paths::state_dir()
+    Ok(paths::state_dir()?
         .join("rules")
-        .join(format!("{:016x}", hasher.finish()))
+        .join(format!("{:016x}", hasher.finish())))
 }
 
 /// Forget everything a holder was shown. The release verbs call this, and they
 /// already run when a session or a subagent ends; without it the directory
 /// grows one file per session forever.
 pub fn clear_for_holder(holder: &str) {
-    let _ = std::fs::remove_file(fired_path(holder));
+    if let Ok(path) = fired_path(holder) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Record ids as injected for `holder`. `devkit rules context` calls this too,
 /// so what a session-start block emitted is not emitted again by the first
 /// write that happens to match it.
 pub fn stamp_ids(holder: &str, ids: &[String]) {
-    let path = fired_path(holder);
+    let Ok(path) = fired_path(holder) else {
+        return;
+    };
     let Some(parent) = path.parent() else {
         return;
     };
@@ -88,7 +92,8 @@ pub fn stamp_ids(holder: &str, ids: &[String]) {
 /// cost a duplicate injection and are skipped without locking. Parents and
 /// subagents have separate fired sets.
 fn already_fired(holder: &str) -> HashSet<String> {
-    std::fs::read_to_string(fired_path(holder))
+    fired_path(holder)
+        .and_then(|path| Ok(std::fs::read_to_string(path)?))
         .unwrap_or_default()
         .lines()
         .map(str::trim)
@@ -169,7 +174,9 @@ fn run(payload: &Payload, checkout: &Checkout, cwd: &Path, targets: &[String], h
     // gets both directories' rules.
     let mut chosen = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let loaded = crate::rules::source(settings, checkout, crate::rules::Reader::Write).load();
+    let loaded = crate::rules::source(settings, checkout, crate::rules::Reader::Write)
+        .ok()
+        .and_then(|source| source.load());
     if let Some(loaded) = &loaded {
         for target in &relative {
             let filter = Filter {
@@ -267,8 +274,8 @@ mod tests {
 
     #[test]
     fn fired_path_is_stable_and_holder_specific() {
-        assert_eq!(fired_path("S"), fired_path("S"));
-        assert_ne!(fired_path("S"), fired_path("S/a1"));
+        assert_eq!(fired_path("S").unwrap(), fired_path("S").unwrap());
+        assert_ne!(fired_path("S").unwrap(), fired_path("S/a1").unwrap());
     }
 
     /// nextest runs every test in its own process, so pointing `HOME` and

@@ -36,7 +36,7 @@ impl fmt::Display for HoldSource {
 
 /// The mode `session` set, when it set one that still parses.
 fn session_mode(session: &Holder) -> Option<HoldStop> {
-    std::fs::read_to_string(mode_path(session))
+    std::fs::read_to_string(mode_path(session).ok()?)
         .ok()?
         .trim()
         .parse()
@@ -95,7 +95,7 @@ pub(crate) fn run(mode: Option<HoldStop>, clear: bool, cwd: &Path) -> Result<()>
         let Some(session) = &session else {
             bail!("devkit todo hold needs an agent session to set or clear a session's mode");
         };
-        let path = mode_path(session);
+        let path = mode_path(session)?;
         match mode {
             Some(mode) => {
                 if let Some(dir) = path.parent() {

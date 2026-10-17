@@ -642,15 +642,15 @@ const HOLDER_PREFIX: &str = "devkit-repro-";
 
 /// Where throwaway worktrees go: under devkit's state directory, since a
 /// build in one can outgrow a tmpfs `$TMPDIR`.
-fn throwaway_root() -> PathBuf {
-    devkit_common::paths::state_dir().join("repro")
+fn throwaway_root() -> Result<PathBuf> {
+    Ok(devkit_common::paths::state_dir()?.join("repro"))
 }
 
 impl Throwaway {
     fn new(checkout: &Checkout, head: &str) -> Result<Self> {
         let here = checkout.worktree()?;
         let main = checkout.primary().unwrap_or(&here.path).to_path_buf();
-        let root = throwaway_root();
+        let root = throwaway_root()?;
         std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
         let holder = tempfile::Builder::new()
             .prefix(HOLDER_PREFIX)
@@ -700,7 +700,7 @@ fn remove_worktree(main: &Path, path: &Path) {
 /// holder's lock no process holds. A failure leaves the worktree for the
 /// next try.
 pub(crate) fn prune_stale(checkout: &Checkout) {
-    let Ok(root) = throwaway_root().canonicalize() else {
+    let Ok(root) = throwaway_root().and_then(|root| Ok(root.canonicalize()?)) else {
         return;
     };
     let Some(main) = checkout.primary() else {

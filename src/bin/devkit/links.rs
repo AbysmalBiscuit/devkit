@@ -466,7 +466,9 @@ pub fn ensure_current(exe: &Path) {
     let Some(current) = stamp_line(exe, dir) else {
         return;
     };
-    let state = devkit_common::paths::state_dir();
+    let Ok(state) = devkit_common::paths::state_dir() else {
+        return;
+    };
     let stamp = state.join("links-version");
     if std::fs::read_to_string(&stamp).is_ok_and(|s| stamp_permits_skip(&s, &current, now_secs())) {
         return;
@@ -532,7 +534,7 @@ pub fn run(args: InstallLinksArgs) -> Result<()> {
     let dir = exe
         .parent()
         .context("the running executable has no parent directory")?;
-    let state = devkit_common::paths::state_dir();
+    let state = devkit_common::paths::state_dir()?;
     let lock_path = state.join("links.lock");
     // A state home devkit cannot create costs the gate, not the pass: this is
     // the bootstrap command, and the install directory it links into is a

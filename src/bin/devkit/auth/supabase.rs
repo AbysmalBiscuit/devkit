@@ -62,7 +62,7 @@ pub fn run(login: SupabaseLogin) -> Result<()> {
     };
     let client = Client::new(&url, key, WAIT)?;
     let url = client.url();
-    let file = SessionFile::for_url(&devkit_common::paths::state_dir(), url);
+    let file = SessionFile::for_url(&devkit_common::paths::state_dir()?, url);
     let session = if login.password {
         password(&client, &config)?
     } else if login.email {
@@ -88,7 +88,7 @@ fn project_config() -> Result<RulesSupabaseConfig> {
 }
 
 fn password(client: &Client, config: &RulesSupabaseConfig) -> Result<Session> {
-    let (credentials, _) = crate::rules::resolve_credentials(config, SecretLookup::Doppler);
+    let (credentials, _) = crate::rules::resolve_credentials(config, SecretLookup::Doppler)?;
     let Some(credentials) = credentials else {
         bail!(
             "{} and {} must both resolve, from the environment, Doppler or the secrets file",
@@ -130,7 +130,7 @@ fn browser(client: &Client, config: &RulesSupabaseConfig, with: Option<&str>) ->
     let providers = client.providers()?;
     let provider = choose(&providers, with)?;
     let port = config.callback_port;
-    if let Some(entry) = devkit_ports::registry::load().entries.get(&port) {
+    if let Some(entry) = devkit_ports::registry::load()?.entries.get(&port) {
         bail!(
             "port {port} is held by {} ({}) in devkit's port registry; set [rules.supabase] \
              callback_port, and add http://localhost:<port>/callback to the project's \

@@ -69,10 +69,13 @@ pub(crate) fn spawn(payload: &Payload, checkout: &Checkout, cwd: &Path) {
     let Some(holder) = payload.subagent_holder() else {
         return;
     };
-    let store = Store::for_hook(checkout, cwd);
+    let store = match Store::for_hook(checkout, cwd) {
+        Ok(store) => store,
+        Err(e) => return report(Err(e)),
+    };
     let in_repo = node::place_of(checkout).is_ok_and(|place| place != Place::Global);
     report(Layout::new(store.config()).and_then(|layout| {
-        Roles::at(devkit_todo::state_dir()).spawn(
+        Roles::at(devkit_todo::state_dir()?).spawn(
             &layout,
             &to_todo_holder(&holder),
             payload.agent_type(),
@@ -93,7 +96,7 @@ pub(crate) fn resolve_role(
     };
     let layout = Layout::new(store.config()).ok()?;
     let facts = Facts::new(&node::place_of(checkout).ok()?, Some(&session), holder);
-    let role = Roles::at(devkit_todo::state_dir())
+    let role = Roles::at(devkit_todo::state_dir().ok()?)
         .resolve(&layout, &facts, holder, payload.agent_type())
         .ok()?;
     if let Some(warning) = &role.warning {
@@ -106,12 +109,9 @@ pub(crate) fn resolve_role(
 /// from, as [`anchor`] picks it; `checkout` when the role record cannot be
 /// read.
 pub(crate) fn anchored(checkout: &Checkout, holder: &Holder) -> Checkout {
-    anchor(
-        checkout.clone(),
-        &Roles::at(devkit_todo::state_dir()),
-        holder,
-    )
-    .unwrap_or_else(|_| checkout.clone())
+    devkit_todo::state_dir()
+        .and_then(|dir| anchor(checkout.clone(), &Roles::at(dir), holder))
+        .unwrap_or_else(|_| checkout.clone())
 }
 
 /// The checkout a hook with `payload` from `cwd` works in: `cwd`'s own, or,
@@ -129,7 +129,7 @@ pub(crate) fn anchored_at(payload: &Payload, cwd: &Path) -> Checkout {
 pub(crate) fn nudge(payload: &Payload, checkout: &Checkout) -> Option<String> {
     let holder = to_todo_holder(&payload.holder().ok()?);
     let checkout = anchored(checkout, &holder);
-    let store = Store::for_hook(&checkout, checkout.dir());
+    let store = Store::for_hook(&checkout, checkout.dir()).ok()?;
     let (layout, facts, _) = resolve_role(payload, &checkout, &store, &holder)?;
     if facts.subagent
         && payload.agent_type().is_some_and(|agent_type| {
@@ -141,7 +141,7 @@ pub(crate) fn nudge(payload: &Payload, checkout: &Checkout) -> Option<String> {
     {
         return None;
     }
-    Roles::at(devkit_todo::state_dir())
+    Roles::at(devkit_todo::state_dir().ok()?)
         .nudge(&layout, &facts, &holder)
         .ok()
         .flatten()
@@ -155,9 +155,13 @@ pub(crate) fn nudge(payload: &Payload, checkout: &Checkout) -> Option<String> {
 pub(crate) fn release(holder: Option<payload::Holder>, checkout: &Checkout) {
     if let Some(holder) = holder {
         let holder = to_todo_holder(&holder);
-        let _ = std::fs::remove_file(devkit_todo::digest_path(&holder));
+        if let Ok(digest) = devkit_todo::digest_path(&holder) {
+            let _ = std::fs::remove_file(digest);
+        }
         let cwd = checkout.dir();
-        let store = Store::for_hook(checkout, cwd);
+        let Ok(store) = Store::for_hook(checkout, cwd) else {
+            return;
+        };
         let entry = || Deferred::Release {
             holder: holder.clone(),
         };
@@ -221,7 +225,7 @@ pub(crate) fn hold(
         return None;
     }
     let fingerprint = hold::fingerprint(&open);
-    let path = hold::hold_path(&holder);
+    let path = hold::hold_path(&holder).ok()?;
     if std::fs::read_to_string(&path).is_ok_and(|seen| seen == fingerprint) {
         return None;
     }
@@ -249,13 +253,17 @@ pub(crate) fn hold(
 /// Forgets the list `holder` was last refused over, so its next stop with
 /// open todos is refused again.
 pub(crate) fn rearm(holder: &payload::Holder) {
-    let _ = std::fs::remove_file(hold::hold_path(&to_todo_holder(holder)));
+    if let Ok(path) = hold::hold_path(&to_todo_holder(holder)) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Forgets every list `session` and its sub-agents were refused over, and the
 /// hold mode it set.
 pub(crate) fn forget_holds(session: &payload::Holder) {
-    let _ = std::fs::remove_dir_all(hold::hold_dir(&to_todo_holder(session)));
+    if let Ok(dir) = hold::hold_dir(&to_todo_holder(session)) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// Records one hook write: on a replica with a queue, appends `entry` (given
@@ -348,7 +356,7 @@ pub(crate) fn check_claims(
         } else {
             anchor.dir()
         };
-        let store = Store::for_hook(&anchor, cwd);
+        let store = Store::for_hook(&anchor, cwd).ok()?;
         edits.into_iter().find_map(|(to, id)| {
             let todo = store.resolve(&id).ok()??;
             let Claimed { by } = transition(&todo.status, to, &actor).err()?;
@@ -401,7 +409,10 @@ pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
         return;
     }
     let cwd = checkout.dir().to_path_buf();
-    let store = Store::for_hook(checkout, &cwd);
+    let store = match Store::for_hook(checkout, &cwd) {
+        Ok(store) => store,
+        Err(e) => return report(Err(e)),
+    };
     let Some(mirror) = Mirror::of(payload, checkout, &store) else {
         return;
     };
@@ -436,9 +447,9 @@ pub(crate) fn drain(dir: &Path) -> usize {
 fn apply_deferred(dir: &Path, entry: &Deferred) -> Result<()> {
     match entry {
         Deferred::Capture { mirror } => {
-            mirror.apply(&Store::queued_at(dir, mirror.origin.as_deref()))
+            mirror.apply(&Store::queued_at(dir, mirror.origin.as_deref())?)
         }
-        Deferred::Release { holder } => Store::queued_at(dir, None)
+        Deferred::Release { holder } => Store::queued_at(dir, None)?
             .apply(&Edit::ReleaseAll {
                 holder: holder.clone(),
             })
@@ -515,7 +526,7 @@ impl Mirror {
             node: self.node.clone(),
             repo: self.repo.clone(),
             store,
-            map: NativeMap::at(devkit_todo::state_dir()),
+            map: NativeMap::at(devkit_todo::state_dir()?),
         };
         let input = &self.input;
         store.while_locked(|| match tool {

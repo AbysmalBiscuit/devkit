@@ -258,7 +258,7 @@ impl Gates {
             &cfg.gates,
             head,
             caller,
-            &Ledger::live(),
+            &Ledger::live()?,
         )?;
         let repro = repro::Gate::read(
             checkout,

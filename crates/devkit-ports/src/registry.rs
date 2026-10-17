@@ -138,12 +138,12 @@ pub struct FlockStore {
 
 impl FlockStore {
     /// Real-paths store used by every direct caller.
-    pub fn new() -> Self {
-        Self {
-            gate_path: paths::devkitd_lock(),
-            lock_path: paths::lock_file(),
-            data_path: paths::registry_file(),
-        }
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            gate_path: paths::devkitd_lock()?,
+            lock_path: paths::lock_file()?,
+            data_path: paths::registry_file()?,
+        })
     }
 
     /// Scratch-paths store for tests.
@@ -154,12 +154,6 @@ impl FlockStore {
             lock_path: dir.join("ports.lock"),
             data_path: dir.join("ports.json"),
         }
-    }
-}
-
-impl Default for FlockStore {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -227,15 +221,15 @@ impl Store for MemoryStore {
 
 /// Load the registry file into a `Data` for an owner with its own exclusion
 /// (the daemon, holding `devkitd.lock` exclusive, at startup).
-pub fn load() -> Data {
-    store::load(&paths::registry_file())
+pub fn load() -> Result<Data> {
+    Ok(store::load(&paths::registry_file()?))
 }
 
 /// Run `f` against the registry under the direct flock path. Public because
 /// `devrun down` and the multiprocess race test drive a custom RMW through it;
 /// now gated, so it refuses to write behind a live daemon.
 pub fn with_lock<T>(f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
-    FlockStore::new().commit(f)
+    FlockStore::new()?.commit(f)
 }
 
 #[cfg(test)]
@@ -671,7 +665,7 @@ pub fn snapshot() -> Result<Data> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    snapshot_with(&FlockStore::new())
+    snapshot_with(&FlockStore::new()?)
 }
 
 /// Prune dead entries; returns the ports removed.
@@ -684,7 +678,7 @@ pub fn prune() -> Result<Vec<u16>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    prune_with(&FlockStore::new())
+    prune_with(&FlockStore::new()?)
 }
 
 /// Reserve a port for each `(app, base_port)` request under `holder`+`role`.
@@ -701,7 +695,7 @@ pub fn alloc(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(St
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    alloc_with(&FlockStore::new(), holder, reqs, role)
+    alloc_with(&FlockStore::new()?, holder, reqs, role)
 }
 
 /// Attach a pid + logfile to a reservation (re-establishing it if pruned).
@@ -728,7 +722,7 @@ pub fn record_pid(
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    record_pid_with(&FlockStore::new(), port, app, holder, role, pid, logfile)
+    record_pid_with(&FlockStore::new()?, port, app, holder, role, pid, logfile)
 }
 
 /// Release all entries for `holder` (optionally one role); returns freed ports.
@@ -744,7 +738,7 @@ pub fn release(holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    release_with(&FlockStore::new(), holder, role)
+    release_with(&FlockStore::new()?, holder, role)
 }
 
 /// Release exactly the listed reservations (registry-only, no signals); returns
@@ -760,7 +754,7 @@ pub fn release_ports(ports: &[u16]) -> Result<Vec<u16>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    release_ports_with(&FlockStore::new(), ports)
+    release_ports_with(&FlockStore::new()?, ports)
 }
 
 /// One liveness probe per rendered row, taken once so a caller that both

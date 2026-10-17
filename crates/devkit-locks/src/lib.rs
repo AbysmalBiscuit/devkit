@@ -288,7 +288,7 @@ pub fn acquire_resolved(
         };
     }
     store::acquire_with(
-        &store::FlockStore::new(),
+        &store::FlockStore::new()?,
         root,
         holder,
         paths,
@@ -320,7 +320,7 @@ pub fn check_resolved(root: &str, holder: &str, paths: &[String]) -> Result<Vec<
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::check_with(&store::FlockStore::new(), root, holder, paths, now())
+    store::check_with(&store::FlockStore::new()?, root, holder, paths, now())
 }
 
 fn check_scope_resolved(root: &str, holder: &str, paths: &[String]) -> Result<Vec<Conflict>> {
@@ -337,7 +337,7 @@ fn check_scope_resolved(root: &str, holder: &str, paths: &[String]) -> Result<Ve
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::check_read_only_with(&store::FlockStore::new(), root, holder, paths, now())
+    store::check_read_only_with(&store::FlockStore::new()?, root, holder, paths, now())
 }
 
 fn check_covering_resolved(root: &str, holder: &str, dirs: &[String]) -> Result<Vec<Conflict>> {
@@ -353,7 +353,7 @@ fn check_covering_resolved(root: &str, holder: &str, dirs: &[String]) -> Result<
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::check_covering_with(&store::FlockStore::new(), root, holder, dirs, now())
+    store::check_covering_with(&store::FlockStore::new()?, root, holder, dirs, now())
 }
 
 pub fn release(
@@ -386,7 +386,7 @@ pub fn release_resolved(
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::release_with(&store::FlockStore::new(), root, holder, paths, force)
+    store::release_with(&store::FlockStore::new()?, root, holder, paths, force)
 }
 
 pub fn release_all(as_flag: Option<&str>) -> Result<Vec<String>> {
@@ -410,7 +410,7 @@ pub fn release_all_resolved(root: &str, holder: &str) -> Result<Vec<String>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::release_all_with(&store::FlockStore::new(), holder)
+    store::release_all_with(&store::FlockStore::new()?, holder)
 }
 
 /// Live locks for the current project root, or every project when `all`.
@@ -432,7 +432,7 @@ pub fn status_resolved(root: &str, all: bool) -> Result<Vec<LockEntry>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::status_with(&store::FlockStore::new(), root, all, now())
+    store::status_with(&store::FlockStore::new()?, root, all, now())
 }
 
 pub fn prune() -> Result<usize> {
@@ -444,7 +444,7 @@ pub fn prune() -> Result<usize> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::prune_with(&store::FlockStore::new(), now())
+    store::prune_with(&store::FlockStore::new()?, now())
 }
 
 /// Resolve a write target (absolute, or cwd-relative) to (project_root,
@@ -484,7 +484,7 @@ fn decide_write_at(
         };
     }
     store::write_decide_with(
-        &store::FlockStore::new(),
+        &store::FlockStore::new()?,
         root,
         holder,
         path,
@@ -773,7 +773,7 @@ pub fn release_prefix(holder_prefix: &str) -> Result<Vec<String>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::release_prefix_with(&store::FlockStore::new(), holder_prefix)
+    store::release_prefix_with(&store::FlockStore::new()?, holder_prefix)
 }
 
 #[cfg(test)]

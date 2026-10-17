@@ -374,7 +374,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
     let actor = actor_from_env(caller, get);
     let session = node::session_from_env(get);
     let here = std::env::current_dir()?;
-    let roles = Roles::at(devkit_todo::state_dir());
+    let roles = Roles::at(devkit_todo::state_dir()?);
     let checkout = anchor(Checkout::at(&here), &roles, &actor)?;
     let cwd = checkout.dir().to_path_buf();
     let place = node::place_of(&checkout)?;
@@ -672,7 +672,7 @@ pub fn run(cli: TodoCli) -> Result<()> {
             }
             let todo = resolve_id(&store, &id)?;
             store.apply(&Edit::Purge(todo.id.clone()))?;
-            NativeMap::at(devkit_todo::state_dir()).forget(&todo.id)?;
+            NativeMap::at(devkit_todo::state_dir()?).forget(&todo.id)?;
         }
     }
     if writes {
@@ -1420,7 +1420,7 @@ fn context(args: &ContextArgs, id_style: Option<IdStyle>) -> Option<String> {
     let viewer = to_todo_holder(&payload.holder().ok()?);
     let checkout = anchored(&Checkout::at(&hook::record::payload_cwd(&payload)), &viewer);
     let cwd = checkout.dir().to_path_buf();
-    let store = Store::for_hook(&checkout, &cwd);
+    let store = Store::for_hook(&checkout, &cwd).ok()?;
     let (layout, facts, role) = resolve_role(&payload, &checkout, &store, &viewer)?;
     let visible = layout.visible(&facts, &role.name).ok()?;
     let own = &role.node;
@@ -1486,7 +1486,7 @@ fn context(args: &ContextArgs, id_style: Option<IdStyle>) -> Option<String> {
     }
     let role_line = format!("Role `{}`, writing to `{}`.", role.name, role.node);
     let digest = render::digest(&format!("{role_line}\n{lists}"));
-    let digest_path = devkit_todo::digest_path(&viewer);
+    let digest_path = devkit_todo::digest_path(&viewer).ok()?;
     if args.if_changed && std::fs::read_to_string(&digest_path).is_ok_and(|seen| seen == digest) {
         return None;
     }

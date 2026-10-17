@@ -48,19 +48,19 @@ pub fn fingerprint(open: &[&Todo]) -> String {
 
 /// The directory holding the fingerprints of `session` and its sub-agents,
 /// removed whole when the session ends.
-pub fn hold_dir(session: &Holder) -> PathBuf {
-    state_dir().join("holds").join(render::digest(session))
+pub fn hold_dir(session: &Holder) -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("holds").join(render::digest(session)))
 }
 
 /// The hold mode `devkit todo hold` set for `holder`'s session, forgotten
 /// with the rest of [`hold_dir`] when the session ends.
-pub fn mode_path(holder: &Holder) -> PathBuf {
-    hold_dir(&holder.session()).join("mode")
+pub fn mode_path(holder: &Holder) -> anyhow::Result<PathBuf> {
+    Ok(hold_dir(&holder.session())?.join("mode"))
 }
 
 /// The fingerprint of the open todos `holder` was last reminded of.
-pub fn hold_path(holder: &Holder) -> PathBuf {
-    hold_dir(&holder.session()).join(render::digest(holder))
+pub fn hold_path(holder: &Holder) -> anyhow::Result<PathBuf> {
+    Ok(hold_dir(&holder.session())?.join(render::digest(holder)))
 }
 
 #[cfg(test)]
@@ -148,12 +148,18 @@ mod tests {
     fn a_sessions_and_its_sub_agents_holds_share_one_dir() {
         let session = Holder::new("S");
         let sub = Holder::new("S/a1");
-        assert_eq!(hold_path(&sub).parent(), Some(hold_dir(&session).as_path()));
         assert_eq!(
-            hold_path(&session).parent(),
-            Some(hold_dir(&session).as_path())
+            hold_path(&sub).unwrap().parent(),
+            Some(hold_dir(&session).unwrap().as_path())
         );
-        assert_ne!(hold_path(&sub), hold_path(&session));
-        assert_ne!(hold_dir(&session), hold_dir(&Holder::new("T")));
+        assert_eq!(
+            hold_path(&session).unwrap().parent(),
+            Some(hold_dir(&session).unwrap().as_path())
+        );
+        assert_ne!(hold_path(&sub).unwrap(), hold_path(&session).unwrap());
+        assert_ne!(
+            hold_dir(&session).unwrap(),
+            hold_dir(&Holder::new("T")).unwrap()
+        );
     }
 }

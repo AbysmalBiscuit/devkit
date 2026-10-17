@@ -143,30 +143,31 @@ fn strip_verbatim(path: &Path) -> PathBuf {
 /// `%LOCALAPPDATA%\<appauthor>\<appname>\Cache` with appauthor defaulting to
 /// appname, hence the `repo-rules\repo-rules\Cache` nesting below. The Unix
 /// arms are the documented XDG and Apple locations.
-fn cache_root() -> PathBuf {
+fn cache_root() -> anyhow::Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        devkit_common::paths::home().join("Library/Caches/repo-rules")
+        Ok(devkit_common::paths::require_home()?.join("Library/Caches/repo-rules"))
     }
     #[cfg(target_os = "windows")]
     {
         match std::env::var_os("LOCALAPPDATA") {
-            Some(x) if !x.is_empty() => PathBuf::from(x).join("repo-rules\\repo-rules\\Cache"),
-            _ => devkit_common::paths::home().join("AppData\\Local\\repo-rules\\repo-rules\\Cache"),
+            Some(x) if !x.is_empty() => Ok(PathBuf::from(x).join("repo-rules\\repo-rules\\Cache")),
+            _ => Ok(devkit_common::paths::require_home()?
+                .join("AppData\\Local\\repo-rules\\repo-rules\\Cache")),
         }
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         match std::env::var_os("XDG_CACHE_HOME") {
-            Some(x) if !x.is_empty() => PathBuf::from(x).join("repo-rules"),
-            _ => devkit_common::paths::home().join(".cache/repo-rules"),
+            Some(x) if !x.is_empty() => Ok(PathBuf::from(x).join("repo-rules")),
+            _ => Ok(devkit_common::paths::require_home()?.join(".cache/repo-rules")),
         }
     }
 }
 
 /// The directory where the extractor keeps this repository's index.
-pub fn cache_dir(repo: &Path) -> PathBuf {
-    cache_root().join(cache_dir_name(repo))
+pub fn cache_dir(repo: &Path) -> anyhow::Result<PathBuf> {
+    Ok(cache_root()?.join(cache_dir_name(repo)))
 }
 
 /// The index at `path` without its removed rules, or `None` when there is no

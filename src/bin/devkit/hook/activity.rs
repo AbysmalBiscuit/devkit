@@ -40,7 +40,9 @@ fn observe(payload: &Payload, event: HookEvent, checkout: &Checkout, cwd: &Path)
         return;
     };
     let agent = payload.agent_id().map(str::to_string);
-    let log = Store::activity_for_hook(checkout, cwd);
+    let Ok(log) = Store::activity_for_hook(checkout, cwd) else {
+        return;
+    };
     let record = |what| log.record_now(&what);
     let session = session.to_string();
     let _ = match (event, agent) {
@@ -82,6 +84,8 @@ pub(crate) fn seen_within(payload: &Payload, checkout: &Checkout, cwd: &Path) {
     let (session, agent) = (session.to_string(), agent.to_string());
     let (checkout, cwd) = (checkout.clone(), cwd.to_path_buf());
     let _ = gate::with_deadline(wait, move || {
-        let _ = Store::activity_for_hook(&checkout, &cwd).seen(&session, &agent);
+        if let Ok(log) = Store::activity_for_hook(&checkout, &cwd) {
+            let _ = log.seen(&session, &agent);
+        }
     });
 }

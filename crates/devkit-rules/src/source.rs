@@ -76,12 +76,12 @@ impl Source {
         database: impl FnOnce(&RulesPostgresConfig) -> Arc<Database>,
         api: impl FnOnce(&RulesSupabaseConfig) -> Arc<Api>,
         state_dir: &Path,
-    ) -> Source {
+    ) -> anyhow::Result<Source> {
         let repo = repo_of(checkout);
-        match settings.source {
+        Ok(match settings.source {
             RulesSource::File => match settings.index.as_deref() {
                 Some(path) => Source::at(PathBuf::from(path), repo),
-                None => Source::cached(repo),
+                None => Source::cached(repo)?,
             },
             RulesSource::Postgres => Source::Cached(CachedSource::at_state_dir(
                 state_dir,
@@ -99,7 +99,7 @@ impl Source {
                     repo,
                 )),
             )),
-        }
+        })
     }
 
     /// The store in the file at `path`, whichever kind it is.
@@ -114,14 +114,14 @@ impl Source {
     /// The store the extractor keeps for `repo`: its SQLite store when there
     /// is one, as the extractor's own `cache list` prefers it, else the JSON
     /// index, which devkit leaves to the extractor to create.
-    fn cached(repo: &Path) -> Source {
-        let dir = cache_dir(repo);
+    fn cached(repo: &Path) -> anyhow::Result<Source> {
+        let dir = cache_dir(repo)?;
         let store = dir.join("index.sqlite");
-        if store.is_file() {
+        Ok(if store.is_file() {
             Source::Sqlite(SqliteSource::at(store, repo))
         } else {
             Source::Json(FileSource::cached(dir.join("index.json")))
-        }
+        })
     }
 
     /// Whether there are rules to read, found as cheaply as this source

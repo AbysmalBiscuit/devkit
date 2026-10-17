@@ -18,7 +18,7 @@
 
 use std::{
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc,
     time::{Duration, SystemTime},
 };
@@ -46,13 +46,12 @@ pub fn record(settings: &Settings, rec: &Record) {
 /// the worker, so a test injects them by argument. Reading the environment from
 /// two threads at once is what makes that the wrong seam.
 fn record_faulted(settings: &Settings, rec: &Record, fault: Option<String>, deadline: Duration) {
-    if !settings.enabled {
+    let (true, Some(dir)) = (settings.enabled, settings.dir.clone()) else {
         return;
-    }
+    };
     let Ok(line) = serde_json::to_string(rec) else {
         return;
     };
-    let settings = settings.clone();
     let session = rec.session_id.clone();
     let agent = rec.agent_id.clone();
     // `catch_unwind` makes this panic-safe, not block-safe, so the write runs
@@ -61,7 +60,7 @@ fn record_faulted(settings: &Settings, rec: &Record, fault: Option<String>, dead
     let _ = with_deadline(deadline, move || {
         inject(fault.as_deref());
         let path = file_for(
-            &settings,
+            &dir,
             session.as_deref(),
             agent.as_deref(),
             SystemTime::now(),
@@ -139,12 +138,12 @@ pub fn now_rfc3339() -> String {
 
 /// The file a record with these ids lands in.
 pub fn file_for(
-    settings: &Settings,
+    dir: &Path,
     session: Option<&str>,
     agent: Option<&str>,
     now: SystemTime,
 ) -> PathBuf {
-    let dir = settings.dir.join(day_dir(now));
+    let dir = dir.join(day_dir(now));
     let stem = match (
         session.and_then(sanitize_component),
         agent.and_then(sanitize_component),
@@ -201,7 +200,7 @@ mod tests {
             command: Fidelity::Redacted,
             prompt: PromptFidelity::Off,
             auto_prune: true,
-            dir: dir.to_path_buf(),
+            dir: Some(dir.to_path_buf()),
             max_age_days: None,
             max_bytes: None,
         }
@@ -233,18 +232,16 @@ mod tests {
     #[test]
     fn the_day_directory_is_utc() {
         let dir = tempfile::tempdir().unwrap();
-        let s = settings_at(dir.path());
         // 2026-01-01T00:30:00Z is still 2025-12-31 in UTC-8.
-        let p = file_for(&s, Some("s1"), None, unix(1_767_227_400));
+        let p = file_for(dir.path(), Some("s1"), None, unix(1_767_227_400));
         assert!(p.to_string_lossy().contains("2026-01-01"), "{p:?}");
     }
 
     #[test]
     fn a_subagent_gets_its_own_file() {
         let dir = tempfile::tempdir().unwrap();
-        let s = settings_at(dir.path());
-        let solo = file_for(&s, Some("s1"), None, unix(0));
-        let sub = file_for(&s, Some("s1"), Some("a1"), unix(0));
+        let solo = file_for(dir.path(), Some("s1"), None, unix(0));
+        let sub = file_for(dir.path(), Some("s1"), Some("a1"), unix(0));
         assert_ne!(solo, sub, "parallel subagents share a session id");
         assert!(
             sub.file_name()
@@ -272,10 +269,9 @@ mod tests {
     #[test]
     fn no_id_can_name_a_file_outside_the_day_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let s = settings_at(dir.path());
         let day = dir.path().join(day_dir(SystemTime::now()));
         for hostile in ["../../etc/passwd", "..", ".", "/etc/passwd", "a\\b"] {
-            let p = file_for(&s, Some(hostile), None, SystemTime::now());
+            let p = file_for(dir.path(), Some(hostile), None, SystemTime::now());
             assert_eq!(p.parent(), Some(day.as_path()), "{hostile} escaped: {p:?}");
         }
     }
@@ -283,8 +279,7 @@ mod tests {
     #[test]
     fn a_payload_with_no_session_id_still_lands() {
         let dir = tempfile::tempdir().unwrap();
-        let s = settings_at(dir.path());
-        let p = file_for(&s, None, None, unix(0));
+        let p = file_for(dir.path(), None, None, unix(0));
         assert!(
             p.file_name()
                 .unwrap()
@@ -292,7 +287,7 @@ mod tests {
                 .starts_with("unknown-")
         );
         // An agent id alone names no session, so it falls to the same place.
-        let q = file_for(&s, None, Some("a1"), unix(0));
+        let q = file_for(dir.path(), None, Some("a1"), unix(0));
         assert_eq!(p, q);
     }
 
@@ -302,7 +297,7 @@ mod tests {
         let s = settings_at(dir.path());
         record(&s, &a_record());
         record(&s, &a_record());
-        let path = file_for(&s, Some("s1"), None, SystemTime::now());
+        let path = file_for(dir.path(), Some("s1"), None, SystemTime::now());
         let body = std::fs::read_to_string(&path).expect("the record file");
         let lines: Vec<_> = body.lines().collect();
         assert_eq!(lines.len(), 2, "one line per record, appended");

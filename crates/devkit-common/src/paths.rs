@@ -1,18 +1,19 @@
 use std::path::{Path, PathBuf};
 
 /// Agent-neutral state home: `$XDG_STATE_HOME/devkit` (default
-/// `~/.local/state/devkit`).
+/// `~/.local/state/devkit`), or [`NoHome`] when neither `XDG_STATE_HOME` nor a
+/// home is set. No fallback root: a second one would split the registries.
 ///
-/// Pure resolution (stat only, never writes): prefer the XDG path when it
-/// exists; otherwise fall back to the legacy `~/.claude/state/devkit` in place
-/// when it exists (so live state is never orphaned before
-/// `migrate_legacy_state` runs); otherwise the XDG path. Run
-/// `migrate_legacy_state()` once at process startup to move the data.
-pub fn state_dir() -> PathBuf {
-    let new = xdg_state_home().join("devkit");
-    let legacy = home().join(".claude/state/devkit");
+/// Stat only: a legacy `~/.claude/state/devkit` that exists while the XDG
+/// path does not is used in place until `migrate_legacy_state` moves it.
+pub fn state_dir() -> anyhow::Result<PathBuf> {
+    let new = xdg_state_home()?.join("devkit");
+    let Some(home) = try_home() else {
+        return Ok(new);
+    };
+    let legacy = home.join(".claude/state/devkit");
     let (ne, le) = (new.exists(), legacy.exists());
-    pick_state_dir(new, legacy, ne, le)
+    Ok(pick_state_dir(new, legacy, ne, le))
 }
 
 fn pick_state_dir(new: PathBuf, legacy: PathBuf, new_exists: bool, legacy_exists: bool) -> PathBuf {
@@ -25,38 +26,39 @@ fn pick_state_dir(new: PathBuf, legacy: PathBuf, new_exists: bool, legacy_exists
     }
 }
 
-fn xdg_state_home() -> PathBuf {
+fn xdg_state_home() -> anyhow::Result<PathBuf> {
     match std::env::var_os("XDG_STATE_HOME") {
-        Some(x) if !x.is_empty() => PathBuf::from(x),
+        Some(x) if !x.is_empty() => Ok(PathBuf::from(x)),
         _ => default_state_home(),
     }
 }
 
 /// Platform default for the state home when `XDG_STATE_HOME` is unset.
 #[cfg(windows)]
-fn default_state_home() -> PathBuf {
+fn default_state_home() -> anyhow::Result<PathBuf> {
     match std::env::var_os("LOCALAPPDATA") {
-        Some(x) if !x.is_empty() => PathBuf::from(x),
-        _ => home().join("AppData/Local"),
+        Some(x) if !x.is_empty() => Ok(PathBuf::from(x)),
+        _ => Ok(require_home()?.join("AppData/Local")),
     }
 }
 
 #[cfg(not(windows))]
-fn default_state_home() -> PathBuf {
-    home().join(".local/state")
+fn default_state_home() -> anyhow::Result<PathBuf> {
+    Ok(require_home()?.join(".local/state"))
 }
 
-/// One-time best-effort migration of the legacy `~/.claude/state/devkit` home
-/// to the XDG state dir. No-op if no home resolves, the new home already
-/// exists, or the legacy one is absent. On rename failure (cross-device,
-/// permissions) the legacy dir is left in place and `state_dir()` keeps
-/// resolving to it.
+/// One-time best-effort move of the legacy `~/.claude/state/devkit` to the XDG
+/// state dir.
+///
+/// No-op if no home resolves, the new home already exists, or the legacy one
+/// is absent. On rename failure (cross-device, permissions) the legacy dir is
+/// left in place and `state_dir()` keeps resolving to it.
 pub fn migrate_legacy_state() {
-    let Some(home) = try_home() else {
+    let (Some(home), Ok(state_home)) = (try_home(), xdg_state_home()) else {
         return;
     };
     migrate_state_between(
-        &xdg_state_home().join("devkit"),
+        &state_home.join("devkit"),
         &home.join(".claude/state/devkit"),
     );
 }
@@ -71,71 +73,81 @@ fn migrate_state_between(new: &Path, legacy: &Path) {
     let _ = std::fs::rename(legacy, new);
 }
 
-pub fn registry_file() -> PathBuf {
-    state_dir().join("ports.json")
+pub fn registry_file() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("ports.json"))
 }
-pub fn lock_file() -> PathBuf {
-    state_dir().join("ports.lock")
+pub fn lock_file() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("ports.lock"))
 }
-pub fn locks_file() -> PathBuf {
-    state_dir().join("locks.json")
+pub fn locks_file() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("locks.json"))
 }
-pub fn locks_lock() -> PathBuf {
-    state_dir().join("locks.lock")
+pub fn locks_lock() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("locks.lock"))
 }
-pub fn logs_dir() -> PathBuf {
-    state_dir().join("logs")
+pub fn logs_dir() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("logs"))
 }
 /// The run ledger: one record per `devrun task` run, written by devrun. The
 /// hook refuses an agent's edit-tool write into it, and best-effort a shell
 /// write whose target the guard recognizes.
-pub fn runs_dir() -> PathBuf {
-    state_dir().join("runs")
+pub fn runs_dir() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("runs"))
 }
 /// Where `devrun task` captures a task's output while it runs.
-pub fn task_output_dir() -> PathBuf {
-    state_dir().join("output")
+pub fn task_output_dir() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("output"))
 }
 /// Unix socket the daemon binds; clients connect here.
-pub fn port_socket_file() -> PathBuf {
-    state_dir().join("ports.sock")
+pub fn port_socket_file() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("ports.sock"))
 }
 /// Unix socket the daemon binds for the lock registry; clients connect here.
-pub fn lock_socket_file() -> PathBuf {
-    state_dir().join("locks.sock")
+pub fn lock_socket_file() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("locks.sock"))
 }
 /// Single-instance lock for the daemon — separate from the registry's
 /// `ports.lock`.
-pub fn devkitd_lock() -> PathBuf {
-    state_dir().join("devkitd.lock")
+pub fn devkitd_lock() -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("devkitd.lock"))
 }
 /// Daemon log file.
-pub fn daemon_log() -> PathBuf {
-    logs_dir().join("devkitd.log")
+pub fn daemon_log() -> anyhow::Result<PathBuf> {
+    Ok(logs_dir()?.join("devkitd.log"))
 }
 
 /// `$XDG_DATA_HOME/devkit` or `~/.local/share/devkit`.
-pub fn data_dir() -> PathBuf {
+pub fn data_dir() -> anyhow::Result<PathBuf> {
     match std::env::var_os("XDG_DATA_HOME") {
-        Some(x) if !x.is_empty() => PathBuf::from(x).join("devkit"),
-        _ => home().join(".local/share/devkit"),
+        Some(x) if !x.is_empty() => Ok(PathBuf::from(x).join("devkit")),
+        _ => Ok(require_home()?.join(".local/share/devkit")),
     }
 }
 
 /// `$XDG_CACHE_HOME/devkit` or `~/.cache/devkit`.
-pub fn cache_dir() -> PathBuf {
+pub fn cache_dir() -> anyhow::Result<PathBuf> {
     match std::env::var_os("XDG_CACHE_HOME") {
-        Some(x) if !x.is_empty() => PathBuf::from(x).join("devkit"),
-        _ => home().join(".cache/devkit"),
+        Some(x) if !x.is_empty() => Ok(PathBuf::from(x).join("devkit")),
+        _ => Ok(require_home()?.join(".cache/devkit")),
     }
 }
 
-/// The user's home directory.
-///
-/// The rules cache path needs this to reach a non-XDG location on all
-/// platforms.
-pub fn home() -> PathBuf {
-    try_home().expect("HOME must be set")
+/// The environment names no home directory, so nothing derived from one
+/// resolves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoHome;
+
+impl std::fmt::Display for NoHome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("no home directory: set HOME, or XDG_STATE_HOME for devkit's state")
+    }
+}
+
+impl std::error::Error for NoHome {}
+
+/// The user's home directory, or [`NoHome`] when the environment names none.
+pub fn require_home() -> anyhow::Result<PathBuf> {
+    try_home().ok_or_else(|| NoHome.into())
 }
 
 /// The user's home directory, or `None` when the environment names none.
@@ -323,13 +335,13 @@ mod tests {
 
     #[test]
     fn registry_under_state() {
-        assert!(registry_file().ends_with("devkit/ports.json"));
-        assert!(logs_dir().ends_with("devkit/logs"));
+        assert!(registry_file().unwrap().ends_with("devkit/ports.json"));
+        assert!(logs_dir().unwrap().ends_with("devkit/logs"));
     }
     #[test]
     fn lock_paths_under_state() {
-        assert!(locks_file().ends_with("devkit/locks.json"));
-        assert!(locks_lock().ends_with("devkit/locks.lock"));
+        assert!(locks_file().unwrap().ends_with("devkit/locks.json"));
+        assert!(locks_lock().unwrap().ends_with("devkit/locks.lock"));
     }
     #[test]
     fn leaf_is_basename() {
@@ -338,10 +350,10 @@ mod tests {
     }
     #[test]
     fn daemon_paths_under_state() {
-        assert!(port_socket_file().ends_with("devkit/ports.sock"));
-        assert!(devkitd_lock().ends_with("devkit/devkitd.lock"));
-        assert!(daemon_log().ends_with("logs/devkitd.log"));
-        assert!(lock_socket_file().ends_with("devkit/locks.sock"));
+        assert!(port_socket_file().unwrap().ends_with("devkit/ports.sock"));
+        assert!(devkitd_lock().unwrap().ends_with("devkit/devkitd.lock"));
+        assert!(daemon_log().unwrap().ends_with("logs/devkitd.log"));
+        assert!(lock_socket_file().unwrap().ends_with("devkit/locks.sock"));
     }
 
     #[test]

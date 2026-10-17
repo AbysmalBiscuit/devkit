@@ -276,7 +276,7 @@ struct State {
 }
 
 impl State {
-    fn of(node: &str) -> Self {
+    fn of(node: &str) -> Result<Self> {
         let name = node
             .chars()
             .map(|c| match c {
@@ -284,10 +284,10 @@ impl State {
                 _ => '_',
             })
             .collect();
-        Self {
-            dir: devkit_common::paths::state_dir().join("ticket-sync"),
+        Ok(Self {
+            dir: devkit_common::paths::state_dir()?.join("ticket-sync"),
             name,
-        }
+        })
     }
 
     fn path(&self, ext: &str) -> PathBuf {
@@ -327,13 +327,15 @@ impl State {
 /// Records a successful sync of `node`'s tickets, so reads leave it be for
 /// `[ticket.sync] max_age_secs`.
 pub(crate) fn record_success(node: &str) {
-    State::of(node).succeeded();
+    if let Ok(state) = State::of(node) {
+        state.succeeded();
+    }
 }
 
 /// Starts a background ticket sync from `cwd` when `node`'s is due, and
 /// returns at once: a read never waits on the tracker.
 pub(crate) fn spawn_if_stale(cwd: &Path, node: &str, config: &TicketSyncConfig) {
-    if !State::of(node).due(config) {
+    if !State::of(node).is_ok_and(|state| state.due(config)) {
         return;
     }
     let Ok(exe) = std::env::current_exe() else {
@@ -354,7 +356,7 @@ pub(crate) fn sync_in_background(
     node: &str,
     config: &TicketSyncConfig,
 ) -> Result<Option<SyncReport>> {
-    let state = State::of(node);
+    let state = State::of(node)?;
     if !state.due(config) {
         return Ok(None);
     }

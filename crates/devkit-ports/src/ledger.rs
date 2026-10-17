@@ -161,8 +161,8 @@ pub struct Ledger {
 }
 
 impl Ledger {
-    pub fn live() -> Self {
-        Self::at(paths::runs_dir())
+    pub fn live() -> anyhow::Result<Self> {
+        Ok(Self::at(paths::runs_dir()?))
     }
 
     pub fn at(dir: impl Into<PathBuf>) -> Self {
@@ -507,7 +507,7 @@ impl Capture {
     /// A fresh capture file, or `None` when the state directory cannot hold
     /// one: the task then inherits devrun's stream and nothing is captured.
     pub fn open() -> Option<Self> {
-        let dir = paths::task_output_dir();
+        let dir = paths::task_output_dir().ok()?;
         std::fs::create_dir_all(&dir).ok()?;
         let named = tempfile::NamedTempFile::new_in(&dir).ok()?;
         // Separate opens, so the reader keeps its own offset.

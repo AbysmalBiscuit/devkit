@@ -40,7 +40,11 @@ pub fn run(cli: HookLogCli) -> Result<()> {
     let settings = harness_log::resolve(&cwd);
     match cli.cmd {
         Cmd::Path => {
-            println!("{}", settings.dir.display());
+            let dir = settings
+                .dir
+                .clone()
+                .map_or_else(harness_log::default_dir, Ok)?;
+            println!("{}", dir.display());
             Ok(())
         }
         Cmd::Prune { dry_run } => prune(&settings, dry_run),
@@ -58,7 +62,11 @@ fn prune(settings: &harness_log::Settings, dry_run: bool) -> Result<()> {
     if dry_run {
         println!(
             "would sweep {} against max_age_days={} max_bytes={}",
-            settings.dir.display(),
+            settings
+                .dir
+                .clone()
+                .map_or_else(harness_log::default_dir, Ok)?
+                .display(),
             settings
                 .max_age_days
                 .map_or("unlimited".to_string(), |d| d.to_string()),

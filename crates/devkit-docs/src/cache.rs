@@ -18,10 +18,12 @@ use crate::{layout::Layout, locks, refs::RefStore, tags::TagPattern};
 /// The store lives under the XDG *data* home, not the cache home: coding
 /// agents commonly run with a blanket read-deny on `~/.cache`, and the whole
 /// point of these checkouts is that an agent can search them.
-pub fn docs_root() -> PathBuf {
-    let root = devkit_common::paths::data_dir().join("docs");
-    migrate_legacy_root(&root, &devkit_common::paths::cache_dir().join("docs"));
-    root
+pub fn docs_root() -> Result<PathBuf> {
+    let root = devkit_common::paths::data_dir()?.join("docs");
+    if let Ok(cache) = devkit_common::paths::cache_dir() {
+        migrate_legacy_root(&root, &cache.join("docs"));
+    }
+    Ok(root)
 }
 
 /// Move a store left behind at the pre-data-home location (`~/.cache/devkit/

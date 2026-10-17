@@ -6,7 +6,7 @@ use devkit_docs::refs::RefStore;
 fn concurrent_records_never_lose_rows() {
     // The test binary re-execs itself as the worker via an env switch.
     if let Ok(project) = std::env::var("DEVKIT_DOCS_TEST_RECORD") {
-        let store = RefStore::at(&devkit_docs::cache::docs_root());
+        let store = RefStore::at(&devkit_docs::cache::docs_root().unwrap());
         store
             .commit(|d| {
                 d.record(&project, "tokio", "1.0.0", "v1.0.0", "aaa");
