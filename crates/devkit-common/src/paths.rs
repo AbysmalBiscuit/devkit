@@ -47,13 +47,17 @@ fn default_state_home() -> PathBuf {
 }
 
 /// One-time best-effort migration of the legacy `~/.claude/state/devkit` home
-/// to the XDG state dir. No-op if the new home already exists or the legacy one
-/// is absent. On rename failure (cross-device, permissions) the legacy dir is
-/// left in place and `state_dir()` keeps resolving to it.
+/// to the XDG state dir. No-op if no home resolves, the new home already
+/// exists, or the legacy one is absent. On rename failure (cross-device,
+/// permissions) the legacy dir is left in place and `state_dir()` keeps
+/// resolving to it.
 pub fn migrate_legacy_state() {
+    let Some(home) = try_home() else {
+        return;
+    };
     migrate_state_between(
         &xdg_state_home().join("devkit"),
-        &home().join(".claude/state/devkit"),
+        &home.join(".claude/state/devkit"),
     );
 }
 
