@@ -1082,7 +1082,13 @@ fn harness_log_row() -> Row {
             .as_deref()
             .map_or_else(|| "no directory".to_string(), |d| d.display().to_string())
     );
-    let check = if !settings.enabled {
+    let check = if settings.dir.is_none() {
+        Check::Warn(
+            devkit_common::harness_log::default_dir()
+                .err()
+                .map_or_else(|| "no log directory".to_string(), |e| format!("{e:#}")),
+        )
+    } else if !settings.enabled {
         Check::Unset(HINT_HARNESS_LOG)
     } else if settings.command == devkit_config::Fidelity::Full {
         Check::Warn(format!(
