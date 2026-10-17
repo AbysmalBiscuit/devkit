@@ -1451,12 +1451,14 @@ pub(crate) struct Reported {
     /// check judged, and absent for one it did not run.
     #[serde(skip_serializing_if = "Option::is_none")]
     verdict: Option<&'static str>,
-    /// The exit code of the run at HEAD, when the selector ran.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    head_exit: Option<Option<i32>>,
-    /// The exit code of the run with the fix reverted, when the selector ran.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reverted_exit: Option<Option<i32>>,
+    /// The exit code of the run at HEAD. Absent when the selector did not
+    /// run, and `signal` when the run was killed.
+    #[serde(skip_serializing_if = "ExitCode::is_absent")]
+    head_exit: ExitCode,
+    /// The exit code of the run with the fix reverted. Absent when the
+    /// selector did not run, and `signal` when the run was killed.
+    #[serde(skip_serializing_if = "ExitCode::is_absent")]
+    reverted_exit: ExitCode,
     /// The item as the text report prints it.
     text: String,
 }
@@ -1484,13 +1486,46 @@ impl Report {
     }
 }
 
+/// One run's exit as `--json` prints it: a number, `signal` when the run
+/// was killed, or absent when the selector did not run.
+#[derive(Debug, Clone, Copy)]
+enum ExitCode {
+    Absent,
+    Code(i32),
+    Signal,
+}
+
+impl ExitCode {
+    fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+
+    fn of(ran: Option<Option<i32>>) -> Self {
+        match ran {
+            None => Self::Absent,
+            Some(None) => Self::Signal,
+            Some(Some(code)) => Self::Code(code),
+        }
+    }
+}
+
+impl Serialize for ExitCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Absent => serializer.serialize_none(),
+            Self::Code(code) => serializer.serialize_i32(*code),
+            Self::Signal => serializer.serialize_str("signal"),
+        }
+    }
+}
+
 /// The exit code of one of an item's runs: the HEAD run when `head`, else
-/// the run with the fix reverted. `None` when the selector did not run.
-fn exit_of(item: &Item, head: bool) -> Option<Option<i32>> {
+/// the run with the fix reverted. Absent when the selector did not run.
+fn exit_of(item: &Item, head: bool) -> ExitCode {
     let Outcome::Ran { base, head: at, .. } = &item.outcome else {
-        return None;
+        return ExitCode::Absent;
     };
-    Some(if head { at.exit } else { base.exit })
+    ExitCode::of(Some(if head { at.exit } else { base.exit }))
 }
 
 /// `pr repro`: the repro gate's check on its own, for the current
@@ -1601,6 +1636,34 @@ fn short(rev: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_marks_a_signalled_run_and_omits_one_that_did_not_happen() {
+        let signalled = Reported {
+            number: 1,
+            title: "The lib is fixed".into(),
+            verdict: Some("FAILS AT HEAD"),
+            head_exit: ExitCode::Signal,
+            reverted_exit: ExitCode::Code(1),
+            text: "1. The lib is fixed: FAILS AT HEAD\n".into(),
+        };
+        let json = serde_json::to_value(&signalled).unwrap();
+        assert_eq!(json["head_exit"], "signal", "{json}");
+        assert_eq!(json["reverted_exit"], 1);
+
+        let skipped = Reported {
+            number: 2,
+            title: "The docs say so".into(),
+            verdict: None,
+            head_exit: ExitCode::Absent,
+            reverted_exit: ExitCode::Absent,
+            text: "2. The docs say so\n".into(),
+        };
+        let json = serde_json::to_string(&skipped).unwrap();
+        assert!(!json.contains("head_exit"), "{json}");
+        assert!(!json.contains("reverted_exit"), "{json}");
+        assert!(!json.contains("verdict"), "{json}");
+    }
 
     #[test]
     fn a_marker_names_its_selector() {
