@@ -160,3 +160,10 @@ agent_model = { default = "" }
     let out = run(&fake, &["pr", "render"], WITH_PROOF);
     assert!(out.status.success(), "{}", stderr(&out));
 }
+
+#[test]
+fn a_heading_differing_only_in_case_and_level_is_refused() {
+    let fake = ghfake::Fake::without_pr(TEMPLATE);
+    let out = run(&fake, &["pr", "render"], "Why.\n\n# proof #\n\n1. test `a`");
+    assert_refused(&out, "# proof #");
+}
