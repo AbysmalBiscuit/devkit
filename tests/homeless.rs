@@ -110,6 +110,28 @@ fn version_runs_without_home() {
     );
 }
 
+/// With no home there is nothing to migrate: a relative or `.` home would
+/// move a legacy-shaped directory under the working directory instead.
+#[test]
+fn startup_migrates_nothing_without_home() {
+    let cwd = tempfile::tempdir().unwrap();
+    let legacy = cwd.path().join(".claude/state/devkit");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(legacy.join("ports.json"), b"{}").unwrap();
+
+    let out = homeless_in(cwd.path(), &["--version"], "");
+
+    assert!(out.status.success(), "devkit --version should exit 0");
+    assert!(
+        legacy.join("ports.json").exists(),
+        "the directory is untouched"
+    );
+    assert!(
+        !cwd.path().join(".local").exists(),
+        "no state home appears under the working directory"
+    );
+}
+
 #[test]
 fn doctor_reports_the_missing_home() {
     let out = homeless(&["doctor", "--json"]);
