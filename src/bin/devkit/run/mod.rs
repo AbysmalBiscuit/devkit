@@ -833,7 +833,7 @@ fn cmd_task(
     let live = std::cell::RefCell::new(Vec::<ledger::LiveServer>::new());
     let mut launched = std::collections::HashSet::new();
     let mut reused = Vec::new();
-    let step = |step_name: &str| -> Result<Option<i32>> {
+    let step = |step_name: &str| -> Result<std::process::ExitStatus> {
         let fresh = task::resolve_step(
             &loaded.config,
             &loaded.catalog,
@@ -851,7 +851,7 @@ fn cmd_task(
             up: None,
             ports: fresh.ports.clone(),
         });
-        Ok(child_exit(&task::exec(&fresh, &tail)?))
+        task::exec(&fresh, &tail)
     };
     let outcome = match &resolved {
         Resolved::Command(_) => step(name),
@@ -859,9 +859,9 @@ fn cmd_task(
             for item in items {
                 match item {
                     SeqItem::Run(plan) => {
-                        let code = step(&plan.name)?;
-                        if code != Some(0) {
-                            return Ok(code);
+                        let status = step(&plan.name)?;
+                        if !status.success() {
+                            return Ok(status);
                         }
                     }
                     SeqItem::Up(app) => {
@@ -880,11 +880,11 @@ fn cmd_task(
                     }
                 }
             }
-            Ok(Some(0))
+            Ok(std::process::ExitStatus::default())
         })(),
     };
     let run = start.finish(
-        outcome.as_ref().ok().copied().flatten(),
+        outcome.as_ref().ok().and_then(child_exit),
         &tail,
         steps.into_inner(),
         ledger::Servers {
@@ -895,17 +895,44 @@ fn cmd_task(
     if let Err(e) = ledger::Ledger::live().record(&run) {
         eprintln!("devrun: the run was not recorded in the run ledger: {e:#}");
     }
-    // A non-zero child exits the process with the child's code, so a caller
-    // sees the task's own exit status.
-    match outcome? {
-        Some(0) => Ok(()),
-        code => std::process::exit(code.unwrap_or(1)),
+    // A non-zero child exits the process with the child's status, so a caller
+    // sees the task's own exit, including a death by signal.
+    let status = outcome?;
+    if status.success() {
+        return Ok(());
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            raise_signal(signal);
+        }
+    }
+    std::process::exit(status.code().unwrap_or(1));
 }
 
-/// The exit a caller of `devrun task` sees. A child killed by a signal has
-/// no code, and reporting that as 1 would hide it behind an ordinary
-/// failure, so it leaves as 128 plus the signal number.
+/// Replace this process with a death by `signal`, so the parent reads a
+/// signal status rather than an exit code. `process::exit` can only report
+/// a code, which would make a killed child look like `exit 143`.
+#[cfg(unix)]
+fn raise_signal(sig: i32) -> ! {
+    // The symbols libc itself links. A crate dependency would pull signal
+    // handling into every target for one Unix exit path.
+    unsafe extern "C" {
+        fn signal(sig: i32, handler: usize) -> usize;
+        fn raise(sig: i32) -> i32;
+    }
+    // SAFETY: the signal number came from the child's own status, and the
+    // default handler is what a killed process dies by.
+    unsafe {
+        signal(sig, 0);
+        raise(sig);
+    }
+    std::process::exit(128 + sig);
+}
+
+/// The exit the ledger records. A child killed by a signal has no code,
+/// so the record holds 128 plus the signal number.
 fn child_exit(status: &std::process::ExitStatus) -> Option<i32> {
     if let Some(code) = status.code() {
         return Some(code);

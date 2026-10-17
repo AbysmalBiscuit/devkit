@@ -1591,16 +1591,19 @@ pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool, base: Option<&st
     Ok(())
 }
 
-/// The shell convention for a death by signal: 128 plus the signal number.
-const SIGNAL_EXIT: i32 = 128;
-
-/// `status` as a run's exit. A child `devrun` killed by a signal exits
-/// 128 plus that signal, which reads back as no exit code.
+/// `status` as a run's exit. `devrun` exits with the child's raw wait
+/// status, so a death by signal still has its signal bit set and reads as
+/// no exit code. A code the program itself exited with stays that code,
+/// including one above 128.
 fn signalled_exit(status: std::process::ExitStatus) -> Option<i32> {
-    match status.code() {
-        Some(code) if code > SIGNAL_EXIT => None,
-        code => code,
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if status.signal().is_some() {
+            return None;
+        }
     }
+    status.code()
 }
 
 fn exited(ran: &Ran) -> String {

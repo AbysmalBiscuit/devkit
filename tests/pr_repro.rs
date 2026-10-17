@@ -378,3 +378,44 @@ fn base_selects_the_merge_base_the_check_reverts_to() {
     assert!(!missing.status.success(), "{text}");
     assert!(text.contains("pass --base"), "{text}");
 }
+
+/// A task that exits 143, the number a SIGTERM death is stored as.
+/// It has a real exit code, so it must not read as a signal.
+const EXIT_143: &str = r#"
+[tracker]
+kind = "github"
+
+[tasks.repro]
+run = ["sh", "-c", "echo {{ selector }}; exit 143"]
+"#;
+
+#[test]
+fn a_real_exit_above_128_stays_that_code_and_refuses_when_it_names_no_test() {
+    let p = project(
+        "\n[pr.gates]\nrepro_task = \"repro\"\nrepro_no_tests_exit = 143\n",
+        FIX,
+    );
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace(TASKS, EXIT_143);
+    std::fs::write(&config, toml).unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "--amend", "--no-edit"]);
+    git(&p, &["branch", "-f", "main", "HEAD"]);
+    write(&p, "src/lib.txt", "lib: fixed again\n");
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "fix the lib again"]);
+
+    let (ok, stdout, stderr) = repro(&p, &["--json"]);
+    assert!(
+        !ok,
+        "143 is the no-test exit, so require refuses: {stdout}{stderr}"
+    );
+    let item: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap())
+        .unwrap_or_else(|e| panic!("{e}: {stdout}{stderr}"));
+    assert_eq!(item["verdict"], "FAILED", "{item}");
+    assert_eq!(item["head_exit"], 143, "{item}");
+    assert_eq!(item["reverted_exit"], 143, "{item}");
+    assert!(!stdout.contains("signal"), "{stdout}");
+}
