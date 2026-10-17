@@ -221,15 +221,19 @@ fn the_project_commit_message_template_renders_the_message() {
     assert_eq!(message(dir), "fix: a [ENG-1]\n\n");
 }
 
-#[test]
-fn an_agent_must_name_its_coauthors_when_the_project_says_so() {
-    let repo = repo();
-    let dir = repo.path();
+fn require_agent_coauthors(dir: &Path) {
     std::fs::write(
         dir.join("devkit.toml"),
         "[templates.variables]\ncoauthors = { default = \"\", required = \"agents\" }\n",
     )
     .unwrap();
+}
+
+#[test]
+fn an_agent_must_name_its_coauthors_when_the_project_says_so() {
+    let repo = repo();
+    let dir = repo.path();
+    require_agent_coauthors(dir);
     std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
     let before = head(dir);
 
@@ -246,6 +250,207 @@ fn an_agent_must_name_its_coauthors_when_the_project_says_so() {
         stderr(&out)
     );
     assert_eq!(head(dir), before);
+}
+
+/// An agent author, as a caller sets it when the harness itself authors the
+/// commit: a GitHub bot address, not a person's.
+const AGENT_AUTHOR: (&str, &str) = (
+    "Grok 4.7",
+    "261865991+grok-by-xai[bot]@users.noreply.github.com",
+);
+
+fn author_env(cmd: &mut Command, name: &str, email: &str) {
+    cmd.env("GIT_AUTHOR_NAME", name)
+        .env("GIT_AUTHOR_EMAIL", email)
+        .env("GIT_COMMITTER_NAME", name)
+        .env("GIT_COMMITTER_EMAIL", email);
+}
+
+#[test]
+fn an_agent_author_meets_a_coauthor_requirement_with_no_trailer() {
+    let repo = repo();
+    let dir = repo.path();
+    require_agent_coauthors(dir);
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+
+    let mut cmd = devkit_commit(dir);
+    author_env(&mut cmd, AGENT_AUTHOR.0, AGENT_AUTHOR.1);
+    let out = cmd
+        .env("DEVKIT_CALLER", "agent")
+        .env_remove("GIT_CONFIG_GLOBAL")
+        .args(["--files", "a.txt", "--subject", "fix: a"])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(message(dir), "fix: a\n\n");
+    assert!(
+        !message(dir).contains("Co-authored-by"),
+        "{}",
+        message(dir)
+    );
+    assert_eq!(
+        git(dir, &["log", "-1", "--format=%an <%ae>"]),
+        format!("{} <{}>\n", AGENT_AUTHOR.0, AGENT_AUTHOR.1)
+    );
+}
+
+#[test]
+fn an_agent_author_from_user_config_meets_a_coauthor_requirement() {
+    let repo = repo();
+    let dir = repo.path();
+    require_agent_coauthors(dir);
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+    let home = dir.join(".git/test-home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join(".gitconfig"),
+        format!(
+            "[user]\n\tname = {}\n\temail = {}\n",
+            AGENT_AUTHOR.0, AGENT_AUTHOR.1
+        ),
+    )
+    .unwrap();
+
+    let out = devkit_commit(dir)
+        .env("DEVKIT_CALLER", "agent")
+        .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
+        .env_remove("GIT_AUTHOR_NAME")
+        .env_remove("GIT_AUTHOR_EMAIL")
+        .env_remove("GIT_COMMITTER_NAME")
+        .env_remove("GIT_COMMITTER_EMAIL")
+        .args(["--files", "a.txt", "--subject", "fix: a"])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(message(dir), "fix: a\n\n");
+    assert_eq!(
+        git(dir, &["log", "-1", "--format=%an <%ae>"]),
+        format!("{} <{}>\n", AGENT_AUTHOR.0, AGENT_AUTHOR.1)
+    );
+}
+
+#[test]
+fn a_blank_author_email_still_needs_a_coauthor() {
+    let repo = repo();
+    let dir = repo.path();
+    require_agent_coauthors(dir);
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+    let before = head(dir);
+
+    let mut cmd = devkit_commit(dir);
+    author_env(&mut cmd, "Grok 4.7", "   ");
+    let out = cmd
+        .env("DEVKIT_CALLER", "agent")
+        .args(["--files", "a.txt", "--subject", "fix: a"])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("devkit commit needs --coauthor=... (required for agents)"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(head(dir), before);
+}
+
+#[test]
+fn a_spaced_bot_author_meets_a_coauthor_requirement() {
+    let repo = repo();
+    let dir = repo.path();
+    require_agent_coauthors(dir);
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+
+    let mut cmd = devkit_commit(dir);
+    author_env(
+        &mut cmd,
+        "  Grok 4.7  ",
+        "  261865991+grok-by-xai[bot]@users.noreply.github.com  ",
+    );
+    let out = cmd
+        .env("DEVKIT_CALLER", "agent")
+        .args(["--files", "a.txt", "--subject", "fix: a"])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(message(dir), "fix: a\n\n");
+}
+
+#[test]
+fn a_noreply_address_without_bot_still_needs_a_coauthor() {
+    let repo = repo();
+    let dir = repo.path();
+    require_agent_coauthors(dir);
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+    let before = head(dir);
+
+    let mut cmd = devkit_commit(dir);
+    author_env(&mut cmd, "Ada", "ada@users.noreply.github.com");
+    let out = cmd
+        .env("DEVKIT_CALLER", "agent")
+        .args(["--files", "a.txt", "--subject", "fix: a"])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("required for agents"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(head(dir), before);
+}
+
+#[test]
+fn a_project_commit_message_still_requires_coauthors_of_an_agent_author() {
+    let repo = repo();
+    let dir = repo.path();
+    std::fs::write(
+        dir.join("devkit.toml"),
+        "[templates]\ncommit_message = \"{{ subject }}\\n\\ntrailers: {{ coauthors }}\"\n\
+         [templates.variables]\ncoauthors = { default = \"\", required = \"agents\" }\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+    let before = head(dir);
+
+    let mut cmd = devkit_commit(dir);
+    author_env(&mut cmd, AGENT_AUTHOR.0, AGENT_AUTHOR.1);
+    let out = cmd
+        .env("DEVKIT_CALLER", "agent")
+        .args(["--files", "a.txt", "--subject", "fix: a"])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("devkit commit needs --coauthor=... (required for agents)"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(head(dir), before);
+}
+
+#[test]
+fn a_human_with_an_agent_author_still_names_coauthors_only_when_required_of_humans() {
+    let repo = repo();
+    let dir = repo.path();
+    require_agent_coauthors(dir);
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+
+    let mut cmd = devkit_commit(dir);
+    author_env(&mut cmd, AGENT_AUTHOR.0, AGENT_AUTHOR.1);
+    let out = cmd
+        .env("DEVKIT_CALLER", "human")
+        .args(["--files", "a.txt", "--subject", "fix: a"])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(message(dir), "fix: a\n\n");
 }
 
 #[test]

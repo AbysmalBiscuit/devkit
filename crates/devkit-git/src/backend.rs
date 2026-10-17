@@ -360,6 +360,26 @@ impl VersionControl for GitBackend {
             .to_string())
     }
 
+    fn author(&self, dir: &Path) -> Result<Option<(String, String)>> {
+        // The same order `git commit` uses: an author variable wins over
+        // config, and a variable set for only one half does not mix with
+        // the other half from config.
+        let from_env = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"]
+            .map(|key| std::env::var(key).ok().filter(|v| !v.trim().is_empty()));
+        let [name, email] = match from_env {
+            [Some(name), Some(email)] => [name, email],
+            [None, None] => ["user.name", "user.email"].map(|key| {
+                Git::at(dir)
+                    .args(["config", key])
+                    .output()
+                    .map(|v| v.trim().to_string())
+                    .unwrap_or_default()
+            }),
+            _ => return Ok(None),
+        };
+        Ok((!name.trim().is_empty() && !email.trim().is_empty()).then_some((name, email)))
+    }
+
     fn commit(&self, dir: &Path, selection: &Selection<'_>, message: &str) -> Result<String> {
         super::commit::commit(dir, selection, message)
     }

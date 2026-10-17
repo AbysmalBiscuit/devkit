@@ -289,6 +289,15 @@ pub trait VersionControl {
     /// configured.
     fn user_email(&self, dir: &::std::path::Path) -> ::anyhow::Result<::std::string::String>;
 
+    /// The author a new commit in `dir` would record (`GIT_AUTHOR_*`, else `user.name` and `user.email`), or `Ok(None)` when either half is unset.
+    fn author(
+        &self,
+        dir: &::std::path::Path,
+    ) -> ::anyhow::Result<Option<(::std::string::String, ::std::string::String)>> {
+        let _ = dir;
+        Ok(None)
+    }
+
     /// Commits `selection` in `dir`'s repository with `message`, leaving the
     /// working tree, and changes anyone else staged, as they were. Refuses
     /// rather than committing part of the selection. Returns the backend's
@@ -430,6 +439,10 @@ mod tests {
 
         fn user_email(&self, _: &Path) -> anyhow::Result<String> {
             unimplemented!()
+        }
+
+        fn author(&self, _: &Path) -> anyhow::Result<Option<(String, String)>> {
+            Ok(None)
         }
     }
 
