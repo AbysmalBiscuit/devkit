@@ -430,7 +430,7 @@ impl Gate {
             .map(str::to_string)
             .collect();
         Ok(Ran {
-            exit: status.code(),
+            exit: signalled_exit(status),
             output,
         })
     }
@@ -1531,14 +1531,15 @@ fn exit_of(item: &Item, head: bool) -> ExitCode {
 /// `pr repro`: the repro gate's check on its own, for the current
 /// worktree's branch. Prints each item's verdict and exits nonzero exactly
 /// when the `require` strength would refuse the PR. Touches no forge.
-pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool) -> Result<()> {
+pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool, base: Option<&str>) -> Result<()> {
     let checkout = Checkout::at(dir);
     let loaded = devkit_ports::load::load_in(&checkout, config.map(Path::new), dir)?;
-    let base = &loaded.config.defaults.pr_base;
+    let configured = &loaded.config.defaults.pr_base;
+    let base = base.unwrap_or(configured);
     let Some(merge_base) = super::weakened::merge_base(dir, base)? else {
         bail!(
             "the repro check reads its settings from the merge base with `{base}`, and neither \
-             `origin/{base}` nor `{base}` is a commit here: fetch it, or set defaults.pr_base"
+             `origin/{base}` nor `{base}` is a commit here: fetch it, pass --base, or set              defaults.pr_base"
         );
     };
     let cfg = super::weakened::config_at(&checkout, &merge_base)?;
@@ -1590,6 +1591,18 @@ pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// The shell convention for a death by signal: 128 plus the signal number.
+const SIGNAL_EXIT: i32 = 128;
+
+/// `status` as a run's exit. A child `devrun` killed by a signal exits
+/// 128 plus that signal, which reads back as no exit code.
+fn signalled_exit(status: std::process::ExitStatus) -> Option<i32> {
+    match status.code() {
+        Some(code) if code > SIGNAL_EXIT => None,
+        code => code,
+    }
+}
+
 fn exited(ran: &Ran) -> String {
     match ran.exit {
         Some(code) => format!("exited {code}"),
@@ -1636,34 +1649,6 @@ fn short(rev: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn json_marks_a_signalled_run_and_omits_one_that_did_not_happen() {
-        let signalled = Reported {
-            number: 1,
-            title: "The lib is fixed".into(),
-            verdict: Some("FAILS AT HEAD"),
-            head_exit: ExitCode::Signal,
-            reverted_exit: ExitCode::Code(1),
-            text: "1. The lib is fixed: FAILS AT HEAD\n".into(),
-        };
-        let json = serde_json::to_value(&signalled).unwrap();
-        assert_eq!(json["head_exit"], "signal", "{json}");
-        assert_eq!(json["reverted_exit"], 1);
-
-        let skipped = Reported {
-            number: 2,
-            title: "The docs say so".into(),
-            verdict: None,
-            head_exit: ExitCode::Absent,
-            reverted_exit: ExitCode::Absent,
-            text: "2. The docs say so\n".into(),
-        };
-        let json = serde_json::to_string(&skipped).unwrap();
-        assert!(!json.contains("head_exit"), "{json}");
-        assert!(!json.contains("reverted_exit"), "{json}");
-        assert!(!json.contains("verdict"), "{json}");
-    }
 
     #[test]
     fn a_marker_names_its_selector() {

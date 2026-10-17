@@ -851,7 +851,7 @@ fn cmd_task(
             up: None,
             ports: fresh.ports.clone(),
         });
-        Ok(task::exec(&fresh, &tail)?.code())
+        Ok(child_exit(&task::exec(&fresh, &tail)?))
     };
     let outcome = match &resolved {
         Resolved::Command(_) => step(name),
@@ -901,6 +901,23 @@ fn cmd_task(
         Some(0) => Ok(()),
         code => std::process::exit(code.unwrap_or(1)),
     }
+}
+
+/// The exit a caller of `devrun task` sees. A child killed by a signal has
+/// no code, and reporting that as 1 would hide it behind an ordinary
+/// failure, so it leaves as 128 plus the signal number.
+fn child_exit(status: &std::process::ExitStatus) -> Option<i32> {
+    if let Some(code) = status.code() {
+        return Some(code);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return Some(128 + signal);
+        }
+    }
+    None
 }
 
 /// Add to `live` each of `apps` not yet in it, with when the port registry
