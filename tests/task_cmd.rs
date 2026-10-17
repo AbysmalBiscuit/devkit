@@ -111,8 +111,8 @@ fn devkit_run_in(dir: &Path) -> Command {
     cmd
 }
 
-/// `devkit` sandboxed to `dir`, with no caller override inherited from the
-/// developer's shell.
+/// `devkit` sandboxed to `dir`, with no caller override or harness session
+/// inherited from the developer's shell.
 fn devkit_in(dir: &Path) -> Command {
     let state = dir.join("state");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
@@ -124,6 +124,9 @@ fn devkit_in(dir: &Path) -> Command {
         .env("USERPROFILE", dir) // Windows: keep config resolution off the real home
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove("DEVKIT_CALLER");
+    for var in devkit_common::caller::HARNESS_SESSION_VARS {
+        cmd.env_remove(var);
+    }
     cmd
 }
 
