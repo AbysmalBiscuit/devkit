@@ -725,3 +725,59 @@ fn an_unresolved_program_a_task_or_app_could_run_keeps_its_project_note() {
         );
     }
 }
+
+fn deny_reason(out: &Output) -> String {
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("a denial is a JSON envelope");
+    v["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn an_agents_gh_pr_create_is_denied_in_any_devkit_project_naming_devkit_pr_create() {
+    let home = tempfile::tempdir().unwrap();
+    for config in ["[defaults]\n", GATE_OFF, GUARDED] {
+        let proj = project(config);
+        for command in [
+            "gh pr create --title t --body b",
+            "cd sub && gh pr create --fill",
+            "gh  pr   new --fill",
+        ] {
+            let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+            assert!(denied(&out), "{config}: {command}");
+            assert!(
+                deny_reason(&out).contains("devkit pr create"),
+                "{config}: {command}: {}",
+                deny_reason(&out)
+            );
+        }
+        let view = run_hook(proj.path(), home.path(), &claude_payload("gh pr view 9"));
+        assert!(!denied(&view), "{config}: only pr create is refused");
+    }
+}
+
+#[test]
+fn a_project_rule_switches_the_gh_pr_create_guard_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness.commands.gh-pr-create]\nenabled = false\n");
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("gh pr create --fill"),
+    );
+    assert!(!denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn gh_pr_create_outside_a_devkit_project_is_left_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    devkit_git::Git::fixture(dir.path())
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    let out = run_hook(dir.path(), home.path(), &claude_payload("gh pr create --fill"));
+    assert!(!denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}

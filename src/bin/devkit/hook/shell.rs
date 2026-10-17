@@ -296,10 +296,14 @@ fn respond(
         );
         let analysis = devkit_command::analyze(command, &context(dialect, shell_cwd));
         let blocks = ledger_blocks(&analysis, &cwd);
-        return match blocks.is_empty() {
-            true => Outcome::silent(),
-            false => deny(which, &blocks),
-        };
+        if !blocks.is_empty() {
+            return deny(which, &blocks);
+        }
+        // A built-in command rule applies whatever the gates say, so a
+        // command naming one of its programs reads the rules below.
+        if !runs_builtin_program(&analysis) {
+            return Outcome::silent();
+        }
     }
     if writes_on {
         armed.arm(which);
@@ -322,6 +326,10 @@ fn respond(
         let verdict = guard::decide(&analysis, &rules.commands, project.as_ref(), &own);
         blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
         notes.extend(verdict.warnings.into_iter().map(|f| f.message));
+    } else {
+        let builtin = rules.builtin_commands();
+        let verdict = guard::decide(&analysis, &builtin, None, &own);
+        blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
     }
     // Everything the record needs that the write stage may consume.
     let shell_record = |decision, blocks: &[String], notes: &[String]| {
@@ -391,6 +399,22 @@ fn respond(
         response,
         record: rec,
     }
+}
+
+/// Whether an invocation in `analysis`, or a wrapper around one, runs a
+/// program a built-in command rule names.
+fn runs_builtin_program(analysis: &Analysis) -> bool {
+    let programs = harness::builtin_programs();
+    let named = |program: Option<&str>| {
+        program.is_some_and(|p| programs.iter().any(|b| guard::norm::basename(p) == b))
+    };
+    analysis.invocations.iter().any(|inv| {
+        named(inv.program.known())
+            || inv
+                .wrappers
+                .iter()
+                .any(|w| named(w.first().and_then(|v| v.known())))
+    })
 }
 
 fn context(dialect: Dialect, cwd: Option<&Path>) -> Context {

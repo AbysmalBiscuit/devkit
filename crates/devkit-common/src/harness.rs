@@ -288,22 +288,73 @@ fn value_names_programs(v: &toml::Value) -> bool {
     v.as_table().is_some_and(|t| t.contains_key("programs"))
 }
 
+/// Command rules devkit applies in every devkit project, below the global
+/// config and whatever `enforce_commands` says. A layer's rule of the same name
+/// overrides the keys it sets, so `enabled = false` switches one off.
+const BUILTIN_COMMANDS: &str = r#"
+[harness.commands.gh-pr-create]
+programs = ["gh"]
+args = ["pr", "create"]
+reason = "Open PRs with `devkit pr create`, which renders the PR template and runs the gates an agent's PR must pass."
+
+[harness.commands.gh-pr-new]
+programs = ["gh"]
+args = ["pr", "new"]
+reason = "Open PRs with `devkit pr create`, which renders the PR template and runs the gates an agent's PR must pass."
+"#;
+
+fn builtin_layer() -> toml::Table {
+    toml::from_str(BUILTIN_COMMANDS).expect("the built-in command rules parse")
+}
+
+/// The programs a built-in command rule names, so a caller can tell whether a
+/// command could match one before resolving any config.
+pub fn builtin_programs() -> Vec<String> {
+    let (rules, _) = merge_rules(&[(PathBuf::new(), builtin_layer())]);
+    rules
+        .commands
+        .into_values()
+        .flat_map(|rule| rule.programs)
+        .collect()
+}
+
+impl HarnessRules {
+    /// The merged command rules that devkit builds in, as the layers left
+    /// them. They apply even where `enforce_commands` is off.
+    pub fn builtin_commands(&self) -> BTreeMap<String, CommandRule> {
+        let names = builtin_layer();
+        let names = names
+            .get("harness")
+            .and_then(|h| h.get("commands"))
+            .and_then(toml::Value::as_table);
+        self.commands
+            .iter()
+            .filter(|(name, _)| names.is_some_and(|n| n.contains_key(*name)))
+            .map(|(name, rule)| (name.clone(), rule.clone()))
+            .collect()
+    }
+}
+
 /// The merged `[harness]` command-guard tables applying at `cwd`, lowest
-/// precedence first: the global config, then every project layer. A project
-/// layer that will not parse is left out with a warning naming it.
+/// precedence first: devkit's built-in rules when `cwd` is in a devkit
+/// project, the global config, then every project layer. A project layer that
+/// will not parse is left out with a warning naming it.
 ///
 /// Warnings are returned rather than printed. This runs inside the shared gate,
 /// which `lockm hook pretooluse` also calls, and a rule warning printed here
 /// would fire on every `Edit` as well as every `Bash`.
 pub fn resolve_rules_in(checkout: &Checkout, cwd: &Path) -> (HarnessRules, Vec<String>) {
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
+    let project = devkit_config::read_project_layers(cwd, checkout.main_checkout());
+    if !project.layers.is_empty() {
+        layers.push((PathBuf::from("<devkit built-in>"), builtin_layer()));
+    }
     if let Some(p) = global_config_path()
         && let Ok(body) = std::fs::read_to_string(&p)
         && let Ok(t) = toml::from_str::<toml::Table>(&body)
     {
         layers.push((p, t));
     }
-    let project = devkit_config::read_project_layers(cwd, checkout.main_checkout());
     layers.extend(project.layers.into_iter().map(|(l, t)| (l.path, t)));
     let (rules, mut warnings) = merge_rules(&layers);
     for broken in project.broken {

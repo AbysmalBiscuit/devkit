@@ -560,7 +560,10 @@ pub struct HarnessSection {
     pub script_files: PolicyAction,
     /// Extra refusals beyond the ones devkit derives from `[apps]` and
     /// `[tasks]`. Merged across config layers by name; redefining a rule
-    /// overrides only the keys it sets.
+    /// overrides only the keys it sets. devkit builds in `gh-pr-create` and
+    /// `gh-pr-new`, refusing `gh pr create` and its alias in favour of
+    /// `devkit pr create`; they apply in every devkit project even with
+    /// `enforce_commands` off, and `enabled = false` switches one off.
     #[serde(default)]
     pub commands: BTreeMap<String, CommandRule>,
     /// MCP tools that create or edit issues, whose title and body must come
