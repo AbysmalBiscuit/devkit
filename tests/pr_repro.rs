@@ -202,6 +202,7 @@ fn json_prints_one_object_per_item_with_the_same_verdicts() {
     assert_eq!(verdict(3)["head_exit"], 128);
     assert!(verdict(4).get("verdict").is_none(), "{}", verdict(4));
     assert!(verdict(4).get("head_exit").is_none(), "{}", verdict(4));
+    assert!(verdict(4).get("reverted_exit").is_none(), "{}", verdict(4));
     assert!(stdout.contains("1. The lib is fixed"), "{stdout}");
 
     let mixed = project(GATE, FIX);
@@ -218,6 +219,7 @@ fn json_prints_one_object_per_item_with_the_same_verdicts() {
         .unwrap_or_else(|e| panic!("{e}: {stdout}"));
     assert_eq!(item["verdict"], "INCONCLUSIVE", "{stdout}");
     assert!(item.get("head_exit").is_none(), "{item}");
+    assert!(item.get("reverted_exit").is_none(), "{item}");
 
     let blank = project(GATE, NO_SELECTOR);
     let (ok, stdout, stderr) = repro(&blank, &["--json"]);
@@ -324,6 +326,33 @@ fn a_killed_selector_prints_signal_not_an_exit_code() {
     assert_eq!(item["head_exit"], "signal", "{item}");
     assert_eq!(item["reverted_exit"], "signal", "{item}");
     assert!(stdout.contains("killed by a signal"), "{stdout}");
+}
+
+#[test]
+fn json_omits_both_exits_when_the_selector_did_not_run() {
+    let unmarked = project(GATE, UNMARKED);
+    let (ok, stdout, stderr) = repro(&unmarked, &["--json"]);
+    assert!(ok, "{stderr}");
+    let item: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap())
+        .unwrap_or_else(|e| panic!("{e}: {stdout}"));
+    assert!(item.get("head_exit").is_none(), "{item}");
+    assert!(item.get("reverted_exit").is_none(), "{item}");
+
+    let mixed = project(GATE, FIX);
+    write(
+        &mixed,
+        "src/mixed.rs",
+        "fn f() -> u8 { 2 }\n\n#[cfg(test)]\nmod tests {\n}\n",
+    );
+    git(&mixed, &["add", "-A"]);
+    git(&mixed, &["commit", "-q", "-m", "a module and its test"]);
+    let (ok, stdout, stderr) = repro(&mixed, &["--json"]);
+    assert!(ok, "{stderr}");
+    let item: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap())
+        .unwrap_or_else(|e| panic!("{e}: {stdout}"));
+    assert_eq!(item["verdict"], "INCONCLUSIVE", "{item}");
+    assert!(item.get("head_exit").is_none(), "{item}");
+    assert!(item.get("reverted_exit").is_none(), "{item}");
 }
 
 #[test]
