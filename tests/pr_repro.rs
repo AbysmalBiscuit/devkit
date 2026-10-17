@@ -289,3 +289,91 @@ fn a_missing_issue_or_merge_base_names_what_is_missing() {
     );
     assert_eq!(repro_runs(&no_base), Vec::<i64>::new());
 }
+
+/// A task whose shell kills itself, committed before the branch so the
+/// reverted run uses it too. A task the branch itself changes is restored
+/// with the fix, and the reverted run would not be the killed one.
+const KILL: &str = r#"
+[tracker]
+kind = "github"
+
+[tasks.repro]
+run = ["sh", "-c", "kill -TERM $$; echo {{ selector }}"]
+"#;
+
+#[cfg(unix)]
+#[test]
+fn a_killed_selector_prints_signal_not_an_exit_code() {
+    let p = project("\n[pr.gates]\nrepro_task = \"repro\"\n", FIX);
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace(TASKS, KILL);
+    std::fs::write(&config, toml).unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "--amend", "--no-edit"]);
+    git(&p, &["branch", "-f", "main", "HEAD"]);
+    write(&p, "src/lib.txt", "lib: fixed again\n");
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "fix the lib again"]);
+    let (ok, stdout, stderr) = repro(&p, &["--json"]);
+    assert!(ok, "a signal does not refuse: {stdout}{stderr}");
+    let item: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap())
+        .unwrap_or_else(|e| panic!("{e}: {stdout}{stderr}"));
+    assert_eq!(item["head_exit"], "signal", "{item}");
+    assert_eq!(item["reverted_exit"], "signal", "{item}");
+    assert!(stdout.contains("killed by a signal"), "{stdout}");
+}
+
+#[test]
+fn base_selects_the_merge_base_the_check_reverts_to() {
+    let p = project(GATE, FIX);
+    git(&p, &["branch", "release", "main"]);
+    write(&p, "src/lib.txt", "lib: broken again\n");
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "break it after release"]);
+    git(&p, &["branch", "-f", "main", "HEAD"]);
+    write(&p, "src/lib.txt", "lib: fixed\n");
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "fix it again"]);
+    git(&p, &["branch", "-f", "main", "HEAD"]);
+
+    let (ok, stdout, stderr) = repro(&p, &["--base", "release"]);
+    assert!(ok, "the fix is red against release: {stdout}{stderr}");
+    assert!(stdout.contains("PASSED"), "{stdout}");
+    assert!(stdout.contains("restored to the merge base"), "{stdout}");
+
+    let (ok, stdout, stderr) = repro(&p, &[]);
+    assert!(ok, "against main the source matches HEAD: {stderr}");
+    assert!(
+        stdout.contains("no non-test path"),
+        "the default base is main, not release: {stdout}"
+    );
+
+    let blank = p.devkit_here_with_env(&["pr", "repro", "--base", ""], &[(
+        "DEVKIT_CALLER",
+        "agent",
+    )]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&blank.stdout),
+        String::from_utf8_lossy(&blank.stderr)
+    );
+    assert!(!blank.status.success(), "{text}");
+    assert!(
+        text.contains("neither `origin/` nor `` is a commit here"),
+        "{text}"
+    );
+
+    let missing = p.devkit_here_with_env(&["pr", "repro", "--base", "no-such"], &[(
+        "DEVKIT_CALLER",
+        "agent",
+    )]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&missing.stdout),
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    assert!(!missing.status.success(), "{text}");
+    assert!(text.contains("pass --base"), "{text}");
+}
