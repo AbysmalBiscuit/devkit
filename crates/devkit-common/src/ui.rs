@@ -488,13 +488,13 @@ pub fn dim_strike(s: &str) -> String {
 // --- terminal width
 // ------------------------------------------------------------
 
-/// Terminal width of stdout: `$COLUMNS`, else `TIOCGWINSZ`, else 100.
+/// Terminal width of stdout: `$COLUMNS`, else the terminal's size, else 100.
 pub fn term_width() -> usize {
     term_width_on(Stream::Stdout)
 }
 
-/// Terminal width of `stream`: `$COLUMNS`, else `TIOCGWINSZ` on that stream's
-/// fd, else 100.
+/// Terminal width of `stream`: `$COLUMNS`, else the size of the terminal that
+/// stream is, else 100.
 pub fn term_width_on(stream: Stream) -> usize {
     if let Ok(c) = std::env::var("COLUMNS")
         && let Ok(n) = c.trim().parse::<usize>()
@@ -502,47 +502,14 @@ pub fn term_width_on(stream: Stream) -> usize {
     {
         return n;
     }
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        let mut ws: Winsize = Winsize {
-            ws_row: 0,
-            ws_col: 0,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        let fd = match stream {
-            Stream::Stdout => std::io::stdout().as_raw_fd(),
-            Stream::Stderr => std::io::stderr().as_raw_fd(),
-        };
-        // SAFETY: ws is a plain POD struct sized for struct winsize; TIOCGWINSZ
-        // fills it.
-        let rc = unsafe { ioctl_winsize(fd, &mut ws) };
-        if rc == 0 && ws.ws_col > 0 {
-            return ws.ws_col as usize;
-        }
+    let term = match stream {
+        Stream::Stdout => console::Term::stdout(),
+        Stream::Stderr => console::Term::stderr(),
+    };
+    match term.size_checked() {
+        Some((_, cols)) if cols > 0 => cols as usize,
+        _ => 100,
     }
-    #[cfg(not(unix))]
-    let _ = stream;
-    100
-}
-
-#[cfg(unix)]
-#[repr(C)]
-struct Winsize {
-    ws_row: u16,
-    ws_col: u16,
-    ws_xpixel: u16,
-    ws_ypixel: u16,
-}
-
-#[cfg(unix)]
-unsafe fn ioctl_winsize(fd: i32, ws: *mut Winsize) -> i32 {
-    // TIOCGWINSZ is 0x5413 on Linux.
-    unsafe extern "C" {
-        fn ioctl(fd: i32, request: u64, ...) -> i32;
-    }
-    unsafe { ioctl(fd, 0x5413, ws) }
 }
 
 #[cfg(test)]
@@ -703,6 +670,72 @@ mod tests {
                 "URL leaked into visible output: {line:?}"
             );
         }
+    }
+
+    /// Where [`term_width_probe`] writes the width it measured. Set only by the
+    /// tests that re-run this binary; the probe does nothing without it.
+    const WIDTH_OUT: &str = "DEVKIT_TEST_TERM_WIDTH_OUT";
+
+    #[test]
+    fn term_width_probe() {
+        if let Some(out) = std::env::var_os(WIDTH_OUT) {
+            std::fs::write(out, term_width_on(Stream::Stdout).to_string()).unwrap();
+        }
+    }
+
+    /// The width [`term_width_on`] gives stdout in a fresh copy of this test
+    /// binary whose stdout is `stdout` and whose `COLUMNS` is `columns`.
+    fn width_in_child(stdout: std::process::Stdio, columns: Option<&str>) -> usize {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("width");
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args(["ui::tests::term_width_probe", "--exact", "--test-threads=1"])
+            .env(WIDTH_OUT, &out)
+            .stdout(stdout)
+            .stderr(std::process::Stdio::null());
+        match columns {
+            Some(c) => cmd.env("COLUMNS", c),
+            None => cmd.env_remove("COLUMNS"),
+        };
+        let status = cmd.status().unwrap();
+        assert!(status.success(), "probe failed: {status}");
+        std::fs::read_to_string(&out)
+            .expect("the probe ran")
+            .parse()
+            .unwrap()
+    }
+
+    /// A pseudoterminal `cols` columns wide: the master end, which must stay
+    /// open while the child writes, and the slave end for the child's stdout.
+    #[cfg(unix)]
+    fn pty(cols: u16) -> (std::os::fd::OwnedFd, std::process::Stdio) {
+        let size = nix::pty::Winsize {
+            ws_row: 24,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let pair = nix::pty::openpty(&size, None).unwrap();
+        (pair.master, pair.slave.into())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn term_width_reads_the_terminal_size() {
+        let (_master, slave) = pty(137);
+        assert_eq!(width_in_child(slave, None), 137);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn term_width_on_prefers_columns_over_the_terminal() {
+        let (_master, slave) = pty(137);
+        assert_eq!(width_in_child(slave, Some("57")), 57);
+    }
+
+    #[test]
+    fn term_width_on_a_stream_that_is_not_a_terminal_is_100() {
+        assert_eq!(width_in_child(std::process::Stdio::piped(), None), 100);
     }
 
     #[test]
