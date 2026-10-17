@@ -13,7 +13,7 @@ devrun task <name> --env KEY=value            # overlay env on every step
 devrun task <name> --env-file F
 ```
 
-A **command** task runs in the foreground and propagates its exit code. A **sequence** task runs `{ task = … }` / `{ up = … }` steps in order, stopping at the first failure. The `--env`/`--env-file` overlay applies to every step: command steps layer it above the task's `env`, `up` steps above the app's `static_env`, the same as `devrun up --env`.
+A **command** task runs in the foreground and propagates its exit code. When a signal kills the child, devrun dies by that signal. A **sequence** task runs `{ task = … }` / `{ up = … }` steps in order, stopping at the first failure. The `--env`/`--env-file` overlay applies to every step: command steps layer it above the task's `env`, `up` steps above the app's `static_env`, the same as `devrun up --env`.
 
 A task `devrun task <name>` would refuse for its shape still lists, with KIND `invalid` and the refusal in place of its description; `devkit config tasks --json` carries it as `error`. Refusals include both or neither of `run` and `steps`, a template that does not compile, an app the catalog lacks, a split on an empty `on`, a sequence setting `app`, `env` or `require_live`, and a step naming an unknown, malformed or sequence task. Port references are found by rendering, so a problem with one surfaces only when the task runs.
 
