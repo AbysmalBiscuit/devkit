@@ -1539,7 +1539,8 @@ pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool, base: Option<&st
     let Some(merge_base) = super::weakened::merge_base(dir, base)? else {
         bail!(
             "the repro check reads its settings from the merge base with `{base}`, and neither \
-             `origin/{base}` nor `{base}` is a commit here: fetch it, pass --base, or set              defaults.pr_base"
+             `origin/{base}` nor `{base}` is a commit here: fetch it, pass --base, or set \
+             defaults.pr_base"
         );
     };
     let cfg = super::weakened::config_at(&checkout, &merge_base)?;
