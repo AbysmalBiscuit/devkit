@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use devkit_common::{
     caller::Caller,
     record::{self, IssueRecord},
-    required::{ensure_supplied, ensure_supplied_as, missing_args},
+    required::{declared_required, ensure_supplied, ensure_supplied_as, missing_args},
     template,
     vcs::{self, Vcs, VersionControl},
 };
@@ -219,12 +219,12 @@ fn render_commit_parts(
         .cloned()
         .collect::<Vec<_>>()
         .join("; ");
-    // An agent author meets the requirement without a trailer. The stand-in
-    // is empty so the built-in template emits no Co-authored-by line, and
-    // the supplied body is left as the caller wrote it.
+    // An agent author meets required = "agents" without a trailer. The
+    // stand-in is empty so the built-in template emits no Co-authored-by
+    // line, and the supplied body is left as the caller wrote it.
     let agent = coauthors.is_empty()
         && builtin_commit_message(cfg)
-        && devkit_common::required::is_required(cfg, None, "coauthors", caller)
+        && declared_required(cfg, None, "coauthors") == Required::Agents
         && agent_author(start, caller, amend)?.is_some();
     let supplied = agent
         .then_some("")

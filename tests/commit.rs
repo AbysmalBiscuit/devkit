@@ -222,9 +222,15 @@ fn the_project_commit_message_template_renders_the_message() {
 }
 
 fn require_agent_coauthors(dir: &Path) {
+    require_coauthors(dir, "agents");
+}
+
+fn require_coauthors(dir: &Path, required: &str) {
     std::fs::write(
         dir.join("devkit.toml"),
-        "[templates.variables]\ncoauthors = { default = \"\", required = \"agents\" }\n",
+        format!(
+            "[templates.variables]\ncoauthors = {{ default = \"\", required = \"{required}\" }}\n"
+        ),
     )
     .unwrap();
 }
@@ -764,6 +770,70 @@ fn a_project_commit_message_still_requires_coauthors_of_an_agent_author() {
         stderr(&out)
     );
     assert_eq!(head(dir), before);
+}
+
+/// `required = "always"` binds every caller, so an agent author still names
+/// `--coauthor`. The agent-author exemption covers `required = "agents"` only.
+fn an_agent_author_still_needs_a_coauthor_when_always_required(email: &str) {
+    let repo = repo();
+    let dir = repo.path();
+    require_coauthors(dir, "always");
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+    let before = head(dir);
+
+    let mut cmd = devkit_commit(dir);
+    author_env(&mut cmd, "Agent", email);
+    let out = cmd
+        .env("DEVKIT_CALLER", "agent")
+        .args(["--files", "a.txt", "--subject", "fix: a"])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success(), "{email}: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("devkit commit needs --coauthor=..."),
+        "{email}: {}",
+        stderr(&out)
+    );
+    assert!(
+        !stderr(&out).contains("required for agents"),
+        "{email}: {}",
+        stderr(&out)
+    );
+    assert_eq!(head(dir), before, "{email}");
+}
+
+#[test]
+fn a_github_bot_author_still_needs_a_coauthor_when_always_required() {
+    an_agent_author_still_needs_a_coauthor_when_always_required(AGENT_AUTHOR.1);
+}
+
+#[test]
+fn a_claude_author_still_needs_a_coauthor_when_always_required() {
+    an_agent_author_still_needs_a_coauthor_when_always_required("noreply@anthropic.com");
+}
+
+#[test]
+fn a_codex_author_still_needs_a_coauthor_when_always_required() {
+    an_agent_author_still_needs_a_coauthor_when_always_required("noreply@openai.com");
+}
+
+#[test]
+fn a_human_caller_with_required_agents_still_commits_without_a_coauthor() {
+    let repo = repo();
+    let dir = repo.path();
+    require_agent_coauthors(dir);
+    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
+
+    let out = devkit_commit(dir)
+        .env("DEVKIT_CALLER", "human")
+        .args(["--files", "a.txt", "--subject", "fix: a"])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(message(dir), "fix: a\n\n");
+    assert!(!message(dir).contains("Co-authored-by"), "{}", message(dir));
 }
 
 #[test]
