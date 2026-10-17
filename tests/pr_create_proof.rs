@@ -138,12 +138,25 @@ fn a_proof_covering_every_item_opens_the_pr() {
 }
 
 #[test]
-fn an_issue_without_the_section_is_not_gated() {
+fn an_issue_without_the_section_is_refused_naming_it() {
     let p = project();
     p.fake.record_issue("7");
     p.fake.serve_issue("Just prose, no items.\n");
 
     let (ok, stderr) = p.create("agent", "covered no item by number");
+    assert!(!ok, "an issue with nothing to prove must refuse: {stderr}");
+    assert!(stderr.contains("Done when"), "names the section: {stderr}");
+    assert!(!p.pushed(), "nothing is pushed");
+    assert!(!p.opened(), "{}", p.fake.calls());
+}
+
+#[test]
+fn a_human_on_an_issue_without_the_section_opens_the_pr() {
+    let p = project();
+    p.fake.record_issue("7");
+    p.fake.serve_issue("Just prose, no items.\n");
+
+    let (ok, stderr) = p.create("human", "covered no item by number");
     assert!(ok, "{stderr}");
     assert!(p.opened());
 }

@@ -105,7 +105,7 @@ devkit pr edit --arg-file proof=<scratchpad>/proof.md \
 
 ### Proof for every item
 
-When `defaults.pr_proof_variable` names a template variable (say `proof`), an agent's `create` in a `workspace setup` worktree reads the issue from the tracker and refuses, before the push, a proof that skips an item of its `Done when` section. A `Done when` or `Acceptance criteria` section counts, under a heading or a bold label like `**Acceptance criteria:**`, matched in any case. The refusal lists each missing item with its number.
+When `defaults.pr_proof_variable` names a template variable (say `proof`), an agent's `create` in a `workspace setup` worktree reads the issue from the tracker and refuses, before the push, a proof that skips an item of its `Done when` section. A `Done when` or `Acceptance criteria` section counts, under a heading or a bold label like `**Acceptance criteria:**`, matched in any case. The refusal lists each missing item with its number. An issue with no such section is refused too, naming the section: add a `## Done when` list to the issue first.
 
 Items are numbered in the order the issue lists them. Answer item `n` on a line of the proof that starts with `n.`, `n)` or `n:`, so the wording can be yours:
 

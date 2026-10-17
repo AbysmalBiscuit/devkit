@@ -2165,7 +2165,8 @@ pub struct Defaults {
     /// When set, an agent's `pr create` in an issue worktree is refused
     /// before the push unless that proof answers every item of the issue's
     /// `Done when` or `Acceptance criteria` section, each on a line starting
-    /// with the item's number (`2. <evidence>`). Unset by default.
+    /// with the item's number (`2. <evidence>`). An issue with no such
+    /// section is refused too. Unset by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_proof_variable: Option<String>,
     /// Glob patterns for status-check names to discount from a PR's CHECK

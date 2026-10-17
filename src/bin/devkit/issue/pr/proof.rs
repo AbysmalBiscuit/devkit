@@ -33,7 +33,8 @@ pub(crate) fn gate_proof(
 
 /// Refuse `proof` when it skips an item of `issue`, read from the tracker so
 /// the items are the ones the issue carries now. An issue the tracker cannot
-/// return is refused too: the check cannot pass on items it never saw.
+/// return is refused too: the check cannot pass on items it never saw, and so
+/// is one with no `Done when` section, which leaves nothing to prove.
 pub(crate) fn require_proof(
     tracker: &dyn Tracker,
     issue: &str,
@@ -51,7 +52,15 @@ pub(crate) fn require_proof(
                 tracker.kind()
             )
         })?;
-    require_every_item(&done_when_items(&details.description), proof, variable)
+    let items = done_when_items(&details.description);
+    if items.is_empty() {
+        bail!(
+            "refusing to open a PR for issue {issue}: it has no `Done when` (or \
+             `Acceptance criteria`) section, so --arg {variable} has nothing to prove. \
+             Add a `## Done when` list to the issue, one item per outcome, then run this again."
+        );
+    }
+    require_every_item(&items, proof, variable)
 }
 
 /// Section titles, matched case-insensitively and with a trailing colon
