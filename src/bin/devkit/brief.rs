@@ -1053,7 +1053,7 @@ fn gate_line(gate: &config::Gate, on: GateOn) -> String {
                  in a throwaway worktree at HEAD and again with the branch's non-test changes \
                  reverted to the merge base, and {effect} an item whose selector passes with the \
                  fix reverted or matches no test; the PR body shows both runs, and an item with \
-                 no marker gets an advisory line",
+                 no marker gets an advisory line. `devkit pr repro -h` says how to                  run the check without opening a PR",
                 task.command("<selector>")
             )
         }

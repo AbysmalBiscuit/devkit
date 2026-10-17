@@ -112,6 +112,10 @@ fn the_brief_names_the_repro_gate_and_what_it_refuses() {
         "{body}"
     );
     assert!(
+        body.contains("`devkit pr repro -h` says how to run the check without opening a PR"),
+        "{body}"
+    );
+    assert!(
         body.contains("refuses the PR naming an item whose selector passes with the fix reverted or matches no test"),
         "{body}"
     );

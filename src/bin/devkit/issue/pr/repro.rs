@@ -18,6 +18,7 @@ use devkit_common::{
     vcs::{Checkout, NewWorktree, Vcs, VersionControl},
 };
 use devkit_config::{Gate as GateKey, GateMode, PrGates, ReproTask, Step};
+use serde::Serialize;
 
 use super::{
     proof::DoneWhen,
@@ -431,6 +432,57 @@ impl Gate {
         Ok(Ran {
             exit: status.code(),
             output,
+        })
+    }
+
+    /// Runs the check and reports each item. `refused` is whether the
+    /// `require` strength would refuse an agent's PR for these results.
+    pub(crate) fn report(mut self) -> Result<Report> {
+        self.evaluate()?;
+        let refused =
+            self.mode == GateMode::Require && self.caller == Caller::Agent && self.refuses();
+        let items = self
+            .items
+            .iter()
+            .map(|item| Reported {
+                number: item.number,
+                title: item.title.clone(),
+                verdict: self.item_verdict(item),
+                head_exit: exit_of(item, true),
+                reverted_exit: exit_of(item, false),
+                text: self.render_item(item),
+            })
+            .collect();
+        Ok(Report {
+            items,
+            text: self.render(),
+            refused,
+        })
+    }
+
+    /// Whether an agent's PR under `require` is refused for these results.
+    fn refuses(&self) -> bool {
+        self.items.iter().any(|item| match &item.outcome {
+            Outcome::Ran { base, head, .. } => {
+                Verdict::of(base, head, self.task.no_tests_exit).refuses()
+            }
+            Outcome::Unmarked | Outcome::Done | Outcome::Inconclusive(_) | Outcome::Error(_) => {
+                false
+            }
+        })
+    }
+
+    fn item_verdict(&self, item: &Item) -> Option<&'static str> {
+        let (base, head) = match &item.outcome {
+            Outcome::Ran { base, head, .. } => (base, head),
+            Outcome::Inconclusive(_) => return Some("INCONCLUSIVE"),
+            Outcome::Unmarked | Outcome::Done | Outcome::Error(_) => return None,
+        };
+        Some(match Verdict::of(base, head, self.task.no_tests_exit) {
+            Verdict::Passed => "PASSED",
+            Verdict::PassesReverted | Verdict::NoTests => "FAILED",
+            Verdict::NoTestsReverted => "INCONCLUSIVE",
+            Verdict::FailsAtHead => "FAILS AT HEAD",
         })
     }
 
@@ -1388,6 +1440,119 @@ fn title(item: &str) -> &str {
         Some(_) => item[..item.rfind("(proof:").expect("proof_of found it")].trim_end(),
         None => item.trim_end(),
     }
+}
+
+/// One item of a [`Report`], as `--json` prints it.
+#[derive(Debug, Serialize)]
+pub(crate) struct Reported {
+    number: usize,
+    title: String,
+    /// `PASSED`, `FAILED`, `FAILS AT HEAD` or `INCONCLUSIVE` for an item the
+    /// check judged, and absent for one it did not run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verdict: Option<&'static str>,
+    /// The exit code of the run at HEAD, when the selector ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    head_exit: Option<Option<i32>>,
+    /// The exit code of the run with the fix reverted, when the selector ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reverted_exit: Option<Option<i32>>,
+    /// The item as the text report prints it.
+    text: String,
+}
+
+/// What [`Gate::report`] found: each item, the text the command prints, and
+/// whether the `require` strength would refuse the PR.
+pub(crate) struct Report {
+    items: Vec<Reported>,
+    text: String,
+    refused: bool,
+}
+
+impl Report {
+    fn print(&self, json: bool) {
+        if json {
+            for item in &self.items {
+                println!(
+                    "{}",
+                    serde_json::to_string(item).expect("a report item serializes")
+                );
+            }
+            return;
+        }
+        print!("{}", self.text);
+    }
+}
+
+/// The exit code of one of an item's runs: the HEAD run when `head`, else
+/// the run with the fix reverted. `None` when the selector did not run.
+fn exit_of(item: &Item, head: bool) -> Option<Option<i32>> {
+    let Outcome::Ran { base, head: at, .. } = &item.outcome else {
+        return None;
+    };
+    Some(if head { at.exit } else { base.exit })
+}
+
+/// `pr repro`: the repro gate's check on its own, for the current
+/// worktree's branch. Prints each item's verdict and exits nonzero exactly
+/// when the `require` strength would refuse the PR. Touches no forge.
+pub(crate) fn run(dir: &Path, config: Option<&str>, json: bool) -> Result<()> {
+    let checkout = Checkout::at(dir);
+    let loaded = devkit_ports::load::load_in(&checkout, config.map(Path::new), dir)?;
+    let base = &loaded.config.defaults.pr_base;
+    let Some(merge_base) = super::weakened::merge_base(dir, base)? else {
+        bail!(
+            "the repro check reads its settings from the merge base with `{base}`, and neither \
+             `origin/{base}` nor `{base}` is a commit here: fetch it, or set defaults.pr_base"
+        );
+    };
+    let cfg = super::weakened::config_at(&checkout, &merge_base)?;
+    let worktree = checkout.worktree()?;
+    let record = devkit_common::record::read_on(&worktree.path, &worktree.branch);
+    let issue = record.as_ref().and_then(|r| r.tracker_issue());
+    let head = Vcs::at(dir).revision(dir)?;
+    let caller = devkit_common::caller::caller();
+    let config = &loaded.config;
+    let repos = devkit_common::forge::resolve(
+        &config.forge,
+        &config.github,
+        &dir.display().to_string(),
+        None,
+    )
+    .repos;
+    let items = || -> Result<Option<Vec<DoneWhen>>> {
+        let Some(issue) = issue else {
+            return Ok(None);
+        };
+        let tracker = devkit_common::tracker::resolve(config.tracker.kind, dir, &repos);
+        let details = tracker.tracker.details(&issue)?.with_context(|| {
+            format!("no issue {issue} in the {} tracker", tracker.tracker.kind())
+        })?;
+        Ok(Some(super::proof::done_when_entries(&details.description)))
+    };
+    let Some(gate) = Gate::read(
+        &checkout,
+        &merge_base,
+        &cfg.gates,
+        &cfg.test_files,
+        &head,
+        caller,
+        items,
+    )?
+    else {
+        println!("no repro check: the gate is off, or this worktree's issue lists no items");
+        return Ok(());
+    };
+    let report = gate.report()?;
+    let refused = report.refused;
+    report.print(json);
+    if refused {
+        bail!(
+            "the `repro` gate would refuse the PR: an item marked `(proof: repro <selector>)` \
+             passes with the fix reverted or matches no test"
+        );
+    }
+    Ok(())
 }
 
 fn exited(ran: &Ran) -> String {

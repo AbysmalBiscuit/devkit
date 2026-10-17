@@ -606,6 +606,21 @@ pub(crate) enum PrCmd {
         #[arg(long)]
         pr: Option<String>,
     },
+    /// Run the repro gate's check on this branch without opening a PR.
+    ///
+    /// Checks each item of the worktree's issue `Done when` section that
+    /// ends `(proof: repro <selector>)`, the same way `pr create` does:
+    /// the selector must fail with the branch's non-test changes reverted
+    /// and pass at HEAD. Prints each item's verdict (`PASSED`, `FAILED`,
+    /// `FAILS AT HEAD` or `INCONCLUSIVE`) with both runs' exit codes.
+    /// Exits nonzero exactly when `[pr.gates] repro = "require"` would
+    /// refuse the PR. Touches no forge, and leaves this worktree and its
+    /// index unchanged. `--json` prints one object per item.
+    Repro {
+        /// Print one JSON object per item instead of the text report.
+        #[arg(long)]
+        json: bool,
+    },
     /// Flag tests a branch weakened since its merge base with BASE.
     ///
     /// Compares each test file at the merge base of BASE and HEAD with the
@@ -1043,6 +1058,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             dir,
             config,
         }),
+        PrCmd::Repro { json } => pr::repro::run(Path::new(&start(&dir)), config.as_deref(), json),
         PrCmd::WeakenedTests {
             base,
             head,
