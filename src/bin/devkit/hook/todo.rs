@@ -69,13 +69,12 @@ pub(crate) fn spawn(payload: &Payload, checkout: &Checkout, cwd: &Path) {
     let Some(holder) = payload.subagent_holder() else {
         return;
     };
-    let store = match Store::for_hook(checkout, cwd) {
-        Ok(store) => store,
-        Err(e) => return report(Err(e)),
+    let (Ok(store), Ok(state)) = (Store::for_hook(checkout, cwd), devkit_todo::state_dir()) else {
+        return;
     };
     let in_repo = node::place_of(checkout).is_ok_and(|place| place != Place::Global);
     report(Layout::new(store.config()).and_then(|layout| {
-        Roles::at(devkit_todo::state_dir()?).spawn(
+        Roles::at(state).spawn(
             &layout,
             &to_todo_holder(&holder),
             payload.agent_type(),
@@ -409,9 +408,8 @@ pub(crate) fn capture(payload: &Payload, checkout: &Checkout) {
         return;
     }
     let cwd = checkout.dir().to_path_buf();
-    let store = match Store::for_hook(checkout, &cwd) {
-        Ok(store) => store,
-        Err(e) => return report(Err(e)),
+    let (Ok(store), Ok(_)) = (Store::for_hook(checkout, &cwd), devkit_todo::state_dir()) else {
+        return;
     };
     let Some(mirror) = Mirror::of(payload, checkout, &store) else {
         return;

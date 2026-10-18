@@ -31,6 +31,7 @@ fn homeless_in(cwd: &Path, args: &[&str], stdin: &str) -> Output {
         .env_remove("LOCALAPPDATA")
         .env_remove("XDG_STATE_HOME")
         .env_remove("DEVKIT_CONFIG")
+        .env_remove("DEVKIT_TODO_BACKEND")
         .env_remove("DEVKIT_ENFORCE_WRITES")
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .current_dir(cwd)
@@ -212,6 +213,30 @@ fn a_shell_command_is_allowed_without_home() {
     if let Some(v) = decision(&out) {
         assert_ne!(v["hookSpecificOutput"]["permissionDecision"], "deny", "{v}");
     }
+}
+
+/// Doctor is where a missing home is reported; a hook stays quiet about it.
+#[test]
+fn a_subagent_start_is_silent_without_home() {
+    let project = enforced_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "SubagentStart",
+        "session_id": "S",
+        "agent_id": "a1",
+        "agent_type": "general-purpose",
+        "cwd": project.path().to_string_lossy(),
+    });
+    let out = homeless_in(
+        project.path(),
+        &["hook", "subagent-start", "--harness", "claude-code"],
+        &payload.to_string(),
+    );
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "",
+        "stderr stays empty"
+    );
 }
 
 #[test]
