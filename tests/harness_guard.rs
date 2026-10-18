@@ -759,6 +759,32 @@ fn an_agents_gh_pr_create_is_denied_in_any_devkit_project_naming_devkit_pr_creat
 }
 
 #[test]
+fn a_gh_pr_create_beside_a_todo_command_is_denied_with_every_gate_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness]\nenforce_commands = false\nenforce_writes = false\n");
+    for command in [
+        "devkit todo add x && gh pr create --fill",
+        "gh pr create --body todo",
+        "DEVKIT_CALLER=human gh pr create --body 'fixes .todo'",
+    ] {
+        let payload = serde_json::json!({
+            "session_id": "s1",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": command }
+        })
+        .to_string();
+        let out = run_hook(proj.path(), home.path(), &payload);
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("devkit pr create"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
 fn a_gh_pr_create_inside_an_appending_assignment_is_denied() {
     let home = tempfile::tempdir().unwrap();
     let proj = project("[defaults]\n");
