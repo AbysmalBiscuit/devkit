@@ -64,7 +64,8 @@ jobs:
         run: |
           git ls-files -z -- ':(glob)**/.grok/**' ':(glob)**/.claude/**' \
             ':(glob)**/.cursor/**' ':(glob)**/.mcp.json' | xargs -0 -r rm -f
-          git diff "${BASE_SHA}...HEAD" > pr.diff
+          git diff --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "${BASE_SHA}...HEAD" \
+            -- . ':(exclude)Cargo.lock' > pr.diff
           RUSTC_VERSION=$(rustc --version)
           cat > "$RUNNER_TEMP/prompt.md" <<EOF
           Review pull request #${PR_NUMBER} in ${GITHUB_REPOSITORY}: "${PR_TITLE}".
@@ -127,10 +128,15 @@ jobs:
           BOT_LOGIN: ${{ steps.app.outputs.app-slug && format('{0}[bot]', steps.app.outputs.app-slug) || 'github-actions[bot]' }}
         run: |
           reviews="repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
-          # The review object may sit in the result wrapper as an object or as
-          # a JSON string, so take the first one found at any depth.
-          jq '[.. | (objects, (strings | fromjson? // empty | objects))
-               | select(.findings | type == "array")] | first // empty' \
+          # The review object is .structuredOutput. Without one, take the first
+          # review object at any depth, as an object or a JSON string. Paths
+          # come back repo-relative.
+          jq --arg root "$GITHUB_WORKSPACE/" '
+            ((.structuredOutput? | objects | select(.findings | type == "array"))
+             // ([.. | (objects, (strings | fromjson? // empty | objects))
+                   | select(.findings | type == "array")] | first)
+             // empty)
+            | .findings[].path |= (ltrimstr($root) | ltrimstr("./"))' \
             "$RUNNER_TEMP/grok.out" > review.json
           if [ ! -s review.json ]; then
             echo "::error::Grok did not reply with a review object"
@@ -138,23 +144,36 @@ jobs:
             exit 1
           fi
 
+          jq -r '.findings[].path' review.json | sort -u | while IFS= read -r path; do
+            if git --literal-pathspecs ls-files --error-unmatch -- "$path" > /dev/null 2>&1 \
+              && [ -f "$path" ]; then
+              jq -Rs --arg p "$path" '{($p): split("\n")}' "$path"
+            fi
+          done | jq -s 'add // {}' > files.json
+          awk -f .github/grok-review-lines.awk pr.diff \
+            | jq -Rn '[inputs | split("\t")]
+                | reduce .[] as [$p, $h, $l] ({}; .[$p][$l] = ($h | tonumber))' > lines.json
+
           for inline in true false; do
             jq --arg sha "$HEAD_SHA" --arg repo "$GITHUB_REPOSITORY" --argjson inline "$inline" \
+              --slurpfile files files.json --slurpfile lines lines.json \
               -f .github/grok-review-payload.jq review.json > "payload-$inline.json"
           done
 
+          # Placement keeps every comment inside the diff, so the body-only
+          # fallback is a safety net. gh prints GitHub's reason on stdout.
+          if ! gh api "$reviews" --input payload-true.json > posted.json; then
+            cat posted.json
+            gh api "$reviews" --input payload-false.json > posted.json
+          fi
+
           # A P0 change request holds until a review of a later commit
-          # replaces it.
+          # replaces it, so dismiss only once the new review is posted.
+          posted=$(jq .id posted.json)
           gh api "$reviews" --paginate \
-            | jq -r --arg bot "$BOT_LOGIN" \
-                '.[] | select(.user.login == $bot and .state == "CHANGES_REQUESTED") | .id' \
+            | jq -r --arg bot "$BOT_LOGIN" --argjson posted "$posted" \
+                '.[] | select(.user.login == $bot and .state == "CHANGES_REQUESTED" and .id != $posted) | .id' \
             | while read -r id; do
                 gh api -X PUT "$reviews/$id/dismissals" \
                   -f message="Superseded by the review of ${HEAD_SHA}" -f event=DISMISS > /dev/null
               done
-
-          # GitHub rejects the whole review when one comment's line is outside
-          # the diff, so fall back to listing the findings in the body.
-          if ! gh api "$reviews" --input payload-true.json > /dev/null; then
-            gh api "$reviews" --input payload-false.json > /dev/null
-          fi
