@@ -253,7 +253,9 @@ pub struct Settings {
     pub command: Fidelity,
     pub prompt: PromptFidelity,
     pub auto_prune: bool,
-    pub dir: PathBuf,
+    /// `None` when neither the global config nor the environment names a
+    /// directory; nothing is logged then.
+    pub dir: Option<PathBuf>,
     /// `None` means unlimited. `0` is rejected at parse time rather than
     /// guessed at.
     pub max_age_days: Option<u32>,
@@ -261,8 +263,8 @@ pub struct Settings {
 }
 
 /// Where records land when the global config names no directory.
-pub fn default_dir() -> PathBuf {
-    paths::state_dir().join("harness-log")
+pub fn default_dir() -> anyhow::Result<PathBuf> {
+    Ok(paths::state_dir()?.join("harness-log"))
 }
 
 /// Resolve the settings for a hook firing at `cwd`.
@@ -313,7 +315,10 @@ pub fn resolve_from(
         Vec::new()
     };
     let disabled_anywhere = layers.iter().any(|l| l.enabled == Some(false));
-    let enabled = env.unwrap_or(enabled_globally && !disabled_anywhere);
+    let dir = global
+        .and_then(|g| g.dir.clone())
+        .or_else(|| default_dir().ok());
+    let enabled = env.unwrap_or(enabled_globally && !disabled_anywhere) && dir.is_some();
 
     // Minimum is monotone and order-independent, so layer precedence stops
     // mattering for the two fidelity keys and no project can raise one from
@@ -333,9 +338,7 @@ pub fn resolve_from(
         // `dir`, `auto_prune` and both caps read from `global` alone and
         // ignore `layers` entirely.
         auto_prune: global.and_then(|g| g.auto_prune).unwrap_or(true),
-        dir: global
-            .and_then(|g| g.dir.clone())
-            .unwrap_or_else(default_dir),
+        dir,
         max_age_days: global.and_then(|g| g.max_age_days),
         max_bytes: global.and_then(|g| g.max_bytes),
     }
@@ -426,7 +429,7 @@ mod tests {
             ..Default::default()
         };
         let s = resolve_from(Some(&global), || vec![project], None);
-        assert_eq!(s.dir, PathBuf::from("/global/logs"));
+        assert_eq!(s.dir, Some(PathBuf::from("/global/logs")));
         assert_eq!(s.max_bytes, Some(10));
         assert_eq!(s.max_age_days, Some(7));
         assert!(!s.auto_prune);
@@ -505,7 +508,7 @@ mod tests {
         assert_eq!(s.command, Fidelity::Redacted);
         assert_eq!(s.prompt, PromptFidelity::Off);
         assert!(s.auto_prune, "a retention promise nothing enforces is none");
-        assert_eq!(s.dir, default_dir());
+        assert_eq!(s.dir, default_dir().ok());
         assert_eq!(s.max_age_days, None, "absent means unlimited");
     }
 
@@ -524,7 +527,7 @@ mod tests {
         let s = resolve_at(None, &Checkout::at(project.path()), project.path());
         assert!(!s.enabled, "only the global config turns logging on");
         assert_eq!(s.command, Fidelity::Redacted, "and cannot raise fidelity");
-        assert_eq!(s.dir, default_dir(), "or move the directory");
+        assert_eq!(s.dir, default_dir().ok(), "or move the directory");
     }
 
     #[test]
@@ -568,7 +571,7 @@ mod tests {
             &Checkout::at(project.path()),
             project.path(),
         );
-        assert_eq!(s.dir, global.path().join("logs"));
+        assert_eq!(s.dir, Some(global.path().join("logs")));
     }
 
     #[test]

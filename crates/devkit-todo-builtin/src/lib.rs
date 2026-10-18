@@ -119,8 +119,8 @@ impl BuiltinStore {
     }
 
     /// The store in [`state_dir`].
-    pub fn open() -> Self {
-        Self::at(state_dir())
+    pub fn open() -> Result<Self> {
+        Ok(Self::at(state_dir()?))
     }
 
     fn with_doc<T>(&self, f: impl FnOnce(&mut Doc) -> Result<T>) -> Result<T> {

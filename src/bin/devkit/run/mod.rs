@@ -591,7 +591,7 @@ fn ledger_repo(cwd: &str) -> Result<std::path::PathBuf> {
 }
 
 fn cmd_runs_list(cwd: &str, task: Option<&str>, limit: usize, json: bool) -> Result<()> {
-    let mut runs = devkit_ports::ledger::Ledger::live().runs_in(&ledger_repo(cwd)?)?;
+    let mut runs = devkit_ports::ledger::Ledger::live()?.runs_in(&ledger_repo(cwd)?)?;
     runs.retain(|r| task.is_none_or(|t| r.task == t));
     let runs = &runs[runs.len().saturating_sub(limit)..];
     if json {
@@ -638,7 +638,7 @@ fn cmd_runs_passed(
     };
     anyhow::ensure!(!sha.is_empty(), "--sha names no commit");
     let found =
-        devkit_ports::ledger::Ledger::live().passed(&ledger_repo(cwd)?, task, &args, &sha)?;
+        devkit_ports::ledger::Ledger::live()?.passed(&ledger_repo(cwd)?, task, &args, &sha)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&found)?);
     } else if let Some(run) = &found {
@@ -892,7 +892,7 @@ fn cmd_task(
             live: live.into_inner(),
         },
     );
-    if let Err(e) = ledger::Ledger::live().record(&run) {
+    if let Err(e) = ledger::Ledger::live().and_then(|ledger| ledger.record(&run)) {
         eprintln!("devrun: the run was not recorded in the run ledger: {e:#}");
     }
     // A non-zero child exits the process with the child's status, so a caller

@@ -412,7 +412,9 @@ fn context(dialect: Dialect, cwd: Option<&Path>) -> Context {
 /// name is not refused here: the guard fails open.
 fn ledger_blocks(analysis: &Analysis, cwd: &Path) -> Vec<String> {
     let claims = writes::evaluate(analysis, &HarnessPolicy::default()).claims;
-    gate::ledger_blocks(&claims, &devkit_ports::ledger::Ledger::live(), cwd)
+    devkit_ports::ledger::Ledger::live()
+        .map(|ledger| gate::ledger_blocks(&claims, &ledger, cwd))
+        .unwrap_or_default()
 }
 
 /// The write stage: the evaluation's own findings, then, when nothing has

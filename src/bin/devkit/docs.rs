@@ -135,7 +135,7 @@ pub fn run(cli: DocsCli) -> Result<()> {
     // script is written from the CLI definition alone — migrating the cache
     // for it would put cache diagnostics, or a cache failure, in shell startup.
     if !matches!(cli.cmd, Cmd::Completions { .. }) {
-        for line in upgrade::run(&cache::docs_root())? {
+        for line in upgrade::run(&cache::docs_root()?)? {
             eprintln!("docm: {line}");
         }
     }
@@ -246,7 +246,7 @@ fn cmd_add(
     entry.docs_dir = docs_dir;
     entry.exclude = (!exclude.is_empty()).then_some(exclude);
     entry.notes = notes;
-    let cache_root = cache::docs_root();
+    let cache_root = cache::docs_root()?;
 
     let dest = manifest_path(project)?;
     let added = devkit_docs::add_library(
@@ -303,7 +303,7 @@ fn manifest_target(project: bool, path: &Path) -> ManifestTarget<'_> {
 }
 
 fn cmd_rm(name: &str, project: bool) -> Result<()> {
-    let cache_root = cache::docs_root();
+    let cache_root = cache::docs_root()?;
     let dest = manifest_path(project)?;
     let removed = devkit_docs::rm_library(manifest_target(project, &dest), &cache_root, name)?;
     if removed {
@@ -360,7 +360,7 @@ fn cmd_list(json: bool, project: bool, refresh: bool) -> Result<()> {
         return Ok(());
     }
     let d = discovered()?;
-    let root = cache::docs_root();
+    let root = cache::docs_root()?;
     if refresh && root.is_dir() {
         // Doctor counts the shared cache, including libraries absent from
         // the current manifest.
@@ -444,7 +444,7 @@ fn cmd_list(json: bool, project: bool, refresh: bool) -> Result<()> {
 
 fn cmd_sync(names: &[String], allow_default_branch: bool) -> Result<()> {
     let d = discovered()?;
-    let root = cache::docs_root();
+    let root = cache::docs_root()?;
     let start = cwd()?;
     let selected: Vec<&LibEntry> = d
         .manifest
@@ -557,7 +557,7 @@ fn resolve_one(name: &str, allow_default_branch: bool) -> Result<resolve::Resolv
     let opts = resolve::Options {
         allow_default_branch,
     };
-    let r = resolve::resolve(&entry, &cwd()?, &cache::docs_root(), &opts)?;
+    let r = resolve::resolve(&entry, &cwd()?, &cache::docs_root()?, &opts)?;
     for w in &r.warnings {
         eprintln!("docm: {w}");
     }
@@ -608,7 +608,7 @@ fn cmd_info(name: &str, json: bool, allow_default_branch: bool) -> Result<()> {
 /// registration that created it, and on its own keeps a library in this
 /// project's `docm list --project`.
 fn cmd_forget(names: &[String]) -> Result<()> {
-    let root = cache::docs_root();
+    let root = cache::docs_root()?;
     let keys = devkit_docs::pins::project_keys(&cwd()?, None)?;
     let mut unreferenced: Vec<&str> = Vec::new();
     let mut released = false;
@@ -642,7 +642,7 @@ fn cmd_forget(names: &[String]) -> Result<()> {
 
 fn cmd_prune(yes: bool) -> Result<()> {
     let d = discovered()?;
-    let root = cache::docs_root();
+    let root = cache::docs_root()?;
     if !root.is_dir() {
         println!("cache is empty");
         return Ok(());

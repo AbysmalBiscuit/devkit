@@ -61,14 +61,14 @@ pub fn sweep_at(settings: &Settings, now: SystemTime) -> Outcome {
         cap_reached: true,
         ..Default::default()
     };
-    if !settings.dir.exists() {
+    let Some(dir) = settings.dir.as_deref().filter(|d| d.exists()) else {
         return out;
-    }
+    };
     // A held lock means bail immediately, never a blocking wait: session end
     // must not sit behind another session's sweep. The lock and its guard are
     // both locals here because the guard borrows the lock, so the pair has to
     // live for the whole sweep.
-    let Some(mut lock) = open_lock(&settings.dir.join("prune.lock")) else {
+    let Some(mut lock) = open_lock(&dir.join("prune.lock")) else {
         out.bailed = true;
         return out;
     };
@@ -78,7 +78,7 @@ pub fn sweep_at(settings: &Settings, now: SystemTime) -> Outcome {
     };
 
     let today = super::writer::day_dir(now);
-    let mut days = day_dirs(&settings.dir);
+    let mut days = day_dirs(dir);
     days.sort_by(|a, b| a.name.cmp(&b.name));
 
     if let Some(max_age) = settings.max_age_days {
@@ -245,7 +245,7 @@ mod tests {
             command: Fidelity::Redacted,
             prompt: PromptFidelity::Off,
             auto_prune: true,
-            dir: dir.to_path_buf(),
+            dir: Some(dir.to_path_buf()),
             max_age_days,
             max_bytes,
         }

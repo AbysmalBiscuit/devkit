@@ -377,8 +377,8 @@ impl ActivityLog {
     }
 
     /// The log in devkit's todo state directory.
-    pub fn open() -> Self {
-        Self::at(crate::state_dir().join("activity"))
+    pub fn open() -> anyhow::Result<Self> {
+        Ok(Self::at(crate::state_dir()?.join("activity")))
     }
 
     fn seen_path(&self, session: &str, agent: Option<&str>) -> PathBuf {

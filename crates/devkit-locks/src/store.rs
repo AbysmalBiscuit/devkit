@@ -77,12 +77,12 @@ pub struct FlockStore {
 }
 
 impl FlockStore {
-    pub fn new() -> Self {
-        Self {
-            gate_path: paths::devkitd_lock(),
-            lock_path: paths::locks_lock(),
-            data_path: paths::locks_file(),
-        }
+    pub fn new() -> anyhow::Result<Self> {
+        Ok(Self {
+            gate_path: paths::devkitd_lock()?,
+            lock_path: paths::locks_lock()?,
+            data_path: paths::locks_file()?,
+        })
     }
 
     #[cfg(test)]
@@ -92,12 +92,6 @@ impl FlockStore {
             lock_path: dir.join("locks.lock"),
             data_path: dir.join("locks.json"),
         }
-    }
-}
-
-impl Default for FlockStore {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -274,7 +268,7 @@ pub fn prune_with(s: &impl Store, now: u64) -> Result<usize> {
 /// runs inside the lock without risk of holding it across a blocking call.
 #[allow(dead_code)] // gated direct RMW entry point retained for parity with the port registry
 pub fn with_lock<T>(f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
-    FlockStore::new().commit(f)
+    FlockStore::new()?.commit(f)
 }
 
 /// The daemon's authoritative in-memory lock registry. Reads serve from memory;
@@ -314,8 +308,8 @@ impl Store for MemoryStore {
 
 /// Load the lock-registry file into a `Data` for an owner with its own
 /// exclusion (the daemon, holding `devkitd.lock` exclusive, at startup).
-pub fn load() -> Data {
-    store::load(&paths::locks_file())
+pub fn load() -> anyhow::Result<Data> {
+    Ok(store::load(&paths::locks_file()?))
 }
 
 #[cfg(test)]

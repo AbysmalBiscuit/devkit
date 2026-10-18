@@ -150,8 +150,10 @@ pub fn run(pins_only: bool, if_changed: bool, harness: Option<AnyHarness>) -> Re
             // next `--if-changed` would compare against a watermark that
             // already matches the current state and stay silent, leaving the
             // devrun half of the brief permanently owed.
-            if let Some(session) = hook.watermark_session() {
-                let _ = std::fs::remove_file(watermark_path(session));
+            if let Some(session) = hook.watermark_session()
+                && let Ok(path) = watermark_path(session)
+            {
+                let _ = std::fs::remove_file(path);
             }
             if let Some(text) = pins_only_text(&cwd, &settings) {
                 hook.emit(&text);
@@ -169,17 +171,16 @@ pub fn run(pins_only: bool, if_changed: bool, harness: Option<AnyHarness>) -> Re
 
     let session = hook.watermark_session();
     let digest = snapshot(&cwd, &settings, &checkout).map(|s| s.digest());
-    let Some(session) = session else {
-        // No id means emit without persisting: a shared per-cwd key would let
-        // one session's brief suppress another's re-injection, and a withheld
-        // brief is the worse failure.
+    let Some(path) = session.and_then(|session| watermark_path(session).ok()) else {
+        // No id, or no state directory, means emit without persisting: a shared
+        // per-cwd key would let one session's brief suppress another's
+        // re-injection, and a withheld brief is the worse failure.
         if let Some(text) = render(&cwd, &settings, &checkout, cursor) {
             hook.emit(&text);
         }
         return Ok(());
     };
 
-    let path = watermark_path(session);
     let previous = std::fs::read_to_string(&path).ok();
     let current = digest.map(|d| format!("{d:016x}"));
     if previous.is_some() && previous.as_deref() == current.as_deref() {
@@ -391,7 +392,9 @@ fn stamp(session: &str, cwd: &Path, settings: &BriefConfig, checkout: &Checkout)
     let Some(digest) = snapshot(cwd, settings, checkout).map(|s| s.digest()) else {
         return;
     };
-    write_watermark(&watermark_path(session), &format!("{digest:016x}"));
+    if let Ok(path) = watermark_path(session) {
+        write_watermark(&path, &format!("{digest:016x}"));
+    }
 }
 
 /// Fails open: an unreadable or unwritable state directory reports "changed",
@@ -404,12 +407,12 @@ fn write_watermark(path: &Path, digest: &str) {
 /// The watermark file for `session`. The name is a hash of the complete raw
 /// id: dropping disallowed characters is lossy, and two ids differing only in
 /// what was dropped would collide onto one watermark.
-fn watermark_path(session: &str) -> PathBuf {
+fn watermark_path(session: &str) -> anyhow::Result<PathBuf> {
     let mut hasher = DefaultHasher::new();
     session.hash(&mut hasher);
-    devkit_common::paths::state_dir()
+    Ok(devkit_common::paths::state_dir()?
         .join("brief")
-        .join(format!("{:016x}", hasher.finish()))
+        .join(format!("{:016x}", hasher.finish())))
 }
 
 /// The same content `render` emits, in the canonical form the watermark

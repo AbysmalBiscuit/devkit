@@ -100,7 +100,11 @@ impl Reader {
 /// The rule source `settings` names for `checkout`, for `reader`. A hook's
 /// remote finishes by one deadline, so a refresh's revision check, pull
 /// pages, sign-in and retries share a single wait between them.
-pub(crate) fn source(settings: &RulesConfig, checkout: &Checkout, reader: Reader) -> Source {
+pub(crate) fn source(
+    settings: &RulesConfig,
+    checkout: &Checkout,
+    reader: Reader,
+) -> Result<Source> {
     let deadline = reader.deadline();
     Source::for_checkout(
         settings,
@@ -119,7 +123,7 @@ pub(crate) fn source(settings: &RulesConfig, checkout: &Checkout, reader: Reader
             }
             api
         },
-        &devkit_common::paths::state_dir(),
+        devkit_common::paths::state_dir,
     )
 }
 
@@ -147,9 +151,9 @@ pub(crate) fn supabase_url() -> (Result<String>, secrets::Source) {
 
 /// The sign-in email and password and where Doppler's answers for each are
 /// kept.
-fn supabase_credentials() -> [Secret; 2] {
-    let state = devkit_common::paths::state_dir();
-    [
+fn supabase_credentials() -> Result<[Secret; 2]> {
+    let state = devkit_common::paths::state_dir()?;
+    Ok([
         Secret {
             var: SUPABASE_EMAIL_VAR,
             cache_dir: state.join("rules-supabase-email"),
@@ -158,7 +162,7 @@ fn supabase_credentials() -> [Secret; 2] {
             var: SUPABASE_PASSWORD_VAR,
             cache_dir: state.join("rules-supabase-password"),
         },
-    ]
+    ])
 }
 
 /// The sign-in email and password, resolved as the database URL is, and
@@ -167,12 +171,12 @@ fn supabase_credentials() -> [Secret; 2] {
 pub(crate) fn resolve_credentials(
     config: &RulesSupabaseConfig,
     lookup: SecretLookup,
-) -> (Option<Credentials>, secrets::Source) {
+) -> Result<(Option<Credentials>, secrets::Source)> {
     let scope = doppler_scope(
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
     );
-    let [email, password] = supabase_credentials();
+    let [email, password] = supabase_credentials()?;
     let resolve = |secret: &Secret| {
         let resolved = resolve_or_kept(secret, scope.as_ref(), lookup);
         if let (secrets::Source::Doppler, Some(scope), Some(value), false) = (
@@ -190,7 +194,7 @@ pub(crate) fn resolve_credentials(
         .value
         .zip(password.value)
         .map(|(email, password)| Credentials { email, password });
-    (credentials, email.source)
+    Ok((credentials, email.source))
 }
 
 /// The rules API `config` and [`SUPABASE_URL_VAR`] name, opened with
@@ -208,14 +212,22 @@ pub(crate) fn open_api(
         Ok(url) => url,
         Err(e) => return (Arc::new(Api::unusable(e, API_LABEL)), url_source),
     };
+    let state = match devkit_common::paths::state_dir() {
+        Ok(state) => state,
+        Err(e) => return (Arc::new(Api::unusable(e, API_LABEL)), url_source),
+    };
     let auth = match &config.publishable_key {
         None => Ok(Auth::None),
         Some(key) => Client::new(&url, key, wait).map(|client| {
             let config = config.clone();
-            let credentials = move || resolve_credentials(&config, lookup).0;
+            let credentials = move || {
+                resolve_credentials(&config, lookup)
+                    .ok()
+                    .and_then(|(credentials, _)| credentials)
+            };
             Auth::User(Arc::new(Sessions::new(
                 client,
-                SessionFile::for_url(&devkit_common::paths::state_dir(), &url),
+                SessionFile::for_url(&state, &url),
                 Box::new(credentials),
             )))
         }),
@@ -237,7 +249,7 @@ pub(crate) fn open_api(
         config.doppler_config.as_deref(),
     ) {
         api.on_rejected(move || {
-            for secret in supabase_credentials() {
+            for secret in supabase_credentials().into_iter().flatten() {
                 if let Some(value) = secret.resolve(Some(&scope), SecretLookup::CachedOnly).value {
                     secret.forget(&scope, &value);
                 }
@@ -284,9 +296,18 @@ pub(crate) fn open_database(
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
     );
+    let state = match devkit_common::paths::state_dir() {
+        Ok(state) => state,
+        Err(e) => {
+            return (
+                Arc::new(Database::unusable(format!("{e:#}"))),
+                secrets::Source::Unset,
+            );
+        }
+    };
     let cache = Secret {
         var: DATABASE_VAR,
-        cache_dir: devkit_common::paths::state_dir().join("rules-database-url"),
+        cache_dir: state.join("rules-database-url"),
     };
     let resolved = resolve_or_kept(&cache, scope.as_ref(), lookup);
     let Some(url) = resolved.value else {
@@ -525,7 +546,7 @@ impl Here {
                 let settings = devkit_common::config::resolve_in(&checkout, None, &cwd)
                     .map(|(project, _)| project.rules)
                     .unwrap_or_default();
-                source(&settings, &checkout, Reader::Cli)
+                source(&settings, &checkout, Reader::Cli)?
             }
         };
         Ok(Here {
@@ -560,7 +581,7 @@ fn load_or_default(explicit: Option<PathBuf>) -> Result<(String, RuleIndex)> {
 /// rules the other would not deliver.
 pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesConfig, RuleIndex)> {
     let rules = enabled_settings(checkout, cwd)?;
-    let source = source(&rules, checkout, Reader::Session);
+    let source = source(&rules, checkout, Reader::Session).ok()?;
     refresh_quietly(&source);
     let loaded = source.load()?;
     Some((rules, loaded))
@@ -572,6 +593,7 @@ pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesCon
 pub(crate) fn enabled_rules(checkout: &Checkout, cwd: &Path) -> Option<RulesConfig> {
     let rules = enabled_settings(checkout, cwd)?;
     source(&rules, checkout, Reader::Session)
+        .ok()?
         .present()
         .then_some(rules)
 }

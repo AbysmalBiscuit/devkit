@@ -343,7 +343,7 @@ pub fn plan_group(
         let env = env_for(&rendered, provider_url.as_deref(), user_env);
         let url = render_launch(app.url_template(), Some(port), ports, variables)
             .with_context(|| format!("rendering url of `{a}`"))?;
-        let log = paths::logs_dir()
+        let log = paths::logs_dir()?
             .join(holder_slug(base_dir.to_str().unwrap_or("wt")))
             .join(format!("{}-{}.log", role.as_str(), a));
         plans.push(LaunchPlan {

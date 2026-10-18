@@ -32,35 +32,35 @@ pub struct ReplicaLocation {
 
 /// The configured directory, then `TASKDATA`, then taskrc's `data.location`,
 /// then devkit's todo state. A malformed taskrc warns and uses the default.
-pub fn replica_location(config: Option<&str>) -> ReplicaLocation {
+pub fn replica_location(config: Option<&str>) -> anyhow::Result<ReplicaLocation> {
     if let Some(path) = config {
-        return ReplicaLocation {
+        return Ok(ReplicaLocation {
             path: expand_tilde(Path::new(path)),
             source: ReplicaSource::Config,
-        };
+        });
     }
     if let Some(path) = std::env::var_os("TASKDATA").filter(|v| !v.is_empty()) {
-        return ReplicaLocation {
+        return Ok(ReplicaLocation {
             path: expand_tilde(Path::new(&path)),
             source: ReplicaSource::Taskdata,
-        };
+        });
     }
     if let Some(taskrc) = taskrc_path() {
         match read_taskrc(&taskrc) {
             Ok(Some(path)) => {
-                return ReplicaLocation {
+                return Ok(ReplicaLocation {
                     path: expand_tilde(&path),
                     source: ReplicaSource::Taskrc(taskrc),
-                };
+                });
             }
             Ok(None) => {}
             Err(error) => eprintln!("devkit todo: {error:#}; using the default replica"),
         }
     }
-    ReplicaLocation {
-        path: devkit_todo::state_dir().join("taskchampion"),
+    Ok(ReplicaLocation {
+        path: devkit_todo::state_dir()?.join("taskchampion"),
         source: ReplicaSource::Default,
-    }
+    })
 }
 
 fn taskrc_path() -> Option<PathBuf> {

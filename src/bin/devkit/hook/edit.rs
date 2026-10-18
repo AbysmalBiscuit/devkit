@@ -115,7 +115,10 @@ fn respond(
     }
     let mut blocks = match &write {
         Write::Targets { paths, .. } => {
-            gate::ledger_blocks(&Claims::paths(paths.clone()), &Ledger::live(), cwd)
+            // With no state directory there is no ledger to write into.
+            Ledger::live()
+                .map(|ledger| gate::ledger_blocks(&Claims::paths(paths.clone()), &ledger, cwd))
+                .unwrap_or_default()
         }
         Write::Unusable(_) => Vec::new(),
     };

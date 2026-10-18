@@ -257,15 +257,15 @@ impl<T: TodoStore + ?Sized> TodoStore for &T {
 /// Where devkit keeps todo state of its own, whichever backend holds the
 /// todos: the native map, the context digests, the activity log, and the
 /// built-in store.
-pub fn state_dir() -> PathBuf {
-    paths::state_dir().join("todo")
+pub fn state_dir() -> anyhow::Result<PathBuf> {
+    Ok(paths::state_dir()?.join("todo"))
 }
 
 /// Where the lists last injected for `holder` are fingerprinted, keyed on a
 /// hash of the full holder so a sub-agent's injection never suppresses its
 /// session's.
-pub fn digest_path(holder: &Holder) -> PathBuf {
-    state_dir().join("digests").join(render::digest(holder))
+pub fn digest_path(holder: &Holder) -> anyhow::Result<PathBuf> {
+    Ok(state_dir()?.join("digests").join(render::digest(holder)))
 }
 
 /// `id` as text an agent reads it: a uuid shortens to its first 8

@@ -38,16 +38,20 @@ enum Cmd {
 pub fn run(cli: HookLogCli) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let settings = harness_log::resolve(&cwd);
+    let dir = settings
+        .dir
+        .clone()
+        .map_or_else(harness_log::default_dir, Ok)?;
     match cli.cmd {
         Cmd::Path => {
-            println!("{}", settings.dir.display());
+            println!("{}", dir.display());
             Ok(())
         }
-        Cmd::Prune { dry_run } => prune(&settings, dry_run),
+        Cmd::Prune { dry_run } => prune(&settings, &dir, dry_run),
     }
 }
 
-fn prune(settings: &harness_log::Settings, dry_run: bool) -> Result<()> {
+fn prune(settings: &harness_log::Settings, dir: &std::path::Path, dry_run: bool) -> Result<()> {
     if settings.max_age_days.is_none() && settings.max_bytes.is_none() {
         println!(
             "no retention caps set; nothing to prune. \
@@ -58,7 +62,7 @@ fn prune(settings: &harness_log::Settings, dry_run: bool) -> Result<()> {
     if dry_run {
         println!(
             "would sweep {} against max_age_days={} max_bytes={}",
-            settings.dir.display(),
+            dir.display(),
             settings
                 .max_age_days
                 .map_or("unlimited".to_string(), |d| d.to_string()),

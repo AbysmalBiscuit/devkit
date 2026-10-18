@@ -313,7 +313,10 @@ fn issue_events_row(
 }
 
 fn docs_cache_check() -> Check {
-    let root = devkit_docs::cache::docs_root();
+    let root = match devkit_docs::cache::docs_root() {
+        Ok(root) => root,
+        Err(e) => return Check::Invalid(format!("{e:#}")),
+    };
     if !root.is_dir() {
         return Check::Ok("empty".into());
     }
@@ -484,6 +487,15 @@ fn harness_identity_check(id: Option<devkit_locks::ident::Identity>, harness_env
 fn gather(steps: &Steps) -> Vec<Row> {
     let selection = resolve_selection(std::path::Path::new("."));
     let mut rows = vec![
+        Row {
+            key: "state_dir",
+            data: serde_json::Value::Null,
+            source: Source::Unset,
+            check: match devkit_common::paths::state_dir() {
+                Ok(dir) => Check::Ok(dir.display().to_string()),
+                Err(e) => Check::Invalid(format!("{e:#}")),
+            },
+        },
         Row {
             key: "linear_api_key",
             data: serde_json::Value::Null,
@@ -700,7 +712,18 @@ fn todo_rows(start: &std::path::Path) -> Vec<Row> {
     }
     let tc = config.taskchampion;
     if backend == devkit_config::TodoBackend::Taskchampion {
-        let location = replica_location(tc.data_dir.as_deref());
+        let location = match replica_location(tc.data_dir.as_deref()) {
+            Ok(location) => location,
+            Err(e) => {
+                rows.push(Row {
+                    key: "todo_replica",
+                    data: serde_json::Value::Null,
+                    source: Source::Unset,
+                    check: Check::Invalid(format!("{e:#}")),
+                });
+                return rows;
+            }
+        };
         let (source, origin, detail) = match location.source {
             ReplicaSource::Config => (
                 Source::File,
@@ -778,8 +801,19 @@ fn rules_rows(
             api_url_source = Some(from);
             api
         },
-        &devkit_common::paths::state_dir(),
+        devkit_common::paths::state_dir,
     );
+    let source = match source {
+        Ok(source) => source,
+        Err(e) => {
+            return vec![Row {
+                key: "rules_source",
+                data: serde_json::Value::Null,
+                source: Source::Unset,
+                check: Check::Invalid(format!("{e:#}")),
+            }];
+        }
+    };
     let mut rows = vec![rules_row(settings, configured, &source)];
     let Rules::Cached(cached) = &source else {
         return rows;
@@ -819,10 +853,11 @@ fn rules_api_rows(
         },
     };
     let (credentials, credentials_from) =
-        crate::rules::resolve_credentials(config, crate::secret::SecretLookup::Doppler);
-    let session =
-        devkit_supabase::auth::SessionFile::for_url(&devkit_common::paths::state_dir(), api.url())
-            .load();
+        crate::rules::resolve_credentials(config, crate::secret::SecretLookup::Doppler)
+            .unwrap_or((None, Source::Unset));
+    let session = devkit_common::paths::state_dir()
+        .ok()
+        .and_then(|state| devkit_supabase::auth::SessionFile::for_url(&state, api.url()).load());
     let now = unix_now();
     let signed_in = match (&config.publishable_key, session, credentials) {
         (None, ..) => Check::Ok("no publishable_key: requests carry no credentials".into()),
@@ -1026,13 +1061,13 @@ fn harness_log_row() -> Row {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let settings = devkit_common::harness_log::resolve(&cwd);
     let global = devkit_common::harness::global_config_path().filter(|p| p.exists());
-    let bytes = log_dir_bytes(&settings.dir);
+    let bytes = settings.dir.as_deref().map_or(0, log_dir_bytes);
     // Through serde, so the names are the ones `config.toml` spells.
     let data = serde_json::json!({
         "enabled": settings.enabled,
         "command": settings.command,
         "prompt": settings.prompt,
-        "dir": settings.dir.to_string_lossy(),
+        "dir": settings.dir.as_deref().map(|d| d.to_string_lossy()),
         "bytes": bytes,
         "global_config": global.is_some(),
     });
@@ -1040,9 +1075,18 @@ fn harness_log_row() -> Row {
     let prompt = data["prompt"].as_str().unwrap_or_default();
     let detail = format!(
         "command={command} prompt={prompt}, {bytes} bytes in {}",
-        settings.dir.display()
+        settings
+            .dir
+            .as_deref()
+            .map_or_else(|| "no directory".to_string(), |d| d.display().to_string())
     );
-    let check = if !settings.enabled {
+    let check = if settings.dir.is_none() {
+        Check::Warn(
+            devkit_common::harness_log::default_dir()
+                .err()
+                .map_or_else(|| "no log directory".to_string(), |e| format!("{e:#}")),
+        )
+    } else if !settings.enabled {
         Check::Unset(HINT_HARNESS_LOG)
     } else if settings.command == devkit_config::Fidelity::Full {
         Check::Warn(format!(

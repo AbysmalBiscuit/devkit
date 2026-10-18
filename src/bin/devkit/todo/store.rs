@@ -284,7 +284,10 @@ pub(crate) fn open_database(
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
     );
-    let cache = database_url();
+    let cache = match database_url() {
+        Ok(cache) => cache,
+        Err(e) => return (Err(format!("{e:#}")), Source::Unset),
+    };
     let resolved = cache.resolve(scope.as_ref(), lookup);
     let Some(url) = resolved.value else {
         return (Err(format!("{DATABASE_VAR} is not set")), resolved.source);
@@ -305,11 +308,11 @@ pub(crate) fn open_database(
 }
 
 /// The todo database's URL and where Doppler's answers for it are kept.
-fn database_url() -> Secret {
-    Secret {
+fn database_url() -> Result<Secret> {
+    Ok(Secret {
         var: DATABASE_VAR,
-        cache_dir: devkit_todo::state_dir().join("database-url"),
-    }
+        cache_dir: devkit_todo::state_dir()?.join("database-url"),
+    })
 }
 
 /// [`open_database`], resolved and connected once per Doppler scope, CA file
@@ -352,11 +355,11 @@ pub(crate) struct OpenedApi {
 }
 
 /// The key Supabase's API takes and where Doppler's answers for it are kept.
-fn supabase_key() -> Secret {
-    Secret {
+fn supabase_key() -> Result<Secret> {
+    Ok(Secret {
         var: SUPABASE_KEY_VAR,
-        cache_dir: devkit_todo::state_dir().join("supabase-key"),
-    }
+        cache_dir: devkit_todo::state_dir()?.join("supabase-key"),
+    })
 }
 
 /// The Supabase API: its URL from [`SUPABASE_URL_VAR`], else the global
@@ -368,7 +371,16 @@ pub(crate) fn open_api(config: &SupabaseConfig, wait: Duration, lookup: SecretLo
         config.doppler_project.as_deref(),
         config.doppler_config.as_deref(),
     );
-    let cache = supabase_key();
+    let cache = match supabase_key() {
+        Ok(cache) => cache,
+        Err(e) => {
+            return OpenedApi {
+                api: Err(format!("{e:#}")),
+                url_source: Source::Unset,
+                key_source: Source::Unset,
+            };
+        }
+    };
     let key = cache.resolve(scope.as_ref(), lookup);
     let (url, url_source) = match std::env::var(SUPABASE_URL_VAR)
         .ok()
@@ -482,21 +494,21 @@ fn sync_target_with(
 }
 
 impl Backend {
-    fn recorded(self) -> Store {
-        Store {
-            store: Recorded::new(self, Activity::Local(ActivityLog::open())),
+    fn recorded(self) -> Result<Store> {
+        Ok(Store {
+            store: Recorded::new(self, Activity::Local(ActivityLog::open()?)),
             config: TodoConfig::default(),
             ticket: TicketConfig::default(),
             origin: None,
             listing: Mutex::new(None),
-        }
+        })
     }
 }
 
 impl Activity {
     /// The log that goes with the store `config` names.
-    fn of(config: &TodoConfig, opener: Opener) -> Self {
-        match config.backend {
+    fn of(config: &TodoConfig, opener: Opener) -> Result<Self> {
+        Ok(match config.backend {
             TodoBackend::Postgres => Self::Postgres(PostgresActivity::new(
                 database(&config.postgres, opener),
                 &config.postgres.root,
@@ -505,28 +517,33 @@ impl Activity {
                 api(&config.supabase, opener),
                 &config.supabase.root,
             )),
-            TodoBackend::Builtin | TodoBackend::Taskchampion => Self::Local(ActivityLog::open()),
-        }
+            TodoBackend::Builtin | TodoBackend::Taskchampion => Self::Local(ActivityLog::open()?),
+        })
     }
 }
 
-fn taskchampion(config: &TodoConfig) -> Replica {
-    let location = replica_location(config.taskchampion.data_dir.as_deref());
-    Replica {
+fn taskchampion(config: &TodoConfig) -> Result<Replica> {
+    let location = replica_location(config.taskchampion.data_dir.as_deref())?;
+    Ok(Replica {
         store: TaskchampionStore::at(location.path),
         syncs: names_a_target(&config.taskchampion),
         source: location.source,
-    }
+    })
 }
 
 impl Store {
     /// The store `config` names, its claim changes recorded in the activity
     /// log that goes with it.
-    fn open(config: &TodoConfig, ticket: TicketConfig, opener: Opener, origin: Checkout) -> Self {
+    fn open(
+        config: &TodoConfig,
+        ticket: TicketConfig,
+        opener: Opener,
+        origin: Checkout,
+    ) -> Result<Self> {
         let backend = match config.backend {
-            TodoBackend::Builtin => Backend::Builtin(BuiltinStore::open()),
+            TodoBackend::Builtin => Backend::Builtin(BuiltinStore::open()?),
             TodoBackend::Taskchampion => {
-                let mut replica = taskchampion(config);
+                let mut replica = taskchampion(config)?;
                 replica.store = replica.store.with_lock_wait(opener.lock_wait());
                 Backend::Taskchampion(replica)
             }
@@ -539,13 +556,13 @@ impl Store {
                 &config.supabase.root,
             )),
         };
-        Self {
-            store: Recorded::new(backend, Activity::of(config, opener)),
+        Ok(Self {
+            store: Recorded::new(backend, Activity::of(config, opener)?),
             config: config.clone(),
             ticket,
             origin: Some(origin),
             listing: Mutex::new(None),
-        }
+        })
     }
 
     fn forget_listing(&self) {
@@ -705,13 +722,13 @@ impl Store {
     /// [`Self::for_cli`] against a checkout the caller has already resolved.
     pub(crate) fn for_cli_in(checkout: &Checkout) -> Result<Self> {
         let (config, ticket) = Self::effective_cli_config(checkout)?;
-        Ok(Self::open(&config, ticket, Opener::Cli, checkout.clone()))
+        Self::open(&config, ticket, Opener::Cli, checkout.clone())
     }
 
     /// The activity log a CLI call in `cwd` reads.
     pub(crate) fn activity_for_cli(cwd: &Path) -> Result<Activity> {
         let (config, _) = Self::effective_cli_config(&Checkout::at(cwd))?;
-        Ok(Activity::of(&config, Opener::Cli))
+        Activity::of(&config, Opener::Cli)
     }
 
     /// The activity log this store records its claims in.
@@ -765,13 +782,13 @@ impl Store {
     /// exactly where it was resolved. A hook's lock wait keeps a busy entry
     /// queued. With `origin`, the checkout the hook ran in, its ticket
     /// changes fire from there as an unqueued write's do.
-    pub(crate) fn queued_at(dir: &Path, origin: Option<&Path>) -> Self {
+    pub(crate) fn queued_at(dir: &Path, origin: Option<&Path>) -> Result<Self> {
         let mut store = Backend::Taskchampion(Replica {
             store: TaskchampionStore::at(dir.to_path_buf()).with_lock_wait(HOOK_WAIT),
             syncs: false,
             source: ReplicaSource::Config,
         })
-        .recorded();
+        .recorded()?;
         if let Some(origin) = origin {
             let checkout = Checkout::at(origin);
             if let Ok((config, ticket)) = Self::hook_config(&checkout, origin, None) {
@@ -780,7 +797,7 @@ impl Store {
                 store.origin = Some(checkout);
             }
         }
-        store
+        Ok(store)
     }
 
     /// The replica `devkit todo sync` in `checkout` syncs, its target
@@ -795,7 +812,7 @@ impl Store {
             return Ok(None);
         }
         let config = config.unwrap_or_default();
-        let replica = taskchampion(&config);
+        let replica = taskchampion(&config)?;
         replica.check_sync()?;
         Ok(sync_target(&config.taskchampion)?.map(|target| replica.store.with_target(target)))
     }
@@ -817,24 +834,24 @@ impl Store {
         with_effective_backend(config, backend_var)
     }
 
-    /// The store a hook in `cwd` uses. A hook never fails on the store's
-    /// account: a config that fails to load or an unknown
-    /// `DEVKIT_TODO_BACKEND` is the built-in store.
-    pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Self {
+    /// The store a hook in `cwd` uses: a config that fails to load or an
+    /// unknown `DEVKIT_TODO_BACKEND` is the built-in store. Fails only when no
+    /// state directory resolves.
+    pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Result<Self> {
         let backend_var = std::env::var(BACKEND_VAR).ok();
         match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
             Ok((config, ticket)) => Self::open(&config, ticket, Opener::Hook, checkout.clone()),
-            Err(_) => Backend::Builtin(BuiltinStore::open()).recorded(),
+            Err(_) => Backend::Builtin(BuiltinStore::open()?).recorded(),
         }
     }
 
     /// The activity log a hook in `cwd` writes, the one that goes with
     /// [`Store::for_hook`]'s store.
-    pub(crate) fn activity_for_hook(checkout: &Checkout, cwd: &Path) -> Activity {
+    pub(crate) fn activity_for_hook(checkout: &Checkout, cwd: &Path) -> Result<Activity> {
         let backend_var = std::env::var(BACKEND_VAR).ok();
         match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
             Ok((config, _)) => Activity::of(&config, Opener::Hook),
-            Err(_) => Activity::Local(ActivityLog::open()),
+            Err(_) => Ok(Activity::Local(ActivityLog::open()?)),
         }
     }
 
@@ -851,7 +868,9 @@ impl Store {
         holds: impl FnOnce(&TodoConfig) -> bool,
     ) -> Option<Self> {
         let (config, ticket) = Self::hook_config(checkout, cwd, backend_var).ok()?;
-        holds(&config).then(|| Self::open(&config, ticket, Opener::Hook, checkout.clone()))
+        holds(&config)
+            .then(|| Self::open(&config, ticket, Opener::Hook, checkout.clone()))?
+            .ok()
     }
 }
 

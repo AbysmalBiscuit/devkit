@@ -80,10 +80,10 @@ struct Snapshot {
     diff: DiffMap,
 }
 
-fn cache_path(repo: &str) -> PathBuf {
-    paths::cache_dir()
+fn cache_path(repo: &str) -> anyhow::Result<PathBuf> {
+    Ok(paths::cache_dir()?
         .join("pr-status")
-        .join(format!("{}.json", repo.replace('/', "_")))
+        .join(format!("{}.json", repo.replace('/', "_"))))
 }
 
 /// Read the snapshot; any parse failure (including the pre-snapshot cache
@@ -335,7 +335,7 @@ pub fn run(
     } else {
         Some(resolved.clone())
     };
-    let path = repo_key.as_ref().map(|r| cache_path(r));
+    let path = repo_key.as_ref().and_then(|r| cache_path(r).ok());
     let Snapshot {
         mine: prev_mine,
         reviews: prev_reviews,

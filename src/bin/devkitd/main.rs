@@ -6,6 +6,7 @@
 use std::{
     fs::OpenOptions,
     io::{BufReader, BufWriter},
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -60,6 +61,7 @@ pub(crate) struct Daemon {
     /// Resolved hard-cap state: `Some` only when `memory_max_mb > 0` and
     /// cgroup-v2 enforcement is available. Consulted by both spawn paths.
     pub(crate) cgroup_cap: Option<CgroupCap>,
+    pub(crate) paths: DaemonPaths,
 }
 
 /// Counts one live connection for as long as it is held.
@@ -85,6 +87,29 @@ impl Drop for ConnGuard<'_> {
     }
 }
 
+/// The state files the daemon serves, resolved once at startup.
+pub(crate) struct DaemonPaths {
+    registry_file: PathBuf,
+    locks_file: PathBuf,
+    port_socket: PathBuf,
+    lock_socket: PathBuf,
+}
+
+impl DaemonPaths {
+    pub(crate) fn resolve() -> Result<Self> {
+        Ok(Self {
+            registry_file: paths::registry_file()?,
+            locks_file: paths::locks_file()?,
+            port_socket: paths::port_socket_file()?,
+            lock_socket: paths::lock_socket_file()?,
+        })
+    }
+
+    pub(crate) fn sockets(&self) -> [&Path; 2] {
+        [&self.port_socket, &self.lock_socket]
+    }
+}
+
 impl Daemon {
     fn touch(&self) {
         *self.last_activity.lock().unwrap() = Instant::now();
@@ -92,15 +117,12 @@ impl Daemon {
 
     /// A `Store` view over the daemon's authoritative registry.
     pub(crate) fn port_store(&self) -> registry::MemoryStore {
-        registry::MemoryStore::new(self.ports.clone(), devkit_common::paths::registry_file())
+        registry::MemoryStore::new(self.ports.clone(), self.paths.registry_file.clone())
     }
 
     /// A `Store` view over the daemon's authoritative lock registry.
     pub(crate) fn lock_store(&self) -> devkit_locks::store::MemoryStore {
-        devkit_locks::store::MemoryStore::new(
-            self.locks.clone(),
-            devkit_common::paths::locks_file(),
-        )
+        devkit_locks::store::MemoryStore::new(self.locks.clone(), self.paths.locks_file.clone())
     }
 
     /// Idle = no live connections and no supervised children, for longer than
@@ -167,8 +189,9 @@ fn main() -> Result<()> {
     // Mark this process as the daemon so registry facade calls resolve locally
     // instead of connecting back to this same daemon over the socket.
     unsafe { std::env::set_var("DEVKITD_SELF", "1") };
-    std::fs::create_dir_all(paths::state_dir())?;
-    std::fs::create_dir_all(paths::logs_dir())?;
+    std::fs::create_dir_all(paths::state_dir()?)?;
+    std::fs::create_dir_all(paths::logs_dir()?)?;
+    let daemon_paths = DaemonPaths::resolve()?;
 
     // Single-instance: hold devkitd.lock for the daemon's whole life. A peer
     // daemon holds it exclusive for its entire lifetime, so all retry
@@ -176,7 +199,7 @@ fn main() -> Result<()> {
     // shared hold by a direct writer (portm/devrun taking the gate during a
     // registry RMW) clears within ~1ms, so a brief retry distinguishes that
     // from a live peer without blocking.
-    let lock_path = paths::devkitd_lock();
+    let lock_path = paths::devkitd_lock()?;
     let lock_file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -205,12 +228,12 @@ fn main() -> Result<()> {
     // Load the registries into memory while holding devkitd.lock and before
     // binding any socket, so no request is ever served against an
     // unpopulated registry.
-    let ports = std::sync::Arc::new(std::sync::Mutex::new(registry::load()));
-    let locks = std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::store::load()));
+    let ports = std::sync::Arc::new(std::sync::Mutex::new(registry::load()?));
+    let locks = std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::store::load()?));
 
     // Holding the lock, no live daemon owns the socket — clear any stale one
     // and bind.
-    let sock = paths::port_socket_file();
+    let sock = daemon_paths.port_socket.clone();
     let _ = std::fs::remove_file(&sock); // clear a stale unix socket file before binding
     let name = transport::socket_name(&sock).with_context(|| "building socket name")?;
     let listener = ListenerOptions::new()
@@ -282,6 +305,7 @@ fn main() -> Result<()> {
         ports,
         locks,
         cgroup_cap,
+        paths: daemon_paths,
     });
 
     // Adopt servers a previous daemon left running: monitor by poll, not
@@ -322,8 +346,8 @@ fn main() -> Result<()> {
                 std::thread::sleep(Duration::from_millis(500));
                 if d.shutdown.load(Ordering::SeqCst) || d.is_idle() {
                     d.shutdown.store(true, Ordering::SeqCst);
-                    for sock in [paths::port_socket_file(), paths::lock_socket_file()] {
-                        if let Ok(name) = transport::socket_name(&sock) {
+                    for sock in d.paths.sockets() {
+                        if let Ok(name) = transport::socket_name(sock) {
                             let _ = Stream::connect(name);
                         }
                     }
@@ -431,7 +455,7 @@ fn main() -> Result<()> {
     }
 
     // Lock control channel — second socket, same process and lifecycle.
-    let lock_sock = paths::lock_socket_file();
+    let lock_sock = daemon.paths.lock_socket.clone();
     let _ = std::fs::remove_file(&lock_sock);
     let lock_name =
         transport::socket_name(&lock_sock).with_context(|| "building lock socket name")?;
@@ -475,8 +499,9 @@ fn main() -> Result<()> {
     }
 
     // Clean shutdown: drop both sockets and release the lock.
-    let _ = std::fs::remove_file(paths::port_socket_file());
-    let _ = std::fs::remove_file(paths::lock_socket_file());
+    for sock in daemon.paths.sockets() {
+        let _ = std::fs::remove_file(sock);
+    }
     drop(guard);
     Ok(())
 }
@@ -560,10 +585,8 @@ fn restart(daemon: &Arc<Daemon>, key: &supervisor::Key) {
 
 pub(crate) fn log_line(msg: &str) {
     use std::io::Write;
-    if let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths::daemon_log())
+    if let Ok(mut f) = paths::daemon_log()
+        .and_then(|log| Ok(OpenOptions::new().create(true).append(true).open(log)?))
     {
         let _ = writeln!(f, "{msg}");
     }
@@ -606,6 +629,7 @@ pub(crate) fn test_daemon_with_base(base: std::path::PathBuf, max_bytes: u64) ->
         ports: std::sync::Arc::new(std::sync::Mutex::new(registry::Data::default())),
         locks: std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::model::Data::default())),
         cgroup_cap: Some(CgroupCap { base, max_bytes }),
+        paths: DaemonPaths::resolve().unwrap(),
     }
 }
 
@@ -628,6 +652,7 @@ mod tests {
             ports: std::sync::Arc::new(std::sync::Mutex::new(registry::Data::default())),
             locks: std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::model::Data::default())),
             cgroup_cap: None,
+            paths: DaemonPaths::resolve().unwrap(),
         }
     }
 

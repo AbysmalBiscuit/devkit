@@ -90,7 +90,7 @@ pub(crate) fn fire_for(
 }
 
 fn spawn(root: &Path, event: IssueEvent, key: &str, todo: &str) {
-    let Ok(exe) = std::env::current_exe() else {
+    let (Ok(exe), Ok(state)) = (std::env::current_exe(), devkit_common::paths::state_dir()) else {
         return;
     };
     let mut cmd = Command::new(exe);
@@ -98,7 +98,7 @@ fn spawn(root: &Path, event: IssueEvent, key: &str, todo: &str) {
         .arg("-C")
         .arg(root)
         .args(["event", event.as_str(), key, "--todo", todo, "--log-file"])
-        .arg(devkit_common::paths::state_dir().join("ticket-event.log"))
+        .arg(state.join("ticket-event.log"))
         .current_dir(root);
     let _ = devkit_common::sys::spawn_background(&mut cmd);
 }
@@ -124,7 +124,7 @@ pub(crate) fn fire_current(
     issue: &str,
     todo: &str,
 ) -> anyhow::Result<String> {
-    let lock = devkit_todo::state_dir()
+    let lock = devkit_todo::state_dir()?
         .join("ticket-event")
         .join(format!("{}.lock", devkit_common::slug::slugify(todo)));
     devkit_common::store::with_file_lock(&lock, || {
