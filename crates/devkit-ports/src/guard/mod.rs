@@ -1192,6 +1192,29 @@ mod tests {
     }
 
     #[test]
+    fn a_prefix_assignment_keeps_a_differing_doppler_config_denied() {
+        let p = project(|c| {
+            c.tasks.insert("check".into(), TaskConfig {
+                run: ["doppler", "run", "-c", "dev", "--", "bun", "test"]
+                    .iter()
+                    .map(|s| (*s).into())
+                    .collect(),
+                ..Default::default()
+            });
+        });
+        let denied = decide_with(
+            "FOO=1 doppler run -c prd -- bun test",
+            &BTreeMap::new(),
+            Some(&p),
+        );
+        assert!(
+            reason(&denied).contains("devrun task check"),
+            "{}",
+            reason(&denied)
+        );
+    }
+
+    #[test]
     fn an_identical_task_is_allowed_through() {
         let p = project(|c| {
             c.tasks.insert("check".into(), TaskConfig {
