@@ -292,43 +292,25 @@ fn value_names_programs(v: &toml::Value) -> bool {
 /// Command rules devkit applies in every devkit project, below the global
 /// config and whatever `enforce_commands` says. A layer's rule of the same name
 /// overrides the keys it sets, so `enabled = false` switches one off.
-static BUILTIN_LAYER: LazyLock<toml::Table> = LazyLock::new(|| {
-    const GH_PR_REASON: &str = "Open PRs with `devkit pr create`, which renders the PR template and runs the gates an agent's PR must pass.";
-    let gh_pr = |verb: &str| {
-        toml::Value::Table(toml::Table::from_iter([
-            ("programs".to_owned(), toml::Value::Array(vec!["gh".into()])),
-            (
-                "args".to_owned(),
-                toml::Value::Array(vec!["pr".into(), verb.into()]),
-            ),
-            ("reason".to_owned(), GH_PR_REASON.into()),
-        ]))
-    };
-    const CALLER_HUMAN_REASON: &str = "An agent cannot declare itself human: `DEVKIT_CALLER=human` skips the gates an agent's `devkit pr create` must pass. Run the command without it.";
-    let caller_human = toml::Value::Table(toml::Table::from_iter([
-        (
-            "programs".to_owned(),
-            toml::Value::Array(vec![
-                "env".into(),
-                "export".into(),
-                "declare".into(),
-                "typeset".into(),
-            ]),
-        ),
-        (
-            "args".to_owned(),
-            toml::Value::Array(vec!["**".into(), "DEVKIT_CALLER=human".into()]),
-        ),
-        ("reason".to_owned(), CALLER_HUMAN_REASON.into()),
-    ]));
-    let commands = toml::Table::from_iter([
-        ("gh-pr-create".to_owned(), gh_pr("create")),
-        ("gh-pr-new".to_owned(), gh_pr("new")),
-        ("devkit-caller-human".to_owned(), caller_human),
-    ]);
-    let harness = toml::Table::from_iter([("commands".to_owned(), toml::Value::Table(commands))]);
-    toml::Table::from_iter([("harness".to_owned(), toml::Value::Table(harness))])
-});
+const BUILTIN_RULES: &str = r#"
+[harness.commands.gh-pr-create]
+programs = ["gh"]
+args = ["pr", "create"]
+reason = "Open PRs with `devkit pr create`, which renders the PR template and runs the gates an agent's PR must pass."
+
+[harness.commands.gh-pr-new]
+programs = ["gh"]
+args = ["pr", "new"]
+reason = "Open PRs with `devkit pr create`, which renders the PR template and runs the gates an agent's PR must pass."
+
+[harness.commands.devkit-caller-human]
+programs = ["env", "export", "declare", "typeset"]
+args = ["**", "DEVKIT_CALLER=human"]
+reason = "An agent cannot declare itself human: `DEVKIT_CALLER=human` skips the gates an agent's `devkit pr create` must pass. Run the command without it."
+"#;
+
+static BUILTIN_LAYER: LazyLock<toml::Table> =
+    LazyLock::new(|| toml::from_str(BUILTIN_RULES).expect("BUILTIN_RULES is valid TOML"));
 
 fn builtin_command_tables() -> &'static toml::Table {
     BUILTIN_LAYER["harness"]["commands"]
@@ -638,6 +620,15 @@ programs = "node"
             "[defaults]\napps_dir = \"apps\"\n",
             "enforce_writes"
         ));
+    }
+
+    #[test]
+    fn the_built_in_rules_parse_into_every_named_rule() {
+        let (h, warns) = merge_rules(&[layer("<devkit built-in>", BUILTIN_RULES)]);
+        assert!(warns.is_empty(), "{warns:?}");
+        for name in ["gh-pr-create", "gh-pr-new", "devkit-caller-human"] {
+            assert!(!h.commands[name].reason.is_empty(), "{name}");
+        }
     }
 
     fn layer(name: &str, body: &str) -> (PathBuf, toml::Table) {
