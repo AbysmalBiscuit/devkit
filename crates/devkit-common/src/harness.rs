@@ -304,7 +304,7 @@ args = ["pr", "new"]
 reason = "Open PRs with `devkit pr create`, which renders the PR template and runs the gates an agent's PR must pass."
 
 [harness.commands.devkit-caller-human]
-programs = ["env", "export", "declare", "typeset"]
+programs = ["env", "export", "declare", "typeset", "local"]
 args = ["**", "DEVKIT_CALLER=human"]
 reason = "An agent cannot declare itself human: `DEVKIT_CALLER=human` skips the gates an agent's `devkit pr create` must pass. Run the command without it."
 "#;

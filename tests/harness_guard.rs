@@ -809,6 +809,8 @@ fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
             "export DEVKIT_CALLER=human",
             "export DEVKIT_CALLER=human && devkit pr create",
             "declare -x DEVKIT_CALLER=human",
+            "local DEVKIT_CALLER=human",
+            "f() { local -x DEVKIT_CALLER=human; devkit pr create; }; f",
             r#"DEVKIT_CALLER="human" devkit pr create"#,
             "FOO=1 DEVKIT_CALLER='human' devkit pr create",
             "bash -c 'DEVKIT_CALLER=human devkit pr create'",
