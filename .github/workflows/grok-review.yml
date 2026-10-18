@@ -125,6 +125,7 @@ jobs:
       - name: Post review
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           BOT_LOGIN: ${{ steps.app.outputs.app-slug && format('{0}[bot]', steps.app.outputs.app-slug) || 'github-actions[bot]' }}
         run: |
           reviews="repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
@@ -159,6 +160,13 @@ jobs:
               --slurpfile files files.json --slurpfile lines lines.json \
               -f .github/grok-review-payload.jq review.json > "payload-$inline.json"
           done
+
+          # Grok runs with the key in its environment, and Actions masks
+          # secrets only in logs, not in a posted review.
+          if [ -n "$XAI_API_KEY" ] && grep -qF -- "$XAI_API_KEY" payload-true.json payload-false.json; then
+            echo "::error::The review contains the xAI API key, so it is not posted"
+            exit 1
+          fi
 
           # Placement keeps every comment inside the diff, so the body-only
           # fallback is a safety net. gh prints GitHub's reason on stdout.
