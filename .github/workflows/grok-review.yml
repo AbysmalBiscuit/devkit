@@ -67,42 +67,29 @@ jobs:
           git diff --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "${BASE_SHA}...HEAD" \
             -- . ':(exclude)Cargo.lock' > pr.diff
           RUSTC_VERSION=$(rustc --version)
-          cat > "$RUNNER_TEMP/prompt.md" <<EOF
-          Review pull request #${PR_NUMBER} in ${GITHUB_REPOSITORY}: "${PR_TITLE}".
-          Its changes are in pr.diff at the repository root; read the changed
-          files and their callers with your file tools. The author's description:
+          cp .github/grok-review-prompt.md "$RUNNER_TEMP/prompt.md"
+          cat >> "$RUNNER_TEMP/prompt.md" <<EOF
+
+          ## The pull request
+
+          #${PR_NUMBER} in ${GITHUB_REPOSITORY}: "${PR_TITLE}"
+
+          CI builds with ${RUSTC_VERSION}, and no Cargo.toml sets a rust-version.
+
+          The author's description:
 
           ${PR_BODY}
-
-          Apply the AGENTS.md files in the root and in each changed file's
-          directories; the nearest one wins on conflict.
-
-          Flag an issue only when all hold: the PR introduced it; it breaks
-          behaviour (wrong result, crash, data loss, security hole, race, or
-          code that won't build); it is discrete and the author would fix it;
-          it does not rest on guesses about intent; and if it claims to break
-          other code, you have found that code. Read the code to confirm each
-          one before reporting it. Do not flag style, naming, missing tests,
-          linter findings, or pre-existing bugs. If unsure, leave it out.
-
-          CI builds with ${RUSTC_VERSION}, and no Cargo.toml sets a
-          rust-version. Treat every API that toolchain ships as stable and
-          available; your recall of Rust may predate it. Report each root
-          cause once, at its first site, and name its other sites in the body.
-
-          Answer in the structured output. The verdict is "correct" when
-          existing code and tests won't break and nothing blocks merge, and
-          the explanation is one sentence on why. Per finding:
-          - priority: 0 breaks for every input and blocks release, 1 must be
-            fixed before merge, 2 should be fixed eventually, 3 is nice to have.
-          - title: imperative, at most 80 characters.
-          - body: one paragraph on the inputs or state that trigger it, what
-            goes wrong, and the fix. Quote the AGENTS.md rule when one applies.
-          - path, start_line, line: the repo-relative file and the lines in
-            the PR's version of it, inside the diff, fewer than ten lines.
-          - suggestion: the exact replacement for those lines with their
-            indentation kept, or null when the fix is not a drop-in edit.
           EOF
+          # The diff goes in the prompt: read_file pages a file 1000 lines at a
+          # time, which cost large PRs many slow turns.
+          if [ "$(wc -c < pr.diff)" -le 1000000 ]; then
+            printf '\n## The diff\n\n`````diff\n' >> "$RUNNER_TEMP/prompt.md"
+            cat pr.diff >> "$RUNNER_TEMP/prompt.md"
+            printf '`````\n' >> "$RUNNER_TEMP/prompt.md"
+          else
+            printf '\n## The diff\n\nThe diff is too large for this prompt. Read pr.diff at the repository root with your file tools.\n' \
+              >> "$RUNNER_TEMP/prompt.md"
+          fi
           grok --no-auto-update --trust --always-approve --no-subagents \
             --tools read_file,list_dir,grep,glob --disable-web-search \
             --json-schema "$(cat .github/grok-review-schema.json)" \
