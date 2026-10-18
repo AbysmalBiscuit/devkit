@@ -108,7 +108,9 @@ fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
 }
 
 /// Whether `args` starts with `patterns`. A `"**"` entry stands for zero or
-/// more whole arguments; every other entry matches one argument.
+/// more whole arguments; every other entry matches one argument. A
+/// `DEVKIT_CALLER=` assignment, in a pattern or an argument, is compared in
+/// its canonical spelling.
 fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((pattern, patterns)) = patterns.split_first() else {
         return Match::Yes;
@@ -122,6 +124,7 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((arg, args)) = args.split_first() else {
         return Match::No;
     };
+    let pattern = caller::canonical_caller_assignment(pattern).unwrap_or(pattern);
     let here = match arg {
         Value::Known(actual)
             if wildcard_matches(

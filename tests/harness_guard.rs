@@ -759,6 +759,34 @@ fn an_agents_gh_pr_create_is_denied_in_any_devkit_project_naming_devkit_pr_creat
 }
 
 #[test]
+fn a_project_rule_naming_another_caller_spelling_still_matches() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.devkit-caller-human]
+enabled = false
+
+[harness.commands.no-human-env]
+programs = ["env"]
+args = ["DEVKIT_CALLER=HUMAN"]
+reason = "project rule refuses the human caller"
+"#,
+    );
+    for command in ["env DEVKIT_CALLER=HUMAN true", "env DEVKIT_CALLER=human true"] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("project rule refuses"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
 fn a_gh_pr_create_beside_a_todo_command_is_denied_with_every_gate_off() {
     let home = tempfile::tempdir().unwrap();
     let proj = project("[harness]\nenforce_commands = false\nenforce_writes = false\n");
