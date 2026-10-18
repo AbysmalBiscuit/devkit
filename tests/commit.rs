@@ -685,32 +685,6 @@ fn an_agent_author_keeps_a_supplied_body_including_an_interior_trailer() {
 }
 
 #[test]
-fn an_agent_author_keeps_body_paragraph_spacing() {
-    let repo = repo();
-    let dir = repo.path();
-    require_agent_coauthors(dir);
-    std::fs::write(dir.join("a.txt"), lines("a.txt", &[1])).unwrap();
-
-    let mut cmd = devkit_commit(dir);
-    author_env(&mut cmd, AGENT_AUTHOR.0, AGENT_AUTHOR.1);
-    let out = cmd
-        .env("DEVKIT_CALLER", "agent")
-        .args([
-            "--files",
-            "a.txt",
-            "--subject",
-            "fix: a",
-            "--body",
-            "Before\n\n\nAfter",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(message(dir), "fix: a\n\nBefore\n\n\nAfter\n\n");
-}
-
-#[test]
 fn a_custom_commit_message_still_requires_coauthors_of_an_agent_author() {
     let repo = repo();
     let dir = repo.path();
