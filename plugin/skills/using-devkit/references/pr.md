@@ -108,7 +108,7 @@ devkit pr edit --arg-file proof=<scratchpad>/proof.md \
 
 ### Proof for every item
 
-When `defaults.pr_proof_variable` names a template variable (say `proof`), an agent's `create` in a `workspace setup` worktree reads the issue from the tracker and refuses, before the push, a proof that skips an item of its `Done when` section. A `Done when` or `Acceptance criteria` section counts, under a heading or a bold label like `**Acceptance criteria:**`, matched in any case. The refusal lists each missing item with its number. An issue with no such section is refused too, naming the section: add a `## Done when` list to the issue first.
+When `defaults.pr_proof_variable` names a template variable (say `proof`), an agent's `create` in a `workspace setup` worktree reads the issue from the tracker and refuses, before the push, a proof that skips an item of its `Done when` section. A `Done when` or `Acceptance criteria` section counts, under a heading or a bold label like `**Acceptance criteria:**`, matched in any case. The refusal lists each missing item with its number. An issue with no such section, or one whose section lists no items, is refused too, saying which: add the `## Done when` list or its items to the issue first.
 
 Items are numbered in the order the issue lists them. Answer item `n` on a line of the proof that starts with `n.`, `n)` or `n:`, so the wording can be yours:
 
@@ -119,7 +119,7 @@ devkit pr create --pr-title 'feat(login): show the error state' --arg proof='1. 
 ```
 
 - A numbered line indented two columns or more belongs to the entry above it and answers nothing.
-- Not gated: a human caller, a worktree with no issue record, one set up with only `--slug` or checked out from a PR that names no issue, and an issue with no such section.
+- Not gated: a human caller, a worktree with no issue record, and one set up with only `--slug` or checked out from a PR that names no issue.
 - An issue the tracker cannot return is refused, since the items cannot be checked.
 - The check runs on every agent run, a reused PR included, because it comes before the push that finds the PR. Whether the evidence holds is left to review.
 
