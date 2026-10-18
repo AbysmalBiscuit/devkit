@@ -34,7 +34,8 @@ pub(crate) fn gate_proof(
 /// Refuse `proof` when it skips an item of `issue`, read from the tracker so
 /// the items are the ones the issue carries now. An issue the tracker cannot
 /// return is refused too: the check cannot pass on items it never saw, and so
-/// is one with no `Done when` section, which leaves nothing to prove.
+/// is one whose `Done when` section is missing or lists no items, which leaves
+/// nothing to prove.
 pub(crate) fn require_proof(
     tracker: &dyn Tracker,
     issue: &str,
@@ -54,10 +55,19 @@ pub(crate) fn require_proof(
         })?;
     let items = done_when_items(&details.description);
     if items.is_empty() {
+        let (problem, fix) = match outside_fences(&details.description).any(opens_section) {
+            true => (
+                "its `Done when` (or `Acceptance criteria`) section lists no items",
+                "List the outcomes under that section, one item per outcome",
+            ),
+            false => (
+                "it has no `Done when` (or `Acceptance criteria`) section",
+                "Add a `## Done when` list to the issue, one item per outcome",
+            ),
+        };
         bail!(
-            "refusing to open a PR for issue {issue}: it has no `Done when` (or \
-             `Acceptance criteria`) section, so --arg {variable} has nothing to prove. \
-             Add a `## Done when` list to the issue, one item per outcome, then run this again."
+            "refusing --arg {variable} for issue {issue}: {problem}, so there is \
+             nothing to prove. {fix}, then run this again."
         );
     }
     require_every_item(&items, proof, variable)
