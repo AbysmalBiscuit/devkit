@@ -56,6 +56,28 @@ jobs:
       # --trust also applies project harness config (permission rules, hooks,
       # MCP servers); drop it so the flags below are Grok's whole policy: file
       # tools only, no shell (headless dontAsk cancels the turn instead).
+      - name: Fetch earlier findings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api graphql -F owner="${GITHUB_REPOSITORY%/*}" -F name="${GITHUB_REPOSITORY#*/}" \
+            -F number="$PR_NUMBER" -f query='
+              query($owner: String!, $name: String!, $number: Int!) {
+                repository(owner: $owner, name: $name) {
+                  pullRequest(number: $number) {
+                    reviewThreads(first: 100) {
+                      nodes {
+                        isResolved isOutdated path line originalLine
+                        comments(first: 20) { nodes { author { login } body } }
+                      }
+                    }
+                    reviews(last: 50) { nodes { body } }
+                  }
+                }
+              }' > earlier.json
+          jq -r -f .github/grok-review-earlier.jq earlier.json > "$RUNNER_TEMP/earlier.md"
+          cat "$RUNNER_TEMP/earlier.md"
+
       - name: Review
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
@@ -79,7 +101,11 @@ jobs:
           The author's description:
 
           ${PR_BODY}
+
+          ## Earlier findings
+
           EOF
+          cat "$RUNNER_TEMP/earlier.md" >> "$RUNNER_TEMP/prompt.md"
           # The diff goes in the prompt: read_file pages a file 1000 lines at a
           # time, which cost large PRs many slow turns.
           if [ "$(wc -c < pr.diff)" -le 1000000 ]; then

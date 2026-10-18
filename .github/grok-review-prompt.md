@@ -31,6 +31,10 @@ These are false positives. Leave them out:
 
 If no finding is one the author would definitely want to fix, return no findings. Otherwise list every qualifying finding, not only the first: one finding per root cause, at its first site, with its other sites named in the body.
 
+## Earlier findings
+
+The section "Earlier findings" lists what this reviewer already reported on the pull request: each inline thread with its state and replies, and the findings that went only into a review body. Report none of them again, in any wording, unless the commits since then made the issue worse. A reply that explains why a finding is wrong settles it.
+
 ## The answer
 
 Answer in the structured output. The verdict is "correct" when existing code and tests won't break and nothing blocks merge, and the explanation is one sentence on why. Per finding:
