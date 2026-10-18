@@ -10,7 +10,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["priority", "title", "body", "path", "start_line", "line", "suggestion"],
+        "required": ["priority", "title", "body", "path", "start_line", "line", "quote", "suggestion"],
         "properties": {
           "priority": { "type": "integer", "minimum": 0, "maximum": 3 },
           "title": { "type": "string" },
@@ -18,6 +18,10 @@
           "path": { "type": "string" },
           "start_line": { "type": "integer" },
           "line": { "type": "integer" },
+          "quote": {
+            "type": "string",
+            "description": "The exact text of line `line` in the PR's version of the file, without its leading indentation. The comment is placed by this text."
+          },
           "suggestion": { "type": ["string", "null"] }
         }
       }
