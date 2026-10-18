@@ -1592,6 +1592,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 stdin: Stdin::None,
                 cwd,
                 path: None,
+                assignments: Vec::new(),
                 language: Language::Python,
                 location: self.at(node),
             },

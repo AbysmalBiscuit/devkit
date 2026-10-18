@@ -28,7 +28,7 @@ Ticket titles and bodies come from the `ticket_title` and `ticket_body` template
 
 A denied MCP call names the render command and the `--arg`s it needs. The render has to happen in the same agent session as the call, because its receipt is filed under the session id. Receipts live under `.devkit/issue-receipts/` in the repository's main worktree, so a render in any worktree of the repository counts, and session end deletes that session's receipts.
 
-Enforcement is configuration. `[harness.issue_tools.<name>]` entries name the MCP servers and tools that write tickets and enforce as soon as they exist. `devkit schema` documents their keys. Refusing a bare `gh issue create` takes a `[harness.commands]` rule with `programs = ["gh"]` and `args = ["issue", "create"]`, and a bare `gh issue edit --body` one with `args = ["issue", "edit", "**", "--body*"]`; like every command rule they need `[harness] enforce_commands = true`. `ticket create` and `ticket edit` run their own `gh`, which the rules never see.
+Enforcement is configuration. `[harness.issue_tools.<name>]` entries name the MCP servers and tools that write tickets and enforce as soon as they exist. `devkit schema` documents their keys. Refusing a bare `gh issue create` takes a `[harness.commands]` rule with `programs = ["gh"]` and `args = ["issue", "create"]`, and a bare `gh issue edit --body` one with `args = ["issue", "edit", "**", "--body*"]`; like every command rule but the built-in `gh pr create` ones they need `[harness] enforce_commands = true`. `ticket create` and `ticket edit` run their own `gh`, which the rules never see.
 
 ## Ticket fields
 

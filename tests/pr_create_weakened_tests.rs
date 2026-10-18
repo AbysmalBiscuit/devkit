@@ -110,6 +110,27 @@ fn a_human_caller_is_not_gated() {
 }
 
 #[test]
+fn a_human_override_inside_a_harness_session_is_still_gated() {
+    let p = project("");
+    let out = p.issue_in_session("human", Some("S"), &[
+        "pr",
+        "create",
+        "--no-push",
+        "--pr-title",
+        "feat: a thing",
+        "--pr-body",
+        "Adds a thing.",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("tests/math.rs: fewer-tests: test declarations 2 -> 1"),
+        "{stderr}"
+    );
+    assert!(!opened(&p), "{}", p.calls());
+}
+
+#[test]
 fn advise_lists_the_flags_in_the_body_and_opens_the_pr() {
     let p = project("\n[pr.gates]\nweakened_tests = \"advise\"\n");
     let (ok, stderr) = create(&p, "agent", "Adds a thing.");

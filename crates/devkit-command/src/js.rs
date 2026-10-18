@@ -905,6 +905,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 stdin: Stdin::None,
                 cwd,
                 path: None,
+                assignments: Vec::new(),
                 language: Language::JavaScript,
                 location: self.at(node),
             },

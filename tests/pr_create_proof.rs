@@ -138,12 +138,49 @@ fn a_proof_covering_every_item_opens_the_pr() {
 }
 
 #[test]
-fn an_issue_without_the_section_is_not_gated() {
+fn an_issue_without_the_section_is_refused_naming_it() {
     let p = project();
     p.fake.record_issue("7");
     p.fake.serve_issue("Just prose, no items.\n");
 
     let (ok, stderr) = p.create("agent", "covered no item by number");
+    assert!(!ok, "an issue with nothing to prove must refuse: {stderr}");
+    assert!(stderr.contains("Done when"), "names the section: {stderr}");
+    assert!(!p.pushed(), "nothing is pushed");
+    assert!(!p.opened(), "{}", p.fake.calls());
+}
+
+#[test]
+fn an_issue_whose_section_lists_no_items_is_refused_saying_so() {
+    for section in ["## Done when", "**Acceptance criteria:**"] {
+        let p = project();
+        p.fake.record_issue("7");
+        p.fake.serve_issue(&format!(
+            "Why.\n\n{section}\n\nWhen it works.\n\n## Notes\n"
+        ));
+
+        let (ok, stderr) = p.create("agent", "covered no item by number");
+        assert!(!ok, "{section}: an empty section must refuse: {stderr}");
+        assert!(
+            stderr.contains("lists no items"),
+            "{section}: says the section is empty: {stderr}"
+        );
+        assert!(
+            !stderr.contains("has no `Done when`"),
+            "{section}: does not call the section missing: {stderr}"
+        );
+        assert!(!p.pushed(), "{section}: nothing is pushed");
+        assert!(!p.opened(), "{section}: {}", p.fake.calls());
+    }
+}
+
+#[test]
+fn a_human_on_an_issue_without_the_section_opens_the_pr() {
+    let p = project();
+    p.fake.record_issue("7");
+    p.fake.serve_issue("Just prose, no items.\n");
+
+    let (ok, stderr) = p.create("human", "covered no item by number");
     assert!(ok, "{stderr}");
     assert!(p.opened());
 }
@@ -171,6 +208,30 @@ fn a_human_caller_is_not_gated() {
     let (ok, stderr) = p.create("human", "covered no item by number");
     assert!(ok, "{stderr}");
     assert!(p.opened());
+}
+
+#[test]
+fn a_human_override_inside_a_harness_session_is_still_gated() {
+    let p = project();
+    p.fake.record_issue("7");
+    p.fake.serve_issue(ISSUE);
+
+    let out = p.fake.issue_in_session("human", Some("S"), &[
+        "pr",
+        "create",
+        "--pr-title",
+        "feat: a thing",
+        "--arg",
+        "proof=covered no item by number",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("1. A gap is refused (proof: test)"),
+        "the proof gate refused: {stderr}"
+    );
+    assert!(!p.pushed(), "nothing is pushed");
+    assert!(!p.opened(), "{}", p.fake.calls());
 }
 
 /// `pr checkout` records `UNKNOWN` when the PR names no issue, which leaves

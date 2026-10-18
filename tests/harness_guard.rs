@@ -725,3 +725,337 @@ fn an_unresolved_program_a_task_or_app_could_run_keeps_its_project_note() {
         );
     }
 }
+
+fn deny_reason(out: &Output) -> String {
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("a denial is a JSON envelope");
+    v["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn an_agents_gh_pr_create_is_denied_in_any_devkit_project_naming_devkit_pr_create() {
+    let home = tempfile::tempdir().unwrap();
+    for config in ["[defaults]\n", GATE_OFF, GUARDED] {
+        let proj = project(config);
+        for command in [
+            "gh pr create --title t --body b",
+            "cd sub && gh pr create --fill",
+            "gh  pr   new --fill",
+        ] {
+            let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+            assert!(denied(&out), "{config}: {command}");
+            assert!(
+                deny_reason(&out).contains("devkit pr create"),
+                "{config}: {command}: {}",
+                deny_reason(&out)
+            );
+        }
+        let view = run_hook(proj.path(), home.path(), &claude_payload("gh pr view 9"));
+        assert!(!denied(&view), "{config}: only pr create is refused");
+    }
+}
+
+#[test]
+fn a_project_rule_naming_another_caller_spelling_still_matches() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.devkit-caller-human]
+enabled = false
+
+[harness.commands.no-human-env]
+programs = ["env"]
+args = ["DEVKIT_CALLER=HUMAN"]
+reason = "project rule refuses the human caller"
+"#,
+    );
+    for command in [
+        "env DEVKIT_CALLER=HUMAN true",
+        "env DEVKIT_CALLER=human true",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("project rule refuses"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
+fn a_project_rule_with_a_wildcard_caller_pattern_matches_the_raw_word() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.devkit-caller-human]
+enabled = false
+
+[harness.commands.no-human-env]
+programs = ["env"]
+args = ["DEVKIT_CALLER=HUM*"]
+reason = "project rule refuses the human caller"
+"#,
+    );
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("env DEVKIT_CALLER=HUMAN true"),
+    );
+    assert!(denied(&out));
+    assert!(
+        deny_reason(&out).contains("project rule refuses"),
+        "{}",
+        deny_reason(&out)
+    );
+}
+
+#[test]
+fn an_agent_declaring_itself_human_is_denied_with_every_gate_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness]\nenforce_commands = false\nenforce_writes = false\n");
+    for command in [
+        "DEVKIT_CALLER=human devkit pr create",
+        "env DEVKIT_CALLER=human devkit pr create",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("DEVKIT_CALLER"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("FOO=1 cargo build"),
+    );
+    assert!(!denied(&out), "{}", deny_reason(&out));
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
+fn a_gh_pr_create_beside_a_todo_command_is_denied_with_every_gate_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness]\nenforce_commands = false\nenforce_writes = false\n");
+    for command in [
+        "devkit todo add x && gh pr create --fill",
+        "gh pr create --body todo",
+        "DEVKIT_CALLER=human gh pr create --body 'fixes .todo'",
+    ] {
+        let payload = serde_json::json!({
+            "session_id": "s1",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": command }
+        })
+        .to_string();
+        let out = run_hook(proj.path(), home.path(), &payload);
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("devkit pr create"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
+fn a_powershell_gh_pr_create_is_denied_with_every_gate_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        "[harness]\nenforce_commands = false\nenforce_writes = false\nshell = \"powershell\"\n",
+    );
+    for command in [
+        r#"$x = "gh"; & $x pr create --fill"#,
+        r#"& "g`h" pr create"#,
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("devkit pr create"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
+fn a_gh_pr_create_inside_an_appending_assignment_is_denied() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in ["X+=$(gh pr create) true", "X+=$(gh pr create)"] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+    }
+}
+
+#[test]
+fn a_project_rule_switches_the_gh_pr_create_guard_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness.commands.gh-pr-create]\nenabled = false\n");
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("gh pr create --fill"),
+    );
+    assert!(!denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn gh_pr_create_outside_a_devkit_project_is_left_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    devkit_git::Git::fixture(dir.path())
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    let out = run_hook(
+        dir.path(),
+        home.path(),
+        &claude_payload("gh pr create --fill"),
+    );
+    assert!(!denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn a_global_rule_named_like_a_builtin_is_off_outside_a_devkit_project() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    devkit_git::Git::fixture(dir.path())
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    let global = home.path().join("global.toml");
+    std::fs::write(
+        &global,
+        "[harness.commands.gh-pr-create]\nprograms = [\"gh\"]\nreason = \"no gh\"\n",
+    )
+    .unwrap();
+    let out = run_hook_with(
+        dir.path(),
+        home.path(),
+        &claude_payload("gh issue list"),
+        &[("DEVKIT_CONFIG", global.to_str().unwrap())],
+    );
+    assert!(!denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
+    let home = tempfile::tempdir().unwrap();
+    for config in ["[defaults]\n", GATE_OFF, GUARDED] {
+        let proj = project(config);
+        for command in [
+            "DEVKIT_CALLER=human devkit pr create",
+            "env DEVKIT_CALLER=human devkit pr create",
+            "env -u CLAUDE_CODE_SESSION_ID DEVKIT_CALLER=human devkit pr create",
+            "env -u CLAUDE_CODE_SESSION_ID -u CODEX_SESSION_ID DEVKIT_CALLER=human devkit pr create",
+            "export DEVKIT_CALLER=human",
+            "export DEVKIT_CALLER=human && devkit pr create",
+            "declare -x DEVKIT_CALLER=human",
+            "local DEVKIT_CALLER=human",
+            "f() { local -x DEVKIT_CALLER=human; devkit pr create; }; f",
+            "f() { devkit pr create; }; DEVKIT_CALLER=human f",
+            r#"DEVKIT_CALLER="human" devkit pr create"#,
+            "FOO=1 DEVKIT_CALLER='human' devkit pr create",
+            "bash -c 'DEVKIT_CALLER=human devkit pr create'",
+            r#"sh -c "export DEVKIT_CALLER=human; devkit pr create""#,
+            "who=human; DEVKIT_CALLER=$who devkit pr create",
+            "who=human DEVKIT_CALLER=$who devkit pr create",
+            "who=human; export who=agent DEVKIT_CALLER=$who",
+            "who=human; declare -x who=agent DEVKIT_CALLER=\"$who\"",
+            "DEVKIT_CALLER=human; export DEVKIT_CALLER",
+            "DEVKIT_CALLER=HUMAN devkit pr create",
+            r#"DEVKIT_CALLER=" human" devkit pr create"#,
+            "env DEVKIT_CALLER=Human devkit pr create",
+            "export DEVKIT_CALLER='human '",
+            "env  -u  CLAUDE_CODE_SESSION_ID   DEVKIT_CALLER=human  devkit pr create",
+            "env -u CLAUDE_CODE_SESSION_ID -u CODEX_SESSION_ID -- DEVKIT_CALLER=human devkit pr create",
+            "env -- DEVKIT_CALLER=human devkit pr create",
+        ] {
+            let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+            assert!(denied(&out), "{config}: {command}");
+            assert!(
+                deny_reason(&out).contains("DEVKIT_CALLER"),
+                "{config}: {command}: {}",
+                deny_reason(&out)
+            );
+        }
+    }
+}
+
+#[test]
+fn setting_devkit_caller_to_agent_or_unsetting_a_session_is_allowed() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in [
+        "DEVKIT_CALLER=agent devkit pr create",
+        "env DEVKIT_CALLER=agent devkit pr create",
+        "export DEVKIT_CALLER=agent",
+        "env -u CLAUDE_CODE_SESSION_ID devkit pr create",
+        "unset CLAUDE_CODE_SESSION_ID",
+        "echo DEVKIT_CALLER=human",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
+}
+
+#[test]
+fn an_unresolved_assignment_adds_no_rule_note() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in [
+        r#"FOO="$(date)" cargo build"#,
+        r#"export PATH="$PATH:/opt/bin""#,
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert_eq!(notes(&out), Vec::<String>::new(), "{command}");
+    }
+}
+
+#[test]
+fn a_project_rule_switches_the_devkit_caller_guard_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness.commands.devkit-caller-human]\nenabled = false\n");
+    for command in [
+        "DEVKIT_CALLER=human devkit pr create",
+        "export DEVKIT_CALLER=human",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
+}
+
+#[test]
+fn a_builtin_set_to_warn_adds_its_note_with_enforcement_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        "[harness]\nenforce_commands = false\n\n[harness.commands.gh-pr-create]\naction = \"warn\"\n",
+    );
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("gh pr create --fill"),
+    );
+    let notes = notes(&out);
+    assert!(
+        notes.iter().any(|n| n.contains("devkit pr create")),
+        "{notes:?}"
+    );
+}

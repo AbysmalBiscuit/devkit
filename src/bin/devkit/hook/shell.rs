@@ -296,10 +296,23 @@ fn respond(
         );
         let analysis = devkit_command::analyze(command, &context(dialect, shell_cwd));
         let blocks = ledger_blocks(&analysis, &cwd);
-        return match blocks.is_empty() {
-            true => Outcome::silent(),
-            false => deny(which, &blocks),
+        if !blocks.is_empty() {
+            return deny(which, &blocks);
+        }
+        // A built-in command rule applies whatever the gates say, and the
+        // rules' `shell` may pick either dialect, so a command naming one of
+        // its programs in either reading goes on to the rules below.
+        let names_builtin_elsewhere = || {
+            [Dialect::Bash, Dialect::PowerShell]
+                .into_iter()
+                .filter(|d| *d != dialect)
+                .any(|d| {
+                    runs_builtin_program(&devkit_command::analyze(command, &context(d, shell_cwd)))
+                })
         };
+        if !runs_builtin_program(&analysis) && !names_builtin_elsewhere() {
+            return Outcome::silent();
+        }
     }
     if writes_on {
         armed.arm(which);
@@ -317,12 +330,14 @@ fn respond(
     let mut blocks = ledger_blocks(&analysis, &cwd);
     let mut notes: Vec<String> = Vec::new();
     let own = devkit_common::shim::OwnBinary::current();
-    if commands_on {
+    let verdict = if commands_on {
         let project = load_project(&checkout, &cwd, rules.app_match.clone());
-        let verdict = guard::decide(&analysis, &rules.commands, project.as_ref(), &own);
-        blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
-        notes.extend(verdict.warnings.into_iter().map(|f| f.message));
-    }
+        guard::decide(&analysis, &rules.commands, project.as_ref(), &own)
+    } else {
+        guard::decide(&analysis, &rules.builtin_commands(), None, &own)
+    };
+    blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
+    notes.extend(verdict.warnings.into_iter().map(|f| f.message));
     // Everything the record needs that the write stage may consume.
     let shell_record = |decision, blocks: &[String], notes: &[String]| {
         settings.enabled.then(|| {
@@ -391,6 +406,22 @@ fn respond(
         response,
         record: rec,
     }
+}
+
+/// Whether an invocation in `analysis`, or a wrapper around one, runs a
+/// program a built-in command rule names.
+fn runs_builtin_program(analysis: &Analysis) -> bool {
+    let programs = harness::builtin_programs();
+    let named = |program: Option<&str>| {
+        program.is_some_and(|p| programs.iter().any(|b| guard::norm::basename(p) == b))
+    };
+    analysis.invocations.iter().any(|inv| {
+        named(inv.program.known())
+            || inv
+                .wrappers
+                .iter()
+                .any(|w| named(w.first().and_then(|v| v.known())))
+    })
 }
 
 fn context(dialect: Dialect, cwd: Option<&Path>) -> Context {

@@ -470,6 +470,9 @@ github = "sweeper[bot]"
             .env_remove("GH_REPO")
             .env_remove("SLACK_TOKEN")
             .env_remove("DEVKIT_CALLER");
+        for var in devkit_common::caller::HARNESS_SESSION_VARS {
+            cmd.env_remove(var);
+        }
         cmd
     }
 }

@@ -36,6 +36,9 @@ Where GitHub refuses GraphQL, as in a Claude Code cloud session, the PR's head i
 - Whichever PR the run ends on, its head commit must be this worktree's `HEAD`. A reused PR is checked before it is touched, a new one straight after it opens and before any reviewer is requested on it; a failure there leaves the new PR open and says so.
 - `ready` on a branch with no PR is an error naming `devkit pr create`; a merged or closed PR is refused.
 - A `--pr-body` that writes, outside a code fence, a heading the `pr_body` template's text emits on any of its branches, such as `## Proof` or a human's `## TL;DR (human written)`, is refused naming it, by `create`, `edit` and `render` alike: drop it and pass that section's text through its `--arg`. Headings match whatever their case and level, so `# proof` counts as `## Proof`. Headings the template does not emit pass.
+- In a devkit project an agent's bare `gh pr create` (or its alias `gh pr new`) is denied, naming `devkit pr create`, whatever `[harness] enforce_commands` says. These are the built-in `[harness.commands]` rules `gh-pr-create` and `gh-pr-new`, which a layer redefines or switches off with `enabled = false`.
+- A bash or sh command that sets `DEVKIT_CALLER=human` through one of the spellings the built-in rule `devkit-caller-human` matches is denied the same way: an agent cannot declare itself human to skip the gates below. The matched spellings are a prefix assignment (`DEVKIT_CALLER=human cmd`), `env DEVKIT_CALLER=human cmd` (after any `-u NAME` options or `--`), `export`, `declare`, `typeset` or `local` with `DEVKIT_CALLER=human`, and a plain assignment later exported, each with the value in any case and with any surrounding spaces, including inside `bash -c`/`sh -c` and when the value comes from a variable the guard can resolve. `DEVKIT_CALLER=agent` is allowed. The rule reads the command line only and tracks no shell state across statements, so these get past it: export state (`set -a`, or `export DEVKIT_CALLER` followed by a later assignment), an `export` in a sourced file, and a script file that sets it. So do a value the guard cannot resolve, a non-exported assignment, `sudo DEVKIT_CALLER=human cmd`, `env -S '...'`, and non-bash dialects such as PowerShell or fish. An earlier `unset` of the harness session variables is not refused either, and without them `devkit pr create` honours a human value that got past the rule.
+- With both `enforce_commands` and `enforce_writes` off, a program a layer adds to a built-in rule's `programs` goes unchecked; the built-in programs are checked whatever the gates say.
 - Where GitHub refuses GraphQL, as in a Claude Code cloud session, `create` still finds the branch's PR and opens one over REST, ready or draft as asked, but finds no PR on a fork's branch, refuses to open one when `origin` is another repository than the PR repository, and cannot `--attach`. `ready` and `review request`'s draft flip need GraphQL, so open the PR ready there.
 
 ### Weakened tests: the gate on an agent's new PR
@@ -105,7 +108,7 @@ devkit pr edit --arg-file proof=<scratchpad>/proof.md \
 
 ### Proof for every item
 
-When `defaults.pr_proof_variable` names a template variable (say `proof`), an agent's `create` in a `workspace setup` worktree reads the issue from the tracker and refuses, before the push, a proof that skips an item of its `Done when` section. A `Done when` or `Acceptance criteria` section counts, under a heading or a bold label like `**Acceptance criteria:**`, matched in any case. The refusal lists each missing item with its number.
+When `defaults.pr_proof_variable` names a template variable (say `proof`), an agent's `create` in a `workspace setup` worktree reads the issue from the tracker and refuses, before the push, a proof that skips an item of its `Done when` section. A `Done when` or `Acceptance criteria` section counts, under a heading or a bold label like `**Acceptance criteria:**`, matched in any case. The refusal lists each missing item with its number. An issue with no such section, or one whose section lists no items, is refused too, saying which: add the `## Done when` list or its items to the issue first.
 
 Items are numbered in the order the issue lists them. Answer item `n` on a line of the proof that starts with `n.`, `n)` or `n:`, so the wording can be yours:
 
@@ -116,7 +119,7 @@ devkit pr create --pr-title 'feat(login): show the error state' --arg proof='1. 
 ```
 
 - A numbered line indented two columns or more belongs to the entry above it and answers nothing.
-- Not gated: a human caller, a worktree with no issue record, one set up with only `--slug` or checked out from a PR that names no issue, and an issue with no such section.
+- Not gated: a human caller, a worktree with no issue record, and one set up with only `--slug` or checked out from a PR that names no issue.
 - An issue the tracker cannot return is refused, since the items cannot be checked.
 - The check runs on every agent run, a reused PR included, because it comes before the push that finds the PR. Whether the evidence holds is left to review.
 

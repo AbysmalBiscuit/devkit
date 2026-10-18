@@ -66,6 +66,9 @@ fn devkit(dir: &Path, caller: &str) -> Command {
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env("DEVKIT_CALLER", caller)
         .arg("template");
+    for var in devkit_common::caller::HARNESS_SESSION_VARS {
+        cmd.env_remove(var);
+    }
     cmd
 }
 

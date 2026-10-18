@@ -220,6 +220,27 @@ fn a_repro_that_passes_with_the_fix_reverted_refuses_naming_the_item() {
 }
 
 #[test]
+fn a_human_override_inside_a_harness_session_is_still_gated() {
+    let p = project(GATE, &format!("{FIX}\n{ALWAYS}"));
+    let out = p.issue_in_session("human", Some("S"), &[
+        "pr",
+        "create",
+        "--no-push",
+        "--pr-title",
+        "fix: the lib",
+        "--pr-body",
+        "Fixes the lib.",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("passes with the fix reverted"),
+        "the repro gate refused: {stderr}"
+    );
+    assert!(!opened(&p), "{}", p.calls());
+}
+
+#[test]
 fn a_selector_matching_no_test_refuses_naming_the_item() {
     let p = project(GATE, NONE);
     let stderr = refusal(&p);

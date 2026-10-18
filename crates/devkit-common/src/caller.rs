@@ -47,15 +47,38 @@ pub fn parse_caller_override(val: Option<&str>) -> Option<Caller> {
     }
 }
 
+/// A `DEVKIT_CALLER=<value>` assignment word spelled the way rules name it,
+/// `DEVKIT_CALLER=human` or `DEVKIT_CALLER=agent`, when
+/// [`parse_caller_override`] reads its value as either; `None` for any other
+/// word. Lets a rule naming one spelling match every value the override
+/// accepts.
+pub fn canonical_caller_assignment(word: &str) -> Option<&'static str> {
+    let value = word.strip_prefix("DEVKIT_CALLER=")?;
+    Some(match parse_caller_override(Some(value))? {
+        Caller::Human => "DEVKIT_CALLER=human",
+        Caller::Agent => "DEVKIT_CALLER=agent",
+    })
+}
+
+/// The classification with `DEVKIT_CALLER` applied. A harness session id
+/// outranks an override of `human`: the override exists for a person whose
+/// shell detection misreads, and an agent declaring itself human would skip
+/// every gate an agent's `pr create` runs. `agent` is honoured everywhere.
+pub fn resolve_caller(over: Option<Caller>, harness_session: bool, is_tty: bool) -> Caller {
+    match over {
+        Some(Caller::Human) if harness_session => Caller::Agent,
+        Some(c) => c,
+        None => decide_caller(harness_session, is_tty),
+    }
+}
+
 /// Resolve once per command at the CLI edge and pass the result down.
 pub fn caller() -> Caller {
-    if let Some(c) = parse_caller_override(std::env::var("DEVKIT_CALLER").ok().as_deref()) {
-        return c;
-    }
+    let over = parse_caller_override(std::env::var("DEVKIT_CALLER").ok().as_deref());
     let harness = HARNESS_SESSION_VARS
         .iter()
         .any(|v| std::env::var(v).is_ok_and(|s| !s.is_empty()));
-    decide_caller(harness, std::io::stdin().is_terminal())
+    resolve_caller(over, harness, std::io::stdin().is_terminal())
 }
 
 #[cfg(test)]
@@ -72,6 +95,23 @@ mod tests {
     fn without_a_harness_session_the_terminal_decides() {
         assert_eq!(decide_caller(false, true), Caller::Human);
         assert_eq!(decide_caller(false, false), Caller::Agent);
+    }
+
+    #[test]
+    fn a_harness_session_outranks_a_human_override_but_not_an_agent_one() {
+        assert_eq!(
+            resolve_caller(Some(Caller::Human), true, true),
+            Caller::Agent
+        );
+        assert_eq!(
+            resolve_caller(Some(Caller::Human), false, false),
+            Caller::Human
+        );
+        assert_eq!(
+            resolve_caller(Some(Caller::Agent), false, true),
+            Caller::Agent
+        );
+        assert_eq!(resolve_caller(None, false, true), Caller::Human);
     }
 
     #[test]

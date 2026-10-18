@@ -2165,7 +2165,8 @@ pub struct Defaults {
     /// When set, an agent's `pr create` in an issue worktree is refused
     /// before the push unless that proof answers every item of the issue's
     /// `Done when` or `Acceptance criteria` section, each on a line starting
-    /// with the item's number (`2. <evidence>`). Unset by default.
+    /// with the item's number (`2. <evidence>`). An issue with no such
+    /// section is refused too. Unset by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_proof_variable: Option<String>,
     /// Glob patterns for status-check names to discount from a PR's CHECK
@@ -2559,7 +2560,8 @@ const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
 /// no default is required) is a floor this enum sits on top of and cannot
 /// lower. `Never` is therefore meaningful only as a task-level override of a
 /// variable-level marking. Who counts as an agent is `DEVKIT_CALLER`, then a
-/// harness session variable, then a non-terminal stdin.
+/// harness session variable, then a non-terminal stdin; a harness session
+/// variable outranks `DEVKIT_CALLER=human`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Required {

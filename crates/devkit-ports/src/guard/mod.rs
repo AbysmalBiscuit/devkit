@@ -12,7 +12,10 @@ use std::{
 };
 
 use devkit_command::{Analysis, Invocation, SearchPath, Value};
-use devkit_common::{caller::Caller, shim::OwnBinary};
+use devkit_common::{
+    caller::{self, Caller},
+    shim::OwnBinary,
+};
 use devkit_config::{
     AppMatch, CommandRule, Config, RuleAction, RunAction, RunArg, Severity, wildcard_matches,
 };
@@ -105,7 +108,10 @@ fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
 }
 
 /// Whether `args` starts with `patterns`. A `"**"` entry stands for zero or
-/// more whole arguments; every other entry matches one argument.
+/// more whole arguments; every other entry matches one argument. A pattern
+/// that is a `DEVKIT_CALLER=` assignment the override accepts matches every
+/// spelling of that value; any other pattern, wildcards included, matches the
+/// argument as written.
 fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((pattern, patterns)) = patterns.split_first() else {
         return Match::Yes;
@@ -119,8 +125,18 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((arg, args)) = args.split_first() else {
         return Match::No;
     };
+    let canonical = caller::canonical_caller_assignment(pattern);
     let here = match arg {
-        Value::Known(actual) if wildcard_matches(pattern, actual) => Match::Yes,
+        Value::Known(actual)
+            if match canonical {
+                Some(pattern) => {
+                    caller::canonical_caller_assignment(actual).unwrap_or(actual) == pattern
+                }
+                None => wildcard_matches(pattern, actual),
+            } =>
+        {
+            Match::Yes
+        }
         Value::Known(_) => return Match::No,
         Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => Match::Possible,
     };
@@ -1173,6 +1189,29 @@ mod tests {
             &BTreeMap::new(),
             Some(&p)
         )));
+    }
+
+    #[test]
+    fn a_prefix_assignment_keeps_a_differing_doppler_config_denied() {
+        let p = project(|c| {
+            c.tasks.insert("check".into(), TaskConfig {
+                run: ["doppler", "run", "-c", "dev", "--", "bun", "test"]
+                    .iter()
+                    .map(|s| (*s).into())
+                    .collect(),
+                ..Default::default()
+            });
+        });
+        let denied = decide_with(
+            "FOO=1 doppler run -c prd -- bun test",
+            &BTreeMap::new(),
+            Some(&p),
+        );
+        assert!(
+            reason(&denied).contains("devrun task check"),
+            "{}",
+            reason(&denied)
+        );
     }
 
     #[test]

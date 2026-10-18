@@ -2408,24 +2408,22 @@ mod tests {
     }
 
     /// Two callers that both find themselves holding the last reference must
-    /// produce one remover and no leak. The barrier forces the interleaving
-    /// worth testing: both worktrees are gone before either counts, so both see
-    /// zero referencers and both try to remove. Without it the threads can
-    /// serialize, one declining because the other's worktree still stands,
-    /// which never exercises the contention.
+    /// produce one remover and no leak, so both worktrees go before either
+    /// counts. They go serially: concurrent `git worktree remove` runs in one
+    /// repository race on `.git/worktrees` and fail.
     #[test]
     fn two_concurrent_ends_leave_no_baseline_behind() {
         let f = two_worktrees_sharing_one_baseline();
+        remove_worktree(&f.repo, &f.a);
+        remove_worktree(&f.repo, &f.b);
         let gate = std::sync::Barrier::new(2);
         let removed: Vec<bool> = std::thread::scope(|s| {
-            let handles: Vec<_> = [f.a.clone(), f.b.clone()]
-                .into_iter()
-                .map(|wt| {
+            let handles: Vec<_> = (0..2)
+                .map(|_| {
                     let repo = f.repo.clone();
                     let baseline = f.baseline.clone();
                     let gate = &gate;
                     s.spawn(move || {
-                        remove_worktree(&repo, &wt);
                         gate.wait();
                         let ports = registry::Data::default();
                         drop_reference(&repo, &baseline, &ports, false).unwrap()

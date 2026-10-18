@@ -283,15 +283,13 @@ fn role_selection_lists_names_and_refuses_terminal_callers() {
     for name in ["main", "subagent", "manager", "implementer", "reviewer"] {
         assert!(stderr(&unknown).contains(name), "{}", stderr(&unknown));
     }
-    for env in [&[][..], &[("DEVKIT_CALLER", "human"), MAIN[1]][..]] {
-        let terminal = p.devkit(&["todo", "role", "manager"], env);
-        assert!(!terminal.status.success());
-        assert!(
-            stderr(&terminal).contains("agent session"),
-            "{}",
-            stderr(&terminal)
-        );
-    }
+    let terminal = p.devkit(&["todo", "role", "manager"], &[]);
+    assert!(!terminal.status.success());
+    assert!(
+        stderr(&terminal).contains("agent session"),
+        "{}",
+        stderr(&terminal)
+    );
 }
 
 #[test]

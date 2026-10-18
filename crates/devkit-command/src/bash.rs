@@ -20,6 +20,9 @@ struct Scope {
     cwd: Option<String>,
     positional: Vec<Value>,
     functions: HashMap<String, std::ops::Range<usize>>,
+    /// Prefix assignments on the function call this scope runs the body of,
+    /// which every command in that body inherits in its environment.
+    env: Vec<Word>,
 }
 
 impl Scope {
@@ -154,13 +157,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "command" => self.command(node, scope, stdin),
             "redirected_statement" => self.redirected(node, scope, stdin),
             "variable_assignment" => self.assign(node, scope),
-            "variable_assignments" | "declaration_command" => {
+            "variable_assignments" => {
                 for child in ts::named_children(node) {
                     if child.kind() == "variable_assignment" {
                         self.assign(child, scope);
                     }
                 }
             }
+            "declaration_command" => self.declaration(node, scope, stdin),
             "list" => self.list(node, scope),
             "pipeline" => self.pipeline(ts::named_children(node), scope, stdin),
             "subshell" => {
@@ -460,6 +464,64 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
+    /// `export`, `declare` and their kin bind each assignment in the scope and
+    /// run as a command whose arguments are their operands, with a bare name
+    /// read as the `NAME=value` it exports when its value is known. Bash
+    /// expands every operand before binding any, so each assigned value is
+    /// read in the scope from before the command.
+    fn declaration(&mut self, node: Node<'t>, scope: &mut Scope, stdin: Stdin) {
+        let Some(keyword) = node.child(0) else {
+            return;
+        };
+        let mut words = vec![Word {
+            value: Value::Known(ts::text(keyword, self.source).to_string()),
+            typed: ts::text(keyword, self.source).to_string(),
+            span: keyword.byte_range(),
+        }];
+        let mut bound: Vec<(String, Value)> = Vec::new();
+        for child in ts::named_children(node) {
+            match child.kind() {
+                "variable_assignment" => {
+                    let Some((name, value)) = self.assignment(child, scope) else {
+                        continue;
+                    };
+                    words.extend(assignment_word(&name, &value, child));
+                    bound.push((name, value));
+                }
+                "variable_name" => {
+                    let name = ts::text(child, self.source);
+                    let value = bound
+                        .iter()
+                        .rev()
+                        .find(|(n, _)| n == name)
+                        .map(|(_, v)| v)
+                        .or_else(|| scope.vars.get(name))
+                        .cloned()
+                        .unwrap_or(Value::Unknown);
+                    words.push(
+                        assignment_word(name, &value, child).unwrap_or_else(|| Word {
+                            value: Value::Known(name.to_string()),
+                            typed: name.to_string(),
+                            span: child.byte_range(),
+                        }),
+                    );
+                }
+                _ => words.push(self.word(child, scope)),
+            }
+        }
+        scope.vars.extend(bound);
+        let raw = RawInvocation {
+            words,
+            stdin,
+            cwd: scope.cwd.clone(),
+            path: scope.vars.get("PATH").cloned(),
+            assignments: scope.env.clone(),
+            language: Language::Bash,
+            location: self.frame.locate(node.byte_range()),
+        };
+        self.a.invocation(raw, self.frame);
+    }
+
     fn assign(&mut self, node: Node<'t>, scope: &mut Scope) {
         if let Some((name, value)) = self.assignment(node, scope) {
             scope.vars.insert(name, value);
@@ -473,7 +535,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
         let value = match node.child_by_field_name("value") {
             None => Value::Known(String::new()),
             Some(v) if v.kind() == "array" || appends => {
-                self.substitutions(v, scope);
+                self.substitutions(node, scope);
                 Value::Unknown
             }
             Some(v) => self.word(v, scope).value,
@@ -523,17 +585,26 @@ impl<'t> Walker<'_, '_, '_, 't> {
 
     fn command(&mut self, node: Node<'t>, scope: &mut Scope, stdin: Stdin) {
         let mut words: Vec<Word> = Vec::new();
+        let mut assignments: Vec<Word> = Vec::new();
         let mut path = scope.vars.get("PATH").cloned();
+        // Bash expands prefix assignments left to right, each seeing the ones
+        // before it, and drops them once the command returns.
+        let mut prefix: Option<Scope> = None;
         for child in ts::named_children(node) {
             match child.kind() {
-                "variable_assignment"
-                    if child
-                        .child_by_field_name("name")
-                        .is_some_and(|name| ts::text(name, self.source) == "PATH") =>
-                {
-                    path = self.assignment(child, scope).map(|(_, value)| value);
+                "variable_assignment" => {
+                    let env = prefix.get_or_insert_with(|| scope.clone());
+                    let Some((name, value)) = self.assignment(child, env) else {
+                        continue;
+                    };
+                    if let Some(word) = assignment_word(&name, &value, child) {
+                        assignments.push(word);
+                    }
+                    if name == "PATH" {
+                        path = Some(value.clone());
+                    }
+                    env.vars.insert(name, value);
                 }
-                "variable_assignment" => self.substitutions(child, scope),
                 "file_redirect" => self.file_redirect(child, scope),
                 _ => words.push(self.word(child, scope)),
             }
@@ -571,7 +642,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
             Some(name) if scope.functions.contains_key(name) => {
                 let body = scope.functions[name].clone();
                 if let Some(body) = self.root.descendant_for_byte_range(body.start, body.end) {
-                    let mut call = scope.clone();
+                    let mut call = prefix.unwrap_or_else(|| scope.clone());
+                    call.env.extend(assignments);
                     call.positional = std::iter::once(Value::Known(name.to_string()))
                         .chain(words[1..].iter().map(|w| w.value.clone()))
                         .collect();
@@ -586,6 +658,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             stdin,
             cwd: scope.cwd.clone(),
             path,
+            assignments: scope.env.iter().cloned().chain(assignments).collect(),
             language: Language::Bash,
             location: self.frame.locate(node.byte_range()),
         };
@@ -871,6 +944,17 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
         scope.vars.get(name).cloned().unwrap_or(Value::Unknown)
     }
+}
+
+/// An assignment as the `NAME=value` word an environment receives, when its
+/// value is known. An unknown value names nothing a rule could match.
+fn assignment_word(name: &str, value: &Value, node: Node<'_>) -> Option<Word> {
+    let text = format!("{name}={}", value.known()?);
+    Some(Word {
+        value: Value::Known(text.clone()),
+        typed: text,
+        span: node.byte_range(),
+    })
 }
 
 /// `mktemp -u` prints a name without creating anything, leaving the path free

@@ -4,6 +4,7 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::LazyLock,
 };
 
 use devkit_config::{
@@ -135,6 +136,10 @@ pub struct HarnessRules {
     pub pr_tools: BTreeMap<String, RenderedToolRule>,
     pub app_match: AppMatch,
     pub policy: HarnessPolicy,
+    /// Whether devkit's built-in rules were layered in, which happens only in
+    /// a devkit project. Without them, a rule that shares a built-in's name is
+    /// an ordinary rule.
+    pub builtins_layered: bool,
 }
 
 /// Merge the `[harness]` tables of parsed layers, lowest precedence first, and
@@ -247,6 +252,7 @@ pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<Stri
             pr_tools,
             app_match,
             policy,
+            builtins_layered: false,
         },
         warnings,
     )
@@ -288,24 +294,86 @@ fn value_names_programs(v: &toml::Value) -> bool {
     v.as_table().is_some_and(|t| t.contains_key("programs"))
 }
 
+/// Command rules devkit applies in every devkit project, below the global
+/// config and whatever `enforce_commands` says. A layer's rule of the same name
+/// overrides the keys it sets, so `enabled = false` switches one off.
+const BUILTIN_RULES: &str = r#"
+[harness.commands.gh-pr-create]
+programs = ["gh"]
+args = ["pr", "create"]
+reason = "Open PRs with `devkit pr create`, which renders the PR template and runs the gates an agent's PR must pass."
+
+[harness.commands.gh-pr-new]
+programs = ["gh"]
+args = ["pr", "new"]
+reason = "Open PRs with `devkit pr create`, which renders the PR template and runs the gates an agent's PR must pass."
+
+[harness.commands.devkit-caller-human]
+programs = ["env", "export", "declare", "typeset", "local"]
+args = ["**", "DEVKIT_CALLER=human"]
+reason = "An agent cannot declare itself human: `DEVKIT_CALLER=human` skips the gates an agent's `devkit pr create` must pass. Run the command without it."
+"#;
+
+static BUILTIN_LAYER: LazyLock<toml::Table> =
+    LazyLock::new(|| toml::from_str(BUILTIN_RULES).expect("BUILTIN_RULES is valid TOML"));
+
+fn builtin_command_tables() -> &'static toml::Table {
+    BUILTIN_LAYER["harness"]["commands"]
+        .as_table()
+        .expect("the built-in layer holds `[harness.commands]`")
+}
+
+/// The programs a built-in command rule names, so a caller can tell whether a
+/// command could match one before resolving any config.
+pub fn builtin_programs() -> Vec<String> {
+    builtin_command_tables()
+        .values()
+        .filter_map(|rule| rule.get("programs")?.as_array())
+        .flatten()
+        .filter_map(|p| p.as_str().map(str::to_owned))
+        .collect()
+}
+
+impl HarnessRules {
+    /// The merged command rules that devkit builds in, as the layers left
+    /// them. They apply even where `enforce_commands` is off.
+    pub fn builtin_commands(&self) -> BTreeMap<String, CommandRule> {
+        if !self.builtins_layered {
+            return BTreeMap::new();
+        }
+        let names = builtin_command_tables();
+        self.commands
+            .iter()
+            .filter(|(name, _)| names.contains_key(*name))
+            .map(|(name, rule)| (name.clone(), rule.clone()))
+            .collect()
+    }
+}
+
 /// The merged `[harness]` command-guard tables applying at `cwd`, lowest
-/// precedence first: the global config, then every project layer. A project
-/// layer that will not parse is left out with a warning naming it.
+/// precedence first: devkit's built-in rules when `cwd` is in a devkit
+/// project, the global config, then every project layer. A project layer that
+/// will not parse is left out with a warning naming it.
 ///
 /// Warnings are returned rather than printed. This runs inside the shared gate,
 /// which `lockm hook pretooluse` also calls, and a rule warning printed here
 /// would fire on every `Edit` as well as every `Bash`.
 pub fn resolve_rules_in(checkout: &Checkout, cwd: &Path) -> (HarnessRules, Vec<String>) {
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
+    let project = devkit_config::read_project_layers(cwd, checkout.main_checkout());
+    let builtins_layered = !project.layers.is_empty();
+    if builtins_layered {
+        layers.push((PathBuf::from("<devkit built-in>"), BUILTIN_LAYER.clone()));
+    }
     if let Some(p) = global_config_path()
         && let Ok(body) = std::fs::read_to_string(&p)
         && let Ok(t) = toml::from_str::<toml::Table>(&body)
     {
         layers.push((p, t));
     }
-    let project = devkit_config::read_project_layers(cwd, checkout.main_checkout());
     layers.extend(project.layers.into_iter().map(|(l, t)| (l.path, t)));
-    let (rules, mut warnings) = merge_rules(&layers);
+    let (mut rules, mut warnings) = merge_rules(&layers);
+    rules.builtins_layered = builtins_layered;
     for broken in project.broken {
         warnings.push(format!("ignoring a project layer: {:#}", broken.error));
     }
@@ -562,6 +630,15 @@ programs = "node"
             "[defaults]\napps_dir = \"apps\"\n",
             "enforce_writes"
         ));
+    }
+
+    #[test]
+    fn the_built_in_rules_parse_into_every_named_rule() {
+        let (h, warns) = merge_rules(&[layer("<devkit built-in>", BUILTIN_RULES)]);
+        assert!(warns.is_empty(), "{warns:?}");
+        for name in ["gh-pr-create", "gh-pr-new", "devkit-caller-human"] {
+            assert!(!h.commands[name].reason.is_empty(), "{name}");
+        }
     }
 
     fn layer(name: &str, body: &str) -> (PathBuf, toml::Table) {

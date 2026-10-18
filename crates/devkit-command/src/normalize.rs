@@ -354,15 +354,18 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
             break;
         };
         let mut i = wrapper.prefix.len();
+        // `env` still reads NAME=VALUE operands after `--` ends its options.
+        let mut options_done = false;
         while let Some(word) = argv.get(i) {
             let Some(text) = word.value.known() else {
                 break;
             };
-            if text == "--" {
+            if text == "--" && !options_done {
+                options_done = true;
                 i += 1;
-                break;
+                continue;
             }
-            if !text.starts_with('-') {
+            if options_done || !text.starts_with('-') {
                 if first == "env" && is_assignment(word) {
                     if let Some(path) = path_assignment(word, style) {
                         search_path = SearchPath::Set(path);
@@ -584,6 +587,7 @@ fn run_find_exec(
                         SearchPath::Set(path) => Some(path.clone()),
                         SearchPath::Inherited => None,
                     },
+                    assignments: Vec::new(),
                     language: raw.language,
                     location: raw.location.clone(),
                 },

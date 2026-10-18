@@ -293,6 +293,7 @@ impl<'t> Walker<'_, '_, '_> {
             stdin,
             cwd: scope.cwd.clone(),
             path: None,
+            assignments: Vec::new(),
             language: Language::Fish,
             location: self.frame.locate(node.byte_range()),
         };

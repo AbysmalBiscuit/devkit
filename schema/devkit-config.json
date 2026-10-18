@@ -170,7 +170,7 @@
         },
         "programs": {
           "default": [],
-          "description": "Program names this rule refuses, matched against the segment's command\nword by basename, and against each wrapper unwrapped to reach it\n(`sudo`, `nohup`, `env`), whose own options are then its arguments. An\nempty list matches nothing, which is how a child layer exempts a\nsubtree from a rule its parent declared.",
+          "description": "Program names this rule refuses, matched against the segment's command\nword by basename, and against each wrapper unwrapped to reach it\n(`sudo`, `nohup`, `env`), whose own options are then its arguments.\nA prefix assignment whose value the guard can resolve counts as\n`env`: `FOO=1 cmd` reads as `env FOO=1 cmd`, while\n`FOO=\"$(date)\" cmd` adds no `env`. `export` and `declare` are programs\nwhose arguments are their `NAME=value` operands. An empty list matches\nnothing, which is how a child layer exempts a subtree from a rule its\nparent declared.",
           "items": {
             "type": "string"
           },
@@ -393,7 +393,7 @@
           "description": "State `pr create` opens a PR in when neither `--draft` nor\n`--ready` is given. Draft by default, so a new PR never lands in\nanyone's review queue until it is marked ready."
         },
         "pr_proof_variable": {
-          "description": "The `[templates.variables]` name whose `--arg` carries a PR's proof.\nWhen set, an agent's `pr create` in an issue worktree is refused\nbefore the push unless that proof answers every item of the issue's\n`Done when` or `Acceptance criteria` section, each on a line starting\nwith the item's number (`2. <evidence>`). Unset by default.",
+          "description": "The `[templates.variables]` name whose `--arg` carries a PR's proof.\nWhen set, an agent's `pr create` in an issue worktree is refused\nbefore the push unless that proof answers every item of the issue's\n`Done when` or `Acceptance criteria` section, each on a line starting\nwith the item's number (`2. <evidence>`). An issue with no such\nsection is refused too. Unset by default.",
           "type": [
             "string",
             "null"
@@ -802,7 +802,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/CommandRule"
           },
-          "description": "Extra refusals beyond the ones devkit derives from `[apps]` and\n`[tasks]`. Merged across config layers by name; redefining a rule\noverrides only the keys it sets.",
+          "description": "Extra refusals beyond the ones devkit derives from `[apps]` and\n`[tasks]`. Merged across config layers by name; redefining a rule\noverrides only the keys it sets. devkit builds in `gh-pr-create` and\n`gh-pr-new`, refusing `gh pr create` and its alias in favour of\n`devkit pr create`, and `devkit-caller-human`, refusing a command that\nsets `DEVKIT_CALLER=human`; they apply in every devkit project even\nwith `enforce_commands` off, and `enabled = false` switches one off.\nWith both `enforce_commands` and `enforce_writes` off, a program a\nlayer adds to a built-in rule's `programs` goes unchecked.",
           "type": "object"
         },
         "enforce_commands": {
@@ -1677,7 +1677,7 @@
       "type": "object"
     },
     "Required": {
-      "description": "Who must supply an `--arg` even though a default exists. `Never` is the\nabsence of a marking, not a licence to omit: the derived rule (an arg with\nno default is required) is a floor this enum sits on top of and cannot\nlower. `Never` is therefore meaningful only as a task-level override of a\nvariable-level marking. Who counts as an agent is `DEVKIT_CALLER`, then a\nharness session variable, then a non-terminal stdin.",
+      "description": "Who must supply an `--arg` even though a default exists. `Never` is the\nabsence of a marking, not a licence to omit: the derived rule (an arg with\nno default is required) is a floor this enum sits on top of and cannot\nlower. `Never` is therefore meaningful only as a task-level override of a\nvariable-level marking. Who counts as an agent is `DEVKIT_CALLER`, then a\nharness session variable, then a non-terminal stdin; a harness session\nvariable outranks `DEVKIT_CALLER=human`.",
       "enum": [
         "never",
         "humans",
