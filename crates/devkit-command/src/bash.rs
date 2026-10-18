@@ -584,18 +584,23 @@ impl<'t> Walker<'_, '_, '_, 't> {
         let mut words: Vec<Word> = Vec::new();
         let mut assignments: Vec<Word> = Vec::new();
         let mut path = scope.vars.get("PATH").cloned();
+        // Bash expands prefix assignments left to right, each seeing the ones
+        // before it, and drops them once the command returns.
+        let mut prefix: Option<Scope> = None;
         for child in ts::named_children(node) {
             match child.kind() {
                 "variable_assignment" => {
-                    let Some((name, value)) = self.assignment(child, scope) else {
+                    let env = prefix.get_or_insert_with(|| scope.clone());
+                    let Some((name, value)) = self.assignment(child, env) else {
                         continue;
                     };
                     if let Some(word) = assignment_word(&name, &value, child) {
                         assignments.push(word);
                     }
                     if name == "PATH" {
-                        path = Some(value);
+                        path = Some(value.clone());
                     }
+                    env.vars.insert(name, value);
                 }
                 "file_redirect" => self.file_redirect(child, scope),
                 _ => words.push(self.word(child, scope)),
