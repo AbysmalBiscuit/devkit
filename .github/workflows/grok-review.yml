@@ -53,9 +53,6 @@ jobs:
           mkdir -p "$HOME/.grok"
           cp .github/grok-config.toml "$HOME/.grok/config.toml"
 
-      # --trust also applies project harness config (permission rules, hooks,
-      # MCP servers); drop it so the flags below are Grok's whole policy: file
-      # tools only, no shell (headless dontAsk cancels the turn instead).
       - name: Fetch earlier findings
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,6 +75,8 @@ jobs:
           jq -r -f .github/grok-review-earlier.jq earlier.json > "$RUNNER_TEMP/earlier.md"
           cat "$RUNNER_TEMP/earlier.md"
 
+      # --trust loads the checkout's harness config, which the PR controls, so
+      # the step deletes it first and the flags stay Grok's whole policy.
       - name: Review
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
@@ -85,7 +84,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           git ls-files -z -- ':(glob)**/.grok/**' ':(glob)**/.claude/**' \
-            ':(glob)**/.cursor/**' ':(glob)**/.mcp.json' | xargs -0 -r rm -f
+            ':(glob)**/.cursor/**' ':(glob)**/.agents/**' ':(glob)**/.mcp.json' | xargs -0 -r rm -f
           git diff --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "${BASE_SHA}...HEAD" \
             -- . ':(exclude)Cargo.lock' > pr.diff
           RUSTC_VERSION=$(rustc --version)
