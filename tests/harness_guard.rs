@@ -846,6 +846,23 @@ fn a_gh_pr_create_beside_a_todo_command_is_denied_with_every_gate_off() {
 }
 
 #[test]
+fn a_powershell_gh_pr_create_is_denied_with_every_gate_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        "[harness]\nenforce_commands = false\nenforce_writes = false\nshell = \"powershell\"\n",
+    );
+    for command in [r#"$x = "gh"; & $x pr create --fill"#, r#"& "g`h" pr create"#] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("devkit pr create"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
 fn a_gh_pr_create_inside_an_appending_assignment_is_denied() {
     let home = tempfile::tempdir().unwrap();
     let proj = project("[defaults]\n");

@@ -299,9 +299,18 @@ fn respond(
         if !blocks.is_empty() {
             return deny(which, &blocks);
         }
-        // A built-in command rule applies whatever the gates say, so a
-        // command naming one of its programs reads the rules below.
-        if !runs_builtin_program(&analysis) {
+        // A built-in command rule applies whatever the gates say, and the
+        // rules' `shell` may pick either dialect, so a command naming one of
+        // its programs in either reading goes on to the rules below.
+        let names_builtin_elsewhere = || {
+            [Dialect::Bash, Dialect::PowerShell]
+                .into_iter()
+                .filter(|d| *d != dialect)
+                .any(|d| {
+                    runs_builtin_program(&devkit_command::analyze(command, &context(d, shell_cwd)))
+                })
+        };
+        if !runs_builtin_program(&analysis) && !names_builtin_elsewhere() {
             return Outcome::silent();
         }
     }
