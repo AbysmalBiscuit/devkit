@@ -47,6 +47,19 @@ pub fn parse_caller_override(val: Option<&str>) -> Option<Caller> {
     }
 }
 
+/// A `DEVKIT_CALLER=<value>` assignment word spelled the way rules name it,
+/// `DEVKIT_CALLER=human` or `DEVKIT_CALLER=agent`, when
+/// [`parse_caller_override`] reads its value as either; `None` for any other
+/// word. Lets a rule naming one spelling match every value the override
+/// accepts.
+pub fn canonical_caller_assignment(word: &str) -> Option<&'static str> {
+    let value = word.strip_prefix("DEVKIT_CALLER=")?;
+    Some(match parse_caller_override(Some(value))? {
+        Caller::Human => "DEVKIT_CALLER=human",
+        Caller::Agent => "DEVKIT_CALLER=agent",
+    })
+}
+
 /// The classification with `DEVKIT_CALLER` applied. A harness session id
 /// outranks an override of `human`: the override exists for a person whose
 /// shell detection misreads, and an agent declaring itself human would skip

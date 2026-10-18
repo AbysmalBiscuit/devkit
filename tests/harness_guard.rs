@@ -805,6 +805,10 @@ fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
             r#"sh -c "export DEVKIT_CALLER=human; devkit pr create""#,
             "who=human; DEVKIT_CALLER=$who devkit pr create",
             "DEVKIT_CALLER=human; export DEVKIT_CALLER",
+            "DEVKIT_CALLER=HUMAN devkit pr create",
+            r#"DEVKIT_CALLER=" human" devkit pr create"#,
+            "env DEVKIT_CALLER=Human devkit pr create",
+            "export DEVKIT_CALLER='human '",
             "env  -u  CLAUDE_CODE_SESSION_ID   DEVKIT_CALLER=human  devkit pr create",
         ] {
             let out = run_hook(proj.path(), home.path(), &claude_payload(command));

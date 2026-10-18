@@ -12,7 +12,10 @@ use std::{
 };
 
 use devkit_command::{Analysis, Invocation, SearchPath, Value};
-use devkit_common::{caller::Caller, shim::OwnBinary};
+use devkit_common::{
+    caller::{self, Caller},
+    shim::OwnBinary,
+};
 use devkit_config::{
     AppMatch, CommandRule, Config, RuleAction, RunAction, RunArg, Severity, wildcard_matches,
 };
@@ -120,7 +123,14 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
         return Match::No;
     };
     let here = match arg {
-        Value::Known(actual) if wildcard_matches(pattern, actual) => Match::Yes,
+        Value::Known(actual)
+            if wildcard_matches(
+                pattern,
+                caller::canonical_caller_assignment(actual).unwrap_or(actual),
+            ) =>
+        {
+            Match::Yes
+        }
         Value::Known(_) => return Match::No,
         Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => Match::Possible,
     };
