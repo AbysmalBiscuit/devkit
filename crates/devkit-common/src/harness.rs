@@ -304,9 +304,27 @@ static BUILTIN_LAYER: LazyLock<toml::Table> = LazyLock::new(|| {
             ("reason".to_owned(), GH_PR_REASON.into()),
         ]))
     };
+    const CALLER_HUMAN_REASON: &str = "An agent cannot declare itself human: `DEVKIT_CALLER=human` skips the gates an agent's `devkit pr create` must pass. Run the command without it.";
+    let caller_human = toml::Value::Table(toml::Table::from_iter([
+        (
+            "programs".to_owned(),
+            toml::Value::Array(vec![
+                "env".into(),
+                "export".into(),
+                "declare".into(),
+                "typeset".into(),
+            ]),
+        ),
+        (
+            "args".to_owned(),
+            toml::Value::Array(vec!["**".into(), "DEVKIT_CALLER=human".into()]),
+        ),
+        ("reason".to_owned(), CALLER_HUMAN_REASON.into()),
+    ]));
     let commands = toml::Table::from_iter([
         ("gh-pr-create".to_owned(), gh_pr("create")),
         ("gh-pr-new".to_owned(), gh_pr("new")),
+        ("devkit-caller-human".to_owned(), caller_human),
     ]);
     let harness = toml::Table::from_iter([("commands".to_owned(), toml::Value::Table(commands))]);
     toml::Table::from_iter([("harness".to_owned(), toml::Value::Table(harness))])

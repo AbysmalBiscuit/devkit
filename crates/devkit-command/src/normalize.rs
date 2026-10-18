@@ -584,6 +584,7 @@ fn run_find_exec(
                         SearchPath::Set(path) => Some(path.clone()),
                         SearchPath::Inherited => None,
                     },
+                    assignments: Vec::new(),
                     language: raw.language,
                     location: raw.location.clone(),
                 },

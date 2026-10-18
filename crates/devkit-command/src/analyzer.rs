@@ -37,6 +37,9 @@ pub(crate) struct RawInvocation {
     /// A `PATH` the source language set for this invocation alone, in place
     /// of the frame's.
     pub(crate) path: Option<Value>,
+    /// The `NAME=value` words the source language set in this invocation's
+    /// environment alone (`FOO=1 cmd`), which run it as `env FOO=1 cmd` does.
+    pub(crate) assignments: Vec<Word>,
     pub(crate) language: Language,
     pub(crate) location: Location,
 }
@@ -151,6 +154,7 @@ impl<'c> Analyzer<'c> {
             stdin: Stdin::None,
             cwd: self.ctx.cwd.clone(),
             path: None,
+            assignments: Vec::new(),
             language: Language::Bash,
             location: Location {
                 outer: 0..0,
@@ -390,10 +394,14 @@ impl<'c> Analyzer<'c> {
             program: program_value.clone(),
             args: args.clone(),
             semantic_args: git.semantic_args.clone(),
-            wrappers: unwrapped
-                .wrappers
-                .iter()
-                .map(|ws| ws.iter().map(|w| w.value.clone()).collect())
+            wrappers: assignment_wrapper(&raw.assignments)
+                .into_iter()
+                .chain(
+                    unwrapped
+                        .wrappers
+                        .iter()
+                        .map(|ws| ws.iter().map(|w| w.value.clone()).collect()),
+                )
                 .collect(),
             typed: raw.words.iter().map(|w| w.typed.clone()).collect(),
             cwd: cwd.clone(),
@@ -505,6 +513,16 @@ impl<'c> Analyzer<'c> {
     }
 }
 
+/// Prefix assignments as the `env` wrapper they are equivalent to, so a rule
+/// naming `env` sees `FOO=1 cmd` the way it sees `env FOO=1 cmd`.
+fn assignment_wrapper(assignments: &[Word]) -> Option<Vec<Value>> {
+    (!assignments.is_empty()).then(|| {
+        std::iter::once(Value::Known("env".into()))
+            .chain(assignments.iter().map(|w| w.value.clone()))
+            .collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,6 +565,7 @@ mod tests {
                 stdin: Stdin::None,
                 cwd: Some("/repo".into()),
                 path: None,
+                assignments: Vec::new(),
                 language: Language::Bash,
                 location: at(),
             },
@@ -572,6 +591,7 @@ mod tests {
                 stdin: Stdin::None,
                 cwd: None,
                 path: None,
+                assignments: Vec::new(),
                 language: Language::Bash,
                 location: at(),
             },

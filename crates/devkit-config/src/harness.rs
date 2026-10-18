@@ -215,7 +215,10 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 pub struct CommandRule {
     /// Program names this rule refuses, matched against the segment's command
     /// word by basename, and against each wrapper unwrapped to reach it
-    /// (`sudo`, `nohup`, `env`), whose own options are then its arguments. An
+    /// (`sudo`, `nohup`, `env`), whose own options are then its arguments.
+    /// A prefix assignment counts as `env`: `FOO=1 cmd` reads as
+    /// `env FOO=1 cmd`. `export` and `declare` are programs whose arguments
+    /// are their `NAME=value` operands. An
     /// empty list matches nothing, which is how a child layer exempts a
     /// subtree from a rule its parent declared.
     #[serde(default)]
@@ -562,8 +565,9 @@ pub struct HarnessSection {
     /// `[tasks]`. Merged across config layers by name; redefining a rule
     /// overrides only the keys it sets. devkit builds in `gh-pr-create` and
     /// `gh-pr-new`, refusing `gh pr create` and its alias in favour of
-    /// `devkit pr create`; they apply in every devkit project even with
-    /// `enforce_commands` off, and `enabled = false` switches one off.
+    /// `devkit pr create`, and `devkit-caller-human`, refusing a command that
+    /// sets `DEVKIT_CALLER=human`; they apply in every devkit project even
+    /// with `enforce_commands` off, and `enabled = false` switches one off.
     #[serde(default)]
     pub commands: BTreeMap<String, CommandRule>,
     /// MCP tools that create or edit issues, whose title and body must come

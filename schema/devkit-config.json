@@ -170,7 +170,7 @@
         },
         "programs": {
           "default": [],
-          "description": "Program names this rule refuses, matched against the segment's command\nword by basename, and against each wrapper unwrapped to reach it\n(`sudo`, `nohup`, `env`), whose own options are then its arguments. An\nempty list matches nothing, which is how a child layer exempts a\nsubtree from a rule its parent declared.",
+          "description": "Program names this rule refuses, matched against the segment's command\nword by basename, and against each wrapper unwrapped to reach it\n(`sudo`, `nohup`, `env`), whose own options are then its arguments.\nA prefix assignment counts as `env`: `FOO=1 cmd` reads as\n`env FOO=1 cmd`. `export` and `declare` are programs whose arguments\nare their `NAME=value` operands. An\nempty list matches nothing, which is how a child layer exempts a\nsubtree from a rule its parent declared.",
           "items": {
             "type": "string"
           },
@@ -802,7 +802,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/CommandRule"
           },
-          "description": "Extra refusals beyond the ones devkit derives from `[apps]` and\n`[tasks]`. Merged across config layers by name; redefining a rule\noverrides only the keys it sets. devkit builds in `gh-pr-create` and\n`gh-pr-new`, refusing `gh pr create` and its alias in favour of\n`devkit pr create`; they apply in every devkit project even with\n`enforce_commands` off, and `enabled = false` switches one off.",
+          "description": "Extra refusals beyond the ones devkit derives from `[apps]` and\n`[tasks]`. Merged across config layers by name; redefining a rule\noverrides only the keys it sets. devkit builds in `gh-pr-create` and\n`gh-pr-new`, refusing `gh pr create` and its alias in favour of\n`devkit pr create`, and `devkit-caller-human`, refusing a command that\nsets `DEVKIT_CALLER=human`; they apply in every devkit project even\nwith `enforce_commands` off, and `enabled = false` switches one off.",
           "type": "object"
         },
         "enforce_commands": {

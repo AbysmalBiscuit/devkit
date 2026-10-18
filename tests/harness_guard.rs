@@ -785,3 +785,78 @@ fn gh_pr_create_outside_a_devkit_project_is_left_alone() {
     );
     assert!(!denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
 }
+
+#[test]
+fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
+    let home = tempfile::tempdir().unwrap();
+    for config in ["[defaults]\n", GATE_OFF, GUARDED] {
+        let proj = project(config);
+        for command in [
+            "DEVKIT_CALLER=human devkit pr create",
+            "env DEVKIT_CALLER=human devkit pr create",
+            "env -u CLAUDE_CODE_SESSION_ID DEVKIT_CALLER=human devkit pr create",
+            "env -u CLAUDE_CODE_SESSION_ID -u CODEX_SESSION_ID DEVKIT_CALLER=human devkit pr create",
+            "export DEVKIT_CALLER=human",
+            "export DEVKIT_CALLER=human && devkit pr create",
+            "declare -x DEVKIT_CALLER=human",
+            r#"DEVKIT_CALLER="human" devkit pr create"#,
+            "FOO=1 DEVKIT_CALLER='human' devkit pr create",
+            "bash -c 'DEVKIT_CALLER=human devkit pr create'",
+            r#"sh -c "export DEVKIT_CALLER=human; devkit pr create""#,
+            "who=human; DEVKIT_CALLER=$who devkit pr create",
+            "DEVKIT_CALLER=human; export DEVKIT_CALLER",
+            "env  -u  CLAUDE_CODE_SESSION_ID   DEVKIT_CALLER=human  devkit pr create",
+        ] {
+            let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+            assert!(denied(&out), "{config}: {command}");
+            assert!(
+                deny_reason(&out).contains("DEVKIT_CALLER"),
+                "{config}: {command}: {}",
+                deny_reason(&out)
+            );
+        }
+    }
+}
+
+#[test]
+fn setting_devkit_caller_to_agent_or_unsetting_a_session_is_allowed() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in [
+        "DEVKIT_CALLER=agent devkit pr create",
+        "env DEVKIT_CALLER=agent devkit pr create",
+        "export DEVKIT_CALLER=agent",
+        "env -u CLAUDE_CODE_SESSION_ID devkit pr create",
+        "unset CLAUDE_CODE_SESSION_ID",
+        "echo DEVKIT_CALLER=human",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
+}
+
+#[test]
+fn an_unresolved_assignment_adds_no_rule_note() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in [
+        r#"FOO="$(date)" cargo build"#,
+        r#"export PATH="$PATH:/opt/bin""#,
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert_eq!(notes(&out), Vec::<String>::new(), "{command}");
+    }
+}
+
+#[test]
+fn a_project_rule_switches_the_devkit_caller_guard_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness.commands.devkit-caller-human]\nenabled = false\n");
+    for command in [
+        "DEVKIT_CALLER=human devkit pr create",
+        "export DEVKIT_CALLER=human",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
+}
