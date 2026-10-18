@@ -15,7 +15,7 @@ use devkit_config::Templates;
 use super::{
     create::{attached_file, check_attachments},
     proof::gate_proof,
-    render::{Texts, missing, require_pr_title},
+    render::{Texts, missing, refuse_template_headings, require_pr_title},
     require_existing_pr,
     resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
     splice::{slot, splice},
@@ -91,6 +91,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let mut edits = parse_args(&args.vars, &tmpls.declared())?;
     if let Some(body) = args.pr_body {
+        refuse_template_headings(tmpls, &body)?;
         edits.insert("input".into(), body);
     }
     if edits.is_empty() && args.pr_title.is_none() {

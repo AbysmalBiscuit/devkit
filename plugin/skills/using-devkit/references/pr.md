@@ -35,6 +35,7 @@ Where GitHub refuses GraphQL, as in a Claude Code cloud session, the PR's head i
 - `--pr <URL|number>` acts on that PR and records it, which is how a worktree bound to the wrong PR is rebound. `--no-push` skips the push.
 - Whichever PR the run ends on, its head commit must be this worktree's `HEAD`. A reused PR is checked before it is touched, a new one straight after it opens and before any reviewer is requested on it; a failure there leaves the new PR open and says so.
 - `ready` on a branch with no PR is an error naming `devkit pr create`; a merged or closed PR is refused.
+- A `--pr-body` that writes, outside a code fence, a heading the `pr_body` template's text emits on any of its branches, such as `## Proof` or a human's `## TL;DR (human written)`, is refused naming it, by `create`, `edit` and `render` alike: drop it and pass that section's text through its `--arg`. Headings match whatever their case and level, so `# proof` counts as `## Proof`. Headings the template does not emit pass.
 - Where GitHub refuses GraphQL, as in a Claude Code cloud session, `create` still finds the branch's PR and opens one over REST, ready or draft as asked, but finds no PR on a fork's branch, refuses to open one when `origin` is another repository than the PR repository, and cannot `--attach`. `ready` and `review request`'s draft flip need GraphQL, so open the PR ready there.
 
 ### Weakened tests: the gate on an agent's new PR

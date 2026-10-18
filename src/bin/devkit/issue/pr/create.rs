@@ -13,7 +13,7 @@ use devkit_ports::ledger::Ledger;
 use super::{
     add_reviewers,
     proof::{DoneWhen, done_when_entries, gate_proof},
-    render::{Texts, require_pr_title, values},
+    render::{Texts, refuse_template_headings, require_pr_title, values},
     repro, require_reviewer_for_ready,
     resolve::{Existing, assert_belongs, parse_pr_flag, resolve_existing, verify_created},
     reviewer_logins, verify, weakened,
@@ -474,6 +474,9 @@ pub fn run(args: Args) -> Result<()> {
 
     let caller = devkit_common::caller::caller();
     let vars = values("pr create", &loaded.config, &args.vars, caller)?;
+    if let Some(summary) = &args.pr_body {
+        refuse_template_headings(&loaded.config.templates, summary)?;
+    }
 
     let worktree = checkout.worktree()?;
     let branch = worktree.branch.clone();
