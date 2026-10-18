@@ -463,7 +463,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
 
     /// `export`, `declare` and their kin bind each assignment in the scope and
     /// run as a command whose arguments are their operands, with a bare name
-    /// read as the `NAME=value` it exports when its value is known.
+    /// read as the `NAME=value` it exports when its value is known. Bash
+    /// expands every operand before binding any, so each assigned value is
+    /// read in the scope from before the command.
     fn declaration(&mut self, node: Node<'t>, scope: &mut Scope, stdin: Stdin) {
         let Some(keyword) = node.child(0) else {
             return;
@@ -473,6 +475,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             typed: ts::text(keyword, self.source).to_string(),
             span: keyword.byte_range(),
         }];
+        let mut bound: Vec<(String, Value)> = Vec::new();
         for child in ts::named_children(node) {
             match child.kind() {
                 "variable_assignment" => {
@@ -480,13 +483,20 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         continue;
                     };
                     words.extend(assignment_word(&name, &value, child));
-                    scope.vars.insert(name, value);
+                    bound.push((name, value));
                 }
                 "variable_name" => {
                     let name = ts::text(child, self.source);
-                    let bound = scope.vars.get(name).cloned().unwrap_or(Value::Unknown);
+                    let value = bound
+                        .iter()
+                        .rev()
+                        .find(|(n, _)| n == name)
+                        .map(|(_, v)| v)
+                        .or_else(|| scope.vars.get(name))
+                        .cloned()
+                        .unwrap_or(Value::Unknown);
                     words.push(
-                        assignment_word(name, &bound, child).unwrap_or_else(|| Word {
+                        assignment_word(name, &value, child).unwrap_or_else(|| Word {
                             value: Value::Known(name.to_string()),
                             typed: name.to_string(),
                             span: child.byte_range(),
@@ -496,6 +506,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 _ => words.push(self.word(child, scope)),
             }
         }
+        scope.vars.extend(bound);
         let raw = RawInvocation {
             words,
             stdin,

@@ -943,6 +943,8 @@ fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
             "bash -c 'DEVKIT_CALLER=human devkit pr create'",
             r#"sh -c "export DEVKIT_CALLER=human; devkit pr create""#,
             "who=human; DEVKIT_CALLER=$who devkit pr create",
+            "who=human; export who=agent DEVKIT_CALLER=$who",
+            "who=human; declare -x who=agent DEVKIT_CALLER=\"$who\"",
             "DEVKIT_CALLER=human; export DEVKIT_CALLER",
             "DEVKIT_CALLER=HUMAN devkit pr create",
             r#"DEVKIT_CALLER=" human" devkit pr create"#,
