@@ -155,8 +155,9 @@ fn an_issue_whose_section_lists_no_items_is_refused_saying_so() {
     for section in ["## Done when", "**Acceptance criteria:**"] {
         let p = project();
         p.fake.record_issue("7");
-        p.fake
-            .serve_issue(&format!("Why.\n\n{section}\n\nWhen it works.\n\n## Notes\n"));
+        p.fake.serve_issue(&format!(
+            "Why.\n\n{section}\n\nWhen it works.\n\n## Notes\n"
+        ));
 
         let (ok, stderr) = p.create("agent", "covered no item by number");
         assert!(!ok, "{section}: an empty section must refuse: {stderr}");

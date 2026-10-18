@@ -851,7 +851,10 @@ fn a_powershell_gh_pr_create_is_denied_with_every_gate_off() {
     let proj = project(
         "[harness]\nenforce_commands = false\nenforce_writes = false\nshell = \"powershell\"\n",
     );
-    for command in [r#"$x = "gh"; & $x pr create --fill"#, r#"& "g`h" pr create"#] {
+    for command in [
+        r#"$x = "gh"; & $x pr create --fill"#,
+        r#"& "g`h" pr create"#,
+    ] {
         let out = run_hook(proj.path(), home.path(), &claude_payload(command));
         assert!(denied(&out), "{command}");
         assert!(
