@@ -16,7 +16,7 @@ use crate::{
     normalize, paths,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Word {
     pub(crate) value: Value,
     pub(crate) typed: String,

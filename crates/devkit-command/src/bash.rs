@@ -20,6 +20,9 @@ struct Scope {
     cwd: Option<String>,
     positional: Vec<Value>,
     functions: HashMap<String, std::ops::Range<usize>>,
+    /// Prefix assignments on the function call this scope runs the body of,
+    /// which every command in that body inherits in its environment.
+    env: Vec<Word>,
 }
 
 impl Scope {
@@ -512,7 +515,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             stdin,
             cwd: scope.cwd.clone(),
             path: scope.vars.get("PATH").cloned(),
-            assignments: Vec::new(),
+            assignments: scope.env.clone(),
             language: Language::Bash,
             location: self.frame.locate(node.byte_range()),
         };
@@ -639,7 +642,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
             Some(name) if scope.functions.contains_key(name) => {
                 let body = scope.functions[name].clone();
                 if let Some(body) = self.root.descendant_for_byte_range(body.start, body.end) {
-                    let mut call = scope.clone();
+                    let mut call = prefix.unwrap_or_else(|| scope.clone());
+                    call.env.extend(assignments);
                     call.positional = std::iter::once(Value::Known(name.to_string()))
                         .chain(words[1..].iter().map(|w| w.value.clone()))
                         .collect();
@@ -654,7 +658,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             stdin,
             cwd: scope.cwd.clone(),
             path,
-            assignments,
+            assignments: scope.env.iter().cloned().chain(assignments).collect(),
             language: Language::Bash,
             location: self.frame.locate(node.byte_range()),
         };
