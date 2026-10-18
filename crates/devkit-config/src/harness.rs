@@ -568,6 +568,8 @@ pub struct HarnessSection {
     /// `devkit pr create`, and `devkit-caller-human`, refusing a command that
     /// sets `DEVKIT_CALLER=human`; they apply in every devkit project even
     /// with `enforce_commands` off, and `enabled = false` switches one off.
+    /// With both `enforce_commands` and `enforce_writes` off, a program a
+    /// layer adds to a built-in rule's `programs` goes unchecked.
     #[serde(default)]
     pub commands: BTreeMap<String, CommandRule>,
     /// MCP tools that create or edit issues, whose title and body must come
