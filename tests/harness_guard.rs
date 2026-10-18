@@ -759,6 +759,16 @@ fn an_agents_gh_pr_create_is_denied_in_any_devkit_project_naming_devkit_pr_creat
 }
 
 #[test]
+fn a_gh_pr_create_inside_an_appending_assignment_is_denied() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in ["X+=$(gh pr create) true", "X+=$(gh pr create)"] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+    }
+}
+
+#[test]
 fn a_project_rule_switches_the_gh_pr_create_guard_off() {
     let home = tempfile::tempdir().unwrap();
     let proj = project("[harness.commands.gh-pr-create]\nenabled = false\n");

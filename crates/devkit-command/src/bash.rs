@@ -521,7 +521,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
         let value = match node.child_by_field_name("value") {
             None => Value::Known(String::new()),
             Some(v) if v.kind() == "array" || appends => {
-                self.substitutions(v, scope);
+                self.substitutions(node, scope);
                 Value::Unknown
             }
             Some(v) => self.word(v, scope).value,
