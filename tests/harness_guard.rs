@@ -797,6 +797,29 @@ fn gh_pr_create_outside_a_devkit_project_is_left_alone() {
 }
 
 #[test]
+fn a_global_rule_named_like_a_builtin_is_off_outside_a_devkit_project() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    devkit_git::Git::fixture(dir.path())
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    let global = home.path().join("global.toml");
+    std::fs::write(
+        &global,
+        "[harness.commands.gh-pr-create]\nprograms = [\"gh\"]\nreason = \"no gh\"\n",
+    )
+    .unwrap();
+    let out = run_hook_with(
+        dir.path(),
+        home.path(),
+        &claude_payload("gh issue list"),
+        &[("DEVKIT_CONFIG", global.to_str().unwrap())],
+    );
+    assert!(!denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
 fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
     let home = tempfile::tempdir().unwrap();
     for config in ["[defaults]\n", GATE_OFF, GUARDED] {

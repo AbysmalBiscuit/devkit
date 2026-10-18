@@ -136,6 +136,10 @@ pub struct HarnessRules {
     pub pr_tools: BTreeMap<String, RenderedToolRule>,
     pub app_match: AppMatch,
     pub policy: HarnessPolicy,
+    /// Whether devkit's built-in rules were layered in, which happens only in
+    /// a devkit project. Without them, a rule that shares a built-in's name is
+    /// an ordinary rule.
+    pub builtins_layered: bool,
 }
 
 /// Merge the `[harness]` tables of parsed layers, lowest precedence first, and
@@ -248,6 +252,7 @@ pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<Stri
             pr_tools,
             app_match,
             policy,
+            builtins_layered: false,
         },
         warnings,
     )
@@ -333,6 +338,9 @@ impl HarnessRules {
     /// The merged command rules that devkit builds in, as the layers left
     /// them. They apply even where `enforce_commands` is off.
     pub fn builtin_commands(&self) -> BTreeMap<String, CommandRule> {
+        if !self.builtins_layered {
+            return BTreeMap::new();
+        }
         let names = builtin_command_tables();
         self.commands
             .iter()
@@ -353,7 +361,8 @@ impl HarnessRules {
 pub fn resolve_rules_in(checkout: &Checkout, cwd: &Path) -> (HarnessRules, Vec<String>) {
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
     let project = devkit_config::read_project_layers(cwd, checkout.main_checkout());
-    if !project.layers.is_empty() {
+    let builtins_layered = !project.layers.is_empty();
+    if builtins_layered {
         layers.push((PathBuf::from("<devkit built-in>"), BUILTIN_LAYER.clone()));
     }
     if let Some(p) = global_config_path()
@@ -363,7 +372,8 @@ pub fn resolve_rules_in(checkout: &Checkout, cwd: &Path) -> (HarnessRules, Vec<S
         layers.push((p, t));
     }
     layers.extend(project.layers.into_iter().map(|(l, t)| (l.path, t)));
-    let (rules, mut warnings) = merge_rules(&layers);
+    let (mut rules, mut warnings) = merge_rules(&layers);
+    rules.builtins_layered = builtins_layered;
     for broken in project.broken {
         warnings.push(format!("ignoring a project layer: {:#}", broken.error));
     }
