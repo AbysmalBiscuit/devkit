@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.25](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.24...v0.14.25) (2026-10-18)
+
+
+### Features
+
+* **commit:** let an agent author stand ([#412](https://github.com/AbysmalBiscuit/devkit/issues/412)) ([47f6b61](https://github.com/AbysmalBiscuit/devkit/commit/47f6b61879dedc7aa0fda28e181c6949009c9b2f))
+* **pr:** refuse a summary repeating template headings ([#414](https://github.com/AbysmalBiscuit/devkit/issues/414)) ([467affb](https://github.com/AbysmalBiscuit/devkit/commit/467affb91944052b261275cceaedf541f3c3845c))
+
+
+### Bug Fixes
+
+* **pr:** close agent bypasses of the PR gates ([#417](https://github.com/AbysmalBiscuit/devkit/issues/417)) ([0f2adf0](https://github.com/AbysmalBiscuit/devkit/commit/0f2adf061781ba7836400a7d1e7045e82d4ea0b1))
+* report a missing home instead of panicking ([#416](https://github.com/AbysmalBiscuit/devkit/issues/416)) ([916ab68](https://github.com/AbysmalBiscuit/devkit/commit/916ab68c80730f3d9590e6224f05c50b6d4b4707))
+* **ui:** read terminal width through console ([#413](https://github.com/AbysmalBiscuit/devkit/issues/413)) ([ee1e9f6](https://github.com/AbysmalBiscuit/devkit/commit/ee1e9f636d455c673e0c0a238d4ff598fdd37212))
+
 ## [0.14.24](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.23...v0.14.24) (2026-10-17)
 
 
