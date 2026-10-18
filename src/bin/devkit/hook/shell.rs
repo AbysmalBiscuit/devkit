@@ -321,16 +321,14 @@ fn respond(
     let mut blocks = ledger_blocks(&analysis, &cwd);
     let mut notes: Vec<String> = Vec::new();
     let own = devkit_common::shim::OwnBinary::current();
-    if commands_on {
+    let verdict = if commands_on {
         let project = load_project(&checkout, &cwd, rules.app_match.clone());
-        let verdict = guard::decide(&analysis, &rules.commands, project.as_ref(), &own);
-        blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
-        notes.extend(verdict.warnings.into_iter().map(|f| f.message));
+        guard::decide(&analysis, &rules.commands, project.as_ref(), &own)
     } else {
-        let builtin = rules.builtin_commands();
-        let verdict = guard::decide(&analysis, &builtin, None, &own);
-        blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
-    }
+        guard::decide(&analysis, &rules.builtin_commands(), None, &own)
+    };
+    blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
+    notes.extend(verdict.warnings.into_iter().map(|f| f.message));
     // Everything the record needs that the write stage may consume.
     let shell_record = |decision, blocks: &[String], notes: &[String]| {
         settings.enabled.then(|| {

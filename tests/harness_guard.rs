@@ -899,3 +899,21 @@ fn a_project_rule_switches_the_devkit_caller_guard_off() {
         assert!(!denied(&out), "{command}: {}", deny_reason(&out));
     }
 }
+
+#[test]
+fn a_builtin_set_to_warn_adds_its_note_with_enforcement_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        "[harness]\nenforce_commands = false\n\n[harness.commands.gh-pr-create]\naction = \"warn\"\n",
+    );
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("gh pr create --fill"),
+    );
+    let notes = notes(&out);
+    assert!(
+        notes.iter().any(|n| n.contains("devkit pr create")),
+        "{notes:?}"
+    );
+}
