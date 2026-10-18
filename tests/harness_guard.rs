@@ -775,7 +775,10 @@ args = ["DEVKIT_CALLER=HUMAN"]
 reason = "project rule refuses the human caller"
 "#,
     );
-    for command in ["env DEVKIT_CALLER=HUMAN true", "env DEVKIT_CALLER=human true"] {
+    for command in [
+        "env DEVKIT_CALLER=HUMAN true",
+        "env DEVKIT_CALLER=human true",
+    ] {
         let out = run_hook(proj.path(), home.path(), &claude_payload(command));
         assert!(denied(&out), "{command}");
         assert!(
