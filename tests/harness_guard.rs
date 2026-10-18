@@ -820,6 +820,35 @@ reason = "project rule refuses the human caller"
 }
 
 #[test]
+fn an_agent_declaring_itself_human_is_denied_with_every_gate_off() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness]\nenforce_commands = false\nenforce_writes = false\n");
+    for command in [
+        "DEVKIT_CALLER=human devkit pr create",
+        "env DEVKIT_CALLER=human devkit pr create",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("DEVKIT_CALLER"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("FOO=1 cargo build"),
+    );
+    assert!(!denied(&out), "{}", deny_reason(&out));
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
 fn a_gh_pr_create_beside_a_todo_command_is_denied_with_every_gate_off() {
     let home = tempfile::tempdir().unwrap();
     let proj = project("[harness]\nenforce_commands = false\nenforce_writes = false\n");
