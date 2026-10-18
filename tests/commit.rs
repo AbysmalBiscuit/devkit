@@ -1,6 +1,9 @@
 //! `devkit commit` end to end: a selection committed with a rendered message
 //! while changes another session staged stay staged.
 
+#[path = "common/testenv.rs"]
+mod testenv;
+
 use std::{
     path::Path,
     process::{Command, Output},
@@ -62,6 +65,7 @@ fn devkit_commit(dir: &Path) -> Command {
         .env("GIT_COMMITTER_NAME", "devkit test")
         .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
         .arg("commit");
+    testenv::scrub_identity(&mut cmd);
     cmd
 }
 
