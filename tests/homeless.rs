@@ -14,6 +14,12 @@ use std::{
 /// The exit code Rust gives a process that panicked.
 const PANIC_EXIT: i32 = 101;
 
+/// What devkit says when its state directory cannot resolve.
+#[cfg(not(windows))]
+const NO_STATE_HOME: &str = "no home directory: set HOME, or XDG_STATE_HOME for this path";
+#[cfg(windows)]
+const NO_STATE_HOME: &str = "no home directory: set USERPROFILE, or XDG_STATE_HOME for this path";
+
 /// `devkit <args>` in `cwd` with neither `HOME` nor `XDG_STATE_HOME` set,
 /// `stdin` piped in.
 fn homeless_in(cwd: &Path, args: &[&str], stdin: &str) -> Output {
@@ -21,6 +27,8 @@ fn homeless_in(cwd: &Path, args: &[&str], stdin: &str) -> Output {
     testenv::scrub_identity(&mut cmd);
     testenv::scrub_xdg_homes(&mut cmd)
         .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .env_remove("LOCALAPPDATA")
         .env_remove("XDG_STATE_HOME")
         .env_remove("DEVKIT_CONFIG")
         .env_remove("DEVKIT_ENFORCE_WRITES")
@@ -144,9 +152,9 @@ fn doctor_reports_the_missing_home() {
         .find(|r| r["key"] == "state_dir")
         .expect("a state_dir row");
     assert_eq!(row["status"], "invalid", "{row}");
-    assert!(
-        row["detail"].as_str().unwrap().contains("HOME"),
-        "the finding names HOME: {row}"
+    assert_eq!(
+        row["detail"], NO_STATE_HOME,
+        "the finding names what to set: {row}"
     );
     assert_eq!(out.status.code(), Some(1), "an invalid row fails doctor");
 }
@@ -176,7 +184,7 @@ fn a_gated_write_is_denied_naming_home() {
     let output = &v["hookSpecificOutput"];
     assert_eq!(output["permissionDecision"], "deny", "{v}");
     let reason = output["permissionDecisionReason"].as_str().unwrap();
-    assert!(reason.contains("HOME"), "{reason}");
+    assert!(reason.ends_with(NO_STATE_HOME), "{reason}");
 }
 
 #[test]

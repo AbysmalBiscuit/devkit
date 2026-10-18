@@ -146,13 +146,13 @@ fn strip_verbatim(path: &Path) -> PathBuf {
 fn cache_root() -> anyhow::Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        Ok(devkit_common::paths::require_home()?.join("Library/Caches/repo-rules"))
+        Ok(devkit_common::paths::require_home(None)?.join("Library/Caches/repo-rules"))
     }
     #[cfg(target_os = "windows")]
     {
         match std::env::var_os("LOCALAPPDATA") {
             Some(x) if !x.is_empty() => Ok(PathBuf::from(x).join("repo-rules\\repo-rules\\Cache")),
-            _ => Ok(devkit_common::paths::require_home()?
+            _ => Ok(devkit_common::paths::require_home(Some("LOCALAPPDATA"))?
                 .join("AppData\\Local\\repo-rules\\repo-rules\\Cache")),
         }
     }
@@ -160,7 +160,8 @@ fn cache_root() -> anyhow::Result<PathBuf> {
     {
         match std::env::var_os("XDG_CACHE_HOME") {
             Some(x) if !x.is_empty() => Ok(PathBuf::from(x).join("repo-rules")),
-            _ => Ok(devkit_common::paths::require_home()?.join(".cache/repo-rules")),
+            _ => Ok(devkit_common::paths::require_home(Some("XDG_CACHE_HOME"))?
+                .join(".cache/repo-rules")),
         }
     }
 }

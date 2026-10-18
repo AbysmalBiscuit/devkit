@@ -38,13 +38,13 @@ fn xdg_state_home() -> anyhow::Result<PathBuf> {
 fn default_state_home() -> anyhow::Result<PathBuf> {
     match std::env::var_os("LOCALAPPDATA") {
         Some(x) if !x.is_empty() => Ok(PathBuf::from(x)),
-        _ => Ok(require_home()?.join("AppData/Local")),
+        _ => Ok(require_home(Some("XDG_STATE_HOME"))?.join("AppData/Local")),
     }
 }
 
 #[cfg(not(windows))]
 fn default_state_home() -> anyhow::Result<PathBuf> {
-    Ok(require_home()?.join(".local/state"))
+    Ok(require_home(Some("XDG_STATE_HOME"))?.join(".local/state"))
 }
 
 /// One-time best-effort move of the legacy `~/.claude/state/devkit` to the XDG
@@ -120,7 +120,7 @@ pub fn daemon_log() -> anyhow::Result<PathBuf> {
 pub fn data_dir() -> anyhow::Result<PathBuf> {
     match std::env::var_os("XDG_DATA_HOME") {
         Some(x) if !x.is_empty() => Ok(PathBuf::from(x).join("devkit")),
-        _ => Ok(require_home()?.join(".local/share/devkit")),
+        _ => Ok(require_home(Some("XDG_DATA_HOME"))?.join(".local/share/devkit")),
     }
 }
 
@@ -128,26 +128,38 @@ pub fn data_dir() -> anyhow::Result<PathBuf> {
 pub fn cache_dir() -> anyhow::Result<PathBuf> {
     match std::env::var_os("XDG_CACHE_HOME") {
         Some(x) if !x.is_empty() => Ok(PathBuf::from(x).join("devkit")),
-        _ => Ok(require_home()?.join(".cache/devkit")),
+        _ => Ok(require_home(Some("XDG_CACHE_HOME"))?.join(".cache/devkit")),
     }
 }
 
-/// The environment names no home directory, so nothing derived from one
-/// resolves.
+/// The variable naming the home directory on this platform.
+#[cfg(not(windows))]
+const HOME_VAR: &str = "HOME";
+#[cfg(windows)]
+const HOME_VAR: &str = "USERPROFILE";
+
+/// The environment names no home directory, so a path derived from one does
+/// not resolve. Holds the variable that would place that path instead, when
+/// one would.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NoHome;
+pub struct NoHome(pub Option<&'static str>);
 
 impl std::fmt::Display for NoHome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("no home directory: set HOME, or XDG_STATE_HOME for devkit's state")
+        write!(f, "no home directory: set {HOME_VAR}")?;
+        match self.0 {
+            Some(var) => write!(f, ", or {var} for this path"),
+            None => Ok(()),
+        }
     }
 }
 
 impl std::error::Error for NoHome {}
 
-/// The user's home directory, or [`NoHome`] when the environment names none.
-pub fn require_home() -> anyhow::Result<PathBuf> {
-    try_home().ok_or_else(|| NoHome.into())
+/// The user's home directory, or [`NoHome`] naming `instead`, the variable that
+/// would place the caller's path without one.
+pub fn require_home(instead: Option<&'static str>) -> anyhow::Result<PathBuf> {
+    try_home().ok_or_else(|| NoHome(instead).into())
 }
 
 /// The user's home directory, or `None` when the environment names none.
