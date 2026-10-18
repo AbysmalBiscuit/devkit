@@ -170,7 +170,7 @@
         },
         "programs": {
           "default": [],
-          "description": "Program names this rule refuses, matched against the segment's command\nword by basename, and against each wrapper unwrapped to reach it\n(`sudo`, `nohup`, `env`), whose own options are then its arguments.\nA prefix assignment counts as `env`: `FOO=1 cmd` reads as\n`env FOO=1 cmd`. `export` and `declare` are programs whose arguments\nare their `NAME=value` operands. An\nempty list matches nothing, which is how a child layer exempts a\nsubtree from a rule its parent declared.",
+          "description": "Program names this rule refuses, matched against the segment's command\nword by basename, and against each wrapper unwrapped to reach it\n(`sudo`, `nohup`, `env`), whose own options are then its arguments.\nA prefix assignment whose value the guard can resolve counts as\n`env`: `FOO=1 cmd` reads as `env FOO=1 cmd`, while\n`FOO=\"$(date)\" cmd` adds no `env`. `export` and `declare` are programs\nwhose arguments are their `NAME=value` operands. An empty list matches\nnothing, which is how a child layer exempts a subtree from a rule its\nparent declared.",
           "items": {
             "type": "string"
           },

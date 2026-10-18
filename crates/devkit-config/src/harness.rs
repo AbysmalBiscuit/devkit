@@ -216,11 +216,12 @@ pub struct CommandRule {
     /// Program names this rule refuses, matched against the segment's command
     /// word by basename, and against each wrapper unwrapped to reach it
     /// (`sudo`, `nohup`, `env`), whose own options are then its arguments.
-    /// A prefix assignment counts as `env`: `FOO=1 cmd` reads as
-    /// `env FOO=1 cmd`. `export` and `declare` are programs whose arguments
-    /// are their `NAME=value` operands. An
-    /// empty list matches nothing, which is how a child layer exempts a
-    /// subtree from a rule its parent declared.
+    /// A prefix assignment whose value the guard can resolve counts as
+    /// `env`: `FOO=1 cmd` reads as `env FOO=1 cmd`, while
+    /// `FOO="$(date)" cmd` adds no `env`. `export` and `declare` are programs
+    /// whose arguments are their `NAME=value` operands. An empty list matches
+    /// nothing, which is how a child layer exempts a subtree from a rule its
+    /// parent declared.
     #[serde(default)]
     pub programs: Vec<String>,
     /// Arguments that must appear, in order, at the head of the typed
