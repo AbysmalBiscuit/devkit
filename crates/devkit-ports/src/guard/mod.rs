@@ -108,9 +108,10 @@ fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
 }
 
 /// Whether `args` starts with `patterns`. A `"**"` entry stands for zero or
-/// more whole arguments; every other entry matches one argument. A
-/// `DEVKIT_CALLER=` assignment, in a pattern or an argument, is compared in
-/// its canonical spelling.
+/// more whole arguments; every other entry matches one argument. A pattern
+/// that is a `DEVKIT_CALLER=` assignment the override accepts matches every
+/// spelling of that value; any other pattern, wildcards included, matches the
+/// argument as written.
 fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((pattern, patterns)) = patterns.split_first() else {
         return Match::Yes;
@@ -124,13 +125,15 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((arg, args)) = args.split_first() else {
         return Match::No;
     };
-    let pattern = caller::canonical_caller_assignment(pattern).unwrap_or(pattern);
+    let canonical = caller::canonical_caller_assignment(pattern);
     let here = match arg {
         Value::Known(actual)
-            if wildcard_matches(
-                pattern,
-                caller::canonical_caller_assignment(actual).unwrap_or(actual),
-            ) =>
+            if match canonical {
+                Some(pattern) => {
+                    caller::canonical_caller_assignment(actual).unwrap_or(actual) == pattern
+                }
+                None => wildcard_matches(pattern, actual),
+            } =>
         {
             Match::Yes
         }

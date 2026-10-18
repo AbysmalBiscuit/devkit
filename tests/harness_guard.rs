@@ -790,6 +790,36 @@ reason = "project rule refuses the human caller"
 }
 
 #[test]
+fn a_project_rule_with_a_wildcard_caller_pattern_matches_the_raw_word() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.devkit-caller-human]
+enabled = false
+
+[harness.commands.no-human-env]
+programs = ["env"]
+args = ["DEVKIT_CALLER=HUM*"]
+reason = "project rule refuses the human caller"
+"#,
+    );
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("env DEVKIT_CALLER=HUMAN true"),
+    );
+    assert!(denied(&out));
+    assert!(
+        deny_reason(&out).contains("project rule refuses"),
+        "{}",
+        deny_reason(&out)
+    );
+}
+
+#[test]
 fn a_gh_pr_create_beside_a_todo_command_is_denied_with_every_gate_off() {
     let home = tempfile::tempdir().unwrap();
     let proj = project("[harness]\nenforce_commands = false\nenforce_writes = false\n");
