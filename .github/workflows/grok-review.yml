@@ -115,7 +115,6 @@ jobs:
       - name: Post review
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
-          BOT_LOGIN: ${{ steps.app.outputs.app-slug && format('{0}[bot]', steps.app.outputs.app-slug) || 'github-actions[bot]' }}
         run: |
           reviews="repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews"
           # The review object may sit in the result wrapper as an object or as
@@ -133,14 +132,6 @@ jobs:
             jq --arg sha "$HEAD_SHA" --arg repo "$GITHUB_REPOSITORY" --argjson inline "$inline" \
               -f .github/grok-review-payload.jq review.json > "payload-$inline.json"
           done
-
-          gh api "$reviews" --paginate \
-            | jq -r --arg bot "$BOT_LOGIN" \
-                '.[] | select(.user.login == $bot and .state == "CHANGES_REQUESTED") | .id' \
-            | while read -r id; do
-                gh api -X PUT "$reviews/$id/dismissals" \
-                  -f message="Superseded by the review of ${HEAD_SHA}" -f event=DISMISS > /dev/null
-              done
 
           # GitHub rejects the whole review when one comment's line is outside
           # the diff, so fall back to listing the findings in the body.

@@ -1,7 +1,9 @@
 # Turns Grok's review object into a GitHub review payload. With $inline,
 # each finding is an inline comment and the summary lists them; without
 # it, the summary carries every finding in full, for when GitHub rejects
-# a comment whose lines fall outside the diff.
+# a comment whose lines fall outside the diff. The review is always a
+# comment: an unresolved inline thread gates the merge, and a cancelled run
+# leaves no stale change request behind.
 
 def priority: .priority // 3;
 
@@ -33,7 +35,7 @@ def quote: "> " + (rtrimstr("\n") | gsub("\n"; "\n> "));
 
 (.findings | sort_by(priority)) as $findings
 | {commit_id: $sha,
-   event: (if any($findings[]; priority <= 1) then "REQUEST_CHANGES" else "COMMENT" end),
+   event: "COMMENT",
    body: ([
      "### ⚡ Grok Review",
      "**Reviewed commit:** `\($sha[:10])`",
