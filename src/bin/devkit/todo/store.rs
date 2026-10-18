@@ -834,9 +834,9 @@ impl Store {
         with_effective_backend(config, backend_var)
     }
 
-    /// The store a hook in `cwd` uses. A hook never fails on the store's
-    /// account: a config that fails to load or an unknown
-    /// `DEVKIT_TODO_BACKEND` is the built-in store.
+    /// The store a hook in `cwd` uses: a config that fails to load or an
+    /// unknown `DEVKIT_TODO_BACKEND` is the built-in store. Fails only when no
+    /// state directory resolves.
     pub(crate) fn for_hook(checkout: &Checkout, cwd: &Path) -> Result<Self> {
         let backend_var = std::env::var(BACKEND_VAR).ok();
         match Self::hook_config(checkout, cwd, backend_var.as_deref()) {
