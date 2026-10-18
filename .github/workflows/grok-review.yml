@@ -36,6 +36,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The toolchain CI tests with, so the prompt can name the Rust version.
+      - uses: dtolnay/rust-toolchain@stable
+
       # The installer only adds its bin dir to shell rc files, which later
       # steps never source.
       - name: Install Grok CLI
@@ -62,6 +65,7 @@ jobs:
           git ls-files -z -- ':(glob)**/.grok/**' ':(glob)**/.claude/**' \
             ':(glob)**/.cursor/**' ':(glob)**/.mcp.json' | xargs -0 -r rm -f
           git diff "${BASE_SHA}...HEAD" > pr.diff
+          RUSTC_VERSION=$(rustc --version)
           cat > "$RUNNER_TEMP/prompt.md" <<EOF
           Review pull request #${PR_NUMBER} in ${GITHUB_REPOSITORY}: "${PR_TITLE}".
           Its changes are in pr.diff at the repository root; read the changed
@@ -79,6 +83,11 @@ jobs:
           other code, you have found that code. Read the code to confirm each
           one before reporting it. Do not flag style, naming, missing tests,
           linter findings, or pre-existing bugs. If unsure, leave it out.
+
+          CI builds with ${RUSTC_VERSION}, and no Cargo.toml sets a
+          rust-version. Treat every API that toolchain ships as stable and
+          available; your recall of Rust may predate it. Report each root
+          cause once, at its first site, and name its other sites in the body.
 
           Answer in the structured output. The verdict is "correct" when
           existing code and tests won't break and nothing blocks merge, and
