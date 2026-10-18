@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use devkit_common::{
     caller::Caller,
     record::{self, IssueRecord},
-    required::{ensure_supplied, ensure_supplied_as, missing_args},
+    required::{declared_required, ensure_supplied, ensure_supplied_as, missing_args},
     template,
     vcs::{self, Vcs, VersionControl},
 };
@@ -189,6 +189,7 @@ pub fn commit_message(
     message: &CommitMessage<'_>,
     given: &BTreeMap<String, String>,
     caller: Caller,
+    amend: bool,
 ) -> Result<String> {
     render_commit_parts(
         cfg,
@@ -197,6 +198,7 @@ pub fn commit_message(
         message,
         given,
         caller,
+        amend,
     )
 }
 
@@ -208,14 +210,84 @@ fn render_commit_parts(
     message: &CommitMessage<'_>,
     given: &BTreeMap<String, String>,
     caller: Caller,
+    amend: bool,
 ) -> Result<String> {
-    let coauthors = message.coauthors.join("; ");
-    let parts = [
-        message.subject,
-        message.body,
-        (!coauthors.is_empty()).then_some(coauthors.as_str()),
-    ];
+    let coauthors = message
+        .coauthors
+        .iter()
+        .filter(|c| !c.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
+    // An agent author meets required = "agents" without a trailer. The
+    // stand-in is empty so the built-in template emits no Co-authored-by
+    // line, and the supplied body is left as the caller wrote it.
+    let agent = coauthors.is_empty()
+        && builtin_commit_message(cfg)
+        && declared_required(cfg, None, "coauthors") == Required::Agents
+        && agent_author(start, caller, amend)?.is_some();
+    let supplied = agent
+        .then_some("")
+        .or((!coauthors.is_empty()).then_some(coauthors.as_str()));
+    let parts = [message.subject, message.body, supplied];
     render_commit_message(cfg, start, parts, given, caller, what)
+}
+
+/// The exemption applies only to the unchanged built-in `commit_message`.
+/// A `[templates].commit_message` override and a custom template of that
+/// name still require `--coauthor`.
+fn builtin_commit_message(cfg: &Config) -> bool {
+    cfg.templates.commit_message.is_none() && !cfg.templates.custom.contains_key(COMMIT_MESSAGE)
+}
+
+/// The git author when it is the agent, as `Name <email>`. A person's author
+/// and a human caller get `None`. An amend keeps the existing commit's
+/// author, so that author is the one checked.
+fn agent_author(start: &Path, caller: Caller, amend: bool) -> Result<Option<String>> {
+    if caller != Caller::Agent {
+        return Ok(None);
+    }
+    let Some((name, email)) = (if amend {
+        Vcs::at(start).head_author(start)?
+    } else {
+        Vcs::at(start).author(start)?
+    }) else {
+        return Ok(None);
+    };
+    if !agent_email(&email) {
+        return Ok(None);
+    }
+    Ok(Some(format!("{} <{}>", name.trim(), email.trim())))
+}
+
+/// Addresses an agent harness records when it authors a commit itself, and
+/// that have no GitHub bot form: Claude and Codex.
+const AGENT_EMAILS: [&str; 2] = ["noreply@anthropic.com", "noreply@openai.com"];
+
+/// A GitHub bot address, or one of [`AGENT_EMAILS`]. The bot form is a
+/// numeric id, `+`, a nonempty name, and a terminal `[bot]`, at
+/// `users.noreply.github.com`.
+fn agent_email(email: &str) -> bool {
+    let email = email.trim();
+    if AGENT_EMAILS
+        .iter()
+        .any(|known| email.eq_ignore_ascii_case(known))
+    {
+        return true;
+    }
+    let Some((local, host)) = email.rsplit_once('@') else {
+        return false;
+    };
+    if !host.eq_ignore_ascii_case("users.noreply.github.com") {
+        return false;
+    }
+    let Some((id, rest)) = local.split_once('+') else {
+        return false;
+    };
+    let Some(name) = rest.strip_suffix("[bot]") else {
+        return false;
+    };
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) && !name.is_empty()
 }
 
 /// Whether `devkit commit` can leave out `part`: every part but the subject,
@@ -387,7 +459,7 @@ pub fn render(
             );
         }
         let what = format!("template `{name}`");
-        return render_commit_parts(cfg, start, (&what, names), parts, given, caller);
+        return render_commit_parts(cfg, start, (&what, names), parts, given, caller, false);
     }
     let [subject, body, coauthor] = COMMIT_PARTS.map(|(_, flag)| names.part(flag));
     ensure!(

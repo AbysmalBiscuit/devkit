@@ -360,6 +360,43 @@ impl VersionControl for GitBackend {
             .to_string())
     }
 
+    fn author(&self, dir: &Path) -> Result<Option<(String, String)>> {
+        // GIT_AUTHOR_* wins, and one half set alone does not mix with
+        // config. author.* overrides user.*.
+        let from_env = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"]
+            .map(|key| std::env::var(key).ok().filter(|v| !v.trim().is_empty()));
+        let [name, email] = match from_env {
+            [Some(name), Some(email)] => [name, email],
+            [None, None] => ["name", "email"].map(|half| {
+                for key in [format!("author.{half}"), format!("user.{half}")] {
+                    if let Ok(value) = Git::at(dir).args(["config", &key]).output() {
+                        let value = value.trim().to_string();
+                        if !value.is_empty() {
+                            return value;
+                        }
+                    }
+                }
+                String::new()
+            }),
+            _ => return Ok(None),
+        };
+        Ok((!name.trim().is_empty() && !email.trim().is_empty()).then_some((name, email)))
+    }
+
+    fn head_author(&self, dir: &Path) -> Result<Option<(String, String)>> {
+        let out = Git::at(dir)
+            .args(["log", "-1", "--format=%an%x00%ae"])
+            .wait()?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut parts = text.trim_end_matches(['\n', '\r']).splitn(2, '\0');
+        let name = parts.next().unwrap_or_default().to_string();
+        let email = parts.next().unwrap_or_default().to_string();
+        Ok((!name.trim().is_empty() && !email.trim().is_empty()).then_some((name, email)))
+    }
+
     fn commit(&self, dir: &Path, selection: &Selection<'_>, message: &str) -> Result<String> {
         super::commit::commit(dir, selection, message)
     }

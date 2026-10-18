@@ -83,6 +83,7 @@ pub fn run(cli: CommitCli) -> Result<()> {
         &cli.message.parts(),
         &cli.vars.parse()?,
         devkit_common::caller::caller(),
+        cli.amend,
     )?;
     // git applies the patch from the repository's top, not from here.
     let patch = cli
