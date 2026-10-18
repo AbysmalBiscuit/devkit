@@ -780,31 +780,29 @@ fn rules_rows(
 
     let mut url_source = None;
     let mut api_url_source = None;
-    let source = devkit_common::paths::state_dir().and_then(|state| {
-        Rules::for_checkout(
-            settings,
-            checkout,
-            |config| {
-                let (db, from) = crate::rules::open_database(
-                    config,
-                    RULES_DATABASE_WAIT,
-                    crate::secret::SecretLookup::Doppler,
-                );
-                url_source = Some(from);
-                db
-            },
-            |config| {
-                let (api, from) = crate::rules::open_api(
-                    config,
-                    RULES_DATABASE_WAIT,
-                    crate::secret::SecretLookup::Doppler,
-                );
-                api_url_source = Some(from);
-                api
-            },
-            &state,
-        )
-    });
+    let source = Rules::for_checkout(
+        settings,
+        checkout,
+        |config| {
+            let (db, from) = crate::rules::open_database(
+                config,
+                RULES_DATABASE_WAIT,
+                crate::secret::SecretLookup::Doppler,
+            );
+            url_source = Some(from);
+            db
+        },
+        |config| {
+            let (api, from) = crate::rules::open_api(
+                config,
+                RULES_DATABASE_WAIT,
+                crate::secret::SecretLookup::Doppler,
+            );
+            api_url_source = Some(from);
+            api
+        },
+        devkit_common::paths::state_dir,
+    );
     let source = match source {
         Ok(source) => source,
         Err(e) => {

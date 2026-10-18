@@ -68,14 +68,14 @@ impl Source {
     /// The source `settings` names for `checkout`'s repository. `database`
     /// opens the database `[rules.postgres]` names, called only for the
     /// `postgres` source, and `api` the Data API `[rules.supabase]` names,
-    /// called only for the `supabase` source. Their caches live under
-    /// `state_dir`.
+    /// called only for the `supabase` source. Their caches live under the
+    /// directory `state_dir` resolves, asked for only by those two sources.
     pub fn for_checkout(
         settings: &RulesConfig,
         checkout: &Checkout,
         database: impl FnOnce(&RulesPostgresConfig) -> Arc<Database>,
         api: impl FnOnce(&RulesSupabaseConfig) -> Arc<Api>,
-        state_dir: &Path,
+        state_dir: impl FnOnce() -> anyhow::Result<PathBuf>,
     ) -> anyhow::Result<Source> {
         let repo = repo_of(checkout);
         Ok(match settings.source {
@@ -84,7 +84,7 @@ impl Source {
                 None => Source::cached(repo)?,
             },
             RulesSource::Postgres => Source::Cached(CachedSource::at_state_dir(
-                state_dir,
+                &state_dir()?,
                 Remote::Postgres(PostgresSource::new(
                     database(&settings.postgres),
                     settings.postgres.repository.as_deref(),
@@ -92,7 +92,7 @@ impl Source {
                 )),
             )),
             RulesSource::Supabase => Source::Cached(CachedSource::at_state_dir(
-                state_dir,
+                &state_dir()?,
                 Remote::Supabase(SupabaseSource::new(
                     api(&settings.supabase),
                     settings.supabase.repository.as_deref(),

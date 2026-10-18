@@ -140,6 +140,48 @@ fn startup_migrates_nothing_without_home() {
     );
 }
 
+/// A file rules source reads no state, so it loads with no home.
+#[test]
+fn a_file_rules_source_loads_without_home() {
+    let project = tempfile::tempdir().unwrap();
+    devkit_git::Git::fixture(project.path())
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    let index = project.path().join("index.json");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/devkit-rules/tests/fixtures/index.json"),
+        &index,
+    )
+    .unwrap();
+    std::fs::write(
+        project.path().join("devkit.toml"),
+        format!("[rules]\nindex = '{}'\n", index.display()),
+    )
+    .unwrap();
+
+    let out = homeless_in(
+        project.path(),
+        &[
+            "rules",
+            "query",
+            "--format",
+            "json",
+            "--path",
+            "crates/foo/src/a.rs",
+        ],
+        "",
+    );
+
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body = String::from_utf8_lossy(&out.stdout);
+    assert!(body.contains("r-foo-should"), "{body}");
+}
+
 #[test]
 fn doctor_reports_the_missing_home() {
     let out = homeless(&["doctor", "--json"]);

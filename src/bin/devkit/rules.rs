@@ -123,7 +123,7 @@ pub(crate) fn source(
             }
             api
         },
-        &devkit_common::paths::state_dir()?,
+        devkit_common::paths::state_dir,
     )
 }
 
