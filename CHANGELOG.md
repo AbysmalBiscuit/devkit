@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.26](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.25...v0.14.26) (2026-10-29)
+
+
+### Bug Fixes
+
+* **ci:** restore rustfmt and cargo audit ([d7a2115](https://github.com/AbysmalBiscuit/devkit/commit/d7a2115c5df5f2478b8c3931c79c54dbe8fc4e5a))
+
 ## [0.14.25](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.24...v0.14.25) (2026-10-18)
 
 
