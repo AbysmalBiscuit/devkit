@@ -1,5 +1,8 @@
 # How workcell lands a reviewed PR. Squash matches the repo's default
-# merge, and workcell asks before it merges.
+# merge.
 [merge]
 method = "squash"
-auto = "ask"
+
+# The standard workflow asks before it merges a PR.
+[workflow.standard]
+merge_auto = "ask"
