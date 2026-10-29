@@ -1279,7 +1279,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .map_or(Py::Unknown, |parts| self.known(node, parts.join(&s), false)),
                 _ => Py::Unknown,
             },
-            // `str.replace` takes the old and new text; `Path.replace` takes one target.
+            // `str.replace` takes the old and new text; `Path.replace` takes
+            // one target.
             Py::Unknown if method == "replace" && args.len() >= 2 => Py::Unknown,
             Py::Unknown if WRITE_METHODS.contains(&method) => {
                 self.unresolved(

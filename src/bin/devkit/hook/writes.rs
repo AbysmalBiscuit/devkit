@@ -81,7 +81,8 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
             // no other session holds it, and none can produce it. Claiming it
             // would write a row nobody could ever conflict with. The directory
             // it was created in is another matter, since a claim there covers
-            // every path born under it, so that is checked like any other scope.
+            // every path born under it, so that is checked like any other
+            // scope.
             Target::Ephemeral { at } => {
                 if let Some(dir) = at.named() {
                     e.claims.scope(ScopeCheck::Fresh {
