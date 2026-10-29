@@ -3005,10 +3005,11 @@ pub struct AppConfig {
     /// wins over the inferred path when set.
     #[serde(default)]
     pub path: Option<String>,
-    // Table-like fields (`static_env`, `prep_files`) kept last so the serialized
-    // TOML groups scalars/arrays before the nested table and array-of-tables —
-    // readable, stable output. (toml 0.8 also orders values before tables on its
-    // own, so this is for source layout, not a serializer requirement.)
+    // Table-like fields (`static_env`, `prep_files`) kept last so the
+    // serialized TOML groups scalars/arrays before the nested table and
+    // array-of-tables — readable, stable output. (toml 0.8 also orders values
+    // before tables on its own, so this is for source layout, not a serializer
+    // requirement.)
     /// Env vars always set for this app, rendered as minijinja over the same
     /// variables as `launch`. The lowest layer: a task's `env` and the CLI's
     /// `--env` both win over it.

@@ -585,8 +585,8 @@ mod tests {
             ),
             proc(300, 200, "/opt/google/chrome/chrome --type=zygote", wt),
             proc(400, 200, "/opt/google/chrome/chrome --type=renderer", wt),
-            // crashpad's argv0 differs, so it never matches the signature; it dies
-            // as a subtree member when the root is killed.
+            // crashpad's argv0 differs, so it never matches the signature; it
+            // dies as a subtree member when the root is killed.
             proc(
                 500,
                 200,

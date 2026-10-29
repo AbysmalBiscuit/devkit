@@ -498,7 +498,8 @@ impl RollupContext {
         }
         match self.conclusion.as_deref() {
             Some("SUCCESS" | "NEUTRAL" | "SKIPPED") => CheckState::Passed,
-            // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE, STALE
+            // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE,
+            // STALE
             Some(_) => CheckState::Failed,
             None => CheckState::Running,
         }
