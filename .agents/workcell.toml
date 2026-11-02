@@ -4,5 +4,5 @@
 method = "squash"
 
 # The standard workflow asks before it merges a PR.
-[workflow.standard]
+[standard.parameters]
 merge_auto = "ask"
