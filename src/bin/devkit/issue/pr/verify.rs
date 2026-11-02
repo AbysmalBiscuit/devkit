@@ -26,6 +26,9 @@ pub(crate) struct Gate {
     /// Why the latest run that passed at `head` does not qualify, when one
     /// passed and none qualifies.
     rejected: Option<String>,
+    /// The latest run of the required task and args at `head`, when no run
+    /// qualifies and that one did not exit 0.
+    failed: Option<Run>,
     /// What the PR changes in what the required task runs, when it does.
     change: Option<String>,
     /// The steps `run` executed, when they differ from what HEAD's committed
@@ -84,6 +87,18 @@ impl Gate {
                 }
             }
         };
+        let failed = match &run {
+            Some(_) => None,
+            None => runs
+                .iter()
+                .find(|r| {
+                    r.task == required.task
+                        && r.args == required.args
+                        && r.head.as_deref() == Some(head)
+                })
+                .filter(|r| r.exit_code != Some(0))
+                .cloned(),
+        };
         let run_dir = run.as_ref().and_then(|r| r.dir.as_deref()).unwrap_or("");
         let change = definition_change(
             checkout,
@@ -105,6 +120,7 @@ impl Gate {
             caller,
             run,
             rejected,
+            failed,
             change,
             ran,
         }))
@@ -157,13 +173,6 @@ impl Gate {
             ));
         }
         out.push_str(&self.ran);
-        if run.exit_code != Some(0) {
-            match run.tail.as_deref() {
-                Some(lines) if !lines.is_empty() => out.push_str(&output_tail(lines)),
-                Some(_) => out.push_str("\nThe run printed nothing.\n"),
-                None => out.push_str("\nNo output was captured: it went straight to a terminal.\n"),
-            }
-        }
         out.push_str(self.change.as_deref().unwrap_or_default());
         out
     }
@@ -172,11 +181,34 @@ impl Gate {
         format!(
             "### Verification\n\n\
              NOT RUN: the run ledger records no run of `{command}` that exited 0 on a clean \
-             tree at `{head}`.{rejected}\n{change}",
+             tree at `{head}`.{rejected}\n{failed}{change}",
             command = self.required.command(),
             head = self.head,
             rejected = self.rejected_note(),
+            failed = self.failed_note(),
             change = self.change.as_deref().unwrap_or_default(),
+        )
+    }
+
+    /// The exit and output tail of [`Self::failed`], or empty when no
+    /// failed run is recorded.
+    fn failed_note(&self) -> String {
+        let Some(run) = &self.failed else {
+            return String::new();
+        };
+        let exit = match run.exit_code {
+            Some(code) => format!("exited {code}"),
+            None => "never started its program".to_string(),
+        };
+        let tail = match run.tail.as_deref() {
+            Some(lines) if !lines.is_empty() => output_tail(lines),
+            Some(_) => "\nThe run printed nothing.\n".to_string(),
+            None => "\nNo output was captured: it went straight to a terminal.\n".to_string(),
+        };
+        format!(
+            "\nThe latest run of `{command}` at `{head}` {exit}.\n{tail}",
+            command = self.required.command(),
+            head = self.head,
         )
     }
 
@@ -633,6 +665,7 @@ mod tests {
             caller: Caller::Agent,
             run: None,
             rejected: None,
+            failed: None,
             change: None,
             ran: String::new(),
         };
@@ -640,60 +673,6 @@ mod tests {
             let out = gate.apply(body.into()).unwrap();
             assert!(out.starts_with("### Verification\n\nNOT RUN"), "{out:?}");
         }
-    }
-
-    fn gate_with(run: Run) -> Gate {
-        Gate {
-            mode: GateMode::Advise,
-            required: RequiredTask {
-                task: "verify".into(),
-                args: Default::default(),
-            },
-            head: "0123".into(),
-            caller: Caller::Agent,
-            run: Some(run),
-            rejected: None,
-            change: None,
-            ran: String::new(),
-        }
-    }
-
-    fn run_exiting(code: Option<i32>) -> Run {
-        Run {
-            task: "verify".into(),
-            args: Default::default(),
-            arg_files: Default::default(),
-            repo: PathBuf::new(),
-            worktree: PathBuf::new(),
-            dir: None,
-            head: Some("0123".into()),
-            clean: true,
-            env: Vec::new(),
-            env_file: None,
-            steps: Vec::new(),
-            reused_servers: Vec::new(),
-            live_servers: Vec::new(),
-            exit_code: code,
-            started_at: String::new(),
-            ended_at: String::new(),
-            tail: Some(vec!["test broken ... FAILED".into()]),
-            path: None,
-        }
-    }
-
-    #[test]
-    fn a_failing_run_keeps_its_output_tail() {
-        for code in [Some(101), None] {
-            let out = gate_with(run_exiting(code)).apply(String::new()).unwrap();
-            assert!(
-                out.contains("\nOutput tail:\n\n```text\ntest broken ... FAILED\n```\n"),
-                "{out}"
-            );
-        }
-        let passing = gate_with(run_exiting(Some(0)))
-            .apply(String::new())
-            .unwrap();
-        assert!(!passing.contains("Output tail"), "{passing}");
     }
 
     #[test]

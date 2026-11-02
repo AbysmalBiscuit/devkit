@@ -144,6 +144,31 @@ fn a_failing_run_at_head_does_not_satisfy_the_gate() {
 }
 
 #[test]
+fn a_failing_run_at_head_shows_its_output_tail_beside_not_run() {
+    let p = project(
+        &GATE
+            .replace("\"verify\"", "\"broken\"")
+            .replace("verify_args = { scope = \"all\" }\n", ""),
+    );
+    task(&p, &["broken"]);
+    let (ok, stderr) = create(&p, "human");
+    assert!(ok, "{stderr}");
+    let body = body(&p);
+    assert!(body.contains("NOT RUN"), "{body}");
+    assert!(
+        body.contains(&format!(
+            "The latest run of `devrun task broken` at `{}` exited 3.",
+            head(&p)
+        )),
+        "{body}"
+    );
+    assert!(
+        body.contains("\nOutput tail:\n\n```text\ngoing down\n```\n"),
+        "{body}"
+    );
+}
+
+#[test]
 fn a_pass_at_an_ancestor_of_head_does_not_satisfy_the_gate() {
     let p = project(GATE);
     verify(&p);
