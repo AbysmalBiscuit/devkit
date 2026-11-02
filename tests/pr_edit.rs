@@ -332,3 +332,111 @@ fn nothing_to_change_is_refused() {
     assert!(!out.status.success());
     assert!(!wrote(&fake), "{}", fake.calls());
 }
+
+/// The Caveats section of workcell's `pr_body` template: one loop renders
+/// three variables, and the template rewrites `**None**`.
+const CAVEATS_TEMPLATE: &str = r#"
+[templates]
+pr_body = '''
+## Summary
+
+{{ input | trim }}
+{%- set caveats = [["departures", departures], ["loose ends", loose_ends], ["assumptions", assumptions]] %}
+{%- set filled = [departures, loose_ends, assumptions] | map("trim") | reject("eq", "") | reject("eq", "**None**") | list %}
+{%- if agent_model or filled %}
+
+## Caveats
+{%- for kind, value in caveats %}
+
+{{ value | trim if value | trim not in ["", "**None**"] else "**0 " ~ kind ~ "**" }}
+{%- endfor %}
+{%- endif %}
+
+## Proof
+
+{{ proof | trim }}
+
+---
+
+Footer by {{ agent_model }}'''
+
+[templates.variables]
+departures = { default = "" }
+loose_ends = { default = "" }
+assumptions = { default = "" }
+proof = { default = "" }
+agent_model = { default = "" }
+"#;
+
+const CAVEATS_LIVE: &str = "\
+## Summary
+
+The summary.
+
+## Caveats
+
+**0 departures**
+
+<details><summary><b>1 loose end</b></summary>
+
+- the old loose end
+
+</details>
+
+**0 assumptions**
+
+## Proof
+
+1. the proof
+
+---
+
+Footer by Claude
+
+## Review bot
+Details the bot keeps current.
+";
+
+#[test]
+fn an_edit_giving_every_variable_of_a_shared_section_rerenders_it() {
+    let fake = ghfake::Fake::new(CAVEATS_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, CAVEATS_LIVE);
+    let assumption = "<details><summary><b>1 assumption</b></summary>\n\n- a choice\n\n</details>";
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "departures=**None**",
+        "--arg",
+        "loose_ends=**None**",
+        "--arg",
+        &format!("assumptions={assumption}"),
+    ]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    let old = CAVEATS_LIVE
+        .split_once("## Caveats\n")
+        .and_then(|(_, rest)| rest.split_once("## Proof"))
+        .map(|(section, _)| section)
+        .unwrap();
+    let new = format!("\n**0 departures**\n\n**0 loose ends**\n\n{assumption}\n\n");
+    assert_eq!(sent_body(&fake), CAVEATS_LIVE.replace(old, &new));
+}
+
+#[test]
+fn an_edit_giving_part_of_a_shared_section_names_what_it_needs() {
+    let fake = ghfake::Fake::new(CAVEATS_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, CAVEATS_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "assumptions=**None**"]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("`departures`") && stderr.contains("`loose_ends`"),
+        "names the variables the edit left out: {stderr}"
+    );
+    assert!(!wrote(&fake), "{}", fake.calls());
+}

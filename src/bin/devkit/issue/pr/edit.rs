@@ -18,7 +18,7 @@ use super::{
     render::{Texts, missing, refuse_template_headings, require_pr_title},
     require_existing_pr,
     resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
-    splice::{slot, splice},
+    splice::{section, slot, splice},
 };
 use crate::{
     issue::review::{guard_branch, parse_args},
@@ -52,25 +52,28 @@ fn require_embedded(dir: &Path, attach: &[String], edits: &BTreeMap<String, Stri
     Ok(())
 }
 
-/// The `pr_body` template rendered with every variable as its slot.
+/// The `pr_body` template rendered with `given`'s values, and every other
+/// variable as its slot. With nothing given, this is the skeleton.
 fn skeleton(
     tmpls: &Templates,
     record: Option<&IssueRecord>,
     branch: &str,
     toplevel: &Path,
+    given: &BTreeMap<String, String>,
 ) -> Result<String> {
-    let slots = tmpls.declared().into_iter().map(|n| {
-        let s = slot(&n);
-        (n, s)
+    let value = |n: &str| given.get(n).cloned().unwrap_or_else(|| slot(n));
+    let values = tmpls.declared().into_iter().map(|n| {
+        let v = value(&n);
+        (n, v)
     });
     Texts::new(
         tmpls,
         record,
         branch,
         toplevel,
-        slots.collect(),
+        values.collect(),
         None,
-        Some(slot("input")),
+        Some(value("input")),
     )
     .body(&slot("pr_title"))
 }
@@ -171,12 +174,29 @@ pub fn run(args: Args) -> Result<()> {
     let body = if edits.is_empty() {
         None
     } else {
-        let skeleton = skeleton(tmpls, record.as_ref(), &branch, &toplevel)?;
+        let render = |given: &BTreeMap<String, String>| {
+            skeleton(tmpls, record.as_ref(), &branch, &toplevel, given)
+        };
+        let blank = render(&BTreeMap::new())?;
+        let mut sections = Vec::new();
+        for name in edits.keys() {
+            if sections.iter().flatten().any(|n| n == name) {
+                continue;
+            }
+            let names = section(&blank, name, |n| edits.contains_key(n))
+                .with_context(|| format!("placing `{name}` in PR #{}'s body", pr.number))?;
+            sections.push(names);
+        }
         let mut body = steps.during_result("Reading the PR's body...", || {
             f.pr_body(&found.repo, pr.number)
         })?;
-        for (name, value) in &edits {
-            body = splice(&skeleton, &body, name, value)
+        for names in &sections {
+            let name = &names[0];
+            let given = names
+                .iter()
+                .map(|n| (n.clone(), edits[n].clone()))
+                .collect();
+            body = splice(&blank, &render(&given)?, &body, name)
                 .with_context(|| format!("placing `{name}` in PR #{}'s body", pr.number))?;
         }
         Some(body)
