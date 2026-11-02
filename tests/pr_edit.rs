@@ -440,3 +440,52 @@ fn an_edit_giving_part_of_a_shared_section_names_what_it_needs() {
     );
     assert!(!wrote(&fake), "{}", fake.calls());
 }
+
+/// `CAVEATS_LIVE` as `pr create` rendered it with no agent and no caveats.
+fn without_caveats() -> String {
+    let (head, rest) = CAVEATS_LIVE.split_once("## Caveats\n").unwrap();
+    let (_, tail) = rest.split_once("## Proof").unwrap();
+    format!("{head}## Proof{tail}")
+}
+
+const NO_CAVEATS: [&str; 6] = [
+    "--arg",
+    "departures=**None**",
+    "--arg",
+    "loose_ends=**None**",
+    "--arg",
+    "assumptions=**None**",
+];
+
+/// The template hides Caveats when no agent made the PR and every caveat
+/// is `**None**`, as `pr create` did.
+#[test]
+fn a_section_the_values_hide_stays_out_of_a_body_that_lacks_it() {
+    let live = without_caveats();
+    let fake = ghfake::Fake::new(CAVEATS_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, &live);
+
+    let out = fake.issue(&[&["pr", "edit", "--no-push"][..], &NO_CAVEATS].concat());
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(sent_body(&fake), live);
+}
+
+/// An agent's edit leaves out `agent_model`, which the open PR already
+/// shows, so the section the body has is still replaced.
+#[test]
+fn a_section_the_body_has_is_replaced_even_when_the_edit_leaves_its_condition_out() {
+    let fake = ghfake::Fake::new(CAVEATS_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, CAVEATS_LIVE);
+
+    let out = fake.issue(&[&["pr", "edit", "--no-push"][..], &NO_CAVEATS].concat());
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        without_caveats().replace(
+            "## Proof",
+            "## Caveats\n\n**0 departures**\n\n**0 loose ends**\n\n**0 assumptions**\n\n## Proof"
+        )
+    );
+}

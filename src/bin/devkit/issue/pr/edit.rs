@@ -15,10 +15,10 @@ use devkit_config::Templates;
 use super::{
     create::{attached_file, check_attachments},
     proof::gate_proof,
-    render::{Texts, missing, refuse_template_headings, require_pr_title},
+    render::{Texts, missing, refuse_template_headings, require_pr_title, with_defaults},
     require_existing_pr,
     resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
-    splice::{section, slot, splice},
+    splice::{hides, section, slot, splice},
 };
 use crate::{
     issue::review::{guard_branch, parse_args},
@@ -52,16 +52,15 @@ fn require_embedded(dir: &Path, attach: &[String], edits: &BTreeMap<String, Stri
     Ok(())
 }
 
-/// The `pr_body` template rendered with `given`'s values, and every other
-/// variable as its slot. With nothing given, this is the skeleton.
-fn skeleton(
+/// The `pr_body` template rendered with `value` of each variable, the
+/// summary `input` included.
+fn render_body(
     tmpls: &Templates,
     record: Option<&IssueRecord>,
     branch: &str,
     toplevel: &Path,
-    given: &BTreeMap<String, String>,
+    value: &dyn Fn(&str) -> String,
 ) -> Result<String> {
-    let value = |n: &str| given.get(n).cloned().unwrap_or_else(|| slot(n));
     let values = tmpls.declared().into_iter().map(|n| {
         let v = value(&n);
         (n, v)
@@ -130,14 +129,12 @@ pub fn run(args: Args) -> Result<()> {
     let title = args
         .pr_title
         .map(|input| {
-            let mut values = tmpls.defaults();
-            values.extend(edits.clone());
             let title = Texts::new(
                 tmpls,
                 record.as_ref(),
                 &branch,
                 &toplevel,
-                values,
+                with_defaults(tmpls, edits.clone()),
                 Some(input),
                 None,
             )
@@ -174,10 +171,12 @@ pub fn run(args: Args) -> Result<()> {
     let body = if edits.is_empty() {
         None
     } else {
-        let render = |given: &BTreeMap<String, String>| {
-            skeleton(tmpls, record.as_ref(), &branch, &toplevel, given)
+        let render = |value: &dyn Fn(&str) -> String| {
+            render_body(tmpls, record.as_ref(), &branch, &toplevel, value)
         };
-        let blank = render(&BTreeMap::new())?;
+        let blank = render(&|n| slot(n))?;
+        let created = with_defaults(tmpls, edits.clone());
+        let as_created = |n: &str| created.get(n).cloned().unwrap_or_else(|| slot(n));
         let mut sections = Vec::new();
         for name in edits.keys() {
             if sections.iter().flatten().any(|n| n == name) {
@@ -192,11 +191,11 @@ pub fn run(args: Args) -> Result<()> {
         })?;
         for names in &sections {
             let name = &names[0];
-            let given = names
-                .iter()
-                .map(|n| (n.clone(), edits[n].clone()))
-                .collect();
-            body = splice(&blank, &render(&given)?, &body, name)
+            let ours = |n: &str| names.iter().any(|x| x == n);
+            let rendered = render(&|n| if ours(n) { edits[n].clone() } else { slot(n) })?;
+            let marked = render(&|n| if ours(n) { slot(n) } else { as_created(n) })?;
+            let hidden = hides(&blank, &marked, &render(&as_created)?, name)?;
+            body = splice(&blank, &rendered, &body, name, hidden)
                 .with_context(|| format!("placing `{name}` in PR #{}'s body", pr.number))?;
         }
         Some(body)

@@ -55,8 +55,15 @@ pub(crate) fn section(
 /// `live` with the span variable `name` owns replaced by that span of
 /// `rendered`, the template rendered with the section's values and every
 /// other variable as its slot. When the live body lacks the template text that
-/// opens the span, the span is inserted where the template puts it.
-pub(crate) fn splice(skeleton: &str, rendered: &str, live: &str, name: &str) -> Result<String> {
+/// opens the span, the span is inserted where the template puts it, unless
+/// the section is `hidden`, and `live` is kept as it is.
+pub(crate) fn splice(
+    skeleton: &str,
+    rendered: &str,
+    live: &str,
+    name: &str,
+    hidden: bool,
+) -> Result<String> {
     let sk = lines(skeleton);
     let at = slot_line(&sk, &slot(name), name)?;
     let (before, after) = bounds(&sk, at, name)?;
@@ -88,6 +95,7 @@ pub(crate) fn splice(skeleton: &str, rendered: &str, live: &str, name: &str) -> 
     };
     let (start, opens) = match found(before) {
         Some(l) => (body[l].end, span_start),
+        None if hidden => return Ok(live.to_string()),
         None => (
             end,
             sk[section_start(&sk, before, |k| found(k).is_some())].start,
@@ -103,6 +111,22 @@ pub(crate) fn splice(skeleton: &str, rendered: &str, live: &str, name: &str) -> 
         );
     };
     Ok(format!("{}{text}{}", &live[..start], &live[end..]))
+}
+
+/// Whether the values in `rendered` hide the section `name` owns: `rendered`
+/// has fewer of the line that opens it than `marked`, the same render with
+/// the section's variables as slots.
+pub(crate) fn hides(skeleton: &str, marked: &str, rendered: &str, name: &str) -> Result<bool> {
+    let sk = lines(skeleton);
+    let at = slot_line(&sk, &slot(name), name)?;
+    let (before, _) = bounds(&sk, at, name)?;
+    let count = |text: &str| {
+        lines(text)
+            .iter()
+            .filter(|l| fits(sk[before].text, l.text))
+            .count()
+    };
+    Ok(count(rendered) < count(marked))
 }
 
 /// The template lines on either side of skeleton line `at`.
@@ -313,7 +337,14 @@ Footer by @@devkit-slot:agent_model@@";
     fn a_separator_the_body_lacks_does_not_swallow_the_sections_after_it() {
         let live = "## TL;DR\n\n---\n\n## Summary\n\nold\n\n## Proof\n\np\n\n---\n\nFooter by X\n";
 
-        let got = splice(SKELETON, &fill(SKELETON, "proof", "new"), live, "proof").unwrap();
+        let got = splice(
+            SKELETON,
+            &fill(SKELETON, "proof", "new"),
+            live,
+            "proof",
+            false,
+        )
+        .unwrap();
 
         assert_eq!(got, live.replace("\np\n", "\nnew\n"));
     }
@@ -323,7 +354,14 @@ Footer by @@devkit-slot:agent_model@@";
     fn crlf_line_endings_still_match() {
         let live = "## Summary\r\n\r\nold\r\n\r\n## Proof\r\n\r\np\r\n\r\n---\r\n\r\nFooter\r\n";
 
-        let got = splice(SKELETON, &fill(SKELETON, "input", "new"), live, "input").unwrap();
+        let got = splice(
+            SKELETON,
+            &fill(SKELETON, "input", "new"),
+            live,
+            "input",
+            false,
+        )
+        .unwrap();
 
         assert_eq!(
             got,
@@ -338,18 +376,18 @@ Footer by @@devkit-slot:agent_model@@";
     fn a_variable_at_either_end_of_the_template_is_refused() {
         let tail = "## Proof\n\n@@devkit-slot:proof@@";
         let live = "## Proof\n\np\n\n## Walkthrough\nbot text\n";
-        let err = splice(tail, tail, live, "proof").unwrap_err();
+        let err = splice(tail, tail, live, "proof", false).unwrap_err();
         assert!(err.to_string().contains("after it"), "{err}");
 
         let head = "@@devkit-slot:input@@\n\n## Proof\n\n@@devkit-slot:proof@@\n\n---";
         let live = "> bot banner\n\nsummary\n\n## Proof\n\np\n\n---\n";
-        let err = splice(head, head, live, "input").unwrap_err();
+        let err = splice(head, head, live, "input", false).unwrap_err();
         assert!(err.to_string().contains("before it"), "{err}");
     }
 
     #[test]
     fn an_inline_variable_is_refused() {
-        let err = splice(SKELETON, SKELETON, "Footer by X", "agent_model").unwrap_err();
+        let err = splice(SKELETON, SKELETON, "Footer by X", "agent_model", false).unwrap_err();
         assert!(err.to_string().contains("line of its own"), "{err}");
     }
 
@@ -376,8 +414,17 @@ Footer by @@devkit-slot:agent_model@@";
         let rendered = fill(&fill(SHARED, "door", "x"), "blast_radius", "y");
         let live = "## Merge danger\n\na\n\nb\n\n---\nbot\n";
 
-        let got = splice(SHARED, &rendered, live, "door").unwrap();
+        let got = splice(SHARED, &rendered, live, "door", false).unwrap();
 
         assert_eq!(got, "## Merge danger\n\nx\n\ny\n\n---\nbot\n");
+    }
+
+    #[test]
+    fn a_render_without_the_sections_opening_line_hides_it() {
+        let marked = SHARED;
+        let shown = fill(&fill(SHARED, "door", "x"), "blast_radius", "y");
+
+        assert!(!hides(SHARED, marked, &shown, "door").unwrap());
+        assert!(hides(SHARED, marked, "---\n", "door").unwrap());
     }
 }
