@@ -154,11 +154,59 @@ pr_body = '''
 {%- endif %}
 
 {{ input | trim }}
+{%- if departures | trim not in ["", "**None**"] %}
+
+## Departures
+
+{{ departures | trim }}
+{%- endif %}
+{%- if loose_ends | trim not in ["", "**None**"] %}
+
+## Loose Ends
+
+{{ loose_ends | trim }}
+{%- endif %}
+{%- if assumptions | trim not in ["", "**None**"] %}
+
+## Assumptions
+
+{{ assumptions | trim }}
+{%- endif %}
+{%- if conceptual_changes | trim not in ["", "**None**"] %}
+
+## Conceptual Changes
+
+{{ conceptual_changes | trim }}
+{%- endif %}
 {%- if proof | trim %}
 
 ## Proof
 
 {{ proof | trim }}
+{%- endif %}
+{%- if change_risk | trim or change_risk_reason | trim %}
+
+## Change Risk
+{%- if change_risk | trim %}
+
+**Change risk:** {{ change_risk | trim }}
+{%- endif %}
+{%- if change_risk_reason | trim %}
+
+**Classifier:** {{ change_risk_reason | trim }}
+{%- endif %}
+{%- endif %}
+{%- if door | trim or blast_radius | trim %}
+
+## Merge Danger
+{%- if door | trim %}
+
+**Door:** {{ door | trim }}
+{%- endif %}
+{%- if blast_radius | trim %}
+
+**Blast Radius:** {{ blast_radius | trim }}
+{%- endif %}
 {%- endif %}
 {%- if agent %}
 
@@ -230,6 +278,15 @@ refs = { default = "", description = "Every other issue line, `;`-separated, eac
 agent_model = { default = "", required = "agents", description = "Full name of the model that did the work, e.g. `Claude Opus 5`" }
 agent_harness = { default = "", required = "agents", description = "Markdown link to the harness, e.g. `[Claude Code](https://claude.com/claude-code)`" }
 implemented_by = { default = "", description = "One prose line naming who did which part, when several agents or people did the work" }
+
+departures = { default = "", description = "What the branch does that the issue did not ask for. Renders under its own heading only when set to something other than `**None**`" }
+loose_ends = { default = "", description = "What the branch knowingly leaves stale or unfinished. Renders under its own heading only when set to something other than `**None**`" }
+assumptions = { default = "", description = "The choices the branch made where the issue and the human gave no answer. Renders under its own heading only when set to something other than `**None**`" }
+conceptual_changes = { default = "", description = "The concepts the branch adds or changes, without the heading. Renders under its own heading only when set to something other than `**None**`" }
+change_risk = { default = "", description = "`low`, `medium` or `high`; workcell sets it, so agents leave it unset. The template adds the `**Change risk:**` label" }
+change_risk_reason = { default = "", description = "The change-risk classifier's answer and its one-line reason; workcell sets it, so agents leave it unset. The template adds the `**Classifier:**` label" }
+door = { default = "", description = "`➡️ one-way` or `&#x2194;&#xFE0F; two-way`: whether a revert undoes the change. The template adds the `**Door:**` label" }
+blast_radius = { default = "", description = "The widest scope a bad merge reaches, then one bullet per risk. The template adds the `**Blast Radius:**` label" }
 
 [tasks.fmt]
 description = "Format the workspace with nightly rustfmt"
