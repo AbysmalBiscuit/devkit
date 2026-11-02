@@ -143,21 +143,40 @@ fn a_failing_run_at_head_does_not_satisfy_the_gate() {
     assert!(!opened(&p), "{}", p.calls());
 }
 
-#[test]
-fn a_failing_run_at_head_shows_its_output_tail_beside_not_run() {
+/// The body of a human's PR opened after `devrun task broken <extra>`, a
+/// task that prints `going down` and exits 3, ran at HEAD. `dirty` leaves
+/// an untracked file in the tree during the run, removed before the PR.
+fn body_after_failed_run(extra: &[&str], dirty: bool) -> (ghfake::Fake, String) {
     let p = project(
         &GATE
             .replace("\"verify\"", "\"broken\"")
             .replace("verify_args = { scope = \"all\" }\n", ""),
     );
-    task(&p, &["broken"]);
+    let scratch = p.project().join("scratch.txt");
+    if dirty {
+        std::fs::write(&scratch, "uncommitted\n").unwrap();
+    }
+    let mut args = vec!["broken"];
+    args.extend_from_slice(extra);
+    task(&p, &args);
+    if dirty {
+        std::fs::remove_file(&scratch).unwrap();
+    }
     let (ok, stderr) = create(&p, "human");
     assert!(ok, "{stderr}");
     let body = body(&p);
+    (p, body)
+}
+
+#[test]
+fn a_failing_run_at_head_shows_its_output_tail_beside_not_run() {
+    let (p, body) = body_after_failed_run(&[], false);
     assert!(body.contains("NOT RUN"), "{body}");
     assert!(
         body.contains(&format!(
-            "The latest run of `devrun task broken` at `{}` exited 3.",
+            "\nThe latest run of `devrun task broken` at `{}`:\n\n\
+             - Exit code: 3\n\
+             - Tree: clean\n",
             head(&p)
         )),
         "{body}"
@@ -166,6 +185,29 @@ fn a_failing_run_at_head_shows_its_output_tail_beside_not_run() {
         body.contains("\nOutput tail:\n\n```text\ngoing down\n```\n"),
         "{body}"
     );
+}
+
+#[test]
+fn a_failing_run_on_a_dirty_tree_says_its_tree_was_not_clean() {
+    let (_p, body) = body_after_failed_run(&[], true);
+    assert!(
+        body.contains(
+            "- Tree: not clean: a file was modified, staged or untracked when it started or \
+             ended, or HEAD moved during it\n"
+        ),
+        "{body}"
+    );
+    assert!(body.contains("going down"), "{body}");
+}
+
+#[test]
+fn a_failing_run_given_env_names_the_variables_but_not_their_values() {
+    let (_p, body) = body_after_failed_run(&["--env", "GIT_TRACE=0"], false);
+    assert!(
+        body.contains("- Tree: not proven clean: it was given `--env` for `GIT_TRACE`\n"),
+        "{body}"
+    );
+    assert!(!body.contains("GIT_TRACE=0"), "{body}");
 }
 
 #[test]

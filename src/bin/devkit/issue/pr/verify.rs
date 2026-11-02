@@ -190,15 +190,15 @@ impl Gate {
         )
     }
 
-    /// The exit and output tail of [`Self::failed`], or empty when no
-    /// failed run is recorded.
+    /// The exit code, tree state and output tail of [`Self::failed`], or
+    /// empty when no failed run is recorded.
     fn failed_note(&self) -> String {
         let Some(run) = &self.failed else {
             return String::new();
         };
         let exit = match run.exit_code {
-            Some(code) => format!("exited {code}"),
-            None => "never started its program".to_string(),
+            Some(code) => code.to_string(),
+            None => "none: its program never started".to_string(),
         };
         let tail = match run.tail.as_deref() {
             Some(lines) if !lines.is_empty() => output_tail(lines),
@@ -206,9 +206,12 @@ impl Gate {
             None => "\nNo output was captured: it went straight to a terminal.\n".to_string(),
         };
         format!(
-            "\nThe latest run of `{command}` at `{head}` {exit}.\n{tail}",
+            "\nThe latest run of `{command}` at `{head}`:\n\n\
+             - Exit code: {exit}\n\
+             - Tree: {tree}\n{tail}",
             command = self.required.command(),
             head = self.head,
+            tree = tree_state(run),
         )
     }
 
@@ -508,34 +511,49 @@ fn unproven(required: &RequiredTask, run: &Run) -> Option<String> {
             flags(&required.args, &BTreeMap::new())
         ));
     }
-    if !run.env.is_empty() || run.env_file.is_some() {
-        let mut given = Vec::new();
-        if !run.env.is_empty() {
-            given.push(format!(
-                "`--env` for {}",
-                run.env
-                    .iter()
-                    .map(|v| format!("`{v}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        if let Some(file) = &run.env_file {
-            given.push(format!("`--env-file {}`", file.display()));
-        }
+    if let Some(given) = env_given(run) {
         why.push(format!(
-            "it was given {}, which the committed config does not set, so run it without them",
-            given.join(" and ")
+            "it was given {given}, which the committed config does not set, so run it without them"
         ));
     }
     if why.is_empty() && !run.clean {
-        why.push(
-            "its tree was not clean: a file was modified, staged or untracked when it started \
-             or ended, or HEAD moved during it"
-                .to_string(),
-        );
+        why.push(format!("its tree was not clean: {DIRTY_TREE}"));
     }
     (!why.is_empty()).then(|| format!("A run at that commit passed, but {}.", why.join("; and ")))
+}
+
+/// Why a run recorded as not clean, and given no env, was not clean.
+const DIRTY_TREE: &str =
+    "a file was modified, staged or untracked when it started or ended, or HEAD moved during it";
+
+/// The `--env` names and `--env-file` that `run` was given, quoted, or
+/// `None` when it was given neither. The values are never recorded.
+fn env_given(run: &Run) -> Option<String> {
+    let mut given = Vec::new();
+    if !run.env.is_empty() {
+        given.push(format!(
+            "`--env` for {}",
+            run.env
+                .iter()
+                .map(|v| format!("`{v}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if let Some(file) = &run.env_file {
+        given.push(format!("`--env-file {}`", file.display()));
+    }
+    (!given.is_empty()).then(|| given.join(" and "))
+}
+
+/// The tree state `run` recorded, as the section names it. A run given env
+/// is recorded as not clean whatever its tree held, so it says so instead.
+fn tree_state(run: &Run) -> String {
+    match env_given(run) {
+        Some(given) => format!("not proven clean: it was given {given}"),
+        None if run.clean => "clean".to_string(),
+        None => format!("not clean: {DIRTY_TREE}"),
+    }
 }
 
 fn short(rev: &str) -> &str {
