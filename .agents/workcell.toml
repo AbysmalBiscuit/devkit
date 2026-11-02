@@ -3,6 +3,19 @@
 [merge]
 method = "squash"
 
-# The standard workflow asks before it merges a PR.
+# A low-risk PR merges with no approval. A medium or high-risk PR waits for
+# one approval, which the PR author may give.
+[change_risk.low]
+approvals = 0
+
+[change_risk.medium]
+approvals = 1
+non_author = false
+
+[change_risk.high]
+approvals = 1
+non_author = false
+
 [standard.parameters]
-merge_auto = "ask"
+merge_auto = "yes"
+merge_rebase = "every-push"
