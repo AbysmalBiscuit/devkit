@@ -28,8 +28,8 @@ pub(crate) struct Gate {
     rejected: Option<String>,
     /// What the PR changes in what the required task runs, when it does.
     change: Option<String>,
-    /// The steps `run` executed, and whether they differ from what HEAD's
-    /// committed config defines.
+    /// The steps `run` executed, when they differ from what HEAD's committed
+    /// config defines.
     ran: String,
 }
 
@@ -157,10 +157,12 @@ impl Gate {
             ));
         }
         out.push_str(&self.ran);
-        match run.tail.as_deref() {
-            Some(lines) if !lines.is_empty() => out.push_str(&output_tail(lines)),
-            Some(_) => out.push_str("\nThe run printed nothing.\n"),
-            None => out.push_str("\nNo output was captured: it went straight to a terminal.\n"),
+        if run.exit_code != Some(0) {
+            match run.tail.as_deref() {
+                Some(lines) if !lines.is_empty() => out.push_str(&output_tail(lines)),
+                Some(_) => out.push_str("\nThe run printed nothing.\n"),
+                None => out.push_str("\nNo output was captured: it went straight to a terminal.\n"),
+            }
         }
         out.push_str(self.change.as_deref().unwrap_or_default());
         out
@@ -342,11 +344,11 @@ fn changed_plan(
     })
 }
 
-/// The steps `run` executed, as the section lists them, and a line saying
-/// so when they differ from what the `devkit.toml` files committed at
-/// `head` define the required task to run. A layer outside those files,
-/// such as a `devkit.local.toml`, the primary checkout's config, `--config`
-/// or `$DEVKIT_CONFIG`, changes what runs without dirtying the tree.
+/// The note that `run` executed other steps than the `devkit.toml` files
+/// committed at `head` define the required task to run, listing the steps
+/// it executed. A layer outside those files, such as a `devkit.local.toml`,
+/// the primary checkout's config, `--config` or `$DEVKIT_CONFIG`, changes
+/// what runs without dirtying the tree. Empty when the steps match.
 fn ran_note(
     checkout: &Checkout,
     worktree: &Worktree,
@@ -354,18 +356,6 @@ fn ran_note(
     run: &Run,
     required: &RequiredTask,
 ) -> String {
-    let mut out = String::new();
-    if !run.steps.is_empty() {
-        let lines: Vec<String> = run
-            .steps
-            .iter()
-            .map(|s| match &s.up {
-                Some(app) => format!("up: {app}"),
-                None => format!("{}: {}", s.task, s.argv.join(" ")),
-            })
-            .collect();
-        out = format!("\nSteps run:\n{}", leading_block(&lines, "text"));
-    }
     let committed = |ports: &BTreeMap<String, u16>| {
         task::committed_plan(
             checkout,
@@ -378,12 +368,24 @@ fn ran_note(
         )
         .map(|plan| plan.commands())
     };
-    if matches_committed(&run.steps, committed) == Some(false) {
-        out.push_str(&format!(
-            "\nAn uncommitted config layer changed what ran: these steps differ from what the \
-             `devkit.toml` files committed at HEAD define for `{}`.\n",
-            required.task
-        ));
+    if matches_committed(&run.steps, committed) != Some(false) {
+        return String::new();
+    }
+    let mut out = format!(
+        "\nAn uncommitted config layer changed what ran: these steps differ from what the \
+         `devkit.toml` files committed at HEAD define for `{}`.\n",
+        required.task
+    );
+    if !run.steps.is_empty() {
+        let lines: Vec<String> = run
+            .steps
+            .iter()
+            .map(|s| match &s.up {
+                Some(app) => format!("up: {app}"),
+                None => format!("{}: {}", s.task, s.argv.join(" ")),
+            })
+            .collect();
+        out.push_str(&leading_block(&lines, "text"));
     }
     out
 }
@@ -638,6 +640,60 @@ mod tests {
             let out = gate.apply(body.into()).unwrap();
             assert!(out.starts_with("### Verification\n\nNOT RUN"), "{out:?}");
         }
+    }
+
+    fn gate_with(run: Run) -> Gate {
+        Gate {
+            mode: GateMode::Advise,
+            required: RequiredTask {
+                task: "verify".into(),
+                args: Default::default(),
+            },
+            head: "0123".into(),
+            caller: Caller::Agent,
+            run: Some(run),
+            rejected: None,
+            change: None,
+            ran: String::new(),
+        }
+    }
+
+    fn run_exiting(code: Option<i32>) -> Run {
+        Run {
+            task: "verify".into(),
+            args: Default::default(),
+            arg_files: Default::default(),
+            repo: PathBuf::new(),
+            worktree: PathBuf::new(),
+            dir: None,
+            head: Some("0123".into()),
+            clean: true,
+            env: Vec::new(),
+            env_file: None,
+            steps: Vec::new(),
+            reused_servers: Vec::new(),
+            live_servers: Vec::new(),
+            exit_code: code,
+            started_at: String::new(),
+            ended_at: String::new(),
+            tail: Some(vec!["test broken ... FAILED".into()]),
+            path: None,
+        }
+    }
+
+    #[test]
+    fn a_failing_run_keeps_its_output_tail() {
+        for code in [Some(101), None] {
+            let out = gate_with(run_exiting(code)).apply(String::new()).unwrap();
+            assert!(
+                out.contains("\nOutput tail:\n\n```text\ntest broken ... FAILED\n```\n"),
+                "{out}"
+            );
+        }
+        let passing = gate_with(run_exiting(Some(0)))
+            .apply(String::new())
+            .unwrap();
+        assert!(!passing.contains("Output tail"), "{passing}");
     }
 
     #[test]

@@ -215,15 +215,17 @@ fn the_body_carries_a_verification_section_built_from_the_qualifying_run() {
         "{body}"
     );
     let sha = head(&p);
-    for want in [
-        "`devrun task verify --arg scope=all`",
-        "Exit code: 0",
-        &format!("`{sha}`"),
-        "git version",
-    ] {
-        assert!(body.contains(want), "{want}: {body}");
-    }
-    assert!(!body.contains("NOT RUN"), "{body}");
+    assert_eq!(
+        body,
+        format!(
+            "Adds a thing.\n\n### Verification\n\n\
+             - Command: `devrun task verify --arg scope=all`\n\
+             - Exit code: 0\n\
+             - SHA: `{sha}`\n\
+             - Tree: clean\n"
+        ),
+        "a passing run lists no steps and quotes no output"
+    );
 }
 
 #[test]
@@ -541,14 +543,11 @@ fn a_run_under_an_uncommitted_layer_shows_its_steps_and_says_so() {
 }
 
 #[test]
-fn a_run_under_the_committed_config_shows_its_steps_alone() {
+fn a_run_under_the_committed_config_lists_no_steps() {
     let p = project(GATE);
     verify(&p);
     let body = opened_body(&p);
-    assert!(
-        body.contains("\nverify: git -c x.scope=all version\n"),
-        "{body}"
-    );
+    assert!(!body.contains("git -c x.scope=all version"), "{body}");
     assert!(!body.contains("uncommitted config layer"), "{body}");
 }
 
