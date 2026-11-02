@@ -154,29 +154,29 @@ pr_body = '''
 {%- endif %}
 
 {{ input | trim }}
-{%- if departures | trim not in ["", "**None**"] %}
+{%- if agent or departures | trim %}
 
 ## Departures
 
-{{ departures | trim }}
+{{ departures | trim or "**None**" }}
 {%- endif %}
-{%- if loose_ends | trim not in ["", "**None**"] %}
+{%- if agent or loose_ends | trim %}
 
 ## Loose Ends
 
-{{ loose_ends | trim }}
+{{ loose_ends | trim or "**None**" }}
 {%- endif %}
-{%- if assumptions | trim not in ["", "**None**"] %}
+{%- if agent or assumptions | trim %}
 
 ## Assumptions
 
-{{ assumptions | trim }}
+{{ assumptions | trim or "**None**" }}
 {%- endif %}
-{%- if conceptual_changes | trim not in ["", "**None**"] %}
+{%- if agent or conceptual_changes | trim %}
 
 ## Conceptual Changes
 
-{{ conceptual_changes | trim }}
+{{ conceptual_changes | trim or "**None**" }}
 {%- endif %}
 {%- if proof | trim %}
 
@@ -184,29 +184,25 @@ pr_body = '''
 
 {{ proof | trim }}
 {%- endif %}
-{%- if change_risk | trim or change_risk_reason | trim %}
+{%- if agent or change_risk | trim or change_risk_reason | trim %}
 
 ## Change Risk
-{%- if change_risk | trim %}
 
-**Change risk:** {{ change_risk | trim }}
-{%- endif %}
-{%- if change_risk_reason | trim %}
+**Change risk:**
+{{ change_risk | trim or "**None**" }}
 
-**Classifier:** {{ change_risk_reason | trim }}
+**Classifier:**
+{{ change_risk_reason | trim or "**None**" }}
 {%- endif %}
-{%- endif %}
-{%- if door | trim or blast_radius | trim %}
+{%- if agent or door | trim or blast_radius | trim %}
 
 ## Merge Danger
-{%- if door | trim %}
 
-**Door:** {{ door | trim }}
-{%- endif %}
-{%- if blast_radius | trim %}
+**Door:**
+{{ door | trim or "**None**" }}
 
-**Blast Radius:** {{ blast_radius | trim }}
-{%- endif %}
+**Blast Radius:**
+{{ blast_radius | trim or "**None**" }}
 {%- endif %}
 {%- if agent %}
 
@@ -279,10 +275,10 @@ agent_model = { default = "", required = "agents", description = "Full name of t
 agent_harness = { default = "", required = "agents", description = "Markdown link to the harness, e.g. `[Claude Code](https://claude.com/claude-code)`" }
 implemented_by = { default = "", description = "One prose line naming who did which part, when several agents or people did the work" }
 
-departures = { default = "", description = "What the branch does that the ticket did not ask for. Renders under its own heading only when set to something other than `**None**`" }
-loose_ends = { default = "", description = "What the branch knowingly leaves stale or unfinished. Renders under its own heading only when set to something other than `**None**`" }
-assumptions = { default = "", description = "The choices the branch made where the ticket and the human gave no answer. Renders under its own heading only when set to something other than `**None**`" }
-conceptual_changes = { default = "", description = "The concepts the branch adds or changes, without the heading. Renders under its own heading only when set to something other than `**None**`" }
+departures = { default = "", description = "What the branch does that the ticket did not ask for. Renders `**None**` on an agent PR when unset" }
+loose_ends = { default = "", description = "What the branch knowingly leaves stale or unfinished. Renders `**None**` on an agent PR when unset" }
+assumptions = { default = "", description = "The choices the branch made where the ticket and the human gave no answer. Renders `**None**` on an agent PR when unset" }
+conceptual_changes = { default = "", description = "The concepts the branch adds or changes, without the heading. Renders `**None**` on an agent PR when unset" }
 change_risk = { default = "", description = "`low`, `medium` or `high`; workcell sets it, so agents leave it unset. The template adds the `**Change risk:**` label" }
 change_risk_reason = { default = "", description = "The change-risk classifier's answer and its one-line reason; workcell sets it, so agents leave it unset. The template adds the `**Classifier:**` label" }
 door = { default = "", description = "`➡️ one-way` or `&#x2194;&#xFE0F; two-way`: whether a revert undoes the change. The template adds the `**Door:**` label" }
