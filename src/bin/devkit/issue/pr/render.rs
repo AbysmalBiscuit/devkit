@@ -168,9 +168,17 @@ pub(crate) fn values(
     let tmpls = &cfg.templates;
     let given = parse_args(vars, &tmpls.declared())?;
     devkit_common::required::ensure_supplied(surface, &missing(cfg, &given, caller)?)?;
+    Ok(with_defaults(tmpls, given))
+}
+
+/// `given` over the declared defaults: what a PR's templates render with.
+pub(crate) fn with_defaults(
+    tmpls: &Templates,
+    given: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
     let mut values = tmpls.defaults();
     values.extend(given);
-    Ok(values)
+    values
 }
 
 /// Everything the `pr_title` and `pr_body` templates render from, for one

@@ -1,11 +1,11 @@
-//! Placing one template variable in a PR body that has drifted from what the
-//! `pr_body` template rendered. Bots and people add to a live body, so only
-//! the span the variable owns is rewritten.
+//! Placing one section of template variables in a PR body that has drifted
+//! from what the `pr_body` template rendered. Bots and people add to a live
+//! body, so only the span the section owns is rewritten.
 //!
 //! The template is rendered once with every variable as its [`slot`]. That
 //! skeleton's anchors, the lines carrying any of the template's own text, are
 //! found in the live body in order, and the ones on either side of a
-//! variable's slot bound the span it owns there.
+//! variable's slot bound the span that it shares with every slot inside it.
 
 use anyhow::{Result, bail};
 
@@ -17,13 +17,68 @@ pub(crate) fn slot(name: &str) -> String {
     format!("{OPEN}{name}{CLOSE}")
 }
 
-/// `live` with the span variable `name` owns replaced by `value`, or, when
-/// the live body lacks the template text that opens that span, with the
-/// span inserted where the template puts it.
-pub(crate) fn splice(skeleton: &str, live: &str, name: &str, value: &str) -> Result<String> {
-    let marker = slot(name);
+/// The variables that render into the span `name` owns in the skeleton,
+/// `name` first. Such a section is rendered whole, so an edit that is not
+/// `given` every one of them is refused, naming the ones it left out.
+pub(crate) fn section(
+    skeleton: &str,
+    name: &str,
+    given: impl Fn(&str) -> bool,
+) -> Result<Vec<String>> {
     let sk = lines(skeleton);
-    let at = slot_line(&sk, &marker, name)?;
+    let at = slot_line(&sk, &slot(name), name)?;
+    let (before, after) = bounds(&sk, at, name)?;
+    let mut names = vec![name.to_string()];
+    for other in sk[before + 1..after]
+        .iter()
+        .flat_map(|l| slot_names(l.text))
+    {
+        if !names.iter().any(|n| n == other) {
+            names.push(other.to_string());
+        }
+    }
+    let left_out: Vec<String> = names
+        .iter()
+        .filter(|n| !given(n))
+        .map(|n| format!("`{n}`"))
+        .collect();
+    if !left_out.is_empty() {
+        bail!(
+            "`{name}` shares its section of the pr_body template, so the edit must \
+             also pass {}",
+            left_out.join(", ")
+        );
+    }
+    Ok(names)
+}
+
+/// How much of a section the values render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shown<'a> {
+    Whole,
+    /// Another variable hides some of the section's variables. The text is
+    /// the template rendered with the values.
+    Part(&'a str),
+    Hidden,
+}
+
+/// `live` with the span the section `names` owns replaced by that span of
+/// `rendered`, the template rendered with the section's values and every
+/// other variable as its slot. When the live body lacks the template text that
+/// opens the span, a [`Shown::Whole`] span is inserted where the template puts
+/// it, a [`Shown::Part`] span is replaced by what the values render of it, and
+/// `live` is kept as it is for a [`Shown::Hidden`] span.
+pub(crate) fn splice(
+    skeleton: &str,
+    rendered: &str,
+    live: &str,
+    names: &[String],
+    shown: Shown<'_>,
+) -> Result<String> {
+    let name = names[0].as_str();
+    let sk = lines(skeleton);
+    let at = slot_line(&sk, &slot(name), name)?;
+    let (before, after) = bounds(&sk, at, name)?;
     let body = lines(live);
 
     let anchors: Vec<usize> = (0..sk.len()).filter(|&i| is_anchor(sk[i].text)).collect();
@@ -34,12 +89,6 @@ pub(crate) fn splice(skeleton: &str, live: &str, name: &str, value: &str) -> Res
     let row_of =
         |pairs: &[(usize, usize)], i: usize| pairs.iter().find(|(s, _)| *s == i).map(|(_, l)| *l);
     let found = |i: usize| row_of(&earliest, i);
-    let Some(before) = anchors.iter().rev().copied().find(|&i| i < at) else {
-        bail!(unbounded(name, "before"));
-    };
-    let Some(after) = anchors.iter().copied().find(|&i| i > at) else {
-        bail!(unbounded(name, "after"));
-    };
     if let Some(i) = [before, after]
         .into_iter()
         .find(|&i| found(i) != row_of(&latest, i))
@@ -53,30 +102,128 @@ pub(crate) fn splice(skeleton: &str, live: &str, name: &str, value: &str) -> Res
 
     let span_start = sk[before].end;
     let span_end = sk[after].start;
-    if let Some(other) = sk
-        .iter()
-        .filter(|l| l.start >= span_start && l.end <= span_end && l.start != sk[at].start)
-        .find_map(|l| slot_name(l.text))
-    {
-        bail!(
-            "`{name}` shares its section of the pr_body template with `{other}`, \
-             so it cannot be replaced alone"
-        );
-    }
-
     let Some(end) = found(after).map(|l| body[l].start) else {
         bail!(lost(name));
     };
-    let value = value.trim();
-    let (start, opens) = match found(before) {
-        Some(l) => (body[l].end, span_start),
-        None => (
+    let (start, opens) = match (found(before), shown) {
+        (Some(l), _) => (body[l].end, span_start),
+        (None, Shown::Hidden) => return Ok(live.to_string()),
+        (None, Shown::Part(full)) => {
+            let Some((open, row)) = (0..before)
+                .rev()
+                .filter(|&k| is_anchor(sk[k].text))
+                .find_map(|k| found(k).map(|l| (k, l)))
+            else {
+                bail!(lost(name));
+            };
+            let text = visible_part(&sk, open, after, names, full)?;
+            return Ok(format!("{}{text}{}", &live[..body[row].end], &live[end..]));
+        }
+        (None, Shown::Whole) => (
             end,
             sk[section_start(&sk, before, |k| found(k).is_some())].start,
         ),
     };
-    let text = skeleton[opens..span_end].replace(&marker, value);
+    let Some(text) = rendered
+        .strip_prefix(&skeleton[..opens])
+        .and_then(|rest| rest.strip_suffix(&skeleton[span_end..]))
+    else {
+        bail!(
+            "the pr_body template renders `{name}` outside its own section, so \
+             that section cannot be replaced alone"
+        );
+    };
     Ok(format!("{}{text}{}", &live[..start], &live[end..]))
+}
+
+/// How much of the section `names` the values render. `marked` is the
+/// render with the section's variables as slots and every other variable as
+/// its value, and `full` is the render with the values. A variable outside
+/// the section hides each section variable whose slot `marked` lacks. The
+/// section's own values hide it when `full` has fewer of the line that opens
+/// it than `marked`.
+pub(crate) fn shown<'a>(
+    skeleton: &str,
+    marked: &str,
+    full: &'a str,
+    names: &[String],
+) -> Result<Shown<'a>> {
+    let visible = names.iter().filter(|n| marked.contains(&slot(n))).count();
+    if visible == 0 {
+        return Ok(Shown::Hidden);
+    }
+    if visible < names.len() {
+        return Ok(Shown::Part(full));
+    }
+    let name = names[0].as_str();
+    let sk = lines(skeleton);
+    let at = slot_line(&sk, &slot(name), name)?;
+    let (before, _) = bounds(&sk, at, name)?;
+    let count = |text: &str| {
+        lines(text)
+            .iter()
+            .filter(|l| fits(sk[before].text, l.text))
+            .count()
+    };
+    Ok(if count(full) < count(marked) {
+        Shown::Hidden
+    } else {
+        Shown::Whole
+    })
+}
+
+/// The text `full` renders between the template lines `open` and `after`.
+/// Every variable in that span must be one of the section's `names`.
+fn visible_part<'a>(
+    sk: &[Line<'_>],
+    open: usize,
+    after: usize,
+    names: &[String],
+    full: &'a str,
+) -> Result<&'a str> {
+    let name = &names[0];
+    let left_out: Vec<String> = sk[open + 1..after]
+        .iter()
+        .flat_map(|l| slot_names(l.text))
+        .filter(|n| !names.iter().any(|x| x == n))
+        .map(|n| format!("`{n}`"))
+        .collect();
+    if !left_out.is_empty() {
+        bail!(
+            "the body lacks the line that opens `{name}`'s section, so the edit \
+             replaces from the line before it and must also pass {}",
+            left_out.join(", ")
+        );
+    }
+    let fl = lines(full);
+    let only = |i: usize| {
+        let mut fitting = fl.iter().filter(|l| fits(sk[i].text, l.text));
+        match (fitting.next(), fitting.next()) {
+            (Some(l), None) => Ok(l),
+            _ => Err(anyhow::anyhow!(
+                "cannot tell where `{name}` goes: the pr_body template's line `{}` \
+                 does not render once",
+                sk[i].text
+            )),
+        }
+    };
+    let (from, to) = (only(open)?.end, only(after)?.start);
+    if from > to {
+        bail!(lost(name));
+    }
+    Ok(&full[from..to])
+}
+
+/// The template lines on either side of skeleton line `at`.
+fn bounds(sk: &[Line<'_>], at: usize, name: &str) -> Result<(usize, usize)> {
+    let anchor = |i: &usize| is_anchor(sk[*i].text);
+    let Some(before) = (0..at).rev().find(anchor) else {
+        bail!(unbounded(name, "before"));
+    };
+    let Some(after) = (at + 1..sk.len()).find(anchor) else {
+        bail!(unbounded(name, "after"));
+    };
+    Ok((before, after))
 }
 
 fn lost(name: &str) -> String {
@@ -158,9 +305,11 @@ fn fits(pattern: &str, text: &str) -> bool {
     rest.ends_with(last)
 }
 
-fn slot_name(text: &str) -> Option<&str> {
-    let rest = &text[text.find(OPEN)? + OPEN.len()..];
-    rest.find(CLOSE).map(|end| &rest[..end])
+/// Every variable whose slot is on a skeleton line, in order.
+fn slot_names(text: &str) -> impl Iterator<Item = &str> {
+    text.split(OPEN)
+        .skip(1)
+        .filter_map(|rest| rest.find(CLOSE).map(|end| &rest[..end]))
 }
 
 /// The skeleton line that is `marker` and nothing else.
@@ -240,6 +389,15 @@ fn section_start(sk: &[Line<'_>], heading: usize, matched: impl Fn(usize) -> boo
 mod tests {
     use super::*;
 
+    fn names(of: &[&str]) -> Vec<String> {
+        of.iter().map(|n| n.to_string()).collect()
+    }
+
+    /// `skeleton` rendered with `value` for `name`.
+    fn fill(skeleton: &str, name: &str, value: &str) -> String {
+        skeleton.replace(&slot(name), value)
+    }
+
     const SKELETON: &str = "\
 ## TL;DR
 @@devkit-slot:human_tldr@@
@@ -268,7 +426,14 @@ Footer by @@devkit-slot:agent_model@@";
     fn a_separator_the_body_lacks_does_not_swallow_the_sections_after_it() {
         let live = "## TL;DR\n\n---\n\n## Summary\n\nold\n\n## Proof\n\np\n\n---\n\nFooter by X\n";
 
-        let got = splice(SKELETON, live, "proof", "new").unwrap();
+        let got = splice(
+            SKELETON,
+            &fill(SKELETON, "proof", "new"),
+            live,
+            &names(&["proof"]),
+            Shown::Whole,
+        )
+        .unwrap();
 
         assert_eq!(got, live.replace("\np\n", "\nnew\n"));
     }
@@ -278,7 +443,14 @@ Footer by @@devkit-slot:agent_model@@";
     fn crlf_line_endings_still_match() {
         let live = "## Summary\r\n\r\nold\r\n\r\n## Proof\r\n\r\np\r\n\r\n---\r\n\r\nFooter\r\n";
 
-        let got = splice(SKELETON, live, "input", "new").unwrap();
+        let got = splice(
+            SKELETON,
+            &fill(SKELETON, "input", "new"),
+            live,
+            &names(&["input"]),
+            Shown::Whole,
+        )
+        .unwrap();
 
         assert_eq!(
             got,
@@ -293,26 +465,95 @@ Footer by @@devkit-slot:agent_model@@";
     fn a_variable_at_either_end_of_the_template_is_refused() {
         let tail = "## Proof\n\n@@devkit-slot:proof@@";
         let live = "## Proof\n\np\n\n## Walkthrough\nbot text\n";
-        let err = splice(tail, live, "proof", "new").unwrap_err();
+        let err = splice(tail, tail, live, &names(&["proof"]), Shown::Whole).unwrap_err();
         assert!(err.to_string().contains("after it"), "{err}");
 
         let head = "@@devkit-slot:input@@\n\n## Proof\n\n@@devkit-slot:proof@@\n\n---";
         let live = "> bot banner\n\nsummary\n\n## Proof\n\np\n\n---\n";
-        let err = splice(head, live, "input", "new").unwrap_err();
+        let err = splice(head, head, live, &names(&["input"]), Shown::Whole).unwrap_err();
         assert!(err.to_string().contains("before it"), "{err}");
     }
 
     #[test]
     fn an_inline_variable_is_refused() {
-        let err = splice(SKELETON, "Footer by X", "agent_model", "Y").unwrap_err();
+        let err = splice(
+            SKELETON,
+            SKELETON,
+            "Footer by X",
+            &names(&["agent_model"]),
+            Shown::Whole,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("line of its own"), "{err}");
     }
 
+    const SHARED: &str =
+        "## Merge danger\n\n@@devkit-slot:door@@\n\n@@devkit-slot:blast_radius@@\n\n---\n";
+
     #[test]
-    fn a_section_holding_two_variables_is_refused() {
-        let skeleton =
-            "## Merge danger\n\n@@devkit-slot:door@@\n\n@@devkit-slot:blast_radius@@\n\n---\n";
-        let err = splice(skeleton, "## Merge danger\n\na\n\nb\n\n---\n", "door", "x").unwrap_err();
-        assert!(err.to_string().contains("`blast_radius`"), "{err}");
+    fn a_shared_section_names_every_variable_it_renders() {
+        let names = section(SHARED, "blast_radius", |_| true).unwrap();
+        assert_eq!(names, ["blast_radius", "door"]);
+    }
+
+    #[test]
+    fn a_shared_section_given_in_part_names_what_it_left_out() {
+        let err = section(SHARED, "door", |n| n == "door").unwrap_err();
+        assert!(
+            err.to_string().contains("also pass `blast_radius`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_shared_section_is_replaced_whole_from_the_rendered_template() {
+        let rendered = fill(&fill(SHARED, "door", "x"), "blast_radius", "y");
+        let live = "## Merge danger\n\na\n\nb\n\n---\nbot\n";
+
+        let got = splice(
+            SHARED,
+            &rendered,
+            live,
+            &names(&["door", "blast_radius"]),
+            Shown::Whole,
+        )
+        .unwrap();
+
+        assert_eq!(got, "## Merge danger\n\nx\n\ny\n\n---\nbot\n");
+    }
+
+    #[test]
+    fn a_part_shown_section_without_its_opening_line_needs_the_variables_before_it() {
+        let skeleton = "## Summary\n\n@@devkit-slot:input@@\n\n### Optional\n\n\
+                        @@devkit-slot:detail@@\n\n@@devkit-slot:tail@@\n\n## Proof\n";
+        let full = "## Summary\n\n@@devkit-slot:input@@\n\nnew\n\n## Proof\n";
+        let live = "## Summary\n\ns\n\nold\n\n## Proof\n";
+
+        let err = splice(
+            skeleton,
+            skeleton,
+            live,
+            &names(&["detail", "tail"]),
+            Shown::Part(full),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("also pass `input`"), "{err}");
+    }
+
+    #[test]
+    fn a_render_without_the_sections_opening_line_hides_it() {
+        let marked = SHARED;
+        let shown = fill(&fill(SHARED, "door", "x"), "blast_radius", "y");
+
+        let both = names(&["door", "blast_radius"]);
+        assert_eq!(
+            super::shown(SHARED, marked, &shown, &both).unwrap(),
+            Shown::Whole
+        );
+        assert_eq!(
+            super::shown(SHARED, marked, "---\n", &both).unwrap(),
+            Shown::Hidden
+        );
     }
 }

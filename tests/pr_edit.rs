@@ -332,3 +332,291 @@ fn nothing_to_change_is_refused() {
     assert!(!out.status.success());
     assert!(!wrote(&fake), "{}", fake.calls());
 }
+
+/// The Caveats section of workcell's `pr_body` template: one loop renders
+/// three variables, and the template rewrites `**None**`.
+const CAVEATS_TEMPLATE: &str = r#"
+[templates]
+pr_body = '''
+## Summary
+
+{{ input | trim }}
+{%- set caveats = [["departures", departures], ["loose ends", loose_ends], ["assumptions", assumptions]] %}
+{%- set filled = [departures, loose_ends, assumptions] | map("trim") | reject("eq", "") | reject("eq", "**None**") | list %}
+{%- if agent_model or filled %}
+
+## Caveats
+{%- for kind, value in caveats %}
+
+{{ value | trim if value | trim not in ["", "**None**"] else "**0 " ~ kind ~ "**" }}
+{%- endfor %}
+{%- endif %}
+
+## Proof
+
+{{ proof | trim }}
+
+---
+
+Footer by {{ agent_model }}'''
+
+[templates.variables]
+departures = { default = "" }
+loose_ends = { default = "" }
+assumptions = { default = "" }
+proof = { default = "" }
+agent_model = { default = "" }
+"#;
+
+const CAVEATS_LIVE: &str = "\
+## Summary
+
+The summary.
+
+## Caveats
+
+**0 departures**
+
+<details><summary><b>1 loose end</b></summary>
+
+- the old loose end
+
+</details>
+
+**0 assumptions**
+
+## Proof
+
+1. the proof
+
+---
+
+Footer by Claude
+
+## Review bot
+Details the bot keeps current.
+";
+
+#[test]
+fn an_edit_giving_every_variable_of_a_shared_section_rerenders_it() {
+    let fake = ghfake::Fake::new(CAVEATS_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, CAVEATS_LIVE);
+    let assumption = "<details><summary><b>1 assumption</b></summary>\n\n- a choice\n\n</details>";
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "departures=**None**",
+        "--arg",
+        "loose_ends=**None**",
+        "--arg",
+        &format!("assumptions={assumption}"),
+    ]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    let old = CAVEATS_LIVE
+        .split_once("## Caveats\n")
+        .and_then(|(_, rest)| rest.split_once("## Proof"))
+        .map(|(section, _)| section)
+        .unwrap();
+    let new = format!("\n**0 departures**\n\n**0 loose ends**\n\n{assumption}\n\n");
+    assert_eq!(sent_body(&fake), CAVEATS_LIVE.replace(old, &new));
+}
+
+#[test]
+fn an_edit_giving_part_of_a_shared_section_names_what_it_needs() {
+    let fake = ghfake::Fake::new(CAVEATS_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, CAVEATS_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "assumptions=**None**"]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("`departures`") && stderr.contains("`loose_ends`"),
+        "names the variables the edit left out: {stderr}"
+    );
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// `CAVEATS_LIVE` as `pr create` rendered it with no agent and no caveats.
+fn without_caveats() -> String {
+    let (head, rest) = CAVEATS_LIVE.split_once("## Caveats\n").unwrap();
+    let (_, tail) = rest.split_once("## Proof").unwrap();
+    format!("{head}## Proof{tail}")
+}
+
+const NO_CAVEATS: [&str; 6] = [
+    "--arg",
+    "departures=**None**",
+    "--arg",
+    "loose_ends=**None**",
+    "--arg",
+    "assumptions=**None**",
+];
+
+/// The template hides Caveats when no agent made the PR and every caveat
+/// is `**None**`, as `pr create` did.
+#[test]
+fn a_section_the_values_hide_stays_out_of_a_body_that_lacks_it() {
+    let live = without_caveats();
+    let fake = ghfake::Fake::new(CAVEATS_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, &live);
+
+    let out = fake.issue(&[&["pr", "edit", "--no-push"][..], &NO_CAVEATS].concat());
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(sent_body(&fake), live);
+}
+
+/// An agent's edit leaves out `agent_model`, which the open PR already
+/// shows, so the section the body has is still replaced.
+#[test]
+fn a_section_the_body_has_is_replaced_even_when_the_edit_leaves_its_condition_out() {
+    let fake = ghfake::Fake::new(CAVEATS_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, CAVEATS_LIVE);
+
+    let out = fake.issue(&[&["pr", "edit", "--no-push"][..], &NO_CAVEATS].concat());
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        without_caveats().replace(
+            "## Proof",
+            "## Caveats\n\n**0 departures**\n\n**0 loose ends**\n\n**0 assumptions**\n\n## Proof"
+        )
+    );
+}
+
+const GATED_TEMPLATE: &str = r#"
+[templates]
+pr_body = '''
+## Summary
+
+{{ input | trim }}
+{%- if enabled %}
+
+## Optional
+
+{{ detail | trim }}
+{%- endif %}
+
+## Proof
+
+{{ proof | trim }}'''
+
+[templates.variables]
+enabled = { default = "" }
+detail = { default = "" }
+proof = { default = "" }
+"#;
+
+const GATED_LIVE: &str = "\
+## Summary
+
+The summary.
+
+## Proof
+
+1. the proof
+";
+
+/// `enabled` hides the section that `detail` renders into, and the edit
+/// does not pass it, so the body keeps lacking that section.
+#[test]
+fn a_section_another_variable_hides_stays_out_of_a_body_that_lacks_it() {
+    let fake = ghfake::Fake::new(GATED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, GATED_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "detail=New detail"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(sent_body(&fake), GATED_LIVE);
+}
+
+/// The same edit under an `enabled` that shows the section inserts it.
+#[test]
+fn a_section_another_variable_shows_is_inserted_into_a_body_that_lacks_it() {
+    let shown = GATED_TEMPLATE.replace(
+        r#"enabled = { default = "" }"#,
+        r#"enabled = { default = "yes" }"#,
+    );
+    let fake = ghfake::Fake::new(&shown, &PR_7);
+    fake.serve_pr_body(&PR_7, GATED_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "detail=New detail"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        GATED_LIVE.replace("## Proof", "## Optional\n\nNew detail\n\n## Proof")
+    );
+}
+
+const PART_GATED_TEMPLATE: &str = r#"
+[templates]
+pr_body = '''
+## Summary
+
+{{ input | trim }}
+
+## Details
+{%- if enabled %}
+
+### Optional
+
+{{ detail | trim }}
+{%- endif %}
+
+{{ tail | trim }}
+
+## Proof
+
+{{ proof | trim }}'''
+
+[templates.variables]
+enabled = { default = "" }
+detail = { default = "" }
+tail = { default = "" }
+proof = { default = "" }
+"#;
+
+const PART_GATED_LIVE: &str = "\
+## Summary
+
+The summary.
+
+## Details
+
+Old tail
+
+## Proof
+
+1. the proof
+";
+
+/// `enabled` hides `detail` but not `tail`, which shares its section, so the
+/// edit replaces `tail` and keeps the hidden part out.
+#[test]
+fn a_section_another_variable_hides_in_part_keeps_the_visible_edit() {
+    let fake = ghfake::Fake::new(PART_GATED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, PART_GATED_LIVE);
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "detail=New detail",
+        "--arg",
+        "tail=New tail",
+    ]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        PART_GATED_LIVE.replace("Old tail", "New tail")
+    );
+}

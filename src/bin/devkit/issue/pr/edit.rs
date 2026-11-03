@@ -15,10 +15,10 @@ use devkit_config::Templates;
 use super::{
     create::{attached_file, check_attachments},
     proof::gate_proof,
-    render::{Texts, missing, refuse_template_headings, require_pr_title},
+    render::{Texts, missing, refuse_template_headings, require_pr_title, with_defaults},
     require_existing_pr,
     resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
-    splice::{slot, splice},
+    splice::{section, shown, slot, splice},
 };
 use crate::{
     issue::review::{guard_branch, parse_args},
@@ -52,25 +52,27 @@ fn require_embedded(dir: &Path, attach: &[String], edits: &BTreeMap<String, Stri
     Ok(())
 }
 
-/// The `pr_body` template rendered with every variable as its slot.
-fn skeleton(
+/// The `pr_body` template rendered with `value` of each variable, the
+/// summary `input` included.
+fn render_body(
     tmpls: &Templates,
     record: Option<&IssueRecord>,
     branch: &str,
     toplevel: &Path,
+    value: &dyn Fn(&str) -> String,
 ) -> Result<String> {
-    let slots = tmpls.declared().into_iter().map(|n| {
-        let s = slot(&n);
-        (n, s)
+    let values = tmpls.declared().into_iter().map(|n| {
+        let v = value(&n);
+        (n, v)
     });
     Texts::new(
         tmpls,
         record,
         branch,
         toplevel,
-        slots.collect(),
+        values.collect(),
         None,
-        Some(slot("input")),
+        Some(value("input")),
     )
     .body(&slot("pr_title"))
 }
@@ -127,14 +129,12 @@ pub fn run(args: Args) -> Result<()> {
     let title = args
         .pr_title
         .map(|input| {
-            let mut values = tmpls.defaults();
-            values.extend(edits.clone());
             let title = Texts::new(
                 tmpls,
                 record.as_ref(),
                 &branch,
                 &toplevel,
-                values,
+                with_defaults(tmpls, edits.clone()),
                 Some(input),
                 None,
             )
@@ -171,12 +171,32 @@ pub fn run(args: Args) -> Result<()> {
     let body = if edits.is_empty() {
         None
     } else {
-        let skeleton = skeleton(tmpls, record.as_ref(), &branch, &toplevel)?;
+        let render = |value: &dyn Fn(&str) -> String| {
+            render_body(tmpls, record.as_ref(), &branch, &toplevel, value)
+        };
+        let blank = render(&|n| slot(n))?;
+        let created = with_defaults(tmpls, edits.clone());
+        let as_created = |n: &str| created.get(n).cloned().unwrap_or_else(|| slot(n));
+        let mut sections = Vec::new();
+        for name in edits.keys() {
+            if sections.iter().flatten().any(|n| n == name) {
+                continue;
+            }
+            let names = section(&blank, name, |n| edits.contains_key(n))
+                .with_context(|| format!("placing `{name}` in PR #{}'s body", pr.number))?;
+            sections.push(names);
+        }
         let mut body = steps.during_result("Reading the PR's body...", || {
             f.pr_body(&found.repo, pr.number)
         })?;
-        for (name, value) in &edits {
-            body = splice(&skeleton, &body, name, value)
+        for names in &sections {
+            let name = &names[0];
+            let ours = |n: &str| names.iter().any(|x| x == n);
+            let rendered = render(&|n| if ours(n) { edits[n].clone() } else { slot(n) })?;
+            let marked = render(&|n| if ours(n) { slot(n) } else { as_created(n) })?;
+            let full = render(&as_created)?;
+            let shown = shown(&blank, &marked, &full, names)?;
+            body = splice(&blank, &rendered, &body, names, shown)
                 .with_context(|| format!("placing `{name}` in PR #{}'s body", pr.number))?;
         }
         Some(body)
