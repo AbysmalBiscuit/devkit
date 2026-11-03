@@ -37,7 +37,20 @@ fn devkit_with_options(
     options: Option<&str>,
     args: &[&str],
 ) -> Output {
+    devkit_with_env(project, state, caller, options, &[], args)
+}
+
+/// `devkit_with_options` with each of `env` set as well.
+fn devkit_with_env(
+    project: &Path,
+    state: &Path,
+    caller: &str,
+    options: Option<&str>,
+    env: &[(&str, &str)],
+    args: &[&str],
+) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.envs(env.iter().copied());
     cmd.args(args)
         .current_dir(project)
         .env("HOME", state)
@@ -602,4 +615,37 @@ fn a_child_in_another_checkout_resolves_a_repo_relative_option_against_its_own()
         other.path().canonicalize().unwrap(),
         "{shown}"
     );
+}
+
+#[test]
+fn a_task_step_reads_a_repo_relative_option_as_its_parent_expanded_it() {
+    let p = project();
+    let exe = env!("CARGO_BIN_EXE_devkit");
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        format!(
+            "[tasks.show]\nrun = ['{exe}', 'config', 'show', '--json']\n\
+             env = {{ DEVKIT_TEST_DOPPLER = \"child.yaml\" }}\n"
+        ),
+    )
+    .unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let shown = stdout(&devkit_with_env(
+        p.path(),
+        state.path(),
+        "human",
+        None,
+        &[("DEVKIT_TEST_DOPPLER", "parent.yaml")],
+        &[
+            "-o",
+            "defaults.doppler_yaml=\"${DEVKIT_TEST_DOPPLER}\"",
+            "run",
+            "task",
+            "show",
+        ],
+    ));
+    let json = &shown[shown.find('{').unwrap()..=shown.rfind('}').unwrap()];
+    let cfg: serde_json::Value = serde_json::from_str(json).unwrap();
+    let doppler = Path::new(cfg["defaults"]["doppler_yaml"].as_str().unwrap());
+    assert_eq!(doppler.file_name().unwrap(), "parent.yaml", "{shown}");
 }

@@ -87,11 +87,12 @@ impl Options {
     /// The [`OPTIONS_VAR`] value that gives a child process the config these
     /// values give this process, or `None` when they set nothing. `start` and
     /// `checkout_root` are the anchors this process resolves its config at.
-    /// A relative host path leaves anchored to them, because the child anchors
-    /// a relative path to its own directory. A relative repository path stays
-    /// relative inside a checkout, so a child in another checkout resolves its
-    /// own copy. Each line sets one leaf on one
-    /// line, so a string that holds a newline keeps it as an escape.
+    /// A path leaves with `${VAR}` and `~` expanded, because the child's
+    /// environment can differ. A relative host path leaves anchored to them,
+    /// because the child anchors a relative path to its own directory. A
+    /// relative repository path stays relative inside a checkout, so a child
+    /// in another checkout resolves its own copy. Each line sets one leaf on
+    /// one line, so a string that holds a newline keeps it as an escape.
     pub fn to_variable(
         &self,
         start: &Path,
@@ -101,32 +102,43 @@ impl Options {
             return Ok(None);
         };
         for (key, kind, _) in crate::DEFAULTS_PATHS {
-            // A repository file resolves against the checkout reading the
-            // config, so the child resolves its own copy.
-            if matches!(kind, crate::PathKind::RepoRelative) && checkout_root.is_some() {
-                continue;
-            }
             if let Some(toml::Value::String(raw)) = lookup_mut(&mut merged, key) {
-                *raw = crate::resolve_path_key(
-                    raw,
-                    key,
-                    kind,
-                    &Default::default(),
-                    checkout_root,
-                    start,
-                )?;
+                let resolved = match (kind, checkout_root) {
+                    // A repository file resolves against the checkout reading
+                    // the config, so the child resolves its own copy.
+                    (crate::PathKind::RepoRelative, Some(_)) => {
+                        let expanded = crate::expand_vars(raw, key)?;
+                        crate::expand_tilde(&expanded)
+                            .to_string_lossy()
+                            .into_owned()
+                    }
+                    _ => crate::resolve_path_key(
+                        raw,
+                        key,
+                        kind,
+                        &Default::default(),
+                        checkout_root,
+                        start,
+                    )?,
+                };
+                *raw = escape_vars(&resolved);
             }
         }
         let log_dir = "harness.log.dir";
         if let Some(toml::Value::String(raw)) = lookup_mut(&mut merged, log_dir) {
-            *raw = crate::resolve_host_path(raw, log_dir, Some(start))?
-                .to_string_lossy()
-                .into_owned();
+            let resolved = crate::resolve_host_path(raw, log_dir, Some(start))?;
+            *raw = escape_vars(&resolved.to_string_lossy());
         }
         let mut lines = Vec::new();
         leaf_lines(&merged, "", &mut lines);
         Ok(Some(lines.join("\n")))
     }
+}
+
+/// `path`, already expanded, spelled so that the child's expansion gives it
+/// back unchanged.
+fn escape_vars(path: &str) -> String {
+    path.replace('$', "$$")
 }
 
 /// Whether `source`, a layer's name, is a set of `--option` values rather than
@@ -654,6 +666,7 @@ mod tests {
         let opts = Options::parse(&[
             "defaults.worktree_root=\"wts\"",
             "defaults.doppler_yaml=\"doppler.yaml\"",
+            "defaults.baseline_dir=\"a$$b\"",
             "harness.log.dir=\"logs\"",
         ])
         .unwrap();
@@ -680,6 +693,12 @@ mod tests {
             "a repository path stays relative inside a checkout"
         );
         assert_eq!(at("harness.log.dir"), start.join("logs"));
+        let baseline = at("defaults.baseline_dir");
+        assert_eq!(
+            crate::expand_vars(&baseline.to_string_lossy(), "defaults.baseline_dir").unwrap(),
+            start.join("a$b").to_string_lossy(),
+            "the child expands the value to what this process expanded"
+        );
 
         let outside = opts.to_variable(&start, None).unwrap().unwrap();
         let child = Options::new(Some(&outside), &[] as &[&str])
