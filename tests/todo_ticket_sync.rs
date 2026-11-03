@@ -303,6 +303,23 @@ fn a_reopened_blocker_in_another_repository_reopens_its_todo() {
 }
 
 #[test]
+fn a_blocker_in_another_repository_off_the_board_needs_the_empty_status_mapped() {
+    let unmapped = STATUSES.replace("\"\" = \"pending\"\n", "");
+    let s = tickets::blocked_from_workcell(&format!("{RULES}{unmapped}"), "OPEN");
+    let out = s.sync(&[]);
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(stderr(&out).contains("\"\""), "{}", stderr(&out));
+    assert!(s.proj.todos().is_empty(), "{:?}", s.proj.todos());
+    let s = blocked_from_workcell("OPEN");
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+        devkit_todo::StatusKind::Pending
+    );
+}
+
+#[test]
 fn a_closed_blocker_in_another_repository_adds_no_todo() {
     let s = blocked_from_workcell("CLOSED");
     let out = s.sync(&[]);
