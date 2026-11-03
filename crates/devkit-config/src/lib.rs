@@ -3305,7 +3305,8 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
 /// project layers `project_layers` finds for `start`, then the `--option`
 /// values. An explicit path or `$DEVKIT_CONFIG` replaces the project layers
 /// and the home config, all but its `[todo]` table.
-/// `pending` stands in for its file.
+/// `pending` stands in for its file. The `--option` values alone are a
+/// config, so `NoConfig` means that no file and no option applies.
 fn discover(
     explicit: Option<&Path>,
     start: &Path,
@@ -3316,6 +3317,9 @@ fn discover(
 ) -> Result<Vec<(PathBuf, toml::Table)>> {
     let mut layers = discover_files(explicit, start, main_checkout, home, pending)?;
     layers.extend(options.layer());
+    if layers.is_empty() {
+        return Err(anyhow::Error::new(NoConfig));
+    }
     Ok(layers)
 }
 
@@ -3361,9 +3365,6 @@ fn discover_files(
         }
     }
 
-    if layers.is_empty() {
-        return Err(anyhow::Error::new(NoConfig));
-    }
     Ok(layers)
 }
 

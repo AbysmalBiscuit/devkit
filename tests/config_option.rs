@@ -201,3 +201,21 @@ fn a_quoted_key_segment_may_hold_an_equals_sign() {
     let cfg: serde_json::Value = serde_json::from_str(&shown).unwrap();
     assert_eq!(cfg["people"]["a=b"]["github"], "ann", "{shown}");
 }
+
+#[test]
+fn options_stand_alone_without_a_config_file() {
+    let p = tempfile::tempdir().unwrap();
+    devkit_git::Git::fixture(p.path())
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    let shown = stdout(&human(p.path(), &[
+        "config",
+        "show",
+        "--json",
+        "-o",
+        "tracker.kind=\"none\"",
+    ]));
+    let cfg: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(cfg["tracker"]["kind"], "none", "{shown}");
+}
