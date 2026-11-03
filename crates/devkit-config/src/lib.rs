@@ -2162,11 +2162,12 @@ pub struct Defaults {
     #[serde(default)]
     pub require_pr_reviewer: bool,
     /// The `[templates.variables]` name whose `--arg` carries a PR's proof.
-    /// When set, an agent's `pr create` in an issue worktree is refused
-    /// before the push unless that proof answers every item of the issue's
-    /// `Done when` or `Acceptance criteria` section, each on a line starting
-    /// with the item's number (`2. <evidence>`). An issue with no such
-    /// section is refused too. Unset by default.
+    /// When set, an agent's `pr create` or `pr edit` in an issue worktree is
+    /// refused before the push unless that proof answers every item of the
+    /// issue's `Done when` or `Acceptance criteria` section, each on a line
+    /// starting with the item's number (`2. <evidence>`). An issue with no
+    /// such section is refused too. `pr proof` runs the same check alone,
+    /// with no push and no PR. Unset by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_proof_variable: Option<String>,
     /// Glob patterns for status-check names to discount from a PR's CHECK
