@@ -3558,7 +3558,13 @@ fn resolve_layers(
     reject_reserved_variables(&cfg, &origin)?;
     reject_invalid_fields(&cfg, &origin)?;
     reject_never_without_default(&cfg, &origin)?;
-    resolve_defaults(&mut cfg, &origin, checkout_root, default_worktree_root)?;
+    resolve_defaults(
+        &mut cfg,
+        &origin,
+        checkout_root,
+        default_worktree_root,
+        start,
+    )?;
     let unfilled = reject_unfilled_fields(&cfg, &origin);
     let loaded = (cfg, Provenance {
         layers: order,
@@ -3889,8 +3895,8 @@ enum PathKind {
 /// anchors to the config layer that declared it; a `RepoRelative` path anchors
 /// to `checkout_root` when one is known, falling back to the declaring layer
 /// otherwise — there is no repository to anchor to outside one. A path with
-/// no layer directory, as from `--option`, anchors to the current directory,
-/// like any other path on a command line. Empty stays
+/// no layer directory, as from `--option`, anchors to `start`, the directory
+/// the command runs in. Empty stays
 /// empty — an unset optional path must not silently become a directory.
 /// Emptiness is checked after expansion: a variable that is set but empty
 /// (`export FOO=`) must resolve to `""`, not to `dir.join("")`.
@@ -3900,6 +3906,7 @@ fn resolve_path_key(
     kind: PathKind,
     origin: &HashMap<String, PathBuf>,
     checkout_root: Option<&Path>,
+    start: &Path,
 ) -> Result<String> {
     let expanded = expand_vars(raw, key)?;
     if expanded.is_empty() {
@@ -3910,10 +3917,9 @@ fn resolve_path_key(
         PathKind::Host => layer_dir(origin, key),
         PathKind::RepoRelative => checkout_root.or_else(|| layer_dir(origin, key)),
     };
-    let joined = match (p.is_absolute(), anchor) {
-        (true, _) => p,
-        (false, None) => absolutize(&p)?,
-        (false, Some(dir)) => dir.join(p),
+    let joined = match p.is_absolute() {
+        true => p,
+        false => anchor.unwrap_or(start).join(p),
     };
     Ok(normalize_lexically(&joined).to_string_lossy().into_owned())
 }
@@ -3925,6 +3931,7 @@ fn resolve_defaults(
     origin: &HashMap<String, PathBuf>,
     checkout_root: Option<&Path>,
     default_worktree_root: Option<&Path>,
+    start: &Path,
 ) -> Result<()> {
     if cfg.defaults.worktree_root.is_empty()
         && let Some(d) = default_worktree_root
@@ -3937,6 +3944,7 @@ fn resolve_defaults(
         PathKind::Host,
         origin,
         checkout_root,
+        start,
     )?;
     // Computed from the now-resolved worktree_root, so a derived value is
     // already absolute before it goes through its own resolve_path_key below.
@@ -3958,7 +3966,7 @@ fn resolve_defaults(
             &mut cfg.defaults.doppler_yaml,
         ),
     ] {
-        *field = resolve_path_key(field, key, kind, origin, checkout_root)?;
+        *field = resolve_path_key(field, key, kind, origin, checkout_root, start)?;
     }
     cfg.defaults.branch_prefix =
         expand_vars(&cfg.defaults.branch_prefix, "defaults.branch_prefix")?;

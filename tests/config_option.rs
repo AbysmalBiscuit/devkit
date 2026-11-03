@@ -338,3 +338,27 @@ fn a_misspelled_key_inside_a_table_value_is_refused_naming_it() {
         assert!(err.contains(&format!("`{key}`")), "{option}: {err}");
     }
 }
+
+#[test]
+fn a_relative_option_path_anchors_to_the_start_directory() {
+    let p = project();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let shown = stdout(&devkit(elsewhere.path(), state.path(), "human", &[
+        "config",
+        "show",
+        "--json",
+        "-C",
+        p.path().to_str().unwrap(),
+        "-o",
+        "defaults.worktree_root=\"wts\"",
+    ]));
+    let cfg: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    let root = Path::new(cfg["defaults"]["worktree_root"].as_str().unwrap());
+    assert_eq!(root.file_name().unwrap(), "wts", "{shown}");
+    assert_eq!(
+        root.parent().unwrap().canonicalize().unwrap(),
+        p.path().canonicalize().unwrap(),
+        "{shown}"
+    );
+}
