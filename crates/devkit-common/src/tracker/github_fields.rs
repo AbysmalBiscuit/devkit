@@ -79,18 +79,15 @@ pub fn read_query(
         .collect();
     let foreign: String = foreign
         .iter()
-        .filter_map(|key| {
-            let (repo, n) = key.rsplit_once('#')?;
-            let (o, r) = repo.split_once('/')?;
-            Some((o, r, n.parse::<u64>().ok()?))
-        })
+        .filter_map(|key| super::github::parse_ticket_key(key))
         .enumerate()
-        .map(|(i, (o, r, n))| {
-            format!(
+        .filter_map(|(i, (repo, n))| {
+            let (o, r) = repo.split_once('/')?;
+            Some(format!(
                 "\n  xref{i}: repository(owner: {o}, name: {r}) {{ issue(number: {n}) {{ id number repository {{ nameWithOwner }} }} }}",
                 o = Json::from(o),
                 r = Json::from(r),
-            )
+            ))
         })
         .collect();
     let board = match (on_project, project) {

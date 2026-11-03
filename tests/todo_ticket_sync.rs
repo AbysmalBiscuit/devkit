@@ -213,16 +213,7 @@ fn where_github_refuses_graphql_rest_reads_the_tickets() {
 /// Issue 65, at `Todo` and blocked by issue 992 of `AbysmalBiscuit/workcell`,
 /// which GitHub reads in `state`.
 fn blocked_from_workcell(state: &str) -> Synced {
-    let s = Synced::new(&format!("{RULES}{STATUSES}"), true);
-    let i65 = issue(65, Some("Todo"), &[]).replace(
-        r#""blockedBy":{"nodes":[]}"#,
-        r#""blockedBy":{"nodes":[{"number":992,"repository":{"nameWithOwner":"AbysmalBiscuit/workcell"}}]}"#,
-    );
-    let i992 = issue(992, None, &[]).replace("\"OPEN\"", &format!("\"{state}\""));
-    let mut answer: Value = serde_json::from_str(&graphql(&[i65], &OPTIONS)).unwrap();
-    answer["data"]["repository"]["i992"] = serde_json::from_str(&i992).unwrap();
-    s.serve("graphql.json", &answer.to_string());
-    s
+    tickets::blocked_from_workcell(&format!("{RULES}{STATUSES}"), state)
 }
 
 #[test]
@@ -247,6 +238,22 @@ fn an_open_blocker_in_another_repository_joins_the_node_and_blocks() {
         "{}",
         stdout(&again)
     );
+}
+
+#[test]
+fn an_imported_blocker_in_another_repository_syncs_by_its_key() {
+    let s = blocked_from_workcell("OPEN");
+    assert!(s.sync(&[]).status.success());
+    let blocker = s.todo_for("abysmalbiscuit/workcell#992");
+    for key in [
+        "abysmalbiscuit/workcell#992",
+        "https://github.com/AbysmalBiscuit/workcell/issues/992",
+    ] {
+        let out = s.sync(&["--ticket", key]);
+        assert!(out.status.success(), "{key}: {}", stderr(&out));
+        assert_eq!(s.todo_for("abysmalbiscuit/workcell#992").id, blocker.id);
+    }
+    assert_eq!(s.proj.todos().len(), 2, "{:?}", s.proj.todos());
 }
 
 #[test]

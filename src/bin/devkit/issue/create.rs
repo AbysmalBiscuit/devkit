@@ -192,7 +192,11 @@ fn github(args: &CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Resul
             args.verb
         )
     };
-    let key = sel.tracker.tracker.ticket_key(&url).with_context(unread)?;
+    let tracker = &sel.tracker.tracker;
+    // The field writes below go to the issues repository, so an issue filed
+    // anywhere else is refused here.
+    tracker.issue_ref(&url).with_context(unread)?;
+    let key = tracker.ticket_key(&url).with_context(unread)?;
 
     let number = field_write::number_of(&url).with_context(unread)?;
     let writer = GithubFieldWriter::new(repo.clone(), cfg.github.project.clone(), start);

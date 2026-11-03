@@ -323,17 +323,16 @@ impl GithubTickets<'_> {
     /// The issues `keys` name, in any repository, whatever their state. A
     /// key that names no issue is left out.
     pub fn read(&self, keys: &[String]) -> Result<Vec<SyncedTicket>> {
-        let mut by_repo: std::collections::BTreeMap<&str, Vec<u64>> = Default::default();
-        for key in keys {
-            if let Some((repo, number)) = key.rsplit_once('#')
-                && let Ok(number) = number.parse()
-            {
-                by_repo.entry(repo).or_default().push(number);
-            }
+        let mut by_repo: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+        for (repo, number) in keys
+            .iter()
+            .filter_map(|k| super::github::parse_ticket_key(k))
+        {
+            by_repo.entry(repo).or_default().push(number);
         }
         let mut out = Vec::new();
         for (repo, numbers) in by_repo {
-            out.extend(self.read_in(repo, &numbers)?);
+            out.extend(self.read_in(&repo, &numbers)?);
         }
         out.retain(|t| keys.iter().any(|k| k.eq_ignore_ascii_case(&t.key)));
         Ok(out)
