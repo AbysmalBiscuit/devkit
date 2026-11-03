@@ -463,6 +463,7 @@ impl LibCache {
                     path_string.as_str(),
                     commit,
                 ])
+                .timeout(SLOW_TIMEOUT)
                 .output()
                 .with_context(|| format!("adding worktree {dirname} at {commit}"))?;
             if let Err(error) = assert_dir_exact(&self.dir, dirname).and_then(|()| {
