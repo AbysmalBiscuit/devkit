@@ -1175,6 +1175,63 @@ fn a_link_with_a_ticket_of_another_repository_stays_local() {
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
 }
 
+/// `abysmalbiscuit/workcell#992`, imported as the blocker of issue 65, in a
+/// repository pushing parents and blocking links; returns its todo id.
+fn imported_blocker() -> (Synced, String) {
+    let s = blocked_from_workcell(
+        &format!("\n[ticket.sync]\npush = [\"parent\", \"blocking\"]\n{RULES}{STATUSES}"),
+        "OPEN",
+    );
+    s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let id = s.todo_for("abysmalbiscuit/workcell#992").id;
+    (s, id)
+}
+
+#[test]
+fn parent_edits_on_an_imported_blocker_of_another_repository_stay_local() {
+    let (s, blocker) = imported_blocker();
+    let step = add(&s, &["write the parser"]);
+    let under = s.devkit(&["todo", "move", &step, "--parent", &blocker], &AGENT);
+    assert!(under.status.success(), "{}", stderr(&under));
+    let other = add(&s, &["plan the API"]);
+    let over = s.devkit(&["todo", "move", &blocker, "--parent", &other], &AGENT);
+    assert!(over.status.success(), "{}", stderr(&over));
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").parent.as_deref(),
+        Some(s.proj.todo(&other).id.as_str())
+    );
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn a_block_between_two_tickets_of_one_other_repository_stays_local() {
+    let (s, blocker) = imported_blocker();
+    let sibling = s
+        .proj
+        .store()
+        .add(NewTodo {
+            project: s.todo_for("o/r#65").project,
+            description: "abysmalbiscuit/workcell#993".into(),
+            parent: None,
+            order: None,
+            ticket: Some(TicketRef {
+                tracker: "github".into(),
+                key: "abysmalbiscuit/workcell#993".into(),
+                synced_status: None,
+            }),
+        })
+        .unwrap();
+    let out = s.devkit(&["todo", "block", &blocker, "--by", &sibling], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").blocked_by,
+        std::slice::from_ref(&sibling)
+    );
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
 #[test]
 fn a_move_from_a_ticket_parent_to_another_repositorys_ticket_is_refused() {
     for push in ["\"parent\"", "\"status\""] {
