@@ -1,6 +1,6 @@
 //! `ticket fields discover`: read the tracker once and write the ticket
-//! field declarations it offers into the repository's `devkit.toml`, keeping
-//! what a person set there.
+//! field declarations it offers into the repository's `devkit.toml`, or the
+//! layer `--into` names, keeping what a person set there.
 
 use std::{
     io::{IsTerminal, Write},
@@ -17,7 +17,7 @@ use devkit_common::{
 };
 use devkit_config::{
     CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS, LayerKind,
-    PendingLayer, TrackerKind,
+    PendingLayer, Provenance, TrackerKind,
 };
 use serde::Serialize;
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
@@ -27,6 +27,7 @@ use super::field_write;
 pub(crate) struct DiscoverArgs {
     pub yes: bool,
     pub teams: Vec<String>,
+    pub into: Option<String>,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -58,6 +59,20 @@ pub(crate) enum Change {
 pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
     let start = super::start(&args.dir);
     let config = args.config.as_deref().map(Path::new);
+    if args.into.is_some() {
+        if config.is_some() {
+            bail!(
+                "--into writes one layer of the config stack, and --config replaces the stack \
+                 with one file; pass one of them"
+            );
+        }
+        if std::env::var_os("DEVKIT_CONFIG").is_some() {
+            bail!(
+                "--into writes one layer of the config stack, and $DEVKIT_CONFIG replaces the \
+                 stack with one file; unset it or drop --into"
+            );
+        }
+    }
     let mut sel = devkit_common::tracker::select_unfilled(config, &start);
     let cfg = sel
         .config
@@ -85,7 +100,7 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
              none. Set `[tracker] kind` in devkit.toml."
         ),
     };
-    let path = target(config, Path::new(&start))?;
+    let path = destination(args.into.as_deref(), config, Path::new(&start))?;
     let before = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -104,7 +119,12 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
         );
         return Ok(());
     }
-    refuse_unloadable(config, Path::new(&start), kind, &path, &after)?;
+    if args.into.is_some() {
+        refuse_home(&path, &after)?;
+    }
+    let (effective, provenance) =
+        refuse_unloadable(config, Path::new(&start), kind, &path, &after)?;
+    refuse_shadowed(kind, &changes, &path, &after, &effective, &provenance)?;
     if !approved(&path, &before, &after, args.yes)? {
         println!("nothing written");
         return Ok(());
@@ -114,11 +134,24 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
     Ok(())
 }
 
-/// The file discover writes: `--config`, else `$DEVKIT_CONFIG`, each the
-/// one file the run read, else the nearest tracked `devkit.toml`, else a new
-/// one beside the nearest layer inside the checkout, which a `[config] root =
-/// true` barrier leaves standing where the checkout root's file may be cut
-/// off, else a new one at the checkout root.
+/// The file discover writes: `into`, else [`target`]. A bare file name in
+/// `into` sits in the directory of [`target`]'s file, and any other path
+/// resolves against `start`.
+fn destination(into: Option<&str>, config: Option<&Path>, start: &Path) -> Result<PathBuf> {
+    match into.map(Path::new) {
+        None => target(config, start),
+        Some(file) if file.parent() == Some(Path::new("")) => {
+            Ok(target(config, start)?.with_file_name(file))
+        }
+        Some(file) => Ok(start.join(file)),
+    }
+}
+
+/// The file [`destination`] picks with no `--into`: `--config`, else
+/// `$DEVKIT_CONFIG`, each the one file the run read, else the nearest tracked
+/// `devkit.toml`, else a new one beside the nearest layer inside the checkout,
+/// which a `[config] root = true` barrier leaves standing where the checkout
+/// root's file may be cut off, else a new one at the checkout root.
 fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
     if let Some(p) = config
         .map(Path::to_path_buf)
@@ -146,27 +179,112 @@ fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
     Ok(dir.join(devkit_config::CONFIG_FILE))
 }
 
+/// Refuse an `--into` write of `after` to `path` when `path` is the home
+/// config: every project reads it, and tracker fields belong to one project.
+fn refuse_home(path: &Path, after: &str) -> Result<()> {
+    let pending = PendingLayer { path, text: after };
+    if devkit_config::home_config_path().is_some_and(|home| pending.is(&home)) {
+        bail!(
+            "not writing {}: it is the home config, which every project reads, and --into takes \
+             a project config layer, such as devkit.local.toml",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Refuse to write `after` to `path` when the config would then fail to
 /// load, or fail the field checks every ticket command runs on `kind`: an
-/// error-level `enum` left with no values, say.
+/// error-level `enum` left with no values, say. Refuse too when `path` would
+/// not be a layer of the config, since no run would then read it.
 fn refuse_unloadable(
     config: Option<&Path>,
     start: &Path,
     kind: TrackerKind,
     path: &Path,
     after: &str,
-) -> Result<()> {
+) -> Result<(Config, Provenance)> {
     let pending = PendingLayer { path, text: after };
-    devkit_common::config::resolve_pending(config, start, pending)
+    let (cfg, provenance) = devkit_common::config::resolve_pending(config, start, pending)
         .and_then(|(cfg, provenance)| {
-            devkit_config::check_ticket_fields(&cfg, kind, &provenance.origin)
+            devkit_config::check_ticket_fields(&cfg, kind, &provenance.origin)?;
+            Ok((cfg, provenance))
         })
         .with_context(|| {
             format!(
                 "not writing {}: the config would no longer load with the tracker's fields",
                 path.display()
             )
-        })
+        })?;
+    if !provenance.layers.iter().any(|l| pending.is(l)) {
+        bail!(
+            "not writing {}: no run started in {} reads it as a config layer",
+            path.display(),
+            start.display()
+        );
+    }
+    Ok((cfg, provenance))
+}
+
+/// Refuse to write `after` to `path` when a higher layer would outrank a
+/// field it adds or refreshes, so that `effective`, the config with `after`
+/// written, would not carry the tracker's `type`, `list`, `where` or
+/// `values`.
+fn refuse_shadowed(
+    kind: TrackerKind,
+    changes: &[Change],
+    path: &Path,
+    after: &str,
+    effective: &Config,
+    provenance: &Provenance,
+) -> Result<()> {
+    let written = Config::parse(after).with_context(|| format!("parsing {}", path.display()))?;
+    let facts = |d: &FieldDecl| (d.r#type, d.list, d.r#where.clone(), d.values.clone());
+    let pending = PendingLayer { path, text: after };
+    for name in changes.iter().filter_map(|c| match c {
+        Change::Added(n) | Change::Refreshed(n) => Some(n),
+        _ => None,
+    }) {
+        let (Some(w), e) = (
+            written.ticket.fields.for_tracker(kind).get(name),
+            effective.ticket.fields.for_tracker(kind).get(name),
+        ) else {
+            continue;
+        };
+        if e.map(facts) == Some(facts(w)) {
+            continue;
+        }
+        let outranks = ["type", "list", "where", "values"]
+            .iter()
+            .filter_map(|key| {
+                provenance
+                    .origin
+                    .get(&format!("ticket.fields.{kind}.{name}.{key}"))
+            })
+            .find(|layer| !pending.is(layer));
+        bail!(shadowed(path, kind, name, outranks.map(PathBuf::as_path)));
+    }
+    Ok(())
+}
+
+/// Why `path` is not written: `[ticket.fields.<kind>.<name>]` would not take
+/// the tracker's facts, because of `outranks` when the config names it.
+fn shadowed(path: &Path, kind: TrackerKind, name: &str, outranks: Option<&Path>) -> String {
+    let field = format!("[ticket.fields.{kind}.{name}]");
+    match outranks {
+        Some(layer) => format!(
+            "not writing {}: {} outranks it there, so {field} would not take the tracker's \
+             facts. Pass --into a layer at or above {}",
+            path.display(),
+            layer.display(),
+            layer.display()
+        ),
+        None => format!(
+            "not writing {}: the config with it written would not carry the tracker's facts for \
+             {field}",
+            path.display()
+        ),
+    }
 }
 
 /// Whether to write: an agent always writes, a human after `--yes` or a
@@ -574,6 +692,29 @@ description = "how soon"
             target_dir(&inner),
             inner.canonicalize().unwrap(),
             "a layer above the checkout leaves it the checkout root"
+        );
+    }
+
+    #[test]
+    fn a_shadow_refusal_names_a_layer_only_when_one_outranks() {
+        let file = Path::new("/p/devkit.local.toml");
+        let named = shadowed(
+            file,
+            TrackerKind::Github,
+            "milestone",
+            Some(Path::new("/p/app/devkit.toml")),
+        );
+        assert!(
+            named.contains("/p/app/devkit.toml outranks it")
+                && named.contains("at or above /p/app/devkit.toml"),
+            "{named}"
+        );
+        let unnamed = shadowed(file, TrackerKind::Github, "milestone", None);
+        assert!(
+            unnamed.contains("[ticket.fields.github.milestone]")
+                && !unnamed.contains("that one")
+                && !unnamed.contains("outranks"),
+            "{unnamed}"
         );
     }
 

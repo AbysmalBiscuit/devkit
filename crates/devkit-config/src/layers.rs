@@ -62,7 +62,7 @@ pub struct PendingLayer<'a> {
 
 impl PendingLayer<'_> {
     /// Whether `path` names this layer's file, however either is spelled.
-    pub(crate) fn is(&self, path: &Path) -> bool {
+    pub fn is(&self, path: &Path) -> bool {
         fn key(p: &Path) -> PathBuf {
             if let Ok(c) = std::fs::canonicalize(p) {
                 return c;
