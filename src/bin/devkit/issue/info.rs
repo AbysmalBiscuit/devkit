@@ -26,9 +26,7 @@ fn pick_index(
     current_top: Option<&str>,
 ) -> Option<usize> {
     match selector {
-        Some(sel) => rows
-            .iter()
-            .position(|r| crate::issue::select::matches(r, sel)),
+        Some(sel) => rows.iter().position(|r| r.selected_by(sel)),
         None => {
             let top = current_top?;
             rows.iter().position(|r| {
@@ -36,6 +34,51 @@ fn pick_index(
             })
         }
     }
+}
+
+/// The discovered row that `sel` names once the PR fetch has filled each row,
+/// so a PR number that no local name matches still selects its worktree.
+fn selected_after_pr_fetch(
+    d: &st::Discovered,
+    forge: &devkit_common::forge::Resolved,
+    sel: &str,
+) -> Result<Option<IssueWorktree>> {
+    let prs = st::fetch_prs(d, forge)?;
+    Ok(d.rows().iter().cloned().find_map(|mut row| {
+        prs.apply(&mut row);
+        row.selected_by(sel).then_some(row)
+    }))
+}
+
+/// The discovered row whose cached or recorded PR `sel` names, read from
+/// local files alone for `--cache-only`.
+fn selected_by_local_pr(d: &st::Discovered, sel: &str) -> Option<IssueWorktree> {
+    d.rows()
+        .iter()
+        .find(|row| {
+            let recorded = recorded_pr(row);
+            cached_pr(row, recorded.as_ref())
+                .map(|pr| pr.number)
+                .or(recorded.map(|pr| pr.number))
+                .is_some_and(|number| st::names_pr(sel, number))
+        })
+        .cloned()
+}
+
+/// The PR the worktree record of `row` binds.
+fn recorded_pr(row: &IssueWorktree) -> Option<devkit_common::forge::PrLocator> {
+    devkit_common::record::read_on(Path::new(&row.worktree), &row.branch).and_then(|r| r.pr)
+}
+
+/// The cached PR of `row` that agrees with its `recorded` PR.
+fn cached_pr(
+    row: &IssueWorktree,
+    recorded: Option<&devkit_common::forge::PrLocator>,
+) -> Option<crate::issue::info_cache::CachedPr> {
+    seedable_cached_pr(
+        crate::issue::info_cache::read(Path::new(&row.worktree)),
+        recorded,
+    )
 }
 
 /// The current worktree's root (`git rev-parse --show-toplevel`), trimmed.
@@ -68,9 +111,14 @@ pub fn run(
     let tracker = resolved.tracker.as_ref();
     let mut info = TrackerInfo::of(&resolved);
 
-    let (mut row, discovered) = match pick_index(d.rows(), selector, top.as_deref()) {
-        Some(i) => {
-            let mut r = d.rows()[i].clone();
+    let picked = match (pick_index(d.rows(), selector, top.as_deref()), selector) {
+        (Some(i), _) => Some(d.rows()[i].clone()),
+        (None, Some(sel)) if cache_only => selected_by_local_pr(&d, sel),
+        (None, Some(sel)) => selected_after_pr_fetch(&d, &forge, sel)?,
+        (None, _) => None,
+    };
+    let (mut row, discovered) = match picked {
+        Some(mut r) => {
             r.tree = st::tree_of(Path::new(&r.worktree));
             (r, true)
         }
@@ -84,13 +132,7 @@ pub fn run(
     };
 
     if cache_only {
-        let recorded_pr = devkit_common::record::read_on(Path::new(&row.worktree), &row.branch)
-            .and_then(|r| r.pr);
-        let cached_pr = seedable_cached_pr(
-            crate::issue::info_cache::read(Path::new(&row.worktree)),
-            recorded_pr.as_ref(),
-        );
-        if let Some(pr) = cached_pr {
+        if let Some(pr) = cached_pr(&row, recorded_pr(&row).as_ref()) {
             apply_cached_pr(&mut row, pr);
         } else if discovered {
             // Offline verdict from local signal only — PR stays NO_PR and the
@@ -129,11 +171,7 @@ pub fn run(
     if json {
         println!("{}", serde_json::to_string(&row)?);
     } else {
-        let one = StatusReport {
-            finished_count: usize::from(row.verdict.is_finished()),
-            tracker: info,
-            worktrees: vec![row],
-        };
+        let one = StatusReport::new(vec![row], info);
         render(&one, cache_only);
     }
     Ok(())
@@ -219,6 +257,7 @@ fn live_enrich(
             match msg {
                 Update::Prs(res) => {
                     res?.apply(row);
+                    st::check_landed_rows([&mut *row]);
                     got_prs = true;
                     lt.set(0, 3, Cell::Ready(crate::issue::triage::pr_cell(row)));
                 }
@@ -312,6 +351,7 @@ mod tests {
             tree: st::Tree::Clean,
             pr: PrStatus::None,
             state: None,
+            landed: devkit_ticket::status::Landed::not_checked(),
             verdict: Default::default(),
         }
     }

@@ -133,6 +133,19 @@ impl Verdict {
     }
 }
 
+/// Whether a worktree's HEAD is on the remote's default branch, read after a
+/// fetch of that branch. It proves a worktree with no issue id or no PR keeps
+/// no work that removal would lose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Landed {
+    Yes,
+    /// HEAD has commits that the named default branch, `origin/main` say,
+    /// does not reach.
+    No(String),
+    /// The check could not run or did not answer, and why.
+    Unknown(String),
+}
+
 /// One issue worktree with its PR + tracker state and the finished verdict.
 #[derive(Debug, Clone)]
 pub struct IssueWorktree {
@@ -149,6 +162,8 @@ pub struct IssueWorktree {
     /// The tracker's state for this issue, absent when the tracker has no row
     /// for it or there is no tracker.
     pub state: Option<State>,
+    /// Read only for a row that [`IssueWorktree::proves_landing`] holds.
+    pub landed: Landed,
     pub verdict: Verdict,
 }
 
@@ -164,8 +179,49 @@ impl IssueWorktree {
             tree: Tree::Unknown("not checked".into()),
             pr: PrStatus::None,
             state: None,
+            landed: Landed::not_checked(),
             verdict: Verdict::default(),
         }
+    }
+
+    /// True when the row is finished on repository evidence rather than on a
+    /// merged PR: it has no issue id or no PR, and a branch that removal
+    /// deletes. Read once the PR fetch has filled the row.
+    pub fn proves_landing(&self) -> bool {
+        self.branch != "DETACHED"
+            && (self.issue_id == IssueId::Unknown || self.pr == PrStatus::None)
+    }
+
+    /// True when `sel` names this worktree by any of [`matches_parts`]' names
+    /// or by one of its PR numbers (`3124` or `#3124`), an ambiguous row's
+    /// candidates included. The PR numbers are known only once the PR fetch has
+    /// filled the row.
+    pub fn selected_by(&self, sel: &str) -> bool {
+        if matches_parts(
+            &self.worktree,
+            &self.branch,
+            &self.issue_id.to_string(),
+            sel,
+        ) {
+            return true;
+        }
+        match &self.pr {
+            PrStatus::Ambiguous { candidates } => {
+                candidates.iter().any(|pr| names_pr(sel, pr.number))
+            }
+            pr => pr.number().is_some_and(|pr| names_pr(sel, pr)),
+        }
+    }
+}
+
+/// True when `sel` is the PR number `number`, as `3124` or `#3124`.
+pub fn names_pr(sel: &str, number: u64) -> bool {
+    sel.strip_prefix('#').unwrap_or(sel) == number.to_string()
+}
+
+impl Landed {
+    pub fn not_checked() -> Landed {
+        Landed::Unknown("HEAD not checked against the default branch".into())
     }
 }
 
@@ -234,6 +290,35 @@ pub struct StatusReport {
     pub worktrees: Vec<IssueWorktree>,
     pub finished_count: usize,
     pub tracker: TrackerInfo,
+}
+
+impl StatusReport {
+    /// The report of `worktrees`, with `finished_count` counted from their
+    /// verdicts. Every report is built here, so the count always agrees with
+    /// its rows.
+    pub fn new(worktrees: Vec<IssueWorktree>, tracker: TrackerInfo) -> StatusReport {
+        let finished_count = worktrees.iter().filter(|r| r.verdict.is_finished()).count();
+        StatusReport {
+            worktrees,
+            finished_count,
+            tracker,
+        }
+    }
+
+    /// The report narrowed to the rows that one of `selectors` names by
+    /// [`IssueWorktree::selected_by`], or the whole report when `selectors` is
+    /// empty.
+    pub fn select(self, selectors: &[String]) -> StatusReport {
+        if selectors.is_empty() {
+            return self;
+        }
+        let rows = self
+            .worktrees
+            .into_iter()
+            .filter(|row| selectors.iter().any(|sel| row.selected_by(sel)))
+            .collect();
+        StatusReport::new(rows, self.tracker)
+    }
 }
 
 /// Local-only discovery: worktrees + dirty placeholders + issue ids. The slow
@@ -349,7 +434,8 @@ fn pr_status_of(lookup: &HeadLookup) -> PrStatus {
     }
 }
 
-/// Discover worktrees and their issue ids, filtered to `ids` when non-empty.
+/// Discover worktrees and their issue ids, filtered to the rows `ids` names
+/// when non-empty. Each selector is an issue id, a branch, or a worktree path.
 /// Rows carry an unchecked tree; the tree check is a separate step so callers
 /// can drive it with a progress bar.
 pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
@@ -377,18 +463,49 @@ pub fn discover_with_bound_main(start: &str) -> Result<Discovered> {
     Ok(discovered(rows, &[]))
 }
 
-/// `rows` as a [`Discovered`], filtered to `ids` when non-empty.
-fn discovered(all: impl Iterator<Item = IssueWorktree>, ids: &[String]) -> Discovered {
-    let mut rows = Vec::new();
-    for row in all {
-        // An issue id is case-insensitive in every tracker that has one, and
-        // the record holds whichever spelling the tracker was given.
-        let id = row.issue_id.to_string();
-        if !ids.is_empty() && !ids.iter().any(|w| w.eq_ignore_ascii_case(&id)) {
-            continue;
-        }
-        rows.push(row);
+/// True when `sel` names a worktree by issue id, branch, worktree basename, or
+/// full path, all compared case-insensitively. This is the half of the matcher
+/// that needs nothing but local git facts, so callers that never fetch PR or
+/// tracker state can select without paying for the network.
+///
+/// A path selector is compared by identity once the spellings differ: the rows
+/// carry the path git reports, and the shell hands over whatever the caller
+/// typed. The two are routinely different names for one directory — a symlinked
+/// parent, macOS resolving `/var` to `/private/var`, Windows handing back an
+/// 8.3 short component — and a selector that misses leaves the caller no
+/// spelling to reach their own worktree by.
+pub fn matches_parts(worktree_path: &str, branch: &str, issue_id: &str, sel: &str) -> bool {
+    let s = sel.to_lowercase();
+    let base = Path::new(worktree_path)
+        .file_name()
+        .and_then(|x| x.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if [
+        issue_id.to_lowercase(),
+        branch.to_lowercase(),
+        base,
+        worktree_path.to_lowercase(),
+    ]
+    .contains(&s)
+    {
+        return true;
     }
+    devkit_common::paths::same_path(Path::new(worktree_path), Path::new(sel))
+}
+
+/// `rows` as a [`Discovered`], filtered to the rows one of `selectors` names
+/// by [`matches_parts`] when `selectors` is non-empty.
+fn discovered(all: impl Iterator<Item = IssueWorktree>, selectors: &[String]) -> Discovered {
+    let rows: Vec<IssueWorktree> = all
+        .filter(|row| {
+            let id = row.issue_id.to_string();
+            selectors.is_empty()
+                || selectors
+                    .iter()
+                    .any(|sel| matches_parts(&row.worktree, &row.branch, &id, sel))
+        })
+        .collect();
     let issue_ids = rows
         .iter()
         .filter_map(|r| r.issue_id.tracker().map(str::to_owned))
@@ -617,6 +734,49 @@ pub fn fetch_prs(d: &Discovered, f: &forge::Resolved) -> Result<Prs> {
     Ok(Prs::of(lookups, &d.rows))
 }
 
+/// [`check_landed_rows`] over every discovered row, once `prs` is applied.
+pub fn check_landed(d: &mut Discovered, prs: &Prs) {
+    for row in &mut d.rows {
+        prs.apply(row);
+    }
+    check_landed_rows(&mut d.rows);
+}
+
+/// Fills `landed` on each row that [`IssueWorktree::proves_landing`] holds.
+/// The rows carry their PR already. One fetch of the default branch serves
+/// every row, since the rows share one repository.
+pub fn check_landed_rows<'a>(rows: impl IntoIterator<Item = &'a mut IssueWorktree>) {
+    let mut rows: Vec<&mut IssueWorktree> =
+        rows.into_iter().filter(|r| r.proves_landing()).collect();
+    let Some(first) = rows.first() else { return };
+    let repo = std::path::PathBuf::from(&first.worktree);
+    let vcs = Vcs::at(&repo);
+    let base = vcs.default_branch(&repo).and_then(|base| {
+        let (remote, branch) = base
+            .split_once('/')
+            .ok_or_else(|| anyhow::anyhow!("{base} names no remote"))?;
+        // The refspec moves the remote-tracking branch, so the ancestry check
+        // below reads what the remote holds now and not a stale copy.
+        vcs.fetch_commits(&repo, remote, &[format!(
+            "+refs/heads/{branch}:refs/remotes/{base}"
+        )])
+        .map_err(|e| anyhow::anyhow!("fetch of {base} failed: {e:#}"))?;
+        Ok(base)
+    });
+    for row in &mut rows {
+        row.landed = match &base {
+            Err(e) => Landed::Unknown(format!("{e:#}")),
+            Ok(base) => {
+                match Vcs::at(Path::new(&row.worktree)).ahead(Path::new(&row.worktree), base) {
+                    Ok(0) => Landed::Yes,
+                    Ok(_) => Landed::No(base.clone()),
+                    Err(e) => Landed::Unknown(format!("HEAD not compared with {base}: {e:#}")),
+                }
+            }
+        };
+    }
+}
+
 /// Fetches, in one request, every merged PR head missing from the worktree's
 /// repository, so [`Prs::of`] can compare it with HEAD. A branch finished
 /// elsewhere and deleted on merge leaves its head reachable only from the
@@ -674,12 +834,7 @@ pub fn assemble(
         }
         wt.verdict = verdict(wt, &tracker, pr_only);
     }
-    let finished_count = rows.iter().filter(|r| r.verdict.is_finished()).count();
-    StatusReport {
-        worktrees: rows,
-        finished_count,
-        tracker,
-    }
+    StatusReport::new(rows, tracker)
 }
 
 /// How a tracker names itself in user-facing text. `TrackerKind::None` answers
@@ -711,7 +866,12 @@ pub fn label(kind: TrackerKind) -> &'static str {
 ///
 /// With `pr_only` both the state and issue-id gates are dropped (finished = PR
 /// merged + clean), so repos whose branches carry no issue id still qualify.
+///
+/// Without `pr_only`, a row with no issue id or no PR has no merged PR to
+/// prove its work kept. It is finished when its tree is clean, its HEAD is on
+/// the default branch, and no open PR has its branch as head.
 pub fn verdict(wt: &IssueWorktree, tracker: &TrackerInfo, pr_only: bool) -> Verdict {
+    let by_landing = !pr_only && wt.proves_landing();
     let mut held: Vec<String> = Vec::new();
     let mut unknown = false;
     let mut doubt = |held: &mut Vec<String>, reason: String| {
@@ -720,29 +880,45 @@ pub fn verdict(wt: &IssueWorktree, tracker: &TrackerInfo, pr_only: bool) -> Verd
     };
     if wt.record_unreadable {
         doubt(&mut held, "issue record unreadable".into());
-    } else if !pr_only && wt.issue_id == IssueId::Unknown {
+    } else if !pr_only && !by_landing && wt.issue_id == IssueId::Unknown {
         return Verdict::Held(vec!["not an issue worktree".into()]);
     }
-    match &wt.pr {
-        PrStatus::Unique { state, ahead, .. } if state == "MERGED" => match ahead {
-            Some(0) => {}
-            Some(n) => held.push(format!("{n} commit(s) past the merged PR")),
-            None => doubt(&mut held, "HEAD not compared with the merged PR".into()),
-        },
-        PrStatus::Unique { .. } => held.push("PR not merged".into()),
-        PrStatus::None => held.push("no PR".into()),
-        PrStatus::Ambiguous { .. } => held.push("PR ambiguous".into()),
-        PrStatus::Unknown { reason } => doubt(&mut held, format!("PR unknown: {reason}")),
-        PrStatus::Untracked { pushed: true } => {}
-        PrStatus::Untracked { pushed: false } => held.push("commits not on a remote".into()),
+    if by_landing {
+        match &wt.pr {
+            PrStatus::Unique { number, state, .. } if state == "OPEN" => {
+                held.push(format!("PR #{number} open"))
+            }
+            PrStatus::None | PrStatus::Unique { .. } | PrStatus::Untracked { .. } => {}
+            PrStatus::Ambiguous { .. } => held.push("PR ambiguous".into()),
+            PrStatus::Unknown { reason } => doubt(&mut held, format!("PR unknown: {reason}")),
+        }
+        match &wt.landed {
+            Landed::Yes => {}
+            Landed::No(base) => held.push(format!("HEAD not on {base}")),
+            Landed::Unknown(why) => doubt(&mut held, why.clone()),
+        }
+    } else {
+        match &wt.pr {
+            PrStatus::Unique { state, ahead, .. } if state == "MERGED" => match ahead {
+                Some(0) => {}
+                Some(n) => held.push(format!("{n} commit(s) past the merged PR")),
+                None => doubt(&mut held, "HEAD not compared with the merged PR".into()),
+            },
+            PrStatus::Unique { .. } => held.push("PR not merged".into()),
+            PrStatus::None => held.push("no PR".into()),
+            PrStatus::Ambiguous { .. } => held.push("PR ambiguous".into()),
+            PrStatus::Unknown { reason } => doubt(&mut held, format!("PR unknown: {reason}")),
+            PrStatus::Untracked { pushed: true } => {}
+            PrStatus::Untracked { pushed: false } => held.push("commits not on a remote".into()),
+        }
     }
     // A project that declared it has no tracker has no state to wait for. Every
     // other tracker gates on the issue's state and says so when it could not
     // read one, the fallback stand-in included, since it stands in for a
     // tracker devkit could not resolve. A worktree set up with no issue has no
     // state either.
-    let nothing_to_wait_for =
-        wt.issue_id == IssueId::NoIssue || (tracker.kind == TrackerKind::None && tracker.declared);
+    let nothing_to_wait_for = matches!(wt.issue_id, IssueId::NoIssue | IssueId::Unknown)
+        || (tracker.kind == TrackerKind::None && tracker.declared);
     if !pr_only && !nothing_to_wait_for {
         match wt.state.as_ref() {
             Some(s) if s.kind != StateKind::Completed => {
@@ -766,8 +942,10 @@ pub fn verdict(wt: &IssueWorktree, tracker: &TrackerInfo, pr_only: bool) -> Verd
 }
 
 /// Discover worktrees, fetch PRs + tracker state concurrently, and compute the
-/// verdict against a caller-supplied tracker. Silent, with no progress output
-/// (the CLI re-orchestrates the same pieces with bars). This crate reads no
+/// verdict against a caller-supplied tracker. The report keeps the rows that
+/// `ids` names by [`IssueWorktree::selected_by`], or every row when it is
+/// empty. Silent, with no progress output (the CLI re-orchestrates the same
+/// pieces with bars). This crate reads no
 /// config, so the caller that loaded one resolves the tracker and repos and
 /// injects them; tests inject a fake. `pr_only` is [`verdict`]'s.
 pub fn gather_with(
@@ -777,7 +955,17 @@ pub fn gather_with(
     f: &forge::Resolved,
     pr_only: bool,
 ) -> Result<StatusReport> {
-    let d = discover(start, ids)?;
+    Ok(gather_all(start, t, f, pr_only)?.select(ids))
+}
+
+/// [`gather_with`] over every worktree.
+fn gather_all(
+    start: &str,
+    t: &Resolved,
+    f: &forge::Resolved,
+    pr_only: bool,
+) -> Result<StatusReport> {
+    let d = discover(start, &[])?;
     let info = TrackerInfo::of(t);
     let t = t.tracker.as_ref();
     if d.is_empty() {
@@ -806,6 +994,8 @@ pub fn gather_with(
         Ok::<_, anyhow::Error>((trees, prs, states, link_base))
     })?;
     let info = TrackerInfo { link_base, ..info };
+    let mut d = d;
+    check_landed(&mut d, &prs);
     Ok(assemble(d, trees, prs, states, info, pr_only))
 }
 
@@ -1208,6 +1398,7 @@ mod tests {
                 name: "Done".into(),
                 color: None,
             }),
+            landed: Landed::not_checked(),
             verdict: Verdict::default(),
         }
     }
@@ -1287,8 +1478,58 @@ mod tests {
         let linear = tracker(TrackerKind::Linear, true);
         assert!(reason_of(&wt("NONE", "MERGED", false, None), &linear, false).is_none());
         assert_eq!(
-            reason_of(&wt("NONE", "NO_PR", true, None), &linear, false).as_deref(),
-            Some("no PR, dirty")
+            reason_of(&landed(wt("NONE", "NO_PR", true, None)), &linear, false).as_deref(),
+            Some("dirty")
+        );
+    }
+
+    /// `row` with its HEAD on the default branch.
+    fn landed(row: IssueWorktree) -> IssueWorktree {
+        IssueWorktree {
+            landed: Landed::Yes,
+            ..row
+        }
+    }
+
+    /// A row with no issue id or no PR rests on its HEAD being on the default
+    /// branch, in place of the issue-id and PR gates.
+    #[test]
+    fn a_row_with_no_id_or_no_pr_is_gated_on_landing() {
+        let linear = tracker(TrackerKind::Linear, true);
+        let off = |row| IssueWorktree {
+            landed: Landed::No("origin/main".into()),
+            ..row
+        };
+        let completed = Some(StateKind::Completed);
+        assert!(
+            reason_of(
+                &landed(wt("UNKNOWN", "MERGED", false, None)),
+                &linear,
+                false
+            )
+            .is_none()
+        );
+        assert!(
+            reason_of(
+                &landed(wt("ENG-1", "NO_PR", false, completed)),
+                &linear,
+                false
+            )
+            .is_none()
+        );
+        assert_eq!(
+            reason_of(&off(wt("UNKNOWN", "NO_PR", false, None)), &linear, false).as_deref(),
+            Some("HEAD not on origin/main")
+        );
+        assert_eq!(
+            reason_of(&landed(wt("UNKNOWN", "OPEN", false, None)), &linear, false).as_deref(),
+            Some("PR #1 open")
+        );
+        let unchecked = verdict(&wt("UNKNOWN", "NO_PR", false, None), &linear, false);
+        assert_eq!(
+            unchecked.kind(),
+            "unknown",
+            "an unchecked landing holds the row"
         );
     }
 
@@ -1308,25 +1549,24 @@ mod tests {
     #[test]
     fn verdict_combinations() {
         let linear = tracker(TrackerKind::Linear, true);
-        // Unknown id is never an issue worktree.
+        // A detached unknown-id worktree has no branch to judge by.
+        let detached = IssueWorktree {
+            branch: "DETACHED".into(),
+            ..wt("UNKNOWN", "MERGED", false, Some(StateKind::Completed))
+        };
         assert_eq!(
-            reason_of(
-                &wt("UNKNOWN", "MERGED", false, Some(StateKind::Completed)),
-                &linear,
-                false
-            )
-            .as_deref(),
+            reason_of(&detached, &linear, false).as_deref(),
             Some("not an issue worktree")
         );
-        // No PR + a tracker with no key, all reasons join with ", ".
+        // No PR, HEAD on the default branch, and a tracker with no key.
         assert_eq!(
             reason_of(
-                &wt("ENG-2", "NO_PR", false, None),
+                &landed(wt("ENG-2", "NO_PR", false, None)),
                 &tracker(TrackerKind::Linear, false),
                 false
             )
             .as_deref(),
-            Some("no PR, no tracker key")
+            Some("no tracker key")
         );
         // Open PR + started state + dirty; the reason names the tracker.
         assert_eq!(
@@ -1649,5 +1889,99 @@ mod tests {
             ahead: None,
         };
         assert_eq!(status.state_label(), "OPEN");
+    }
+
+    mod selection {
+        use super::super::*;
+
+        fn row() -> IssueWorktree {
+            IssueWorktree {
+                worktree: "/home/u/wt/eng-7-fix".into(),
+                branch: "lev/eng-7-fix".into(),
+                issue_id: "ENG-7".parse().unwrap(),
+                record_unreadable: false,
+                tree: Tree::Clean,
+                pr: PrStatus::None,
+                state: None,
+                landed: Landed::not_checked(),
+                verdict: Default::default(),
+            }
+        }
+
+        #[test]
+        fn selects_by_id_branch_basename_and_path() {
+            let r = row();
+            assert!(r.selected_by("eng-7"));
+            assert!(r.selected_by("ENG-7"));
+            assert!(r.selected_by("lev/eng-7-fix"));
+            assert!(r.selected_by("eng-7-fix"));
+            assert!(r.selected_by("/home/u/wt/eng-7-fix"));
+        }
+
+        /// The rows carry the spelling git reports and the caller types their
+        /// own. Two names for one directory must still select it.
+        #[test]
+        fn a_path_selector_matches_another_spelling_of_one_directory() {
+            let tmp = tempfile::tempdir().unwrap();
+            let real = tmp.path().join("wt").join("eng-7-fix");
+            std::fs::create_dir_all(&real).unwrap();
+            let indirect = tmp.path().join("wt").join(".").join("..").join("wt");
+            let r = IssueWorktree {
+                worktree: real.to_string_lossy().into_owned(),
+                ..row()
+            };
+            assert!(r.selected_by(&indirect.join("eng-7-fix").to_string_lossy()));
+            assert!(!r.selected_by(&indirect.join("eng-8-other").to_string_lossy()));
+        }
+
+        #[test]
+        fn rejects_non_match() {
+            assert!(!row().selected_by("eng-8"));
+        }
+
+        fn with_pr_number(n: u64) -> IssueWorktree {
+            IssueWorktree {
+                pr: PrStatus::Unique {
+                    number: n,
+                    state: "OPEN".into(),
+                    url: "".into(),
+                    is_draft: false,
+                    ahead: None,
+                },
+                ..row()
+            }
+        }
+
+        #[test]
+        fn selects_by_pr_number() {
+            let r = with_pr_number(3124);
+            assert!(r.selected_by("3124"));
+            assert!(r.selected_by("#3124"));
+        }
+
+        #[test]
+        fn rejects_wrong_pr_number_and_pr_when_absent() {
+            let r = with_pr_number(3124);
+            assert!(!r.selected_by("3125"));
+            // A row with no PR never matches a bare number.
+            assert!(!row().selected_by("3124"));
+        }
+
+        #[test]
+        fn selects_by_an_ambiguous_candidate_number() {
+            let pr = |number| devkit_common::tracker::PrRef {
+                url: format!("https://github.com/o/r/pull/{number}"),
+                number,
+            };
+            let r = IssueWorktree {
+                pr: PrStatus::Ambiguous {
+                    candidates: vec![pr(3124), pr(3125)],
+                },
+                ..row()
+            };
+            assert!(r.selected_by("#3124"));
+            assert!(r.selected_by("3125"));
+            assert!(!r.selected_by("3126"));
+        }
     }
 }

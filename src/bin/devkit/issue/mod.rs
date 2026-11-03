@@ -24,7 +24,6 @@ mod prs;
 pub(crate) mod receipt;
 pub(crate) mod render;
 mod review;
-mod select;
 pub(crate) mod setup;
 mod slug;
 mod status;
@@ -427,13 +426,18 @@ pub(crate) enum WorkspaceCmd {
     },
     /// Read-only report of every issue worktree (optionally filtered by ID).
     Status {
-        /// Issue ids to report on; omit for every issue worktree.
+        /// Issue ids, branches, worktree paths, or PR numbers to report on;
+        /// omit for every issue worktree.
         ids: Vec<String>,
     },
     /// Remove FINISHED worktrees (PR merged + issue done + clean).
+    ///
+    /// A worktree with no issue id or no PR is FINISHED when its tree is
+    /// clean, its HEAD is on the remote's default branch, and no open PR has
+    /// its branch as head.
     End {
-        /// Issue ids, branches, or worktree paths to consider; omit to scan
-        /// every issue worktree.
+        /// Issue ids, branches, worktree paths, or PR numbers to consider; omit
+        /// to scan every issue worktree.
         ids: Vec<String>,
         /// Remove without asking for confirmation.
         #[arg(short = 'y', long)]
@@ -701,7 +705,8 @@ pub(crate) enum PrCmd {
 
 #[derive(clap::Args, Debug, Default, PartialEq)]
 pub(crate) struct PrStatus {
-    /// Issue id, branch, worktree basename, or path. Defaults to cwd.
+    /// Issue id, branch, worktree basename, path, or PR number (`7` or `#7`).
+    /// Defaults to cwd.
     selector: Option<String>,
     /// Emit the worktree as one JSON object instead of a table.
     #[arg(long)]

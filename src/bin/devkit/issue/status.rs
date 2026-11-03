@@ -156,9 +156,11 @@ fn progress_msg(prs_done: bool, states_done: bool) -> String {
 /// Discover worktrees, then draw the triage table immediately — ISSUE/BRANCH
 /// known, other cells as spinners — and fill it as each source lands. The
 /// live block animates on stderr and is cleared; the returned report renders
-/// to stdout exactly as the silent gather would.
+/// to stdout exactly as the silent gather would. The live table shows every
+/// worktree, and the report keeps the rows `ids` names: a PR number selects
+/// only once the PR fetch has landed.
 pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<StatusReport> {
-    let d = st::discover(start, ids)?;
+    let d = st::discover(start, &[])?;
     let devkit_common::tracker::Selected {
         tracker: resolved,
         forge,
@@ -261,7 +263,9 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
     looped?;
 
     let (trees, prs, states, info) = state.into_parts();
-    Ok(st::assemble(d, trees, prs, states, info, false))
+    let mut d = d;
+    st::check_landed(&mut d, &prs);
+    Ok(st::assemble(d, trees, prs, states, info, false).select(ids))
 }
 
 /// The note printed under the table for a tracker that could not answer, or
@@ -358,6 +362,7 @@ mod tests {
             tree: Tree::Clean,
             pr: PrStatus::None,
             state: None,
+            landed: devkit_ticket::status::Landed::not_checked(),
             verdict: Default::default(),
         }
     }

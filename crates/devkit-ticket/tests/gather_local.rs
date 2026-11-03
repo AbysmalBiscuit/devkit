@@ -58,11 +58,8 @@ fn gather_local_returns_offline_rows_without_network() {
 
 #[test]
 fn gather_with_builds_tracker_info_from_the_injected_tracker() {
-    // Ready plus a `None` kind is a pairing `tracker::resolve` cannot produce —
-    // `NoneTracker::ready()` is always false — so finding it in the report
-    // proves the injected tracker answered, whatever the environment holds. No
-    // worktree matches the filter, so nothing is fetched and no link base is
-    // resolved.
+    // `tracker::resolve` never pairs ready with a `None` kind, so that pair and
+    // the fake's link base show the injected tracker answered.
     let base = fixture_repo();
     let mut t = FakeTracker::with_states([]);
     t.kind = TrackerKind::None;
@@ -89,7 +86,10 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
     assert!(report.worktrees.is_empty());
     assert_eq!(report.tracker.kind, TrackerKind::None);
     assert!(report.tracker.ready);
-    assert_eq!(report.tracker.link_base, None);
+    assert_eq!(
+        report.tracker.link_base.as_deref(),
+        Some("https://example.test/issue/")
+    );
 }
 
 /// An issue id is a case-insensitive identifier, and the record stores whatever
@@ -158,4 +158,86 @@ fn an_issueless_record_reads_as_none_not_a_branch_scan() {
         "no tracker lookup for an issueless worktree: {:?}",
         found.issue_ids()
     );
+}
+
+/// A PR number is known only after the PR fetch, so selecting by it has to
+/// wait for that fetch rather than filter in discovery.
+#[test]
+fn gather_with_selects_a_worktree_by_its_pr_number() {
+    for selector in ["7", "#7"] {
+        assert_eq!(
+            branches_selected_by(&[7], selector),
+            ["lev/eng-1-bar"],
+            "selecting by {selector}"
+        );
+    }
+}
+
+/// Two PRs from one head branch leave the row ambiguous, and each candidate
+/// still names it.
+#[test]
+fn gather_with_selects_a_worktree_by_an_ambiguous_pr_candidate() {
+    assert_eq!(branches_selected_by(&[7, 8], "#8"), ["lev/eng-1-bar"]);
+}
+
+/// The branches of the rows `gather_with` keeps for `selector`, with one more
+/// worktree beside `lev/eng-1-bar` and a PR from that branch for each number.
+fn branches_selected_by(numbers: &[u64], selector: &str) -> Vec<String> {
+    use devkit_common::forge;
+
+    let base = fixture_repo();
+    let main = base.path().join("main");
+    let other = base.path().join("eng-2-baz");
+    git(
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "lev/eng-2-baz",
+            other.to_str().unwrap(),
+        ],
+        &main,
+    );
+    let fake = numbers
+        .iter()
+        .fold(forge::fake::FakeForge::new(), |f, &number| {
+            f.with_pr(forge::PrBrief {
+                number,
+                state: "OPEN".into(),
+                url: format!("https://github.com/o/r/pull/{number}"),
+                title: String::new(),
+                head_ref_name: "lev/eng-1-bar".into(),
+                head_ref_oid: String::new(),
+                head_repo_owner: None,
+                is_draft: false,
+                author_login: None,
+            })
+        });
+    let forge = forge::Resolved {
+        forge: Box::new(fake),
+        declared: true,
+        reason: "chosen by this test".into(),
+        repos: forge::Repos::from_parts(
+            &Default::default(),
+            &Default::default(),
+            Some("o/r".into()),
+            None,
+        ),
+    };
+    let tracker = Resolved {
+        tracker: Box::new(FakeTracker::with_states([])),
+        declared: true,
+        reason: "chosen by this test".into(),
+    };
+
+    let report = devkit_ticket::status::gather_with(
+        main.to_str().unwrap(),
+        &[selector.to_string()],
+        &tracker,
+        &forge,
+        false,
+    )
+    .unwrap();
+    report.worktrees.into_iter().map(|r| r.branch).collect()
 }
