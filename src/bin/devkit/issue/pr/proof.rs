@@ -19,6 +19,46 @@ use devkit_config::Config;
 
 use crate::{issue::review::parse_args, template::VarArgs};
 
+/// Why the proof gate does not apply to a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Skip {
+    Unset,
+    NoIssue,
+    Human,
+}
+
+impl Skip {
+    fn reason(self) -> &'static str {
+        match self {
+            Skip::Unset => "defaults.pr_proof_variable is unset",
+            Skip::NoIssue => {
+                "no tracker issue is recorded for this worktree (pass --issue <ID> to name one)"
+            }
+            Skip::Human => "the caller is human",
+        }
+    }
+}
+
+/// The proof variable and issue the gate checks, or why it skips the run: it
+/// checks an agent's proof against a known issue when
+/// `defaults.pr_proof_variable` names the variable carrying it.
+fn applies<'a>(
+    cfg: &'a Config,
+    issue: Option<&'a str>,
+    caller: Caller,
+) -> std::result::Result<(&'a str, &'a str), Skip> {
+    let variable = cfg
+        .defaults
+        .pr_proof_variable
+        .as_deref()
+        .ok_or(Skip::Unset)?;
+    let issue = issue.ok_or(Skip::NoIssue)?;
+    match caller {
+        Caller::Agent => Ok((variable, issue)),
+        Caller::Human => Err(Skip::Human),
+    }
+}
+
 /// Refuse an agent's proof in `vars` that skips an item of the worktree's
 /// tracker `issue`, when `defaults.pr_proof_variable` names the variable
 /// carrying it.
@@ -30,12 +70,10 @@ pub(crate) fn gate_proof(
     caller: Caller,
     vars: &BTreeMap<String, String>,
 ) -> Result<()> {
-    let (Some(variable), Some(issue), Caller::Agent) =
-        (&cfg.defaults.pr_proof_variable, issue, caller)
-    else {
-        return Ok(());
-    };
-    check_proof(cfg, here, repos, issue, variable, vars)
+    match applies(cfg, issue, caller) {
+        Ok((variable, issue)) => check_proof(cfg, here, repos, issue, variable, vars),
+        Err(_) => Ok(()),
+    }
 }
 
 /// Refuse the proof in `vars` under `variable` when it skips an item of
@@ -54,7 +92,8 @@ fn check_proof(
 }
 
 /// `pr proof`: run the proof gate of `pr create` on `vars` against `issue`,
-/// or the worktree's issue, for any caller. Opens and pushes nothing.
+/// or the worktree's issue. A run the gate skips exits zero, saying why.
+/// Opens and pushes nothing.
 pub(crate) fn run(
     here: &Path,
     config: Option<&str>,
@@ -64,27 +103,28 @@ pub(crate) fn run(
     let checkout = Checkout::at(here);
     let loaded = devkit_ports::load::load_in(&checkout, config.map(Path::new), here)?;
     let cfg = &loaded.config;
-    let Some(variable) = &cfg.defaults.pr_proof_variable else {
-        bail!("defaults.pr_proof_variable is unset, so no PR proof is checked");
-    };
-    let issue = match issue {
-        Some(issue) => issue,
-        None => worktree_issue(&checkout)?
-            .context("no tracker issue is recorded for this worktree: pass --issue <ID>")?,
+    let issue = issue.or_else(|| worktree_issue(&checkout));
+    let (variable, issue) = match applies(cfg, issue.as_deref(), devkit_common::caller::caller()) {
+        Ok(applied) => applied,
+        Err(skip) => {
+            eprintln!("No proof to check: {}.", skip.reason());
+            return Ok(());
+        }
     };
     let mut values = cfg.templates.defaults();
     values.extend(parse_args(vars, &cfg.templates.declared())?);
     let start = here.to_string_lossy();
     let forge = forge::resolve(&cfg.forge, &cfg.github, &start, None);
-    check_proof(cfg, here, &forge.repos, &issue, variable, &values)?;
+    check_proof(cfg, here, &forge.repos, issue, variable, &values)?;
     eprintln!("The proof answers every item of issue {issue}.");
     Ok(())
 }
 
-fn worktree_issue(checkout: &Checkout) -> Result<Option<String>> {
-    let worktree = checkout.worktree()?;
-    let record = devkit_common::record::read_on(&worktree.path, &worktree.branch);
-    Ok(record.and_then(|r| r.tracker_issue()))
+/// The issue recorded for the worktree at `checkout`. A checkout that is not
+/// a worktree has none.
+fn worktree_issue(checkout: &Checkout) -> Option<String> {
+    let worktree = checkout.worktree().ok()?;
+    devkit_common::record::read_on(&worktree.path, &worktree.branch)?.tracker_issue()
 }
 
 /// Refuse `proof` when it skips an item of `issue`, read from the tracker so
