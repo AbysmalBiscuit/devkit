@@ -445,6 +445,28 @@ fn discover_into_refuses_the_home_config() {
 }
 
 #[test]
+fn discover_writes_the_home_config_config_names() {
+    let fake = fields_fake();
+    fake.serve_graphql(DISCOVERED);
+    let before = devkit_toml(&fake);
+    let home = fake.state().join(".config/devkit/config.toml");
+    std::fs::create_dir_all(home.parent().unwrap()).unwrap();
+    std::fs::write(&home, &before).unwrap();
+    stdout(&fake.issue_as("agent", &[
+        "fields",
+        "discover",
+        "--config",
+        home.to_str().unwrap(),
+    ]));
+    let written = std::fs::read_to_string(&home).unwrap();
+    assert!(
+        written.contains("[ticket.fields.github.labels]"),
+        "{written}"
+    );
+    assert_eq!(devkit_toml(&fake), before, "the project file is untouched");
+}
+
+#[test]
 fn discover_into_refuses_devkit_config() {
     let fake = fields_fake();
     let named = fake.state().join("named.toml");

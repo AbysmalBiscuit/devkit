@@ -119,6 +119,9 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
         );
         return Ok(());
     }
+    if args.into.is_some() {
+        refuse_home(&path, &after)?;
+    }
     let (effective, provenance) =
         refuse_unloadable(config, Path::new(&start), kind, &path, &after)?;
     refuse_shadowed(kind, &changes, &path, &after, &effective, &provenance)?;
@@ -176,18 +179,9 @@ fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
     Ok(dir.join(devkit_config::CONFIG_FILE))
 }
 
-/// Refuse to write `after` to `path` when the config would then fail to
-/// load, or fail the field checks every ticket command runs on `kind`: an
-/// error-level `enum` left with no values, say. Refuse too when `path` would
-/// not be a layer of the config, since no run would then read it, and when it
-/// is the home config, which every project reads.
-fn refuse_unloadable(
-    config: Option<&Path>,
-    start: &Path,
-    kind: TrackerKind,
-    path: &Path,
-    after: &str,
-) -> Result<(Config, Provenance)> {
+/// Refuse an `--into` write of `after` to `path` when `path` is the home
+/// config: every project reads it, and tracker fields belong to one project.
+fn refuse_home(path: &Path, after: &str) -> Result<()> {
     let pending = PendingLayer { path, text: after };
     if devkit_config::home_config_path().is_some_and(|home| pending.is(&home)) {
         bail!(
@@ -196,6 +190,21 @@ fn refuse_unloadable(
             path.display()
         );
     }
+    Ok(())
+}
+
+/// Refuse to write `after` to `path` when the config would then fail to
+/// load, or fail the field checks every ticket command runs on `kind`: an
+/// error-level `enum` left with no values, say. Refuse too when `path` would
+/// not be a layer of the config, since no run would then read it.
+fn refuse_unloadable(
+    config: Option<&Path>,
+    start: &Path,
+    kind: TrackerKind,
+    path: &Path,
+    after: &str,
+) -> Result<(Config, Provenance)> {
+    let pending = PendingLayer { path, text: after };
     let (cfg, provenance) = devkit_common::config::resolve_pending(config, start, pending)
         .and_then(|(cfg, provenance)| {
             devkit_config::check_ticket_fields(&cfg, kind, &provenance.origin)?;
