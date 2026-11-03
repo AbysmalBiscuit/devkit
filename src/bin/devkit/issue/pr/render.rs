@@ -165,10 +165,9 @@ pub(crate) fn values(
     vars: &VarArgs,
     caller: Caller,
 ) -> Result<BTreeMap<String, String>> {
-    let tmpls = &cfg.templates;
-    let given = parse_args(vars, &tmpls.declared())?;
+    let (given, values) = declared_values(&cfg.templates, vars)?;
     devkit_common::required::ensure_supplied(surface, &missing(cfg, &given, caller)?)?;
-    Ok(with_defaults(tmpls, given))
+    Ok(values)
 }
 
 /// `given` over the declared defaults: what a PR's templates render with.
@@ -179,6 +178,18 @@ pub(crate) fn with_defaults(
     let mut values = tmpls.defaults();
     values.extend(given);
     values
+}
+
+/// The arguments `vars` sets, each refused unless a template declares it,
+/// and those arguments over the declared defaults. A required check reads the
+/// first, since a default would hide an argument the caller left out.
+pub(crate) fn declared_values(
+    tmpls: &Templates,
+    vars: &VarArgs,
+) -> Result<(BTreeMap<String, String>, BTreeMap<String, String>)> {
+    let given = parse_args(vars, &tmpls.declared())?;
+    let values = with_defaults(tmpls, given.clone());
+    Ok((given, values))
 }
 
 /// Everything the `pr_title` and `pr_body` templates render from, for one

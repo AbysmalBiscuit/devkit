@@ -17,7 +17,8 @@ use devkit_common::{
 };
 use devkit_config::Config;
 
-use crate::{issue::review::parse_args, template::VarArgs};
+use super::render::declared_values;
+use crate::template::VarArgs;
 
 /// Why the proof gate does not apply to a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,8 +112,7 @@ pub(crate) fn run(
             return Ok(());
         }
     };
-    let mut values = cfg.templates.defaults();
-    values.extend(parse_args(vars, &cfg.templates.declared())?);
+    let (_, values) = declared_values(&cfg.templates, vars)?;
     let start = here.to_string_lossy();
     let forge = forge::resolve(&cfg.forge, &cfg.github, &start, None);
     check_proof(cfg, here, &forge.repos, issue, variable, &values)?;
