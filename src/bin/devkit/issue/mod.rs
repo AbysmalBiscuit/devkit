@@ -705,7 +705,8 @@ pub(crate) enum PrCmd {
 
 #[derive(clap::Args, Debug, Default, PartialEq)]
 pub(crate) struct PrStatus {
-    /// Issue id, branch, worktree basename, or path. Defaults to cwd.
+    /// Issue id, branch, worktree basename, path, or PR number (`7` or `#7`).
+    /// Defaults to cwd.
     selector: Option<String>,
     /// Emit the worktree as one JSON object instead of a table.
     #[arg(long)]
