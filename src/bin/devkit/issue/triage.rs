@@ -162,6 +162,7 @@ mod tests {
             tree: Tree::Clean,
             pr,
             state: None,
+            landed: devkit_ticket::status::Landed::not_checked(),
             verdict: Default::default(),
         }
     }

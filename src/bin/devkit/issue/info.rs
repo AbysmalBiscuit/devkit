@@ -261,6 +261,7 @@ fn live_enrich(
             match msg {
                 Update::Prs(res) => {
                     res?.apply(row);
+                    st::check_landed_rows([&mut *row]);
                     got_prs = true;
                     lt.set(0, 3, Cell::Ready(crate::issue::triage::pr_cell(row)));
                 }
@@ -354,6 +355,7 @@ mod tests {
             tree: st::Tree::Clean,
             pr: PrStatus::None,
             state: None,
+            landed: devkit_ticket::status::Landed::not_checked(),
             verdict: Default::default(),
         }
     }

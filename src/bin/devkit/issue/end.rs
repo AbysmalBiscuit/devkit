@@ -1518,6 +1518,7 @@ mod tests {
             tree: Tree::Clean,
             pr: devkit_ticket::status::PrStatus::None,
             state: None,
+            landed: devkit_ticket::status::Landed::not_checked(),
             verdict: devkit_ticket::status::Verdict::Finished,
         }
     }

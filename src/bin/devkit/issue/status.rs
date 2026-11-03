@@ -263,6 +263,8 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
     looped?;
 
     let (trees, prs, states, info) = state.into_parts();
+    let mut d = d;
+    st::check_landed(&mut d, &prs);
     Ok(st::assemble(d, trees, prs, states, info, false).select(ids))
 }
 
@@ -360,6 +362,7 @@ mod tests {
             tree: Tree::Clean,
             pr: PrStatus::None,
             state: None,
+            landed: devkit_ticket::status::Landed::not_checked(),
             verdict: Default::default(),
         }
     }

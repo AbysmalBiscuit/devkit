@@ -431,6 +431,10 @@ pub(crate) enum WorkspaceCmd {
         ids: Vec<String>,
     },
     /// Remove FINISHED worktrees (PR merged + issue done + clean).
+    ///
+    /// A worktree with no issue id or no PR is FINISHED when its tree is
+    /// clean, its HEAD is on the remote's default branch, and no open PR has
+    /// its branch as head.
     End {
         /// Issue ids, branches, worktree paths, or PR numbers to consider; omit
         /// to scan every issue worktree.
