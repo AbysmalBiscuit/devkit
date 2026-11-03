@@ -50,6 +50,37 @@ fn selected_after_pr_fetch(
     }))
 }
 
+/// The discovered row whose cached or recorded PR `sel` names, read from
+/// local files alone for `--cache-only`.
+fn selected_by_local_pr(d: &st::Discovered, sel: &str) -> Option<IssueWorktree> {
+    d.rows()
+        .iter()
+        .find(|row| {
+            let recorded = recorded_pr(row);
+            cached_pr(row, recorded.as_ref())
+                .map(|pr| pr.number)
+                .or(recorded.map(|pr| pr.number))
+                .is_some_and(|number| st::names_pr(sel, number))
+        })
+        .cloned()
+}
+
+/// The PR the worktree record of `row` binds.
+fn recorded_pr(row: &IssueWorktree) -> Option<devkit_common::forge::PrLocator> {
+    devkit_common::record::read_on(Path::new(&row.worktree), &row.branch).and_then(|r| r.pr)
+}
+
+/// The cached PR of `row` that agrees with its `recorded` PR.
+fn cached_pr(
+    row: &IssueWorktree,
+    recorded: Option<&devkit_common::forge::PrLocator>,
+) -> Option<crate::issue::info_cache::CachedPr> {
+    seedable_cached_pr(
+        crate::issue::info_cache::read(Path::new(&row.worktree)),
+        recorded,
+    )
+}
+
 /// The current worktree's root (`git rev-parse --show-toplevel`), trimmed.
 fn current_top(start: &str) -> Option<String> {
     devkit_common::vcs::checkout_root(Path::new(start))
@@ -82,7 +113,8 @@ pub fn run(
 
     let picked = match (pick_index(d.rows(), selector, top.as_deref()), selector) {
         (Some(i), _) => Some(d.rows()[i].clone()),
-        (None, Some(sel)) if !cache_only => selected_after_pr_fetch(&d, &forge, sel)?,
+        (None, Some(sel)) if cache_only => selected_by_local_pr(&d, sel),
+        (None, Some(sel)) => selected_after_pr_fetch(&d, &forge, sel)?,
         (None, _) => None,
     };
     let (mut row, discovered) = match picked {
@@ -100,13 +132,7 @@ pub fn run(
     };
 
     if cache_only {
-        let recorded_pr = devkit_common::record::read_on(Path::new(&row.worktree), &row.branch)
-            .and_then(|r| r.pr);
-        let cached_pr = seedable_cached_pr(
-            crate::issue::info_cache::read(Path::new(&row.worktree)),
-            recorded_pr.as_ref(),
-        );
-        if let Some(pr) = cached_pr {
+        if let Some(pr) = cached_pr(&row, recorded_pr(&row).as_ref()) {
             apply_cached_pr(&mut row, pr);
         } else if discovered {
             // Offline verdict from local signal only — PR stays NO_PR and the

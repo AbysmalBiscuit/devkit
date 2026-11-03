@@ -73,3 +73,49 @@ fn status_and_info_select_one_worktree_by_its_pr_number() {
     let info: serde_json::Value = serde_json::from_str(&info).unwrap();
     assert_eq!(info["branch"], "lev/eng-1-fix", "info: {info}");
 }
+
+/// Writes `file` under the `.devkit/` of the `eng-1-fix` worktree.
+fn write_devkit_file(fake: &ghfake::Fake, file: &str, body: &str) {
+    let dir = fake.project().join("wts/eng-1-fix/.devkit");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(file), body).unwrap();
+}
+
+const CACHED_PR_7: &str =
+    r#"{"number":7,"state":"OPEN","url":"https://github.com/o/r/pull/7","is_draft":false}"#;
+
+/// `--cache-only` reads no network, so a PR selector resolves through the PR
+/// that a worktree cached on an earlier live run.
+#[test]
+fn cache_only_info_selects_a_worktree_by_its_cached_pr_number() {
+    let fake = two_worktrees();
+    write_devkit_file(&fake, "pr.json", CACHED_PR_7);
+
+    let info = stdout(&fake.issue(&["info", "#7", "--cache-only", "--json"]));
+
+    let info: serde_json::Value = serde_json::from_str(&info).unwrap();
+    assert_eq!(info["branch"], "lev/eng-1-fix", "info: {info}");
+}
+
+/// A record that binds another PR discards the cache, so the cached number no
+/// longer selects the worktree, and the recorded one does.
+#[test]
+fn cache_only_info_selects_by_the_recorded_pr_over_a_stale_cache() {
+    let fake = two_worktrees();
+    write_devkit_file(&fake, "pr.json", CACHED_PR_7);
+    write_devkit_file(
+        &fake,
+        "issue.toml",
+        "issue = \"ENG-1\"\nslug = \"fix\"\napps = []\n\n[pr]\nnumber = 9\n",
+    );
+
+    let stale = fake.issue(&["info", "#7", "--cache-only", "--json"]);
+    let recorded = stdout(&fake.issue(&["info", "#9", "--cache-only", "--json"]));
+
+    assert!(
+        !stale.status.success(),
+        "the stale cached PR selects nothing"
+    );
+    let recorded: serde_json::Value = serde_json::from_str(&recorded).unwrap();
+    assert_eq!(recorded["branch"], "lev/eng-1-fix", "info: {recorded}");
+}

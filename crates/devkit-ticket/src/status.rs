@@ -181,14 +181,18 @@ impl IssueWorktree {
         ) {
             return true;
         }
-        let number = sel.strip_prefix('#').unwrap_or(sel);
         match &self.pr {
             PrStatus::Ambiguous { candidates } => {
-                candidates.iter().any(|pr| number == pr.number.to_string())
+                candidates.iter().any(|pr| names_pr(sel, pr.number))
             }
-            pr => pr.number().is_some_and(|pr| number == pr.to_string()),
+            pr => pr.number().is_some_and(|pr| names_pr(sel, pr)),
         }
     }
+}
+
+/// True when `sel` is the PR number `number`, as `3124` or `#3124`.
+pub fn names_pr(sel: &str, number: u64) -> bool {
+    sel.strip_prefix('#').unwrap_or(sel) == number.to_string()
 }
 
 impl Serialize for IssueWorktree {
