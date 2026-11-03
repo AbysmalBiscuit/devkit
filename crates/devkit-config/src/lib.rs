@@ -3870,8 +3870,6 @@ pub fn normalize_lexically(p: &Path) -> PathBuf {
     stack.into_iter().collect()
 }
 
-/// The directory of the config layer that supplied `key`, from the per-leaf
-/// provenance map.
 /// The directory of the layer that set `key`. A command-line value has none.
 fn layer_dir<'a>(origin: &'a HashMap<String, PathBuf>, key: &str) -> Option<&'a Path> {
     origin
