@@ -14,7 +14,7 @@ pub use layers::{
     BrokenLayer, CONFIG_FILE, Layer, LayerKind, PendingLayer, ReadLayers, nearest_tracked,
     project_layers, read_project_layers,
 };
-pub use options::{COMMAND_LINE, Options};
+pub use options::{COMMAND_LINE, OPTIONS_VAR, Options, is_option_source};
 pub use todo::{HARNESS_PREFIXES, RoleConfig, ScopeConfig};
 pub mod harness;
 mod ticket_fields;
@@ -3316,7 +3316,7 @@ fn discover(
     options: &Options,
 ) -> Result<Vec<(PathBuf, toml::Table)>> {
     let mut layers = discover_files(explicit, start, main_checkout, home, pending)?;
-    layers.extend(options.layer());
+    layers.extend(options.layers());
     if layers.is_empty() {
         return Err(anyhow::Error::new(NoConfig));
     }
@@ -3871,11 +3871,11 @@ pub fn normalize_lexically(p: &Path) -> PathBuf {
     stack.into_iter().collect()
 }
 
-/// The directory of the layer that set `key`. A command-line value has none.
+/// The directory of the layer that set `key`. An `--option` value has none.
 fn layer_dir<'a>(origin: &'a HashMap<String, PathBuf>, key: &str) -> Option<&'a Path> {
     origin
         .get(key)
-        .filter(|p| p.as_os_str() != COMMAND_LINE)
+        .filter(|p| !is_option_source(p))
         .and_then(|p| p.parent())
 }
 

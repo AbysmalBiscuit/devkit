@@ -10,7 +10,8 @@ use crate::vcs::Checkout;
 static OPTIONS: OnceLock<Options> = OnceLock::new();
 
 /// Set the `--option` values every later resolve in this process merges over
-/// its layers. The command line is parsed once, so a second call is a bug.
+/// its layers, the values of `$DEVKIT_OPTIONS` included. The command line is
+/// parsed once, so a second call is a bug.
 pub fn set_options(options: Options) -> Result<()> {
     if OPTIONS.set(options).is_err() {
         bail!("the --option values are already set for this process");
@@ -21,6 +22,14 @@ pub fn set_options(options: Options) -> Result<()> {
 /// The `--option` values of this process: empty until [`set_options`] runs.
 pub fn options() -> &'static Options {
     OPTIONS.get_or_init(Options::default)
+}
+
+/// Give `cmd` the `--option` values of this process in `$DEVKIT_OPTIONS`, so a
+/// devkit it runs resolves the config this process resolves.
+pub fn pass_options(cmd: &mut std::process::Command) {
+    if let Some(value) = options().to_variable() {
+        cmd.env(devkit_config::OPTIONS_VAR, value);
+    }
 }
 
 /// Resolve the `devkit.toml` layers discovered from `start` — or the single

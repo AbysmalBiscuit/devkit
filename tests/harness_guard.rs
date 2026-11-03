@@ -47,6 +47,7 @@ fn run_argv(
         .env("XDG_STATE_HOME", home)
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove("DEVKIT_CONFIG")
+        .env_remove("DEVKIT_OPTIONS")
         .env_remove("DEVKIT_ENFORCE_COMMANDS")
         .env_remove("DEVKIT_ENFORCE_WRITES")
         .stdin(Stdio::piped())
@@ -1124,4 +1125,58 @@ fn an_option_adds_a_command_rule() {
         "harness.commands.bun-only.reason=\"bun only\"",
     ]);
     assert!(denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn a_hook_reads_the_options_its_environment_holds() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness]\nenforce_commands = true\n");
+    let out = run_hook_with(proj.path(), home.path(), &claude_payload("node x.js"), &[
+        ("CLAUDE_CODE_SESSION_ID", "s1"),
+        (
+            "DEVKIT_OPTIONS",
+            "harness.commands.bun-only.programs=[\"node\"]\n\
+             harness.commands.bun-only.reason=\"bun only\"",
+        ),
+    ]);
+    assert!(denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        deny_reason(&out).contains("bun only"),
+        "{}",
+        deny_reason(&out)
+    );
+}
+
+#[test]
+fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
+    let home = tempfile::tempdir().unwrap();
+    for config in ["[defaults]\n", GATE_OFF, GUARDED] {
+        let proj = project(config);
+        for command in [
+            r#"DEVKIT_OPTIONS='harness.enforce_writes=false' devkit pr create"#,
+            r#"env DEVKIT_OPTIONS='tracker.kind="none"' devkit config show"#,
+            "env -u CLAUDE_CODE_SESSION_ID DEVKIT_OPTIONS=x devkit config show",
+            "export DEVKIT_OPTIONS=x",
+            "export DEVKIT_OPTIONS=x && devkit pr create",
+            "declare -x DEVKIT_OPTIONS=x",
+            "typeset -x DEVKIT_OPTIONS=x",
+            "local DEVKIT_OPTIONS=x",
+            "DEVKIT_OPTIONS= devkit config show",
+            "DEVKIT_OPTIONS=x; export DEVKIT_OPTIONS",
+            "bash -c 'DEVKIT_OPTIONS=x devkit config show'",
+        ] {
+            let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+            assert!(denied(&out), "{config}: {command}");
+            assert!(
+                deny_reason(&out).contains("DEVKIT_OPTIONS"),
+                "{config}: {command}: {}",
+                deny_reason(&out)
+            );
+        }
+    }
+    let proj = project("[defaults]\n");
+    for command in ["echo DEVKIT_OPTIONS=x", "unset DEVKIT_OPTIONS"] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
 }

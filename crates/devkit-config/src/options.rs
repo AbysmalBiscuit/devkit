@@ -1,6 +1,7 @@
-//! Config values set on the command line with `-o/--option KEY=VALUE`.
+//! Config values set on the command line with `-o/--option KEY=VALUE`, and
+//! in the `DEVKIT_OPTIONS` environment variable.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
@@ -10,6 +11,13 @@ use crate::{Config, HarnessSection};
 /// The name a command-line value carries as its source: in the layer list, in
 /// `devkit config show --origin`, and in every error that names a layer.
 pub const COMMAND_LINE: &str = "<command line>";
+
+/// The environment variable that holds `--option` values, one `KEY=VALUE`
+/// per line. Its values sit under the command line's.
+pub const OPTIONS_VAR: &str = "DEVKIT_OPTIONS";
+
+/// The name a value from [`OPTIONS_VAR`] carries as its source.
+const ENVIRONMENT: &str = "$DEVKIT_OPTIONS";
 
 /// Tables of the published `devkit.toml` schema that devkit reads from the
 /// config files alone, outside the merged [`Config`], with the reason.
@@ -21,70 +29,185 @@ const FILE_ONLY_TABLES: [(&str, &str); 2] = [
     ("docs", "`docm` reads it from the config files"),
 ];
 
-/// The `--option` values of one command, as one layer above every config file.
+/// The `--option` values of one command, as two layers above every config
+/// file: the values of [`OPTIONS_VAR`], then the command line's.
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct Options(toml::Table);
+pub struct Options {
+    environment: toml::Table,
+    command_line: toml::Table,
+}
 
 impl Options {
-    /// Parse each `KEY=VALUE` in order, so a later value for a key replaces an
-    /// earlier one. `KEY` is a dotted TOML key that the `devkit.toml` schema
-    /// knows, and `VALUE` is a TOML value: a string needs its quotes.
+    /// Parse each command-line `KEY=VALUE` in order, so a later value for a
+    /// key replaces an earlier one. `KEY` is a dotted TOML key that the
+    /// `devkit.toml` schema knows, and `VALUE` is a TOML value: a string needs
+    /// its quotes.
     pub fn parse<S: AsRef<str>>(raw: &[S]) -> Result<Self> {
-        let schema = serde_json::to_value(schemars::schema_for!(Config))
-            .context("generating the devkit.toml schema")?;
-        let harness = serde_json::to_value(schemars::schema_for!(HarnessSection))
-            .context("generating the [harness] schema")?;
-        let mut table = toml::Table::new();
-        let mut harness_keys = Vec::new();
-        for arg in raw {
-            let (path, value) = parse_one(arg.as_ref())?;
-            let key = path.join(".");
-            if let Some((table, reason)) = FILE_ONLY_TABLES.iter().find(|(t, _)| path[0] == *t) {
-                bail!(
-                    "--option {key}: `{key}` is a `[{table}]` key, and `[{table}]` keys \
-                     cannot be set with --option: {reason}"
-                );
-            }
-            let unknown = match path.split_first() {
-                Some((table, rest)) if table == "harness" => {
-                    unknown_key(&harness, &harness, &nested(rest, value.clone()))
-                        .map(|below| [vec![table.clone()], below].concat())
-                }
-                _ => unknown_key(&schema, &schema, &nested(&path, value.clone())),
-            };
-            if let Some(unknown) = unknown {
-                let name = if unknown.len() <= path.len() {
-                    key.clone()
-                } else {
-                    unknown.join(".")
-                };
-                bail!(
-                    "--option {key}: devkit.toml has no key `{name}`; \
-                     `devkit schema` lists the keys"
-                );
-            }
-            if path[0] == "harness" {
-                harness_keys.push(path.clone());
-            }
-            insert(&mut table, &path, value);
-        }
-        for path in &harness_keys {
-            check_harness_value(&table, path)
-                .with_context(|| format!("--option {}", path.join(".")))?;
-        }
-        Ok(Self(table))
+        Self::new(None, raw)
+    }
+
+    /// The values of `variable`, one `KEY=VALUE` per line, under the values
+    /// of `command_line`. Each set parses as [`Options::parse`] parses.
+    pub fn new<S: AsRef<str>>(variable: Option<&str>, command_line: &[S]) -> Result<Self> {
+        let lines: Vec<&str> = variable
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        Ok(Self {
+            environment: parse_set(&lines, ENVIRONMENT)?,
+            command_line: parse_set(command_line, "--option")?,
+        })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.environment.is_empty() && self.command_line.is_empty()
     }
 
-    /// This set as a config layer, or `None` when it sets nothing. The
-    /// `[harness]` readers, which read layer files outside the merged
-    /// [`Config`], take it as their top layer.
-    pub fn layer(&self) -> Option<(PathBuf, toml::Table)> {
-        (!self.is_empty()).then(|| (PathBuf::from(COMMAND_LINE), self.0.clone()))
+    /// These values as config layers, lowest precedence first, each named by
+    /// its source. A set that sets nothing adds no layer.
+    pub fn layers(&self) -> Vec<(PathBuf, toml::Table)> {
+        [
+            (ENVIRONMENT, &self.environment),
+            (COMMAND_LINE, &self.command_line),
+        ]
+        .into_iter()
+        .filter(|(_, table)| !table.is_empty())
+        .map(|(name, table)| (PathBuf::from(name), table.clone()))
+        .collect()
     }
+
+    /// Both layers merged into one table, or `None` when they set nothing.
+    /// The `[harness]` readers, which read layer files outside the merged
+    /// [`Config`], take it as their top layer.
+    pub fn merged(&self) -> Option<toml::Table> {
+        (!self.is_empty()).then(|| crate::merge_layers(&self.layers()).0)
+    }
+
+    /// The [`OPTIONS_VAR`] value that gives a child process the config these
+    /// values give this one, or `None` when they set nothing. Each line sets
+    /// one leaf on one line, so a string that holds a newline keeps it as an
+    /// escape.
+    pub fn to_variable(&self) -> Option<String> {
+        let merged = self.merged()?;
+        let mut lines = Vec::new();
+        leaf_lines(&merged, "", &mut lines);
+        Some(lines.join("\n"))
+    }
+}
+
+/// Whether `source`, a layer's name, is a set of `--option` values rather than
+/// a file.
+pub fn is_option_source(source: &Path) -> bool {
+    source == Path::new(COMMAND_LINE) || source == Path::new(ENVIRONMENT)
+}
+
+/// Parse one set of `KEY=VALUE` values, with errors that start with `label`.
+fn parse_set<S: AsRef<str>>(raw: &[S], label: &str) -> Result<toml::Table> {
+    let schema = serde_json::to_value(schemars::schema_for!(Config))
+        .context("generating the devkit.toml schema")?;
+    let harness = serde_json::to_value(schemars::schema_for!(HarnessSection))
+        .context("generating the [harness] schema")?;
+    let mut table = toml::Table::new();
+    let mut harness_keys = Vec::new();
+    for arg in raw {
+        let (path, value) = parse_one(arg.as_ref(), label)?;
+        let key = path.join(".");
+        if let Some((table, reason)) = FILE_ONLY_TABLES.iter().find(|(t, _)| path[0] == *t) {
+            bail!(
+                "{label} {key}: `{key}` is a `[{table}]` key, and `[{table}]` keys \
+                 cannot be set with {label}: {reason}"
+            );
+        }
+        let unknown = match path.split_first() {
+            Some((table, rest)) if table == "harness" => {
+                unknown_key(&harness, &harness, &nested(rest, value.clone()))
+                    .map(|below| [vec![table.clone()], below].concat())
+            }
+            _ => unknown_key(&schema, &schema, &nested(&path, value.clone())),
+        };
+        if let Some(unknown) = unknown {
+            let name = if unknown.len() <= path.len() {
+                key.clone()
+            } else {
+                unknown.join(".")
+            };
+            bail!(
+                "{label} {key}: devkit.toml has no key `{name}`; \
+                 `devkit schema` lists the keys"
+            );
+        }
+        if path[0] == "harness" {
+            harness_keys.push(path.clone());
+        }
+        insert(&mut table, &path, value);
+    }
+    for path in &harness_keys {
+        check_harness_value(&table, path).with_context(|| format!("{label} {}", path.join(".")))?;
+    }
+    Ok(table)
+}
+
+/// One `KEY=VALUE` line for each leaf of `table`: each value that is not a
+/// table, and each empty table, which a merge still adds.
+fn leaf_lines(table: &toml::Table, prefix: &str, lines: &mut Vec<String>) {
+    for (key, value) in table {
+        let path = format!("{prefix}{}", toml_key(key));
+        match value {
+            toml::Value::Table(inner) if !inner.is_empty() => {
+                leaf_lines(inner, &format!("{path}."), lines);
+            }
+            _ => lines.push(format!("{path}={}", inline(value))),
+        }
+    }
+}
+
+/// `value` as TOML on one line.
+fn inline(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(s) => basic_string(s),
+        toml::Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(inline).collect();
+            format!("[{}]", items.join(", "))
+        }
+        toml::Value::Table(table) => {
+            let entries: Vec<String> = table
+                .iter()
+                .map(|(k, v)| format!("{} = {}", toml_key(k), inline(v)))
+                .collect();
+            format!("{{ {} }}", entries.join(", "))
+        }
+        scalar => scalar.to_string(),
+    }
+}
+
+/// `key` as one segment of a dotted TOML key: bare when TOML allows it,
+/// otherwise quoted.
+fn toml_key(key: &str) -> String {
+    let bare = !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if bare {
+        key.to_owned()
+    } else {
+        basic_string(key)
+    }
+}
+
+/// `s` as a TOML basic string, with every control character escaped.
+fn basic_string(s: &str) -> String {
+    let mut out = String::from('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Read the value at `path`, alone, as the `[harness]` readers read it. A
@@ -120,21 +243,21 @@ fn lookup<'a>(table: &'a toml::Table, path: &[String]) -> Option<&'a toml::Value
 }
 
 /// One `KEY=VALUE`, as the key's segments and the parsed value.
-fn parse_one(arg: &str) -> Result<(Vec<String>, toml::Value)> {
+fn parse_one(arg: &str, label: &str) -> Result<(Vec<String>, toml::Value)> {
     let (key, value) =
-        split_assignment(arg).ok_or_else(|| anyhow!("--option {arg}: expected KEY=VALUE"))?;
+        split_assignment(arg).ok_or_else(|| anyhow!("{label} {arg}: expected KEY=VALUE"))?;
     let key = key.trim();
     let path =
-        key_segments(key).with_context(|| format!("--option {arg}: `{key}` is not a TOML key"))?;
+        key_segments(key).with_context(|| format!("{label} {arg}: `{key}` is not a TOML key"))?;
     let mut doc: toml::Table = toml::from_str(&format!("v = {value}")).map_err(|_| {
         anyhow!(
-            "--option {key}: `{value}` is not a TOML value; \
+            "{label} {key}: `{value}` is not a TOML value; \
              a string needs quotes, as in {key}='\"{value}\"'"
         )
     })?;
     match (doc.remove("v"), doc.is_empty()) {
         (Some(v), true) => Ok((path, v)),
-        _ => bail!("--option {key}: `{value}` is more than one TOML value"),
+        _ => bail!("{label} {key}: `{value}` is more than one TOML value"),
     }
 }
 
@@ -317,7 +440,7 @@ mod tests {
     #[test]
     fn a_later_value_for_a_key_replaces_an_earlier_one() {
         let opts = Options::parse(&["tracker.kind=\"github\"", "tracker.kind=\"none\""]).unwrap();
-        assert_eq!(opts.0, table("tracker.kind = 'none'"));
+        assert_eq!(opts.command_line, table("tracker.kind = 'none'"));
     }
 
     #[test]
@@ -329,7 +452,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(
-            opts.0,
+            opts.command_line,
             table(
                 "apps.api.base_port = 9100\napps.'my.app'.base_port = 7\n\
                  defaults.worktree_include = ['.env']"
@@ -453,6 +576,39 @@ mod tests {
             );
             assert!(!err.contains("has no key"), "{key}: {err}");
         }
+    }
+
+    #[test]
+    fn the_variable_gives_a_child_the_merged_values_one_per_line() {
+        let opts = Options::new(
+            Some("defaults.branch_prefix=\"env/\"\napps.web.base_port=1\ntracker.kind=\"linear\""),
+            &[
+                "tracker.kind=\"none\"",
+                "apps.web={}",
+                "people.\"a=b\".github=\"ann\"",
+                "templates.variables.note.default='''two\nlines \"q\" \\ \t'''",
+                "defaults.worktree_include=[\".env\"]",
+                "apps.api.prep_files=[{ path = \"a b\", content = \"x\\ny\" }]",
+            ],
+        )
+        .unwrap();
+        let variable = opts.to_variable().unwrap();
+        assert!(variable.lines().all(|l| l.contains('=')), "{variable}");
+        let child = Options::new(Some(&variable), &[] as &[&str]).unwrap();
+        assert_eq!(child.merged(), opts.merged(), "{variable}");
+        assert_eq!(Options::default().to_variable(), None);
+    }
+
+    #[test]
+    fn a_command_line_value_sits_above_the_variable() {
+        let opts =
+            Options::new(Some("tracker.kind=\"linear\""), &["tracker.kind=\"none\""]).unwrap();
+        let names: Vec<_> = opts.layers().into_iter().map(|(p, _)| p).collect();
+        assert_eq!(names, [
+            PathBuf::from(ENVIRONMENT),
+            PathBuf::from(COMMAND_LINE)
+        ]);
+        assert_eq!(opts.merged().unwrap(), table("tracker.kind = 'none'"));
     }
 
     #[test]

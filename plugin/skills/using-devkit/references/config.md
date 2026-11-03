@@ -11,7 +11,8 @@
 - `[config] root = true` stops the walk at that directory and drops every shallower layer, the home config included. In a linked worktree it keeps the main checkout's files.
 - `--config <path>` or `$DEVKIT_CONFIG` selects one file verbatim, with no layering and no home base.
 - The home config's `[todo]` table is the exception to both: where todos are kept is a fact about the machine, so it stays the base layer under a rooted or explicit config, which can still override it.
-- `-o KEY=VALUE` (`--option`) sets one key for one command, as the top layer over the files or `--config`. The value is TOML, so a string keeps its quotes: `-o tracker.kind='"none"'`. `--origin` names `<command line>` as its source. devkit refuses the flag for an agent caller, and passes no `-o` value to a child process or hook.
+- `-o KEY=VALUE` (`--option`) sets one key for one command, as the top layer over the files or `--config`. The value is TOML, so a string keeps its quotes: `-o tracker.kind='"none"'`. `--origin` names `<command line>` as its source. devkit refuses the flag for an agent caller.
+- `$DEVKIT_OPTIONS` holds `-o` values, one `KEY=VALUE` per line, as a layer under the command line's `-o` values. A hook reads it, because the harness starts a hook with no `-o` flag. `--origin` names `$DEVKIT_OPTIONS` as its source. A `devrun task` step gets the `-o` values of the devkit that runs it through the variable, so the step resolves the same config. The built-in command rule `devkit-options` refuses an agent command that sets the variable.
 
 The `[harness]` switches and `[harness.log]` resolve across layers by rules of their own, which their descriptions give.
 

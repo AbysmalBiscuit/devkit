@@ -73,8 +73,8 @@ pub fn resolve_enforcement(
 /// not parse costs only its own opt-in.
 fn harness_enabled(checkout: &Checkout, cwd: &Path, flag: &str) -> bool {
     crate::config::options()
-        .layer()
-        .is_some_and(|(_, table)| flag_in(&table, flag))
+        .merged()
+        .is_some_and(|table| flag_in(&table, flag))
         || devkit_config::read_project_layers(cwd, checkout.main_checkout())
             .layers
             .iter()
@@ -316,6 +316,11 @@ reason = "Open PRs with `devkit pr create`, which renders the PR template and ru
 programs = ["env", "export", "declare", "typeset", "local"]
 args = ["**", "DEVKIT_CALLER=human"]
 reason = "An agent cannot declare itself human: `DEVKIT_CALLER=human` skips the gates an agent's `devkit pr create` must pass. Run the command without it."
+
+[harness.commands.devkit-options]
+programs = ["env", "export", "declare", "typeset", "local"]
+args = ["**", "DEVKIT_OPTIONS=*"]
+reason = "An agent cannot set `DEVKIT_OPTIONS`: its values override devkit.toml, whose keys include safety controls, so it is refused as `--option` is. Run the command without it."
 "#;
 
 static BUILTIN_LAYER: LazyLock<toml::Table> =
@@ -376,7 +381,7 @@ pub fn resolve_rules_in(checkout: &Checkout, cwd: &Path) -> (HarnessRules, Vec<S
         layers.push((p, t));
     }
     layers.extend(project.layers.into_iter().map(|(l, t)| (l.path, t)));
-    layers.extend(crate::config::options().layer());
+    layers.extend(crate::config::options().layers());
     let (mut rules, mut warnings) = merge_rules(&layers);
     rules.builtins_layered = builtins_layered;
     for broken in project.broken {

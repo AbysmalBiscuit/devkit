@@ -26,6 +26,17 @@ fn project() -> tempfile::TempDir {
 }
 
 fn devkit(project: &Path, state: &Path, caller: &str, args: &[&str]) -> Output {
+    devkit_with_options(project, state, caller, None, args)
+}
+
+/// `devkit` with `DEVKIT_OPTIONS` set to `options`, or unset for `None`.
+fn devkit_with_options(
+    project: &Path,
+    state: &Path,
+    caller: &str,
+    options: Option<&str>,
+    args: &[&str],
+) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
     cmd.args(args)
         .current_dir(project)
@@ -34,7 +45,11 @@ fn devkit(project: &Path, state: &Path, caller: &str, args: &[&str]) -> Output {
         .env("XDG_CONFIG_HOME", state.join("config"))
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env("DEVKIT_CALLER", caller)
-        .env_remove("DEVKIT_CONFIG");
+        .env_remove("DEVKIT_CONFIG")
+        .env_remove("DEVKIT_OPTIONS");
+    if let Some(options) = options {
+        cmd.env("DEVKIT_OPTIONS", options);
+    }
     testenv::scrub_identity(&mut cmd);
     cmd.output().expect("spawn devkit")
 }
@@ -42,6 +57,12 @@ fn devkit(project: &Path, state: &Path, caller: &str, args: &[&str]) -> Output {
 fn human(project: &Path, args: &[&str]) -> Output {
     let state = tempfile::tempdir().unwrap();
     devkit(project, state.path(), "human", args)
+}
+
+/// `devkit` run by a person with `DEVKIT_OPTIONS` set to `options`.
+fn human_with_options(project: &Path, options: &str, args: &[&str]) -> Output {
+    let state = tempfile::tempdir().unwrap();
+    devkit_with_options(project, state.path(), "human", Some(options), args)
 }
 
 fn stdout(out: &Output) -> String {
@@ -417,5 +438,106 @@ fn a_relative_option_log_dir_anchors_to_the_hook_directory() {
         "no record under {}; under the process directory: {:?}",
         logs.display(),
         std::fs::read_dir(elsewhere.path().join("logs")).map(|d| d.count())
+    );
+}
+
+#[test]
+fn the_environment_options_override_a_config_file_and_origin_names_the_variable() {
+    let p = project();
+    let options = "tracker.kind=\"none\"\ndefaults.branch_prefix = \"env/\"\n";
+    let shown = stdout(&human_with_options(p.path(), options, &["config", "show"]));
+    assert!(shown.contains("kind = \"none\""), "{shown}");
+    assert!(shown.contains("branch_prefix = \"env/\""), "{shown}");
+
+    let shown = stdout(&human_with_options(p.path(), options, &[
+        "config", "show", "--origin",
+    ]));
+    let line = shown
+        .lines()
+        .find(|l| l.starts_with("tracker.kind ="))
+        .unwrap_or_else(|| panic!("no tracker.kind line: {shown}"));
+    assert!(line.contains("# from $DEVKIT_OPTIONS"), "{line}");
+    assert!(
+        shown.contains("#   $DEVKIT_OPTIONS"),
+        "the layer list names the variable: {shown}"
+    );
+}
+
+#[test]
+fn an_environment_option_an_agent_inherits_applies() {
+    let p = project();
+    let state = tempfile::tempdir().unwrap();
+    let shown = stdout(&devkit_with_options(
+        p.path(),
+        state.path(),
+        "agent",
+        Some("tracker.kind=\"none\""),
+        &["config", "show"],
+    ));
+    assert!(shown.contains("kind = \"none\""), "{shown}");
+}
+
+#[test]
+fn a_bad_environment_option_fails_naming_the_variable_and_the_key() {
+    let p = project();
+    let err = stderr(&human_with_options(p.path(), "tracker.knd=\"none\"", &[
+        "config", "show",
+    ]));
+    assert!(err.contains("DEVKIT_OPTIONS"), "{err}");
+    assert!(err.contains("`tracker.knd`"), "{err}");
+}
+
+#[test]
+fn a_command_line_option_wins_over_the_same_key_in_the_environment() {
+    let p = project();
+    let shown = stdout(&human_with_options(
+        p.path(),
+        "tracker.kind=\"linear\"\ndefaults.branch_prefix=\"env/\"",
+        &["config", "show", "--origin", "-o", "tracker.kind=\"none\""],
+    ));
+    let line = shown
+        .lines()
+        .find(|l| l.starts_with("tracker.kind ="))
+        .unwrap_or_else(|| panic!("no tracker.kind line: {shown}"));
+    assert!(line.contains("\"none\""), "{line}");
+    assert!(line.contains("# from <command line>"), "{line}");
+    assert!(
+        line.contains("$DEVKIT_OPTIONS"),
+        "the shadowed layer: {line}"
+    );
+    assert!(shown.contains("branch_prefix = \"env/\""), "{shown}");
+}
+
+#[test]
+fn a_task_step_sees_the_options_of_the_devkit_that_runs_it() {
+    let p = project();
+    let exe = env!("CARGO_BIN_EXE_devkit");
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        format!("[tasks.show]\nrun = ['{exe}', 'config', 'show', '--origin']\n"),
+    )
+    .unwrap();
+    let shown = stdout(&human_with_options(
+        p.path(),
+        "tracker.kind=\"linear\"\ndefaults.branch_prefix=\"env/\"",
+        &[
+            "-o",
+            "tracker.kind=\"none\"",
+            "-o",
+            "templates.variables.note.default=\"\"\"two\nlines\"\"\"",
+            "run",
+            "task",
+            "show",
+        ],
+    ));
+    let kind = shown
+        .lines()
+        .find(|l| l.starts_with("tracker.kind ="))
+        .unwrap_or_else(|| panic!("no tracker.kind line: {shown}"));
+    assert!(kind.contains("\"none\""), "{kind}");
+    assert!(shown.contains("branch_prefix = \"env/\""), "{shown}");
+    assert!(
+        shown.contains("two") && shown.contains("lines"),
+        "a value that spans lines reaches the step: {shown}"
     );
 }

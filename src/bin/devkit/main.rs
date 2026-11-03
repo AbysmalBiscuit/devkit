@@ -66,25 +66,33 @@ struct ConfigOptions {
     /// Set one config value for this command, over every config file and
     /// `--config`: a dotted key and a TOML value, as in
     /// `-o tracker.kind='"none"'`. Repeat it to set more keys; the last value
-    /// for a key wins. Refused for agent callers.
+    /// for a key wins. `$DEVKIT_OPTIONS` holds more of them, one per line,
+    /// under these; a devkit this command runs gets both through it. Refused
+    /// for agent callers.
     #[arg(short = 'o', long = "option", value_name = "KEY=VALUE", global = true)]
     option: Vec<String>,
 }
 
 impl ConfigOptions {
-    /// Parse the values and set them for every config resolve in this process.
-    /// An agent may not pass any: several keys are safety controls.
+    /// Parse the values, under those of `$DEVKIT_OPTIONS`, and set them for
+    /// every config resolve in this process. An agent may not pass any on
+    /// its command line: several keys are safety controls. The command guard
+    /// refuses an agent command that sets the variable.
     fn apply(self) -> Result<()> {
-        if self.option.is_empty() {
-            return Ok(());
-        }
-        if devkit_common::caller::caller() == devkit_common::caller::Caller::Agent {
+        if !self.option.is_empty()
+            && devkit_common::caller::caller() == devkit_common::caller::Caller::Agent
+        {
             anyhow::bail!(
                 "--option is refused for agent callers: it could weaken the safety \
                  controls devkit.toml sets"
             );
         }
-        devkit_common::config::set_options(devkit_config::Options::parse(&self.option)?)
+        let variable = std::env::var(devkit_config::OPTIONS_VAR).ok();
+        let options = devkit_config::Options::new(variable.as_deref(), &self.option)?;
+        if options.is_empty() {
+            return Ok(());
+        }
+        devkit_common::config::set_options(options)
     }
 }
 

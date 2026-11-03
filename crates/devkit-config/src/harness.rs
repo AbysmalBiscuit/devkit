@@ -569,8 +569,9 @@ pub struct HarnessSection {
     /// `[tasks]`. Merged across config layers by name; redefining a rule
     /// overrides only the keys it sets. devkit builds in `gh-pr-create` and
     /// `gh-pr-new`, refusing `gh pr create` and its alias in favour of
-    /// `devkit pr create`, and `devkit-caller-human`, refusing a command that
-    /// sets `DEVKIT_CALLER=human`; they apply in every devkit project even
+    /// `devkit pr create`, `devkit-caller-human`, refusing a command that
+    /// sets `DEVKIT_CALLER=human`, and `devkit-options`, refusing a command
+    /// that sets `DEVKIT_OPTIONS`; they apply in every devkit project even
     /// with `enforce_commands` off, and `enabled = false` switches one off.
     /// With both `enforce_commands` and `enforce_writes` off, a program a
     /// layer adds to a built-in rule's `programs` goes unchecked.
