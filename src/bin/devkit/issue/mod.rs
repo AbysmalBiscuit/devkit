@@ -484,14 +484,32 @@ pub(crate) enum WorkspaceCmd {
     },
 }
 
-const PROOF_HELP: &str = "\
-Proof check: with `defaults.pr_proof_variable` set, an agent in an issue
-worktree is refused before the push unless that variable answers every item of
-the issue's `Done when` or `Acceptance criteria` section, each on an unindented
-line starting with the item's number:
+/// The proof-line format that every proof-checking verb's help ends with.
+macro_rules! proof_format {
+    () => {
+        "answers every item of the issue's `Done when` or `Acceptance criteria`
+section, each on an unindented line starting with the item's number:
 
 --arg proof='1. test `refuses_a_gap`
-2. test `opens_when_covered`'";
+2. test `opens_when_covered`'"
+    };
+}
+
+const PROOF_HELP: &str = concat!(
+    "\
+Proof check: with `defaults.pr_proof_variable` set, an agent in an issue
+worktree is refused before the push unless that variable
+",
+    proof_format!()
+);
+
+const PROOF_ALONE_HELP: &str = concat!(
+    "\
+Proof check: with `defaults.pr_proof_variable` set, an agent's run against the
+worktree's issue, or the one --issue names, exits nonzero unless that variable
+",
+    proof_format!()
+);
 
 #[derive(Subcommand, Debug, PartialEq)]
 pub(crate) enum PrCmd {
@@ -631,10 +649,11 @@ pub(crate) enum PrCmd {
     /// Run the proof check of `pr create` without opening a PR.
     ///
     /// Checks the `defaults.pr_proof_variable` argument against each item of
-    /// the issue's `Done when` or `Acceptance criteria` section, for any
-    /// caller. Exits nonzero with the refusal `pr create` gives. Touches no
-    /// branch and opens no PR.
-    #[command(after_help = PROOF_HELP)]
+    /// the issue's `Done when` or `Acceptance criteria` section, on an agent's
+    /// run. Exits nonzero with the refusal `pr create` gives. A run
+    /// `pr create` would not check, a human's or one with no issue, exits
+    /// zero saying why. Touches no branch and opens no PR.
+    #[command(after_help = PROOF_ALONE_HELP)]
     Proof {
         /// Tracker issue to check against, instead of the worktree's issue.
         #[arg(long)]
