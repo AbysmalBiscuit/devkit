@@ -244,16 +244,30 @@ fn refuse_shadowed(
                     .origin
                     .get(&format!("ticket.fields.{kind}.{name}.{key}"))
             })
-            .find(|layer| !pending.is(layer))
-            .map(|layer| format!(" {} outranks it there, so", layer.display()))
-            .unwrap_or_default();
-        bail!(
-            "not writing {}: [ticket.fields.{kind}.{name}] would not take the tracker's \
-             facts:{outranks} no run would read them. Pass --into a layer at or above that one",
-            path.display()
-        );
+            .find(|layer| !pending.is(layer));
+        bail!(shadowed(path, kind, name, outranks.map(PathBuf::as_path)));
     }
     Ok(())
+}
+
+/// Why `path` is not written: `[ticket.fields.<kind>.<name>]` would not take
+/// the tracker's facts, because of `outranks` when the config names it.
+fn shadowed(path: &Path, kind: TrackerKind, name: &str, outranks: Option<&Path>) -> String {
+    let field = format!("[ticket.fields.{kind}.{name}]");
+    match outranks {
+        Some(layer) => format!(
+            "not writing {}: {} outranks it there, so {field} would not take the tracker's \
+             facts. Pass --into a layer at or above {}",
+            path.display(),
+            layer.display(),
+            layer.display()
+        ),
+        None => format!(
+            "not writing {}: the config with it written would not carry the tracker's facts for \
+             {field}",
+            path.display()
+        ),
+    }
 }
 
 /// Whether to write: an agent always writes, a human after `--yes` or a
@@ -661,6 +675,29 @@ description = "how soon"
             target_dir(&inner),
             inner.canonicalize().unwrap(),
             "a layer above the checkout leaves it the checkout root"
+        );
+    }
+
+    #[test]
+    fn a_shadow_refusal_names_a_layer_only_when_one_outranks() {
+        let file = Path::new("/p/devkit.local.toml");
+        let named = shadowed(
+            file,
+            TrackerKind::Github,
+            "milestone",
+            Some(Path::new("/p/app/devkit.toml")),
+        );
+        assert!(
+            named.contains("/p/app/devkit.toml outranks it")
+                && named.contains("at or above /p/app/devkit.toml"),
+            "{named}"
+        );
+        let unnamed = shadowed(file, TrackerKind::Github, "milestone", None);
+        assert!(
+            unnamed.contains("[ticket.fields.github.milestone]")
+                && !unnamed.contains("that one")
+                && !unnamed.contains("outranks"),
+            "{unnamed}"
         );
     }
 
