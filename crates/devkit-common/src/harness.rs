@@ -334,7 +334,7 @@ fn assignment_rule(assignment: &str, reason: &str) -> toml::Value {
     toml::Table::from_iter([
         (
             "programs".to_string(),
-            vec!["env", "export", "declare", "typeset", "local"].into(),
+            vec!["env", "export", "declare", "typeset", "local", "readonly"].into(),
         ),
         ("args".to_string(), vec!["**", assignment].into()),
         ("reason".to_string(), reason.into()),

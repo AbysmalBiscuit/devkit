@@ -988,6 +988,8 @@ fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
             "env  -u  CLAUDE_CODE_SESSION_ID   DEVKIT_CALLER=human  devkit pr create",
             "env -u CLAUDE_CODE_SESSION_ID -u CODEX_SESSION_ID -- DEVKIT_CALLER=human devkit pr create",
             "env -- DEVKIT_CALLER=human devkit pr create",
+            "readonly DEVKIT_CALLER=human",
+            "set -a; readonly DEVKIT_CALLER=human; devkit pr create",
         ] {
             let out = run_hook(proj.path(), home.path(), &claude_payload(command));
             assert!(denied(&out), "{config}: {command}");
@@ -1047,6 +1049,8 @@ fn setting_devkit_caller_to_agent_or_unsetting_a_session_is_allowed() {
         "env -u CLAUDE_CODE_SESSION_ID devkit pr create",
         "unset CLAUDE_CODE_SESSION_ID",
         "echo DEVKIT_CALLER=human",
+        "echo readonly DEVKIT_CALLER=human",
+        "readonly DEVKIT_CALLER=agent",
     ] {
         let out = run_hook(proj.path(), home.path(), &claude_payload(command));
         assert!(!denied(&out), "{command}: {}", deny_reason(&out));
@@ -1212,6 +1216,9 @@ fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
             r#"env "DEVKIT_OPTIONS=$UNRESOLVED" devkit config show"#,
             "env DEVKIT_OPTIONS=$UNRESOLVED devkit config show",
             "env -u CLAUDE_CODE_SESSION_ID DEVKIT_OPTIONS=a$UNRESOLVED devkit config show",
+            "readonly DEVKIT_OPTIONS=x",
+            r#"set -a; readonly DEVKIT_OPTIONS='tracker.kind="none"'; devkit config show --origin"#,
+            r#"readonly DEVKIT_OPTIONS="$UNRESOLVED""#,
         ] {
             let out = run_hook(proj.path(), home.path(), &claude_payload(command));
             assert!(denied(&out), "{config}: {command}");
@@ -1225,6 +1232,7 @@ fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
     let proj = project("[defaults]\n");
     for command in [
         "echo DEVKIT_OPTIONS=x",
+        "echo readonly DEVKIT_OPTIONS=x",
         r#"printf "%s" DEVKIT_OPTIONS="$UNRESOLVED""#,
         r#"printf "%s" "DEVKIT_OPTIONS=$(date)""#,
         "unset DEVKIT_OPTIONS",
