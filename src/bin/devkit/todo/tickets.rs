@@ -451,14 +451,36 @@ pub(crate) struct TicketWorkspace {
     pub here: bool,
 }
 
+/// Whether a ticket key names an issue of the issues repository of the
+/// checkout at `cwd`, where a bare number (`#65`) resolves. The tracker is
+/// read on the first call.
+pub(crate) fn in_issues_repo(cwd: &Path) -> impl Fn(&str) -> bool + '_ {
+    let tracker = std::cell::OnceCell::new();
+    move |key| {
+        tracker
+            .get_or_init(|| {
+                tracker::select(None, &cwd.to_string_lossy(), None)
+                    .tracker
+                    .tracker
+            })
+            .foreign_issue_key(key)
+            .is_none()
+    }
+}
+
 /// The open ticket todo in `todos` that `text`, a harness task's subject or
 /// plan step, names: by its ticket key (`SWE-123`, `owner/repo#65`), by its
-/// number after a `#` (`#65`), or by the todo's own description.
-pub(crate) fn named_ticket<'a>(todos: &'a [Todo], text: &str) -> Option<&'a Todo> {
+/// number after a `#` (`#65`) when `local` admits the key, or by the todo's
+/// own description.
+pub(crate) fn named_ticket<'a>(
+    todos: &'a [Todo],
+    text: &str,
+    local: impl Fn(&str) -> bool,
+) -> Option<&'a Todo> {
     let text = devkit_todo::one_line(text);
     let text = text.trim();
     let names = |key: &str| match text.strip_prefix('#') {
-        Some(number) => names_issue(key, number),
+        Some(number) => names_issue(key, number) && local(key),
         None => key.eq_ignore_ascii_case(text),
     };
     let open = |t: &&Todo| t.status.kind().is_open();
@@ -470,7 +492,8 @@ pub(crate) fn named_ticket<'a>(todos: &'a [Todo], text: &str) -> Option<&'a Todo
 
 /// Each worktree of `checkout`'s repository whose record names the ticket of
 /// a todo in `todos` on the repository node, with that worktree's workspace
-/// node; a `pr checkout` record names none. A worktree on another machine has
+/// node; a `pr checkout` record names none, and a record names no ticket
+/// outside the issues repository. A worktree on another machine has
 /// no record here, so it is absent.
 pub(crate) fn ticket_workspaces(
     checkout: &Checkout,
@@ -479,6 +502,7 @@ pub(crate) fn ticket_workspaces(
 ) -> Vec<TicketWorkspace> {
     let worktrees = checkout.worktrees();
     let here = checkout.here().map(|h| h.path.as_path());
+    let local = in_issues_repo(checkout.dir());
     worktrees
         .iter()
         .filter(|wt| !wt.bare)
@@ -498,7 +522,7 @@ pub(crate) fn ticket_workspaces(
                 t.node() == repo
                     && t.ticket
                         .as_ref()
-                        .is_some_and(|r| names_issue(&r.key, &issue))
+                        .is_some_and(|r| names_issue(&r.key, &issue) && local(&r.key))
             })?;
             Some(TicketWorkspace {
                 todo: todo.id.clone(),
@@ -556,7 +580,7 @@ mod tests {
             todo("b", "SWE-7", "pending"),
             todo("c", "o/r#9", "completed"),
         ];
-        let named = |text| named_ticket(&todos, text).map(|t| t.id.as_str());
+        let named = |text| named_ticket(&todos, text, |_| true).map(|t| t.id.as_str());
         assert_eq!(named("#65"), Some("a"));
         assert_eq!(named("  O/R#65 "), Some("a"));
         assert_eq!(named("swe-7"), Some("b"));

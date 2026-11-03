@@ -973,6 +973,71 @@ fn ready_without_a_record_is_unchanged() {
     assert!(!stdout(&out).contains("#66"), "{}", stdout(&out));
 }
 
+/// Issue 65 blocked by `AbysmalBiscuit/workcell#992`, beside issue 992 of
+/// this project's issues repository, synced. Issue 992 is open when `local`
+/// holds, else absent.
+fn workcell_and_local_992(local: bool) -> Synced {
+    let s = blocked_from_workcell("OPEN");
+    if local {
+        let mut answer: Value = serde_json::from_str(&workcell_blocks_65("OPEN")).unwrap();
+        let i992: Value = serde_json::from_str(&issue(992, Some("Todo"), &[])).unwrap();
+        answer["data"]["search"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(i992);
+        s.serve("graphql.json", &answer.to_string());
+    }
+    s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    s
+}
+
+#[test]
+fn a_short_number_names_no_ticket_of_another_repository() {
+    for local in [true, false] {
+        let s = workcell_and_local_992(local);
+        task_create(&s, "1", "#992");
+        task_update(&s, "1", "completed");
+        let foreign = s.todo_for("abysmalbiscuit/workcell#992");
+        assert!(
+            foreign.status.kind().is_open(),
+            "local {local}: {foreign:?}"
+        );
+        if local {
+            assert_eq!(
+                s.todo_for("o/r#992").status.kind(),
+                devkit_todo::StatusKind::Completed
+            );
+        }
+    }
+}
+
+#[test]
+fn a_full_key_names_a_ticket_of_another_repository() {
+    let s = workcell_and_local_992(true);
+    task_create(&s, "1", "AbysmalBiscuit/workcell#992");
+    task_update(&s, "1", "completed");
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+        devkit_todo::StatusKind::Completed
+    );
+    assert!(s.todo_for("o/r#992").status.kind().is_open());
+}
+
+#[test]
+fn a_worktree_record_names_no_ticket_of_another_repository() {
+    for local in [true, false] {
+        let s = workcell_and_local_992(local);
+        record_issue(&s, "992");
+        let out = s.devkit(&["todo", "ready"], &AGENT);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let ready = stdout(&out);
+        assert!(!ready.contains("workcell#992"), "local {local}: {ready}");
+        assert_eq!(ready.contains("#992  Issue 992"), local, "{ready}");
+    }
+}
+
 #[test]
 fn expand_lists_the_workspace_todos_under_the_ticket() {
     let s = two_issues();
