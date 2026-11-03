@@ -112,7 +112,8 @@ fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
 /// that is a `DEVKIT_CALLER=` assignment the override accepts matches every
 /// spelling of that value; any other pattern, wildcards included, matches the
 /// argument as written. An argument known only by its start, such as an
-/// assignment of an unknown value, matches a pattern that accepts any rest.
+/// assignment of an unknown value, matches a pattern that accepts any rest,
+/// and a `DEVKIT_CALLER=` pattern whose value the unknown rest could complete.
 fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((pattern, patterns)) = patterns.split_first() else {
         return Match::Yes;
@@ -139,10 +140,18 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
             Match::Yes
         }
         Value::Known(_) => return Match::No,
-        Value::Prefixed(start) => match prefix_match(pattern, start) {
-            Match::No => return Match::No,
-            here => here,
-        },
+        Value::Prefixed(start) => {
+            let here = match canonical.and_then(|c| caller::caller_assignment_could_read(c, start))
+            {
+                Some(true) => Match::Yes,
+                Some(false) => Match::No,
+                None => prefix_match(pattern, start),
+            };
+            if here == Match::No {
+                return Match::No;
+            }
+            here
+        }
         Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => Match::Possible,
     };
     here.min(args_match(patterns, args))

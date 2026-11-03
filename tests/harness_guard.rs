@@ -1001,6 +1001,42 @@ fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
 }
 
 #[test]
+fn an_agent_assigning_devkit_caller_a_value_that_could_read_human_is_denied() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in [
+        "DEVKIT_CALLER=$(printf human) devkit pr create",
+        r#"env DEVKIT_CALLER="$X" devkit pr create"#,
+        r#"export DEVKIT_CALLER="$X""#,
+        r#"declare -x DEVKIT_CALLER="hu$X""#,
+        r#"DEVKIT_CALLER=" H$X" devkit pr create"#,
+        r#"env DEVKIT_CALLER="human $X" devkit pr create"#,
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("DEVKIT_CALLER"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
+fn an_unresolved_devkit_caller_that_cannot_read_human_is_allowed() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in [
+        "env DEVKIT_CALLER=agent$X devkit pr create",
+        r#"env "DEVKIT_CALLER=a$X" devkit pr create"#,
+        "env DEVKIT_CALLER=human-$X devkit pr create",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
+}
+
+#[test]
 fn setting_devkit_caller_to_agent_or_unsetting_a_session_is_allowed() {
     let home = tempfile::tempdir().unwrap();
     let proj = project("[defaults]\n");

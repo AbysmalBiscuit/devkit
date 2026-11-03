@@ -311,20 +311,48 @@ reason = "Open PRs with `devkit pr create`, which renders the PR template and ru
 programs = ["gh"]
 args = ["pr", "new"]
 reason = "Open PRs with `devkit pr create`, which renders the PR template and runs the gates an agent's PR must pass."
-
-[harness.commands.devkit-caller-human]
-programs = ["env", "export", "declare", "typeset", "local"]
-args = ["**", "DEVKIT_CALLER=human"]
-reason = "An agent cannot declare itself human: `DEVKIT_CALLER=human` skips the gates an agent's `devkit pr create` must pass. Run the command without it."
-
-[harness.commands.devkit-options]
-programs = ["env", "export", "declare", "typeset", "local"]
-args = ["**", "DEVKIT_OPTIONS=*"]
-reason = "An agent cannot set `DEVKIT_OPTIONS`: its values override devkit.toml, whose keys include safety controls, so it is refused as `--option` is. Run the command without it."
 "#;
 
-static BUILTIN_LAYER: LazyLock<toml::Table> =
-    LazyLock::new(|| toml::from_str(BUILTIN_RULES).expect("BUILTIN_RULES is valid TOML"));
+/// Built-in rules refusing an agent that assigns a protected variable: rule
+/// name, the assignment it refuses, and the reason.
+const PROTECTED_ASSIGNMENTS: [(&str, &str, &str); 2] = [
+    (
+        "devkit-caller-human",
+        "DEVKIT_CALLER=human",
+        "An agent cannot declare itself human: `DEVKIT_CALLER=human` skips the gates an agent's `devkit pr create` must pass. Run the command without it.",
+    ),
+    (
+        "devkit-options",
+        "DEVKIT_OPTIONS=*",
+        "An agent cannot set `DEVKIT_OPTIONS`: its values override devkit.toml, whose keys include safety controls, so it is refused as `--option` is. Run the command without it.",
+    ),
+];
+
+/// A rule refusing `assignment` as an argument of any program that assigns a
+/// variable, for the command it runs or for the shell.
+fn assignment_rule(assignment: &str, reason: &str) -> toml::Value {
+    toml::Table::from_iter([
+        (
+            "programs".to_string(),
+            vec!["env", "export", "declare", "typeset", "local"].into(),
+        ),
+        ("args".to_string(), vec!["**", assignment].into()),
+        ("reason".to_string(), reason.into()),
+    ])
+    .into()
+}
+
+static BUILTIN_LAYER: LazyLock<toml::Table> = LazyLock::new(|| {
+    let mut layer: toml::Table =
+        toml::from_str(BUILTIN_RULES).expect("BUILTIN_RULES is valid TOML");
+    let commands = layer["harness"]["commands"]
+        .as_table_mut()
+        .expect("BUILTIN_RULES holds `[harness.commands]`");
+    for (name, assignment, reason) in PROTECTED_ASSIGNMENTS {
+        commands.insert(name.into(), assignment_rule(assignment, reason));
+    }
+    layer
+});
 
 fn builtin_command_tables() -> &'static toml::Table {
     BUILTIN_LAYER["harness"]["commands"]
@@ -644,9 +672,15 @@ programs = "node"
 
     #[test]
     fn the_built_in_rules_parse_into_every_named_rule() {
-        let (h, warns) = merge_rules(&[layer("<devkit built-in>", BUILTIN_RULES)]);
+        let (h, warns) =
+            merge_rules(&[(PathBuf::from("<devkit built-in>"), BUILTIN_LAYER.clone())]);
         assert!(warns.is_empty(), "{warns:?}");
-        for name in ["gh-pr-create", "gh-pr-new", "devkit-caller-human"] {
+        for name in [
+            "gh-pr-create",
+            "gh-pr-new",
+            "devkit-caller-human",
+            "devkit-options",
+        ] {
             assert!(!h.commands[name].reason.is_empty(), "{name}");
         }
     }

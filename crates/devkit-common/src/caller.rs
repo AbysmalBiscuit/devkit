@@ -60,6 +60,23 @@ pub fn canonical_caller_assignment(word: &str) -> Option<&'static str> {
     })
 }
 
+/// Whether a `DEVKIT_CALLER=` assignment known only by its start, such as
+/// `DEVKIT_CALLER=hu$X`, could still read as `canonical`, a spelling
+/// [`canonical_caller_assignment`] returns. `None` when either is no
+/// `DEVKIT_CALLER=` assignment.
+pub fn caller_assignment_could_read(canonical: &str, start: &str) -> Option<bool> {
+    let value = canonical.strip_prefix("DEVKIT_CALLER=")?;
+    let known = start
+        .strip_prefix("DEVKIT_CALLER=")?
+        .trim_start()
+        .to_ascii_lowercase();
+    let word = known.trim_end();
+    Some(match word.len() < known.len() {
+        true => word == value,
+        false => value.starts_with(word),
+    })
+}
+
 /// The classification with `DEVKIT_CALLER` applied. A harness session id
 /// outranks an override of `human`: the override exists for a person whose
 /// shell detection misreads, and an agent declaring itself human would skip
