@@ -362,3 +362,60 @@ fn a_relative_option_path_anchors_to_the_start_directory() {
         "{shown}"
     );
 }
+
+#[test]
+fn a_relative_option_log_dir_anchors_to_the_hook_directory() {
+    use std::io::Write;
+    let p = project();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "s1",
+        "cwd": p.path(),
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" }
+    });
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.args([
+        "hook",
+        "pre-tool-use",
+        "-o",
+        "harness.log.enabled=true",
+        "-o",
+        "harness.log.dir=\"logs\"",
+    ])
+    .current_dir(elsewhere.path())
+    .env("HOME", state.path())
+    .env("XDG_STATE_HOME", state.path())
+    .env("XDG_CONFIG_HOME", state.path().join("config"))
+    .env("DEVKIT_SKIP_AUTOLINK", "1")
+    .env("DEVKIT_CALLER", "human")
+    .env("CLAUDE_CODE_SESSION_ID", "")
+    .env("CODEX_SESSION_ID", "")
+    .env_remove("DEVKIT_CONFIG")
+    .stdin(std::process::Stdio::piped())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped());
+    testenv::scrub_identity(&mut cmd);
+    let mut child = cmd.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let logs = p.path().join("logs");
+    assert!(
+        std::fs::read_dir(&logs).is_ok_and(|mut d| d.next().is_some()),
+        "no record under {}; under the process directory: {:?}",
+        logs.display(),
+        std::fs::read_dir(elsewhere.path().join("logs")).map(|d| d.count())
+    );
+}

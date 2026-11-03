@@ -292,10 +292,12 @@ pub fn resolve_at(global_path: Option<&Path>, checkout: &Checkout, cwd: &Path) -
         // every other path key resolves.
         Some(anchor_dir(section, p.parent()))
     });
-    let options = crate::config::options().layer().and_then(|(_, table)| {
-        let cwd = std::env::current_dir().ok();
-        Some(anchor_dir(section_of(&table)?, cwd.as_deref()))
-    });
+    // A command-line `dir` has no declaring file, so it anchors to the
+    // directory the settings resolve for, as a relative `--option` path in
+    // `devkit.toml` anchors to the start directory.
+    let options = crate::config::options()
+        .layer()
+        .and_then(|(_, table)| Some(anchor_dir(section_of(&table)?, Some(cwd))));
     let global = overlay(file, options);
     let env = parse_env_override(std::env::var(ENV_OVERRIDE).ok().as_deref());
     resolve_from(global.as_ref(), || project_sections(checkout, cwd), env)
