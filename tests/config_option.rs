@@ -219,3 +219,55 @@ fn options_stand_alone_without_a_config_file() {
     let cfg: serde_json::Value = serde_json::from_str(&shown).unwrap();
     assert_eq!(cfg["tracker"]["kind"], "none", "{shown}");
 }
+
+fn harness_log_row(out: &Output) -> serde_json::Value {
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "doctor --json: {e}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    rows.as_array()
+        .and_then(|rows| rows.iter().find(|r| r["key"] == "harness_log"))
+        .unwrap_or_else(|| panic!("no harness_log row: {rows}"))
+        .clone()
+}
+
+#[test]
+fn an_option_sets_harness_logging_and_a_project_layer_still_disables_it() {
+    let p = project();
+    let on = [
+        "doctor",
+        "--json",
+        "-o",
+        "harness.log.enabled=true",
+        "-o",
+        "harness.log.command=\"hashed\"",
+    ];
+    let row = harness_log_row(&human(p.path(), &on));
+    assert_eq!(row["enabled"], true, "{row}");
+    assert_eq!(row["command"], "hashed", "{row}");
+
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        "[harness.log]\nenabled = false\n",
+    )
+    .unwrap();
+    let row = harness_log_row(&human(p.path(), &on));
+    assert_eq!(
+        row["enabled"], false,
+        "a project layer may still disable logging: {row}"
+    );
+}
+
+#[test]
+fn an_unknown_harness_key_is_refused_naming_it() {
+    let p = project();
+    let err = stderr(&human(p.path(), &[
+        "config",
+        "show",
+        "-o",
+        "harness.enforce_writs=true",
+    ]));
+    assert!(err.contains("`harness.enforce_writs`"), "{err}");
+}

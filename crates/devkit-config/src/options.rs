@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 
-use crate::Config;
+use crate::{Config, HarnessSection};
 
 /// The name a command-line value carries as its source: in the layer list, in
 /// `devkit config show --origin`, and in every error that names a layer.
@@ -13,16 +13,12 @@ pub const COMMAND_LINE: &str = "<command line>";
 
 /// Tables of the published `devkit.toml` schema that devkit reads from the
 /// config files alone, outside the merged [`Config`], with the reason.
-const FILE_ONLY_TABLES: [(&str, &str); 3] = [
+const FILE_ONLY_TABLES: [(&str, &str); 2] = [
     (
         "config",
         "it decides which config files exist, before any value merges",
     ),
     ("docs", "`docm` reads it from the config files"),
-    (
-        "harness",
-        "it controls write and command enforcement, which a config file sets",
-    ),
 ];
 
 /// The `--option` values of one command, as one layer above every config file.
@@ -36,6 +32,8 @@ impl Options {
     pub fn parse<S: AsRef<str>>(raw: &[S]) -> Result<Self> {
         let schema = serde_json::to_value(schemars::schema_for!(Config))
             .context("generating the devkit.toml schema")?;
+        let harness = serde_json::to_value(schemars::schema_for!(HarnessSection))
+            .context("generating the [harness] schema")?;
         let mut table = toml::Table::new();
         for arg in raw {
             let (path, value) = parse_one(arg.as_ref())?;
@@ -46,7 +44,11 @@ impl Options {
                      cannot be set with --option: {reason}"
                 );
             }
-            if !knows(&schema, &schema, &path) {
+            let known = match path.split_first() {
+                Some((table, rest)) if table == "harness" => knows(&harness, &harness, rest),
+                _ => knows(&schema, &schema, &path),
+            };
+            if !known {
                 bail!(
                     "--option {key}: devkit.toml has no key `{key}`; \
                      `devkit schema` lists the keys"
@@ -61,8 +63,10 @@ impl Options {
         self.0.is_empty()
     }
 
-    /// This set as a config layer, or `None` when it sets nothing.
-    pub(crate) fn layer(&self) -> Option<(PathBuf, toml::Table)> {
+    /// This set as a config layer, or `None` when it sets nothing. The
+    /// `[harness]` readers, which read layer files outside the merged
+    /// [`Config`], take it as their top layer.
+    pub fn layer(&self) -> Option<(PathBuf, toml::Table)> {
         (!self.is_empty()).then(|| (PathBuf::from(COMMAND_LINE), self.0.clone()))
     }
 }
@@ -264,12 +268,17 @@ mod tests {
     }
 
     #[test]
-    fn harness_keys_are_not_config_keys() {
-        let err = Options::parse(&["harness.enforce_writes=false"])
+    fn harness_keys_are_checked_against_the_schema() {
+        Options::parse(&[
+            "harness.enforce_commands=true",
+            "harness.log.enabled=true",
+            "harness.commands.x.programs=[\"node\"]",
+        ])
+        .unwrap();
+        let err = Options::parse(&["harness.nope=true"])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("`harness.enforce_writes`"), "{err}");
-        assert!(err.contains("`[harness]` keys cannot be set"), "{err}");
+        assert!(err.contains("`harness.nope`"), "{err}");
     }
 
     #[test]

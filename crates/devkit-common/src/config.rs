@@ -18,7 +18,8 @@ pub fn set_options(options: Options) -> Result<()> {
     Ok(())
 }
 
-fn options() -> &'static Options {
+/// The `--option` values of this process: empty until [`set_options`] runs.
+pub fn options() -> &'static Options {
     OPTIONS.get_or_init(Options::default)
 }
 

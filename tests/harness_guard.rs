@@ -1059,3 +1059,69 @@ fn a_builtin_set_to_warn_adds_its_note_with_enforcement_off() {
         "{notes:?}"
     );
 }
+
+/// The hook run by a person with `-o` values on its command line.
+fn run_hook_as_human(project: &Path, home: &Path, payload: &str, options: &[&str]) -> Output {
+    run_hook_as_human_with(project, home, payload, options, &[])
+}
+
+fn run_hook_as_human_with(
+    project: &Path,
+    home: &Path,
+    payload: &str,
+    options: &[&str],
+    extra_env: &[(&str, &str)],
+) -> Output {
+    let mut argv = vec!["hook", "pre-tool-use"];
+    for option in options {
+        argv.extend(["-o", option]);
+    }
+    // An empty session variable reads as unset, so the session running the
+    // tests does not make the hook's caller an agent.
+    let mut env = vec![
+        ("DEVKIT_CALLER", "human"),
+        ("CLAUDE_CODE_SESSION_ID", ""),
+        ("CODEX_SESSION_ID", ""),
+    ];
+    env.extend_from_slice(extra_env);
+    run_argv(project, home, &argv, payload, &env)
+}
+
+#[test]
+fn an_option_turns_command_enforcement_on() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GATE_OFF);
+    let out = run_hook_as_human(proj.path(), home.path(), &claude_payload("node x.js"), &[
+        "harness.enforce_commands=true",
+    ]);
+    assert!(denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn an_option_cannot_turn_enforcement_off_but_the_env_override_can() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GUARDED);
+    let off = ["harness.enforce_commands=false"];
+    let out = run_hook_as_human(proj.path(), home.path(), &claude_payload("node x.js"), &off);
+    assert!(denied(&out), "enforcement ratchets on across every layer");
+
+    let out = run_hook_as_human_with(
+        proj.path(),
+        home.path(),
+        &claude_payload("node x.js"),
+        &["harness.enforce_commands=true"],
+        &[("DEVKIT_ENFORCE_COMMANDS", "0")],
+    );
+    assert!(!denied(&out), "the env override wins over an option");
+}
+
+#[test]
+fn an_option_adds_a_command_rule() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness]\nenforce_commands = true\n");
+    let out = run_hook_as_human(proj.path(), home.path(), &claude_payload("node x.js"), &[
+        "harness.commands.bun-only.programs=[\"node\"]",
+        "harness.commands.bun-only.reason=\"bun only\"",
+    ]);
+    assert!(denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}

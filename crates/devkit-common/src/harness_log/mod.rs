@@ -286,12 +286,17 @@ pub fn resolve_in(checkout: &Checkout, cwd: &Path) -> Settings {
 /// on a machine that has none — can say where the global layer is rather than
 /// rearranging the environment to move it.
 pub fn resolve_at(global_path: Option<&Path>, checkout: &Checkout, cwd: &Path) -> Settings {
-    let global = global_path.and_then(|p| {
+    let file = global_path.and_then(|p| {
         let section = read_section(p)?;
         // A relative `dir` anchors to the directory that declared it, the way
         // every other path key resolves.
         Some(anchor_dir(section, p.parent()))
     });
+    let options = crate::config::options().layer().and_then(|(_, table)| {
+        let cwd = std::env::current_dir().ok();
+        Some(anchor_dir(section_of(&table)?, cwd.as_deref()))
+    });
+    let global = overlay(file, options);
     let env = parse_env_override(std::env::var(ENV_OVERRIDE).ok().as_deref());
     resolve_from(global.as_ref(), || project_sections(checkout, cwd), env)
 }
@@ -358,6 +363,34 @@ fn section_in(body: &str) -> Option<LogSection> {
 
 fn section_of(table: &toml::Table) -> Option<LogSection> {
     table.get("harness")?.get("log")?.clone().try_into().ok()
+}
+
+/// `top` over `base`, key by key: the `--option` values sit above the global
+/// config and take its place in the logging policy.
+fn overlay(base: Option<LogSection>, top: Option<LogSection>) -> Option<LogSection> {
+    let (base, top) = match (base, top) {
+        (base, None) => return base,
+        (None, top) => return top,
+        (Some(base), Some(top)) => (base, top),
+    };
+    let LogSection {
+        enabled,
+        command,
+        prompt,
+        auto_prune,
+        dir,
+        max_age_days,
+        max_bytes,
+    } = top;
+    Some(LogSection {
+        enabled: enabled.or(base.enabled),
+        command: command.or(base.command),
+        prompt: prompt.or(base.prompt),
+        auto_prune: auto_prune.or(base.auto_prune),
+        dir: dir.or(base.dir),
+        max_age_days: max_age_days.or(base.max_age_days),
+        max_bytes: max_bytes.or(base.max_bytes),
+    })
 }
 
 fn anchor_dir(mut section: LogSection, anchor: Option<&Path>) -> LogSection {

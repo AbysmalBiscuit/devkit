@@ -65,16 +65,20 @@ pub fn resolve_enforcement(
     }
 }
 
-/// True iff any project layer applying at `cwd` sets `[harness] <flag>`.
+/// True iff the `--option` values or any project layer applying at `cwd` set
+/// `[harness] <flag>`.
 /// Combined with `any` rather than by precedence: enforcement ratchets on, and
 /// only the env override turns it off, so one layer opting in must win even if
 /// a closer layer leaves the flag unset. For the same reason a layer that will
 /// not parse costs only its own opt-in.
 fn harness_enabled(checkout: &Checkout, cwd: &Path, flag: &str) -> bool {
-    devkit_config::read_project_layers(cwd, checkout.main_checkout())
-        .layers
-        .iter()
-        .any(|(_, table)| flag_in(table, flag))
+    crate::config::options()
+        .layer()
+        .is_some_and(|(_, table)| flag_in(&table, flag))
+        || devkit_config::read_project_layers(cwd, checkout.main_checkout())
+            .layers
+            .iter()
+            .any(|(_, table)| flag_in(table, flag))
 }
 
 fn global_harness_enabled(flag: &str) -> bool {
@@ -372,6 +376,7 @@ pub fn resolve_rules_in(checkout: &Checkout, cwd: &Path) -> (HarnessRules, Vec<S
         layers.push((p, t));
     }
     layers.extend(project.layers.into_iter().map(|(l, t)| (l.path, t)));
+    layers.extend(crate::config::options().layer());
     let (mut rules, mut warnings) = merge_rules(&layers);
     rules.builtins_layered = builtins_layered;
     for broken in project.broken {
