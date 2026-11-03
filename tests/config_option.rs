@@ -337,3 +337,4 @@ fn a_misspelled_key_inside_a_table_value_is_refused_naming_it() {
         let err = stderr(&human(p.path(), &["config", "show", "-o", option]));
         assert!(err.contains(&format!("`{key}`")), "{option}: {err}");
     }
+}
