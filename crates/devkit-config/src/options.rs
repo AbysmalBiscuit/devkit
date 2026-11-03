@@ -26,6 +26,12 @@ impl Options {
         for arg in raw {
             let (path, value) = parse_one(arg.as_ref())?;
             let key = path.join(".");
+            if path[0] == "harness" {
+                bail!(
+                    "--option {key}: `{key}` is a `[harness]` key, and `[harness]` keys cannot be set with --option; \
+                     they control write and command enforcement, which a config file sets"
+                );
+            }
             if !knows(&schema, &schema, &path) {
                 bail!(
                     "--option {key}: devkit.toml has no key `{key}`; \
@@ -241,6 +247,15 @@ mod tests {
             "templates.variables.team.default=\"x\"",
         ])
         .unwrap();
+    }
+
+    #[test]
+    fn harness_keys_are_not_config_keys() {
+        let err = Options::parse(&["harness.enforce_writes=false"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`harness.enforce_writes`"), "{err}");
+        assert!(err.contains("`[harness]` keys cannot be set"), "{err}");
     }
 
     #[test]
