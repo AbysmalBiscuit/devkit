@@ -1181,9 +1181,13 @@ mod tests {
     }
 
     fn end_everything_finished(main: &std::path::Path, sel: Selected) {
+        end_finished_among(main, &[], sel);
+    }
+
+    fn end_finished_among(main: &std::path::Path, selectors: &[String], sel: Selected) {
         run_selected(
             main.to_str().unwrap(),
-            &[],
+            selectors,
             EndFlags {
                 yes: true,
                 force: false,
@@ -1229,6 +1233,48 @@ mod tests {
         end_everything_finished(&main, merged_at(&rev_parse(&wt, "HEAD")));
 
         assert!(!wt.exists(), "a finished worktree is removed");
+    }
+
+    #[test]
+    fn a_finished_worktree_selected_by_its_branch_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt) = worktree_with_a_commit(dir.path());
+
+        end_finished_among(
+            &main,
+            &["eng-1-fix".into()],
+            merged_at(&rev_parse(&wt, "HEAD")),
+        );
+
+        assert!(!wt.exists(), "the branch selects the finished worktree");
+    }
+
+    #[test]
+    fn a_finished_worktree_selected_by_its_path_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt) = worktree_with_a_commit(dir.path());
+
+        end_finished_among(
+            &main,
+            &[wt.to_string_lossy().into_owned()],
+            merged_at(&rev_parse(&wt, "HEAD")),
+        );
+
+        assert!(!wt.exists(), "the path selects the finished worktree");
+    }
+
+    #[test]
+    fn a_selector_naming_another_worktree_keeps_a_finished_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt) = worktree_with_a_commit(dir.path());
+
+        end_finished_among(
+            &main,
+            &["eng-2-other".into()],
+            merged_at(&rev_parse(&wt, "HEAD")),
+        );
+
+        assert!(wt.exists(), "an unselected worktree stays");
     }
 
     /// Work committed after the merge and never pushed lives only on the local

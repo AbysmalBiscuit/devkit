@@ -349,7 +349,8 @@ fn pr_status_of(lookup: &HeadLookup) -> PrStatus {
     }
 }
 
-/// Discover worktrees and their issue ids, filtered to `ids` when non-empty.
+/// Discover worktrees and their issue ids, filtered to the rows `ids` names
+/// when non-empty. Each selector is an issue id, a branch, or a worktree path.
 /// Rows carry an unchecked tree; the tree check is a separate step so callers
 /// can drive it with a progress bar.
 pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
@@ -377,18 +378,49 @@ pub fn discover_with_bound_main(start: &str) -> Result<Discovered> {
     Ok(discovered(rows, &[]))
 }
 
-/// `rows` as a [`Discovered`], filtered to `ids` when non-empty.
-fn discovered(all: impl Iterator<Item = IssueWorktree>, ids: &[String]) -> Discovered {
-    let mut rows = Vec::new();
-    for row in all {
-        // An issue id is case-insensitive in every tracker that has one, and
-        // the record holds whichever spelling the tracker was given.
-        let id = row.issue_id.to_string();
-        if !ids.is_empty() && !ids.iter().any(|w| w.eq_ignore_ascii_case(&id)) {
-            continue;
-        }
-        rows.push(row);
+/// True when `sel` names a worktree by issue id, branch, worktree basename, or
+/// full path, all compared case-insensitively. This is the half of the matcher
+/// that needs nothing but local git facts, so callers that never fetch PR or
+/// tracker state can select without paying for the network.
+///
+/// A path selector is compared by identity once the spellings differ: the rows
+/// carry the path git reports, and the shell hands over whatever the caller
+/// typed. The two are routinely different names for one directory — a symlinked
+/// parent, macOS resolving `/var` to `/private/var`, Windows handing back an
+/// 8.3 short component — and a selector that misses leaves the caller no
+/// spelling to reach their own worktree by.
+pub fn matches_parts(worktree_path: &str, branch: &str, issue_id: &str, sel: &str) -> bool {
+    let s = sel.to_lowercase();
+    let base = Path::new(worktree_path)
+        .file_name()
+        .and_then(|x| x.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if [
+        issue_id.to_lowercase(),
+        branch.to_lowercase(),
+        base,
+        worktree_path.to_lowercase(),
+    ]
+    .contains(&s)
+    {
+        return true;
     }
+    devkit_common::paths::same_path(Path::new(worktree_path), Path::new(sel))
+}
+
+/// `rows` as a [`Discovered`], filtered to the rows one of `selectors` names
+/// by [`matches_parts`] when `selectors` is non-empty.
+fn discovered(all: impl Iterator<Item = IssueWorktree>, selectors: &[String]) -> Discovered {
+    let rows: Vec<IssueWorktree> = all
+        .filter(|row| {
+            let id = row.issue_id.to_string();
+            selectors.is_empty()
+                || selectors
+                    .iter()
+                    .any(|sel| matches_parts(&row.worktree, &row.branch, &id, sel))
+        })
+        .collect();
     let issue_ids = rows
         .iter()
         .filter_map(|r| r.issue_id.tracker().map(str::to_owned))

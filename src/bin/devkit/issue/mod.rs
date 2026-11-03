@@ -427,7 +427,8 @@ pub(crate) enum WorkspaceCmd {
     },
     /// Read-only report of every issue worktree (optionally filtered by ID).
     Status {
-        /// Issue ids to report on; omit for every issue worktree.
+        /// Issue ids, branches, or worktree paths to report on; omit for every
+        /// issue worktree.
         ids: Vec<String>,
     },
     /// Remove FINISHED worktrees (PR merged + issue done + clean).

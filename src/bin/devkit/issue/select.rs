@@ -1,37 +1,5 @@
-use std::path::Path;
-
 use devkit_ticket::status::IssueWorktree;
-
-/// True when `sel` names a worktree by issue id, branch, worktree basename, or
-/// full path, all compared case-insensitively. This is the half of the matcher
-/// that needs nothing but local git facts, so callers that never fetch PR or
-/// tracker state can select without paying for the network.
-///
-/// A path selector is compared by identity once the spellings differ: the rows
-/// carry the path git reports, and the shell hands over whatever the caller
-/// typed. The two are routinely different names for one directory — a symlinked
-/// parent, macOS resolving `/var` to `/private/var`, Windows handing back an
-/// 8.3 short component — and a selector that misses leaves the caller no
-/// spelling to reach their own worktree by.
-pub fn matches_parts(worktree_path: &str, branch: &str, issue_id: &str, sel: &str) -> bool {
-    let s = sel.to_lowercase();
-    let base = Path::new(worktree_path)
-        .file_name()
-        .and_then(|x| x.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if [
-        issue_id.to_lowercase(),
-        branch.to_lowercase(),
-        base,
-        worktree_path.to_lowercase(),
-    ]
-    .contains(&s)
-    {
-        return true;
-    }
-    devkit_common::paths::same_path(Path::new(worktree_path), Path::new(sel))
-}
+pub use devkit_ticket::status::matches_parts;
 
 /// True when `sel` names this worktree by any of `matches_parts`' names or by
 /// the PR number (`3124` or `#3124`).
