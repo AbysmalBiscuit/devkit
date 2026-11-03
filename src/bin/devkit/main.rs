@@ -538,8 +538,8 @@ fn main() -> Result<()> {
         Some(s) => dispatch_shim(s, name, args),
         None => {
             let cli = parse_cli(&args);
-            // A hook answers for a bad option itself: pre-tool-use must still
-            // give a verdict.
+            // A hook decides for itself what a bad option means: pre-tool-use
+            // ignores it and still gives a verdict.
             let options = match (&cli.cmd, cli.options.apply()) {
                 (Cmd::Hook(_), applied) => applied,
                 (_, applied) => {

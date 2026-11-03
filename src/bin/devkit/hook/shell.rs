@@ -328,7 +328,7 @@ fn respond(
     let analyze_micros = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
 
     let mut blocks = ledger_blocks(&analysis, &cwd);
-    let mut notes: Vec<String> = Vec::new();
+    let mut notes = super::record_warnings();
     let own = devkit_common::shim::OwnBinary::current();
     let verdict = if commands_on {
         let project = load_project(&checkout, &cwd, rules.app_match.clone());

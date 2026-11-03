@@ -88,22 +88,21 @@ pub enum HookEvent {
 }
 
 /// Run one hook verb. `options` is the outcome of reading this process's
-/// `--option` values: pre-tool-use denies every call they make unreadable,
-/// and every other verb fails on them.
+/// `--option` values. Pre-tool-use fails open on unreadable values: it judges
+/// the call without them and names the error on stderr and in its record.
+/// Every other verb fails on them.
 pub fn run(cli: HookCli, options: Result<()>) -> Result<()> {
     let harness = cli.harness;
     if let Err(e) = options {
-        if cli.event == HookEvent::PreToolUse {
-            let payload = read_payload(harness, HookEvent::PreToolUse)
-                .unwrap_or_else(|| Payload::empty(harness, HookEvent::PreToolUse));
-            let reason = format!(
-                "devkit cannot check this call: its config options are unreadable: {e:#}. \
-                 Fix `$DEVKIT_OPTIONS` or `--option` in the harness's environment."
-            );
-            print_envelope(&payload::deny(payload.harness(), &reason));
-            return Ok(());
+        if cli.event != HookEvent::PreToolUse {
+            return Err(e);
         }
-        return Err(e);
+        let note = format!(
+            "devkit ignored its config options, which are unreadable: {e:#}. \
+             Fix `$DEVKIT_OPTIONS` or `--option` in the harness's environment."
+        );
+        let _ = writeln!(std::io::stderr(), "devkit: {note}");
+        let _ = IGNORED_OPTIONS.set(note);
     }
     match cli.event {
         HookEvent::PreToolUse => pre_tool_use(harness),
@@ -350,6 +349,14 @@ pub(crate) fn pre_tool_use(harness: Option<AnyHarness>) -> Result<()> {
 /// out lets the call through. Every wait after the write gate's is cut to
 /// what is left of it.
 const PRE_TOOL_USE_DEADLINE: Duration = Duration::from_secs(3);
+
+/// Why this process ignored its config options, when it could not read them.
+static IGNORED_OPTIONS: OnceLock<String> = OnceLock::new();
+
+/// The warnings every pre-tool-use record carries: the ignored options, if any.
+pub(crate) fn record_warnings() -> Vec<String> {
+    IGNORED_OPTIONS.get().cloned().into_iter().collect()
+}
 
 /// When this process's pre-tool-use must have finished, once one started.
 static ANSWER_BY: OnceLock<Instant> = OnceLock::new();

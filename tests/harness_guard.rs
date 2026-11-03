@@ -1251,7 +1251,7 @@ fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
 }
 
 #[test]
-fn pre_tool_use_denies_every_call_when_the_options_will_not_parse() {
+fn pre_tool_use_ignores_options_that_will_not_parse() {
     let home = tempfile::tempdir().unwrap();
     let proj = project("[defaults]\n");
     let write = serde_json::json!({
@@ -1263,21 +1263,29 @@ fn pre_tool_use_denies_every_call_when_the_options_will_not_parse() {
     })
     .to_string();
     for payload in [claude_payload("ls"), write] {
+        let session = [("CLAUDE_CODE_SESSION_ID", "s1")];
+        let clean = run_hook_with(proj.path(), home.path(), &payload, &session);
         let out = run_hook_with(proj.path(), home.path(), &payload, &[
-            ("CLAUDE_CODE_SESSION_ID", "s1"),
+            session[0],
             ("DEVKIT_OPTIONS", "tracker.knd=\"none\""),
         ]);
-        assert!(
-            denied(&out),
-            "{payload}: {}",
-            String::from_utf8_lossy(&out.stderr)
+        assert_eq!(out.status.code(), Some(0), "{payload}: {out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&clean.stdout),
+            "{payload}"
         );
-        let reason = deny_reason(&out);
+        let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            reason.contains("DEVKIT_OPTIONS") && reason.contains("tracker.knd"),
-            "{reason}"
+            stderr.contains("DEVKIT_OPTIONS") && stderr.contains("tracker.knd"),
+            "{stderr}"
         );
     }
+    let out = run_hook_with(proj.path(), home.path(), &claude_payload("ls"), &[
+        ("CLAUDE_CODE_SESSION_ID", "s1"),
+        ("DEVKIT_OPTIONS", "tracker.knd=\"none\""),
+    ]);
+    assert!(!denied(&out), "{}", deny_reason(&out));
 }
 
 #[test]
