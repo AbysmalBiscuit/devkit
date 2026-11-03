@@ -85,14 +85,40 @@ impl Options {
     }
 
     /// The [`OPTIONS_VAR`] value that gives a child process the config these
-    /// values give this one, or `None` when they set nothing. Each line sets
-    /// one leaf on one line, so a string that holds a newline keeps it as an
-    /// escape.
-    pub fn to_variable(&self) -> Option<String> {
-        let merged = self.merged()?;
+    /// values give this process, or `None` when they set nothing. `start` and
+    /// `checkout_root` are the anchors this process resolves its config at.
+    /// A relative path key leaves anchored to them, because the child anchors
+    /// a relative path to its own directory. Each line sets one leaf on one
+    /// line, so a string that holds a newline keeps it as an escape.
+    pub fn to_variable(
+        &self,
+        start: &Path,
+        checkout_root: Option<&Path>,
+    ) -> Result<Option<String>> {
+        let Some(mut merged) = self.merged() else {
+            return Ok(None);
+        };
+        for (key, kind) in crate::DEFAULTS_PATHS {
+            if let Some(toml::Value::String(raw)) = lookup_mut(&mut merged, key) {
+                *raw = crate::resolve_path_key(
+                    raw,
+                    key,
+                    kind,
+                    &Default::default(),
+                    checkout_root,
+                    start,
+                )?;
+            }
+        }
+        let log_dir = "harness.log.dir";
+        if let Some(toml::Value::String(raw)) = lookup_mut(&mut merged, log_dir) {
+            *raw = crate::resolve_host_path(raw, log_dir, Some(start))?
+                .to_string_lossy()
+                .into_owned();
+        }
         let mut lines = Vec::new();
         leaf_lines(&merged, "", &mut lines);
-        Some(lines.join("\n"))
+        Ok(Some(lines.join("\n")))
     }
 }
 
@@ -233,6 +259,13 @@ fn check_harness_value(table: &toml::Table, path: &[String]) -> Result<()> {
     }
     one.try_into::<HarnessSection>()?;
     Ok(())
+}
+
+/// The value at the dotted `key` in `table`.
+fn lookup_mut<'a>(table: &'a mut toml::Table, key: &str) -> Option<&'a mut toml::Value> {
+    let mut segments = key.split('.');
+    let first = table.get_mut(segments.next()?)?;
+    segments.try_fold(first, |at, seg| at.as_table_mut()?.get_mut(seg))
 }
 
 /// The value at `path` in `table`, if a later option left it there.
@@ -592,11 +625,50 @@ mod tests {
             ],
         )
         .unwrap();
-        let variable = opts.to_variable().unwrap();
+        let variable = opts
+            .to_variable(Path::new("/start"), None)
+            .unwrap()
+            .unwrap();
         assert!(variable.lines().all(|l| l.contains('=')), "{variable}");
         let child = Options::new(Some(&variable), &[] as &[&str]).unwrap();
         assert_eq!(child.merged(), opts.merged(), "{variable}");
-        assert_eq!(Options::default().to_variable(), None);
+        assert_eq!(
+            Options::default()
+                .to_variable(Path::new("/start"), None)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_variable_anchors_relative_paths_as_this_process_does() {
+        let start = std::env::temp_dir().join("start");
+        let root = std::env::temp_dir().join("root");
+        let opts = Options::parse(&[
+            "defaults.worktree_root=\"wts\"",
+            "defaults.doppler_yaml=\"doppler.yaml\"",
+            "harness.log.dir=\"logs\"",
+        ])
+        .unwrap();
+        let variable = opts.to_variable(&start, Some(&root)).unwrap().unwrap();
+        let child = Options::new(Some(&variable), &[] as &[&str])
+            .unwrap()
+            .merged()
+            .unwrap();
+        let at = |key: &str| {
+            PathBuf::from(
+                lookup(
+                    &child,
+                    &key.split('.').map(String::from).collect::<Vec<_>>(),
+                )
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            )
+        };
+        assert_eq!(at("defaults.worktree_root"), start.join("wts"));
+        assert_eq!(at("defaults.doppler_yaml"), root.join("doppler.yaml"));
+        assert_eq!(at("harness.log.dir"), start.join("logs"));
     }
 
     #[test]

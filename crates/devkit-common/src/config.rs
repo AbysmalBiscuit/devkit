@@ -1,6 +1,9 @@
 //! The one door every subcommand's config resolution passes through.
 
-use std::{path::Path, sync::OnceLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use anyhow::{Result, bail};
 use devkit_config::{Config, Options, PendingLayer, Provenance};
@@ -8,6 +11,10 @@ use devkit_config::{Config, Options, PendingLayer, Provenance};
 use crate::vcs::Checkout;
 
 static OPTIONS: OnceLock<Options> = OnceLock::new();
+
+/// The `start` directory and checkout root of the first config this process
+/// resolves, which anchor a relative path in the `--option` values.
+static ANCHORS: OnceLock<(PathBuf, Option<PathBuf>)> = OnceLock::new();
 
 /// Set the `--option` values every later resolve in this process merges over
 /// its layers, the values of `$DEVKIT_OPTIONS` included. The command line is
@@ -25,11 +32,18 @@ pub fn options() -> &'static Options {
 }
 
 /// Give `cmd` the `--option` values of this process in `$DEVKIT_OPTIONS`, so a
-/// devkit it runs resolves the config this process resolves.
-pub fn pass_options(cmd: &mut std::process::Command) {
-    if let Some(value) = options().to_variable() {
+/// devkit it runs resolves the config this process resolves. A relative path
+/// value anchors as this process anchors it, at its first resolved config or,
+/// before one, at its working directory.
+pub fn pass_options(cmd: &mut std::process::Command) -> Result<()> {
+    let (start, root) = match ANCHORS.get() {
+        Some((start, root)) => (start.clone(), root.clone()),
+        None => (std::env::current_dir()?, None),
+    };
+    if let Some(value) = options().to_variable(&start, root.as_deref())? {
         cmd.env(devkit_config::OPTIONS_VAR, value);
     }
+    Ok(())
 }
 
 /// Resolve the `devkit.toml` layers discovered from `start` — or the single
@@ -76,6 +90,9 @@ pub fn resolve_in(
     if let Ok((cfg, _)) = &resolved {
         crate::pool::configure(cfg.parallelism.threads);
         crate::github::configure(cfg.github.no_graphql);
+        if let Ok(start) = std::path::absolute(start) {
+            let _ = ANCHORS.set((start, checkout.root().map(Path::to_path_buf)));
+        }
     }
     resolved
 }

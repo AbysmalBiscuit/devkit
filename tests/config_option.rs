@@ -541,3 +541,35 @@ fn a_task_step_sees_the_options_of_the_devkit_that_runs_it() {
         "a value that spans lines reaches the step: {shown}"
     );
 }
+
+#[test]
+fn a_task_step_in_an_app_directory_anchors_option_paths_as_its_parent_does() {
+    let p = project();
+    let exe = env!("CARGO_BIN_EXE_devkit");
+    std::fs::create_dir_all(p.path().join("apps/api")).unwrap();
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        format!(
+            "[apps.api]\nbase_port = 39170\npath = \"apps/api\"\nlaunch = [\"git\", \"version\"]\n\n\
+             [tasks.show]\napp = \"api\"\nrun = ['{exe}', 'config', 'show', '--json']\n"
+        ),
+    )
+    .unwrap();
+    let shown = stdout(&human(p.path(), &[
+        "-o",
+        "defaults.worktree_root=\"wts\"",
+        "-o",
+        "harness.log.dir=\"logs\"",
+        "run",
+        "task",
+        "show",
+    ]));
+    let json = &shown[shown.find('{').unwrap()..=shown.rfind('}').unwrap()];
+    let cfg: serde_json::Value = serde_json::from_str(json).unwrap();
+    let root = Path::new(cfg["defaults"]["worktree_root"].as_str().unwrap());
+    assert_eq!(
+        root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+        p.path().canonicalize().unwrap().join("wts"),
+        "{shown}"
+    );
+}

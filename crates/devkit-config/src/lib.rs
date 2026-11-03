@@ -3879,8 +3879,17 @@ fn layer_dir<'a>(origin: &'a HashMap<String, PathBuf>, key: &str) -> Option<&'a 
         .and_then(|p| p.parent())
 }
 
+/// The `[defaults]` path keys a config value sets, with what each names.
+/// `defaults.baseline_dir` defaults to a path below `defaults.worktree_root`.
+const DEFAULTS_PATHS: [(&str, PathKind); 3] = [
+    ("defaults.worktree_root", PathKind::Host),
+    ("defaults.baseline_dir", PathKind::Host),
+    ("defaults.doppler_yaml", PathKind::RepoRelative),
+];
+
 /// What a `[defaults]` path key names, which decides what a relative value
 /// anchors to.
+#[derive(Clone, Copy)]
 enum PathKind {
     /// A location on this machine. Only the layer that declared it gives the
     /// value meaning, so it anchors to that layer's directory.
