@@ -850,6 +850,12 @@ pub(crate) enum FieldsCmd {
         /// teams. Repeatable.
         #[arg(long, value_name = "KEY")]
         team: Vec<String>,
+        /// Write the fields into FILE, such as devkit.local.toml, instead of
+        /// the tracked devkit.toml. The run still loads every config layer,
+        /// and leaves out a field another layer already declares. FILE must
+        /// be a layer of that stack once written.
+        #[arg(long, value_name = "FILE")]
+        into: Option<String>,
     },
 }
 
@@ -915,11 +921,12 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             config,
         }),
         TicketCmd::Fields {
-            cmd: Some(FieldsCmd::Discover { yes, team }),
+            cmd: Some(FieldsCmd::Discover { yes, team, into }),
             ..
         } => fields_discover::run(fields_discover::DiscoverArgs {
             yes,
             teams: team,
+            into,
             dir,
             config,
         }),

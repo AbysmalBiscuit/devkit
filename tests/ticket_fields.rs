@@ -236,6 +236,125 @@ fn discover_writes_the_config_devkit_config_names() {
     assert_eq!(devkit_toml(&fake), before, "the project file is untouched");
 }
 
+fn local_toml(fake: &ghfake::Fake) -> Option<String> {
+    std::fs::read_to_string(fake.project().join("devkit.local.toml")).ok()
+}
+
+#[test]
+fn discover_into_writes_the_local_file_from_the_whole_stack() {
+    let fake = fields_fake();
+    fake.serve_graphql(DISCOVERED);
+    let before = devkit_toml(&fake);
+    let out = stdout(&fake.issue_as("agent", &[
+        "fields",
+        "discover",
+        "--into",
+        "devkit.local.toml",
+    ]));
+    assert!(
+        fake.calls().contains("graphql"),
+        "reads GitHub: {}",
+        fake.calls()
+    );
+    assert_eq!(devkit_toml(&fake), before, "devkit.toml is untouched");
+    let local = local_toml(&fake).expect("devkit.local.toml is written");
+    assert!(local.contains("[ticket.fields.github.labels]"), "{local}");
+    assert!(out.contains("devkit.local.toml"), "{out}");
+}
+
+#[test]
+fn discover_into_leaves_out_a_field_devkit_toml_declares() {
+    let fake = ghfake::Fake::without_pr(
+        "[tracker]\nkind = \"github\"\n\n[ticket.fields.github.labels]\ntype = \"enum\"\n\
+         list = true\nwhere = \"labels\"\nvalues = [{ name = \"bug\", id = \"bug\" }, \
+         { name = \"enhancement\", id = \"enhancement\" }]\n",
+    );
+    fake.github_keys("project = 1");
+    fake.serve_graphql(DISCOVERED);
+    let before = devkit_toml(&fake);
+    stdout(&fake.issue_as("agent", &[
+        "fields",
+        "discover",
+        "--into",
+        "devkit.local.toml",
+    ]));
+    assert_eq!(devkit_toml(&fake), before);
+    let local = local_toml(&fake).expect("devkit.local.toml is written");
+    assert!(
+        local.contains("[ticket.fields.github.milestone]"),
+        "{local}"
+    );
+    assert!(
+        !local.contains("labels"),
+        "declared in devkit.toml: {local}"
+    );
+}
+
+#[test]
+fn discover_into_refuses_a_write_the_stack_would_not_load() {
+    let fake = ghfake::Fake::without_pr(
+        "[tracker]\nkind = \"github\"\n\n[ticket.fields.github.milestone]\ntype = \"enum\"\n\
+         where = \"milestone\"\nvalues = [{ name = \"v1\", id = \"v1\" }]\nlevel = \"error\"\n",
+    );
+    fake.github_keys("project = 1");
+    fake.serve_graphql(&DISCOVERED.replace(r#"[{ "title": "v1" }, { "title": "v2" }]"#, "[]"));
+    let local = "# this machine's overrides\n";
+    std::fs::write(fake.project().join("devkit.local.toml"), local).unwrap();
+    let before = devkit_toml(&fake);
+    let out = fake.issue_as("agent", &[
+        "fields",
+        "discover",
+        "--into",
+        "devkit.local.toml",
+    ]);
+    assert!(
+        !out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("[ticket.fields.github.milestone]") && stderr.contains("no `values`"),
+        "the loader's error: {stderr}"
+    );
+    assert_eq!(local_toml(&fake).as_deref(), Some(local), "nothing written");
+    assert_eq!(devkit_toml(&fake), before);
+}
+
+#[test]
+fn discover_into_refuses_a_file_no_run_reads() {
+    let fake = fields_fake();
+    fake.serve_graphql(DISCOVERED);
+    let out = fake.issue_as("agent", &["fields", "discover", "--into", "fields.toml"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("fields.toml"), "{stderr}");
+    assert!(!fake.project().join("fields.toml").exists());
+}
+
+#[test]
+fn discover_into_refuses_config() {
+    let fake = fields_fake();
+    let named = fake.state().join("named.toml");
+    std::fs::write(&named, devkit_toml(&fake)).unwrap();
+    let out = fake.issue_as("agent", &[
+        "fields",
+        "discover",
+        "--into",
+        "devkit.local.toml",
+        "--config",
+        named.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--into") && stderr.contains("--config"),
+        "{stderr}"
+    );
+    assert_eq!(fake.calls(), "", "no tracker read");
+    assert_eq!(local_toml(&fake), None);
+}
+
 #[test]
 fn a_human_without_a_terminal_must_pass_yes() {
     let fake = fields_fake();

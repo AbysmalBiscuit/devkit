@@ -1,6 +1,6 @@
 //! `ticket fields discover`: read the tracker once and write the ticket
-//! field declarations it offers into the repository's `devkit.toml`, keeping
-//! what a person set there.
+//! field declarations it offers into the repository's `devkit.toml`, or the
+//! layer `--into` names, keeping what a person set there.
 
 use std::{
     io::{IsTerminal, Write},
@@ -27,6 +27,7 @@ use super::field_write;
 pub(crate) struct DiscoverArgs {
     pub yes: bool,
     pub teams: Vec<String>,
+    pub into: Option<String>,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -58,6 +59,20 @@ pub(crate) enum Change {
 pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
     let start = super::start(&args.dir);
     let config = args.config.as_deref().map(Path::new);
+    if args.into.is_some() {
+        if config.is_some() {
+            bail!(
+                "--into writes one layer of the config stack, and --config replaces the stack \
+                 with one file; pass one of them"
+            );
+        }
+        if std::env::var_os("DEVKIT_CONFIG").is_some() {
+            bail!(
+                "--into writes one layer of the config stack, and $DEVKIT_CONFIG replaces the \
+                 stack with one file; unset it or drop --into"
+            );
+        }
+    }
     let mut sel = devkit_common::tracker::select_unfilled(config, &start);
     let cfg = sel
         .config
@@ -85,7 +100,10 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
              none. Set `[tracker] kind` in devkit.toml."
         ),
     };
-    let path = target(config, Path::new(&start))?;
+    let path = match &args.into {
+        Some(file) => Path::new(&start).join(file),
+        None => target(config, Path::new(&start))?,
+    };
     let before = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -148,7 +166,8 @@ fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
 
 /// Refuse to write `after` to `path` when the config would then fail to
 /// load, or fail the field checks every ticket command runs on `kind`: an
-/// error-level `enum` left with no values, say.
+/// error-level `enum` left with no values, say. Refuse too when `path` would
+/// not be a layer of the config, since no run would then read it.
 fn refuse_unloadable(
     config: Option<&Path>,
     start: &Path,
@@ -157,16 +176,25 @@ fn refuse_unloadable(
     after: &str,
 ) -> Result<()> {
     let pending = PendingLayer { path, text: after };
-    devkit_common::config::resolve_pending(config, start, pending)
+    let provenance = devkit_common::config::resolve_pending(config, start, pending)
         .and_then(|(cfg, provenance)| {
-            devkit_config::check_ticket_fields(&cfg, kind, &provenance.origin)
+            devkit_config::check_ticket_fields(&cfg, kind, &provenance.origin)?;
+            Ok(provenance)
         })
         .with_context(|| {
             format!(
                 "not writing {}: the config would no longer load with the tracker's fields",
                 path.display()
             )
-        })
+        })?;
+    if !provenance.layers.iter().any(|l| pending.is(l)) {
+        bail!(
+            "not writing {}: no run started in {} reads it as a config layer",
+            path.display(),
+            start.display()
+        );
+    }
+    Ok(())
 }
 
 /// Whether to write: an agent always writes, a human after `--yes` or a
