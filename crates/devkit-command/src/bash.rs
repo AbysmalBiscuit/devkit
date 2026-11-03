@@ -482,7 +482,11 @@ impl<'t> Walker<'_, '_, '_, 't> {
             span: keyword.byte_range(),
         }];
         let mut bound: Vec<(String, Value)> = Vec::new();
-        for child in ts::named_children(node) {
+        let children = ts::named_children(node);
+        let mut i = 0;
+        while i < children.len() {
+            let child = children[i];
+            i += 1;
             match child.kind() {
                 "variable_assignment" => {
                     let Some((name, value)) = self.assignment(child, scope) else {
@@ -492,16 +496,45 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     bound.push((name, value));
                 }
                 "variable_name" => {
-                    let name = ts::text(child, self.source);
-                    let value = bound
-                        .iter()
-                        .rev()
-                        .find(|(n, _)| n == name)
-                        .map(|(_, v)| v)
-                        .or_else(|| scope.vars.get(name))
-                        .cloned()
-                        .unwrap_or(Value::Unknown);
-                    words.push(assignment_word(name, &value, child));
+                    // `DEVKIT_OPTION""S=x` parses as a name and the parts glued
+                    // to it, which bash reads as one operand.
+                    let mut operand = Value::Known(ts::text(child, self.source).to_string());
+                    let mut end = child.end_byte();
+                    while let Some(&part) = children.get(i).filter(|p| p.start_byte() == end) {
+                        operand = glued(operand, self.value(part, scope));
+                        end = part.end_byte();
+                        i += 1;
+                    }
+                    let span = child.start_byte()..end;
+                    match operand {
+                        Value::Known(text) => match text.split_once('=') {
+                            Some((name, value)) => {
+                                let value = Value::Known(value.to_string());
+                                let mut word = assignment_word(name, &value, child);
+                                word.span = span;
+                                words.push(word);
+                                bound.push((name.to_string(), value));
+                            }
+                            None => {
+                                let value = bound
+                                    .iter()
+                                    .rev()
+                                    .find(|(n, _)| *n == text)
+                                    .map(|(_, v)| v)
+                                    .or_else(|| scope.vars.get(&text))
+                                    .cloned()
+                                    .unwrap_or(Value::Unknown);
+                                let mut word = assignment_word(&text, &value, child);
+                                word.span = span;
+                                words.push(word);
+                            }
+                        },
+                        value => words.push(Word {
+                            typed: ts::text(child, self.source).to_string(),
+                            value,
+                            span,
+                        }),
+                    }
                 }
                 _ => words.push(self.word(child, scope)),
             }
@@ -968,6 +1001,16 @@ fn assignment_word(name: &str, value: &Value, node: Node<'_>) -> Word {
     }
 }
 
+/// Two adjacent parts of one word as one value.
+fn glued(left: Value, right: Value) -> Value {
+    match (left, right) {
+        (Value::Known(l), Value::Known(r)) => Value::Known(l + &r),
+        (Value::Known(l), Value::Prefixed(r)) => known_start(l + &r),
+        (Value::Known(l), _) => known_start(l),
+        (left, _) => left,
+    }
+}
+
 /// A word known only up to `start`. An assignment keeps the name it sets,
 /// so a rule on that variable still sees it.
 fn known_start(start: String) -> Value {
@@ -1106,6 +1149,24 @@ mod tests {
         model::{FileOp, Target, UncertaintyKind, Value},
         testutil::{bash, programs, targets, writes},
     };
+
+    #[test]
+    fn a_declaration_operand_split_by_quotes_is_one_word() {
+        assert_eq!(bash(r#"export DEVKIT_OPTION""S=x"#).invocations[0].args, [
+            Value::Known("DEVKIT_OPTIONS=x".into())
+        ]);
+        assert_eq!(bash(r#"export A""B=1 C"#).invocations[0].args, [
+            Value::Known("AB=1".into()),
+            Value::Prefixed("C=".into())
+        ]);
+        assert_eq!(bash(r#"declare -x A"B=$X""#).invocations[0].args, [
+            Value::Known("-x".into()),
+            Value::Prefixed("AB=".into())
+        ]);
+        assert_eq!(bash(r#"AB=1; export A""B"#).invocations[0].args, [
+            Value::Known("AB=1".into())
+        ]);
+    }
 
     #[test]
     fn operators_start_new_invocations() {

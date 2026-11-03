@@ -990,6 +990,8 @@ fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
             "env -- DEVKIT_CALLER=human devkit pr create",
             "readonly DEVKIT_CALLER=human",
             "set -a; readonly DEVKIT_CALLER=human; devkit pr create",
+            r#"export DEVKIT_CALLE""R=human"#,
+            r#"export DEVKIT_CALLE""R=human && devkit pr create"#,
         ] {
             let out = run_hook(proj.path(), home.path(), &claude_payload(command));
             assert!(denied(&out), "{config}: {command}");
@@ -1050,6 +1052,7 @@ fn setting_devkit_caller_to_agent_or_unsetting_a_session_is_allowed() {
         "unset CLAUDE_CODE_SESSION_ID",
         "echo DEVKIT_CALLER=human",
         "echo readonly DEVKIT_CALLER=human",
+        r#"export DEVKIT_CALLE""R=agent"#,
         "readonly DEVKIT_CALLER=agent",
     ] {
         let out = run_hook(proj.path(), home.path(), &claude_payload(command));
@@ -1210,6 +1213,9 @@ fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
             "export DEVKIT_OPTIONS+=x",
             r#"export DEVKIT_OPTIONS"=x""#,
             r#"export "DEVKIT_OPT""IONS=x""#,
+            r#"export DEVKIT_OPTION""S=x"#,
+            r#"export DEVKIT_OPTION''S=x && devkit config show"#,
+            r#"declare -x DEVKIT_OPT"IONS=$UNRESOLVED""#,
             "export DEVKIT_OPTIONS",
             r#"env DEVKIT_OPTIONS="$(printf %s 'tracker.kind="none"')" devkit config show"#,
             r#"env DEVKIT_OPTIONS="$UNRESOLVED" devkit config show"#,
@@ -1233,6 +1239,7 @@ fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
     for command in [
         "echo DEVKIT_OPTIONS=x",
         "echo readonly DEVKIT_OPTIONS=x",
+        r#"echo export DEVKIT_OPTION""S=x"#,
         r#"printf "%s" DEVKIT_OPTIONS="$UNRESOLVED""#,
         r#"printf "%s" "DEVKIT_OPTIONS=$(date)""#,
         "unset DEVKIT_OPTIONS",
