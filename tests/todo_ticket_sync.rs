@@ -257,6 +257,33 @@ fn an_imported_blocker_in_another_repository_syncs_by_its_key() {
 }
 
 #[test]
+fn an_unreadable_repository_of_an_imported_blocker_does_not_stop_the_sync() {
+    let s = blocked_from_workcell("OPEN");
+    assert!(s.sync(&[]).status.success());
+    let i65 = issue(65, Some("Todo"), &[])
+        .replace(
+            r#""blockedBy":{"nodes":[]}"#,
+            r#""blockedBy":{"nodes":[{"number":992,"repository":{"nameWithOwner":"AbysmalBiscuit/workcell"}}]}"#,
+        )
+        .replace("Issue 65", "Issue 65 renamed");
+    let mut answer: Value = serde_json::from_str(&graphql(&[i65], &OPTIONS)).unwrap();
+    answer["data"]["repository"] = Value::Null;
+    answer["errors"] = json!([{
+        "type": "NOT_FOUND",
+        "path": ["repository"],
+        "message": "Could not resolve to a Repository with the name 'AbysmalBiscuit/workcell'."
+    }]);
+    s.serve("graphql.json", &answer.to_string());
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(s.todo_for("o/r#65").description, "#65 Issue 65 renamed");
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+        devkit_todo::StatusKind::Pending
+    );
+}
+
+#[test]
 fn a_closed_blocker_in_another_repository_adds_no_todo() {
     let s = blocked_from_workcell("CLOSED");
     let out = s.sync(&[]);

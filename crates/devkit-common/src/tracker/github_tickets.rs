@@ -338,12 +338,20 @@ impl GithubTickets<'_> {
         Ok(out)
     }
 
-    /// The issues numbered `numbers` of `repo`.
+    /// The issues numbered `numbers` of `repo`. A repository other than the
+    /// issues repository that GitHub does not find, deleted or out of the
+    /// token's reach, has no issues.
     fn read_in(&self, repo: &str, numbers: &[u64]) -> Result<Vec<SyncedTicket>> {
+        let foreign = !repo.eq_ignore_ascii_case(&self.repo.slug);
         let mut out = Vec::new();
         for chunk in numbers.chunks(50) {
             let query = issues_query_in(repo, &self.repo.slug, chunk, self.board.as_ref());
             match self.send(&query) {
+                Ok(resp)
+                    if foreign && resp.pointer("/data/repository").is_none_or(Value::is_null) =>
+                {
+                    return Ok(out);
+                }
                 Ok(resp) => out.extend(parse_issues(&resp, repo, self.board.as_ref())?),
                 Err(e) if graphql_refused(&e) => {
                     self.rest_allowed(e)?;
