@@ -381,6 +381,37 @@ fn discover_into_places_a_bare_name_beside_the_nearest_layer() {
     );
 }
 
+#[test]
+fn discover_into_refuses_a_file_a_higher_layer_shadows() {
+    let fake = fields_fake();
+    fake.serve_graphql(DISCOVERED);
+    let app = fake.project().join("app");
+    std::fs::create_dir(&app).unwrap();
+    std::fs::write(
+        app.join("devkit.toml"),
+        "[ticket.fields.github.milestone]\ntype = \"enum\"\nwhere = \"milestone\"\n\
+         values = [{ name = \"old\", id = \"old\" }]\n",
+    )
+    .unwrap();
+    let out = fake.issue_as_in("agent", &app, &[
+        "fields",
+        "discover",
+        "--into",
+        "../devkit.local.toml",
+    ]);
+    assert!(
+        !out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("[ticket.fields.github.milestone]")
+            && stderr.contains(&app.join("devkit.toml").display().to_string()),
+        "names the layer that outranks it: {stderr}"
+    );
+    assert_eq!(local_toml(&fake), None, "nothing written");
+}
 
 
 #[test]

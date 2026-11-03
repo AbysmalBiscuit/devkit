@@ -17,7 +17,7 @@ use devkit_common::{
 };
 use devkit_config::{
     CALLER_CONDITION, Config, EnumValue, FieldDecl, FieldType, ISSUE_CONTEXT_KEYS, LayerKind,
-    PendingLayer, TrackerKind,
+    PendingLayer, Provenance, TrackerKind,
 };
 use serde::Serialize;
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
@@ -119,7 +119,9 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
         );
         return Ok(());
     }
-    refuse_unloadable(config, Path::new(&start), kind, &path, &after)?;
+    let (effective, provenance) =
+        refuse_unloadable(config, Path::new(&start), kind, &path, &after)?;
+    refuse_shadowed(kind, &changes, &path, &after, &effective, &provenance)?;
     if !approved(&path, &before, &after, args.yes)? {
         println!("nothing written");
         return Ok(());
@@ -184,12 +186,12 @@ fn refuse_unloadable(
     kind: TrackerKind,
     path: &Path,
     after: &str,
-) -> Result<()> {
+) -> Result<(Config, Provenance)> {
     let pending = PendingLayer { path, text: after };
-    let provenance = devkit_common::config::resolve_pending(config, start, pending)
+    let (cfg, provenance) = devkit_common::config::resolve_pending(config, start, pending)
         .and_then(|(cfg, provenance)| {
             devkit_config::check_ticket_fields(&cfg, kind, &provenance.origin)?;
-            Ok(provenance)
+            Ok((cfg, provenance))
         })
         .with_context(|| {
             format!(
@@ -204,9 +206,55 @@ fn refuse_unloadable(
             start.display()
         );
     }
-    Ok(())
+    Ok((cfg, provenance))
 }
 
+/// Refuse to write `after` to `path` when a higher layer would outrank a
+/// field it adds or refreshes, so that `effective`, the config with `after`
+/// written, would not carry the tracker's `type`, `list`, `where` or
+/// `values`.
+fn refuse_shadowed(
+    kind: TrackerKind,
+    changes: &[Change],
+    path: &Path,
+    after: &str,
+    effective: &Config,
+    provenance: &Provenance,
+) -> Result<()> {
+    let written = Config::parse(after).with_context(|| format!("parsing {}", path.display()))?;
+    let facts = |d: &FieldDecl| (d.r#type, d.list, d.r#where.clone(), d.values.clone());
+    let pending = PendingLayer { path, text: after };
+    for name in changes.iter().filter_map(|c| match c {
+        Change::Added(n) | Change::Refreshed(n) => Some(n),
+        _ => None,
+    }) {
+        let (Some(w), e) = (
+            written.ticket.fields.for_tracker(kind).get(name),
+            effective.ticket.fields.for_tracker(kind).get(name),
+        ) else {
+            continue;
+        };
+        if e.map(facts) == Some(facts(w)) {
+            continue;
+        }
+        let outranks = ["type", "list", "where", "values"]
+            .iter()
+            .filter_map(|key| {
+                provenance
+                    .origin
+                    .get(&format!("ticket.fields.{kind}.{name}.{key}"))
+            })
+            .find(|layer| !pending.is(layer))
+            .map(|layer| format!(" {} outranks it there, so", layer.display()))
+            .unwrap_or_default();
+        bail!(
+            "not writing {}: [ticket.fields.{kind}.{name}] would not take the tracker's \
+             facts:{outranks} no run would read them. Pass --into a layer at or above that one",
+            path.display()
+        );
+    }
+    Ok(())
+}
 
 /// Whether to write: an agent always writes, a human after `--yes` or a
 /// `y` at the prompt, which needs a terminal.
