@@ -49,9 +49,8 @@ impl Options {
 
 /// One `KEY=VALUE`, as the key's segments and the parsed value.
 fn parse_one(arg: &str) -> Result<(Vec<String>, toml::Value)> {
-    let (key, value) = arg
-        .split_once('=')
-        .ok_or_else(|| anyhow!("--option {arg}: expected KEY=VALUE"))?;
+    let (key, value) =
+        split_assignment(arg).ok_or_else(|| anyhow!("--option {arg}: expected KEY=VALUE"))?;
     let key = key.trim();
     let path =
         key_segments(key).with_context(|| format!("--option {arg}: `{key}` is not a TOML key"))?;
@@ -65,6 +64,25 @@ fn parse_one(arg: &str) -> Result<(Vec<String>, toml::Value)> {
         (Some(v), true) => Ok((path, v)),
         _ => bail!("--option {key}: `{value}` is more than one TOML value"),
     }
+}
+
+/// `arg` split at its first `=` outside a quoted key segment, so a quoted
+/// segment such as `apps."a=b"` keeps its `=`.
+fn split_assignment(arg: &str) -> Option<(&str, &str)> {
+    let mut quote = None;
+    let mut escaped = false;
+    for (i, c) in arg.char_indices() {
+        match (quote, c) {
+            (Some('"'), _) if escaped => escaped = false,
+            (Some('"'), '\\') => escaped = true,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '=') => return Some((&arg[..i], &arg[i + 1..])),
+            (None, _) => {}
+        }
+    }
+    None
 }
 
 /// The segments of a dotted TOML key, quoted segments included.

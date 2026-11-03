@@ -187,3 +187,17 @@ fn doctor_reports_an_option_of_the_wrong_type_as_a_broken_config() {
         "{config}"
     );
 }
+
+#[test]
+fn a_quoted_key_segment_may_hold_an_equals_sign() {
+    let p = project();
+    let shown = stdout(&human(p.path(), &[
+        "config",
+        "show",
+        "--json",
+        "-o",
+        "people.\"a=b\".github=\"ann\"",
+    ]));
+    let cfg: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(cfg["people"]["a=b"]["github"], "ann", "{shown}");
+}
