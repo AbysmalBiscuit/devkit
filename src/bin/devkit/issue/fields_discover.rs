@@ -100,10 +100,7 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
              none. Set `[tracker] kind` in devkit.toml."
         ),
     };
-    let path = match &args.into {
-        Some(file) => Path::new(&start).join(file),
-        None => target(config, Path::new(&start))?,
-    };
+    let path = destination(args.into.as_deref(), config, Path::new(&start))?;
     let before = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -132,11 +129,24 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
     Ok(())
 }
 
-/// The file discover writes: `--config`, else `$DEVKIT_CONFIG`, each the
-/// one file the run read, else the nearest tracked `devkit.toml`, else a new
-/// one beside the nearest layer inside the checkout, which a `[config] root =
-/// true` barrier leaves standing where the checkout root's file may be cut
-/// off, else a new one at the checkout root.
+/// The file discover writes: `into`, else [`target`]. A bare file name in
+/// `into` sits in the directory of [`target`]'s file, and any other path
+/// resolves against `start`.
+fn destination(into: Option<&str>, config: Option<&Path>, start: &Path) -> Result<PathBuf> {
+    match into.map(Path::new) {
+        None => target(config, start),
+        Some(file) if file.parent() == Some(Path::new("")) => {
+            Ok(target(config, start)?.with_file_name(file))
+        }
+        Some(file) => Ok(start.join(file)),
+    }
+}
+
+/// The file [`destination`] picks with no `--into`: `--config`, else
+/// `$DEVKIT_CONFIG`, each the one file the run read, else the nearest tracked
+/// `devkit.toml`, else a new one beside the nearest layer inside the checkout,
+/// which a `[config] root = true` barrier leaves standing where the checkout
+/// root's file may be cut off, else a new one at the checkout root.
 fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
     if let Some(p) = config
         .map(Path::to_path_buf)
@@ -196,6 +206,7 @@ fn refuse_unloadable(
     }
     Ok(())
 }
+
 
 /// Whether to write: an agent always writes, a human after `--yes` or a
 /// `y` at the prompt, which needs a terminal.

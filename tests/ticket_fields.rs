@@ -361,6 +361,29 @@ fn discover_into_refuses_a_file_no_run_reads() {
 }
 
 #[test]
+fn discover_into_places_a_bare_name_beside_the_nearest_layer() {
+    let fake = fields_fake();
+    fake.serve_graphql(DISCOVERED);
+    let app = fake.project().join("app");
+    std::fs::create_dir(&app).unwrap();
+    stdout(&fake.issue_as_in("agent", &app, &[
+        "fields",
+        "discover",
+        "--into",
+        "devkit.local.toml",
+    ]));
+    assert!(!app.join("devkit.local.toml").exists());
+    assert!(local_toml(&fake).is_some(), "written at the checkout root");
+    let fields = stdout(&fake.issue_as("agent", &["fields", "--json"]));
+    assert!(
+        fields.contains("\"labels\""),
+        "a run from the checkout root reads them: {fields}"
+    );
+}
+
+
+
+#[test]
 fn discover_into_refuses_config() {
     let fake = fields_fake();
     let named = fake.state().join("named.toml");
