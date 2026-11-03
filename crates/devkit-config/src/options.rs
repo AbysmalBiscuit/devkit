@@ -87,8 +87,10 @@ impl Options {
     /// The [`OPTIONS_VAR`] value that gives a child process the config these
     /// values give this process, or `None` when they set nothing. `start` and
     /// `checkout_root` are the anchors this process resolves its config at.
-    /// A relative path key leaves anchored to them, because the child anchors
-    /// a relative path to its own directory. Each line sets one leaf on one
+    /// A relative host path leaves anchored to them, because the child anchors
+    /// a relative path to its own directory. A relative repository path stays
+    /// relative inside a checkout, so a child in another checkout resolves its
+    /// own copy. Each line sets one leaf on one
     /// line, so a string that holds a newline keeps it as an escape.
     pub fn to_variable(
         &self,
@@ -98,7 +100,12 @@ impl Options {
         let Some(mut merged) = self.merged() else {
             return Ok(None);
         };
-        for (key, kind) in crate::DEFAULTS_PATHS {
+        for (key, kind, _) in crate::DEFAULTS_PATHS {
+            // A repository file resolves against the checkout reading the
+            // config, so the child resolves its own copy.
+            if matches!(kind, crate::PathKind::RepoRelative) && checkout_root.is_some() {
+                continue;
+            }
             if let Some(toml::Value::String(raw)) = lookup_mut(&mut merged, key) {
                 *raw = crate::resolve_path_key(
                     raw,
@@ -667,8 +674,24 @@ mod tests {
             )
         };
         assert_eq!(at("defaults.worktree_root"), start.join("wts"));
-        assert_eq!(at("defaults.doppler_yaml"), root.join("doppler.yaml"));
+        assert_eq!(
+            at("defaults.doppler_yaml"),
+            PathBuf::from("doppler.yaml"),
+            "a repository path stays relative inside a checkout"
+        );
         assert_eq!(at("harness.log.dir"), start.join("logs"));
+
+        let outside = opts.to_variable(&start, None).unwrap().unwrap();
+        let child = Options::new(Some(&outside), &[] as &[&str])
+            .unwrap()
+            .merged()
+            .unwrap();
+        let doppler = lookup(&child, &["defaults".into(), "doppler_yaml".into()]).unwrap();
+        assert_eq!(
+            PathBuf::from(doppler.as_str().unwrap()),
+            start.join("doppler.yaml"),
+            "outside a checkout it anchors as this process anchors it"
+        );
     }
 
     #[test]

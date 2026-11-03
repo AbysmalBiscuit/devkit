@@ -3879,12 +3879,22 @@ fn layer_dir<'a>(origin: &'a HashMap<String, PathBuf>, key: &str) -> Option<&'a 
         .and_then(|p| p.parent())
 }
 
-/// The `[defaults]` path keys a config value sets, with what each names.
-/// `defaults.baseline_dir` defaults to a path below `defaults.worktree_root`.
-const DEFAULTS_PATHS: [(&str, PathKind); 3] = [
-    ("defaults.worktree_root", PathKind::Host),
-    ("defaults.baseline_dir", PathKind::Host),
-    ("defaults.doppler_yaml", PathKind::RepoRelative),
+/// A `[defaults]` field that holds a path.
+type DefaultsPath = for<'a> fn(&'a mut Defaults) -> &'a mut String;
+
+/// The `[defaults]` path keys in the order they resolve, with what each names
+/// and its field. `defaults.baseline_dir` defaults to a path below the
+/// resolved `defaults.worktree_root`, so it resolves after it.
+const DEFAULTS_PATHS: [(&str, PathKind, DefaultsPath); 3] = [
+    ("defaults.worktree_root", PathKind::Host, |d| {
+        &mut d.worktree_root
+    }),
+    ("defaults.baseline_dir", PathKind::Host, |d| {
+        &mut d.baseline_dir
+    }),
+    ("defaults.doppler_yaml", PathKind::RepoRelative, |d| {
+        &mut d.doppler_yaml
+    }),
 ];
 
 /// What a `[defaults]` path key names, which decides what a relative value
@@ -3947,34 +3957,19 @@ fn resolve_defaults(
     {
         cfg.defaults.worktree_root = d.to_string_lossy().into_owned();
     }
-    cfg.defaults.worktree_root = resolve_path_key(
-        &cfg.defaults.worktree_root,
-        "defaults.worktree_root",
-        PathKind::Host,
-        origin,
-        checkout_root,
-        start,
-    )?;
-    // Computed from the now-resolved worktree_root, so a derived value is
-    // already absolute before it goes through its own resolve_path_key below.
-    if cfg.defaults.baseline_dir.is_empty() && !cfg.defaults.worktree_root.is_empty() {
-        cfg.defaults.baseline_dir = Path::new(&cfg.defaults.worktree_root)
-            .join("_baselines")
-            .to_string_lossy()
-            .into_owned();
-    }
-    for (key, kind, field) in [
-        (
-            "defaults.baseline_dir",
-            PathKind::Host,
-            &mut cfg.defaults.baseline_dir,
-        ),
-        (
-            "defaults.doppler_yaml",
-            PathKind::RepoRelative,
-            &mut cfg.defaults.doppler_yaml,
-        ),
-    ] {
+    for (key, kind, field) in DEFAULTS_PATHS {
+        // Computed from the already-resolved worktree_root, so a derived value
+        // is absolute before it goes through its own resolve_path_key.
+        if key == "defaults.baseline_dir"
+            && cfg.defaults.baseline_dir.is_empty()
+            && !cfg.defaults.worktree_root.is_empty()
+        {
+            cfg.defaults.baseline_dir = Path::new(&cfg.defaults.worktree_root)
+                .join("_baselines")
+                .to_string_lossy()
+                .into_owned();
+        }
+        let field = field(&mut cfg.defaults);
         *field = resolve_path_key(field, key, kind, origin, checkout_root, start)?;
     }
     cfg.defaults.branch_prefix =

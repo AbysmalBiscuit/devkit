@@ -573,3 +573,33 @@ fn a_task_step_in_an_app_directory_anchors_option_paths_as_its_parent_does() {
         "{shown}"
     );
 }
+
+#[test]
+fn a_child_in_another_checkout_resolves_a_repo_relative_option_against_its_own() {
+    let p = project();
+    let other = project();
+    let exe = env!("CARGO_BIN_EXE_devkit");
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        format!(
+            "[tasks.show]\nrun = ['{exe}', 'config', 'show', '--json', '-C', '{}']\n",
+            other.path().display()
+        ),
+    )
+    .unwrap();
+    let shown = stdout(&human(p.path(), &[
+        "-o",
+        "defaults.doppler_yaml=\"doppler.yaml\"",
+        "run",
+        "task",
+        "show",
+    ]));
+    let json = &shown[shown.find('{').unwrap()..=shown.rfind('}').unwrap()];
+    let cfg: serde_json::Value = serde_json::from_str(json).unwrap();
+    let doppler = Path::new(cfg["defaults"]["doppler_yaml"].as_str().unwrap());
+    assert_eq!(
+        doppler.parent().unwrap().canonicalize().unwrap(),
+        other.path().canonicalize().unwrap(),
+        "{shown}"
+    );
+}
