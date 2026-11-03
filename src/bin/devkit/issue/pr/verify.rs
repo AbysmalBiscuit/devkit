@@ -26,10 +26,13 @@ pub(crate) struct Gate {
     /// Why the latest run that passed at `head` does not qualify, when one
     /// passed and none qualifies.
     rejected: Option<String>,
+    /// The latest run of the required task and args at `head`, when no run
+    /// qualifies and that one did not exit 0.
+    failed: Option<Run>,
     /// What the PR changes in what the required task runs, when it does.
     change: Option<String>,
-    /// The steps `run` executed, and whether they differ from what HEAD's
-    /// committed config defines.
+    /// The steps `run` executed, when they differ from what HEAD's committed
+    /// config defines.
     ran: String,
 }
 
@@ -84,6 +87,18 @@ impl Gate {
                 }
             }
         };
+        let failed = match &run {
+            Some(_) => None,
+            None => runs
+                .iter()
+                .find(|r| {
+                    r.task == required.task
+                        && r.args == required.args
+                        && r.head.as_deref() == Some(head)
+                })
+                .filter(|r| r.exit_code != Some(0))
+                .cloned(),
+        };
         let run_dir = run.as_ref().and_then(|r| r.dir.as_deref()).unwrap_or("");
         let change = definition_change(
             checkout,
@@ -105,6 +120,7 @@ impl Gate {
             caller,
             run,
             rejected,
+            failed,
             change,
             ran,
         }))
@@ -157,11 +173,6 @@ impl Gate {
             ));
         }
         out.push_str(&self.ran);
-        match run.tail.as_deref() {
-            Some(lines) if !lines.is_empty() => out.push_str(&output_tail(lines)),
-            Some(_) => out.push_str("\nThe run printed nothing.\n"),
-            None => out.push_str("\nNo output was captured: it went straight to a terminal.\n"),
-        }
         out.push_str(self.change.as_deref().unwrap_or_default());
         out
     }
@@ -170,11 +181,37 @@ impl Gate {
         format!(
             "### Verification\n\n\
              NOT RUN: the run ledger records no run of `{command}` that exited 0 on a clean \
-             tree at `{head}`.{rejected}\n{change}",
+             tree at `{head}`.{rejected}\n{failed}{change}",
             command = self.required.command(),
             head = self.head,
             rejected = self.rejected_note(),
+            failed = self.failed_note(),
             change = self.change.as_deref().unwrap_or_default(),
+        )
+    }
+
+    /// The exit code, tree state and output tail of [`Self::failed`], or
+    /// empty when no failed run is recorded.
+    fn failed_note(&self) -> String {
+        let Some(run) = &self.failed else {
+            return String::new();
+        };
+        let exit = match run.exit_code {
+            Some(code) => code.to_string(),
+            None => "none: its program never started".to_string(),
+        };
+        let tail = match run.tail.as_deref() {
+            Some(lines) if !lines.is_empty() => output_tail(lines),
+            Some(_) => "\nThe run printed nothing.\n".to_string(),
+            None => "\nNo output was captured: it went straight to a terminal.\n".to_string(),
+        };
+        format!(
+            "\nThe latest run of `{command}` at `{head}`:\n\n\
+             - Exit code: {exit}\n\
+             - Tree: {tree}\n{tail}",
+            command = self.required.command(),
+            head = self.head,
+            tree = tree_state(run),
         )
     }
 
@@ -342,11 +379,11 @@ fn changed_plan(
     })
 }
 
-/// The steps `run` executed, as the section lists them, and a line saying
-/// so when they differ from what the `devkit.toml` files committed at
-/// `head` define the required task to run. A layer outside those files,
-/// such as a `devkit.local.toml`, the primary checkout's config, `--config`
-/// or `$DEVKIT_CONFIG`, changes what runs without dirtying the tree.
+/// The note that `run` executed other steps than the `devkit.toml` files
+/// committed at `head` define the required task to run, listing the steps
+/// it executed. A layer outside those files, such as a `devkit.local.toml`,
+/// the primary checkout's config, `--config` or `$DEVKIT_CONFIG`, changes
+/// what runs without dirtying the tree. Empty when the steps match.
 fn ran_note(
     checkout: &Checkout,
     worktree: &Worktree,
@@ -354,18 +391,6 @@ fn ran_note(
     run: &Run,
     required: &RequiredTask,
 ) -> String {
-    let mut out = String::new();
-    if !run.steps.is_empty() {
-        let lines: Vec<String> = run
-            .steps
-            .iter()
-            .map(|s| match &s.up {
-                Some(app) => format!("up: {app}"),
-                None => format!("{}: {}", s.task, s.argv.join(" ")),
-            })
-            .collect();
-        out = format!("\nSteps run:\n{}", leading_block(&lines, "text"));
-    }
     let committed = |ports: &BTreeMap<String, u16>| {
         task::committed_plan(
             checkout,
@@ -378,12 +403,24 @@ fn ran_note(
         )
         .map(|plan| plan.commands())
     };
-    if matches_committed(&run.steps, committed) == Some(false) {
-        out.push_str(&format!(
-            "\nAn uncommitted config layer changed what ran: these steps differ from what the \
-             `devkit.toml` files committed at HEAD define for `{}`.\n",
-            required.task
-        ));
+    if matches_committed(&run.steps, committed) != Some(false) {
+        return String::new();
+    }
+    let mut out = format!(
+        "\nAn uncommitted config layer changed what ran: these steps differ from what the \
+         `devkit.toml` files committed at HEAD define for `{}`.\n",
+        required.task
+    );
+    if !run.steps.is_empty() {
+        let lines: Vec<String> = run
+            .steps
+            .iter()
+            .map(|s| match &s.up {
+                Some(app) => format!("up: {app}"),
+                None => format!("{}: {}", s.task, s.argv.join(" ")),
+            })
+            .collect();
+        out.push_str(&leading_block(&lines, "text"));
     }
     out
 }
@@ -474,34 +511,49 @@ fn unproven(required: &RequiredTask, run: &Run) -> Option<String> {
             flags(&required.args, &BTreeMap::new())
         ));
     }
-    if !run.env.is_empty() || run.env_file.is_some() {
-        let mut given = Vec::new();
-        if !run.env.is_empty() {
-            given.push(format!(
-                "`--env` for {}",
-                run.env
-                    .iter()
-                    .map(|v| format!("`{v}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        if let Some(file) = &run.env_file {
-            given.push(format!("`--env-file {}`", file.display()));
-        }
+    if let Some(given) = env_given(run) {
         why.push(format!(
-            "it was given {}, which the committed config does not set, so run it without them",
-            given.join(" and ")
+            "it was given {given}, which the committed config does not set, so run it without them"
         ));
     }
     if why.is_empty() && !run.clean {
-        why.push(
-            "its tree was not clean: a file was modified, staged or untracked when it started \
-             or ended, or HEAD moved during it"
-                .to_string(),
-        );
+        why.push(format!("its tree was not clean: {DIRTY_TREE}"));
     }
     (!why.is_empty()).then(|| format!("A run at that commit passed, but {}.", why.join("; and ")))
+}
+
+/// Why a run recorded as not clean, and given no env, was not clean.
+const DIRTY_TREE: &str =
+    "a file was modified, staged or untracked when it started or ended, or HEAD moved during it";
+
+/// The `--env` names and `--env-file` that `run` was given, quoted, or
+/// `None` when it was given neither. The values are never recorded.
+fn env_given(run: &Run) -> Option<String> {
+    let mut given = Vec::new();
+    if !run.env.is_empty() {
+        given.push(format!(
+            "`--env` for {}",
+            run.env
+                .iter()
+                .map(|v| format!("`{v}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if let Some(file) = &run.env_file {
+        given.push(format!("`--env-file {}`", file.display()));
+    }
+    (!given.is_empty()).then(|| given.join(" and "))
+}
+
+/// The tree state `run` recorded, as the section names it. A run given env
+/// is recorded as not clean whatever its tree held, so it says so instead.
+fn tree_state(run: &Run) -> String {
+    match env_given(run) {
+        Some(given) => format!("not proven clean: it was given {given}"),
+        None if run.clean => "clean".to_string(),
+        None => format!("not clean: {DIRTY_TREE}"),
+    }
 }
 
 fn short(rev: &str) -> &str {
@@ -631,6 +683,7 @@ mod tests {
             caller: Caller::Agent,
             run: None,
             rejected: None,
+            failed: None,
             change: None,
             ran: String::new(),
         };

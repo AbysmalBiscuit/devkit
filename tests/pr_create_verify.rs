@@ -143,6 +143,73 @@ fn a_failing_run_at_head_does_not_satisfy_the_gate() {
     assert!(!opened(&p), "{}", p.calls());
 }
 
+/// The body of a human's PR opened after `devrun task broken <extra>`, a
+/// task that prints `going down` and exits 3, ran at HEAD. `dirty` leaves
+/// an untracked file in the tree during the run, removed before the PR.
+fn body_after_failed_run(extra: &[&str], dirty: bool) -> (ghfake::Fake, String) {
+    let p = project(
+        &GATE
+            .replace("\"verify\"", "\"broken\"")
+            .replace("verify_args = { scope = \"all\" }\n", ""),
+    );
+    let scratch = p.project().join("scratch.txt");
+    if dirty {
+        std::fs::write(&scratch, "uncommitted\n").unwrap();
+    }
+    let mut args = vec!["broken"];
+    args.extend_from_slice(extra);
+    task(&p, &args);
+    if dirty {
+        std::fs::remove_file(&scratch).unwrap();
+    }
+    let (ok, stderr) = create(&p, "human");
+    assert!(ok, "{stderr}");
+    let body = body(&p);
+    (p, body)
+}
+
+#[test]
+fn a_failing_run_at_head_shows_its_output_tail_beside_not_run() {
+    let (p, body) = body_after_failed_run(&[], false);
+    assert!(body.contains("NOT RUN"), "{body}");
+    assert!(
+        body.contains(&format!(
+            "\nThe latest run of `devrun task broken` at `{}`:\n\n\
+             - Exit code: 3\n\
+             - Tree: clean\n",
+            head(&p)
+        )),
+        "{body}"
+    );
+    assert!(
+        body.contains("\nOutput tail:\n\n```text\ngoing down\n```\n"),
+        "{body}"
+    );
+}
+
+#[test]
+fn a_failing_run_on_a_dirty_tree_says_its_tree_was_not_clean() {
+    let (_p, body) = body_after_failed_run(&[], true);
+    assert!(
+        body.contains(
+            "- Tree: not clean: a file was modified, staged or untracked when it started or \
+             ended, or HEAD moved during it\n"
+        ),
+        "{body}"
+    );
+    assert!(body.contains("going down"), "{body}");
+}
+
+#[test]
+fn a_failing_run_given_env_names_the_variables_but_not_their_values() {
+    let (_p, body) = body_after_failed_run(&["--env", "GIT_TRACE=0"], false);
+    assert!(
+        body.contains("- Tree: not proven clean: it was given `--env` for `GIT_TRACE`\n"),
+        "{body}"
+    );
+    assert!(!body.contains("GIT_TRACE=0"), "{body}");
+}
+
 #[test]
 fn a_pass_at_an_ancestor_of_head_does_not_satisfy_the_gate() {
     let p = project(GATE);
@@ -215,15 +282,17 @@ fn the_body_carries_a_verification_section_built_from_the_qualifying_run() {
         "{body}"
     );
     let sha = head(&p);
-    for want in [
-        "`devrun task verify --arg scope=all`",
-        "Exit code: 0",
-        &format!("`{sha}`"),
-        "git version",
-    ] {
-        assert!(body.contains(want), "{want}: {body}");
-    }
-    assert!(!body.contains("NOT RUN"), "{body}");
+    assert_eq!(
+        body,
+        format!(
+            "Adds a thing.\n\n### Verification\n\n\
+             - Command: `devrun task verify --arg scope=all`\n\
+             - Exit code: 0\n\
+             - SHA: `{sha}`\n\
+             - Tree: clean\n"
+        ),
+        "a passing run lists no steps and quotes no output"
+    );
 }
 
 #[test]
@@ -541,14 +610,11 @@ fn a_run_under_an_uncommitted_layer_shows_its_steps_and_says_so() {
 }
 
 #[test]
-fn a_run_under_the_committed_config_shows_its_steps_alone() {
+fn a_run_under_the_committed_config_lists_no_steps() {
     let p = project(GATE);
     verify(&p);
     let body = opened_body(&p);
-    assert!(
-        body.contains("\nverify: git -c x.scope=all version\n"),
-        "{body}"
-    );
+    assert!(!body.contains("git -c x.scope=all version"), "{body}");
     assert!(!body.contains("uncommitted config layer"), "{body}");
 }
 
