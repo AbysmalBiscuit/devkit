@@ -6,7 +6,7 @@
 //! detached `devkit ticket event start`. It writes no stdout and every failure
 //! is silence, so a SessionStart verdict never depends on it.
 
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use devkit_common::{
     record::{self, IssueRecord, RecordOrigin, RecordState},
@@ -61,10 +61,9 @@ pub(crate) fn on_session_start(checkout: &Checkout) {
 }
 
 fn spawn(root: &Path) {
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(mut cmd) = devkit_common::config::devkit_command() else {
         return;
     };
-    let mut cmd = Command::new(exe);
     cmd.args(["ticket", "event", "start", "--dir"])
         .arg(root)
         .arg("--log-file")

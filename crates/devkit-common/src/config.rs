@@ -5,7 +5,7 @@ use std::{
     sync::OnceLock,
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use devkit_config::{Config, Options, PendingLayer, Provenance};
 
 use crate::vcs::Checkout;
@@ -29,6 +29,15 @@ pub fn set_options(options: Options) -> Result<()> {
 /// The `--option` values of this process: empty until [`set_options`] runs.
 pub fn options() -> &'static Options {
     OPTIONS.get_or_init(Options::default)
+}
+
+/// A command that runs this devkit executable with this process's `--option`
+/// values, so the child resolves the config this process resolves.
+pub fn devkit_command() -> Result<std::process::Command> {
+    let exe = std::env::current_exe().context("locating the devkit executable")?;
+    let mut cmd = std::process::Command::new(exe);
+    pass_options(&mut cmd)?;
+    Ok(cmd)
 }
 
 /// Give `cmd` the `--option` values of this process in `$DEVKIT_OPTIONS`, so a

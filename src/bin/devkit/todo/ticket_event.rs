@@ -4,7 +4,7 @@
 //! `[ticket.events]` configures, in a detached `devkit ticket event` so no todo
 //! command waits on the tracker.
 
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use devkit_common::vcs::Checkout;
 use devkit_config::{IssueEvent, PushKind, TicketConfig, TodoConfig};
@@ -93,10 +93,12 @@ pub(crate) fn fire_for(
 }
 
 fn spawn(root: &Path, event: IssueEvent, key: &str, todo: &str) {
-    let (Ok(exe), Ok(state)) = (std::env::current_exe(), devkit_common::paths::state_dir()) else {
+    let (Ok(mut cmd), Ok(state)) = (
+        devkit_common::config::devkit_command(),
+        devkit_common::paths::state_dir(),
+    ) else {
         return;
     };
-    let mut cmd = Command::new(exe);
     cmd.arg("ticket")
         .arg("-C")
         .arg(root)

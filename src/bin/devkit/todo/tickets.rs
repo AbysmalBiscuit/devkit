@@ -12,7 +12,6 @@ use std::{
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
-    process::Command,
     time::Duration,
 };
 
@@ -394,10 +393,9 @@ pub(crate) fn spawn_if_stale(cwd: &Path, node: &str, config: &TicketSyncConfig) 
     if !State::of(node).is_ok_and(|state| state.due(config)) {
         return;
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(mut cmd) = devkit_common::config::devkit_command() else {
         return;
     };
-    let mut cmd = Command::new(exe);
     cmd.args(["todo", "sync", "--tickets-only", "--background"])
         .current_dir(cwd);
     let _ = devkit_common::sys::spawn_background(&mut cmd);
