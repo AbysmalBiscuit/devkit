@@ -9,15 +9,19 @@
 
 use std::{ffi::OsStr, process::Command};
 
-/// Variables that would let an ambient session own a test's locks or todos.
-const IDENTITY_VARS: [&str; 5] = [
+/// Variables that would let an ambient session own a test's locks or todos,
+/// or override the config the test writes.
+const IDENTITY_VARS: [&str; 6] = [
     "DEVKIT_SESSION",
     "TMUX_PANE",
     "CLAUDE_CODE_SESSION_ID",
     "CODEX_SESSION_ID",
     "GROK_SESSION_ID",
+    "DEVKIT_OPTIONS",
 ];
 
+/// Remove the ambient session and config overrides. A test that sets one of
+/// these variables sets it after this call.
 pub fn scrub_identity(cmd: &mut Command) -> &mut Command {
     for var in IDENTITY_VARS {
         cmd.env_remove(var);

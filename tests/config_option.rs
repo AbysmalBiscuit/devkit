@@ -45,12 +45,11 @@ fn devkit_with_options(
         .env("XDG_CONFIG_HOME", state.join("config"))
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env("DEVKIT_CALLER", caller)
-        .env_remove("DEVKIT_CONFIG")
-        .env_remove("DEVKIT_OPTIONS");
+        .env_remove("DEVKIT_CONFIG");
+    testenv::scrub_identity(&mut cmd);
     if let Some(options) = options {
         cmd.env("DEVKIT_OPTIONS", options);
     }
-    testenv::scrub_identity(&mut cmd);
     cmd.output().expect("spawn devkit")
 }
 

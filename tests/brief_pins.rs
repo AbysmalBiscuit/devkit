@@ -105,7 +105,8 @@ impl Project {
             .env("XDG_STATE_HOME", self.home.join("state"))
             .env("XDG_DATA_HOME", self.home.join("data"))
             .env("COLUMNS", "100")
-            .env("DEVKIT_SKIP_AUTOLINK", "1");
+            .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .env_remove("DEVKIT_OPTIONS");
         for (key, value) in env {
             cmd.env(key, value);
         }
@@ -124,6 +125,7 @@ impl Project {
             .env("XDG_DATA_HOME", self.home.join("data"))
             .env("COLUMNS", "100")
             .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .env_remove("DEVKIT_OPTIONS")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped());
         let mut child = cmd.spawn().unwrap();
@@ -150,6 +152,7 @@ impl Project {
             .env("XDG_DATA_HOME", self.home.join("data"))
             .env("COLUMNS", "100")
             .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .env_remove("DEVKIT_OPTIONS")
             .output()
             .unwrap()
     }
@@ -175,6 +178,7 @@ fn brief_with_stdin(project: &Project, args: &[&str], stdin: &str, columns: &str
         .env("XDG_DATA_HOME", project.home.join("data"))
         .env("COLUMNS", columns)
         .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env_remove("DEVKIT_OPTIONS")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -377,6 +381,7 @@ fn an_unwritable_state_dir_fails_open() {
             .env("XDG_DATA_HOME", project.home.join("data"))
             .env("COLUMNS", "100")
             .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .env_remove("DEVKIT_OPTIONS")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -448,6 +453,7 @@ fn brief_from(project: &Project, cwd: &Path, stdin: &str) -> Output {
         .env("XDG_DATA_HOME", project.home.join("data"))
         .env("COLUMNS", "100")
         .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env_remove("DEVKIT_OPTIONS")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
