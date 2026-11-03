@@ -159,3 +159,31 @@ fn an_agent_caller_is_refused_the_flag() {
     assert!(err.contains("--option"), "{err}");
     assert!(out.stdout.is_empty(), "nothing ran: {:?}", out.stdout);
 }
+
+#[test]
+fn doctor_reports_an_option_of_the_wrong_type_as_a_broken_config() {
+    let p = project();
+    let out = human(p.path(), &[
+        "doctor",
+        "--json",
+        "-o",
+        "defaults.branch_prefix=1",
+    ]);
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "doctor --json: {e}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )
+    });
+    let config = rows
+        .as_array()
+        .and_then(|rows| rows.iter().find(|r| r["key"] == "config"))
+        .unwrap_or_else(|| panic!("no config row: {rows}"));
+    assert_eq!(config["status"], "invalid", "{config}");
+    assert!(
+        config["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("branch_prefix")),
+        "{config}"
+    );
+}

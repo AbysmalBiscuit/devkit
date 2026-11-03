@@ -3433,14 +3433,7 @@ impl Health {
     }
 }
 
-/// Classify the config reachable from `start` without ever failing.
-/// `main_checkout` is this repository's main checkout when `start` is a
-/// linked worktree of one — resolved by the caller, because `devkit-config`
-/// asks git nothing.
-pub fn health(start: &Path, main_checkout: Option<&Path>) -> Health {
-    health_with_home(start, main_checkout, home_config_path().as_deref(), None)
-}
-
+#[cfg(test)]
 pub(crate) fn health_with_home(
     start: &Path,
     main_checkout: Option<&Path>,
@@ -3509,6 +3502,7 @@ pub fn resolve_pending(
 
 /// `resolve` with an injectable home-config path (tests pass a controlled path
 /// or `None` so the real `~/.config/devkit/config.toml` never participates).
+#[cfg(test)]
 pub(crate) fn resolve_with_home(
     explicit: Option<&Path>,
     start: &Path,

@@ -70,6 +70,12 @@ pub fn resolve_in(
     resolved
 }
 
+/// Classify the config [`resolve_in`] loads, `--option` values included,
+/// without ever failing.
+pub fn health_in(checkout: &Checkout, start: &Path) -> devkit_config::Health {
+    devkit_config::Health::of(&resolve_in(checkout, None, start))
+}
+
 /// [`resolve`] as it would be once `pending` is written, configuring
 /// nothing: the config it answers is not yet the one in force.
 pub fn resolve_pending(
