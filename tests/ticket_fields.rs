@@ -417,6 +417,34 @@ fn discover_into_refuses_a_file_a_higher_layer_shadows() {
 }
 
 #[test]
+fn discover_into_refuses_the_home_config() {
+    let fake = fields_fake();
+    fake.serve_graphql(DISCOVERED);
+    let home = fake.state().join(".config/devkit/config.toml");
+    std::fs::create_dir_all(home.parent().unwrap()).unwrap();
+    let text = "# this machine's settings\n[people.lev]\ngithub = \"LevValle\"\n";
+    std::fs::write(&home, text).unwrap();
+    let out = fake.issue_as("agent", &[
+        "fields",
+        "discover",
+        "--into",
+        home.to_str().unwrap(),
+    ]);
+    assert!(
+        !out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&home.display().to_string())
+            && stderr.contains("--into takes a project config layer"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&home).unwrap(), text);
+}
+
+#[test]
 fn discover_into_refuses_devkit_config() {
     let fake = fields_fake();
     let named = fake.state().join("named.toml");

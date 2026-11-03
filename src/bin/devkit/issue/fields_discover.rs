@@ -179,7 +179,8 @@ fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
 /// Refuse to write `after` to `path` when the config would then fail to
 /// load, or fail the field checks every ticket command runs on `kind`: an
 /// error-level `enum` left with no values, say. Refuse too when `path` would
-/// not be a layer of the config, since no run would then read it.
+/// not be a layer of the config, since no run would then read it, and when it
+/// is the home config, which every project reads.
 fn refuse_unloadable(
     config: Option<&Path>,
     start: &Path,
@@ -188,6 +189,13 @@ fn refuse_unloadable(
     after: &str,
 ) -> Result<(Config, Provenance)> {
     let pending = PendingLayer { path, text: after };
+    if devkit_config::home_config_path().is_some_and(|home| pending.is(&home)) {
+        bail!(
+            "not writing {}: it is the home config, which every project reads, and --into takes \
+             a project config layer, such as devkit.local.toml",
+            path.display()
+        );
+    }
     let (cfg, provenance) = devkit_common::config::resolve_pending(config, start, pending)
         .and_then(|(cfg, provenance)| {
             devkit_config::check_ticket_fields(&cfg, kind, &provenance.origin)?;
