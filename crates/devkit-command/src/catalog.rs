@@ -143,7 +143,9 @@ fn each(op: FileOp, operands: &[Value]) -> Vec<Hit> {
 fn file(op: FileOp, v: &Value) -> Hit {
     match v {
         Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => Hit::File(op, v.clone()),
-        Value::Unknown => Hit::Unresolved(format!("a {op:?} target could not be determined")),
+        Value::Unknown | Value::Prefixed(_) => {
+            Hit::Unresolved(format!("a {op:?} target could not be determined"))
+        }
     }
 }
 
@@ -153,7 +155,9 @@ fn rename_into(sources: &[Value], dest: &Value) -> Hit {
             sources: sources.to_vec(),
             dest: dest.clone(),
         },
-        Value::Unknown => Hit::Unresolved("a Rename target could not be determined".into()),
+        Value::Unknown | Value::Prefixed(_) => {
+            Hit::Unresolved("a Rename target could not be determined".into())
+        }
     }
 }
 
@@ -213,7 +217,7 @@ fn formatter_operands(operands: &[Value], by: &str) -> Vec<Hit> {
                 Hit::File(FileOp::Overwrite, v.clone())
             }
             Value::Known(_) => tree(v, false, by),
-            Value::Unknown | Value::Ephemeral(_) => Hit::Unresolved(format!(
+            Value::Unknown | Value::Ephemeral(_) | Value::Prefixed(_) => Hit::Unresolved(format!(
                 "`{by}` rewrites a path that could not be determined"
             )),
         })
@@ -264,7 +268,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                         Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => {
                             removal(v, "rm -r")
                         }
-                        Value::Unknown => Hit::Unresolved(
+                        Value::Unknown | Value::Prefixed(_) => Hit::Unresolved(
                             "`rm -r` removes a path that could not be determined".into(),
                         ),
                     })
@@ -309,7 +313,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                                 Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => {
                                     tree(&target, false, "cp -r")
                                 }
-                                Value::Unknown => Hit::Unresolved(
+                                Value::Unknown | Value::Prefixed(_) => Hit::Unresolved(
                                     "`cp -r` destination could not be determined".into(),
                                 ),
                             }
@@ -326,7 +330,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                             Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => {
                                 tree(dest, false, "cp -r")
                             }
-                            Value::Unknown => Hit::Unresolved(
+                            Value::Unknown | Value::Prefixed(_) => Hit::Unresolved(
                                 "`cp -r` destination could not be determined".into(),
                             ),
                         }]
@@ -766,7 +770,7 @@ fn git(args: &[Value]) -> Vec<Hit> {
                         Value::Known(_) | Value::Ephemeral(_) | Value::Within(_) => {
                             removal(v, "git rm -r")
                         }
-                        Value::Unknown => {
+                        Value::Unknown | Value::Prefixed(_) => {
                             Hit::Unresolved("`git rm -r` path could not be determined".into())
                         }
                     })

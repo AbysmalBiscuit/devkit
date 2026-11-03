@@ -519,7 +519,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             self.value_limit(node);
                             Js::Unknown
                         }
-                        Value::Unknown | Value::Within(_) => Js::Unknown,
+                        Value::Unknown | Value::Within(_) | Value::Prefixed(_) => Js::Unknown,
                         Value::Ephemeral(at) => Js::Ephemeral(at.clone()),
                     }),
                 (Js::Array(items), Js::Num(i)) => usize::try_from(i)

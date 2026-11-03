@@ -417,7 +417,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 .map(|n| self.word(n, scope).value)
                 .map(|v| match v {
                     Value::Known(s) => Value::Known(format!("{s}\n")),
-                    Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => Value::Unknown,
+                    Value::Unknown
+                    | Value::Ephemeral(_)
+                    | Value::Within(_)
+                    | Value::Prefixed(_) => Value::Unknown,
                 })
                 .unwrap_or(Value::Unknown);
             return Stdin::Source { value, span };
@@ -485,7 +488,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     let Some((name, value)) = self.assignment(child, scope) else {
                         continue;
                     };
-                    words.extend(assignment_word(&name, &value, child));
+                    words.push(assignment_word(&name, &value, child));
                     bound.push((name, value));
                 }
                 "variable_name" => {
@@ -498,13 +501,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         .or_else(|| scope.vars.get(name))
                         .cloned()
                         .unwrap_or(Value::Unknown);
-                    words.push(
-                        assignment_word(name, &value, child).unwrap_or_else(|| Word {
-                            value: Value::Known(name.to_string()),
-                            typed: name.to_string(),
-                            span: child.byte_range(),
-                        }),
-                    );
+                    words.push(assignment_word(name, &value, child));
                 }
                 _ => words.push(self.word(child, scope)),
             }
@@ -597,9 +594,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     let Some((name, value)) = self.assignment(child, env) else {
                         continue;
                     };
-                    if let Some(word) = assignment_word(&name, &value, child) {
-                        assignments.push(word);
-                    }
+                    assignments.push(assignment_word(&name, &value, child));
                     if name == "PATH" {
                         path = Some(value.clone());
                     }
@@ -736,7 +731,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     };
                     match value {
                         Value::Known(s) => out.push_str(&s),
-                        Value::Unknown => known = false,
+                        Value::Unknown | Value::Prefixed(_) => known = false,
                         v @ (Value::Ephemeral(_) | Value::Within(_)) => whole_word = Some(v),
                     }
                 }
@@ -774,7 +769,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         // A concatenation always has something beside the temp
                         // path or the match, which is exactly what stops it
                         // being bounded.
-                        Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => {
+                        Value::Unknown
+                        | Value::Ephemeral(_)
+                        | Value::Within(_)
+                        | Value::Prefixed(_) => {
                             return Value::Unknown;
                         }
                     }
@@ -946,15 +944,21 @@ impl<'t> Walker<'_, '_, '_, 't> {
     }
 }
 
-/// An assignment as the `NAME=value` word an environment receives, when its
-/// value is known. An unknown value names nothing a rule could match.
-fn assignment_word(name: &str, value: &Value, node: Node<'_>) -> Option<Word> {
-    let text = format!("{name}={}", value.known()?);
-    Some(Word {
-        value: Value::Known(text.clone()),
-        typed: text,
+/// An assignment as the `NAME=value` word an environment receives. An
+/// unknown value still names the variable it sets.
+fn assignment_word(name: &str, value: &Value, node: Node<'_>) -> Word {
+    let (value, typed) = match value.known() {
+        Some(known) => {
+            let text = format!("{name}={known}");
+            (Value::Known(text.clone()), text)
+        }
+        None => (Value::Prefixed(format!("{name}=")), format!("{name}=...")),
+    };
+    Word {
+        value,
+        typed,
         span: node.byte_range(),
-    })
+    }
 }
 
 /// `mktemp -u` prints a name without creating anything, leaving the path free

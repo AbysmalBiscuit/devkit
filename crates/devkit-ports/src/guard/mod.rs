@@ -111,7 +111,8 @@ fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
 /// more whole arguments; every other entry matches one argument. A pattern
 /// that is a `DEVKIT_CALLER=` assignment the override accepts matches every
 /// spelling of that value; any other pattern, wildcards included, matches the
-/// argument as written.
+/// argument as written. An argument known only by its start, such as an
+/// assignment of an unknown value, matches a pattern that accepts any rest.
 fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((pattern, patterns)) = patterns.split_first() else {
         return Match::Yes;
@@ -138,9 +139,28 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
             Match::Yes
         }
         Value::Known(_) => return Match::No,
+        Value::Prefixed(start) => match prefix_match(pattern, start) {
+            Match::No => return Match::No,
+            here => here,
+        },
         Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => Match::Possible,
     };
     here.min(args_match(patterns, args))
+}
+
+/// Whether `pattern` matches every word that starts with `start`, only some,
+/// or none.
+fn prefix_match(pattern: &str, start: &str) -> Match {
+    let (head, rest) = pattern.split_at(pattern.find('*').unwrap_or(pattern.len()));
+    let common = head.len().min(start.len());
+    match (
+        head.as_bytes()[..common] == start.as_bytes()[..common],
+        !rest.is_empty() && rest.chars().all(|c| c == '*'),
+    ) {
+        (false, _) => Match::No,
+        (true, true) if head.len() <= start.len() => Match::Yes,
+        (true, _) => Match::Possible,
+    }
 }
 
 /// Whether `inv` runs devkit's own binary, judging its program against the
@@ -152,7 +172,9 @@ pub fn runs_own(inv: &Invocation, own: &OwnBinary) -> bool {
         match &inv.search_path {
             SearchPath::Inherited => own.runs(p, cwd),
             SearchPath::Set(Value::Known(path)) => own.on_path(path.into()).runs(p, cwd),
-            SearchPath::Set(Value::Unknown | Value::Ephemeral(_) | Value::Within(_)) => false,
+            SearchPath::Set(
+                Value::Unknown | Value::Ephemeral(_) | Value::Within(_) | Value::Prefixed(_),
+            ) => false,
         }
     })
 }
