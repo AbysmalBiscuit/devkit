@@ -269,7 +269,9 @@ impl Project {
 fn refusal(stderr: &str) -> String {
     let at = stderr.find("refusing").expect("a refusal");
     let message = &stderr[at..];
-    let end = message.find("\n\nStack backtrace:").unwrap_or(message.len());
+    let end = message
+        .find("\n\nStack backtrace:")
+        .unwrap_or(message.len());
     message[..end].trim_end().to_string()
 }
 
