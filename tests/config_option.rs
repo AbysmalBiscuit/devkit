@@ -305,3 +305,21 @@ fn a_harness_option_may_set_one_key_and_the_last_value_wins() {
     ]));
     assert_eq!(row["enabled"], true, "{row}");
 }
+
+#[test]
+fn an_option_may_set_the_whole_harness_table() {
+    let p = project();
+    let row = harness_log_row(&human(p.path(), &[
+        "doctor",
+        "--json",
+        "-o",
+        "harness={ log = { enabled = true } }",
+    ]));
+    assert_eq!(row["enabled"], true, "{row}");
+
+    for option in ["harness={ enforce_commands = 1 }", "harness=1"] {
+        let err = stderr(&human(p.path(), &["config", "show", "-o", option]));
+        assert!(err.contains("--option harness"), "{option}: {err}");
+        assert!(!err.contains("panicked"), "{option}: {err}");
+    }
+}

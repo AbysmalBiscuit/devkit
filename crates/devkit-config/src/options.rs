@@ -86,8 +86,14 @@ fn check_harness_value(table: &toml::Table, path: &[String]) -> Result<()> {
     let Some(value) = lookup(table, path) else {
         return Ok(());
     };
-    let mut one = toml::Table::new();
-    insert(&mut one, &path[1..], value.clone());
+    let mut one = match &path[1..] {
+        [] => value.clone(),
+        rest => {
+            let mut section = toml::Table::new();
+            insert(&mut section, rest, value.clone());
+            toml::Value::Table(section)
+        }
+    };
     for tools in ["issue_tools", "pr_tools"] {
         let entries = one.get_mut(tools).and_then(toml::Value::as_table_mut);
         for entry in entries
@@ -101,7 +107,7 @@ fn check_harness_value(table: &toml::Table, path: &[String]) -> Result<()> {
             }
         }
     }
-    toml::Value::Table(one).try_into::<HarnessSection>()?;
+    one.try_into::<HarnessSection>()?;
     Ok(())
 }
 
