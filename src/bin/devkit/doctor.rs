@@ -224,8 +224,8 @@ fn tracker_check(r: &Resolved) -> Check {
 /// rather than a warning; having none at all is how any non-devkit directory
 /// looks and is reported without complaint.
 fn config_check(start: &std::path::Path) -> Check {
-    let main_checkout = devkit_common::vcs::main_checkout(start).ok().flatten();
-    match devkit_config::health(start, main_checkout.as_deref()) {
+    let checkout = devkit_common::vcs::Checkout::at(start);
+    match devkit_common::config::health_in(&checkout, start) {
         devkit_config::Health::Ok => Check::Ok("devkit.toml loads".into()),
         devkit_config::Health::Absent => Check::Ok("no devkit.toml — not a devkit project".into()),
         // A toml error breaks its own lines; the rows here are one line each.

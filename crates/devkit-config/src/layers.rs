@@ -316,8 +316,17 @@ mod tests {
             path: &path,
             text: "[tracker]\nkind = \"linear\"\n",
         };
-        let (cfg, provenance) =
-            crate::resolve_layers(None, dir.path(), None, None, None, None, Some(pending)).unwrap();
+        let (cfg, provenance) = crate::resolve_layers(
+            None,
+            dir.path(),
+            None,
+            None,
+            None,
+            None,
+            Some(pending),
+            &Default::default(),
+        )
+        .unwrap();
         assert_eq!(cfg.tracker.kind, Some(crate::TrackerKind::Linear));
         assert_eq!(provenance.layers.len(), 2, "{:?}", provenance.layers);
         assert!(!path.exists());

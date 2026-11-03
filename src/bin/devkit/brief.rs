@@ -510,7 +510,7 @@ fn brief_config(checkout: &Checkout, cwd: &Path) -> BriefConfig {
 /// does not exist. An absent config is how every non-devkit repository looks,
 /// so only a config that exists and fails is worth a word.
 fn config_fault(cwd: &Path, checkout: &Checkout) -> Option<String> {
-    match config::health(cwd, checkout.main_checkout()) {
+    match devkit_common::config::health_in(checkout, cwd) {
         config::Health::Broken(why) => Some(why),
         config::Health::Ok | config::Health::Absent => None,
     }

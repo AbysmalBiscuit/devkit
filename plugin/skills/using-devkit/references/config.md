@@ -11,6 +11,7 @@
 - `[config] root = true` stops the walk at that directory and drops every shallower layer, the home config included. In a linked worktree it keeps the main checkout's files.
 - `--config <path>` or `$DEVKIT_CONFIG` selects one file verbatim, with no layering and no home base.
 - The home config's `[todo]` table is the exception to both: where todos are kept is a fact about the machine, so it stays the base layer under a rooted or explicit config, which can still override it.
+- `-o KEY=VALUE` (`--option`) sets one key for one command, as the top layer over the files or `--config`. The value is TOML, so a string keeps its quotes: `-o tracker.kind='"none"'`. `--origin` names `<command line>` as its source. devkit refuses the flag for an agent caller, and passes no `-o` value to a child process or hook.
 
 The `[harness]` switches and `[harness.log]` resolve across layers by rules of their own, which their descriptions give.
 

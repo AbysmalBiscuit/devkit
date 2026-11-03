@@ -55,6 +55,37 @@ Run `devkit install-links` if any of them are missing.";
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    #[command(flatten)]
+    options: ConfigOptions,
+}
+
+// A plain comment: a doc comment here would become the about text of every
+// shim that `shim_command` augments with this flag.
+#[derive(clap::Args)]
+struct ConfigOptions {
+    /// Set one config value for this command, over every config file and
+    /// `--config`: a dotted key and a TOML value, as in
+    /// `-o tracker.kind='"none"'`. Repeat it to set more keys; the last value
+    /// for a key wins. Refused for agent callers.
+    #[arg(short = 'o', long = "option", value_name = "KEY=VALUE", global = true)]
+    option: Vec<String>,
+}
+
+impl ConfigOptions {
+    /// Parse the values and set them for every config resolve in this process.
+    /// An agent may not pass any: several keys are safety controls.
+    fn apply(self) -> Result<()> {
+        if self.option.is_empty() {
+            return Ok(());
+        }
+        if devkit_common::caller::caller() == devkit_common::caller::Caller::Agent {
+            anyhow::bail!(
+                "--option is refused for agent callers: it could weaken the safety \
+                 controls devkit.toml sets"
+            );
+        }
+        devkit_common::config::set_options(devkit_config::Options::parse(&self.option)?)
+    }
 }
 
 #[derive(Subcommand)]
@@ -257,7 +288,8 @@ pub(crate) fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::C
             .unwrap_or_else(|| panic!("no `{subcommand}` subcommand"))
             .clone()
     };
-    cmd.name(shim_name)
+    ConfigOptions::augment_args(cmd)
+        .name(shim_name)
         // Overrides the `devkit <sub>` spelling the subcommand carries for its
         // own version line: under this name it *is* the root command.
         .display_name(shim_name)
@@ -322,6 +354,7 @@ fn route(args: Vec<OsString>) -> (Option<shim::Shim>, &'static str, Vec<OsString
 
 fn dispatch_shim(s: shim::Shim, name: &'static str, args: Vec<OsString>) -> Result<()> {
     let matches = shim_command(s.subcommand(), name).get_matches_from(args);
+    ConfigOptions::from_arg_matches(&matches)?.apply()?;
     match s {
         shim::Shim::Ports => ports::run(ports::PortsCli::from_arg_matches(&matches)?),
         shim::Shim::Locks => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
@@ -497,6 +530,7 @@ fn main() -> Result<()> {
         Some(s) => dispatch_shim(s, name, args),
         None => {
             let cli = parse_cli(&args);
+            cli.options.apply()?;
             match cli.cmd {
                 Cmd::Auth {
                     provider,

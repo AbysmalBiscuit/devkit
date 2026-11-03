@@ -1,11 +1,27 @@
 //! The one door every subcommand's config resolution passes through.
 
-use std::path::Path;
+use std::{path::Path, sync::OnceLock};
 
-use anyhow::Result;
-use devkit_config::{Config, PendingLayer, Provenance};
+use anyhow::{Result, bail};
+use devkit_config::{Config, Options, PendingLayer, Provenance};
 
 use crate::vcs::Checkout;
+
+static OPTIONS: OnceLock<Options> = OnceLock::new();
+
+/// Set the `--option` values every later resolve in this process merges over
+/// its layers. The command line is parsed once, so a second call is a bug.
+pub fn set_options(options: Options) -> Result<()> {
+    if OPTIONS.set(options).is_err() {
+        bail!("the --option values are already set for this process");
+    }
+    Ok(())
+}
+
+/// The `--option` values of this process: empty until [`set_options`] runs.
+pub fn options() -> &'static Options {
+    OPTIONS.get_or_init(Options::default)
+}
 
 /// Resolve the `devkit.toml` layers discovered from `start` — or the single
 /// file `explicit` names — and size the shared worker pool from the result.
@@ -46,12 +62,19 @@ pub fn resolve_in(
         checkout.main_checkout(),
         checkout.root(),
         derived.as_deref(),
+        options(),
     );
     if let Ok((cfg, _)) = &resolved {
         crate::pool::configure(cfg.parallelism.threads);
         crate::github::configure(cfg.github.no_graphql);
     }
     resolved
+}
+
+/// Classify the config [`resolve_in`] loads, `--option` values included,
+/// without ever failing.
+pub fn health_in(checkout: &Checkout, start: &Path) -> devkit_config::Health {
+    devkit_config::Health::of(&resolve_in(checkout, None, start))
 }
 
 /// [`resolve`] as it would be once `pending` is written, configuring
@@ -72,6 +95,7 @@ pub fn resolve_pending(
         checkout.root(),
         derived.as_deref(),
         pending,
+        options(),
     )
 }
 

@@ -464,7 +464,7 @@ pub(crate) enum WorkspaceCmd {
         /// Replace files the worktree already has instead of leaving them
         /// alone. Asks once per worktree before clobbering anything, and needs
         /// a scope: one or more selectors, or --all.
-        #[arg(short = 'o', long)]
+        #[arg(long)]
         overwrite: bool,
         /// Widen --overwrite to every worktree in the repository, other
         /// sessions' included.

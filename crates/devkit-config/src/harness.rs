@@ -98,7 +98,9 @@ pub enum PromptFidelity {
 /// `enabled = true` is: a project layer setting `dir = "./.logs"` would land
 /// command text inside the checkout. That boundary guards against a
 /// `devkit.toml` a project ships, not against your own environment:
-/// `$DEVKIT_CONFIG` can point anywhere, a repository included.
+/// `$DEVKIT_CONFIG` can point anywhere, a repository included. A
+/// `-o harness.log.KEY=VALUE` value overrides the global config's key for the
+/// one command that carries it.
 ///
 /// ```
 /// # use devkit_config::{Fidelity, HarnessSection, PromptFidelity};
@@ -505,8 +507,9 @@ impl Default for AppMatch {
 ///
 /// `enforce_writes` and `enforce_commands` are on if any layer sets them.
 /// `shell` and the three policy keys take the closest layer's value. A
-/// checkout opting in is read for its `[harness]` table alone, so its
-/// `devkit.toml` may hold nothing else.
+/// `-o harness.KEY=VALUE` value is the top layer for the one command that
+/// carries it. A checkout opting in is read for its `[harness]` table alone, so
+/// its `devkit.toml` may hold nothing else.
 ///
 /// ```
 /// # use devkit_config::{HarnessSection, PolicyAction};
