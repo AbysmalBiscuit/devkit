@@ -271,3 +271,37 @@ fn an_unknown_harness_key_is_refused_naming_it() {
     ]));
     assert!(err.contains("`harness.enforce_writs`"), "{err}");
 }
+
+#[test]
+fn a_harness_value_of_the_wrong_type_is_refused_naming_the_key() {
+    let p = project();
+    for (option, key) in [
+        ("harness.enforce_commands=1", "harness.enforce_commands"),
+        ("harness.log.max_age_days=0", "harness.log.max_age_days"),
+        (
+            "harness.commands.x.programs=\"node\"",
+            "harness.commands.x.programs",
+        ),
+    ] {
+        let err = stderr(&human(p.path(), &["config", "show", "-o", option]));
+        assert!(err.contains(&format!("--option {key}")), "{option}: {err}");
+    }
+}
+
+#[test]
+fn a_harness_option_may_set_one_key_and_the_last_value_wins() {
+    let p = project();
+    let row = harness_log_row(&human(p.path(), &[
+        "doctor",
+        "--json",
+        "-o",
+        "harness.log.enabled=true",
+        "-o",
+        "harness.log.max_age_days=0",
+        "-o",
+        "harness.log.max_age_days=7",
+        "-o",
+        "harness.pr_tools.x.enabled=false",
+    ]));
+    assert_eq!(row["enabled"], true, "{row}");
+}

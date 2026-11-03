@@ -35,6 +35,7 @@ impl Options {
         let harness = serde_json::to_value(schemars::schema_for!(HarnessSection))
             .context("generating the [harness] schema")?;
         let mut table = toml::Table::new();
+        let mut harness_keys = Vec::new();
         for arg in raw {
             let (path, value) = parse_one(arg.as_ref())?;
             let key = path.join(".");
@@ -54,7 +55,14 @@ impl Options {
                      `devkit schema` lists the keys"
                 );
             }
+            if path[0] == "harness" {
+                harness_keys.push(path.clone());
+            }
             insert(&mut table, &path, value);
+        }
+        for path in &harness_keys {
+            check_harness_value(&table, path)
+                .with_context(|| format!("--option {}", path.join(".")))?;
         }
         Ok(Self(table))
     }
@@ -69,6 +77,39 @@ impl Options {
     pub fn layer(&self) -> Option<(PathBuf, toml::Table)> {
         (!self.is_empty()).then(|| (PathBuf::from(COMMAND_LINE), self.0.clone()))
     }
+}
+
+/// Read the value at `path`, alone, as the `[harness]` readers read it. A
+/// rendered-tool entry needs `title` and `body`, which an option that changes
+/// one key of a file's entry leaves to the file, so they stand in here.
+fn check_harness_value(table: &toml::Table, path: &[String]) -> Result<()> {
+    let Some(value) = lookup(table, path) else {
+        return Ok(());
+    };
+    let mut one = toml::Table::new();
+    insert(&mut one, &path[1..], value.clone());
+    for tools in ["issue_tools", "pr_tools"] {
+        let entries = one.get_mut(tools).and_then(toml::Value::as_table_mut);
+        for entry in entries
+            .into_iter()
+            .flat_map(|e| e.iter_mut().map(|(_, v)| v))
+        {
+            if let Some(entry) = entry.as_table_mut() {
+                for key in ["title", "body"] {
+                    entry.entry(key).or_insert_with(|| String::new().into());
+                }
+            }
+        }
+    }
+    toml::Value::Table(one).try_into::<HarnessSection>()?;
+    Ok(())
+}
+
+/// The value at `path` in `table`, if a later option left it there.
+fn lookup<'a>(table: &'a toml::Table, path: &[String]) -> Option<&'a toml::Value> {
+    let (first, rest) = path.split_first()?;
+    rest.iter()
+        .try_fold(table.get(first)?, |at, seg| at.as_table()?.get(seg))
 }
 
 /// One `KEY=VALUE`, as the key's segments and the parsed value.
@@ -279,6 +320,26 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("`harness.nope`"), "{err}");
+    }
+
+    #[test]
+    fn a_harness_value_is_read_as_the_harness_readers_read_it() {
+        let err = format!(
+            "{:#}",
+            Options::parse(&["harness.log.max_age_days=0"]).unwrap_err()
+        );
+        assert!(err.contains("max_age_days = 0 is ambiguous"), "{err}");
+        let err = format!(
+            "{:#}",
+            Options::parse(&["harness.enforce_commands=1"]).unwrap_err()
+        );
+        assert!(err.contains("bool"), "{err}");
+        Options::parse(&["harness.pr_tools.x.enabled=false"]).unwrap();
+        Options::parse(&[
+            "harness.enforce_commands=1",
+            "harness.enforce_commands=true",
+        ])
+        .unwrap();
     }
 
     #[test]
