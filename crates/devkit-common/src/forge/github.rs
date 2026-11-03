@@ -725,7 +725,9 @@ impl GithubForge {
     /// `POST /pulls`. A ready PR is opened ready, so no GraphQL-only draft
     /// flip follows. REST takes the head by name in `repo` and finds no fork's
     /// head afterwards, so a branch `origin` pushes to another repository is
-    /// refused before anything is opened.
+    /// refused before anything is opened. The create goes through `gh api`
+    /// even when devkit holds a token, so a `gh` wrapper that acts on each
+    /// opened PR sees this one too.
     fn rest_create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String> {
         if let Ok(pushed) = super::remote::origin_slug(&cwd.to_string_lossy(), &repo.host)
             && !pushed.eq_ignore_ascii_case(&repo.slug)
@@ -738,8 +740,8 @@ impl GithubForge {
         }
         let created = self
             .api
-            .rest(
-                Method::POST,
+            .gh_rest(
+                &Method::POST,
                 &format!("/repos/{}/pulls", repo.slug),
                 Some(&serde_json::json!({
                     "title": pr.title,
