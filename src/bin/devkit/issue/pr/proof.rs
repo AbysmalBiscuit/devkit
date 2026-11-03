@@ -1,5 +1,6 @@
 //! The proof gate on `pr create` and `pr edit`: an agent's proof must answer
 //! every item under the issue's `Done when` (or `Acceptance criteria`) section.
+//! `pr proof` runs the same check alone.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -7,8 +8,16 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use devkit_common::{caller::Caller, forge::Repos, progress::Steps, tracker::Tracker};
+use devkit_common::{
+    caller::Caller,
+    forge::{self, Repos},
+    progress::Steps,
+    tracker::Tracker,
+    vcs::Checkout,
+};
 use devkit_config::Config;
+
+use crate::{issue::review::parse_args, template::VarArgs};
 
 /// Refuse an agent's proof in `vars` that skips an item of the worktree's
 /// tracker `issue`, when `defaults.pr_proof_variable` names the variable
@@ -26,9 +35,56 @@ pub(crate) fn gate_proof(
     else {
         return Ok(());
     };
+    check_proof(cfg, here, repos, issue, variable, vars)
+}
+
+/// Refuse the proof in `vars` under `variable` when it skips an item of
+/// `issue`, read from the project's tracker.
+fn check_proof(
+    cfg: &Config,
+    here: &Path,
+    repos: &Repos,
+    issue: &str,
+    variable: &str,
+    vars: &BTreeMap<String, String>,
+) -> Result<()> {
     let tracker = devkit_common::tracker::resolve(cfg.tracker.kind, here, repos);
     let proof = vars.get(variable).map_or("", String::as_str);
     require_proof(tracker.tracker.as_ref(), issue, proof, variable)
+}
+
+/// `pr proof`: run the proof gate of `pr create` on `vars` against `issue`,
+/// or the worktree's issue, for any caller. Opens and pushes nothing.
+pub(crate) fn run(
+    here: &Path,
+    config: Option<&str>,
+    issue: Option<String>,
+    vars: &VarArgs,
+) -> Result<()> {
+    let checkout = Checkout::at(here);
+    let loaded = devkit_ports::load::load_in(&checkout, config.map(Path::new), here)?;
+    let cfg = &loaded.config;
+    let Some(variable) = &cfg.defaults.pr_proof_variable else {
+        bail!("defaults.pr_proof_variable is unset, so no PR proof is checked");
+    };
+    let issue = match issue {
+        Some(issue) => issue,
+        None => worktree_issue(&checkout)?
+            .context("no tracker issue is recorded for this worktree: pass --issue <ID>")?,
+    };
+    let mut values = cfg.templates.defaults();
+    values.extend(parse_args(vars, &cfg.templates.declared())?);
+    let start = here.to_string_lossy();
+    let forge = forge::resolve(&cfg.forge, &cfg.github, &start, None);
+    check_proof(cfg, here, &forge.repos, &issue, variable, &values)?;
+    eprintln!("The proof answers every item of issue {issue}.");
+    Ok(())
+}
+
+fn worktree_issue(checkout: &Checkout) -> Result<Option<String>> {
+    let worktree = checkout.worktree()?;
+    let record = devkit_common::record::read_on(&worktree.path, &worktree.branch);
+    Ok(record.and_then(|r| r.tracker_issue()))
 }
 
 /// Refuse `proof` when it skips an item of `issue`, read from the tracker so

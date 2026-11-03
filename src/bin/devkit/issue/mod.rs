@@ -628,6 +628,20 @@ pub(crate) enum PrCmd {
         #[arg(long)]
         base: Option<String>,
     },
+    /// Run the proof check of `pr create` without opening a PR.
+    ///
+    /// Checks the `defaults.pr_proof_variable` argument against each item of
+    /// the issue's `Done when` or `Acceptance criteria` section, for any
+    /// caller. Exits nonzero with the refusal `pr create` gives. Touches no
+    /// branch and opens no PR.
+    #[command(after_help = PROOF_HELP)]
+    Proof {
+        /// Tracker issue to check against, instead of the worktree's issue.
+        #[arg(long)]
+        issue: Option<String>,
+        #[command(flatten)]
+        vars: VarArgs,
+    },
     /// Flag tests a branch weakened since its merge base with BASE.
     ///
     /// Compares each test file at the merge base of BASE and HEAD with the
@@ -1071,6 +1085,9 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             json,
             base.as_deref(),
         ),
+        PrCmd::Proof { issue, vars } => {
+            pr::proof::run(Path::new(&start(&dir)), config.as_deref(), issue, &vars)
+        }
         PrCmd::WeakenedTests {
             base,
             head,
