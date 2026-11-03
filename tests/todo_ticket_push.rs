@@ -137,6 +137,26 @@ fn cancel_closes_as_not_planned() {
 }
 
 #[test]
+fn done_and_cancel_on_a_blocker_in_another_repository_stay_local() {
+    for (verb, kind) in [
+        ("done", StatusKind::Completed),
+        ("cancel", StatusKind::Cancelled),
+    ] {
+        let s = blocked_from_workcell(&format!("{PUSH}{RULES}{STATUSES}{DONE_EVENT}"), "OPEN");
+        s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+        assert!(s.sync(&[]).status.success());
+        let id = s.todo_for("abysmalbiscuit/workcell#992").id;
+        let out = s.devkit(&["todo", verb, &id], &AGENT);
+        assert!(out.status.success(), "{verb}: {}", stderr(&out));
+        assert!(s.mutations().is_empty(), "{verb}: {:?}", s.mutations());
+        assert_eq!(
+            s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+            kind
+        );
+    }
+}
+
+#[test]
 fn done_on_an_issue_already_closed_as_completed_closes_nothing() {
     let s = pushing(DONE_EVENT, true);
     tracker_shows(&s, closed("COMPLETED"));

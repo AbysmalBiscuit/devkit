@@ -42,16 +42,24 @@ pub(crate) struct StatusPush<'a> {
 }
 
 impl StatusPush<'_> {
-    /// Whether `todo`'s change goes through [`push_status`]: a ticket todo,
-    /// in a repository pushing statuses, changed from a checkout of that
-    /// repository. Any other todo commits as it always has.
+    /// Whether `todo`'s change goes through [`push_status`]: a ticket todo
+    /// of the issues repository, in a repository pushing statuses, changed
+    /// from a checkout of that repository. Any other todo, such as a blocker
+    /// synced from another repository, commits as it always has.
     pub(crate) fn pushes(&self, store: &Store, todo: &Todo) -> bool {
-        todo.ticket.is_some()
-            && store.ticket().sync.pushes(PushKind::Status)
+        let Some(ticket) = &todo.ticket else {
+            return false;
+        };
+        store.ticket().sync.pushes(PushKind::Status)
             && store.origin().is_some_and(|origin| {
                 super::ticket_event::root_on(origin, todo.node(), store.config(), self.actor)
                     .is_some()
             })
+            && tracker::select(None, &self.cwd.to_string_lossy(), None)
+                .tracker
+                .tracker
+                .foreign_issue_key(&ticket.key)
+                .is_none()
     }
 }
 
