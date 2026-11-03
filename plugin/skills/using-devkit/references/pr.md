@@ -105,7 +105,7 @@ devkit pr edit --arg-file proof=<scratchpad>/proof.md \
 - Pass the whole new text of a section: it replaces the old one. A blank value for a variable the template requires of you is refused, as on `create`.
 - `--attach` works as on `create`, but each file must be embedded by the same path in the text this run passes, as in the `create` example above, under the proof line it proves. A file nothing embeds is refused, because gh would append it below everything else in the body. A rerun replaces the section, so it shows each file once.
 - The proof gate below checks a `--arg` for `defaults.pr_proof_variable` as it does on `create`.
-- An edit with no `--attach` goes over REST, so it works where GitHub refuses GraphQL. `--attach` needs `gh pr edit`, so it fails there.
+- An edit with no `--attach` goes over REST, so it works where GitHub refuses GraphQL. It sends that edit through `gh api`, so a `gh` wrapper on `PATH` sees it. `--attach` needs `gh pr edit`, so it fails there.
 - A variable with no template line on one side of it is refused, since its text cannot be told from what was added there. With the built-in `pr_body`, which is `{{ input }}` alone, that is every body edit.
 - GitHub only. Every other forge refuses `edit` before the push.
 

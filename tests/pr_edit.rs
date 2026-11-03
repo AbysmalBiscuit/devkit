@@ -261,6 +261,60 @@ fn a_body_edit_works_where_github_refuses_graphql() {
     );
 }
 
+/// With a token of its own, devkit reads the PR over GitHub's REST API
+/// directly, but writes the edit through `gh api`, so a `gh` wrapper on `PATH`
+/// sees every body devkit writes.
+#[test]
+fn a_body_edit_goes_through_gh_api_with_a_token() {
+    use devkit_common::http::stub::{self, Route};
+
+    let fake = project("", LIVE);
+    fake.refuse_graphql();
+    let pr = serde_json::json!({
+        "number": 7, "state": "open", "merged_at": null,
+        "html_url": "https://github.com/o/r/pull/7", "title": "fix it", "body": LIVE,
+        "head": { "ref": "lev/eng-1-fix", "sha": fake.head(), "repo": { "owner": { "login": "o" } } },
+        "draft": false, "user": { "login": "LevValle" }
+    });
+    let api = stub::serve(vec![
+        Route::new(
+            "POST",
+            "/graphql",
+            403,
+            r#"{"message":"GitHub GraphQL is not available from Claude Code sessions"}"#,
+        ),
+        Route::new("GET", "/repos/o/r/pulls?", 200, &format!("[{pr}]")),
+        Route::new("GET", "/repos/o/r/pulls/7", 200, &pr.to_string()),
+        Route::new("PATCH", "/repos/o/r/pulls/7", 200, &pr.to_string()),
+    ]);
+
+    let out = fake.issue_with_env(
+        &["pr", "edit", "--no-push", "--arg", "proof=1. the new proof"],
+        &[("GH_TOKEN", "t0k"), ("DEVKIT_TEST_GITHUB_API", &api.url())],
+    );
+
+    let reqs = api.requests();
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{reqs:#?}\n{calls}");
+    assert_eq!(
+        fake.patched_pr_field("body").as_deref(),
+        Some(
+            LIVE.replace("1. the old proof", "1. the new proof")
+                .as_str()
+        ),
+        "the edit did not go through gh: {calls}"
+    );
+    assert!(
+        !reqs.iter().any(|r| r.method == "PATCH"),
+        "the edit went around gh: {reqs:#?}"
+    );
+    assert!(
+        reqs.iter()
+            .any(|r| r.method == "GET" && r.path == "/repos/o/r/pulls/7"),
+        "the body was not read directly: {reqs:#?}"
+    );
+}
+
 #[test]
 fn a_merged_pr_is_refused() {
     let fake = ghfake::Fake::new(TEMPLATE, &ghfake::Pr {

@@ -916,7 +916,9 @@ impl Forge for GithubForge {
     }
 
     /// Over REST, which works where GitHub refuses GraphQL, unless there are
-    /// files to upload: only `gh pr edit` uploads them.
+    /// files to upload: only `gh pr edit` uploads them. The REST edit goes
+    /// through `gh api` even when devkit holds a token, so a `gh` wrapper
+    /// that acts on each PR body sees this one too.
     fn edit(&self, repo: &Repo, n: u64, edit: &PrEdit<'_>, cwd: &Path) -> Result<()> {
         if edit.attachments.is_empty() {
             let mut fields = serde_json::Map::new();
@@ -927,8 +929,8 @@ impl Forge for GithubForge {
                 fields.insert("body".into(), body.into());
             }
             self.api
-                .rest(
-                    Method::PATCH,
+                .gh_rest(
+                    &Method::PATCH,
                     &format!("/repos/{}/pulls/{n}", repo.slug),
                     Some(&Value::Object(fields)),
                 )?
