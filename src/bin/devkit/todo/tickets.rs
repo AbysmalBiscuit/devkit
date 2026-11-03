@@ -50,9 +50,9 @@ pub(crate) struct SyncReport {
 ///
 /// Every ticket a rule selects is fetched, and so is each ticket whose todo
 /// is still pending or in progress, so a close or a reassignment reaches its
-/// todo. An open ticket from another repository that blocks one of them is
-/// fetched too, so the blocked todo waits on it. Adds land before edits,
-/// which name todos by ticket.
+/// todo. A ticket from another repository that blocks one of them is
+/// fetched too, so the blocked todo waits on it while it is open. Adds land
+/// before edits, which name todos by ticket.
 pub(crate) fn sync_tickets(
     store: &impl TodoStore,
     cwd: &Path,
@@ -203,8 +203,9 @@ pub(crate) fn sync_one(
         }))
 }
 
-/// Adds to `fetched` each open ticket from another repository that blocks
-/// one of them and has no todo in `existing`, but those in one of
+/// Adds to `fetched` each ticket from another repository that blocks one of
+/// them: one with a todo in `existing` in any state, so a close or a reopen
+/// reaches that todo, and one without only while it is open and in none of
 /// `closed_names`.
 fn with_foreign_blockers(
     tracker: &dyn tracker::Tracker,
@@ -223,7 +224,7 @@ fn with_foreign_blockers(
         .iter()
         .flat_map(|t| &t.blocked_by)
         .filter(|key| tracker.foreign_issue_key(key).is_some())
-        .filter(|key| !fetched.iter().any(|t| &t.key == *key) && !has_todo(key))
+        .filter(|key| !fetched.iter().any(|t| &t.key == *key))
         .cloned()
         .collect();
     wanted.sort();
@@ -237,7 +238,7 @@ fn with_foreign_blockers(
     fetched.extend(
         blockers
             .into_iter()
-            .filter(|t| !in_closed_name(t, closed_names)),
+            .filter(|t| has_todo(&t.key) || !in_closed_name(t, closed_names)),
     );
     Ok(())
 }

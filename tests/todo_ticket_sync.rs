@@ -284,6 +284,25 @@ fn an_unreadable_repository_of_an_imported_blocker_does_not_stop_the_sync() {
 }
 
 #[test]
+fn a_reopened_blocker_in_another_repository_reopens_its_todo() {
+    let s = blocked_from_workcell("OPEN");
+    assert!(s.sync(&[]).status.success());
+    for (state, want) in [
+        ("CLOSED", devkit_todo::StatusKind::Completed),
+        ("OPEN", devkit_todo::StatusKind::Pending),
+    ] {
+        s.serve("graphql.json", &workcell_blocks_65(state));
+        let out = s.sync(&[]);
+        assert!(out.status.success(), "{state}: {}", stderr(&out));
+        assert_eq!(
+            s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+            want,
+            "{state}"
+        );
+    }
+}
+
+#[test]
 fn a_closed_blocker_in_another_repository_adds_no_todo() {
     let s = blocked_from_workcell("CLOSED");
     let out = s.sync(&[]);
