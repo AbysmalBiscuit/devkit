@@ -566,9 +566,10 @@ fn a_task_step_in_an_app_directory_anchors_option_paths_as_its_parent_does() {
     let json = &shown[shown.find('{').unwrap()..=shown.rfind('}').unwrap()];
     let cfg: serde_json::Value = serde_json::from_str(json).unwrap();
     let root = Path::new(cfg["defaults"]["worktree_root"].as_str().unwrap());
+    assert_eq!(root.file_name().unwrap(), "wts", "{shown}");
     assert_eq!(
-        root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
-        p.path().canonicalize().unwrap().join("wts"),
+        root.parent().unwrap().canonicalize().unwrap(),
+        p.path().canonicalize().unwrap(),
         "{shown}"
     );
 }
