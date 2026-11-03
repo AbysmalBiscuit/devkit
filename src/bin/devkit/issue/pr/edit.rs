@@ -18,7 +18,7 @@ use super::{
     render::{Texts, missing, refuse_template_headings, require_pr_title, with_defaults},
     require_existing_pr,
     resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
-    splice::{hides, section, slot, splice},
+    splice::{section, shown, slot, splice},
 };
 use crate::{
     issue::review::{guard_branch, parse_args},
@@ -194,8 +194,9 @@ pub fn run(args: Args) -> Result<()> {
             let ours = |n: &str| names.iter().any(|x| x == n);
             let rendered = render(&|n| if ours(n) { edits[n].clone() } else { slot(n) })?;
             let marked = render(&|n| if ours(n) { slot(n) } else { as_created(n) })?;
-            let hidden = hides(&blank, &marked, &render(&as_created)?, name)?;
-            body = splice(&blank, &rendered, &body, name, hidden)
+            let full = render(&as_created)?;
+            let shown = shown(&blank, &marked, &full, names)?;
+            body = splice(&blank, &rendered, &body, names, shown)
                 .with_context(|| format!("placing `{name}` in PR #{}'s body", pr.number))?;
         }
         Some(body)

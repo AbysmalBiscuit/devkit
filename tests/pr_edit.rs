@@ -554,3 +554,69 @@ fn a_section_another_variable_shows_is_inserted_into_a_body_that_lacks_it() {
         GATED_LIVE.replace("## Proof", "## Optional\n\nNew detail\n\n## Proof")
     );
 }
+
+const PART_GATED_TEMPLATE: &str = r#"
+[templates]
+pr_body = '''
+## Summary
+
+{{ input | trim }}
+
+## Details
+{%- if enabled %}
+
+### Optional
+
+{{ detail | trim }}
+{%- endif %}
+
+{{ tail | trim }}
+
+## Proof
+
+{{ proof | trim }}'''
+
+[templates.variables]
+enabled = { default = "" }
+detail = { default = "" }
+tail = { default = "" }
+proof = { default = "" }
+"#;
+
+const PART_GATED_LIVE: &str = "\
+## Summary
+
+The summary.
+
+## Details
+
+Old tail
+
+## Proof
+
+1. the proof
+";
+
+/// `enabled` hides `detail` but not `tail`, which shares its section, so the
+/// edit replaces `tail` and keeps the hidden part out.
+#[test]
+fn a_section_another_variable_hides_in_part_keeps_the_visible_edit() {
+    let fake = ghfake::Fake::new(PART_GATED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, PART_GATED_LIVE);
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "detail=New detail",
+        "--arg",
+        "tail=New tail",
+    ]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        PART_GATED_LIVE.replace("Old tail", "New tail")
+    );
+}
