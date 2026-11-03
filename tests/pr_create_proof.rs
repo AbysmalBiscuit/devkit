@@ -264,11 +264,13 @@ impl Project {
     }
 }
 
-/// The refusal's lines from `refusing` on, so the two commands' messages
-/// compare without what each prints before it.
+/// The refusal's lines from `refusing` on, up to any backtrace, so the two
+/// commands' messages compare without what each prints around it.
 fn refusal(stderr: &str) -> String {
     let at = stderr.find("refusing").expect("a refusal");
-    stderr[at..].trim_end().to_string()
+    let message = &stderr[at..];
+    let end = message.find("\n\nStack backtrace:").unwrap_or(message.len());
+    message[..end].trim_end().to_string()
 }
 
 #[test]
