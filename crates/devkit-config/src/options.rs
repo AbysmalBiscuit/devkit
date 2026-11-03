@@ -11,6 +11,20 @@ use crate::Config;
 /// `devkit config show --origin`, and in every error that names a layer.
 pub const COMMAND_LINE: &str = "<command line>";
 
+/// Tables of the published `devkit.toml` schema that devkit reads from the
+/// config files alone, outside the merged [`Config`], with the reason.
+const FILE_ONLY_TABLES: [(&str, &str); 3] = [
+    (
+        "config",
+        "it decides which config files exist, before any value merges",
+    ),
+    ("docs", "`docm` reads it from the config files"),
+    (
+        "harness",
+        "it controls write and command enforcement, which a config file sets",
+    ),
+];
+
 /// The `--option` values of one command, as one layer above every config file.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Options(toml::Table);
@@ -26,10 +40,10 @@ impl Options {
         for arg in raw {
             let (path, value) = parse_one(arg.as_ref())?;
             let key = path.join(".");
-            if path[0] == "harness" {
+            if let Some((table, reason)) = FILE_ONLY_TABLES.iter().find(|(t, _)| path[0] == *t) {
                 bail!(
-                    "--option {key}: `{key}` is a `[harness]` key, and `[harness]` keys cannot be set with --option; \
-                     they control write and command enforcement, which a config file sets"
+                    "--option {key}: `{key}` is a `[{table}]` key, and `[{table}]` keys \
+                     cannot be set with --option: {reason}"
                 );
             }
             if !knows(&schema, &schema, &path) {
@@ -256,6 +270,18 @@ mod tests {
             .to_string();
         assert!(err.contains("`harness.enforce_writes`"), "{err}");
         assert!(err.contains("`[harness]` keys cannot be set"), "{err}");
+    }
+
+    #[test]
+    fn schema_tables_the_merged_config_skips_are_named_as_such() {
+        for (key, table) in [("config.root=true", "config"), ("docs.libs=[]", "docs")] {
+            let err = Options::parse(&[key]).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("`[{table}]` keys cannot be set")),
+                "{key}: {err}"
+            );
+            assert!(!err.contains("has no key"), "{key}: {err}");
+        }
     }
 
     #[test]
