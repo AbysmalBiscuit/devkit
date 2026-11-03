@@ -250,3 +250,126 @@ fn a_checkout_worktree_with_no_issue_is_not_gated() {
         p.fake.calls()
     );
 }
+
+impl Project {
+    fn proof(&self, caller: &str, extra: &[&str], proof: &str) -> (Option<i32>, String) {
+        let arg = format!("proof={proof}");
+        let mut args = vec!["pr", "proof", "--arg", &arg];
+        args.extend_from_slice(extra);
+        let out = self.fake.issue_as(caller, &args);
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+}
+
+/// The refusal's lines from `refusing` on, up to any backtrace, so the two
+/// commands' messages compare without what each prints around it.
+fn refusal(stderr: &str) -> String {
+    let at = stderr.find("refusing").expect("a refusal");
+    let message = &stderr[at..];
+    let end = message
+        .find("\n\nStack backtrace:")
+        .unwrap_or(message.len());
+    message[..end].trim_end().to_string()
+}
+
+#[test]
+fn pr_proof_refuses_a_skipped_item() {
+    let p = project();
+    p.fake.record_issue("7");
+    p.fake.serve_issue(ISSUE);
+
+    let (code, stderr) = p.proof("agent", &[], "1. test `gap`\n3. test `ac`");
+    assert_eq!(code, Some(1), "a skipped item exits 1: {stderr}");
+    assert!(
+        stderr.contains("2. A covered run opens the PR (proof: test)"),
+        "names the missing item: {stderr}"
+    );
+    assert!(!stderr.contains("1. A gap is refused"), "{stderr}");
+
+    let (code, stderr) = p.proof("agent", &[], "1. test `gap`\n2. test `opens`\n3. test `ac`");
+    assert_eq!(code, Some(0), "every item answered exits 0: {stderr}");
+
+    assert!(!p.pushed(), "nothing is pushed");
+    assert!(!p.opened(), "nothing is opened: {}", p.fake.calls());
+}
+
+/// `pr proof` skips where `pr create` skips its gate, exiting zero and
+/// saying why.
+#[test]
+fn pr_proof_passes_a_human_as_pr_create_does() {
+    let p = project();
+    p.fake.record_issue("7");
+    p.fake.serve_issue(ISSUE);
+
+    let (code, stderr) = p.proof("human", &[], "1. test `gap`");
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        stderr.contains("human"),
+        "says why nothing is checked: {stderr}"
+    );
+    assert!(
+        !p.fake.calls().contains("api graphql"),
+        "nothing is looked up: {}",
+        p.fake.calls()
+    );
+}
+
+#[test]
+fn pr_proof_passes_when_no_proof_variable_is_set() {
+    let fake = ghfake::Fake::without_pr(&CONFIG.replace("pr_proof_variable = \"proof\"\n", ""));
+    fake.record_issue("7");
+    fake.serve_issue(ISSUE);
+
+    let out = fake.issue_as("agent", &["pr", "proof", "--arg", "proof=1. x"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("pr_proof_variable"), "says why: {stderr}");
+}
+
+#[test]
+fn pr_proof_reads_the_issue_that_issue_names() {
+    let p = project();
+    p.fake.serve_issue(ISSUE);
+
+    let (code, stderr) = p.proof("agent", &["--issue", "7"], "2. test `opens`");
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("1. A gap is refused"), "{stderr}");
+}
+
+#[test]
+fn pr_proof_outside_an_issue_worktree_passes_naming_the_flag() {
+    let p = project();
+    p.fake.serve_issue(ISSUE);
+
+    let (code, stderr) = p.proof("agent", &[], "1. x");
+    assert_eq!(code, Some(0), "no issue, nothing to check: {stderr}");
+    assert!(
+        stderr.contains("--issue"),
+        "names the way forward: {stderr}"
+    );
+}
+
+#[test]
+fn pr_proof_and_pr_create_refuse_alike() {
+    for (issue, proof) in [
+        (ISSUE, "1. test `gap`\n3. test `ac`"),
+        ("Just prose, no items.\n", "1. x"),
+        (
+            "Why.\n\n## Done when\n\nWhen it works.\n\n## Notes\n",
+            "1. x",
+        ),
+    ] {
+        let p = project();
+        p.fake.record_issue("7");
+        p.fake.serve_issue(issue);
+
+        let (ok, created) = p.create("agent", proof);
+        assert!(!ok, "{created}");
+        let (code, checked) = p.proof("agent", &[], proof);
+        assert_eq!(code, Some(1), "{checked}");
+        assert_eq!(refusal(&checked), refusal(&created));
+    }
+}

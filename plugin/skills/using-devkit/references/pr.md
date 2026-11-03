@@ -14,6 +14,7 @@ devkit pr review request ["<message>"] [--to <alias|#channel>] [--pr <URL|number
 devkit pr review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg k=v] [--arg-file k=path]
 devkit pr weakened-tests <base> [<head>] [--body-file <file|->]
 devkit pr repro [--json] [--base <branch>]
+devkit pr proof [--issue <id>] [--arg k=v] [--arg-file k=path]
 ```
 
 ## `checkout`: review someone else's work
@@ -125,6 +126,8 @@ devkit pr create --pr-title 'feat(login): show the error state' --arg proof='1. 
 - Not gated: a human caller, a worktree with no issue record, and one set up with only `--slug` or checked out from a PR that names no issue.
 - An issue the tracker cannot return is refused, since the items cannot be checked.
 - The check runs on every agent run, a reused PR included, because it comes before the push that finds the PR. Whether the evidence holds is left to review.
+
+`devkit pr proof` runs the same check alone. It reads the worktree's issue, or the issue that `--issue` names, and the proof from `--arg` or `--arg-file` for `defaults.pr_proof_variable`. It exits nonzero with the refusal that `create` gives, and exits zero when the proof answers each item. It skips each run that `create` does not gate: a human caller, an unset `defaults.pr_proof_variable`, and no issue. A skipped run exits zero and says why. It pushes nothing and opens no PR.
 
 ## `review request`: ship for review
 
