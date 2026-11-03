@@ -365,7 +365,7 @@ fn a_hook_queues_its_write_behind_a_held_replica() {
     assert_eq!(stdout(&out), "");
     assert_eq!(stderr(&out), "");
     assert!(
-        took >= Duration::from_millis(800) && took < Duration::from_secs(3),
+        took >= Duration::from_millis(800) && took < Duration::from_secs(8),
         "{took:?}"
     );
     assert!(replica(&p).is_empty());

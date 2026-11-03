@@ -119,9 +119,12 @@ impl Git {
     /// signing keys belong to the user and have to work. Identity is set
     /// through the environment because a `git config` call that loses its
     /// working directory writes into whatever repository it lands in.
+    /// Setup is not under test, so it takes the slow timeout a loaded CI runner
+    /// needs.
     #[cfg(any(test, feature = "test-support"))]
     pub fn fixture(cwd: &Path) -> Self {
         Self::at(cwd)
+            .timeout(SLOW_TIMEOUT)
             .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
             .env("GIT_CONFIG_SYSTEM", NULL_DEVICE)
             .env("GIT_AUTHOR_NAME", "devkit test")
