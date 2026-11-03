@@ -718,6 +718,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "string" => {
                 let mut out = String::new();
                 let mut known = true;
+                let mut start = None;
                 let mut whole_word = None;
                 let mut parts = 0;
                 let mut last = node.start_byte() + 1;
@@ -731,7 +732,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     };
                     match value {
                         Value::Known(s) => out.push_str(&s),
-                        Value::Unknown | Value::Prefixed(_) => known = false,
+                        Value::Unknown => {
+                            start.get_or_insert_with(|| out.clone());
+                            known = false;
+                        }
+                        Value::Prefixed(s) => {
+                            start.get_or_insert_with(|| format!("{out}{s}"));
+                            known = false;
+                        }
                         v @ (Value::Ephemeral(_) | Value::Within(_)) => whole_word = Some(v),
                     }
                 }
@@ -745,7 +753,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     Some(v) if parts == 1 && out.is_empty() => v,
                     Some(_) => Value::Unknown,
                     None if known => Value::Known(out),
-                    None => Value::Unknown,
+                    None => known_start(start.unwrap_or_default()),
                 }
             }
             "string_content" => Value::Known(unescape_dquoted(text)),
@@ -766,13 +774,12 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 for part in parts {
                     match self.value(part, scope) {
                         Value::Known(s) => out.push_str(&s),
+                        Value::Unknown => return known_start(out),
+                        Value::Prefixed(s) => return known_start(out + &s),
                         // A concatenation always has something beside the temp
                         // path or the match, which is exactly what stops it
                         // being bounded.
-                        Value::Unknown
-                        | Value::Ephemeral(_)
-                        | Value::Within(_)
-                        | Value::Prefixed(_) => {
+                        Value::Ephemeral(_) | Value::Within(_) => {
                             return Value::Unknown;
                         }
                     }
@@ -958,6 +965,16 @@ fn assignment_word(name: &str, value: &Value, node: Node<'_>) -> Word {
         value,
         typed,
         span: node.byte_range(),
+    }
+}
+
+/// A word known only up to `start`. An assignment keeps the name it sets,
+/// so a rule on that variable still sees it.
+fn known_start(start: String) -> Value {
+    if crate::normalize::names_variable(&start) {
+        Value::Prefixed(start)
+    } else {
+        Value::Unknown
     }
 }
 

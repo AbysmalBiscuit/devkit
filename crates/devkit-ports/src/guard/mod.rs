@@ -846,6 +846,7 @@ mod tests {
         let (_own_dir, own) = own_links(&["ticket"]);
         for command in [
             "PATH=\"$HOME/bin:$PATH\" ticket create",
+            "env PATH=\"$HOME/bin:$PATH\" ticket create",
             "env -i ticket create",
             "env -u PATH ticket create",
             "sudo ticket create",

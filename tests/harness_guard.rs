@@ -1171,6 +1171,11 @@ fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
             r#"export DEVKIT_OPTIONS"=x""#,
             r#"export "DEVKIT_OPT""IONS=x""#,
             "export DEVKIT_OPTIONS",
+            r#"env DEVKIT_OPTIONS="$(printf %s 'tracker.kind="none"')" devkit config show"#,
+            r#"env DEVKIT_OPTIONS="$UNRESOLVED" devkit config show"#,
+            r#"env "DEVKIT_OPTIONS=$UNRESOLVED" devkit config show"#,
+            "env DEVKIT_OPTIONS=$UNRESOLVED devkit config show",
+            "env -u CLAUDE_CODE_SESSION_ID DEVKIT_OPTIONS=a$UNRESOLVED devkit config show",
         ] {
             let out = run_hook(proj.path(), home.path(), &claude_payload(command));
             assert!(denied(&out), "{config}: {command}");
@@ -1185,6 +1190,7 @@ fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
     for command in [
         "echo DEVKIT_OPTIONS=x",
         r#"printf "%s" DEVKIT_OPTIONS="$UNRESOLVED""#,
+        r#"printf "%s" "DEVKIT_OPTIONS=$(date)""#,
         "unset DEVKIT_OPTIONS",
         r#"FOO="$(date)" cargo build"#,
     ] {
