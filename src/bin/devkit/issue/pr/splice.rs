@@ -113,10 +113,15 @@ pub(crate) fn splice(
     Ok(format!("{}{text}{}", &live[..start], &live[end..]))
 }
 
-/// Whether the values in `rendered` hide the section `name` owns: `rendered`
-/// has fewer of the line that opens it than `marked`, the same render with
-/// the section's variables as slots.
+/// Whether the values hide the section `name` owns. `marked` is the render
+/// with the section's variables as slots and every other variable as its
+/// value. A variable outside the section hides it when `marked` lacks the
+/// slot of `name`. The section's own values hide it when `rendered` has
+/// fewer of the line that opens it than `marked`.
 pub(crate) fn hides(skeleton: &str, marked: &str, rendered: &str, name: &str) -> Result<bool> {
+    if !marked.contains(&slot(name)) {
+        return Ok(true);
+    }
     let sk = lines(skeleton);
     let at = slot_line(&sk, &slot(name), name)?;
     let (before, _) = bounds(&sk, at, name)?;

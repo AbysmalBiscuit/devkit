@@ -489,3 +489,68 @@ fn a_section_the_body_has_is_replaced_even_when_the_edit_leaves_its_condition_ou
         )
     );
 }
+
+const GATED_TEMPLATE: &str = r#"
+[templates]
+pr_body = '''
+## Summary
+
+{{ input | trim }}
+{%- if enabled %}
+
+## Optional
+
+{{ detail | trim }}
+{%- endif %}
+
+## Proof
+
+{{ proof | trim }}'''
+
+[templates.variables]
+enabled = { default = "" }
+detail = { default = "" }
+proof = { default = "" }
+"#;
+
+const GATED_LIVE: &str = "\
+## Summary
+
+The summary.
+
+## Proof
+
+1. the proof
+";
+
+/// `enabled` hides the section that `detail` renders into, and the edit
+/// does not pass it, so the body keeps lacking that section.
+#[test]
+fn a_section_another_variable_hides_stays_out_of_a_body_that_lacks_it() {
+    let fake = ghfake::Fake::new(GATED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, GATED_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "detail=New detail"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(sent_body(&fake), GATED_LIVE);
+}
+
+/// The same edit under an `enabled` that shows the section inserts it.
+#[test]
+fn a_section_another_variable_shows_is_inserted_into_a_body_that_lacks_it() {
+    let shown = GATED_TEMPLATE.replace(
+        r#"enabled = { default = "" }"#,
+        r#"enabled = { default = "yes" }"#,
+    );
+    let fake = ghfake::Fake::new(&shown, &PR_7);
+    fake.serve_pr_body(&PR_7, GATED_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "detail=New detail"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        GATED_LIVE.replace("## Proof", "## Optional\n\nNew detail\n\n## Proof")
+    );
+}
