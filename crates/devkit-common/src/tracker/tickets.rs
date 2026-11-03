@@ -11,7 +11,8 @@ pub struct SyncedTicket {
     pub key: String,
     pub title: String,
     pub status: TicketStatus,
-    /// The keys of the tickets blocking this one, in the same tracker scope.
+    /// The keys of the tickets blocking this one: in the same tracker scope,
+    /// or on GitHub, in any repository.
     pub blocked_by: Vec<String>,
     /// The key of the ticket this one is a sub-issue of.
     pub parent: Option<String>,
@@ -19,7 +20,7 @@ pub struct SyncedTicket {
 
 /// Whether `ticket` is closed, or in one of `closed_names`: a ticket no
 /// sync rule brings in.
-pub(crate) fn in_closed_name(ticket: &SyncedTicket, closed_names: &[String]) -> bool {
+pub fn in_closed_name(ticket: &SyncedTicket, closed_names: &[String]) -> bool {
     match &ticket.status {
         TicketStatus::Named(name) => closed_names.iter().any(|c| same_status(c, name)),
         TicketStatus::Closed(_) => true,

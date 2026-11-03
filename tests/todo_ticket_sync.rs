@@ -210,6 +210,154 @@ fn where_github_refuses_graphql_rest_reads_the_tickets() {
     assert!(s.calls().contains("assignee=LevValle"), "{}", s.calls());
 }
 
+/// Issue 65, at `Todo` and blocked by issue 992 of `AbysmalBiscuit/workcell`,
+/// which GitHub reads in `state`.
+fn blocked_from_workcell(state: &str) -> Synced {
+    tickets::blocked_from_workcell(&format!("{RULES}{STATUSES}"), state)
+}
+
+#[test]
+fn an_open_blocker_in_another_repository_joins_the_node_and_blocks() {
+    let s = blocked_from_workcell("OPEN");
+    let dry = s.sync(&["--dry-run"]);
+    assert!(dry.status.success(), "{}", stderr(&dry));
+    assert!(
+        stdout(&dry).contains("block o/r#65 by abysmalbiscuit/workcell#992"),
+        "{}",
+        stdout(&dry)
+    );
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("2 added"), "{}", stdout(&out));
+    let blocker = s.todo_for("abysmalbiscuit/workcell#992");
+    assert_eq!(blocker.node(), "proj");
+    assert_eq!(s.todo_for("o/r#65").blocked_by, [blocker.id]);
+    let again = s.sync(&[]);
+    assert!(
+        stdout(&again).contains("0 added, 0 changed"),
+        "{}",
+        stdout(&again)
+    );
+}
+
+#[test]
+fn an_imported_blocker_in_another_repository_syncs_by_its_key() {
+    let s = blocked_from_workcell("OPEN");
+    assert!(s.sync(&[]).status.success());
+    let blocker = s.todo_for("abysmalbiscuit/workcell#992");
+    for key in [
+        "abysmalbiscuit/workcell#992",
+        "https://github.com/AbysmalBiscuit/workcell/issues/992",
+    ] {
+        let out = s.sync(&["--ticket", key]);
+        assert!(out.status.success(), "{key}: {}", stderr(&out));
+        assert_eq!(s.todo_for("abysmalbiscuit/workcell#992").id, blocker.id);
+    }
+    assert_eq!(s.proj.todos().len(), 2, "{:?}", s.proj.todos());
+}
+
+#[test]
+fn an_unreadable_repository_of_an_imported_blocker_does_not_stop_the_sync() {
+    let s = blocked_from_workcell("OPEN");
+    assert!(s.sync(&[]).status.success());
+    let i65 = issue(65, Some("Todo"), &[])
+        .replace(
+            r#""blockedBy":{"nodes":[]}"#,
+            r#""blockedBy":{"nodes":[{"number":992,"repository":{"nameWithOwner":"AbysmalBiscuit/workcell"}}]}"#,
+        )
+        .replace("Issue 65", "Issue 65 renamed");
+    let mut answer: Value = serde_json::from_str(&graphql(&[i65], &OPTIONS)).unwrap();
+    answer["data"]["repository"] = Value::Null;
+    answer["errors"] = json!([{
+        "type": "NOT_FOUND",
+        "path": ["repository"],
+        "message": "Could not resolve to a Repository with the name 'AbysmalBiscuit/workcell'."
+    }]);
+    s.serve("graphql.json", &answer.to_string());
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(s.todo_for("o/r#65").description, "#65 Issue 65 renamed");
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+        devkit_todo::StatusKind::Pending
+    );
+}
+
+#[test]
+fn a_reopened_blocker_in_another_repository_reopens_its_todo() {
+    let s = blocked_from_workcell("OPEN");
+    assert!(s.sync(&[]).status.success());
+    for (state, want) in [
+        ("CLOSED", devkit_todo::StatusKind::Completed),
+        ("OPEN", devkit_todo::StatusKind::Pending),
+    ] {
+        s.serve("graphql.json", &workcell_blocks_65(state));
+        let out = s.sync(&[]);
+        assert!(out.status.success(), "{state}: {}", stderr(&out));
+        assert_eq!(
+            s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+            want,
+            "{state}"
+        );
+    }
+}
+
+#[test]
+fn a_blocker_in_another_repository_off_the_board_needs_the_empty_status_mapped() {
+    let unmapped = STATUSES.replace("\"\" = \"pending\"\n", "");
+    let s = tickets::blocked_from_workcell(&format!("{RULES}{unmapped}"), "OPEN");
+    let out = s.sync(&[]);
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(stderr(&out).contains("\"\""), "{}", stderr(&out));
+    assert!(s.proj.todos().is_empty(), "{:?}", s.proj.todos());
+    let s = blocked_from_workcell("OPEN");
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+        devkit_todo::StatusKind::Pending
+    );
+}
+
+#[test]
+fn a_closed_blocker_in_another_repository_adds_no_todo() {
+    let s = blocked_from_workcell("CLOSED");
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(s.proj.todos().len(), 1, "{:?}", s.proj.todos());
+    assert!(s.todo_for("o/r#65").blocked_by.is_empty());
+}
+
+#[test]
+fn where_github_refuses_graphql_rest_reads_a_blocker_in_another_repository() {
+    let s = Synced::new(
+        &format!("{RULES}\n[ticket.sync.statuses]\n\"\" = \"pending\"\n"),
+        false,
+    );
+    std::fs::write(s.bin.path().join("refuse_graphql"), "").unwrap();
+    let rest = |n: u64, repo: &str, blocked: u64| {
+        format!(
+            r#"{{"number":{n},"title":"Issue {n}","state":"open","state_reason":null,
+                "repository_url":"https://api.github.com/repos/{repo}",
+                "issue_dependencies_summary":{{"total_blocked_by":{blocked}}}}}"#
+        )
+    };
+    s.serve("rest_issues.json", &format!("[{}]", rest(65, "o/r", 1)));
+    let workcell = rest(992, "AbysmalBiscuit/workcell", 0);
+    s.serve("rest_issue_65_blocked_by.json", &format!("[{workcell}]"));
+    s.serve("rest_issue_992.json", &workcell);
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let blocker = s.todo_for("abysmalbiscuit/workcell#992");
+    assert_eq!(s.todo_for("o/r#65").blocked_by, [blocker.id]);
+    assert!(
+        s.calls()
+            .contains("repos/abysmalbiscuit/workcell/issues/992"),
+        "{}",
+        s.calls()
+    );
+}
+
 #[test]
 fn a_slug_in_another_case_names_the_same_tickets() {
     let s = two_issues();
@@ -823,6 +971,71 @@ fn ready_without_a_record_is_unchanged() {
     let out = s.devkit(&["todo", "ready"], &AGENT);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!stdout(&out).contains("#66"), "{}", stdout(&out));
+}
+
+/// Issue 65 blocked by `AbysmalBiscuit/workcell#992`, beside issue 992 of
+/// this project's issues repository, synced. Issue 992 is open when `local`
+/// holds, else absent.
+fn workcell_and_local_992(local: bool) -> Synced {
+    let s = blocked_from_workcell("OPEN");
+    if local {
+        let mut answer: Value = serde_json::from_str(&workcell_blocks_65("OPEN")).unwrap();
+        let i992: Value = serde_json::from_str(&issue(992, Some("Todo"), &[])).unwrap();
+        answer["data"]["search"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(i992);
+        s.serve("graphql.json", &answer.to_string());
+    }
+    s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    s
+}
+
+#[test]
+fn a_short_number_names_no_ticket_of_another_repository() {
+    for local in [true, false] {
+        let s = workcell_and_local_992(local);
+        task_create(&s, "1", "#992");
+        task_update(&s, "1", "completed");
+        let foreign = s.todo_for("abysmalbiscuit/workcell#992");
+        assert!(
+            foreign.status.kind().is_open(),
+            "local {local}: {foreign:?}"
+        );
+        if local {
+            assert_eq!(
+                s.todo_for("o/r#992").status.kind(),
+                devkit_todo::StatusKind::Completed
+            );
+        }
+    }
+}
+
+#[test]
+fn a_full_key_names_a_ticket_of_another_repository() {
+    let s = workcell_and_local_992(true);
+    task_create(&s, "1", "AbysmalBiscuit/workcell#992");
+    task_update(&s, "1", "completed");
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+        devkit_todo::StatusKind::Completed
+    );
+    assert!(s.todo_for("o/r#992").status.kind().is_open());
+}
+
+#[test]
+fn a_worktree_record_names_no_ticket_of_another_repository() {
+    for local in [true, false] {
+        let s = workcell_and_local_992(local);
+        record_issue(&s, "992");
+        let out = s.devkit(&["todo", "ready"], &AGENT);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let ready = stdout(&out);
+        assert!(!ready.contains("workcell#992"), "local {local}: {ready}");
+        assert_eq!(ready.contains("#992  Issue 992"), local, "{ready}");
+    }
 }
 
 #[test]

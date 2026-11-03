@@ -687,13 +687,19 @@ fn parse_issue_url(s: &str, host: &str) -> Option<(String, u64)> {
 }
 
 /// `owner/repo#number`, the key `devkit todo sync` gives a GitHub ticket.
-fn parse_ticket_key(s: &str) -> Option<(String, u64)> {
+pub(super) fn parse_ticket_key(s: &str) -> Option<(String, u64)> {
     let (repo, number) = s.rsplit_once('#')?;
     let (owner, name) = repo.split_once('/')?;
     if owner.is_empty() || name.is_empty() || name.contains('/') {
         return None;
     }
     Some((repo.to_string(), number.parse().ok()?))
+}
+
+/// The repository and number of the issue `s` names: an issue URL on
+/// `host`, or a ticket key.
+fn parse_reference(s: &str, host: &str) -> Option<(String, u64)> {
+    parse_issue_url(s, host).or_else(|| parse_ticket_key(s))
 }
 
 // --- the adapter -------------------------------------------------------------
@@ -742,8 +748,7 @@ impl Tracker for GithubTracker {
                 slug: None,
             });
         }
-        let (repo, number) = parse_issue_url(s, &self.repo.host)
-            .or_else(|| parse_ticket_key(s))
+        let (repo, number) = parse_reference(s, &self.repo.host)
             .with_context(|| format!("unrecognized GitHub issue identifier: {s}"))?;
         anyhow::ensure!(
             repo.eq_ignore_ascii_case(&self.repo.slug),
@@ -754,6 +759,14 @@ impl Tracker for GithubTracker {
             id: number.to_string(),
             slug: None,
         })
+    }
+
+    /// `owner/repo#65`, from that key or an issue URL in another repository.
+    fn foreign_issue_key(&self, input: &str) -> Option<String> {
+        let s = input.trim();
+        let (repo, number) = parse_reference(s, &self.repo.host)?;
+        (!repo.eq_ignore_ascii_case(&self.repo.slug))
+            .then(|| super::github_tickets::ticket_key(&repo, number))
     }
 
     fn title(&self, id: &str) -> Result<Option<String>> {
@@ -942,8 +955,11 @@ impl Tracker for GithubTracker {
     }
 
     /// `owner/repo#65`, from that key in any case, an issue URL, `#65` or
-    /// `65`.
+    /// `65`. A key or URL of another repository gives that repository's key.
     fn ticket_key(&self, input: &str) -> Result<String> {
+        if let Some(key) = self.foreign_issue_key(input) {
+            return Ok(key);
+        }
         let s = input.trim();
         let id = self.issue_ref(s.strip_prefix('#').unwrap_or(s))?.id;
         let number = id

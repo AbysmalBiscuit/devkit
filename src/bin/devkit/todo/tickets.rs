@@ -17,7 +17,14 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use devkit_common::{record, tracker, vcs::Checkout};
+use devkit_common::{
+    record,
+    tracker::{
+        self,
+        tickets::{SyncedTicket, in_closed_name},
+    },
+    vcs::Checkout,
+};
 use devkit_config::TicketSyncConfig;
 use devkit_todo::{
     Filter, Holder, StatusKind, Todo, TodoStore,
@@ -43,7 +50,9 @@ pub(crate) struct SyncReport {
 ///
 /// Every ticket a rule selects is fetched, and so is each ticket whose todo
 /// is still pending or in progress, so a close or a reassignment reaches its
-/// todo. Adds land before edits, which name todos by ticket.
+/// todo. A ticket from another repository that blocks one of them is
+/// fetched too, so the blocked todo waits on it while it is open. Adds land
+/// before edits, which name todos by ticket.
 pub(crate) fn sync_tickets(
     store: &impl TodoStore,
     cwd: &Path,
@@ -80,6 +89,12 @@ pub(crate) fn sync_tickets(
                 .with_context(|| format!("reading {kind} tickets"))?,
         );
     }
+    with_foreign_blockers(
+        tracker.as_ref(),
+        &existing,
+        &mut fetched,
+        &sync.closed_names(),
+    )?;
     let known = tracker.status_names()?;
     let plan = ticket::plan(&kind, node, &existing, &fetched, &known, sync)?;
     if dry_run {
@@ -144,7 +159,8 @@ pub(crate) fn sync_created(dir: &Path, key: &str) -> Result<()> {
 /// checkout at `cwd`, reading no other ticket and running no rule search,
 /// and returns its todo; `None` when the repository has no `[ticket.sync]`
 /// rules, which queries no tracker. The ticket's parent and blockers link
-/// to the todos already synced for them.
+/// to the todos already synced for them, and an open blocker from another
+/// repository is synced with it.
 pub(crate) fn sync_one(
     store: &impl TodoStore,
     cwd: &Path,
@@ -159,7 +175,7 @@ pub(crate) fn sync_one(
     let kind = tracker.kind().to_string();
     let key = tracker.ticket_key(key)?;
     let key = key.as_str();
-    let fetched: Vec<_> = tracker
+    let mut fetched: Vec<_> = tracker
         .tickets(&[key.to_string()])
         .with_context(|| format!("reading {kind} ticket {key}"))?
         .into_iter()
@@ -167,15 +183,15 @@ pub(crate) fn sync_one(
         .collect();
     anyhow::ensure!(!fetched.is_empty(), "{kind} has no ticket {key}");
     let existing = store.list(&Filter::exact([node.to_string()]))?;
-    let known = tracker.status_names()?;
-    let plan = ticket::plan(
-        &kind,
-        node,
+    let sync = &config.ticket.sync;
+    with_foreign_blockers(
+        tracker.as_ref(),
         &existing,
-        &fetched,
-        &known,
-        &config.ticket.sync,
+        &mut fetched,
+        &sync.closed_names(),
     )?;
+    let known = tracker.status_names()?;
+    let plan = ticket::plan(&kind, node, &existing, &fetched, &known, sync)?;
     apply_plan(store, &kind, &existing, &plan)?;
     Ok(store
         .list(&Filter::exact([node.to_string()]))?
@@ -185,6 +201,46 @@ pub(crate) fn sync_one(
                 .as_ref()
                 .is_some_and(|r| r.tracker == kind && r.key == key)
         }))
+}
+
+/// Adds to `fetched` each ticket from another repository that blocks one of
+/// them: one with a todo in `existing` in any state, so a close or a reopen
+/// reaches that todo, and one without only while it is open and in none of
+/// `closed_names`.
+fn with_foreign_blockers(
+    tracker: &dyn tracker::Tracker,
+    existing: &[Todo],
+    fetched: &mut Vec<SyncedTicket>,
+    closed_names: &[String],
+) -> Result<()> {
+    let kind = tracker.kind().to_string();
+    let has_todo = |key: &str| {
+        existing
+            .iter()
+            .filter_map(|t| t.ticket.as_ref())
+            .any(|r| r.tracker == kind && r.key == key)
+    };
+    let mut wanted: Vec<String> = fetched
+        .iter()
+        .flat_map(|t| &t.blocked_by)
+        .filter(|key| tracker.foreign_issue_key(key).is_some())
+        .filter(|key| !fetched.iter().any(|t| &t.key == *key))
+        .cloned()
+        .collect();
+    wanted.sort();
+    wanted.dedup();
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let blockers = tracker
+        .tickets(&wanted)
+        .with_context(|| format!("reading {kind} tickets"))?;
+    fetched.extend(
+        blockers
+            .into_iter()
+            .filter(|t| has_todo(&t.key) || !in_closed_name(t, closed_names)),
+    );
+    Ok(())
 }
 
 /// Lands `plan`, made from `existing`, the todos on its node.
@@ -395,14 +451,36 @@ pub(crate) struct TicketWorkspace {
     pub here: bool,
 }
 
+/// Whether a ticket key names an issue of the issues repository of the
+/// checkout at `cwd`, where a bare number (`#65`) resolves. The tracker is
+/// read on the first call.
+pub(crate) fn in_issues_repo(cwd: &Path) -> impl Fn(&str) -> bool + '_ {
+    let tracker = std::cell::OnceCell::new();
+    move |key| {
+        tracker
+            .get_or_init(|| {
+                tracker::select(None, &cwd.to_string_lossy(), None)
+                    .tracker
+                    .tracker
+            })
+            .foreign_issue_key(key)
+            .is_none()
+    }
+}
+
 /// The open ticket todo in `todos` that `text`, a harness task's subject or
 /// plan step, names: by its ticket key (`SWE-123`, `owner/repo#65`), by its
-/// number after a `#` (`#65`), or by the todo's own description.
-pub(crate) fn named_ticket<'a>(todos: &'a [Todo], text: &str) -> Option<&'a Todo> {
+/// number after a `#` (`#65`) when `local` admits the key, or by the todo's
+/// own description.
+pub(crate) fn named_ticket<'a>(
+    todos: &'a [Todo],
+    text: &str,
+    local: impl Fn(&str) -> bool,
+) -> Option<&'a Todo> {
     let text = devkit_todo::one_line(text);
     let text = text.trim();
     let names = |key: &str| match text.strip_prefix('#') {
-        Some(number) => names_issue(key, number),
+        Some(number) => names_issue(key, number) && local(key),
         None => key.eq_ignore_ascii_case(text),
     };
     let open = |t: &&Todo| t.status.kind().is_open();
@@ -414,7 +492,8 @@ pub(crate) fn named_ticket<'a>(todos: &'a [Todo], text: &str) -> Option<&'a Todo
 
 /// Each worktree of `checkout`'s repository whose record names the ticket of
 /// a todo in `todos` on the repository node, with that worktree's workspace
-/// node; a `pr checkout` record names none. A worktree on another machine has
+/// node; a `pr checkout` record names none, and a record names no ticket
+/// outside the issues repository. A worktree on another machine has
 /// no record here, so it is absent.
 pub(crate) fn ticket_workspaces(
     checkout: &Checkout,
@@ -423,6 +502,7 @@ pub(crate) fn ticket_workspaces(
 ) -> Vec<TicketWorkspace> {
     let worktrees = checkout.worktrees();
     let here = checkout.here().map(|h| h.path.as_path());
+    let local = in_issues_repo(checkout.dir());
     worktrees
         .iter()
         .filter(|wt| !wt.bare)
@@ -442,7 +522,7 @@ pub(crate) fn ticket_workspaces(
                 t.node() == repo
                     && t.ticket
                         .as_ref()
-                        .is_some_and(|r| names_issue(&r.key, &issue))
+                        .is_some_and(|r| names_issue(&r.key, &issue) && local(&r.key))
             })?;
             Some(TicketWorkspace {
                 todo: todo.id.clone(),
@@ -500,7 +580,7 @@ mod tests {
             todo("b", "SWE-7", "pending"),
             todo("c", "o/r#9", "completed"),
         ];
-        let named = |text| named_ticket(&todos, text).map(|t| t.id.as_str());
+        let named = |text| named_ticket(&todos, text, |_| true).map(|t| t.id.as_str());
         assert_eq!(named("#65"), Some("a"));
         assert_eq!(named("  O/R#65 "), Some("a"));
         assert_eq!(named("swe-7"), Some("b"));

@@ -560,12 +560,14 @@ impl Capture<'_> {
             None => Ok(Vec::new()),
         }
     }
-}
 
-/// The open ticket todo among `repo_todos` that `text` names, which a new
-/// native task or step maps to instead of adding a todo.
-fn ticket_named(repo_todos: &[Todo], text: &str) -> Option<String> {
-    tickets::named_ticket(repo_todos, text).map(|t| t.id.clone())
+    /// The open ticket todo among `repo_todos` that `text` names, which a new
+    /// native task or step maps to instead of adding a todo.
+    fn ticket_named(&self, repo_todos: &[Todo], text: &str) -> Option<String> {
+        let origin = self.store.origin()?;
+        tickets::named_ticket(repo_todos, text, tickets::in_issues_repo(origin.dir()))
+            .map(|t| t.id.clone())
+    }
 }
 
 /// The harness tools capture mirrors.
@@ -618,7 +620,7 @@ fn task_create(c: &Capture<'_>, input: &Value, response: &Value) -> Result<()> {
     else {
         return Ok(());
     };
-    let id = match ticket_named(&c.repo_todos()?, subject) {
+    let id = match c.ticket_named(&c.repo_todos()?, subject) {
         Some(ticket) => ticket,
         None => c.store.add(NewTodo {
             ticket: None,
@@ -788,7 +790,7 @@ fn list_replace(c: &Capture<'_>, list: &Value, text_key: &str) -> Result<()> {
                 if repo_todos.is_none() {
                     repo_todos = Some(c.repo_todos()?);
                 }
-                let ticket = ticket_named(repo_todos.as_deref().unwrap_or_default(), &step.text);
+                let ticket = c.ticket_named(repo_todos.as_deref().unwrap_or_default(), &step.text);
                 let id = match &ticket {
                     Some(ticket) => ticket.clone(),
                     None => c.store.add(NewTodo {

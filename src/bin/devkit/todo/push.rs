@@ -42,17 +42,37 @@ pub(crate) struct StatusPush<'a> {
 }
 
 impl StatusPush<'_> {
-    /// Whether `todo`'s change goes through [`push_status`]: a ticket todo,
-    /// in a repository pushing statuses, changed from a checkout of that
-    /// repository. Any other todo commits as it always has.
+    /// Whether `todo`'s change goes through [`push_status`]: a ticket todo
+    /// that [`reachable`] admits, in a repository pushing statuses. Any other
+    /// todo commits as it always has.
     pub(crate) fn pushes(&self, store: &Store, todo: &Todo) -> bool {
-        todo.ticket.is_some()
-            && store.ticket().sync.pushes(PushKind::Status)
-            && store.origin().is_some_and(|origin| {
-                super::ticket_event::root_on(origin, todo.node(), store.config(), self.actor)
-                    .is_some()
-            })
+        store.ticket().sync.pushes(PushKind::Status) && reachable(store, self.actor, self.cwd, todo)
     }
+}
+
+/// Whether a change to `todo` can reach its ticket from the checkout at
+/// `cwd`: `todo` is a ticket todo on that checkout's repository, and its
+/// ticket is in the issues repository. A blocker synced from another
+/// repository is not, so its changes stay local.
+fn reachable(store: &Store, actor: &Holder, cwd: &Path, todo: &Todo) -> bool {
+    let Some(ticket) = &todo.ticket else {
+        return false;
+    };
+    inside(store, actor, todo) && !foreign(cwd, &ticket.key)
+}
+
+/// Whether `todo` is on the repository of the checkout the command runs in,
+/// whose config is the one the store read.
+fn inside(store: &Store, actor: &Holder, todo: &Todo) -> bool {
+    store.origin().is_some_and(|origin| {
+        super::ticket_event::root_on(origin, todo.node(), store.config(), actor).is_some()
+    })
+}
+
+/// Whether `key` names a ticket outside the issues repository of the
+/// checkout at `cwd`.
+pub(crate) fn foreign(cwd: &Path, key: &str) -> bool {
+    !super::tickets::in_issues_repo(cwd)(key)
 }
 
 /// A link verb's push: `move`, `block` and `unblock`.
@@ -67,11 +87,11 @@ pub(crate) struct LinkPush<'a> {
 impl LinkPush<'_> {
     /// Whether a `kind` link between `written`, the ticket todo whose ticket
     /// the link lands on, and `other` reaches the tracker. A link with a todo
-    /// that is not a ticket todo, or with a ticket on another tracker or in
-    /// another repository, stays local. A link between two tickets that cannot
-    /// reach the tracker is refused, since the next sync would revert it:
-    /// one changed outside their repository, or in a repository whose
-    /// `push` leaves `kind` out.
+    /// that is not a ticket todo, or with a ticket on another tracker or
+    /// outside the issues repository, stays local. A link between two tickets
+    /// that cannot reach the tracker is refused, since the next sync would
+    /// revert it: one changed outside their repository, or in a repository
+    /// whose `push` leaves `kind` out.
     pub(crate) fn reaches(
         &self,
         store: &Store,
@@ -82,11 +102,11 @@ impl LinkPush<'_> {
         let (Some(a), Some(b)) = (&written.ticket, &other.ticket) else {
             return Ok(false);
         };
-        if !a.same_tracker(b) {
+        if !a.same_tracker(b) || foreign(self.cwd, &a.key) || foreign(self.cwd, &b.key) {
             return Ok(false);
         }
         let (a, b) = (&a.key, &b.key);
-        if !self.inside(store, written) {
+        if !inside(store, self.actor, written) {
             bail!(
                 "{a} and {b} are tickets of {}; change their link from a checkout of it, where \
                  it reaches the tracker, or the next sync reverts it",
@@ -105,18 +125,10 @@ impl LinkPush<'_> {
     }
 
     /// Whether a ticket todo with `kind` pushing reaches its tracker from
-    /// here: `ticket` is a ticket todo of the repository the command runs in,
-    /// and that repository's `[ticket.sync] push` names `kind`.
+    /// here: [`reachable`] admits `ticket`, and the repository's
+    /// `[ticket.sync] push` names `kind`.
     pub(crate) fn pushes(&self, store: &Store, kind: PushKind, ticket: &Todo) -> bool {
-        ticket.ticket.is_some() && store.ticket().sync.pushes(kind) && self.inside(store, ticket)
-    }
-
-    /// Whether `todo` is on the repository of the checkout the command runs
-    /// in, whose config is the one the store read.
-    fn inside(&self, store: &Store, todo: &Todo) -> bool {
-        store.origin().is_some_and(|origin| {
-            super::ticket_event::root_on(origin, todo.node(), store.config(), self.actor).is_some()
-        })
+        store.ticket().sync.pushes(kind) && reachable(store, self.actor, self.cwd, ticket)
     }
 
     fn conflict<'a>(&self, key: &'a str, values: &'a str) -> Conflict<'a> {

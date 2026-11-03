@@ -137,6 +137,26 @@ fn cancel_closes_as_not_planned() {
 }
 
 #[test]
+fn done_and_cancel_on_a_blocker_in_another_repository_stay_local() {
+    for (verb, kind) in [
+        ("done", StatusKind::Completed),
+        ("cancel", StatusKind::Cancelled),
+    ] {
+        let s = blocked_from_workcell(&format!("{PUSH}{RULES}{STATUSES}{DONE_EVENT}"), "OPEN");
+        s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+        assert!(s.sync(&[]).status.success());
+        let id = s.todo_for("abysmalbiscuit/workcell#992").id;
+        let out = s.devkit(&["todo", verb, &id], &AGENT);
+        assert!(out.status.success(), "{verb}: {}", stderr(&out));
+        assert!(s.mutations().is_empty(), "{verb}: {:?}", s.mutations());
+        assert_eq!(
+            s.todo_for("abysmalbiscuit/workcell#992").status.kind(),
+            kind
+        );
+    }
+}
+
+#[test]
 fn done_on_an_issue_already_closed_as_completed_closes_nothing() {
     let s = pushing(DONE_EVENT, true);
     tracker_shows(&s, closed("COMPLETED"));
@@ -397,6 +417,24 @@ fn without_push_done_fires_the_background_event() {
         mutation_at(&s, "updateProjectV2ItemFieldValue").is_some()
     });
     assert_eq!(mutation_at(&s, "closeIssue"), None);
+}
+
+#[test]
+fn done_on_an_imported_blocker_of_another_repository_fires_no_event() {
+    let s = blocked_from_workcell(&format!("{RULES}{STATUSES}{DONE_EVENT}"), "OPEN");
+    s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+    assert!(s.sync(&[]).status.success());
+    let blocker = s.todo_for("abysmalbiscuit/workcell#992").id;
+    let out = s.devkit(&["todo", "done", &blocker], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = s.devkit(&["todo", "done", &ticket_id(&s)], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the background move of o/r#65 to Done", || {
+        mutation_at(&s, "updateProjectV2ItemFieldValue").is_some()
+    });
+    settle();
+    let log = std::fs::read_to_string(s.proj.state().join("ticket-event.log")).unwrap_or_default();
+    assert!(!log.contains("workcell"), "{log}");
 }
 
 #[test]
@@ -1152,6 +1190,63 @@ fn a_link_with_a_ticket_of_another_repository_stays_local() {
         std::slice::from_ref(&foreign)
     );
 
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+/// `abysmalbiscuit/workcell#992`, imported as the blocker of issue 65, in a
+/// repository pushing parents and blocking links; returns its todo id.
+fn imported_blocker() -> (Synced, String) {
+    let s = blocked_from_workcell(
+        &format!("\n[ticket.sync]\npush = [\"parent\", \"blocking\"]\n{RULES}{STATUSES}"),
+        "OPEN",
+    );
+    s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+    let out = s.sync(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let id = s.todo_for("abysmalbiscuit/workcell#992").id;
+    (s, id)
+}
+
+#[test]
+fn parent_edits_on_an_imported_blocker_of_another_repository_stay_local() {
+    let (s, blocker) = imported_blocker();
+    let step = add(&s, &["write the parser"]);
+    let under = s.devkit(&["todo", "move", &step, "--parent", &blocker], &AGENT);
+    assert!(under.status.success(), "{}", stderr(&under));
+    let other = add(&s, &["plan the API"]);
+    let over = s.devkit(&["todo", "move", &blocker, "--parent", &other], &AGENT);
+    assert!(over.status.success(), "{}", stderr(&over));
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").parent.as_deref(),
+        Some(s.proj.todo(&other).id.as_str())
+    );
+    assert!(s.mutations().is_empty(), "{:?}", s.mutations());
+}
+
+#[test]
+fn a_block_between_two_tickets_of_one_other_repository_stays_local() {
+    let (s, blocker) = imported_blocker();
+    let sibling = s
+        .proj
+        .store()
+        .add(NewTodo {
+            project: s.todo_for("o/r#65").project,
+            description: "abysmalbiscuit/workcell#993".into(),
+            parent: None,
+            order: None,
+            ticket: Some(TicketRef {
+                tracker: "github".into(),
+                key: "abysmalbiscuit/workcell#993".into(),
+                synced_status: None,
+            }),
+        })
+        .unwrap();
+    let out = s.devkit(&["todo", "block", &blocker, "--by", &sibling], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        s.todo_for("abysmalbiscuit/workcell#992").blocked_by,
+        std::slice::from_ref(&sibling)
+    );
     assert!(s.mutations().is_empty(), "{:?}", s.mutations());
 }
 

@@ -144,6 +144,13 @@ pub trait Tracker: Send + Sync {
     /// repository or workspace this tracker is not scoped to; the caller
     /// surfaces the error rather than guessing.
     fn issue_ref(&self, input: &str) -> Result<IssueRef>;
+    /// The ticket key of the issue `input` names in another repository on
+    /// this tracker's host, which [`Tracker::issue_ref`] refuses. `None`
+    /// when `input` names no such issue or the tracker has no such
+    /// repositories.
+    fn foreign_issue_key(&self, _input: &str) -> Option<String> {
+        None
+    }
     fn title(&self, id: &str) -> Result<Option<String>>;
     fn details(&self, id: &str) -> Result<Option<IssueDetails>>;
     /// The issue's summary as the tracker holds it, written verbatim as the

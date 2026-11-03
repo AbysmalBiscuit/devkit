@@ -546,6 +546,121 @@ fn edit_lists_replace() {
     assert!(!calls.contains("--add-label"), "{calls}");
 }
 
+/// [`issue_read`] of issue `n`, blocked by `blockers`, that also resolves
+/// `AbysmalBiscuit/workcell#992` as the `xref0` alias.
+fn read_with_workcell_992(n: u64, blockers: serde_json::Value) -> String {
+    let mut read: serde_json::Value = serde_json::from_str(&issue_read(
+        n,
+        serde_json::json!({ "blockedBy": { "nodes": blockers } }),
+        item(serde_json::json!([{ "optionId": "opt_p1", "field": { "id": "PVTSSF_p" } }])),
+    ))
+    .unwrap();
+    read["data"]["xref0"] = workcell_992();
+    read.to_string()
+}
+
+fn workcell_992() -> serde_json::Value {
+    serde_json::json!({ "issue": {
+        "id": "I_992",
+        "number": 992,
+        "repository": { "nameWithOwner": "AbysmalBiscuit/workcell" },
+    }})
+}
+
+#[test]
+fn create_writes_a_blocker_in_another_repository_and_reads_it_back() {
+    let fake = writes_fake();
+    fake.serve_graphql_nth(1, &read_with_workcell_992(42, serde_json::json!([])));
+    fake.serve_graphql_nth(
+        2,
+        &read_with_workcell_992(42, serde_json::json!([workcell_992()["issue"]])),
+    );
+    fake.serve_mutation(MUTATED);
+    let out = fake.issue_as("agent", &[
+        "create",
+        "--title",
+        "T",
+        "--arg",
+        "priority=P1",
+        "--arg",
+        "blocked_by=AbysmalBiscuit/workcell#992",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let calls = fake.calls();
+    assert!(
+        calls.contains("xref0: repository(owner: \"abysmalbiscuit\", name: \"workcell\")"),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("addBlockedBy(input: {issueId: \"I_42\", blockingIssueId: \"I_992\"})"),
+        "{calls}"
+    );
+}
+
+#[test]
+fn edit_writes_a_blocker_named_by_an_issue_url_in_another_repository() {
+    let fake = writes_fake();
+    fake.serve_graphql_nth(1, &read_with_workcell_992(7, serde_json::json!([])));
+    fake.serve_graphql_nth(
+        2,
+        &read_with_workcell_992(7, serde_json::json!([workcell_992()["issue"]])),
+    );
+    fake.serve_mutation(MUTATED);
+    let out = fake.issue_as("agent", &[
+        "edit",
+        "7",
+        "--arg",
+        "blocked_by=https://github.com/AbysmalBiscuit/workcell/issues/992",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        fake.calls()
+            .contains("addBlockedBy(input: {issueId: \"I_7\", blockingIssueId: \"I_992\"})"),
+        "{}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn a_bare_number_names_the_issues_repository_beside_another_repository() {
+    let fake = writes_fake();
+    let blockers = serde_json::json!([
+        { "id": "I_13", "number": 13, "repository": { "nameWithOwner": "o/r" } },
+        workcell_992()["issue"],
+    ]);
+    fake.serve_graphql_nth(1, &read_with_workcell_992(7, serde_json::json!([])));
+    fake.serve_graphql_nth(2, &read_with_workcell_992(7, blockers));
+    fake.serve_mutation(MUTATED);
+    let out = fake.issue_as("agent", &[
+        "edit",
+        "7",
+        "--arg",
+        "blocked_by=#13, AbysmalBiscuit/workcell#992",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let calls = fake.calls();
+    assert!(calls.contains("ref13: issue(number: 13) { id }"), "{calls}");
+    for blocker in ["I_13", "I_992"] {
+        let written =
+            format!("addBlockedBy(input: {{issueId: \"I_7\", blockingIssueId: \"{blocker}\"}})");
+        assert!(calls.contains(&written), "missing {written}: {calls}");
+    }
+}
+
+#[test]
+fn a_parent_in_another_repository_is_still_refused() {
+    let fake = writes_fake();
+    let out = fake.issue_as("agent", &[
+        "edit",
+        "7",
+        "--arg",
+        "parent=AbysmalBiscuit/workcell#992",
+    ]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("is not an issue reference here"), "{err}");
+}
+
 #[test]
 fn edit_lists_compare_labels_case_insensitively() {
     let fake = writes_fake();

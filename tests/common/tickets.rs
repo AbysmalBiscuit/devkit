@@ -237,6 +237,27 @@ pub fn two_issues_in(proj: Proj) -> Synced {
     s
 }
 
+/// Issue 65 at `Todo`, blocked by `AbysmalBiscuit/workcell#992` in `state`,
+/// in a repository whose config is `config` on project 3.
+pub fn blocked_from_workcell(config: &str, state: &str) -> Synced {
+    let s = Synced::new(config, true);
+    s.serve("graphql.json", &workcell_blocks_65(state));
+    s
+}
+
+/// The GraphQL answer of [`blocked_from_workcell`], with the blocker in
+/// `state`.
+pub fn workcell_blocks_65(state: &str) -> String {
+    let i65 = issue(65, Some("Todo"), &[]).replace(
+        r#""blockedBy":{"nodes":[]}"#,
+        r#""blockedBy":{"nodes":[{"number":992,"repository":{"nameWithOwner":"AbysmalBiscuit/workcell"}}]}"#,
+    );
+    let i992 = issue(992, None, &[]).replace("\"OPEN\"", &format!("\"{state}\""));
+    let mut answer: serde_json::Value = serde_json::from_str(&graphql(&[i65], &OPTIONS)).unwrap();
+    answer["data"]["repository"]["i992"] = serde_json::from_str(&i992).unwrap();
+    answer.to_string()
+}
+
 /// Polls `done` until it holds, failing with `what` after 30 seconds.
 pub fn poll(what: &str, done: impl Fn() -> bool) {
     poll_or(what, done, String::new);

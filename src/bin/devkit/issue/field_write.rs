@@ -16,7 +16,8 @@ use devkit_common::{
 use devkit_config::{FieldDecl, Place, TrackerKind};
 
 /// Turn each `issue` value into the issue number the tracker's own parser
-/// reads from it, refusing one it rejects before anything is written.
+/// reads from it, refusing one it rejects before anything is written. A
+/// blocker in another repository becomes that issue's ticket key instead.
 pub(crate) fn number_issue_refs(
     tracker: &dyn Tracker,
     decls: &BTreeMap<String, FieldDecl>,
@@ -24,16 +25,21 @@ pub(crate) fn number_issue_refs(
 ) -> Result<()> {
     let mut problems = Vec::new();
     for (name, values) in &mut resolved.fields {
-        let is_issue = decls
+        let Some(decl) = decls
             .get(name)
-            .is_some_and(|d| d.r#type == Some(devkit_config::FieldType::Issue));
-        if !is_issue {
+            .filter(|d| d.r#type == Some(devkit_config::FieldType::Issue))
+        else {
             continue;
-        }
+        };
+        let blocker = decl.r#where == Some(Place::BlockedBy);
         for v in values.iter_mut() {
             let Value::Issue(raw) = v else { continue };
-            match tracker.issue_ref(raw.trim().trim_start_matches('#')) {
-                Ok(r) => *raw = r.id,
+            let id = match tracker.issue_ref(raw.trim().trim_start_matches('#')) {
+                Ok(r) => Ok(r.id),
+                Err(e) => tracker.foreign_issue_key(raw).filter(|_| blocker).ok_or(e),
+            };
+            match id {
+                Ok(id) => *raw = id,
                 Err(e) => problems.push(Problem::Invalid {
                     field: name.clone(),
                     value: raw.clone(),
