@@ -275,8 +275,14 @@ impl Api {
         }
     }
 
-    /// [`Api::rest`] through `gh api --hostname <host>`.
-    fn gh_rest(&self, method: &Method, path: &str, body: Option<&Value>) -> Result<Option<Value>> {
+    /// [`Api::rest`] through `gh api --hostname <host>`, whatever token
+    /// devkit holds, so a `gh` wrapper on `PATH` sees the call.
+    pub fn gh_rest(
+        &self,
+        method: &Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Option<Value>> {
         let mut args: Vec<String> = [
             "api",
             "--hostname",
