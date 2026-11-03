@@ -291,6 +291,34 @@ fn discover_into_leaves_out_a_field_devkit_toml_declares() {
 }
 
 #[test]
+fn discover_into_overrides_a_field_devkit_toml_declares_stale() {
+    let fake = fields_fake();
+    fake.serve_graphql(DISCOVERED);
+    let before = devkit_toml(&fake);
+    stdout(&fake.issue_as("agent", &[
+        "fields",
+        "discover",
+        "--into",
+        "devkit.local.toml",
+    ]));
+    assert_eq!(devkit_toml(&fake), before, "devkit.toml is untouched");
+    let local = local_toml(&fake).expect("devkit.local.toml is written");
+    let doc: toml::Table = toml::from_str(&local).unwrap();
+    let milestone = &doc["ticket"]["fields"]["github"]["milestone"];
+    let ids: Vec<&str> = milestone["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["v1", "v2"], "{local}");
+    assert!(
+        milestone.get("level").is_none() && milestone.get("when").is_none(),
+        "devkit.toml keeps what a person set: {local}"
+    );
+}
+
+#[test]
 fn discover_into_refuses_a_write_the_stack_would_not_load() {
     let fake = ghfake::Fake::without_pr(
         "[tracker]\nkind = \"github\"\n\n[ticket.fields.github.milestone]\ntype = \"enum\"\n\
