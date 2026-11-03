@@ -36,7 +36,7 @@ fn status_schema() -> Value {
         "type": "object",
         "properties": {
             "root": { "type": "string", "description": "Directory whose worktrees are enumerated (default \".\")." },
-            "ids": { "type": "array", "items": { "type": "string" }, "description": "Filter to the worktrees these issue ids, branches, or worktree paths name (case-insensitive)." }
+            "ids": { "type": "array", "items": { "type": "string" }, "description": "Filter to the worktrees these issue ids, branches, worktree paths, or PR numbers name (case-insensitive)." }
         },
         "additionalProperties": false
     })

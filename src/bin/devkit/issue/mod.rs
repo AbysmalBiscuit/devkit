@@ -24,7 +24,6 @@ mod prs;
 pub(crate) mod receipt;
 pub(crate) mod render;
 mod review;
-mod select;
 pub(crate) mod setup;
 mod slug;
 mod status;
@@ -427,14 +426,14 @@ pub(crate) enum WorkspaceCmd {
     },
     /// Read-only report of every issue worktree (optionally filtered by ID).
     Status {
-        /// Issue ids, branches, or worktree paths to report on; omit for every
-        /// issue worktree.
+        /// Issue ids, branches, worktree paths, or PR numbers to report on;
+        /// omit for every issue worktree.
         ids: Vec<String>,
     },
     /// Remove FINISHED worktrees (PR merged + issue done + clean).
     End {
-        /// Issue ids, branches, or worktree paths to consider; omit to scan
-        /// every issue worktree.
+        /// Issue ids, branches, worktree paths, or PR numbers to consider; omit
+        /// to scan every issue worktree.
         ids: Vec<String>,
         /// Remove without asking for confirmation.
         #[arg(short = 'y', long)]

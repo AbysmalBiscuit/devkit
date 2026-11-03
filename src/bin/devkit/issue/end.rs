@@ -20,10 +20,7 @@ fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWor
     let mut chosen = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for sel in selectors {
-        let hits: Vec<&IssueWorktree> = rows
-            .iter()
-            .filter(|r| crate::issue::select::matches(r, sel))
-            .collect();
+        let hits: Vec<&IssueWorktree> = rows.iter().filter(|r| r.selected_by(sel)).collect();
         if hits.is_empty() {
             eprintln!("no worktree matches '{sel}'");
         }

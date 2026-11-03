@@ -26,9 +26,7 @@ fn pick_index(
     current_top: Option<&str>,
 ) -> Option<usize> {
     match selector {
-        Some(sel) => rows
-            .iter()
-            .position(|r| crate::issue::select::matches(r, sel)),
+        Some(sel) => rows.iter().position(|r| r.selected_by(sel)),
         None => {
             let top = current_top?;
             rows.iter().position(|r| {
@@ -36,6 +34,20 @@ fn pick_index(
             })
         }
     }
+}
+
+/// The discovered row that `sel` names once the PR fetch has filled each row,
+/// so a PR number that no local name matches still selects its worktree.
+fn selected_after_pr_fetch(
+    d: &st::Discovered,
+    forge: &devkit_common::forge::Resolved,
+    sel: &str,
+) -> Result<Option<IssueWorktree>> {
+    let prs = st::fetch_prs(d, forge)?;
+    Ok(d.rows().iter().cloned().find_map(|mut row| {
+        prs.apply(&mut row);
+        row.selected_by(sel).then_some(row)
+    }))
 }
 
 /// The current worktree's root (`git rev-parse --show-toplevel`), trimmed.
@@ -68,9 +80,13 @@ pub fn run(
     let tracker = resolved.tracker.as_ref();
     let mut info = TrackerInfo::of(&resolved);
 
-    let (mut row, discovered) = match pick_index(d.rows(), selector, top.as_deref()) {
-        Some(i) => {
-            let mut r = d.rows()[i].clone();
+    let picked = match (pick_index(d.rows(), selector, top.as_deref()), selector) {
+        (Some(i), _) => Some(d.rows()[i].clone()),
+        (None, Some(sel)) if !cache_only => selected_after_pr_fetch(&d, &forge, sel)?,
+        (None, _) => None,
+    };
+    let (mut row, discovered) = match picked {
+        Some(mut r) => {
             r.tree = st::tree_of(Path::new(&r.worktree));
             (r, true)
         }

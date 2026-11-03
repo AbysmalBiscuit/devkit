@@ -9,8 +9,7 @@ use devkit_common::{
     worktree::{self, IncludePlan, IssueId},
 };
 use devkit_ports::load;
-
-use crate::issue::select::matches_parts;
+use devkit_ticket::status::matches_parts;
 
 fn confirm(label: &str) -> bool {
     print!("  Overwrite in {label}? [y/N] ");

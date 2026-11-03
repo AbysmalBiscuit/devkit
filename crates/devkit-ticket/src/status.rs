@@ -167,6 +167,22 @@ impl IssueWorktree {
             verdict: Verdict::default(),
         }
     }
+
+    /// True when `sel` names this worktree by any of [`matches_parts`]' names
+    /// or by its PR number (`3124` or `#3124`). The PR number is known only
+    /// once the PR fetch has filled the row.
+    pub fn selected_by(&self, sel: &str) -> bool {
+        if matches_parts(
+            &self.worktree,
+            &self.branch,
+            &self.issue_id.to_string(),
+            sel,
+        ) {
+            return true;
+        }
+        let number = sel.strip_prefix('#').unwrap_or(sel);
+        self.pr.number().is_some_and(|pr| number == pr.to_string())
+    }
 }
 
 impl Serialize for IssueWorktree {
@@ -234,6 +250,25 @@ pub struct StatusReport {
     pub worktrees: Vec<IssueWorktree>,
     pub finished_count: usize,
     pub tracker: TrackerInfo,
+}
+
+impl StatusReport {
+    /// The report narrowed to the rows that one of `selectors` names by
+    /// [`IssueWorktree::selected_by`], or the whole report when `selectors` is
+    /// empty.
+    pub fn select(mut self, selectors: &[String]) -> StatusReport {
+        if selectors.is_empty() {
+            return self;
+        }
+        self.worktrees
+            .retain(|row| selectors.iter().any(|sel| row.selected_by(sel)));
+        self.finished_count = self
+            .worktrees
+            .iter()
+            .filter(|r| r.verdict.is_finished())
+            .count();
+        self
+    }
 }
 
 /// Local-only discovery: worktrees + dirty placeholders + issue ids. The slow
@@ -798,8 +833,10 @@ pub fn verdict(wt: &IssueWorktree, tracker: &TrackerInfo, pr_only: bool) -> Verd
 }
 
 /// Discover worktrees, fetch PRs + tracker state concurrently, and compute the
-/// verdict against a caller-supplied tracker. Silent, with no progress output
-/// (the CLI re-orchestrates the same pieces with bars). This crate reads no
+/// verdict against a caller-supplied tracker. The report keeps the rows that
+/// `ids` names by [`IssueWorktree::selected_by`], or every row when it is
+/// empty. Silent, with no progress output (the CLI re-orchestrates the same
+/// pieces with bars). This crate reads no
 /// config, so the caller that loaded one resolves the tracker and repos and
 /// injects them; tests inject a fake. `pr_only` is [`verdict`]'s.
 pub fn gather_with(
@@ -809,7 +846,17 @@ pub fn gather_with(
     f: &forge::Resolved,
     pr_only: bool,
 ) -> Result<StatusReport> {
-    let d = discover(start, ids)?;
+    Ok(gather_all(start, t, f, pr_only)?.select(ids))
+}
+
+/// [`gather_with`] over every worktree.
+fn gather_all(
+    start: &str,
+    t: &Resolved,
+    f: &forge::Resolved,
+    pr_only: bool,
+) -> Result<StatusReport> {
+    let d = discover(start, &[])?;
     let info = TrackerInfo::of(t);
     let t = t.tracker.as_ref();
     if d.is_empty() {
@@ -1681,5 +1728,81 @@ mod tests {
             ahead: None,
         };
         assert_eq!(status.state_label(), "OPEN");
+    }
+
+    mod selection {
+        use super::super::*;
+
+        fn row() -> IssueWorktree {
+            IssueWorktree {
+                worktree: "/home/u/wt/eng-7-fix".into(),
+                branch: "lev/eng-7-fix".into(),
+                issue_id: "ENG-7".parse().unwrap(),
+                record_unreadable: false,
+                tree: Tree::Clean,
+                pr: PrStatus::None,
+                state: None,
+                verdict: Default::default(),
+            }
+        }
+
+        #[test]
+        fn selects_by_id_branch_basename_and_path() {
+            let r = row();
+            assert!(r.selected_by("eng-7"));
+            assert!(r.selected_by("ENG-7"));
+            assert!(r.selected_by("lev/eng-7-fix"));
+            assert!(r.selected_by("eng-7-fix"));
+            assert!(r.selected_by("/home/u/wt/eng-7-fix"));
+        }
+
+        /// The rows carry the spelling git reports and the caller types their
+        /// own. Two names for one directory must still select it.
+        #[test]
+        fn a_path_selector_matches_another_spelling_of_one_directory() {
+            let tmp = tempfile::tempdir().unwrap();
+            let real = tmp.path().join("wt").join("eng-7-fix");
+            std::fs::create_dir_all(&real).unwrap();
+            let indirect = tmp.path().join("wt").join(".").join("..").join("wt");
+            let r = IssueWorktree {
+                worktree: real.to_string_lossy().into_owned(),
+                ..row()
+            };
+            assert!(r.selected_by(&indirect.join("eng-7-fix").to_string_lossy()));
+            assert!(!r.selected_by(&indirect.join("eng-8-other").to_string_lossy()));
+        }
+
+        #[test]
+        fn rejects_non_match() {
+            assert!(!row().selected_by("eng-8"));
+        }
+
+        fn with_pr_number(n: u64) -> IssueWorktree {
+            IssueWorktree {
+                pr: PrStatus::Unique {
+                    number: n,
+                    state: "OPEN".into(),
+                    url: "".into(),
+                    is_draft: false,
+                    ahead: None,
+                },
+                ..row()
+            }
+        }
+
+        #[test]
+        fn selects_by_pr_number() {
+            let r = with_pr_number(3124);
+            assert!(r.selected_by("3124"));
+            assert!(r.selected_by("#3124"));
+        }
+
+        #[test]
+        fn rejects_wrong_pr_number_and_pr_when_absent() {
+            let r = with_pr_number(3124);
+            assert!(!r.selected_by("3125"));
+            // A row with no PR never matches a bare number.
+            assert!(!row().selected_by("3124"));
+        }
     }
 }
