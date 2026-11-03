@@ -66,25 +66,33 @@ struct ConfigOptions {
     /// Set one config value for this command, over every config file and
     /// `--config`: a dotted key and a TOML value, as in
     /// `-o tracker.kind='"none"'`. Repeat it to set more keys; the last value
-    /// for a key wins. Refused for agent callers.
+    /// for a key wins. `$DEVKIT_OPTIONS` holds more of them, one per line,
+    /// under these; a devkit this command runs gets both through it. Refused
+    /// for agent callers.
     #[arg(short = 'o', long = "option", value_name = "KEY=VALUE", global = true)]
     option: Vec<String>,
 }
 
 impl ConfigOptions {
-    /// Parse the values and set them for every config resolve in this process.
-    /// An agent may not pass any: several keys are safety controls.
+    /// Parse the values, under those of `$DEVKIT_OPTIONS`, and set them for
+    /// every config resolve in this process. An agent may not pass any on
+    /// its command line: several keys are safety controls. The command guard
+    /// refuses an agent command that sets the variable.
     fn apply(self) -> Result<()> {
-        if self.option.is_empty() {
-            return Ok(());
-        }
-        if devkit_common::caller::caller() == devkit_common::caller::Caller::Agent {
+        if !self.option.is_empty()
+            && devkit_common::caller::caller() == devkit_common::caller::Caller::Agent
+        {
             anyhow::bail!(
                 "--option is refused for agent callers: it could weaken the safety \
                  controls devkit.toml sets"
             );
         }
-        devkit_common::config::set_options(devkit_config::Options::parse(&self.option)?)
+        let variable = std::env::var(devkit_config::OPTIONS_VAR).ok();
+        let options = devkit_config::Options::new(variable.as_deref(), &self.option)?;
+        if options.is_empty() {
+            return Ok(());
+        }
+        devkit_common::config::set_options(options)
     }
 }
 
@@ -472,8 +480,8 @@ fn parse_cli(args: &[OsString]) -> Cli {
 /// Run a hook verb with a panic caught. An escaping panic exits 101, which
 /// aborts a Claude Code `WorktreeCreate` and reads as a failure on every other
 /// verb; the panic hook has already reported it by the time this is reached.
-fn run_hook_guarded(cli: hook::HookCli) -> Result<()> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook::run(cli))) {
+fn run_hook_guarded(cli: hook::HookCli, options: Result<()>) -> Result<()> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook::run(cli, options))) {
         Ok(r) => r,
         Err(_) => std::process::exit(1),
     }
@@ -530,7 +538,15 @@ fn main() -> Result<()> {
         Some(s) => dispatch_shim(s, name, args),
         None => {
             let cli = parse_cli(&args);
-            cli.options.apply()?;
+            // A hook decides for itself what a bad option means: pre-tool-use
+            // ignores it and still gives a verdict.
+            let options = match (&cli.cmd, cli.options.apply()) {
+                (Cmd::Hook(_), applied) => applied,
+                (_, applied) => {
+                    applied?;
+                    Ok(())
+                }
+            };
             match cli.cmd {
                 Cmd::Auth {
                     provider,
@@ -567,7 +583,7 @@ fn main() -> Result<()> {
                 Cmd::Pr(c) => issue::run(c.action(), "pr"),
                 Cmd::Mcp(c) => mcp::run(c),
                 Cmd::Harness(c) => harness::run(c),
-                Cmd::Hook(c) => run_hook_guarded(c),
+                Cmd::Hook(c) => run_hook_guarded(c, options),
                 Cmd::HookLog(c) => hook_log::run(c),
                 Cmd::Rules(c) => rules::run(c),
                 Cmd::Template(c) => template::run(c),

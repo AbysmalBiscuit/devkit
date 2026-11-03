@@ -1,16 +1,24 @@
 //! The one door every subcommand's config resolution passes through.
 
-use std::{path::Path, sync::OnceLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use devkit_config::{Config, Options, PendingLayer, Provenance};
 
 use crate::vcs::Checkout;
 
 static OPTIONS: OnceLock<Options> = OnceLock::new();
 
+/// The `start` directory and checkout root of the first config this process
+/// resolves, which anchor a relative path in the `--option` values.
+static ANCHORS: OnceLock<(PathBuf, Option<PathBuf>)> = OnceLock::new();
+
 /// Set the `--option` values every later resolve in this process merges over
-/// its layers. The command line is parsed once, so a second call is a bug.
+/// its layers, the values of `$DEVKIT_OPTIONS` included. The command line is
+/// parsed once, so a second call is a bug.
 pub fn set_options(options: Options) -> Result<()> {
     if OPTIONS.set(options).is_err() {
         bail!("the --option values are already set for this process");
@@ -21,6 +29,30 @@ pub fn set_options(options: Options) -> Result<()> {
 /// The `--option` values of this process: empty until [`set_options`] runs.
 pub fn options() -> &'static Options {
     OPTIONS.get_or_init(Options::default)
+}
+
+/// A command that runs this devkit executable with this process's `--option`
+/// values, so the child resolves the config this process resolves.
+pub fn devkit_command() -> Result<std::process::Command> {
+    let exe = std::env::current_exe().context("locating the devkit executable")?;
+    let mut cmd = std::process::Command::new(exe);
+    pass_options(&mut cmd)?;
+    Ok(cmd)
+}
+
+/// Give `cmd` the `--option` values of this process in `$DEVKIT_OPTIONS`, so a
+/// devkit it runs resolves the config this process resolves. A relative path
+/// value anchors as this process anchors it, at its first resolved config or,
+/// before one, at its working directory.
+pub fn pass_options(cmd: &mut std::process::Command) -> Result<()> {
+    let (start, root) = match ANCHORS.get() {
+        Some((start, root)) => (start.clone(), root.clone()),
+        None => (std::env::current_dir()?, None),
+    };
+    if let Some(value) = options().to_variable(&start, root.as_deref())? {
+        cmd.env(devkit_config::OPTIONS_VAR, value);
+    }
+    Ok(())
 }
 
 /// Resolve the `devkit.toml` layers discovered from `start` — or the single
@@ -67,6 +99,9 @@ pub fn resolve_in(
     if let Ok((cfg, _)) = &resolved {
         crate::pool::configure(cfg.parallelism.threads);
         crate::github::configure(cfg.github.no_graphql);
+        if let Ok(start) = std::path::absolute(start) {
+            let _ = ANCHORS.set((start, checkout.root().map(Path::to_path_buf)));
+        }
     }
     resolved
 }

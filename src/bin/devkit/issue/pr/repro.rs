@@ -7,7 +7,7 @@
 use std::{
     io::{Read, Seek},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 use anyhow::{Context, Result, bail};
@@ -411,9 +411,8 @@ impl Gate {
     /// `devrun task <repro_task> --arg selector=<selector>` in `at`, which
     /// records the run in the ledger.
     fn devrun(&self, at: &Path, selector: &str) -> Result<Ran> {
-        let exe = std::env::current_exe().context("finding the devkit executable")?;
         let mut log = tempfile::tempfile().context("creating a file for the run's output")?;
-        let status = Command::new(&exe)
+        let status = devkit_common::config::devkit_command()?
             .args(["run", "task", &self.task.task, "--arg"])
             .arg(format!("{SELECTOR}={selector}"))
             .current_dir(at)

@@ -1107,3 +1107,34 @@ fn expand_lists_the_workspace_todos_under_the_ticket() {
         "{plan}"
     );
 }
+
+#[test]
+fn a_background_sync_sees_the_option_values_of_the_devkit_that_starts_it() {
+    let s = Synced::new(STATUSES, true);
+    s.serve(
+        "graphql.json",
+        &graphql(
+            &[issue(65, Some("Todo"), &[66]), issue(66, None, &[])],
+            &OPTIONS,
+        ),
+    );
+    let out = s.devkit(
+        &[
+            "-o",
+            r#"ticket.sync.rules=[{ assignee = "me" }]"#,
+            "todo",
+            "list",
+        ],
+        &[
+            ("DEVKIT_CALLER", "human"),
+            ("CLAUDE_CODE_SESSION_ID", ""),
+            ("CODEX_SESSION_ID", ""),
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the background sync", || {
+        s.sync_state("last").exists() || s.sync_state("failed").exists()
+    });
+    assert_eq!(s.ticket_queries(), 1, "{}", s.calls());
+    assert_eq!(s.proj.todos().len(), 2, "{:?}", s.proj.todos());
+}

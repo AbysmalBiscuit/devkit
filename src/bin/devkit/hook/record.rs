@@ -286,7 +286,7 @@ pub fn projection(analysis: &Analysis, analyze_micros: u64) -> AnalysisProjectio
             .iter()
             .map(|i| match &i.program {
                 Value::Known(p) => p.clone(),
-                Value::Unknown | Value::Within(_) => "<unknown>".to_string(),
+                Value::Unknown | Value::Within(_) | Value::Prefixed(_) => "<unknown>".to_string(),
                 Value::Ephemeral(_) => "<ephemeral>".to_string(),
             })
             .collect(),

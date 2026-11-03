@@ -296,8 +296,8 @@ pub fn resolve_at(global_path: Option<&Path>, checkout: &Checkout, cwd: &Path) -
     // directory the settings resolve for, as a relative `--option` path in
     // `devkit.toml` anchors to the start directory.
     let options = crate::config::options()
-        .layer()
-        .and_then(|(_, table)| Some(anchor_dir(section_of(&table)?, Some(cwd))));
+        .merged()
+        .and_then(|table| Some(anchor_dir(section_of(&table)?, Some(cwd))));
     let global = overlay(file, options);
     let env = parse_env_override(std::env::var(ENV_OVERRIDE).ok().as_deref());
     resolve_from(global.as_ref(), || project_sections(checkout, cwd), env)

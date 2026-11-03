@@ -75,7 +75,7 @@ fn known(inv: &Invocation) -> Option<Known> {
 
 /// Ordered from weakest to strongest, so combining alternatives takes the
 /// maximum and combining a sequence takes the minimum.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Match {
     No,
     Possible,
@@ -111,7 +111,9 @@ fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
 /// more whole arguments; every other entry matches one argument. A pattern
 /// that is a `DEVKIT_CALLER=` assignment the override accepts matches every
 /// spelling of that value; any other pattern, wildcards included, matches the
-/// argument as written.
+/// argument as written. An argument known only by its start, such as an
+/// assignment of an unknown value, matches a pattern that accepts any rest,
+/// and a `DEVKIT_CALLER=` pattern whose value the unknown rest could complete.
 fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((pattern, patterns)) = patterns.split_first() else {
         return Match::Yes;
@@ -138,9 +140,37 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
             Match::Yes
         }
         Value::Known(_) => return Match::No,
+        Value::Prefixed(start) => {
+            let here = match canonical.and_then(|c| caller::caller_assignment_could_read(c, start))
+            {
+                Some(true) => Match::Yes,
+                Some(false) => Match::No,
+                None => prefix_match(pattern, start),
+            };
+            if here == Match::No {
+                return Match::No;
+            }
+            here
+        }
         Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => Match::Possible,
     };
     here.min(args_match(patterns, args))
+}
+
+/// Whether `pattern` matches every word that starts with `start`, only some,
+/// or none.
+fn prefix_match(pattern: &str, start: &str) -> Match {
+    let (head, rest) = pattern.split_at(pattern.find('*').unwrap_or(pattern.len()));
+    let common = head.len().min(start.len());
+    match (
+        head.as_bytes()[..common] == start.as_bytes()[..common],
+        !rest.is_empty() && rest.chars().all(|c| c == '*'),
+    ) {
+        (false, _) => Match::No,
+        (true, _) if rest.is_empty() && head.len() < start.len() => Match::No,
+        (true, true) if head.len() <= start.len() => Match::Yes,
+        (true, _) => Match::Possible,
+    }
 }
 
 /// Whether `inv` runs devkit's own binary, judging its program against the
@@ -152,7 +182,9 @@ pub fn runs_own(inv: &Invocation, own: &OwnBinary) -> bool {
         match &inv.search_path {
             SearchPath::Inherited => own.runs(p, cwd),
             SearchPath::Set(Value::Known(path)) => own.on_path(path.into()).runs(p, cwd),
-            SearchPath::Set(Value::Unknown | Value::Ephemeral(_) | Value::Within(_)) => false,
+            SearchPath::Set(
+                Value::Unknown | Value::Ephemeral(_) | Value::Within(_) | Value::Prefixed(_),
+            ) => false,
         }
     })
 }
@@ -600,6 +632,16 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn a_known_start_matches_a_pattern_only_where_the_two_agree() {
+        assert_eq!(prefix_match("FOO=1", "FOO=10"), Match::No);
+        assert_eq!(prefix_match("FOO=1", "FOO=2"), Match::No);
+        assert_eq!(prefix_match("FOO=1", "FOO=1"), Match::Possible);
+        assert_eq!(prefix_match("FOO=1", "FOO="), Match::Possible);
+        assert_eq!(prefix_match("FOO=*", "FOO=1"), Match::Yes);
+        assert_eq!(prefix_match("FOO=1*", "FOO="), Match::Possible);
+    }
+
     fn rules(programs: &[&str], reason: &str) -> BTreeMap<String, CommandRule> {
         BTreeMap::from([("test-rule".to_string(), CommandRule {
             programs: programs.iter().map(|s| s.to_string()).collect(),
@@ -824,6 +866,7 @@ mod tests {
         let (_own_dir, own) = own_links(&["ticket"]);
         for command in [
             "PATH=\"$HOME/bin:$PATH\" ticket create",
+            "env PATH=\"$HOME/bin:$PATH\" ticket create",
             "env -i ticket create",
             "env -u PATH ticket create",
             "sudo ticket create",

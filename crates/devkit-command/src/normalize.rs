@@ -258,17 +258,31 @@ fn is_path_name(name: &str, style: PathStyle) -> bool {
 
 /// The value `word` assigns to `PATH`, when it is a `PATH` assignment.
 fn path_assignment(word: &Word, style: PathStyle) -> Option<Value> {
-    let (name, value) = word.value.known()?.split_once('=')?;
-    is_path_name(name, style).then(|| Value::Known(value.to_string()))
+    let (text, value_known) = match &word.value {
+        Value::Known(text) => (text, true),
+        Value::Prefixed(text) => (text, false),
+        Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => return None,
+    };
+    let (name, value) = text.split_once('=')?;
+    is_path_name(name, style).then(|| match value_known {
+        true => Value::Known(value.to_string()),
+        false => Value::Unknown,
+    })
 }
 
 fn is_assignment(word: &Word) -> bool {
-    word.value.known().is_some_and(|w| {
-        w.split_once('=').is_some_and(|(name, _)| {
-            !name.is_empty()
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                && !name.starts_with(|c: char| c.is_ascii_digit())
-        })
+    match &word.value {
+        Value::Known(text) | Value::Prefixed(text) => names_variable(text),
+        Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => false,
+    }
+}
+
+/// Whether `text` starts `NAME=`, the form of a shell assignment.
+pub(crate) fn names_variable(text: &str) -> bool {
+    text.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !name.starts_with(|c: char| c.is_ascii_digit())
     })
 }
 
@@ -357,6 +371,13 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
         // `env` still reads NAME=VALUE operands after `--` ends its options.
         let mut options_done = false;
         while let Some(word) = argv.get(i) {
+            if first == "env" && is_assignment(word) {
+                if let Some(path) = path_assignment(word, style) {
+                    search_path = SearchPath::Set(path);
+                }
+                i += 1;
+                continue;
+            }
             let Some(text) = word.value.known() else {
                 break;
             };
@@ -366,13 +387,6 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
                 continue;
             }
             if options_done || !text.starts_with('-') {
-                if first == "env" && is_assignment(word) {
-                    if let Some(path) = path_assignment(word, style) {
-                        search_path = SearchPath::Set(path);
-                    }
-                    i += 1;
-                    continue;
-                }
                 break;
             }
             let (flag, inline) = match text.split_once('=') {

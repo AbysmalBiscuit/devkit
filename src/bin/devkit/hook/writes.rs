@@ -128,7 +128,9 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     for script in &analysis.script_files {
         let name = match &script.script {
             Value::Known(s) => format!("`{s}`"),
-            Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => "a script".to_string(),
+            Value::Unknown | Value::Ephemeral(_) | Value::Within(_) | Value::Prefixed(_) => {
+                "a script".to_string()
+            }
         };
         e.apply(
             policy.script_files,

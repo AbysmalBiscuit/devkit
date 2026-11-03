@@ -26,7 +26,31 @@ fn project() -> tempfile::TempDir {
 }
 
 fn devkit(project: &Path, state: &Path, caller: &str, args: &[&str]) -> Output {
+    devkit_with_options(project, state, caller, None, args)
+}
+
+/// `devkit` with `DEVKIT_OPTIONS` set to `options`, or unset for `None`.
+fn devkit_with_options(
+    project: &Path,
+    state: &Path,
+    caller: &str,
+    options: Option<&str>,
+    args: &[&str],
+) -> Output {
+    devkit_with_env(project, state, caller, options, &[], args)
+}
+
+/// `devkit_with_options` with each of `env` set as well.
+fn devkit_with_env(
+    project: &Path,
+    state: &Path,
+    caller: &str,
+    options: Option<&str>,
+    env: &[(&str, &str)],
+    args: &[&str],
+) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.envs(env.iter().copied());
     cmd.args(args)
         .current_dir(project)
         .env("HOME", state)
@@ -36,12 +60,21 @@ fn devkit(project: &Path, state: &Path, caller: &str, args: &[&str]) -> Output {
         .env("DEVKIT_CALLER", caller)
         .env_remove("DEVKIT_CONFIG");
     testenv::scrub_identity(&mut cmd);
+    if let Some(options) = options {
+        cmd.env("DEVKIT_OPTIONS", options);
+    }
     cmd.output().expect("spawn devkit")
 }
 
 fn human(project: &Path, args: &[&str]) -> Output {
     let state = tempfile::tempdir().unwrap();
     devkit(project, state.path(), "human", args)
+}
+
+/// `devkit` run by a person with `DEVKIT_OPTIONS` set to `options`.
+fn human_with_options(project: &Path, options: &str, args: &[&str]) -> Output {
+    let state = tempfile::tempdir().unwrap();
+    devkit_with_options(project, state.path(), "human", Some(options), args)
 }
 
 fn stdout(out: &Output) -> String {
@@ -418,4 +451,201 @@ fn a_relative_option_log_dir_anchors_to_the_hook_directory() {
         logs.display(),
         std::fs::read_dir(elsewhere.path().join("logs")).map(|d| d.count())
     );
+}
+
+#[test]
+fn the_environment_options_override_a_config_file_and_origin_names_the_variable() {
+    let p = project();
+    let options = "tracker.kind=\"none\"\ndefaults.branch_prefix = \"env/\"\n";
+    let shown = stdout(&human_with_options(p.path(), options, &["config", "show"]));
+    assert!(shown.contains("kind = \"none\""), "{shown}");
+    assert!(shown.contains("branch_prefix = \"env/\""), "{shown}");
+
+    let shown = stdout(&human_with_options(p.path(), options, &[
+        "config", "show", "--origin",
+    ]));
+    let line = shown
+        .lines()
+        .find(|l| l.starts_with("tracker.kind ="))
+        .unwrap_or_else(|| panic!("no tracker.kind line: {shown}"));
+    assert!(line.contains("# from $DEVKIT_OPTIONS"), "{line}");
+    assert!(
+        shown.contains("#   $DEVKIT_OPTIONS"),
+        "the layer list names the variable: {shown}"
+    );
+}
+
+#[test]
+fn an_environment_option_an_agent_inherits_applies() {
+    let p = project();
+    let state = tempfile::tempdir().unwrap();
+    let shown = stdout(&devkit_with_options(
+        p.path(),
+        state.path(),
+        "agent",
+        Some("tracker.kind=\"none\""),
+        &["config", "show"],
+    ));
+    assert!(shown.contains("kind = \"none\""), "{shown}");
+}
+
+#[test]
+fn a_bad_environment_option_fails_naming_the_variable_and_the_key() {
+    let p = project();
+    let err = stderr(&human_with_options(p.path(), "tracker.knd=\"none\"", &[
+        "config", "show",
+    ]));
+    assert!(err.contains("DEVKIT_OPTIONS"), "{err}");
+    assert!(err.contains("`tracker.knd`"), "{err}");
+}
+
+#[test]
+fn a_command_line_option_wins_over_the_same_key_in_the_environment() {
+    let p = project();
+    let shown = stdout(&human_with_options(
+        p.path(),
+        "tracker.kind=\"linear\"\ndefaults.branch_prefix=\"env/\"",
+        &["config", "show", "--origin", "-o", "tracker.kind=\"none\""],
+    ));
+    let line = shown
+        .lines()
+        .find(|l| l.starts_with("tracker.kind ="))
+        .unwrap_or_else(|| panic!("no tracker.kind line: {shown}"));
+    assert!(line.contains("\"none\""), "{line}");
+    assert!(line.contains("# from <command line>"), "{line}");
+    assert!(
+        line.contains("$DEVKIT_OPTIONS"),
+        "the shadowed layer: {line}"
+    );
+    assert!(shown.contains("branch_prefix = \"env/\""), "{shown}");
+}
+
+#[test]
+fn a_task_step_sees_the_options_of_the_devkit_that_runs_it() {
+    let p = project();
+    let exe = env!("CARGO_BIN_EXE_devkit");
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        format!("[tasks.show]\nrun = ['{exe}', 'config', 'show', '--origin']\n"),
+    )
+    .unwrap();
+    let shown = stdout(&human_with_options(
+        p.path(),
+        "tracker.kind=\"linear\"\ndefaults.branch_prefix=\"env/\"",
+        &[
+            "-o",
+            "tracker.kind=\"none\"",
+            "-o",
+            "templates.variables.note.default=\"\"\"two\nlines\"\"\"",
+            "run",
+            "task",
+            "show",
+        ],
+    ));
+    let kind = shown
+        .lines()
+        .find(|l| l.starts_with("tracker.kind ="))
+        .unwrap_or_else(|| panic!("no tracker.kind line: {shown}"));
+    assert!(kind.contains("\"none\""), "{kind}");
+    assert!(shown.contains("branch_prefix = \"env/\""), "{shown}");
+    assert!(
+        shown.contains("two") && shown.contains("lines"),
+        "a value that spans lines reaches the step: {shown}"
+    );
+}
+
+#[test]
+fn a_task_step_in_an_app_directory_anchors_option_paths_as_its_parent_does() {
+    let p = project();
+    let exe = env!("CARGO_BIN_EXE_devkit");
+    std::fs::create_dir_all(p.path().join("apps/api")).unwrap();
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        format!(
+            "[apps.api]\nbase_port = 39170\npath = \"apps/api\"\nlaunch = [\"git\", \"version\"]\n\n\
+             [tasks.show]\napp = \"api\"\nrun = ['{exe}', 'config', 'show', '--json']\n"
+        ),
+    )
+    .unwrap();
+    let shown = stdout(&human(p.path(), &[
+        "-o",
+        "defaults.worktree_root=\"wts\"",
+        "-o",
+        "harness.log.dir=\"logs\"",
+        "run",
+        "task",
+        "show",
+    ]));
+    let json = &shown[shown.find('{').unwrap()..=shown.rfind('}').unwrap()];
+    let cfg: serde_json::Value = serde_json::from_str(json).unwrap();
+    let root = Path::new(cfg["defaults"]["worktree_root"].as_str().unwrap());
+    assert_eq!(root.file_name().unwrap(), "wts", "{shown}");
+    assert_eq!(
+        root.parent().unwrap().canonicalize().unwrap(),
+        p.path().canonicalize().unwrap(),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_child_in_another_checkout_resolves_a_repo_relative_option_against_its_own() {
+    let p = project();
+    let other = project();
+    let exe = env!("CARGO_BIN_EXE_devkit");
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        format!(
+            "[tasks.show]\nrun = ['{exe}', 'config', 'show', '--json', '-C', '{}']\n",
+            other.path().display()
+        ),
+    )
+    .unwrap();
+    let shown = stdout(&human(p.path(), &[
+        "-o",
+        "defaults.doppler_yaml=\"doppler.yaml\"",
+        "run",
+        "task",
+        "show",
+    ]));
+    let json = &shown[shown.find('{').unwrap()..=shown.rfind('}').unwrap()];
+    let cfg: serde_json::Value = serde_json::from_str(json).unwrap();
+    let doppler = Path::new(cfg["defaults"]["doppler_yaml"].as_str().unwrap());
+    assert_eq!(
+        doppler.parent().unwrap().canonicalize().unwrap(),
+        other.path().canonicalize().unwrap(),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_task_step_reads_a_repo_relative_option_as_its_parent_expanded_it() {
+    let p = project();
+    let exe = env!("CARGO_BIN_EXE_devkit");
+    std::fs::write(
+        p.path().join("devkit.local.toml"),
+        format!(
+            "[tasks.show]\nrun = ['{exe}', 'config', 'show', '--json']\n\
+             env = {{ DEVKIT_TEST_DOPPLER = \"child.yaml\" }}\n"
+        ),
+    )
+    .unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let shown = stdout(&devkit_with_env(
+        p.path(),
+        state.path(),
+        "human",
+        None,
+        &[("DEVKIT_TEST_DOPPLER", "parent.yaml")],
+        &[
+            "-o",
+            "defaults.doppler_yaml=\"${DEVKIT_TEST_DOPPLER}\"",
+            "run",
+            "task",
+            "show",
+        ],
+    ));
+    let json = &shown[shown.find('{').unwrap()..=shown.rfind('}').unwrap()];
+    let cfg: serde_json::Value = serde_json::from_str(json).unwrap();
+    let doppler = Path::new(cfg["defaults"]["doppler_yaml"].as_str().unwrap());
+    assert_eq!(doppler.file_name().unwrap(), "parent.yaml", "{shown}");
 }

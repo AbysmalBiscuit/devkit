@@ -1181,6 +1181,7 @@ pub fn exec(
     cmd.args(&plan.argv[1..])
         .current_dir(&plan.cwd)
         .envs(&plan.env);
+    devkit_common::config::pass_options(&mut cmd)?;
     let exited = Arc::new(AtomicBool::new(false));
     let (out_tty, err_tty) = (
         std::io::stdout().is_terminal(),

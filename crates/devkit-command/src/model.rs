@@ -39,13 +39,16 @@ pub enum Value {
     /// or a path `find` found. The directory is unresolved, like a
     /// [`Value::Known`] path.
     Within(String),
+    /// A word that starts with this text, with the rest unknown: an
+    /// assignment `NAME=` whose value is not known.
+    Prefixed(String),
 }
 
 impl Value {
     pub fn known(&self) -> Option<&str> {
         match self {
             Value::Known(s) => Some(s),
-            Value::Unknown | Value::Ephemeral(_) | Value::Within(_) => None,
+            Value::Unknown | Value::Ephemeral(_) | Value::Within(_) | Value::Prefixed(_) => None,
         }
     }
 }

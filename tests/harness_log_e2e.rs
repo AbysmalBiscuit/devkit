@@ -166,6 +166,22 @@ fn a_guarded_command_lands_a_record_carrying_its_verdict() {
 }
 
 #[test]
+fn options_that_will_not_parse_land_in_the_record_warnings() {
+    let e = enabled_project();
+    let out = run_argv_env(&e, &["hook", "pre-tool-use"], &claude_payload(&e, "ls"), &[
+        ("DEVKIT_OPTIONS", "tracker.knd=\"none\""),
+    ]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let rec = sole_record(&e.log_dir());
+    assert_eq!(rec["verdict"]["decision"], "allow", "{rec}");
+    let warnings = rec["verdict"]["warnings"].to_string();
+    assert!(
+        warnings.contains("DEVKIT_OPTIONS") && warnings.contains("tracker.knd"),
+        "{rec}"
+    );
+}
+
+#[test]
 fn nothing_is_recorded_when_the_global_config_does_not_enable_it() {
     let e = enabled_project();
     std::fs::remove_file(e.home.path().join(".config/devkit/config.toml")).unwrap();

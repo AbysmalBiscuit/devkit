@@ -75,7 +75,7 @@ pub(crate) fn join(base: &str, rel: &str, style: PathStyle) -> String {
 pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Target {
     let p = match value {
         Value::Known(p) => p,
-        Value::Unknown => return Target::Unresolved,
+        Value::Unknown | Value::Prefixed(_) => return Target::Unresolved,
         Value::Ephemeral(at) => return Target::Ephemeral { at: at.clone() },
         Value::Within(dir) => {
             return match resolve(&Value::Known(dir.clone()), cwd, style) {

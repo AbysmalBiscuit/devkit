@@ -158,7 +158,7 @@ fn respond(
                         Decision::Deny
                     },
                     blocks,
-                    warnings: Vec::new(),
+                    warnings: super::record_warnings(),
                 },
             }),
         );

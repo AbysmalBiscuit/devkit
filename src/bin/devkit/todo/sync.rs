@@ -9,7 +9,6 @@ use std::{
     fs::{self, File},
     io::ErrorKind,
     path::{Path, PathBuf},
-    process::Command,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -183,7 +182,7 @@ pub(crate) enum SyncOutcome {
 /// resolves the same store. It holds none of this process's handles, so it
 /// never writes to a terminal or keeps a caller's pipe open.
 fn start_sync(cwd: &Path, extra: &[&OsStr]) -> Result<BackgroundChild> {
-    let mut cmd = Command::new(std::env::current_exe()?);
+    let mut cmd = devkit_common::config::devkit_command()?;
     cmd.args(["todo", "sync"]).args(extra).current_dir(cwd);
     Ok(devkit_common::sys::spawn_background(&mut cmd)?)
 }

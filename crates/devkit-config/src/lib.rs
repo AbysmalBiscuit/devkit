@@ -14,7 +14,7 @@ pub use layers::{
     BrokenLayer, CONFIG_FILE, Layer, LayerKind, PendingLayer, ReadLayers, nearest_tracked,
     project_layers, read_project_layers,
 };
-pub use options::{COMMAND_LINE, Options};
+pub use options::{COMMAND_LINE, OPTIONS_VAR, Options, is_option_source};
 pub use todo::{HARNESS_PREFIXES, RoleConfig, ScopeConfig};
 pub mod harness;
 mod ticket_fields;
@@ -3316,7 +3316,7 @@ fn discover(
     options: &Options,
 ) -> Result<Vec<(PathBuf, toml::Table)>> {
     let mut layers = discover_files(explicit, start, main_checkout, home, pending)?;
-    layers.extend(options.layer());
+    layers.extend(options.layers());
     if layers.is_empty() {
         return Err(anyhow::Error::new(NoConfig));
     }
@@ -3871,16 +3871,35 @@ pub fn normalize_lexically(p: &Path) -> PathBuf {
     stack.into_iter().collect()
 }
 
-/// The directory of the layer that set `key`. A command-line value has none.
+/// The directory of the layer that set `key`. An `--option` value has none.
 fn layer_dir<'a>(origin: &'a HashMap<String, PathBuf>, key: &str) -> Option<&'a Path> {
     origin
         .get(key)
-        .filter(|p| p.as_os_str() != COMMAND_LINE)
+        .filter(|p| !is_option_source(p))
         .and_then(|p| p.parent())
 }
 
+/// A `[defaults]` field that holds a path.
+type DefaultsPath = for<'a> fn(&'a mut Defaults) -> &'a mut String;
+
+/// The `[defaults]` path keys in the order they resolve, with what each names
+/// and its field. `defaults.baseline_dir` defaults to a path below the
+/// resolved `defaults.worktree_root`, so it resolves after it.
+const DEFAULTS_PATHS: [(&str, PathKind, DefaultsPath); 3] = [
+    ("defaults.worktree_root", PathKind::Host, |d| {
+        &mut d.worktree_root
+    }),
+    ("defaults.baseline_dir", PathKind::Host, |d| {
+        &mut d.baseline_dir
+    }),
+    ("defaults.doppler_yaml", PathKind::RepoRelative, |d| {
+        &mut d.doppler_yaml
+    }),
+];
+
 /// What a `[defaults]` path key names, which decides what a relative value
 /// anchors to.
+#[derive(Clone, Copy)]
 enum PathKind {
     /// A location on this machine. Only the layer that declared it gives the
     /// value meaning, so it anchors to that layer's directory.
@@ -3938,34 +3957,19 @@ fn resolve_defaults(
     {
         cfg.defaults.worktree_root = d.to_string_lossy().into_owned();
     }
-    cfg.defaults.worktree_root = resolve_path_key(
-        &cfg.defaults.worktree_root,
-        "defaults.worktree_root",
-        PathKind::Host,
-        origin,
-        checkout_root,
-        start,
-    )?;
-    // Computed from the now-resolved worktree_root, so a derived value is
-    // already absolute before it goes through its own resolve_path_key below.
-    if cfg.defaults.baseline_dir.is_empty() && !cfg.defaults.worktree_root.is_empty() {
-        cfg.defaults.baseline_dir = Path::new(&cfg.defaults.worktree_root)
-            .join("_baselines")
-            .to_string_lossy()
-            .into_owned();
-    }
-    for (key, kind, field) in [
-        (
-            "defaults.baseline_dir",
-            PathKind::Host,
-            &mut cfg.defaults.baseline_dir,
-        ),
-        (
-            "defaults.doppler_yaml",
-            PathKind::RepoRelative,
-            &mut cfg.defaults.doppler_yaml,
-        ),
-    ] {
+    for (key, kind, field) in DEFAULTS_PATHS {
+        // Computed from the already-resolved worktree_root, so a derived value
+        // is absolute before it goes through its own resolve_path_key.
+        if key == "defaults.baseline_dir"
+            && cfg.defaults.baseline_dir.is_empty()
+            && !cfg.defaults.worktree_root.is_empty()
+        {
+            cfg.defaults.baseline_dir = Path::new(&cfg.defaults.worktree_root)
+                .join("_baselines")
+                .to_string_lossy()
+                .into_owned();
+        }
+        let field = field(&mut cfg.defaults);
         *field = resolve_path_key(field, key, kind, origin, checkout_root, start)?;
     }
     cfg.defaults.branch_prefix =

@@ -47,6 +47,7 @@ fn run_argv(
         .env("XDG_STATE_HOME", home)
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove("DEVKIT_CONFIG")
+        .env_remove("DEVKIT_OPTIONS")
         .env_remove("DEVKIT_ENFORCE_COMMANDS")
         .env_remove("DEVKIT_ENFORCE_WRITES")
         .stdin(Stdio::piped())
@@ -987,6 +988,10 @@ fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
             "env  -u  CLAUDE_CODE_SESSION_ID   DEVKIT_CALLER=human  devkit pr create",
             "env -u CLAUDE_CODE_SESSION_ID -u CODEX_SESSION_ID -- DEVKIT_CALLER=human devkit pr create",
             "env -- DEVKIT_CALLER=human devkit pr create",
+            "readonly DEVKIT_CALLER=human",
+            "set -a; readonly DEVKIT_CALLER=human; devkit pr create",
+            r#"export DEVKIT_CALLE""R=human"#,
+            r#"export DEVKIT_CALLE""R=human && devkit pr create"#,
         ] {
             let out = run_hook(proj.path(), home.path(), &claude_payload(command));
             assert!(denied(&out), "{config}: {command}");
@@ -996,6 +1001,42 @@ fn an_agent_declaring_itself_human_is_denied_in_any_devkit_project() {
                 deny_reason(&out)
             );
         }
+    }
+}
+
+#[test]
+fn an_agent_assigning_devkit_caller_a_value_that_could_read_human_is_denied() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in [
+        "DEVKIT_CALLER=$(printf human) devkit pr create",
+        r#"env DEVKIT_CALLER="$X" devkit pr create"#,
+        r#"export DEVKIT_CALLER="$X""#,
+        r#"declare -x DEVKIT_CALLER="hu$X""#,
+        r#"DEVKIT_CALLER=" H$X" devkit pr create"#,
+        r#"env DEVKIT_CALLER="human $X" devkit pr create"#,
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("DEVKIT_CALLER"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
+fn an_unresolved_devkit_caller_that_cannot_read_human_is_allowed() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    for command in [
+        "env DEVKIT_CALLER=agent$X devkit pr create",
+        r#"env "DEVKIT_CALLER=a$X" devkit pr create"#,
+        "env DEVKIT_CALLER=human-$X devkit pr create",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
     }
 }
 
@@ -1010,6 +1051,9 @@ fn setting_devkit_caller_to_agent_or_unsetting_a_session_is_allowed() {
         "env -u CLAUDE_CODE_SESSION_ID devkit pr create",
         "unset CLAUDE_CODE_SESSION_ID",
         "echo DEVKIT_CALLER=human",
+        "echo readonly DEVKIT_CALLER=human",
+        r#"export DEVKIT_CALLE""R=agent"#,
+        "readonly DEVKIT_CALLER=agent",
     ] {
         let out = run_hook(proj.path(), home.path(), &claude_payload(command));
         assert!(!denied(&out), "{command}: {}", deny_reason(&out));
@@ -1124,4 +1168,147 @@ fn an_option_adds_a_command_rule() {
         "harness.commands.bun-only.reason=\"bun only\"",
     ]);
     assert!(denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+}
+
+#[test]
+fn a_hook_reads_the_options_its_environment_holds() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[harness]\nenforce_commands = true\n");
+    let out = run_hook_with(proj.path(), home.path(), &claude_payload("node x.js"), &[
+        ("CLAUDE_CODE_SESSION_ID", "s1"),
+        (
+            "DEVKIT_OPTIONS",
+            "harness.commands.bun-only.programs=[\"node\"]\n\
+             harness.commands.bun-only.reason=\"bun only\"",
+        ),
+    ]);
+    assert!(denied(&out), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        deny_reason(&out).contains("bun only"),
+        "{}",
+        deny_reason(&out)
+    );
+}
+
+#[test]
+fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
+    let home = tempfile::tempdir().unwrap();
+    for config in ["[defaults]\n", GATE_OFF, GUARDED] {
+        let proj = project(config);
+        for command in [
+            r#"DEVKIT_OPTIONS='harness.enforce_writes=false' devkit pr create"#,
+            r#"env DEVKIT_OPTIONS='tracker.kind="none"' devkit config show"#,
+            "env -u CLAUDE_CODE_SESSION_ID DEVKIT_OPTIONS=x devkit config show",
+            "export DEVKIT_OPTIONS=x",
+            "export DEVKIT_OPTIONS=x && devkit pr create",
+            "declare -x DEVKIT_OPTIONS=x",
+            "typeset -x DEVKIT_OPTIONS=x",
+            "local DEVKIT_OPTIONS=x",
+            "DEVKIT_OPTIONS= devkit config show",
+            "DEVKIT_OPTIONS=x; export DEVKIT_OPTIONS",
+            "bash -c 'DEVKIT_OPTIONS=x devkit config show'",
+            r#"DEVKIT_OPTIONS="$(printf %s 'tracker.kind="none"')" devkit config show"#,
+            r#"export DEVKIT_OPTIONS="$UNRESOLVED""#,
+            "DEVKIT_OPTIONS+=x devkit config show",
+            "export DEVKIT_OPTIONS+=x",
+            r#"export DEVKIT_OPTIONS"=x""#,
+            r#"export "DEVKIT_OPT""IONS=x""#,
+            r#"export DEVKIT_OPTION""S=x"#,
+            r#"export DEVKIT_OPTION''S=x && devkit config show"#,
+            r#"declare -x DEVKIT_OPT"IONS=$UNRESOLVED""#,
+            "export DEVKIT_OPTIONS",
+            r#"env DEVKIT_OPTIONS="$(printf %s 'tracker.kind="none"')" devkit config show"#,
+            r#"env DEVKIT_OPTIONS="$UNRESOLVED" devkit config show"#,
+            r#"env "DEVKIT_OPTIONS=$UNRESOLVED" devkit config show"#,
+            "env DEVKIT_OPTIONS=$UNRESOLVED devkit config show",
+            "env -u CLAUDE_CODE_SESSION_ID DEVKIT_OPTIONS=a$UNRESOLVED devkit config show",
+            "readonly DEVKIT_OPTIONS=x",
+            r#"set -a; readonly DEVKIT_OPTIONS='tracker.kind="none"'; devkit config show --origin"#,
+            r#"readonly DEVKIT_OPTIONS="$UNRESOLVED""#,
+        ] {
+            let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+            assert!(denied(&out), "{config}: {command}");
+            assert!(
+                deny_reason(&out).contains("DEVKIT_OPTIONS"),
+                "{config}: {command}: {}",
+                deny_reason(&out)
+            );
+        }
+    }
+    let proj = project("[defaults]\n");
+    for command in [
+        "echo DEVKIT_OPTIONS=x",
+        "echo readonly DEVKIT_OPTIONS=x",
+        r#"echo export DEVKIT_OPTION""S=x"#,
+        r#"printf "%s" DEVKIT_OPTIONS="$UNRESOLVED""#,
+        r#"printf "%s" "DEVKIT_OPTIONS=$(date)""#,
+        "unset DEVKIT_OPTIONS",
+        r#"FOO="$(date)" cargo build"#,
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
+}
+
+#[test]
+fn pre_tool_use_ignores_options_that_will_not_parse() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    let write = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "s1",
+        "cwd": proj.path(),
+        "tool_name": "Write",
+        "tool_input": { "file_path": proj.path().join("a.txt"), "content": "x" }
+    })
+    .to_string();
+    for payload in [claude_payload("ls"), write] {
+        let session = [("CLAUDE_CODE_SESSION_ID", "s1")];
+        let clean = run_hook_with(proj.path(), home.path(), &payload, &session);
+        let out = run_hook_with(proj.path(), home.path(), &payload, &[
+            session[0],
+            ("DEVKIT_OPTIONS", "tracker.knd=\"none\""),
+        ]);
+        assert_eq!(out.status.code(), Some(0), "{payload}: {out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&clean.stdout),
+            "{payload}"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("DEVKIT_OPTIONS") && stderr.contains("tracker.knd"),
+            "{stderr}"
+        );
+    }
+    let out = run_hook_with(proj.path(), home.path(), &claude_payload("ls"), &[
+        ("CLAUDE_CODE_SESSION_ID", "s1"),
+        ("DEVKIT_OPTIONS", "tracker.knd=\"none\""),
+    ]);
+    assert!(!denied(&out), "{}", deny_reason(&out));
+}
+
+#[test]
+fn a_hook_verb_other_than_pre_tool_use_still_fails_on_bad_options() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": proj.path(),
+    })
+    .to_string();
+    let out = run_argv(
+        proj.path(),
+        home.path(),
+        &["hook", "session-start"],
+        &payload,
+        &[("DEVKIT_OPTIONS", "tracker.knd=\"none\"")],
+    );
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("DEVKIT_OPTIONS"),
+        "{out:?}"
+    );
 }

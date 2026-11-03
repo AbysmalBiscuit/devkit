@@ -503,3 +503,27 @@ fn a_human_exits_zero_when_the_check_cannot_read_its_settings() {
         "{stdout}{stderr}"
     );
 }
+
+#[test]
+fn the_repro_runs_see_the_option_values_of_the_check() {
+    let p = project(GATE, FIX);
+    let out = p.devkit_here_with_env(
+        &[
+            "-o",
+            r#"tasks.repro.run=["git", "-c", "x.selector={{ selector }}", "version"]"#,
+            "pr",
+            "repro",
+        ],
+        &[
+            ("DEVKIT_CALLER", "human"),
+            ("CLAUDE_CODE_SESSION_ID", ""),
+            ("CODEX_SESSION_ID", ""),
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("1. The lib is fixed: FAILED"),
+        "both runs ran the option's task and passed: {stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
