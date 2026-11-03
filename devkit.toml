@@ -37,9 +37,9 @@ reason = "Remove worktrees with devkit: workspace end [branch-name]"
 [harness.commands.gh-issue-create]
 programs = ["gh"]
 args = ["issue", "create"]
-reason = "file issues with `devkit ticket create` so the issue template applies"
+reason = "file tickets with `devkit ticket create` so the ticket template applies"
 
-# Issue writes through a tracker's MCP must carry text `devkit ticket render`
+# Ticket writes through a tracker's MCP must carry text `devkit ticket render`
 # produced. The templates stay at their defaults for now.
 [harness.issue_tools.linear]
 servers = ["*linear*"]
@@ -154,11 +154,55 @@ pr_body = '''
 {%- endif %}
 
 {{ input | trim }}
+{%- if agent or departures | trim %}
+
+## Departures
+
+{{ departures | trim or "**None**" }}
+{%- endif %}
+{%- if agent or loose_ends | trim %}
+
+## Loose Ends
+
+{{ loose_ends | trim or "**None**" }}
+{%- endif %}
+{%- if agent or assumptions | trim %}
+
+## Assumptions
+
+{{ assumptions | trim or "**None**" }}
+{%- endif %}
+{%- if agent or conceptual_changes | trim %}
+
+## Conceptual Changes
+
+{{ conceptual_changes | trim or "**None**" }}
+{%- endif %}
 {%- if proof | trim %}
 
 ## Proof
 
 {{ proof | trim }}
+{%- endif %}
+{%- if agent or change_risk | trim or change_risk_reason | trim %}
+
+## Change Risk
+
+**Change risk:**
+{{ change_risk | trim or "**None**" }}
+
+**Classifier:**
+{{ change_risk_reason | trim or "**None**" }}
+{%- endif %}
+{%- if agent or door | trim or blast_radius | trim %}
+
+## Merge Danger
+
+**Door:**
+{{ door | trim or "**None**" }}
+
+**Blast Radius:**
+{{ blast_radius | trim or "**None**" }}
 {%- endif %}
 {%- if agent %}
 
@@ -174,7 +218,7 @@ Implemented by {{ implemented_by | trim }}
 
 # Ticket body for `devkit ticket render`, `ticket create` and `ticket edit`;
 # `input` comes from `--body`. Laid out as a prompt to the agent that works
-# the issue: the task, its finish line, when to stop, then what it may not
+# the ticket: the task, its finish line, when to stop, then what it may not
 # touch.
 ticket_body = '''
 {{- input | trim }}
@@ -212,24 +256,33 @@ files = { required = "always", description = "Comma-separated paths to stage, wh
 coauthors = { default = "", required = "agents", description = "`Name <email>` of each `Co-authored-by` trailer, one `--coauthor` apiece. Claude Code: `<full model name, e.g. Claude Opus 5> <noreply@anthropic.com>`. Codex: `Codex <full model name, e.g. GPT-6 Astra> <noreply@openai.com>`. Grok Build: `<full model name, e.g. Grok 4.7> <261865991+grok-by-xai[bot]@users.noreply.github.com>`" }
 
 human_tldr = { default = "", description = "A human's summary, written after the PR opens; agents leave it unset. An agent's PR body has no TL;DR section for `devkit pr edit` to fill, so a human adds one there by editing the body on GitHub" }
-proof = { default = "", required = "agents", description = "One unindented line per `Done when` item, starting with its number in the order the issue lists them (`1. test foo_refuses_gap`, `2. command X and its output`), or with no issue one line per claim the summary makes; a numbered line indented two columns or more answers nothing. Each numbered line gives the evidence that its item holds: the test that covers it, a command and its output, or a screenshot or video under `.devkit/proof/` referenced by that local path (`![after](./.devkit/proof/after.png)`, a video embedded the same way alone in its paragraph) and passed to `--attach` on `devkit pr create`, or on `devkit pr edit` once the PR is open" }
+proof = { default = "", required = "agents", description = "One unindented line per `Done when` item, starting with its number in the order the ticket lists them (`1. test foo_refuses_gap`, `2. command X and its output`), or with no ticket one line per claim the summary makes; a numbered line indented two columns or more answers nothing. Each numbered line gives the evidence that its item holds: the test that covers it, a command and its output, or a screenshot or video under `.devkit/proof/` referenced by that local path (`![after](./.devkit/proof/after.png)`, a video embedded the same way alone in its paragraph) and passed to `--attach` on `devkit pr create`, or on `devkit pr edit` once the PR is open" }
 
-done_when = { default = "", required = "agents", description = "Checkbox list (`- [ ] ...`) of checks that prove the issue is done: a command that passes, behaviour anyone can see. For an investigation, the deliverable and where it goes. End each item with the proof its PR must show: `(proof: test <name>)`, `(proof: command and its output)`, `(proof: screenshot)` or `(proof: video)`. A bug item whose test fails without the fix ends `(proof: repro <selector>)` instead. The repro gate checks that only when `[pr.gates] repro_task` names a task. `--body` holds only the task: what to change and why, as behaviour rather than steps" }
-stop_and_ask = { default = "", description = "Situations particular to this issue where the agent working it must stop and ask; being blocked and destructive actions are already covered. Leave unset when there are none" }
-out_of_scope = { default = "", description = "Adjacent work that must not happen under this issue, even when it looks related" }
-context = { default = "", description = "Links, error output, the parent and blocking issues. Attach screenshots rather than retyping them" }
+done_when = { default = "", required = "agents", description = "Checkbox list (`- [ ] ...`) of checks that prove the ticket is done: a command that passes, behaviour anyone can see. For an investigation, the deliverable and where it goes. End each item with the proof its PR must show: `(proof: test <name>)`, `(proof: command and its output)`, `(proof: screenshot)` or `(proof: video)`. A bug item whose test fails without the fix ends `(proof: repro <selector>)` instead. The repro gate checks that only when `[pr.gates] repro_task` names a task. `--body` holds only the task: what to change and why, as behaviour rather than steps" }
+stop_and_ask = { default = "", description = "Situations particular to this ticket where the agent working it must stop and ask; being blocked and destructive actions are already covered. Leave unset when there are none" }
+out_of_scope = { default = "", description = "Adjacent work that must not happen under this ticket, even when it looks related" }
+context = { default = "", description = "Links, error output, the parent and blocking tickets. Attach screenshots rather than retyping them" }
 
 # Supplied by the render context in a worktree `workspace setup` created; declared
 # so the templates also render outside one.
-ticket = { default = "", description = "The worktree's own issue id, filled in an issue worktree; pass it only outside one" }
+ticket = { default = "", description = "The worktree's own ticket id, filled in a ticket worktree; pass it only outside one" }
 issue = { default = "", description = "Old name of `ticket`" }
-ticket_magic_word = { default = "Closes", description = "Keyword on the worktree's own issue line: `Refs` when this branch does not finish the issue" }
+ticket_magic_word = { default = "Closes", description = "Keyword on the worktree's own ticket line: `Refs` when this branch does not finish the ticket" }
 issue_magic_word = { default = "", description = "Old name of `ticket_magic_word`, which it overrides when set" }
-refs = { default = "", description = "Every other issue line, `;`-separated, each with its own keyword: `Closes #12; Refs #90`" }
+refs = { default = "", description = "Every other ticket line, `;`-separated, each with its own keyword: `Closes #12; Refs #90`" }
 
 agent_model = { default = "", required = "agents", description = "Full name of the model that did the work, e.g. `Claude Opus 5`" }
 agent_harness = { default = "", required = "agents", description = "Markdown link to the harness, e.g. `[Claude Code](https://claude.com/claude-code)`" }
 implemented_by = { default = "", description = "One prose line naming who did which part, when several agents or people did the work" }
+
+departures = { default = "", description = "What the branch does that the ticket did not ask for. Renders `**None**` on an agent PR when unset" }
+loose_ends = { default = "", description = "What the branch knowingly leaves stale or unfinished. Renders `**None**` on an agent PR when unset" }
+assumptions = { default = "", description = "The choices the branch made where the ticket and the human gave no answer. Renders `**None**` on an agent PR when unset" }
+conceptual_changes = { default = "", description = "The concepts the branch adds or changes, without the heading. Renders `**None**` on an agent PR when unset" }
+change_risk = { default = "", description = "`low`, `medium` or `high`; workcell sets it, so agents leave it unset. The template adds the `**Change risk:**` label" }
+change_risk_reason = { default = "", description = "The change-risk classifier's answer and its one-line reason; workcell sets it, so agents leave it unset. The template adds the `**Classifier:**` label" }
+door = { default = "", description = "`➡️ one-way` or `&#x2194;&#xFE0F; two-way`: whether a revert undoes the change. The template adds the `**Door:**` label" }
+blast_radius = { default = "", description = "The widest scope a bad merge reaches, then one bullet per risk. The template adds the `**Blast Radius:**` label" }
 
 [tasks.fmt]
 description = "Format the workspace with nightly rustfmt"
