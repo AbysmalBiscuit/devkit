@@ -171,11 +171,7 @@ pub fn run(
     if json {
         println!("{}", serde_json::to_string(&row)?);
     } else {
-        let one = StatusReport {
-            finished_count: usize::from(row.verdict.is_finished()),
-            tracker: info,
-            worktrees: vec![row],
-        };
+        let one = StatusReport::new(vec![row], info);
         render(&one, cache_only);
     }
     Ok(())

@@ -293,21 +293,31 @@ pub struct StatusReport {
 }
 
 impl StatusReport {
+    /// The report of `worktrees`, with `finished_count` counted from their
+    /// verdicts. Every report is built here, so the count always agrees with
+    /// its rows.
+    pub fn new(worktrees: Vec<IssueWorktree>, tracker: TrackerInfo) -> StatusReport {
+        let finished_count = worktrees.iter().filter(|r| r.verdict.is_finished()).count();
+        StatusReport {
+            worktrees,
+            finished_count,
+            tracker,
+        }
+    }
+
     /// The report narrowed to the rows that one of `selectors` names by
     /// [`IssueWorktree::selected_by`], or the whole report when `selectors` is
     /// empty.
-    pub fn select(mut self, selectors: &[String]) -> StatusReport {
+    pub fn select(self, selectors: &[String]) -> StatusReport {
         if selectors.is_empty() {
             return self;
         }
-        self.worktrees
-            .retain(|row| selectors.iter().any(|sel| row.selected_by(sel)));
-        self.finished_count = self
+        let rows = self
             .worktrees
-            .iter()
-            .filter(|r| r.verdict.is_finished())
-            .count();
-        self
+            .into_iter()
+            .filter(|row| selectors.iter().any(|sel| row.selected_by(sel)))
+            .collect();
+        StatusReport::new(rows, self.tracker)
     }
 }
 
@@ -824,12 +834,7 @@ pub fn assemble(
         }
         wt.verdict = verdict(wt, &tracker, pr_only);
     }
-    let finished_count = rows.iter().filter(|r| r.verdict.is_finished()).count();
-    StatusReport {
-        worktrees: rows,
-        finished_count,
-        tracker,
-    }
+    StatusReport::new(rows, tracker)
 }
 
 /// How a tracker names itself in user-facing text. `TrackerKind::None` answers

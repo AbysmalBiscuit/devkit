@@ -43,18 +43,16 @@ fn gather_selected(
     forge: &devkit_common::forge::Resolved,
     pr_only: bool,
 ) -> Result<StatusReport> {
-    let mut report = steps.during_result("Fetching PR + issue status...", || {
+    let report = steps.during_result("Fetching PR + issue status...", || {
         gather_with(start, &[], tracker, forge, pr_only)
     })?;
-    if !selectors.is_empty() {
-        report.worktrees = select_explicit(&report.worktrees, selectors);
-        report.finished_count = report
-            .worktrees
-            .iter()
-            .filter(|r| r.verdict.is_finished())
-            .count();
+    if selectors.is_empty() {
+        return Ok(report);
     }
-    Ok(report)
+    Ok(StatusReport::new(
+        select_explicit(&report.worktrees, selectors),
+        report.tracker,
+    ))
 }
 
 fn confirm(label: &str) -> bool {
