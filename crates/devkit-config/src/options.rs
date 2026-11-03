@@ -45,13 +45,21 @@ impl Options {
                      cannot be set with --option: {reason}"
                 );
             }
-            let known = match path.split_first() {
-                Some((table, rest)) if table == "harness" => knows(&harness, &harness, rest),
-                _ => knows(&schema, &schema, &path),
+            let unknown = match path.split_first() {
+                Some((table, rest)) if table == "harness" => {
+                    unknown_key(&harness, &harness, &nested(rest, value.clone()))
+                        .map(|below| [vec![table.clone()], below].concat())
+                }
+                _ => unknown_key(&schema, &schema, &nested(&path, value.clone())),
             };
-            if !known {
+            if let Some(unknown) = unknown {
+                let name = if unknown.len() <= path.len() {
+                    key.clone()
+                } else {
+                    unknown.join(".")
+                };
                 bail!(
-                    "--option {key}: devkit.toml has no key `{key}`; \
+                    "--option {key}: devkit.toml has no key `{name}`; \
                      `devkit schema` lists the keys"
                 );
             }
@@ -86,14 +94,7 @@ fn check_harness_value(table: &toml::Table, path: &[String]) -> Result<()> {
     let Some(value) = lookup(table, path) else {
         return Ok(());
     };
-    let mut one = match &path[1..] {
-        [] => value.clone(),
-        rest => {
-            let mut section = toml::Table::new();
-            insert(&mut section, rest, value.clone());
-            toml::Value::Table(section)
-        }
-    };
+    let mut one = nested(&path[1..], value.clone());
     for tools in ["issue_tools", "pr_tools"] {
         let entries = one.get_mut(tools).and_then(toml::Value::as_table_mut);
         for entry in entries
@@ -173,6 +174,14 @@ fn key_segments(key: &str) -> Result<Vec<String>> {
     }
 }
 
+/// `value` placed at `path` in tables of its own, or `value` alone when `path`
+/// is empty.
+fn nested(path: &[String], value: toml::Value) -> toml::Value {
+    path.iter().rev().fold(value, |inner, seg| {
+        toml::Value::Table(toml::Table::from_iter([(seg.clone(), inner)]))
+    })
+}
+
 /// Set `path` in `table` to `value`, replacing whatever a non-table segment
 /// held.
 fn insert(table: &mut toml::Table, path: &[String], value: toml::Value) {
@@ -190,37 +199,96 @@ fn insert(table: &mut toml::Table, path: &[String], value: toml::Value) {
     at.insert(last.clone(), value);
 }
 
-/// Whether the schema `node` admits the key `path` below it. A struct admits
-/// only its own fields, a map admits any key with a value its value schema
-/// admits, and a free-form table admits any key.
-fn knows(root: &Value, node: &Value, path: &[String]) -> bool {
-    let node = resolve_ref(root, node);
-    let Some((seg, rest)) = path.split_first() else {
-        return true;
+/// The schema that admits any value.
+static ANY: Value = Value::Bool(true);
+
+/// The first key in `value` that the schema `node` does not admit, as its
+/// path below `node`. A struct admits only its own fields, a map admits any
+/// key, and a free-form table admits any key. A value of the wrong type is
+/// left to deserialization, which names the type it expected.
+fn unknown_key(root: &Value, node: &Value, value: &toml::Value) -> Option<Vec<String>> {
+    let entries: Vec<(String, &toml::Value)> = match value {
+        toml::Value::Table(t) => t.iter().map(|(k, v)| (k.clone(), v)).collect(),
+        toml::Value::Array(a) => {
+            let items = schemas_of(root, node, &|n| match n.get("items") {
+                Some(Value::Array(tuple)) => tuple.iter().collect(),
+                Some(items) => vec![items],
+                None if admits(n, "array") => vec![&ANY],
+                None => Vec::new(),
+            });
+            if items.is_empty() {
+                return None;
+            }
+            return a
+                .iter()
+                .enumerate()
+                .find_map(|(i, v)| first_unknown(root, &items, i.to_string(), v));
+        }
+        _ => return None,
     };
+    entries.into_iter().find_map(|(seg, v)| {
+        let fields = schemas_of(root, node, &|n| match (
+            n.get("properties").and_then(|p| p.get(&seg)),
+            n.get("additionalProperties"),
+        ) {
+            (Some(field), _) => vec![field],
+            (None, Some(Value::Bool(false))) => Vec::new(),
+            (None, Some(Value::Bool(true))) => vec![&ANY],
+            (None, Some(values)) => vec![values],
+            (None, None) if n.get("properties").is_none() && admits(n, "object") => vec![&ANY],
+            (None, None) => Vec::new(),
+        });
+        first_unknown(root, &fields, seg, v)
+    })
+}
+
+/// `None` when one of `schemas` admits every key in `value`, otherwise the
+/// unknown key's path, which starts at `seg`.
+fn first_unknown(
+    root: &Value,
+    schemas: &[&Value],
+    seg: String,
+    value: &toml::Value,
+) -> Option<Vec<String>> {
+    let mut below = Vec::new();
+    for schema in schemas {
+        match unknown_key(root, schema, value) {
+            None => return None,
+            Some(path) if below.is_empty() => below = path,
+            Some(_) => {}
+        }
+    }
+    Some([vec![seg], below].concat())
+}
+
+/// What `pick` finds in `node` and in each `anyOf`, `oneOf` and `allOf`
+/// branch below it, with each local `$ref` followed.
+fn schemas_of<'a>(
+    root: &'a Value,
+    node: &'a Value,
+    pick: &dyn Fn(&'a Value) -> Vec<&'a Value>,
+) -> Vec<&'a Value> {
+    let node = resolve_ref(root, node);
     let branches: Vec<&Value> = ["anyOf", "oneOf", "allOf"]
         .iter()
         .filter_map(|k| node.get(k).and_then(Value::as_array))
         .flatten()
         .collect();
-    if !branches.is_empty() {
-        return branches.iter().any(|b| knows(root, b, path));
-    }
-    if let Some(field) = node.get("properties").and_then(|p| p.get(seg)) {
-        return knows(root, field, rest);
-    }
-    match node.get("additionalProperties") {
-        Some(Value::Bool(open)) => *open,
-        Some(values) => knows(root, values, rest),
-        None => node.get("properties").is_none() && admits_object(node),
+    if branches.is_empty() {
+        pick(node)
+    } else {
+        branches
+            .into_iter()
+            .flat_map(|b| schemas_of(root, b, pick))
+            .collect()
     }
 }
 
-fn admits_object(node: &Value) -> bool {
+fn admits(node: &Value, kind: &str) -> bool {
     match node.get("type") {
-        None => node.is_object() || node == &Value::Bool(true),
-        Some(Value::String(t)) => t == "object",
-        Some(Value::Array(ts)) => ts.iter().any(|t| t == "object"),
+        None => node.is_object() || node == &ANY,
+        Some(Value::String(t)) => t == kind,
+        Some(Value::Array(ts)) => ts.iter().any(|t| t == kind),
         Some(_) => false,
     }
 }
@@ -301,6 +369,33 @@ mod tests {
                 .to_string();
             assert!(err.contains(&format!("`{key}`")), "{key}: {err}");
         }
+    }
+
+    #[test]
+    fn each_key_inside_a_table_value_is_checked_against_the_schema() {
+        for (option, key) in [
+            ("defaults={branch_prefx=\"x/\"}", "defaults.branch_prefx"),
+            ("apps={api={base_prt=1}}", "apps.api.base_prt"),
+            (
+                "apps.web.prep_files=[{path=\"a\",content=\"\",overwrit=true}]",
+                "apps.web.prep_files.0.overwrit",
+            ),
+            (
+                "harness={enforce_commandz=true}",
+                "harness.enforce_commandz",
+            ),
+            ("harness.log={enabld=true}", "harness.log.enabld"),
+        ] {
+            let err = Options::parse(&[option]).unwrap_err().to_string();
+            assert!(err.contains(&format!("`{key}`")), "{option}: {err}");
+        }
+        Options::parse(&[
+            "defaults={branch_prefix=\"x/\"}",
+            "apps={api={base_port=1,prep_files=[{path=\"a\",content=\"\"}]}}",
+            "people={ann={github=\"ann\"}}",
+            "harness={log={enabled=true},commands={x={programs=[\"node\"]}}}",
+        ])
+        .unwrap();
     }
 
     #[test]

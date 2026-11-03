@@ -323,3 +323,17 @@ fn an_option_may_set_the_whole_harness_table() {
         assert!(!err.contains("panicked"), "{option}: {err}");
     }
 }
+
+#[test]
+fn a_misspelled_key_inside_a_table_value_is_refused_naming_it() {
+    let p = project();
+    for (option, key) in [
+        ("defaults={branch_prefx=\"x/\"}", "defaults.branch_prefx"),
+        (
+            "harness={enforce_commandz=true}",
+            "harness.enforce_commandz",
+        ),
+    ] {
+        let err = stderr(&human(p.path(), &["config", "show", "-o", option]));
+        assert!(err.contains(&format!("`{key}`")), "{option}: {err}");
+    }
