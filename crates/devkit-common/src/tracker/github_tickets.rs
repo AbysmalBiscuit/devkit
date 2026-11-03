@@ -99,7 +99,13 @@ pub fn search_query(
 
 /// The issues numbered `numbers`, one alias apiece.
 pub fn issues_query(slug: &str, numbers: &[u64], board: Option<&BoardRef>) -> String {
-    let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
+    issues_query_in(slug, slug, numbers, board)
+}
+
+/// The issues numbered `numbers` of `repo`, with their items on the board
+/// of the issues repository `slug`.
+fn issues_query_in(repo: &str, slug: &str, numbers: &[u64], board: Option<&BoardRef>) -> String {
+    let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
     let fields = issue_fields(board);
     let issues: Vec<String> = numbers
         .iter()
@@ -128,6 +134,12 @@ pub(crate) fn key_number(key: &str, slug: &str) -> Option<u64> {
     repo.eq_ignore_ascii_case(slug)
         .then(|| number.parse().ok())
         .flatten()
+}
+
+/// The key of the issue `v` names, in any repository.
+fn key_of(v: &Value) -> Option<String> {
+    let repo = v.pointer("/repository/nameWithOwner")?.as_str()?;
+    Some(ticket_key(repo, v["number"].as_u64()?))
 }
 
 /// The key of the issue `v` names when it is an issue of `slug`.
@@ -175,7 +187,7 @@ pub fn parse_issue(v: &Value, slug: &str, board: Option<&Board>) -> Option<Synce
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|b| key_in(b, slug))
+        .filter_map(key_of)
         .collect();
     blocked_by.sort();
     blocked_by.dedup();
@@ -220,8 +232,8 @@ pub fn parse_search(
     Ok((tickets, next))
 }
 
-/// The issues an [`issues_query`] response found. A number with no issue
-/// is left out.
+/// The issues of `slug` an [`issues_query`] response found. A number with
+/// no issue is left out.
 pub fn parse_issues(
     resp: &Value,
     slug: &str,
@@ -231,7 +243,7 @@ pub fn parse_issues(
     let repo = resp
         .pointer("/data/repository")
         .filter(|r| !r.is_null())
-        .context("[github] issues_repo was not found")?;
+        .with_context(|| format!("GitHub found no repository {slug}"))?;
     Ok(repo
         .as_object()
         .into_iter()
@@ -308,22 +320,35 @@ impl GithubTickets<'_> {
         Ok(found)
     }
 
-    /// The issues `keys` name, whatever their state. A key that names no
-    /// issue of this repository is left out.
+    /// The issues `keys` name, in any repository, whatever their state. A
+    /// key that names no issue is left out.
     pub fn read(&self, keys: &[String]) -> Result<Vec<SyncedTicket>> {
-        let slug = &self.repo.slug;
-        let numbers: Vec<u64> = keys.iter().filter_map(|k| key_number(k, slug)).collect();
-        if numbers.is_empty() {
-            return Ok(Vec::new());
+        let mut by_repo: std::collections::BTreeMap<&str, Vec<u64>> = Default::default();
+        for key in keys {
+            if let Some((repo, number)) = key.rsplit_once('#')
+                && let Ok(number) = number.parse()
+            {
+                by_repo.entry(repo).or_default().push(number);
+            }
         }
         let mut out = Vec::new();
+        for (repo, numbers) in by_repo {
+            out.extend(self.read_in(repo, &numbers)?);
+        }
+        out.retain(|t| keys.iter().any(|k| k.eq_ignore_ascii_case(&t.key)));
+        Ok(out)
+    }
+
+    /// The issues numbered `numbers` of `repo`.
+    fn read_in(&self, repo: &str, numbers: &[u64]) -> Result<Vec<SyncedTicket>> {
+        let mut out = Vec::new();
         for chunk in numbers.chunks(50) {
-            let query = issues_query(slug, chunk, self.board.as_ref());
+            let query = issues_query_in(repo, &self.repo.slug, chunk, self.board.as_ref());
             match self.send(&query) {
-                Ok(resp) => out.extend(parse_issues(&resp, slug, self.board.as_ref())?),
+                Ok(resp) => out.extend(parse_issues(&resp, repo, self.board.as_ref())?),
                 Err(e) if graphql_refused(&e) => {
                     self.rest_allowed(e)?;
-                    out.extend(self.rest_read(chunk)?);
+                    out.extend(self.rest_read(repo, chunk)?);
                 }
                 Err(e) => return Err(e),
             }
@@ -362,11 +387,10 @@ impl GithubTickets<'_> {
             .iter()
             .filter(|v| v.get("pull_request").is_none())
             .collect();
-        self.rest_tickets(&issues)
+        self.rest_tickets(slug, &issues)
     }
 
-    fn rest_read(&self, numbers: &[u64]) -> Result<Vec<SyncedTicket>> {
-        let slug = &self.repo.slug;
+    fn rest_read(&self, slug: &str, numbers: &[u64]) -> Result<Vec<SyncedTicket>> {
         let read = each(numbers, |n| {
             self.api
                 .rest(Method::GET, &format!("/repos/{slug}/issues/{n}"), None)
@@ -378,13 +402,12 @@ impl GithubTickets<'_> {
             .flatten()
             .filter(|v| v.get("pull_request").is_none())
             .collect();
-        self.rest_tickets(&issues.iter().collect::<Vec<_>>())
+        self.rest_tickets(slug, &issues.iter().collect::<Vec<_>>())
     }
 
-    /// Each REST issue as a ticket, with its blockers and parent read one
-    /// issue at a time.
-    fn rest_tickets(&self, issues: &[&Value]) -> Result<Vec<SyncedTicket>> {
-        let slug = &self.repo.slug;
+    /// Each REST issue of `slug` as a ticket, with its blockers and parent
+    /// read one issue at a time.
+    fn rest_tickets(&self, slug: &str, issues: &[&Value]) -> Result<Vec<SyncedTicket>> {
         let links = each(issues, |v| -> Result<(Vec<String>, Option<String>)> {
             let n = v["number"].as_u64().context("an issue without a number")?;
             let blocked = v
@@ -404,10 +427,7 @@ impl GithubTickets<'_> {
                 None,
             )?;
             Ok((
-                blockers
-                    .iter()
-                    .filter_map(|b| rest_key_in(b, slug))
-                    .collect(),
+                blockers.iter().filter_map(rest_key_of).collect(),
                 parent.and_then(|p| rest_key_in(&p, slug)),
             ))
         });
@@ -434,6 +454,16 @@ impl GithubTickets<'_> {
             })
             .collect()
     }
+}
+
+/// The key of a REST issue, in any repository.
+fn rest_key_of(v: &Value) -> Option<String> {
+    let url = v["repository_url"].as_str()?;
+    let (_, repo) = url.split_once("/repos/")?;
+    Some(ticket_key(
+        repo.trim_end_matches('/'),
+        v["number"].as_u64()?,
+    ))
 }
 
 /// The key of a REST issue when it is an issue of `slug`.
@@ -565,7 +595,7 @@ mod tests {
         });
         let ticket = only(&search(vec![issue(65, linked)], None));
         assert_eq!(ticket.key, "o/r#65");
-        assert_eq!(ticket.blocked_by, ["o/r#64", "o/r#66"]);
+        assert_eq!(ticket.blocked_by, ["o/r#64", "o/r#66", "other/repo#9"]);
         assert_eq!(ticket.parent.as_deref(), Some("o/r#60"));
         let foreign =
             json!({ "parent": { "number": 1, "repository": { "nameWithOwner": "x/y" } } });

@@ -17,7 +17,14 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use devkit_common::{record, tracker, vcs::Checkout};
+use devkit_common::{
+    record,
+    tracker::{
+        self,
+        tickets::{SyncedTicket, in_closed_name},
+    },
+    vcs::Checkout,
+};
 use devkit_config::TicketSyncConfig;
 use devkit_todo::{
     Filter, Holder, StatusKind, Todo, TodoStore,
@@ -43,7 +50,9 @@ pub(crate) struct SyncReport {
 ///
 /// Every ticket a rule selects is fetched, and so is each ticket whose todo
 /// is still pending or in progress, so a close or a reassignment reaches its
-/// todo. Adds land before edits, which name todos by ticket.
+/// todo. An open ticket from another repository that blocks one of them is
+/// fetched too, so the blocked todo waits on it. Adds land before edits,
+/// which name todos by ticket.
 pub(crate) fn sync_tickets(
     store: &impl TodoStore,
     cwd: &Path,
@@ -80,6 +89,12 @@ pub(crate) fn sync_tickets(
                 .with_context(|| format!("reading {kind} tickets"))?,
         );
     }
+    with_foreign_blockers(
+        tracker.as_ref(),
+        &existing,
+        &mut fetched,
+        &sync.closed_names(),
+    )?;
     let known = tracker.status_names()?;
     let plan = ticket::plan(&kind, node, &existing, &fetched, &known, sync)?;
     if dry_run {
@@ -144,7 +159,8 @@ pub(crate) fn sync_created(dir: &Path, key: &str) -> Result<()> {
 /// checkout at `cwd`, reading no other ticket and running no rule search,
 /// and returns its todo; `None` when the repository has no `[ticket.sync]`
 /// rules, which queries no tracker. The ticket's parent and blockers link
-/// to the todos already synced for them.
+/// to the todos already synced for them, and an open blocker from another
+/// repository is synced with it.
 pub(crate) fn sync_one(
     store: &impl TodoStore,
     cwd: &Path,
@@ -159,7 +175,7 @@ pub(crate) fn sync_one(
     let kind = tracker.kind().to_string();
     let key = tracker.ticket_key(key)?;
     let key = key.as_str();
-    let fetched: Vec<_> = tracker
+    let mut fetched: Vec<_> = tracker
         .tickets(&[key.to_string()])
         .with_context(|| format!("reading {kind} ticket {key}"))?
         .into_iter()
@@ -167,15 +183,15 @@ pub(crate) fn sync_one(
         .collect();
     anyhow::ensure!(!fetched.is_empty(), "{kind} has no ticket {key}");
     let existing = store.list(&Filter::exact([node.to_string()]))?;
-    let known = tracker.status_names()?;
-    let plan = ticket::plan(
-        &kind,
-        node,
+    let sync = &config.ticket.sync;
+    with_foreign_blockers(
+        tracker.as_ref(),
         &existing,
-        &fetched,
-        &known,
-        &config.ticket.sync,
+        &mut fetched,
+        &sync.closed_names(),
     )?;
+    let known = tracker.status_names()?;
+    let plan = ticket::plan(&kind, node, &existing, &fetched, &known, sync)?;
     apply_plan(store, &kind, &existing, &plan)?;
     Ok(store
         .list(&Filter::exact([node.to_string()]))?
@@ -185,6 +201,45 @@ pub(crate) fn sync_one(
                 .as_ref()
                 .is_some_and(|r| r.tracker == kind && r.key == key)
         }))
+}
+
+/// Adds to `fetched` each open ticket from another repository that blocks
+/// one of them and has no todo in `existing`, but those in one of
+/// `closed_names`.
+fn with_foreign_blockers(
+    tracker: &dyn tracker::Tracker,
+    existing: &[Todo],
+    fetched: &mut Vec<SyncedTicket>,
+    closed_names: &[String],
+) -> Result<()> {
+    let kind = tracker.kind().to_string();
+    let has_todo = |key: &str| {
+        existing
+            .iter()
+            .filter_map(|t| t.ticket.as_ref())
+            .any(|r| r.tracker == kind && r.key == key)
+    };
+    let mut wanted: Vec<String> = fetched
+        .iter()
+        .flat_map(|t| &t.blocked_by)
+        .filter(|key| tracker.foreign_issue_key(key).is_some())
+        .filter(|key| !fetched.iter().any(|t| &t.key == *key) && !has_todo(key))
+        .cloned()
+        .collect();
+    wanted.sort();
+    wanted.dedup();
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let blockers = tracker
+        .tickets(&wanted)
+        .with_context(|| format!("reading {kind} tickets"))?;
+    fetched.extend(
+        blockers
+            .into_iter()
+            .filter(|t| !in_closed_name(t, closed_names)),
+    );
+    Ok(())
 }
 
 /// Lands `plan`, made from `existing`, the todos on its node.
