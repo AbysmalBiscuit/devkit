@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.14.26](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.25...v0.14.26) (2026-11-03)
+
+
+### Bug Fixes
+
+* **ci:** restore rustfmt and cargo audit ([d7a2115](https://github.com/AbysmalBiscuit/devkit/commit/d7a2115c5df5f2478b8c3931c79c54dbe8fc4e5a))
+* **pr:** keep the verification section to the outcome ([2e28b9b](https://github.com/AbysmalBiscuit/devkit/commit/2e28b9bd18f0cfb86e38ca63374d13e574a0441b)), closes [#432](https://github.com/AbysmalBiscuit/devkit/issues/432)
+* **pr:** replace a body section several vars share ([d15ef1e](https://github.com/AbysmalBiscuit/devkit/commit/d15ef1e8dc4bf0d6e0fdd1a548128651c33ade3f))
+* stop git timeouts failing windows ci ([398a14b](https://github.com/AbysmalBiscuit/devkit/commit/398a14b89190dd823e0af190226f148e64e55d2e))
+
 ## [0.14.25](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.24...v0.14.25) (2026-10-18)
 
 
