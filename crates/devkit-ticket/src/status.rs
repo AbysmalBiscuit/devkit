@@ -169,8 +169,9 @@ impl IssueWorktree {
     }
 
     /// True when `sel` names this worktree by any of [`matches_parts`]' names
-    /// or by its PR number (`3124` or `#3124`). The PR number is known only
-    /// once the PR fetch has filled the row.
+    /// or by one of its PR numbers (`3124` or `#3124`), an ambiguous row's
+    /// candidates included. The PR numbers are known only once the PR fetch has
+    /// filled the row.
     pub fn selected_by(&self, sel: &str) -> bool {
         if matches_parts(
             &self.worktree,
@@ -181,7 +182,12 @@ impl IssueWorktree {
             return true;
         }
         let number = sel.strip_prefix('#').unwrap_or(sel);
-        self.pr.number().is_some_and(|pr| number == pr.to_string())
+        match &self.pr {
+            PrStatus::Ambiguous { candidates } => {
+                candidates.iter().any(|pr| number == pr.number.to_string())
+            }
+            pr => pr.number().is_some_and(|pr| number == pr.to_string()),
+        }
     }
 }
 
@@ -1803,6 +1809,23 @@ mod tests {
             assert!(!r.selected_by("3125"));
             // A row with no PR never matches a bare number.
             assert!(!row().selected_by("3124"));
+        }
+
+        #[test]
+        fn selects_by_an_ambiguous_candidate_number() {
+            let pr = |number| devkit_common::tracker::PrRef {
+                url: format!("https://github.com/o/r/pull/{number}"),
+                number,
+            };
+            let r = IssueWorktree {
+                pr: PrStatus::Ambiguous {
+                    candidates: vec![pr(3124), pr(3125)],
+                },
+                ..row()
+            };
+            assert!(r.selected_by("#3124"));
+            assert!(r.selected_by("3125"));
+            assert!(!r.selected_by("3126"));
         }
     }
 }

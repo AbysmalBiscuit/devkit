@@ -1150,8 +1150,14 @@ mod tests {
     /// [`merged_at`] for several issues: ENG-n done, and PR #n from
     /// `eng-n-fix` merged at its head.
     fn merged<const N: usize>(prs: [(u64, &str); N]) -> Selected {
+        merged_from(prs.map(|(n, head)| (n, n, head)))
+    }
+
+    /// [`merged`] where each PR `(number, issue, head)` comes from the branch
+    /// `eng-<issue>-fix`, so several PRs can share one head branch.
+    fn merged_from<const N: usize>(prs: [(u64, u64, &str); N]) -> Selected {
         use devkit_common::{forge, tracker};
-        let ids = prs.map(|(n, _)| format!("ENG-{n}"));
+        let ids = prs.map(|(_, issue, _)| format!("ENG-{issue}"));
         let done: [_; N] = std::array::from_fn(|i| {
             (ids[i].as_str(), tracker::State {
                 kind: tracker::StateKind::Completed,
@@ -1161,13 +1167,13 @@ mod tests {
         });
         let forge = prs
             .into_iter()
-            .fold(forge::fake::FakeForge::new(), |f, (n, head)| {
+            .fold(forge::fake::FakeForge::new(), |f, (n, issue, head)| {
                 f.with_pr(forge::PrBrief {
                     number: n,
                     state: "MERGED".into(),
                     url: format!("https://github.com/o/r/pull/{n}"),
                     title: String::new(),
-                    head_ref_name: format!("eng-{n}-fix"),
+                    head_ref_name: format!("eng-{issue}-fix"),
                     head_ref_oid: head.into(),
                     head_repo_owner: None,
                     is_draft: false,
@@ -1319,6 +1325,30 @@ mod tests {
             assert!(
                 !wt.exists(),
                 "the PR number selects the worktree, clean_worktree={clean_worktree}"
+            );
+        }
+    }
+
+    /// Two PRs from one head branch leave the row ambiguous. Either candidate
+    /// still names the worktree, and the ambiguous verdict still holds it.
+    #[test]
+    fn an_ambiguous_pr_candidate_selects_its_worktree() {
+        for (clean_worktree, removed) in [(true, true), (false, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let (main, wt) = worktree_with_a_commit(dir.path());
+            let head = rev_parse(&wt, "HEAD");
+
+            end_among(
+                &main,
+                &["#2".into()],
+                clean_worktree,
+                merged_from([(1, 1, &head), (2, 1, &head)]),
+            );
+
+            assert_eq!(
+                !wt.exists(),
+                removed,
+                "#2 selects the ambiguous row, clean_worktree={clean_worktree}"
             );
         }
     }

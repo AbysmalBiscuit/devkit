@@ -164,6 +164,25 @@ fn an_issueless_record_reads_as_none_not_a_branch_scan() {
 /// wait for that fetch rather than filter in discovery.
 #[test]
 fn gather_with_selects_a_worktree_by_its_pr_number() {
+    for selector in ["7", "#7"] {
+        assert_eq!(
+            branches_selected_by(&[7], selector),
+            ["lev/eng-1-bar"],
+            "selecting by {selector}"
+        );
+    }
+}
+
+/// Two PRs from one head branch leave the row ambiguous, and each candidate
+/// still names it.
+#[test]
+fn gather_with_selects_a_worktree_by_an_ambiguous_pr_candidate() {
+    assert_eq!(branches_selected_by(&[7, 8], "#8"), ["lev/eng-1-bar"]);
+}
+
+/// The branches of the rows `gather_with` keeps for `selector`, with one more
+/// worktree beside `lev/eng-1-bar` and a PR from that branch for each number.
+fn branches_selected_by(numbers: &[u64], selector: &str) -> Vec<String> {
     use devkit_common::forge;
 
     let base = fixture_repo();
@@ -180,19 +199,23 @@ fn gather_with_selects_a_worktree_by_its_pr_number() {
         ],
         &main,
     );
-    let pr = forge::PrBrief {
-        number: 7,
-        state: "OPEN".into(),
-        url: "https://github.com/o/r/pull/7".into(),
-        title: String::new(),
-        head_ref_name: "lev/eng-1-bar".into(),
-        head_ref_oid: String::new(),
-        head_repo_owner: None,
-        is_draft: false,
-        author_login: None,
-    };
+    let fake = numbers
+        .iter()
+        .fold(forge::fake::FakeForge::new(), |f, &number| {
+            f.with_pr(forge::PrBrief {
+                number,
+                state: "OPEN".into(),
+                url: format!("https://github.com/o/r/pull/{number}"),
+                title: String::new(),
+                head_ref_name: "lev/eng-1-bar".into(),
+                head_ref_oid: String::new(),
+                head_repo_owner: None,
+                is_draft: false,
+                author_login: None,
+            })
+        });
     let forge = forge::Resolved {
-        forge: Box::new(forge::fake::FakeForge::new().with_pr(pr)),
+        forge: Box::new(fake),
         declared: true,
         reason: "chosen by this test".into(),
         repos: forge::Repos::from_parts(
@@ -208,16 +231,13 @@ fn gather_with_selects_a_worktree_by_its_pr_number() {
         reason: "chosen by this test".into(),
     };
 
-    for selector in ["7", "#7"] {
-        let report = devkit_ticket::status::gather_with(
-            main.to_str().unwrap(),
-            &[selector.to_string()],
-            &tracker,
-            &forge,
-            false,
-        )
-        .unwrap();
-        let branches: Vec<&str> = report.worktrees.iter().map(|r| r.branch.as_str()).collect();
-        assert_eq!(branches, ["lev/eng-1-bar"], "selecting by {selector}");
-    }
+    let report = devkit_ticket::status::gather_with(
+        main.to_str().unwrap(),
+        &[selector.to_string()],
+        &tracker,
+        &forge,
+        false,
+    )
+    .unwrap();
+    report.worktrees.into_iter().map(|r| r.branch).collect()
 }
