@@ -756,6 +756,14 @@ impl Tracker for GithubTracker {
         })
     }
 
+    /// `owner/repo#65`, from that key or an issue URL in another repository.
+    fn foreign_issue_key(&self, input: &str) -> Option<String> {
+        let s = input.trim();
+        let (repo, number) = parse_issue_url(s, &self.repo.host).or_else(|| parse_ticket_key(s))?;
+        (!repo.eq_ignore_ascii_case(&self.repo.slug))
+            .then(|| super::github_tickets::ticket_key(&repo, number))
+    }
+
     fn title(&self, id: &str) -> Result<Option<String>> {
         Ok(self.details(id)?.map(|d| d.title))
     }

@@ -24,13 +24,14 @@ use crate::{
 const MEMBER: &str = "member";
 
 /// One query reading what the declared places hold on issue `number`, the
-/// node ids of the issues in `refs`, and the project's id.
+/// node ids of the issues in `refs`, and the project's id. A ref is an
+/// issue number in `slug`, or the ticket key of an issue elsewhere.
 pub fn read_query(
     slug: &str,
     number: u64,
     decls: &BTreeMap<String, FieldDecl>,
     project: Option<&ProjectRef>,
-    refs: &BTreeSet<u64>,
+    refs: &BTreeSet<String>,
 ) -> String {
     let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
     let places: Vec<&Place> = decls.values().filter_map(|d| d.r#where.as_ref()).collect();
@@ -52,7 +53,9 @@ pub fn read_query(
         issue.push("parent { id number }".into());
     }
     if has(&Place::BlockedBy) {
-        issue.push("blockedBy(first: 100) { nodes { id number } }".into());
+        issue.push(
+            "blockedBy(first: 100) { nodes { id number repository { nameWithOwner } } }".into(),
+        );
     }
     let on_project = places
         .iter()
@@ -68,9 +71,27 @@ pub fn read_query(
              ... on ProjectV2ItemFieldDateValue {{ date {common} }} }} }} }} }}"
         ));
     }
-    let refs: String = refs
+    let (local, foreign): (Vec<&String>, Vec<&String>) =
+        refs.iter().partition(|r| r.parse::<u64>().is_ok());
+    let local: String = local
         .iter()
         .map(|n| format!("\n    ref{n}: issue(number: {n}) {{ id }}"))
+        .collect();
+    let foreign: String = foreign
+        .iter()
+        .filter_map(|key| {
+            let (repo, n) = key.rsplit_once('#')?;
+            let (o, r) = repo.split_once('/')?;
+            Some((o, r, n.parse::<u64>().ok()?))
+        })
+        .enumerate()
+        .map(|(i, (o, r, n))| {
+            format!(
+                "\n  xref{i}: repository(owner: {o}, name: {r}) {{ issue(number: {n}) {{ id number repository {{ nameWithOwner }} }} }}",
+                o = Json::from(o),
+                r = Json::from(r),
+            )
+        })
         .collect();
     let board = match (on_project, project) {
         (true, Some(p)) => format!(
@@ -81,7 +102,7 @@ pub fn read_query(
         _ => String::new(),
     };
     format!(
-        "query {{\n  repository(owner: {o}, name: {n}) {{\n    issue(number: {number}) {{ {fields} }}{refs}\n  }}{board}\n}}",
+        "query {{\n  repository(owner: {o}, name: {n}) {{\n    issue(number: {number}) {{ {fields} }}{local}\n  }}{foreign}{board}\n}}",
         o = Json::from(owner),
         n = Json::from(name),
         fields = issue.join(" "),
@@ -101,13 +122,14 @@ pub struct IssueFields {
     pub issue_type: Option<String>,
     /// The parent's number and node id.
     pub parent: Option<(u64, String)>,
-    /// Each blocker's number and node id.
-    pub blocked_by: Vec<(u64, String)>,
+    /// Each blocker's ref and node id: its number in the issues repository,
+    /// else its ticket key.
+    pub blocked_by: Vec<(String, String)>,
     /// The item's field values by field id: an option id, text, number or
     /// date.
     pub project_values: BTreeMap<String, String>,
-    /// Node ids of the issues the query was asked to resolve.
-    pub refs: BTreeMap<u64, String>,
+    /// Node ids of the issues the query was asked to resolve, by ref.
+    pub refs: BTreeMap<String, String>,
 }
 
 fn strs(v: &Json, list: &str, key: &str) -> Vec<String> {
@@ -123,8 +145,23 @@ fn number_text(n: f64) -> String {
     format!("{n}")
 }
 
-/// The [`IssueFields`] in a [`read_query`] response.
-pub fn parse_read(resp: &Json) -> Result<IssueFields> {
+/// How `devkit` refers to the issue `v` holds: its number when it is in
+/// `slug`, else its ticket key.
+fn issue_ref(v: &Json, slug: &str) -> Option<String> {
+    let number = v["number"].as_u64()?;
+    match v
+        .pointer("/repository/nameWithOwner")
+        .and_then(Json::as_str)
+    {
+        Some(repo) if !repo.eq_ignore_ascii_case(slug) => {
+            Some(super::github_tickets::ticket_key(repo, number))
+        }
+        _ => Some(number.to_string()),
+    }
+}
+
+/// The [`IssueFields`] of an issue in `slug`, from a [`read_query`] response.
+pub fn parse_read(resp: &Json, slug: &str) -> Result<IssueFields> {
     let issue = resp
         .pointer("/data/repository/issue")
         .filter(|i| !i.is_null())
@@ -162,16 +199,26 @@ pub fn parse_read(resp: &Json) -> Result<IssueFields> {
         project_values.insert(field.to_string(), value);
     }
     let pair = |n: &Json| Some((n["number"].as_u64()?, n["id"].as_str()?.to_string()));
-    let refs = resp
+    let local = resp
         .pointer("/data/repository")
         .and_then(Json::as_object)
         .into_iter()
         .flatten()
         .filter_map(|(k, v)| {
-            let n = k.strip_prefix("ref")?.parse().ok()?;
-            Some((n, v["id"].as_str()?.to_string()))
-        })
-        .collect();
+            let n: u64 = k.strip_prefix("ref")?.parse().ok()?;
+            Some((n.to_string(), v["id"].as_str()?.to_string()))
+        });
+    let foreign = resp
+        .pointer("/data")
+        .and_then(Json::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(k, _)| k.starts_with("xref"))
+        .filter_map(|(_, v)| {
+            let issue = &v["issue"];
+            Some((issue_ref(issue, slug)?, issue["id"].as_str()?.to_string()))
+        });
+    let refs = local.chain(foreign).collect();
     Ok(IssueFields {
         issue_id: issue["id"]
             .as_str()
@@ -195,7 +242,7 @@ pub fn parse_read(resp: &Json) -> Result<IssueFields> {
             .and_then(Json::as_array)
             .into_iter()
             .flatten()
-            .filter_map(pair)
+            .filter_map(|n| Some((issue_ref(n, slug)?, n["id"].as_str()?.to_string())))
             .collect(),
         project_values,
         refs,
@@ -211,7 +258,7 @@ impl IssueFields {
             Place::Milestone => self.milestone.iter().cloned().collect(),
             Place::IssueType => self.issue_type.iter().cloned().collect(),
             Place::Parent => self.parent.iter().map(|(n, _)| n.to_string()).collect(),
-            Place::BlockedBy => self.blocked_by.iter().map(|(n, _)| n.to_string()).collect(),
+            Place::BlockedBy => self.blocked_by.iter().map(|(r, _)| r.clone()).collect(),
             Place::Project => self.item_id.iter().map(|_| MEMBER.to_string()).collect(),
             Place::ProjectField { id, .. } => {
                 self.project_values.get(id).cloned().into_iter().collect()
@@ -499,7 +546,7 @@ impl GithubFieldWriter {
                 decls.get(name).and_then(|d| d.r#where.as_ref()),
                 Some(Place::Parent | Place::BlockedBy)
             ) {
-                refs.extend(values.iter().filter_map(|v| v.name().parse::<u64>().ok()));
+                refs.extend(values.iter().map(Value::name));
             }
         }
         let resp = self.query(&read_query(
@@ -509,7 +556,7 @@ impl GithubFieldWriter {
             self.project.as_ref(),
             &refs,
         ))?;
-        parse_read(&resp)
+        parse_read(&resp, &self.repo.slug)
     }
 
     /// Write every field in `resolved` and every `--none` clear onto issue
@@ -569,15 +616,15 @@ impl GithubFieldWriter {
         crate::cmd::gh_capture(&v, &self.repo, &self.cwd).map(|_| ())
     }
 
-    fn node(&self, before: &IssueFields, number: &str) -> Result<String> {
-        let n: u64 = number
-            .parse()
-            .with_context(|| format!("`{number}` is not an issue number"))?;
+    fn node(&self, before: &IssueFields, issue: &str) -> Result<String> {
         before
             .refs
-            .get(&n)
+            .get(issue)
             .cloned()
-            .with_context(|| format!("issue #{n} was not found in [github] issues_repo"))
+            .with_context(|| match issue.parse::<u64>() {
+                Ok(n) => format!("issue #{n} was not found in [github] issues_repo"),
+                Err(_) => format!("issue {issue} was not found"),
+            })
     }
 
     fn write(
@@ -650,7 +697,7 @@ impl GithubFieldWriter {
                     let blocker = before
                         .blocked_by
                         .iter()
-                        .find(|(n, _)| n.to_string() == **r)
+                        .find(|(b, _)| b == *r)
                         .map(|(_, id)| id.clone())
                         .context("a blocker without a node id")?;
                     self.mutate(&blocked_by_mutation(&before.issue_id, &blocker, false))?;
@@ -785,7 +832,13 @@ where = { project_field = "PVTF_e", name = "Estimate" }
             owner: Some("org".into()),
             number: 3,
         };
-        let q = read_query("o/r", 42, &decls(), Some(&project), &BTreeSet::from([12]));
+        let q = read_query(
+            "o/r",
+            42,
+            &decls(),
+            Some(&project),
+            &BTreeSet::from(["12".to_string()]),
+        );
         for part in [
             "repository(owner: \"o\", name: \"r\")",
             "issue(number: 42)",
@@ -820,7 +873,7 @@ where = { project_field = "PVTF_e", name = "Estimate" }
 
     #[test]
     fn parse_read_maps_project_field_options_back_to_value_ids() {
-        let r = parse_read(&fixture("github_fields_read.json")).unwrap();
+        let r = parse_read(&fixture("github_fields_read.json"), "o/r").unwrap();
         assert_eq!(r.issue_id, "I_42");
         assert_eq!(
             r.item_id.as_deref(),
@@ -831,8 +884,8 @@ where = { project_field = "PVTF_e", name = "Estimate" }
         assert_eq!(r.project_values["PVTF_e"], "3");
         assert_eq!(r.labels, ["bug", "enhancement"]);
         assert_eq!(r.parent, Some((12, "I_12".into())));
-        assert_eq!(r.blocked_by, [(13, "I_13".into())]);
-        assert_eq!(r.refs[&14], "I_14");
+        assert_eq!(r.blocked_by, [("13".into(), "I_13".into())]);
+        assert_eq!(r.refs["14"], "I_14");
         let d = decls();
         let current = r.current(&d, &HashMap::new());
         assert_eq!(current.0["priority"], ["P1"]);
@@ -881,7 +934,7 @@ where = { project_field = "PVTF_e", name = "Estimate" }
             ]),
             nones: BTreeSet::from(["milestone".to_string()]),
         };
-        let after = parse_read(&fixture("github_fields_read.json")).unwrap();
+        let after = parse_read(&fixture("github_fields_read.json"), "o/r").unwrap();
         let bad = GithubFieldWriter::verify(&d, &resolved, &after);
         assert_eq!(bad, [
             ("priority".to_string(), "P1".to_string()),
