@@ -66,10 +66,22 @@ fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
 /// Drive the binary from `cwd`, a directory name under the project tree, so a
 /// test can run from a worktree rather than from the monorepo.
 fn run_in(project: &Path, cwd: &str, state: &Path, args: &[&str]) -> Output {
+    spawn(project, cwd, state, None, args)
+}
+
+/// [`run`] with `DEVKIT_CALLER` set to `caller`.
+fn run_as(project: &Path, state: &Path, caller: &str, args: &[&str]) -> Output {
+    spawn(project, "main", state, Some(caller), args)
+}
+
+fn spawn(project: &Path, cwd: &str, state: &Path, caller: Option<&str>, args: &[&str]) -> Output {
     // The link's guard lives to the end of this function, which is safe because
     // `output()` waits for the child before returning.
     let (_dir, exe) = shimtest::linked("issue");
     let mut cmd = Command::new(&exe);
+    if let Some(caller) = caller {
+        cmd.env("DEVKIT_CALLER", caller);
+    }
     cmd.args(args)
         .current_dir(project.join(cwd))
         .env("HOME", state)
@@ -256,6 +268,27 @@ fn overwrite_with_all_and_yes_replaces_an_existing_file() {
         env_local(t.path(), "wt-eng-2").as_deref(),
         Some("FRESH=1\n")
     );
+}
+
+/// `-o` is `--option` on every command, this one included: it sets a config
+/// value, and `--overwrite` keeps its long flag alone.
+#[test]
+fn dash_o_sets_a_config_value_instead_of_overwriting() {
+    let t = project("\".env.local\"");
+    let state = tempfile::tempdir().unwrap();
+    std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
+
+    let out = run_as(t.path(), state.path(), "human", &[
+        "sync-includes",
+        "-o",
+        "defaults.worktree_include=[\".tool-versions\"]",
+        "--all",
+        "--yes",
+    ]);
+    ok(&out);
+    assert_eq!(env_local(t.path(), "wt-eng-1").as_deref(), Some("OLD=1\n"));
+    assert_eq!(env_local(t.path(), "wt-eng-2"), None);
+    assert!(t.path().join("wt-eng-2").join(".tool-versions").is_file());
 }
 
 /// `--overwrite` replaces untracked files git cannot restore, so it may not

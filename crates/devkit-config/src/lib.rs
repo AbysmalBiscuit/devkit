@@ -8,11 +8,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 mod layers;
+mod options;
 pub mod todo;
 pub use layers::{
     BrokenLayer, CONFIG_FILE, Layer, LayerKind, PendingLayer, ReadLayers, nearest_tracked,
     project_layers, read_project_layers,
 };
+pub use options::{COMMAND_LINE, Options};
 pub use todo::{HARNESS_PREFIXES, RoleConfig, ScopeConfig};
 pub mod harness;
 mod ticket_fields;
@@ -3300,11 +3302,25 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
 
 /// Build the ordered layer list (lowest->highest precedence): the home config
 /// (only its `[todo]` table when a `root = true` marker cuts it off), then the
-/// project layers `project_layers` finds for `start`. An explicit path or
-/// `$DEVKIT_CONFIG` replaces the project layers and the home config, all but
-/// its `[todo]` table.
+/// project layers `project_layers` finds for `start`, then the `--option`
+/// values. An explicit path or `$DEVKIT_CONFIG` replaces the project layers
+/// and the home config, all but its `[todo]` table.
 /// `pending` stands in for its file.
 fn discover(
+    explicit: Option<&Path>,
+    start: &Path,
+    main_checkout: Option<&Path>,
+    home: Option<&Path>,
+    pending: Option<PendingLayer<'_>>,
+    options: &Options,
+) -> Result<Vec<(PathBuf, toml::Table)>> {
+    let mut layers = discover_files(explicit, start, main_checkout, home, pending)?;
+    layers.extend(options.layer());
+    Ok(layers)
+}
+
+/// The config files [`discover`] layers, without the command line's values.
+fn discover_files(
     explicit: Option<&Path>,
     start: &Path,
     main_checkout: Option<&Path>,
@@ -3454,14 +3470,17 @@ pub fn resolve(
     main_checkout: Option<&Path>,
     checkout_root: Option<&Path>,
     default_worktree_root: Option<&Path>,
+    options: &Options,
 ) -> Result<(Config, Provenance)> {
-    resolve_with_home(
+    resolve_layers(
         explicit,
         start,
         main_checkout,
         checkout_root,
         home_config_path().as_deref(),
         default_worktree_root,
+        None,
+        options,
     )
 }
 
@@ -3474,6 +3493,7 @@ pub fn resolve_pending(
     checkout_root: Option<&Path>,
     default_worktree_root: Option<&Path>,
     pending: PendingLayer<'_>,
+    options: &Options,
 ) -> Result<(Config, Provenance)> {
     resolve_layers(
         explicit,
@@ -3483,6 +3503,7 @@ pub fn resolve_pending(
         home_config_path().as_deref(),
         default_worktree_root,
         Some(pending),
+        options,
     )
 }
 
@@ -3504,9 +3525,11 @@ pub(crate) fn resolve_with_home(
         home,
         default_worktree_root,
         None,
+        &Options::default(),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_layers(
     explicit: Option<&Path>,
     start: &Path,
@@ -3515,6 +3538,7 @@ fn resolve_layers(
     home: Option<&Path>,
     default_worktree_root: Option<&Path>,
     pending: Option<PendingLayer<'_>>,
+    options: &Options,
 ) -> Result<(Config, Provenance)> {
     // Every discovered layer path, and every `[defaults]` path resolved against
     // it, must be absolute — `strays/mod.rs` uses `worktree_root` as holder
@@ -3522,7 +3546,7 @@ fn resolve_layers(
     // passing `.`) must not leak into that value.
     let start_buf = absolutize(start)?;
     let start = start_buf.as_path();
-    let mut layers = discover(explicit, start, main_checkout, home, pending)?;
+    let mut layers = discover(explicit, start, main_checkout, home, pending, options)?;
     for (path, table) in &mut layers {
         read_renamed_keys(table)
             .with_context(|| format!("reading config layer {}", path.display()))?;
@@ -3848,8 +3872,12 @@ pub fn normalize_lexically(p: &Path) -> PathBuf {
 
 /// The directory of the config layer that supplied `key`, from the per-leaf
 /// provenance map.
+/// The directory of the layer that set `key`. A command-line value has none.
 fn layer_dir<'a>(origin: &'a HashMap<String, PathBuf>, key: &str) -> Option<&'a Path> {
-    origin.get(key).and_then(|p| p.parent())
+    origin
+        .get(key)
+        .filter(|p| p.as_os_str() != COMMAND_LINE)
+        .and_then(|p| p.parent())
 }
 
 /// What a `[defaults]` path key names, which decides what a relative value
@@ -3867,7 +3895,9 @@ enum PathKind {
 /// Expand `${VAR}`, then `~`, then anchor a still-relative path. A `Host` path
 /// anchors to the config layer that declared it; a `RepoRelative` path anchors
 /// to `checkout_root` when one is known, falling back to the declaring layer
-/// otherwise — there is no repository to anchor to outside one. Empty stays
+/// otherwise — there is no repository to anchor to outside one. A path with
+/// no layer directory, as from `--option`, anchors to the current directory,
+/// like any other path on a command line. Empty stays
 /// empty — an unset optional path must not silently become a directory.
 /// Emptiness is checked after expansion: a variable that is set but empty
 /// (`export FOO=`) must resolve to `""`, not to `dir.join("")`.
@@ -3888,7 +3918,8 @@ fn resolve_path_key(
         PathKind::RepoRelative => checkout_root.or_else(|| layer_dir(origin, key)),
     };
     let joined = match (p.is_absolute(), anchor) {
-        (true, _) | (false, None) => p,
+        (true, _) => p,
+        (false, None) => absolutize(&p)?,
         (false, Some(dir)) => dir.join(p),
     };
     Ok(normalize_lexically(&joined).to_string_lossy().into_owned())
