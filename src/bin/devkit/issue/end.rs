@@ -12,7 +12,7 @@ use devkit_common::{
     vcs::{Vcs, VersionControl},
     worktree::IssueId,
 };
-use devkit_ticket::status::{IssueWorktree, Tree, gather_with, label, tree_of};
+use devkit_ticket::status::{IssueWorktree, StatusReport, Tree, gather_with, label, tree_of};
 
 use crate::issue::triage::render;
 
@@ -34,6 +34,30 @@ fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWor
         }
     }
     chosen
+}
+
+/// The status of every worktree `selectors` names, or of every worktree when
+/// it is empty. Selection runs after the PR fetch, so a PR number selects too.
+fn gather_selected(
+    steps: &Steps,
+    start: &str,
+    selectors: &[String],
+    tracker: &devkit_common::tracker::Resolved,
+    forge: &devkit_common::forge::Resolved,
+    pr_only: bool,
+) -> Result<StatusReport> {
+    let mut report = steps.during_result("Fetching PR + issue status...", || {
+        gather_with(start, &[], tracker, forge, pr_only)
+    })?;
+    if !selectors.is_empty() {
+        report.worktrees = select_explicit(&report.worktrees, selectors);
+        report.finished_count = report
+            .worktrees
+            .iter()
+            .filter(|r| r.verdict.is_finished())
+            .count();
+    }
+    Ok(report)
 }
 
 fn confirm(label: &str) -> bool {
@@ -373,11 +397,9 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
             !ids.is_empty(),
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
-        let report = steps.during_result("Fetching PR + issue status...", || {
-            gather_with(start, &[], &tracker, &forge, pr_only)
-        })?;
+        let report = gather_selected(&steps, start, ids, &tracker, &forge, pr_only)?;
         render(&report, false);
-        let t = select_explicit(&report.worktrees, ids);
+        let t = report.worktrees;
         if t.is_empty() {
             println!("\nNo matching worktrees.");
             return Ok(());
@@ -388,9 +410,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
         );
         t
     } else {
-        let report = steps.during_result("Fetching PR + issue status...", || {
-            gather_with(start, ids, &tracker, &forge, pr_only)
-        })?;
+        let report = gather_selected(&steps, start, ids, &tracker, &forge, pr_only)?;
         render(&report, false);
         if pr_only {
             println!(
@@ -1185,6 +1205,15 @@ mod tests {
     }
 
     fn end_finished_among(main: &std::path::Path, selectors: &[String], sel: Selected) {
+        end_among(main, selectors, false, sel);
+    }
+
+    fn end_among(
+        main: &std::path::Path,
+        selectors: &[String],
+        clean_worktree: bool,
+        sel: Selected,
+    ) {
         run_selected(
             main.to_str().unwrap(),
             selectors,
@@ -1192,7 +1221,7 @@ mod tests {
                 yes: true,
                 force: false,
                 pr_only: false,
-                clean_worktree: false,
+                clean_worktree,
                 no_preserve: true,
             },
             sel,
@@ -1275,6 +1304,38 @@ mod tests {
         );
 
         assert!(wt.exists(), "an unselected worktree stays");
+    }
+
+    #[test]
+    fn a_finished_worktree_selected_by_its_pr_number_is_removed() {
+        for clean_worktree in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (main, wt) = worktree_with_a_commit(dir.path());
+
+            end_among(
+                &main,
+                &["#1".into()],
+                clean_worktree,
+                merged_at(&rev_parse(&wt, "HEAD")),
+            );
+
+            assert!(
+                !wt.exists(),
+                "the PR number selects the worktree, clean_worktree={clean_worktree}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unfinished_worktree_selected_by_its_pr_number_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let (main, wt) = worktree_with_a_commit(dir.path());
+        let merged = rev_parse(&wt, "HEAD");
+        fixture_git(&wt, &["commit", "-q", "--allow-empty", "-m", "unpushed"]);
+
+        end_finished_among(&main, &["#1".into()], merged_at(&merged));
+
+        assert!(wt.exists(), "the finished gate holds a selected worktree");
     }
 
     /// Work committed after the merge and never pushed lives only on the local
