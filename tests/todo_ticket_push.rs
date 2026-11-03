@@ -420,6 +420,24 @@ fn without_push_done_fires_the_background_event() {
 }
 
 #[test]
+fn done_on_an_imported_blocker_of_another_repository_fires_no_event() {
+    let s = blocked_from_workcell(&format!("{RULES}{STATUSES}{DONE_EVENT}"), "OPEN");
+    s.serve("graphql_mutation.json", r#"{"data":{}}"#);
+    assert!(s.sync(&[]).status.success());
+    let blocker = s.todo_for("abysmalbiscuit/workcell#992").id;
+    let out = s.devkit(&["todo", "done", &blocker], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = s.devkit(&["todo", "done", &ticket_id(&s)], &AGENT);
+    assert!(out.status.success(), "{}", stderr(&out));
+    poll("the background move of o/r#65 to Done", || {
+        mutation_at(&s, "updateProjectV2ItemFieldValue").is_some()
+    });
+    settle();
+    let log = std::fs::read_to_string(s.proj.state().join("ticket-event.log")).unwrap_or_default();
+    assert!(!log.contains("workcell"), "{log}");
+}
+
+#[test]
 fn linear_done_sets_the_state_by_name() {
     let linear = linearfake::LinearFake::start();
     let proj = Proj::new();

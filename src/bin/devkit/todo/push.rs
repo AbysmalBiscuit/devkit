@@ -71,7 +71,7 @@ fn inside(store: &Store, actor: &Holder, todo: &Todo) -> bool {
 
 /// Whether `key` names a ticket outside the issues repository of the
 /// checkout at `cwd`.
-fn foreign(cwd: &Path, key: &str) -> bool {
+pub(crate) fn foreign(cwd: &Path, key: &str) -> bool {
     tracker::select(None, &cwd.to_string_lossy(), None)
         .tracker
         .tracker

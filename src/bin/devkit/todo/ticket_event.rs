@@ -53,7 +53,9 @@ pub(crate) fn root_on(
 /// calls for. A change `tracker` made fires nothing, so a sync never moves a
 /// ticket back. A cancel fires only with `"status"` in `[ticket.sync] push`. A
 /// ticket todo changed from outside its repository fires nothing and says so on
-/// stderr: only a checkout of the repository resolves the ticket's config.
+/// stderr: only a checkout of the repository resolves the ticket's config. A
+/// ticket outside the issues repository, such as a blocker synced from another
+/// repository, fires nothing.
 pub(crate) fn fire_for(
     changes: &[StatusChange],
     actor: &Holder,
@@ -79,7 +81,8 @@ pub(crate) fn fire_for(
             Some(root)
                 if ticket.events.get(event).is_some()
                     && (event != IssueEvent::TodoCancel
-                        || ticket.sync.pushes(PushKind::Status)) =>
+                        || ticket.sync.pushes(PushKind::Status))
+                    && !super::push::foreign(&root, &key) =>
             {
                 spawn(&root, event, &key, &change.todo)
             }
