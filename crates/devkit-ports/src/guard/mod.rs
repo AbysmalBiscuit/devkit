@@ -75,7 +75,7 @@ fn known(inv: &Invocation) -> Option<Known> {
 
 /// Ordered from weakest to strongest, so combining alternatives takes the
 /// maximum and combining a sequence takes the minimum.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Match {
     No,
     Possible,
@@ -167,6 +167,7 @@ fn prefix_match(pattern: &str, start: &str) -> Match {
         !rest.is_empty() && rest.chars().all(|c| c == '*'),
     ) {
         (false, _) => Match::No,
+        (true, _) if rest.is_empty() && head.len() < start.len() => Match::No,
         (true, true) if head.len() <= start.len() => Match::Yes,
         (true, _) => Match::Possible,
     }
@@ -630,6 +631,16 @@ mod tests {
     use devkit_config::{AppConfig, AppMatch, CommandRule, RuleAction, Severity, TaskConfig};
 
     use super::*;
+
+    #[test]
+    fn a_known_start_matches_a_pattern_only_where_the_two_agree() {
+        assert_eq!(prefix_match("FOO=1", "FOO=10"), Match::No);
+        assert_eq!(prefix_match("FOO=1", "FOO=2"), Match::No);
+        assert_eq!(prefix_match("FOO=1", "FOO=1"), Match::Possible);
+        assert_eq!(prefix_match("FOO=1", "FOO="), Match::Possible);
+        assert_eq!(prefix_match("FOO=*", "FOO=1"), Match::Yes);
+        assert_eq!(prefix_match("FOO=1*", "FOO="), Match::Possible);
+    }
 
     fn rules(programs: &[&str], reason: &str) -> BTreeMap<String, CommandRule> {
         BTreeMap::from([("test-rule".to_string(), CommandRule {
