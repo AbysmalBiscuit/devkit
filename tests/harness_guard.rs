@@ -1198,3 +1198,58 @@ fn an_agent_setting_devkit_options_is_denied_in_any_devkit_project() {
         assert!(!denied(&out), "{command}: {}", deny_reason(&out));
     }
 }
+
+#[test]
+fn pre_tool_use_denies_every_call_when_the_options_will_not_parse() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    let write = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "s1",
+        "cwd": proj.path(),
+        "tool_name": "Write",
+        "tool_input": { "file_path": proj.path().join("a.txt"), "content": "x" }
+    })
+    .to_string();
+    for payload in [claude_payload("ls"), write] {
+        let out = run_hook_with(proj.path(), home.path(), &payload, &[
+            ("CLAUDE_CODE_SESSION_ID", "s1"),
+            ("DEVKIT_OPTIONS", "tracker.knd=\"none\""),
+        ]);
+        assert!(
+            denied(&out),
+            "{payload}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let reason = deny_reason(&out);
+        assert!(
+            reason.contains("DEVKIT_OPTIONS") && reason.contains("tracker.knd"),
+            "{reason}"
+        );
+    }
+}
+
+#[test]
+fn a_hook_verb_other_than_pre_tool_use_still_fails_on_bad_options() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project("[defaults]\n");
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": proj.path(),
+    })
+    .to_string();
+    let out = run_argv(
+        proj.path(),
+        home.path(),
+        &["hook", "session-start"],
+        &payload,
+        &[("DEVKIT_OPTIONS", "tracker.knd=\"none\"")],
+    );
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("DEVKIT_OPTIONS"),
+        "{out:?}"
+    );
+}

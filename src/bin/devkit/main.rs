@@ -480,8 +480,8 @@ fn parse_cli(args: &[OsString]) -> Cli {
 /// Run a hook verb with a panic caught. An escaping panic exits 101, which
 /// aborts a Claude Code `WorktreeCreate` and reads as a failure on every other
 /// verb; the panic hook has already reported it by the time this is reached.
-fn run_hook_guarded(cli: hook::HookCli) -> Result<()> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook::run(cli))) {
+fn run_hook_guarded(cli: hook::HookCli, options: Result<()>) -> Result<()> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook::run(cli, options))) {
         Ok(r) => r,
         Err(_) => std::process::exit(1),
     }
@@ -538,7 +538,15 @@ fn main() -> Result<()> {
         Some(s) => dispatch_shim(s, name, args),
         None => {
             let cli = parse_cli(&args);
-            cli.options.apply()?;
+            // A hook answers for a bad option itself: pre-tool-use must still
+            // give a verdict.
+            let options = match (&cli.cmd, cli.options.apply()) {
+                (Cmd::Hook(_), applied) => applied,
+                (_, applied) => {
+                    applied?;
+                    Ok(())
+                }
+            };
             match cli.cmd {
                 Cmd::Auth {
                     provider,
@@ -575,7 +583,7 @@ fn main() -> Result<()> {
                 Cmd::Pr(c) => issue::run(c.action(), "pr"),
                 Cmd::Mcp(c) => mcp::run(c),
                 Cmd::Harness(c) => harness::run(c),
-                Cmd::Hook(c) => run_hook_guarded(c),
+                Cmd::Hook(c) => run_hook_guarded(c, options),
                 Cmd::HookLog(c) => hook_log::run(c),
                 Cmd::Rules(c) => rules::run(c),
                 Cmd::Template(c) => template::run(c),

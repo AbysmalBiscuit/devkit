@@ -87,8 +87,24 @@ pub enum HookEvent {
     UserPromptSubmit,
 }
 
-pub fn run(cli: HookCli) -> Result<()> {
+/// Run one hook verb. `options` is the outcome of reading this process's
+/// `--option` values: pre-tool-use denies every call they make unreadable,
+/// and every other verb fails on them.
+pub fn run(cli: HookCli, options: Result<()>) -> Result<()> {
     let harness = cli.harness;
+    if let Err(e) = options {
+        if cli.event == HookEvent::PreToolUse {
+            let payload = read_payload(harness, HookEvent::PreToolUse)
+                .unwrap_or_else(|| Payload::empty(harness, HookEvent::PreToolUse));
+            let reason = format!(
+                "devkit cannot check this call: its config options are unreadable: {e:#}. \
+                 Fix `$DEVKIT_OPTIONS` or `--option` in the harness's environment."
+            );
+            print_envelope(&payload::deny(payload.harness(), &reason));
+            return Ok(());
+        }
+        return Err(e);
+    }
     match cli.event {
         HookEvent::PreToolUse => pre_tool_use(harness),
         // The two verbs that release, which is the half with a correctness
