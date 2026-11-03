@@ -356,7 +356,10 @@ fn discover_into_refuses_a_file_no_run_reads() {
     let out = fake.issue_as("agent", &["fields", "discover", "--into", "fields.toml"]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("fields.toml"), "{stderr}");
+    assert!(
+        stderr.contains("fields.toml") && stderr.contains("reads it as a config layer"),
+        "{stderr}"
+    );
     assert!(!fake.project().join("fields.toml").exists());
 }
 
@@ -413,6 +416,27 @@ fn discover_into_refuses_a_file_a_higher_layer_shadows() {
     assert_eq!(local_toml(&fake), None, "nothing written");
 }
 
+#[test]
+fn discover_into_refuses_devkit_config() {
+    let fake = fields_fake();
+    let named = fake.state().join("named.toml");
+    std::fs::write(&named, devkit_toml(&fake)).unwrap();
+    let before = devkit_toml(&fake);
+    let out = fake.issue_with_env(&["fields", "discover", "--into", "devkit.local.toml"], &[
+        ("DEVKIT_CALLER", "agent"),
+        ("DEVKIT_CONFIG", named.to_str().unwrap()),
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--into") && stderr.contains("$DEVKIT_CONFIG"),
+        "{stderr}"
+    );
+    assert_eq!(fake.calls(), "", "no tracker read");
+    assert_eq!(local_toml(&fake), None);
+    assert_eq!(devkit_toml(&fake), before);
+    assert_eq!(std::fs::read_to_string(&named).unwrap(), before);
+}
 
 #[test]
 fn discover_into_refuses_config() {
