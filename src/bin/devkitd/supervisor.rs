@@ -524,14 +524,9 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("portd-test.log");
-        let pid = devkit_common::supervise::spawn_detached(
-            &argv,
-            ".",
-            &std::collections::BTreeMap::new(),
-            &log,
-            None,
-        )
-        .unwrap();
+        // Not `spawn_detached`: on Unix that starts through this binary, and a
+        // test binary has no trampoline.
+        let pid = std::process::Command::new(&argv[0]).spawn().unwrap().id();
         s.insert_owned(key.clone(), pid, 9100, log.clone(), Launch {
             argv: argv.clone(),
             cwd: ".".into(),

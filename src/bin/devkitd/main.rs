@@ -175,31 +175,13 @@ impl Daemon {
     }
 }
 
-/// `devkitd __cgroup-exec <leaf> -- <program> <args>`: join `leaf`, then
-/// become `program`. Returns only when the exec fails.
-#[cfg(unix)]
-fn cgroup_exec() -> Result<()> {
-    let mut args = std::env::args_os().skip(2);
-    let (Some(leaf), Some(separator), Some(program)) = (args.next(), args.next(), args.next())
-    else {
-        anyhow::bail!(
-            "usage: devkitd {} <leaf> -- <program> [args...]",
-            devkit_common::sys::CGROUP_EXEC
-        );
-    };
-    anyhow::ensure!(separator == "--", "expected `--` after the cgroup leaf");
-    let rest: Vec<_> = args.collect();
-    let err = devkit_common::sys::exec_in_cgroup(Path::new(&leaf), &program, &rest);
-    Err(err).with_context(|| format!("running {}", program.to_string_lossy()))
-}
-
 fn main() -> Result<()> {
+    #[cfg(unix)]
+    devkit_common::sys::run_detach_trampoline();
     devkit_common::report::install_abort_hook("devkitd");
     match std::env::args().nth(1).as_deref() {
         Some("install-service") => return service::install(),
         Some("uninstall-service") => return service::uninstall(),
-        #[cfg(unix)]
-        Some(devkit_common::sys::CGROUP_EXEC) => return cgroup_exec(),
         Some("--version" | "-V") => {
             println!("devkitd {}", devkit::VERSION);
             return Ok(());

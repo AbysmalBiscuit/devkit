@@ -39,14 +39,192 @@ pub(super) fn terminate(pid: u32) {
     let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
 }
 
-pub(super) fn detach(cmd: &mut std::process::Command) {
-    use std::os::unix::process::CommandExt;
-    // Start a new session so the child outlives the launching shell and is
-    // insulated from its controlling terminal's signals.
-    // SAFETY: setsid only mutates the child after fork; it is
-    // async-signal-safe.
-    unsafe {
-        cmd.pre_exec(|| nix::unistd::setsid().map(|_| ()).map_err(|e| e.into()));
+/// The first argument that makes a devkit binary run [`run_detach_trampoline`].
+const DETACH_EXEC: &str = "__detach-exec";
+
+/// The trampoline argument before the cgroup leaf the program joins.
+const CGROUP_ARG: &str = "--cgroup";
+
+/// std has no stable safe `setsid` for a child, so the child is this binary
+/// run as [`run_detach_trampoline`]:
+/// `__detach-exec [--cgroup <leaf>] -- <program> <args>`. It calls `setsid` on
+/// itself, joins the leaf, and execs the program in place, keeping its pid.
+/// Its stdin is the write end of a status pipe. The pipe closes empty when
+/// the program starts, and carries the error when it cannot start.
+pub(super) fn spawn_detached(
+    cmd: &mut std::process::Command,
+    cgroup_leaf: Option<&std::path::Path>,
+    stdout: std::process::Stdio,
+    stderr: std::process::Stdio,
+) -> std::io::Result<std::process::Child> {
+    use std::io::Read as _;
+    let mut trampoline = std::process::Command::new(trampoline_exe()?);
+    trampoline.arg(DETACH_EXEC);
+    if let Some(leaf) = cgroup_leaf {
+        trampoline.arg(CGROUP_ARG).arg(leaf);
+    }
+    trampoline
+        .arg("--")
+        .arg(cmd.get_program())
+        .args(cmd.get_args());
+    if let Some(dir) = cmd.get_current_dir() {
+        trampoline.current_dir(dir);
+    }
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(value) => trampoline.env(key, value),
+            None => trampoline.env_remove(key),
+        };
+    }
+    let (mut status, status_writer) = std::io::pipe()?;
+    trampoline
+        .stdin(status_writer)
+        .stdout(stdout)
+        .stderr(stderr);
+    let mut child = trampoline.spawn()?;
+    // The command holds this process's copy of the write end, and the read
+    // below ends only when every copy is closed.
+    drop(trampoline);
+    let mut failure = String::new();
+    status.read_to_string(&mut failure)?;
+    if failure.is_empty() {
+        return Ok(child);
+    }
+    let _ = child.wait();
+    Err(std::io::Error::other(failure))
+}
+
+fn trampoline_exe() -> std::io::Result<std::path::PathBuf> {
+    resolve_trampoline(
+        std::env::current_exe(),
+        std::path::Path::new("/proc/self/exe"),
+        std::env::args_os().next(),
+        std::env::var_os("PATH"),
+        std::env::current_dir().ok(),
+    )
+}
+
+/// The binary that runs the trampoline: `current_exe`, else `running_image`,
+/// else `argv0` as a path under `cwd` or a name on `search_path`.
+///
+/// After an upgrade deletes a long-lived daemon's binary, `current_exe` names
+/// a missing file, and Linux still runs the old image through
+/// `/proc/self/exe`. On Linux `current_exe` itself reads procfs, so without
+/// procfs only `argv0` is left.
+fn resolve_trampoline(
+    current_exe: std::io::Result<std::path::PathBuf>,
+    running_image: &std::path::Path,
+    argv0: Option<std::ffi::OsString>,
+    search_path: Option<std::ffi::OsString>,
+    cwd: Option<std::path::PathBuf>,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+    let err = match current_exe {
+        Ok(exe) if exe.is_file() => return Ok(exe),
+        Ok(exe) => std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("the running binary `{}` is gone", exe.display()),
+        ),
+        Err(err) => err,
+    };
+    if running_image.is_file() {
+        return Ok(running_image.into());
+    }
+    let argv0 = PathBuf::from(argv0.ok_or(err)?);
+    let has_dir = argv0
+        .parent()
+        .is_some_and(|dir| !dir.as_os_str().is_empty());
+    let found = match (has_dir, search_path) {
+        (true, _) => Some(cwd.map_or_else(|| argv0.clone(), |cwd| cwd.join(&argv0)))
+            .filter(|path| path.is_file()),
+        (false, Some(search_path)) => {
+            super::find_on_path(&argv0, &search_path, cwd.as_deref(), Path::is_file)
+        }
+        (false, None) => None,
+    };
+    found.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("cannot find the running binary `{}`", argv0.display()),
+        )
+    })
+}
+
+/// Runs the program a [`spawn_detached`] command names when this process was
+/// started as its trampoline, and returns otherwise.
+pub(super) fn run_detach_trampoline() {
+    use std::{io::Write as _, os::fd::AsFd as _};
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(std::ffi::OsStr::new(DETACH_EXEC)) {
+        return;
+    }
+    // The clone is close-on-exec, so a successful exec closes the status pipe.
+    // `exec` replaces stdin before it runs the program, so a failed exec has
+    // only the clone left to report through.
+    let status = std::io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .map(std::fs::File::from);
+    let err = exec_detached(args);
+    if let Ok(mut status) = status {
+        let _ = status.write_all(err.to_string().as_bytes());
+    }
+    eprintln!("{DETACH_EXEC}: {err}");
+    std::process::exit(127);
+}
+
+/// Reads `[--cgroup <leaf>] -- <program> <args>`, starts a session, joins the
+/// leaf, and execs the program with stdin at the null device. Returns only
+/// the error that stopped the program.
+fn exec_detached(mut args: impl Iterator<Item = std::ffi::OsString>) -> std::io::Error {
+    use std::os::unix::process::CommandExt as _;
+    let mut next = args.next();
+    let mut leaf = None;
+    if next.as_deref() == Some(std::ffi::OsStr::new(CGROUP_ARG)) {
+        leaf = args.next();
+        next = args.next();
+    }
+    let (Some(separator), Some(program)) = (next, args.next()) else {
+        return usage();
+    };
+    if separator != "--" {
+        return usage();
+    }
+    let err = match nix::unistd::setsid() {
+        Ok(_) => {
+            if let Some(leaf) = leaf {
+                join_cgroup(std::path::Path::new(&leaf));
+            }
+            std::process::Command::new(&program)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .exec()
+        }
+        Err(errno) => errno.into(),
+    };
+    std::io::Error::new(
+        err.kind(),
+        format!("cannot run `{}`: {err}", program.to_string_lossy()),
+    )
+}
+
+fn usage() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("usage: {DETACH_EXEC} [{CGROUP_ARG} <leaf>] -- <program> [args...]"),
+    )
+}
+
+/// Moves this process into `leaf`. A leaf that cannot be joined leaves the
+/// program uncapped. The pid goes in one write, because cgroupfs reads each
+/// write as one request.
+fn join_cgroup(leaf: &std::path::Path) {
+    use std::io::Write as _;
+    if let Ok(mut procs) = std::fs::OpenOptions::new()
+        .write(true)
+        .open(leaf.join("cgroup.procs"))
+    {
+        let _ = procs.write_all(format!("{}\n", std::process::id()).as_bytes());
     }
 }
 
@@ -72,11 +250,7 @@ pub(super) fn spawn_background(
     cmd: &mut std::process::Command,
 ) -> std::io::Result<BackgroundChild> {
     use std::process::Stdio;
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    detach(cmd);
-    cmd.spawn()
+    spawn_detached(cmd, None, Stdio::null(), Stdio::null())
 }
 
 pub(super) fn reap_owned(pid: u32) -> bool {
@@ -311,53 +485,6 @@ pub(super) fn cgroup_list_leaves(base: &std::path::Path) -> Vec<String> {
     names
 }
 
-#[cfg(target_os = "linux")]
-pub(super) fn cgroup_command(
-    leaf: &std::path::Path,
-    program: &str,
-) -> Option<std::process::Command> {
-    // `/proc/self/exe` still runs this binary after an upgrade deletes or
-    // replaces the file at `current_exe()`.
-    let mut cmd = std::process::Command::new("/proc/self/exe");
-    cmd.arg(super::CGROUP_EXEC).arg(leaf).arg("--").arg(program);
-    Some(cmd)
-}
-
-pub(super) fn exec_in_cgroup(
-    leaf: &std::path::Path,
-    program: &std::ffi::OsStr,
-    args: &[std::ffi::OsString],
-) -> std::io::Error {
-    use std::{
-        io::Write as _,
-        os::{fd::AsFd as _, unix::process::CommandExt as _},
-        process::Stdio,
-    };
-    // The clone is close-on-exec, so a successful exec closes the status pipe.
-    // `exec` replaces stdin before it runs the program, so a failed exec has
-    // only the clone left to report through.
-    let status = std::io::stdin()
-        .as_fd()
-        .try_clone_to_owned()
-        .map(std::fs::File::from);
-    // A leaf that cannot be joined leaves the program uncapped. The pid goes
-    // in one write, because cgroupfs reads each write as one request.
-    if let Ok(mut procs) = std::fs::OpenOptions::new()
-        .write(true)
-        .open(leaf.join("cgroup.procs"))
-    {
-        let _ = procs.write_all(format!("{}\n", std::process::id()).as_bytes());
-    }
-    let err = std::process::Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .exec();
-    if let Ok(mut status) = status {
-        let _ = status.write_all(err.to_string().as_bytes());
-    }
-    err
-}
-
 // macOS: no cgroups.
 #[cfg(not(target_os = "linux"))]
 pub(super) fn cgroup_caps() -> super::CgroupCaps {
@@ -378,13 +505,6 @@ pub(super) fn cgroup_remove_leaf(_leaf: &std::path::Path) -> anyhow::Result<()> 
 #[cfg(not(target_os = "linux"))]
 pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
     Vec::new()
-}
-#[cfg(not(target_os = "linux"))]
-pub(super) fn cgroup_command(
-    _leaf: &std::path::Path,
-    _program: &str,
-) -> Option<std::process::Command> {
-    None
 }
 
 #[cfg(target_os = "linux")]
@@ -414,4 +534,80 @@ pub(super) fn symlink(
     _target_is_dir: bool,
 ) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::resolve_trampoline;
+
+    #[test]
+    fn the_trampoline_is_current_exe_when_its_file_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("devkit");
+        let image = tmp.path().join("image");
+        std::fs::write(&exe, "").unwrap();
+        std::fs::write(&image, "").unwrap();
+        let got = resolve_trampoline(Ok(exe.clone()), &image, None, None, None).unwrap();
+        assert_eq!(got, exe);
+    }
+
+    #[test]
+    fn a_deleted_binary_runs_the_running_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let image = tmp.path().join("image");
+        std::fs::write(&image, "").unwrap();
+        let deleted = tmp.path().join("devkit (deleted)");
+        let got = resolve_trampoline(Ok(deleted), &image, None, None, None).unwrap();
+        assert_eq!(got, image);
+    }
+
+    #[test]
+    fn without_procfs_the_trampoline_is_argv0_on_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::write(bin.join("devkit"), "").unwrap();
+        let no_procfs = tmp.path().join("proc/self/exe");
+        let got = resolve_trampoline(
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            &no_procfs,
+            Some("devkit".into()),
+            Some(bin.clone().into_os_string()),
+            Some(tmp.path().to_path_buf()),
+        )
+        .unwrap();
+        assert_eq!(got, bin.join("devkit"));
+    }
+
+    #[test]
+    fn without_procfs_a_relative_argv0_resolves_against_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("target")).unwrap();
+        std::fs::write(tmp.path().join("target/devkit"), "").unwrap();
+        let got = resolve_trampoline(
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            &tmp.path().join("proc/self/exe"),
+            Some("target/devkit".into()),
+            None,
+            Some(tmp.path().to_path_buf()),
+        )
+        .unwrap();
+        assert_eq!(got, tmp.path().join("target/devkit"));
+    }
+
+    #[test]
+    fn without_procfs_or_argv0_the_error_is_current_exes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = resolve_trampoline(
+            Err(io::Error::other("no procfs")),
+            &tmp.path().join("proc/self/exe"),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no procfs"), "{err}");
+    }
 }

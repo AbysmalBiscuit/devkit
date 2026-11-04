@@ -488,6 +488,8 @@ fn run_hook_guarded(cli: hook::HookCli, options: Result<()>) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    #[cfg(unix)]
+    devkit_common::sys::run_detach_trampoline();
     let args: Vec<OsString> = std::env::args_os().collect();
     // The marker probe `links::answers_probe_marker` uses: answered before
     // any clap parsing, any panic-hook/state-migration/linking setup, and —
