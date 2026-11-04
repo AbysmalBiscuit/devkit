@@ -53,22 +53,7 @@ pub(super) fn detach(cmd: &mut std::process::Command) -> std::io::Result<()> {
             format!("program `{}` not found", program.to_string_lossy()),
         ));
     }
-    let mut trampoline = std::process::Command::new(trampoline_exe()?);
-    trampoline
-        .arg(DETACH_EXEC)
-        .arg("--")
-        .arg(&program)
-        .args(cmd.get_args());
-    if let Some(dir) = cmd.get_current_dir() {
-        trampoline.current_dir(dir);
-    }
-    for (key, value) in cmd.get_envs() {
-        match value {
-            Some(value) => trampoline.env(key, value),
-            None => trampoline.env_remove(key),
-        };
-    }
-    *cmd = trampoline;
+    *cmd = self_exec(DETACH_EXEC, &[], cmd)?;
     Ok(())
 }
 
@@ -107,22 +92,85 @@ fn program_exists(cmd: &std::process::Command) -> bool {
 /// Runs the program a [`detach`]ed command names, in a session of its own,
 /// when this process was started as its trampoline, and returns otherwise.
 pub(super) fn run_detach_trampoline() {
+    let session = |_: &[std::ffi::OsString], _: &mut std::process::Command| {
+        nix::unistd::setsid().map(drop).map_err(Into::into)
+    };
+    if let Some(err) = run_self_exec(DETACH_EXEC, 0, session) {
+        eprintln!("{DETACH_EXEC}: {err}");
+        std::process::exit(127);
+    }
+}
+
+/// A command that runs this binary as `verb`'s trampoline:
+/// `<this binary> <verb> <prefix> -- <program> <args>`, where program and
+/// args are `cmd`'s. It keeps `cmd`'s directory and environment changes.
+fn self_exec(
+    verb: &str,
+    prefix: &[&std::ffi::OsStr],
+    cmd: &std::process::Command,
+) -> std::io::Result<std::process::Command> {
+    let mut trampoline = std::process::Command::new(trampoline_exe()?);
+    trampoline
+        .arg(verb)
+        .args(prefix)
+        .arg("--")
+        .arg(cmd.get_program())
+        .args(cmd.get_args());
+    if let Some(dir) = cmd.get_current_dir() {
+        trampoline.current_dir(dir);
+    }
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(value) => trampoline.env(key, value),
+            None => trampoline.env_remove(key),
+        };
+    }
+    Ok(trampoline)
+}
+
+/// Execs the program of a [`self_exec`] command in place, after `prepare`
+/// gets the `prefix_len` arguments and the program's command. Returns `None`
+/// when this process is not `verb`'s trampoline, else what stopped the exec.
+fn run_self_exec(
+    verb: &str,
+    prefix_len: usize,
+    prepare: impl FnOnce(&[std::ffi::OsString], &mut std::process::Command) -> std::io::Result<()>,
+) -> Option<std::io::Error> {
     use std::os::unix::process::CommandExt as _;
     let mut args = std::env::args_os().skip(1);
-    if args.next().as_deref() != Some(std::ffi::OsStr::new(DETACH_EXEC)) {
-        return;
+    if args.next().as_deref() != Some(std::ffi::OsStr::new(verb)) {
+        return None;
     }
-    let _separator = args.next();
-    let Some(program) = args.next() else {
-        eprintln!("{DETACH_EXEC}: no program to run");
-        std::process::exit(127);
+    let prefix: Vec<_> = args.by_ref().take(prefix_len).collect();
+    let (Some(separator), Some(program)) = (args.next(), args.next()) else {
+        return Some(usage(verb, prefix_len));
     };
-    let err = match nix::unistd::setsid() {
-        Ok(_) => std::process::Command::new(&program).args(args).exec(),
-        Err(errno) => errno.into(),
+    if prefix.len() != prefix_len || separator != "--" {
+        return Some(usage(verb, prefix_len));
+    }
+    let mut command = std::process::Command::new(&program);
+    command.args(args);
+    let err = match prepare(&prefix, &mut command) {
+        Ok(()) => command.exec(),
+        Err(err) => err,
     };
-    eprintln!("cannot run `{}`: {err}", program.to_string_lossy());
-    std::process::exit(127);
+    Some(std::io::Error::new(
+        err.kind(),
+        format!("cannot run `{}`: {err}", program.to_string_lossy()),
+    ))
+}
+
+fn usage(verb: &str, prefix_len: usize) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "usage: {} -- <program> [args...]",
+            std::iter::once(verb)
+                .chain(std::iter::repeat_n("<arg>", prefix_len))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    )
 }
 
 pub(super) fn exit_like(status: std::process::ExitStatus) -> ! {
