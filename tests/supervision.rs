@@ -602,6 +602,163 @@ fn cap_requested_without_delegation_falls_back() {
     h.shutdown();
 }
 
+/// A directory that `DEVKIT_DAEMON_CGROUP_ROOT` accepts as a cgroup-v2 base
+/// but that is not a cgroup: its leaves get no `cgroup.procs`, so no process
+/// can join them.
+#[cfg(target_os = "linux")]
+fn unjoinable_cgroup_base() -> tempfile::TempDir {
+    let base = tempfile::tempdir().unwrap();
+    std::fs::write(base.path().join("cgroup.controllers"), "memory\n").unwrap();
+    base
+}
+
+/// The leaf directories the daemon created under `base`.
+#[cfg(target_os = "linux")]
+fn leaves(base: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(base.join("servers"))
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "linux")]
+fn pids_in(leaf: &std::path::Path) -> Vec<u32> {
+    std::fs::read_to_string(leaf.join("cgroup.procs"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect()
+}
+
+/// The app is in its leaf before it runs, so a process the app starts is in
+/// the leaf too.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_supervised_app_and_its_children_join_the_leaf() {
+    let Some(base) = test_cgroup_base() else {
+        eprintln!(
+            "skipping a_supervised_app_and_its_children_join_the_leaf: no writable delegated cgroup-v2 base (set DEVKIT_TEST_CGROUP_ROOT)"
+        );
+        return;
+    };
+    let mut h = Harness::start_with_cgroup_cap(3600, base.to_str().unwrap(), 256);
+    let port = common::free_port();
+    let holder = h.home.path().to_str().unwrap().to_string();
+    let child_pid_file = h.home.path().join("child.pid");
+    let mut argv = vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        r#"sleep 600 & echo $! > "$0"; exec "$@""#.to_string(),
+        child_pid_file.to_str().unwrap().to_string(),
+    ];
+    argv.extend(common::tcp_server_argv(port));
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Workspace,
+        argv,
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.path().join("join.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "supervise did not become ready: {resp:?}"
+    );
+    let app = pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json");
+    let child: u32 = std::fs::read_to_string(&child_pid_file)
+        .expect("the app wrote its child's pid")
+        .trim()
+        .parse()
+        .unwrap();
+
+    let leaf = leaves(&base)
+        .into_iter()
+        .find(|leaf| pids_in(leaf).contains(&app))
+        .unwrap_or_else(|| panic!("app pid {app} is in no leaf under {}", base.display()));
+    let members = pids_in(&leaf);
+    let _ = kill(Pid::from_raw(child as i32), Signal::SIGKILL);
+    assert!(
+        members.contains(&child),
+        "child pid {child} is not in {}: {members:?}",
+        leaf.display()
+    );
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
+/// A leaf the app cannot join leaves it uncapped, and the launch still
+/// succeeds.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_unwritable_leaf_leaves_the_app_uncapped() {
+    let base = unjoinable_cgroup_base();
+    let mut h = Harness::start_with_cgroup_cap(3600, base.path().to_str().unwrap(), 64);
+    let port = common::free_port();
+    let holder = h.home.path().to_str().unwrap().to_string();
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Workspace,
+        argv: common::tcp_server_argv(port),
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.path().join("unjoinable.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "an unjoinable leaf must not stop the app: {resp:?}"
+    );
+    let leaves = leaves(base.path());
+    assert_eq!(leaves.len(), 1, "the daemon created one leaf: {leaves:?}");
+    assert!(
+        pids_in(&leaves[0]).is_empty(),
+        "nothing joined the unjoinable leaf"
+    );
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
+/// A capped launch of a program that does not exist fails the request with an
+/// error that names the program.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_missing_program_fails_the_launch() {
+    let base = unjoinable_cgroup_base();
+    let mut h = Harness::start_with_cgroup_cap(3600, base.path().to_str().unwrap(), 64);
+    let port = common::free_port();
+    let holder = h.home.path().to_str().unwrap().to_string();
+    let program = "devkit-test-no-such-program";
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Workspace,
+        argv: vec![program.into()],
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.path().join("missing.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Err(msg) if msg.contains(program)),
+        "expected an error naming {program}, got {resp:?}"
+    );
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
 /// A second Supervise for a key whose server is alive is a no-op: same port,
 /// ready, and the pid in ports.json does not change (no duplicate spawn).
 #[test]

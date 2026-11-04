@@ -399,7 +399,14 @@ pub(super) fn cgroup_remove_leaf(_leaf: &std::path::Path) -> anyhow::Result<()> 
 pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
     Vec::new()
 }
-pub(super) fn join_cgroup(_cmd: &mut std::process::Command, _leaf: &std::path::Path) {}
+pub(super) fn cgroup_command(
+    _leaf: &std::path::Path,
+    program: &str,
+    _cwd: &str,
+    _path_var: Option<&std::ffi::OsStr>,
+) -> anyhow::Result<std::process::Command> {
+    Ok(std::process::Command::new(program))
+}
 
 pub(super) fn symlink(
     target: &std::path::Path,

@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    ffi::OsStr,
     fs::{self, File},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -11,9 +12,9 @@ use anyhow::{Context, Result};
 pub use crate::sys::tree_rss_bytes;
 
 /// Spawn `argv` detached (own session), env-augmented, stdout+stderr ->
-/// logfile. When `cgroup_leaf` is `Some`, the child joins that cgroup in
-/// `pre_exec` before `exec` (Linux only; a no-op elsewhere). Returns the child
-/// pid.
+/// logfile. When `cgroup_leaf` is `Some`, the child joins that cgroup before
+/// the program runs (Linux only; see [`crate::sys::cgroup_command`]). Returns
+/// the child pid.
 pub fn spawn_detached(
     argv: &[String],
     cwd: &str,
@@ -25,7 +26,10 @@ pub fn spawn_detached(
     let out = File::create(logfile)?;
     let err = out.try_clone()?;
     let (prog, rest) = argv.split_first().context("empty launch argv")?;
-    let mut c = Command::new(prog);
+    let mut c = match cgroup_leaf {
+        Some(leaf) => crate::sys::cgroup_command(leaf, prog, cwd, env.get("PATH").map(OsStr::new))?,
+        None => Command::new(prog),
+    };
     c.args(rest)
         .current_dir(cwd)
         .envs(env)
@@ -33,9 +37,6 @@ pub fn spawn_detached(
         .stdout(out)
         .stderr(err);
     crate::sys::detach(&mut c);
-    if let Some(leaf) = cgroup_leaf {
-        crate::sys::join_cgroup(&mut c, leaf);
-    }
     let child = c.spawn().with_context(|| format!("spawning {prog}"))?;
     Ok(child.id())
 }

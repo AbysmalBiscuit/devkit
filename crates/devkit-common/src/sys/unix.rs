@@ -298,37 +298,60 @@ pub(super) fn cgroup_list_leaves(base: &std::path::Path) -> Vec<String> {
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn join_cgroup(cmd: &mut std::process::Command, leaf: &std::path::Path) {
-    use std::os::{
-        fd::{AsRawFd, OwnedFd},
-        unix::process::CommandExt as _,
+pub(super) fn cgroup_command(
+    leaf: &std::path::Path,
+    program: &str,
+    cwd: &str,
+    path_var: Option<&std::ffi::OsStr>,
+) -> anyhow::Result<std::process::Command> {
+    use anyhow::Context as _;
+    // The trampoline always starts, so a missing program would only show as
+    // an exit of the trampoline. Look it up here to fail the launch instead.
+    anyhow::ensure!(
+        find_program(program, cwd, path_var),
+        "spawning {program}: no such executable"
+    );
+    let exe = std::env::current_exe().context("locating devkitd for the cgroup join")?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg(super::CGROUP_EXEC).arg(leaf).arg("--").arg(program);
+    Ok(cmd)
+}
+
+/// Whether `program` names an executable file the way `execvp` finds it: a
+/// name with a `/` relative to `cwd`, any other name in a `PATH` entry.
+#[cfg(target_os = "linux")]
+fn find_program(program: &str, cwd: &str, path_var: Option<&std::ffi::OsStr>) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    let cwd = std::path::Path::new(cwd);
+    let executable = |p: std::path::PathBuf| {
+        fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
     };
-    // Open the leaf's cgroup.procs in the parent (write, close-on-exec). A
-    // failure here leaves the child uncapped — fail-open, never block the
-    // spawn.
-    let path = leaf.join("cgroup.procs");
-    let Ok(file) = fs::OpenOptions::new().write(true).open(&path) else {
-        return;
-    };
-    let fd: OwnedFd = file.into();
-    // SAFETY: the closure runs in the forked child before `exec` and calls only
-    // async-signal-safe primitives — getpid(), arithmetic via fmt_pid, and a
-    // single write() to a pre-opened fd. Writing the pid to cgroup.procs moves
-    // the child (and every descendant it later forks) into the leaf. The
-    // write error is ignored: an unplaced child runs uncapped rather than
-    // failing the spawn.
-    unsafe {
-        cmd.pre_exec(move || {
-            let mut buf = [0u8; 20];
-            let s = super::fmt_pid(nix::libc::getpid() as i64, &mut buf);
-            let _ = nix::libc::write(
-                fd.as_raw_fd(),
-                s.as_ptr() as *const nix::libc::c_void,
-                s.len(),
-            );
-            Ok(())
-        });
+    if program.contains('/') {
+        return executable(cwd.join(program));
     }
+    let path_var = path_var
+        .map(std::ffi::OsString::from)
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    std::env::split_paths(&path_var).any(|dir| executable(cwd.join(dir).join(program)))
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn exec_in_cgroup(
+    leaf: &std::path::Path,
+    program: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+) -> std::io::Error {
+    use std::{io::Write as _, os::unix::process::CommandExt as _};
+    // A leaf that cannot be joined leaves the program uncapped. The pid goes
+    // in one write, because cgroupfs reads each write as one request.
+    if let Ok(mut procs) = fs::OpenOptions::new()
+        .write(true)
+        .open(leaf.join("cgroup.procs"))
+    {
+        let _ = procs.write_all(format!("{}\n", std::process::id()).as_bytes());
+    }
+    std::process::Command::new(program).args(args).exec()
 }
 
 // macOS: no cgroups.
@@ -353,7 +376,23 @@ pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
     Vec::new()
 }
 #[cfg(not(target_os = "linux"))]
-pub(super) fn join_cgroup(_cmd: &mut std::process::Command, _leaf: &std::path::Path) {}
+pub(super) fn cgroup_command(
+    _leaf: &std::path::Path,
+    program: &str,
+    _cwd: &str,
+    _path_var: Option<&std::ffi::OsStr>,
+) -> anyhow::Result<std::process::Command> {
+    Ok(std::process::Command::new(program))
+}
+#[cfg(not(target_os = "linux"))]
+pub(super) fn exec_in_cgroup(
+    _leaf: &std::path::Path,
+    program: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+) -> std::io::Error {
+    use std::os::unix::process::CommandExt as _;
+    std::process::Command::new(program).args(args).exec()
+}
 
 #[cfg(target_os = "linux")]
 fn read_ppid(pid: u32) -> Option<u32> {
