@@ -100,8 +100,10 @@ pub fn detach(cmd: &mut std::process::Command) {
 }
 
 /// Ends this process the way a child ended, so a parent reads the child's
-/// status. `process::exit` can only report a code, which would make a child a
-/// signal killed look like `exit 143`, so this process dies by that signal.
+/// status. On Unix, `process::exit` can only report a code, so a child killed
+/// by a signal would look like `exit 143`. There, this process dies by the
+/// same signal. On Windows, every status is an exit code, so this process
+/// exits with that code.
 pub fn exit_like(status: std::process::ExitStatus) -> ! {
     imp::exit_like(status)
 }
