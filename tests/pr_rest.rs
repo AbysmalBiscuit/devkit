@@ -305,9 +305,9 @@ fn rest_pr(number: u64, head: &str) -> String {
     .to_string()
 }
 
-/// With a token of its own, devkit reads and requests reviewers over GitHub's
-/// REST API directly, but opens the PR through `gh api`, so a `gh` wrapper on
-/// `PATH` sees every PR devkit opens.
+/// With a token of its own, devkit reads over GitHub's REST API directly, but
+/// opens the PR and requests its reviewers through `gh api`, so a `gh` wrapper
+/// on `PATH` sees every PR write devkit makes.
 #[test]
 fn pr_create_opens_a_pr_through_gh_api_with_a_token() {
     use devkit_common::http::stub::{self, Route};
@@ -368,22 +368,21 @@ fn pr_create_opens_a_pr_through_gh_api_with_a_token() {
     };
     assert_eq!(
         count("POST", "/repos/o/r/pulls"),
-        count("POST", "/repos/o/r/pulls/7/requested_reviewers"),
-        "the create went around gh: {reqs:#?}"
+        0,
+        "a PR write went around gh: {reqs:#?}"
     );
-    let request = reqs
-        .iter()
-        .find(|r| r.method == "POST" && r.path == "/repos/o/r/pulls/7/requested_reviewers")
-        .unwrap_or_else(|| panic!("no direct reviewer request: {reqs:#?}"));
-    assert_eq!(request.header("Authorization"), Some("Bearer t0k"));
-    let body: serde_json::Value = serde_json::from_str(&request.body).unwrap();
-    assert_eq!(body, serde_json::json!({ "reviewers": ["LevValle"] }));
+    assert!(
+        calls.lines().any(|l| l.contains(
+            "--method POST repos/o/r/pulls/7/requested_reviewers -f reviewers[]=LevValle"
+        )),
+        "no reviewer request through gh: {calls}"
+    );
     assert_eq!(count("POST", "/graphql"), 1, "{reqs:#?}");
     assert_eq!(count("GET", "/repos/o/r/pulls?head="), 1, "{reqs:#?}");
     assert_eq!(
         calls.lines().filter(|l| l.starts_with("api ")).count(),
-        1,
-        "a REST call other than the create went through gh: {calls}"
+        2,
+        "a REST call other than the PR writes went through gh: {calls}"
     );
     assert!(
         !calls.contains("pr list"),
