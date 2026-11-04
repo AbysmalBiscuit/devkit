@@ -696,17 +696,18 @@ pub(crate) fn program_options(
 fn without_gh_repo_flags(args: &[Value]) -> Vec<Value> {
     let mut kept = Vec::with_capacity(args.len());
     let mut rest = args.iter();
+    let attached = |text: &str| text.starts_with("--repo=") || text.starts_with("-R");
     while let Some(arg) = rest.next() {
-        match arg.known() {
-            Some("--") => {
+        match arg {
+            Value::Known(text) if text == "--" => {
                 kept.push(arg.clone());
                 kept.extend(rest.cloned());
                 break;
             }
-            Some("-R" | "--repo") => {
+            Value::Known(text) if text == "-R" || text == "--repo" => {
                 rest.next();
             }
-            Some(text) if text.starts_with("--repo=") || text.starts_with("-R") => {}
+            Value::Known(text) | Value::Prefixed(text) if attached(text) => {}
             _ => kept.push(arg.clone()),
         }
     }

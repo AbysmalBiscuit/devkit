@@ -40,7 +40,8 @@ pub enum Value {
     /// [`Value::Known`] path.
     Within(String),
     /// A word that starts with this text, with the rest unknown: an
-    /// assignment `NAME=` whose value is not known.
+    /// assignment `NAME=` or an option such as `--repo=` whose value is not
+    /// known.
     Prefixed(String),
 }
 

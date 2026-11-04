@@ -1012,9 +1012,10 @@ fn glued(left: Value, right: Value) -> Value {
 }
 
 /// A word known only up to `start`. An assignment keeps the name it sets,
-/// so a rule on that variable still sees it.
+/// so a rule on that variable still sees it, and an option keeps its flag,
+/// so `--repo="$R"` still reads as `--repo`.
 fn known_start(start: String) -> Value {
-    if crate::normalize::names_variable(&start) {
+    if crate::normalize::names_variable(&start) || start.starts_with('-') {
         Value::Prefixed(start)
     } else {
         Value::Unknown

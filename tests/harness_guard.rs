@@ -779,7 +779,11 @@ fn a_repo_flag_before_the_gh_subcommand_does_not_pass_the_create_rules() {
         ("gh pr --repo=owner/repo create --fill", "devkit pr create"),
         ("gh pr -Rowner/repo new --fill", "devkit pr create"),
         ("gh -R owner/repo pr create --fill", "devkit pr create"),
+        ("gh pr --repo=\"$R\" create --fill", "devkit pr create"),
+        ("gh pr -R\"$R\" create --fill", "devkit pr create"),
         ("gh issue -R owner/repo create -t t", "devkit ticket create"),
+        ("gh issue --repo=\"$R\" create -t t", "devkit ticket create"),
+        ("gh issue -R\"$R\" create -t t", "devkit ticket create"),
         (
             "gh issue --repo owner/repo create -t t",
             "devkit ticket create",
