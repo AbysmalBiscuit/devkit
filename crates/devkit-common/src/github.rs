@@ -275,14 +275,26 @@ impl Api {
         }
     }
 
-    /// [`Api::rest`] through `gh api --hostname <host>`, whatever token
-    /// devkit holds, so a `gh` wrapper on `PATH` sees the call.
-    pub fn gh_rest(
+    /// A REST write to a pull request: its create, an edit, or a reviewer
+    /// request. The write goes through `gh api` whatever token devkit holds,
+    /// so a `gh` wrapper on `PATH` sees each PR write. With no `gh` to run,
+    /// it goes direct as [`Api::rest`] does.
+    pub fn pr_write(
         &self,
-        method: &Method,
+        method: Method,
         path: &str,
         body: Option<&Value>,
     ) -> Result<Option<Value>> {
+        match self.gh_rest(&method, path, body) {
+            Err(e) if self.token().is_some() && program_missing(&e) => {
+                self.rest_direct(method, path, body)
+            }
+            other => other,
+        }
+    }
+
+    /// [`Api::rest`] through `gh api --hostname <host>`.
+    fn gh_rest(&self, method: &Method, path: &str, body: Option<&Value>) -> Result<Option<Value>> {
         let mut args: Vec<String> = [
             "api",
             "--hostname",
@@ -309,6 +321,15 @@ impl Api {
         self.rest_direct(Method::GET, path, None)?
             .context("GitHub returned 404")
     }
+}
+
+/// Whether `e` is a spawn that found no program to run, so nothing was sent.
+fn program_missing(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 /// `[github] no_graphql` from the resolved config, which

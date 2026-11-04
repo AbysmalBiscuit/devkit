@@ -315,6 +315,69 @@ fn a_body_edit_goes_through_gh_api_with_a_token() {
     );
 }
 
+/// With a token and no `gh` to run, the edit goes straight to GitHub's REST
+/// API. The `PATH` holds `git` alone, so the fake `gh` is out of reach.
+#[cfg(unix)]
+#[test]
+fn a_body_edit_goes_direct_with_a_token_and_no_gh() {
+    use devkit_common::http::stub::{self, Route};
+
+    let fake = project("", LIVE);
+    let pr = serde_json::json!({
+        "number": 7, "state": "open", "merged_at": null,
+        "html_url": "https://github.com/o/r/pull/7", "title": "fix it", "body": LIVE,
+        "head": { "ref": "lev/eng-1-fix", "sha": fake.head(), "repo": { "owner": { "login": "o" } } },
+        "draft": false, "user": { "login": "LevValle" }
+    });
+    let api = stub::serve(vec![
+        Route::new(
+            "POST",
+            "/graphql",
+            403,
+            r#"{"message":"GitHub GraphQL is not available from Claude Code sessions"}"#,
+        ),
+        Route::new("GET", "/repos/o/r/pulls?", 200, &format!("[{pr}]")),
+        Route::new("GET", "/repos/o/r/pulls/7", 200, &pr.to_string()),
+        Route::new("PATCH", "/repos/o/r/pulls/7", 200, &pr.to_string()),
+    ]);
+    let only_git = tempfile::tempdir().unwrap();
+    let git = String::from_utf8(
+        std::process::Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(git.trim(), only_git.path().join("git")).unwrap();
+
+    let out = fake.issue_with_env(
+        &["pr", "edit", "--no-push", "--arg", "proof=1. the new proof"],
+        &[
+            ("GH_TOKEN", "t0k"),
+            ("DEVKIT_TEST_GITHUB_API", &api.url()),
+            ("PATH", &only_git.path().to_string_lossy()),
+        ],
+    );
+
+    let reqs = api.requests();
+    assert!(out.status.success(), "{out:?}\n{reqs:#?}");
+    assert_eq!(fake.calls(), "", "gh ran though it is not on PATH");
+    let patch = reqs
+        .iter()
+        .find(|r| r.method == "PATCH" && r.path == "/repos/o/r/pulls/7")
+        .unwrap_or_else(|| panic!("no direct edit: {reqs:#?}"));
+    assert_eq!(patch.header("Authorization"), Some("Bearer t0k"));
+    let body: serde_json::Value = serde_json::from_str(&patch.body).unwrap();
+    assert_eq!(
+        body["body"].as_str(),
+        Some(
+            LIVE.replace("1. the old proof", "1. the new proof")
+                .as_str()
+        )
+    );
+}
+
 #[test]
 fn a_merged_pr_is_refused() {
     let fake = ghfake::Fake::new(TEMPLATE, &ghfake::Pr {

@@ -725,9 +725,7 @@ impl GithubForge {
     /// `POST /pulls`. A ready PR is opened ready, so no GraphQL-only draft
     /// flip follows. REST takes the head by name in `repo` and finds no fork's
     /// head afterwards, so a branch `origin` pushes to another repository is
-    /// refused before anything is opened. The create goes through `gh api`
-    /// even when devkit holds a token, so a `gh` wrapper that acts on each
-    /// opened PR sees this one too.
+    /// refused before anything is opened. The create is an [`Api::pr_write`].
     fn rest_create(&self, repo: &Repo, pr: &NewPr<'_>, cwd: &Path) -> Result<String> {
         if let Ok(pushed) = super::remote::origin_slug(&cwd.to_string_lossy(), &repo.host)
             && !pushed.eq_ignore_ascii_case(&repo.slug)
@@ -740,8 +738,8 @@ impl GithubForge {
         }
         let created = self
             .api
-            .gh_rest(
-                &Method::POST,
+            .pr_write(
+                Method::POST,
                 &format!("/repos/{}/pulls", repo.slug),
                 Some(&serde_json::json!({
                     "title": pr.title,
@@ -916,9 +914,8 @@ impl Forge for GithubForge {
     }
 
     /// Over REST, which works where GitHub refuses GraphQL, unless there are
-    /// files to upload: only `gh pr edit` uploads them. The REST edit goes
-    /// through `gh api` even when devkit holds a token, so a `gh` wrapper
-    /// that acts on each PR body sees this one too.
+    /// files to upload: only `gh pr edit` uploads them. The REST edit is an
+    /// [`Api::pr_write`].
     fn edit(&self, repo: &Repo, n: u64, edit: &PrEdit<'_>, cwd: &Path) -> Result<()> {
         if edit.attachments.is_empty() {
             let mut fields = serde_json::Map::new();
@@ -929,8 +926,8 @@ impl Forge for GithubForge {
                 fields.insert("body".into(), body.into());
             }
             self.api
-                .gh_rest(
-                    &Method::PATCH,
+                .pr_write(
+                    Method::PATCH,
                     &format!("/repos/{}/pulls/{n}", repo.slug),
                     Some(&Value::Object(fields)),
                 )?
@@ -960,7 +957,7 @@ impl Forge for GithubForge {
 
     fn add_reviewers(&self, repo: &Repo, n: u64, logins: &[String]) -> Result<()> {
         self.api
-            .rest(
+            .pr_write(
                 Method::POST,
                 &format!("/repos/{}/pulls/{n}/requested_reviewers", repo.slug),
                 Some(&serde_json::json!({ "reviewers": logins })),
