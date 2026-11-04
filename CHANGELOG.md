@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.28](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.27...v0.14.28) (2026-11-04)
+
+
+### Features
+
+* **config:** pass --config to devkit children ([26d9aec](https://github.com/AbysmalBiscuit/devkit/commit/26d9aece3439a8af7746f3c07b8298e48b955dc0)), closes [#447](https://github.com/AbysmalBiscuit/devkit/issues/447)
+* **ports:** let a verify run reuse a current server ([56a09e3](https://github.com/AbysmalBiscuit/devkit/commit/56a09e3af99c61022cf61bf328ad9fdfaed9b442)), closes [#379](https://github.com/AbysmalBiscuit/devkit/issues/379)
+* **pr:** read the pr summary from a file ([6d0e959](https://github.com/AbysmalBiscuit/devkit/commit/6d0e95980efeea1f51156f3e8a99568d63c6b568)), closes [#346](https://github.com/AbysmalBiscuit/devkit/issues/346)
+* **todo:** add todo prune to remove done todos ([b383278](https://github.com/AbysmalBiscuit/devkit/commit/b38327811484ff9d5de2f2f4e4b49c365f467a68)), closes [#457](https://github.com/AbysmalBiscuit/devkit/issues/457)
+
+
+### Bug Fixes
+
+* **command:** match gh rules past a -R/--repo flag ([d4ffddc](https://github.com/AbysmalBiscuit/devkit/commit/d4ffddc2dad4ac1d346f280d750998ff4f334722)), closes [#415](https://github.com/AbysmalBiscuit/devkit/issues/415)
+
 ## [0.14.27](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.26...v0.14.27) (2026-11-04)
 
 

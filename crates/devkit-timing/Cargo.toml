@@ -2,7 +2,7 @@
 name = "devkit-timing"
 description = "Opt-in timing of devkit's subprocess and network IO"
 edition.workspace = true
-version = "0.14.27" # x-release-please-version
+version = "0.14.28" # x-release-please-version
 
 [lints]
 workspace = true
