@@ -98,23 +98,21 @@ mod tests {
 
     #[test]
     fn routes_through_systemd_only_when_unit_present() {
-        // Use a unique temp dir so the test does not observe the developer's
-        // real ~/.config/systemd/user/devkitd.service — both branches
-        // are asserted.
+        // A unique temp dir keeps the test from observing the developer's real
+        // ~/.config/systemd/user/devkitd.service, so both branches are
+        // asserted.
         let tmp = tempfile::tempdir().unwrap();
 
-        // Point XDG_CONFIG_HOME at the empty temp dir: no unit present ->
-        // false.
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-        assert!(!super::use_systemd_unit(), "no unit yet — should be false");
+        devkit_git::child_env::child_env()
+            .set("XDG_CONFIG_HOME", tmp.path())
+            .run(|| {
+                assert!(!super::use_systemd_unit(), "no unit yet, should be false");
 
-        // Write the unit file and assert the positive branch.
-        let unit = tmp.path().join("systemd/user/devkitd.service");
-        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
-        std::fs::write(&unit, "").unwrap();
-        assert!(super::use_systemd_unit(), "unit present — should be true");
-
-        // Restore env and clean up.
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+                let config_home = std::env::var_os("XDG_CONFIG_HOME").unwrap();
+                let unit = std::path::Path::new(&config_home).join("systemd/user/devkitd.service");
+                std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+                std::fs::write(&unit, "").unwrap();
+                assert!(super::use_systemd_unit(), "unit present, should be true");
+            });
     }
 }

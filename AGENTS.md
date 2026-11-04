@@ -80,6 +80,7 @@ Each rule's reasoning is documented at the named site. Read it before changing t
 - TDD: the failing test comes first.
 - Test scratch comes from `tempfile`, bound for as long as the path is used. Tests that drive `gh` use `tests/common/ghfake.rs`.
 - Tests that spawn or reap processes poll for the expected state instead of sleeping.
+- Tests do not call `std::env::set_var` or `std::env::remove_var`. A test body that needs its own environment runs through `devkit_git::child_env`. A test that spawns its own probes or concurrent workers sets their variables with `Command::env` and `Command::env_remove`.
 - `anyhow` with `.context()` for errors.
 - Project-specific values come from config, never from code. Tokens resolve through `devkit_common::secrets`.
 - Every user-facing verb is a `devkit` subcommand.

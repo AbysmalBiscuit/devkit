@@ -2,7 +2,10 @@
 //! flock-backed registry: the require_live gate, the user-override waiver,
 //! holder-scoped allocation, and fresh per-call resolution.
 
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+};
 
 use devkit_common::vcs::Worktree;
 use devkit_config::{Config, TaskConfig};
@@ -46,15 +49,18 @@ fn build_task() -> TaskConfig {
 
 #[test]
 fn gate_waiver_scoping_and_lazy_resolution() {
-    // The registry path comes from process-global env, so every scenario runs
-    // sequentially inside this single test.
+    // The registry path comes from the environment.
     let tmp = tempfile::tempdir().unwrap();
-    unsafe {
-        std::env::set_var("HOME", tmp.path());
-        std::env::set_var("XDG_STATE_HOME", tmp.path());
-    }
-    let mine = tmp.path().join("wt-mine");
-    let foreign = tmp.path().join("wt-foreign");
+    devkit_git::child_env::child_env()
+        .set("HOME", tmp.path())
+        .set("XDG_STATE_HOME", tmp.path())
+        .run(gate_waiver_scoping_and_lazy_resolution_body);
+}
+
+fn gate_waiver_scoping_and_lazy_resolution_body() {
+    let tmp = PathBuf::from(std::env::var_os("XDG_STATE_HOME").unwrap());
+    let mine = tmp.join("wt-mine");
+    let foreign = tmp.join("wt-foreign");
     std::fs::create_dir_all(&mine).unwrap();
     std::fs::create_dir_all(&foreign).unwrap();
     let mine_s = mine.to_str().unwrap();
@@ -99,7 +105,7 @@ fn gate_waiver_scoping_and_lazy_resolution() {
         mine_s,
         Role::Workspace,
         std::process::id(),
-        tmp.path().join("api.log"),
+        tmp.join("api.log"),
     )
     .unwrap();
     let plan = task::resolve_step(&cfg, &cat, &here, mine_s, "build", &none, &none).unwrap();
@@ -118,7 +124,7 @@ fn gate_waiver_scoping_and_lazy_resolution() {
         mine_s,
         Role::Workspace,
         std::process::id(),
-        tmp.path().join("api.log"),
+        tmp.join("api.log"),
     )
     .unwrap();
     let plan = task::resolve_step(&cfg, &cat, &here, mine_s, "build", &none, &none).unwrap();

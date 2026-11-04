@@ -1,172 +1,146 @@
-//! `std::env::set_var` is unsafe because `Command::spawn` reads the
-//! environment concurrently — a hazard `cargo test`'s multithreaded unit-test
-//! binary cannot rule out. An integration test file compiles to its own
-//! binary, and every mutation below happens inside one `#[test]` function, so
-//! no other thread can be reading the environment while it is set.
+//! Every variable in `REDIRECTING_VARS` that could repoint a git call at
+//! another repository, or inject config into it, must have no effect on what
+//! the builder resolves.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use devkit_git::Git;
+use devkit_git::{Git, child_env::child_env};
+use tempfile::TempDir;
 
-/// Every variable in `REDIRECTING_VARS` that could repoint a git call at
-/// another repository, or inject config into it, must have no effect on what
-/// the builder resolves. Kept as one test, each case set and cleared before
-/// the next begins, because the variables are process-global and parallel
-/// `#[test]` functions in this binary would race on them. A failure here
-/// collects every regressed variable into one assertion rather than stopping
-/// at the first, so cutting `REDIRECTING_VARS` down names all of them at once.
+fn repo() -> TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    Git::fixture(dir.path())
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
+    dir
+}
+
+fn canonical(path: impl AsRef<Path>) -> PathBuf {
+    std::fs::canonicalize(path).unwrap()
+}
+
+/// GIT_DIR redirects git to another repository's git-dir.
 #[test]
-fn redirecting_vars_cannot_change_resolution() {
-    let repo = tempfile::tempdir().unwrap();
-    Git::fixture(repo.path())
-        .args(["init", "-q", "-b", "main"])
-        .output()
-        .unwrap();
+fn git_dir_cannot_change_resolution() {
+    let decoy = repo();
+    child_env()
+        .set("GIT_DIR", decoy.path().join(".git"))
+        .run(|| {
+            let repo = repo();
+            let out = Git::at(repo.path())
+                .args(["rev-parse", "--absolute-git-dir"])
+                .output();
+            assert_eq!(
+                canonical(out.unwrap().trim()),
+                canonical(repo.path().join(".git"))
+            );
+        });
+}
 
-    let decoy = tempfile::tempdir().unwrap();
-    Git::fixture(decoy.path())
-        .args(["init", "-q", "-b", "main"])
-        .output()
-        .unwrap();
+/// GIT_COMMON_DIR redirects the shared repository state (refs, objects, config)
+/// that every worktree of a repository reads. A linked worktree is where devkit
+/// resolves a project's config from, so that is the setting this checks it in.
+#[test]
+fn git_common_dir_cannot_change_resolution() {
+    let decoy = repo();
+    child_env()
+        .set("GIT_COMMON_DIR", decoy.path().join(".git"))
+        .run(|| {
+            let repo = repo();
+            let linked = tempfile::tempdir().unwrap();
+            let linked = linked.path().join("wt");
+            Git::fixture(repo.path())
+                .args([
+                    "worktree",
+                    "add",
+                    "-q",
+                    linked.to_str().unwrap(),
+                    "-b",
+                    "side",
+                ])
+                .output()
+                .unwrap();
+            let out = Git::at(&linked)
+                .args(["rev-parse", "--git-common-dir"])
+                .output()
+                .unwrap();
+            let reported = Path::new(out.trim());
+            let common_dir = if reported.is_absolute() {
+                reported.to_path_buf()
+            } else {
+                linked.join(reported)
+            };
+            assert_eq!(canonical(common_dir), canonical(repo.path().join(".git")));
+        });
+}
 
-    let mut failures = Vec::new();
-
-    // GIT_DIR redirects git to another repository's git-dir.
-    with_env(&[("GIT_DIR", decoy.path().join(".git"))], || {
-        let out = Git::at(repo.path())
-            .args(["rev-parse", "--absolute-git-dir"])
-            .output();
-        let git_dir = std::fs::canonicalize(out.unwrap().trim()).unwrap();
-        if git_dir != std::fs::canonicalize(repo.path().join(".git")).unwrap() {
-            failures.push("GIT_DIR");
-        }
-    });
-
-    // GIT_COMMON_DIR redirects the shared repository state (refs, objects,
-    // config) that every worktree of a repository reads. A linked worktree is
-    // where devkit resolves a project's config from, so that is the setting
-    // this checks it in.
-    let linked = tempfile::tempdir().unwrap();
-    let linked = linked.path().join("wt");
-    Git::fixture(repo.path())
-        .args([
-            "worktree",
-            "add",
-            "-q",
-            linked.to_str().unwrap(),
-            "-b",
-            "side",
-        ])
-        .output()
-        .unwrap();
-    with_env(&[("GIT_COMMON_DIR", decoy.path().join(".git"))], || {
-        let out = Git::at(&linked)
-            .args(["rev-parse", "--git-common-dir"])
-            .output()
-            .unwrap();
-        let reported = Path::new(out.trim());
-        let common_dir = std::fs::canonicalize(if reported.is_absolute() {
-            reported.to_path_buf()
-        } else {
-            linked.join(reported)
-        })
-        .unwrap();
-        if common_dir != std::fs::canonicalize(repo.path().join(".git")).unwrap() {
-            failures.push("GIT_COMMON_DIR");
-        }
-    });
-
-    // GIT_WORK_TREE redirects which directory git treats as the checkout's
-    // top level.
-    with_env(&[("GIT_WORK_TREE", decoy.path())], || {
+/// GIT_WORK_TREE redirects which directory git treats as the checkout's top
+/// level.
+#[test]
+fn git_work_tree_cannot_change_resolution() {
+    let decoy = repo();
+    child_env().set("GIT_WORK_TREE", decoy.path()).run(|| {
+        let repo = repo();
         let out = Git::at(repo.path())
             .args(["rev-parse", "--show-toplevel"])
             .output();
-        let toplevel = std::fs::canonicalize(out.unwrap().trim()).unwrap();
-        if toplevel != std::fs::canonicalize(repo.path()).unwrap() {
-            failures.push("GIT_WORK_TREE");
-        }
+        assert_eq!(canonical(out.unwrap().trim()), canonical(repo.path()));
     });
+}
 
-    // GIT_INDEX_FILE redirects which staged state git reads and writes.
+/// GIT_INDEX_FILE redirects which staged state git reads and writes.
+#[test]
+fn git_index_file_cannot_change_resolution() {
+    let decoy = repo();
     std::fs::write(decoy.path().join("decoy-only.txt"), "x").unwrap();
     Git::fixture(decoy.path())
         .args(["add", "decoy-only.txt"])
         .output()
         .unwrap();
-    with_env(
-        &[("GIT_INDEX_FILE", decoy.path().join(".git/index"))],
-        || {
+    child_env()
+        .set("GIT_INDEX_FILE", decoy.path().join(".git/index"))
+        .run(|| {
+            let repo = repo();
             let out = Git::at(repo.path()).args(["ls-files"]).output().unwrap();
-            if out.contains("decoy-only.txt") {
-                failures.push("GIT_INDEX_FILE");
-            }
-        },
-    );
+            assert!(!out.contains("decoy-only.txt"), "{out}");
+        });
+}
 
-    // GIT_CONFIG_COUNT, with a GIT_CONFIG_KEY_0/GIT_CONFIG_VALUE_0 pair, can
-    // set an arbitrary config value — core.fsmonitor turns into a command git
-    // executes on every invocation were this honored.
-    with_env(
-        &[
-            ("GIT_CONFIG_COUNT", "1".to_string()),
-            ("GIT_CONFIG_KEY_0", "core.fsmonitor".to_string()),
-            (
-                "GIT_CONFIG_VALUE_0",
-                "touch injected-by-git-config-count".to_string(),
-            ),
-        ],
-        || {
+/// GIT_CONFIG_COUNT, with a GIT_CONFIG_KEY_0/GIT_CONFIG_VALUE_0 pair, can set
+/// an arbitrary config value. core.fsmonitor would turn into a command git
+/// executes on every invocation were this honored.
+#[test]
+fn git_config_count_cannot_inject_config() {
+    child_env()
+        .set("GIT_CONFIG_COUNT", "1")
+        .set("GIT_CONFIG_KEY_0", "core.fsmonitor")
+        .set("GIT_CONFIG_VALUE_0", "touch injected-by-git-config-count")
+        .run(|| {
+            let repo = repo();
             let out = Git::fixture(repo.path())
                 .args(["config", "core.fsmonitor"])
                 .output();
-            if out.is_ok() {
-                failures.push("GIT_CONFIG_COUNT");
-            }
-        },
-    );
-
-    // GIT_CEILING_DIRECTORIES can stop repository discovery before it reaches
-    // an ancestor .git, turning a legitimate call into a false "not a git
-    // repository".
-    let sub = repo.path().join("sub");
-    std::fs::create_dir(&sub).unwrap();
-    with_env(&[("GIT_CEILING_DIRECTORIES", repo.path())], || {
-        let out = Git::at(&sub)
-            .args(["rev-parse", "--show-toplevel"])
-            .output();
-        match out {
-            Ok(toplevel) => {
-                let toplevel = std::fs::canonicalize(toplevel.trim()).unwrap();
-                if toplevel != std::fs::canonicalize(repo.path()).unwrap() {
-                    failures.push("GIT_CEILING_DIRECTORIES");
-                }
-            }
-            Err(_) => failures.push("GIT_CEILING_DIRECTORIES"),
-        }
-    });
-
-    assert!(
-        failures.is_empty(),
-        "these variables changed what the builder resolved: {failures:?}"
-    );
+            assert!(out.is_err(), "{out:?}");
+        });
 }
 
-/// Set each `(key, value)` pair, run `body`, then remove every key —
-/// regardless of whether `body` panics, so a failing case never leaves the
-/// environment poisoned for the ones after it.
-///
-/// SAFETY: this is the only place in the process mutating the environment;
-/// see the module docs.
-fn with_env<V: AsRef<std::ffi::OsStr>>(vars: &[(&str, V)], body: impl FnOnce()) {
-    for (key, value) in vars {
-        unsafe { std::env::set_var(key, value) };
-    }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
-    for (key, _) in vars {
-        unsafe { std::env::remove_var(key) };
-    }
-    if let Err(e) = result {
-        std::panic::resume_unwind(e);
-    }
+/// GIT_CEILING_DIRECTORIES can stop repository discovery before it reaches an
+/// ancestor .git, turning a legitimate call into a false "not a git
+/// repository". The ceiling has to be the repository itself, so the variable
+/// names a repository the parent made, and the body runs against it.
+#[test]
+fn git_ceiling_directories_cannot_change_resolution() {
+    let repo = repo();
+    std::fs::create_dir(repo.path().join("sub")).unwrap();
+    child_env()
+        .set("GIT_CEILING_DIRECTORIES", repo.path())
+        .run(|| {
+            let repo = PathBuf::from(std::env::var_os("GIT_CEILING_DIRECTORIES").unwrap());
+            let toplevel = Git::at(&repo.join("sub"))
+                .args(["rev-parse", "--show-toplevel"])
+                .output()
+                .unwrap();
+            assert_eq!(canonical(toplevel.trim()), canonical(&repo));
+        });
 }

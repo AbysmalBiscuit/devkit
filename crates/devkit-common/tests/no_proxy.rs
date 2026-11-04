@@ -25,24 +25,26 @@ fn serve(body: &'static str) -> u16 {
     port
 }
 
-/// One sequential test: the proxy variables are process-global and
-/// `http::client` reads them once, on first use.
+/// `http::client` reads the proxy variables once, on first use. The parent
+/// serves the proxy, because the child's variables name its port before the
+/// child starts.
 #[test]
 fn a_host_no_proxy_names_is_reached_directly_and_others_through_the_proxy() {
-    let origin = serve("direct");
     let proxy = serve("proxied");
-    unsafe {
-        std::env::set_var("HTTP_PROXY", format!("http://127.0.0.1:{proxy}"));
-        std::env::set_var("NO_PROXY", "127.0.0.1");
-    }
-    let get = |host: &str| {
-        devkit_common::http::client()
-            .get(format!("http://{host}:{origin}/"))
-            .send()
-            .unwrap()
-            .text()
-            .unwrap()
-    };
-    assert_eq!(get("127.0.0.1"), "direct");
-    assert_eq!(get("localhost"), "proxied");
+    devkit_git::child_env::child_env()
+        .set("HTTP_PROXY", format!("http://127.0.0.1:{proxy}"))
+        .set("NO_PROXY", "127.0.0.1")
+        .run(|| {
+            let origin = serve("direct");
+            let get = |host: &str| {
+                devkit_common::http::client()
+                    .get(format!("http://{host}:{origin}/"))
+                    .send()
+                    .unwrap()
+                    .text()
+                    .unwrap()
+            };
+            assert_eq!(get("127.0.0.1"), "direct");
+            assert_eq!(get("localhost"), "proxied");
+        });
 }

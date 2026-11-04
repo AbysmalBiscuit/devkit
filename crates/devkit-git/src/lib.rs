@@ -11,6 +11,8 @@
 //! The project's repository is reached through `devkit_common::vcs` instead.
 
 mod backend;
+#[cfg(any(test, feature = "test-support"))]
+pub mod child_env;
 mod commit;
 #[cfg(any(test, feature = "test-support"))]
 pub mod template;

@@ -69,33 +69,36 @@ fn bundled_only() -> reqwest::blocking::Client {
         .unwrap()
 }
 
-/// One sequential test: `SSL_CERT_FILE` is process-global and
-/// `http::client` reads it once, on first use.
+/// `http::client` reads `SSL_CERT_FILE` once, on first use.
 #[test]
 fn ssl_cert_file_ca_is_trusted_and_an_untrusted_one_is_named() {
     let ca = fixture("ca.pem");
-    unsafe { std::env::set_var("SSL_CERT_FILE", &ca) };
-    let url = format!("https://127.0.0.1:{}/", serve());
+    devkit_git::child_env::child_env()
+        .set("SSL_CERT_FILE", &ca)
+        .run(|| {
+            let url = format!("https://127.0.0.1:{}/", serve());
 
-    let body = devkit_common::http::send(devkit_common::http::client().get(&url))
-        .expect("a CA named by SSL_CERT_FILE must be trusted")
-        .text()
-        .unwrap();
-    assert_eq!(body, "ok");
+            let body = devkit_common::http::send(devkit_common::http::client().get(&url))
+                .expect("a CA named by SSL_CERT_FILE must be trusted")
+                .text()
+                .unwrap();
+            assert_eq!(body, "ok");
 
-    // The bundled roots alone reject the same server, as a proxy's CA is
-    // rejected by a client that never read the platform store.
-    let err = devkit_common::http::send(bundled_only().get(&url)).unwrap_err();
-    let msg = format!("{err:#}");
-    assert!(msg.contains("not trusted"), "{msg}");
-    assert!(
-        msg.contains(&format!("SSL_CERT_FILE={}", ca.display())),
-        "{msg}"
-    );
-    assert!(err.is::<devkit_common::http::UntrustedCertificate>());
-    assert!(
-        err.downcast_ref::<reqwest::Error>()
-            .is_some_and(reqwest::Error::is_connect),
-        "the reqwest error must stay downcastable"
-    );
+            // The bundled roots alone reject the same server, as a proxy's CA
+            // is rejected by a client that never read the platform
+            // store.
+            let err = devkit_common::http::send(bundled_only().get(&url)).unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("not trusted"), "{msg}");
+            assert!(
+                msg.contains(&format!("SSL_CERT_FILE={}", ca.display())),
+                "{msg}"
+            );
+            assert!(err.is::<devkit_common::http::UntrustedCertificate>());
+            assert!(
+                err.downcast_ref::<reqwest::Error>()
+                    .is_some_and(reqwest::Error::is_connect),
+                "the reqwest error must stay downcastable"
+            );
+        });
 }
