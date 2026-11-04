@@ -99,15 +99,23 @@ fn needed_by_open(all: &[Todo]) -> HashSet<&str> {
     needed
 }
 
-/// Removes `todos` from `store` and returns a change for each one it removed.
-pub fn remove(store: &impl TodoStore, todos: &[Todo]) -> anyhow::Result<Vec<StatusChange>> {
-    let mut changes = Vec::new();
+/// Removes `todos` from `store` in batches, and hands `removed` the changes of
+/// each batch as it lands, so a later failed batch loses no earlier report.
+/// Returns how many todos it removed.
+pub fn remove(
+    store: &impl TodoStore,
+    todos: &[Todo],
+    mut removed: impl FnMut(&[StatusChange]) -> anyhow::Result<()>,
+) -> anyhow::Result<usize> {
+    let mut count = 0;
     for batch in todos.chunks(BATCH) {
-        changes.extend(store.apply(&Edit::Prune {
+        let changes = store.apply(&Edit::Prune {
             ids: batch.iter().map(|todo| todo.id.clone()).collect(),
-        })?);
+        })?;
+        removed(&changes)?;
+        count += changes.len();
     }
-    Ok(changes)
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -162,15 +170,56 @@ mod tests {
             todo("a", done(), Some("b")),
             todo("b", done(), Some("a")),
         ];
-        assert!(
-            prunable(
-                &all,
-                all.to_vec(),
-                Window::default(),
-                &TicketSyncConfig::default()
-            )
-            .is_empty()
-        );
+        assert!(prunable(&all, all.to_vec(), Window::default(), &Default::default()).is_empty());
+    }
+
+    /// Removes every todo of its first prune, and fails every later one.
+    struct FailsAfterOneBatch(std::cell::Cell<usize>);
+
+    impl TodoStore for FailsAfterOneBatch {
+        fn list(&self, _: &crate::Filter) -> anyhow::Result<Vec<Todo>> {
+            Ok(Vec::new())
+        }
+
+        fn get(&self, _: &str) -> anyhow::Result<Option<Todo>> {
+            Ok(None)
+        }
+
+        fn add(&self, _: crate::NewTodo) -> anyhow::Result<String> {
+            anyhow::bail!("unused")
+        }
+
+        fn apply(&self, edit: &Edit) -> anyhow::Result<Vec<StatusChange>> {
+            let Edit::Prune { ids } = edit else {
+                anyhow::bail!("unused");
+            };
+            self.0.set(self.0.get() + 1);
+            if self.0.get() > 1 {
+                anyhow::bail!("store went away");
+            }
+            Ok(ids
+                .iter()
+                .map(|id| StatusChange::of(&todo(id, done(), None), None))
+                .collect())
+        }
+    }
+
+    #[test]
+    fn a_failed_batch_still_reports_the_batches_before_it() {
+        let todos: Vec<Todo> = (0..BATCH + 1)
+            .map(|n| todo(&n.to_string(), done(), None))
+            .collect();
+        let mut reported = Vec::new();
+
+        let err = remove(&FailsAfterOneBatch(Default::default()), &todos, |changes| {
+            reported.extend(changes.iter().map(|c| c.todo.clone()));
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("went away"), "{err:#}");
+        assert_eq!(reported.len(), BATCH);
+        assert_eq!(reported[0], "0");
     }
 
     #[test]
@@ -180,14 +229,6 @@ mod tests {
         let mut unset = todo("unset", done(), None);
         unset.modified = None;
         let all = [unread, unset];
-        assert!(
-            prunable(
-                &all,
-                all.to_vec(),
-                Window::default(),
-                &TicketSyncConfig::default()
-            )
-            .is_empty()
-        );
+        assert!(prunable(&all, all.to_vec(), Window::default(), &Default::default()).is_empty());
     }
 }

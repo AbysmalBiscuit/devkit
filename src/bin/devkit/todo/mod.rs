@@ -1473,10 +1473,12 @@ fn prune(
             return Ok(false);
         }
     }
-    let changes = pruning::remove(fence.store, &todos)?;
-    let removed: Vec<&str> = changes.iter().map(|change| change.todo.as_str()).collect();
-    NativeMap::at(devkit_todo::state_dir()?).forget_all(&removed)?;
-    println!("removed {} done todos", removed.len());
+    let native = NativeMap::at(devkit_todo::state_dir()?);
+    let removed = pruning::remove(fence.store, &todos, |changes| {
+        let ids: Vec<&str> = changes.iter().map(|change| change.todo.as_str()).collect();
+        native.forget_all(&ids)
+    })?;
+    println!("removed {removed} done todos");
     Ok(true)
 }
 

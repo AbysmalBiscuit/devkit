@@ -437,7 +437,7 @@ pub fn prune_removes_only_todos_still_done(s: &impl TodoStore) {
     set(s, &claimed, StatusKind::InProgress, "S").unwrap();
 
     let named = [stale.as_slice(), &[get(s, &pending), get(s, &claimed)]].concat();
-    let changes = crate::prune::remove(s, &named).unwrap();
+    let changes = prune_all(s, &named);
 
     let mut removed: Vec<&str> = changes.iter().map(|c| c.todo.as_str()).collect();
     removed.sort();
@@ -451,8 +451,20 @@ pub fn prune_removes_only_todos_still_done(s: &impl TodoStore) {
     assert_eq!(get(s, &pending).status, Status::Pending);
     assert_eq!(get(s, &claimed).status, in_progress("S"));
 
-    let again = crate::prune::remove(s, &stale[..2]).unwrap();
+    let again = prune_all(s, &stale[..2]);
     assert!(again.is_empty(), "{again:?}");
+}
+
+/// Every change [`crate::prune::remove`] reports for `todos`.
+fn prune_all(s: &impl TodoStore, todos: &[Todo]) -> Vec<StatusChange> {
+    let mut changes = Vec::new();
+    let count = crate::prune::remove(s, todos, |batch| {
+        changes.extend_from_slice(batch);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(count, changes.len());
+    changes
 }
 
 pub fn prune_bounds_a_last_change_inclusively(s: &impl TodoStore) {
