@@ -208,10 +208,11 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 /// # assert_eq!(glob.args, ["**", "*nitro", "dev"]);
 /// ```
 ///
-/// `args` matches the typed arguments after the program's own global options
-/// are removed, so `git -C /repo worktree add` fires the first rule and
-/// `git worktree list` does not. For `gh`, these options are `-R` and
-/// `--repo`, so `gh pr -R owner/repo create` matches `["pr", "create"]`. In the
+/// `args` matches the typed arguments, and the same arguments after the
+/// program's own global options are removed, so `git -C /repo worktree add`
+/// fires the first rule and `git worktree list` does not. For `gh`, these
+/// options are `-R` and `--repo`, so `gh pr -R owner/repo create` matches
+/// `["pr", "create"]` and `["**", "--repo", "owner/repo"]`. In the
 /// second rule, `**` skips any flags before the server and `*nitro` matches the
 /// binary at any path, so it refuses `bun --filter=api nitro dev` and allows
 /// `bun nitro build`.

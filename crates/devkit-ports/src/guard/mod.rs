@@ -92,7 +92,13 @@ fn rule_match(inv: &Invocation, rule: &CommandRule, own_binary: bool) -> Match {
         .iter()
         .filter_map(|w| w.split_first())
         .map(|(program, args)| program_match(program, args, rule));
-    let inner = (!own_binary).then(|| program_match(&inv.program, &inv.semantic_args, rule));
+    let inner = (!own_binary).then(|| {
+        program_match(&inv.program, &inv.semantic_args, rule).max(program_match(
+            &inv.program,
+            &inv.args,
+            rule,
+        ))
+    });
     wrapped.chain(inner).max().unwrap_or(Match::No)
 }
 

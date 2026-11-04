@@ -826,6 +826,40 @@ fn a_powershell_repo_flag_before_the_gh_subcommand_does_not_pass_the_create_rule
 }
 
 #[test]
+fn a_rule_naming_the_gh_repo_flag_still_matches() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.prod-merge]
+programs = ["gh"]
+args = ["**", "--repo", "acme/prod"]
+reason = "merge prod PRs through the release train"
+"#,
+    );
+    for command in [
+        "gh pr merge 9 --repo acme/prod",
+        "gh pr --repo acme/prod merge 9",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("release train"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+    let other = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("gh pr merge 9 --repo acme/dev"),
+    );
+    assert!(!denied(&other), "{}", deny_reason(&other));
+}
+
+#[test]
 fn a_repo_flag_before_a_read_only_gh_subcommand_still_passes() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(GH_ISSUE_CREATE);
