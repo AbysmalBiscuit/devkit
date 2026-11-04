@@ -212,9 +212,20 @@ impl Ledger {
     }
 
     /// Record that the server `pid` on `port` launched from `origin`,
-    /// replacing what an earlier server on that port recorded.
-    pub fn record_origin(&self, port: u16, pid: u32, origin: &Origin) -> Result<()> {
+    /// replacing what an earlier server on that port recorded. `None` removes
+    /// the earlier record, so a later process with a recycled pid cannot
+    /// match it.
+    pub fn set_origin(&self, port: u16, pid: u32, origin: Option<&Origin>) -> Result<()> {
         let dir = self.dir.join("origins");
+        let path = dir.join(format!("{port}.json"));
+        let Some(origin) = origin else {
+            return match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    Err(e).with_context(|| format!("removing {}", path.display()))
+                }
+                _ => Ok(()),
+            };
+        };
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let mut tmp = tempfile::NamedTempFile::new_in(&dir)
             .with_context(|| format!("creating an origin in {}", dir.display()))?;
@@ -222,7 +233,6 @@ impl Ledger {
             pid,
             origin: origin.clone(),
         })?;
-        let path = dir.join(format!("{port}.json"));
         tmp.persist(&path)
             .with_context(|| format!("writing {}", path.display()))?;
         Ok(())
@@ -709,6 +719,23 @@ mod tests {
     #[test]
     fn an_uncaptured_tail_is_none() {
         assert_eq!(Tail::default().lines(), None);
+    }
+
+    /// A process that reuses an earlier server's pid on the same port must
+    /// not inherit that server's origin when it launched with none.
+    #[test]
+    fn a_launch_with_no_origin_clears_the_ports_earlier_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::at(dir.path());
+        let stale = Origin {
+            commit: "c0ffee".into(),
+            plan: "sha256:00".into(),
+        };
+        ledger.set_origin(4100, 42, Some(&stale)).unwrap();
+        assert_eq!(ledger.origin(4100, 42), Some(stale));
+        ledger.set_origin(4100, 42, None).unwrap();
+        assert_eq!(ledger.origin(4100, 42), None);
+        ledger.set_origin(4100, 42, None).unwrap();
     }
 
     #[test]

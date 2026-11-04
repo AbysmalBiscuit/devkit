@@ -397,11 +397,12 @@ fn recorded_origin(port: u16, pid: u32) -> Option<Origin> {
     Ledger::live().ok()?.origin(port, pid)
 }
 
-/// Record `origin` for the server `pid` on `port`. A failure leaves the
-/// server with no origin, which no verify run trusts.
+/// Record `origin` for the server `pid` on `port`, which this launch
+/// spawned. A failure leaves the server with no origin, which no verify run
+/// trusts.
 fn record_origin(port: u16, pid: u32, origin: Option<Origin>) {
-    if let (Some(origin), Ok(ledger)) = (origin, Ledger::live()) {
-        let _ = ledger.record_origin(port, pid, &origin);
+    if let Ok(ledger) = Ledger::live() {
+        let _ = ledger.set_origin(port, pid, origin.as_ref());
     }
 }
 
