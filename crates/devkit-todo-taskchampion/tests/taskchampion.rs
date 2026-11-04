@@ -258,11 +258,8 @@ fn get_by_full_id_reads_only_that_task() {
     assert_eq!(store.get(&id).unwrap().unwrap().description, "a");
 }
 
-#[test]
-fn get_by_prefix_and_release_read_only_open_tasks() {
-    let dir = tempfile::tempdir().unwrap();
-    let data = dir.path().join("tc");
-    let store = TaskchampionStore::at(data.clone());
+/// A todo on `r.main` that `s1` claims.
+fn claimed(store: &TaskchampionStore) -> String {
     let id = store.add(new(Some("r.main"), "a")).unwrap();
     store
         .apply(&Edit::SetStatus {
@@ -271,8 +268,34 @@ fn get_by_prefix_and_release_read_only_open_tasks() {
             actor: devkit_todo::Holder::new("s1"),
         })
         .unwrap();
+    id
+}
+
+#[test]
+fn get_by_prefix_reads_only_matching_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let id = claimed(&store);
     unreadable_task(&data, false);
     assert_eq!(store.get(&id[..8]).unwrap().unwrap().id, id);
+}
+
+#[test]
+fn release_reads_no_closed_task_in_the_working_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let id = claimed(&store);
+    let closed = store.add(new(Some("r.main"), "closed")).unwrap();
+    store
+        .apply(&Edit::SetStatus {
+            id: closed,
+            to: devkit_todo::StatusKind::Completed,
+            actor: devkit_todo::Holder::new("s1"),
+        })
+        .unwrap();
+    unreadable_task(&data, true);
     let released = store
         .apply(&Edit::ReleaseAll {
             holder: devkit_todo::Holder::new("s1"),

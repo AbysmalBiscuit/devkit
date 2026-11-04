@@ -269,6 +269,27 @@ impl TaskchampionStore {
         })
     }
 
+    /// The uuids of the pending tasks with a start time, each a claim. SQLite
+    /// filters the rows, so devkit decodes no closed task. A row whose data
+    /// is not JSON, which taskchampion cannot read either, never matches.
+    fn started_uuids(&self) -> Result<Vec<Uuid>> {
+        let db = rusqlite::Connection::open_with_flags(
+            self.data_dir.join("taskchampion.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .with_context(|| format!("opening the todo replica at {}", self.data_dir.display()))?;
+        let mut query = db.prepare(
+            "SELECT uuid FROM tasks WHERE CASE WHEN json_valid(data) THEN \
+             json_extract(data, '$.status') = 'pending' \
+             AND json_extract(data, '$.start') IS NOT NULL END",
+        )?;
+        let uuids = query
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|uuid| uuid.ok().and_then(|u| Uuid::try_parse(&u).ok()))
+            .collect();
+        Ok(uuids)
+    }
+
     async fn open(&self) -> Result<Replica> {
         let storage = SqliteStorage::new(&self.data_dir, AccessMode::ReadWrite, true)
             .await
@@ -634,7 +655,10 @@ impl TodoStore for TaskchampionStore {
                 }
                 let mut ops = Operations::new();
                 let mut changes = Vec::new();
-                for mut task in replica.pending_task_data().await? {
+                for uuid in self.started_uuids()? {
+                    let Some(mut task) = replica.get_task_data(uuid).await? else {
+                        continue;
+                    };
                     let Some(todo) = Self::todo_of(&task) else {
                         continue;
                     };

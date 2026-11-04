@@ -6,6 +6,7 @@ version = "0.14.26" # x-release-please-version
 
 [dependencies]
 anyhow.workspace = true
+rusqlite.workspace = true
 chrono.workspace = true
 taskchampion.workspace = true
 tokio.workspace = true
@@ -15,7 +16,6 @@ serde.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-rusqlite.workspace = true
 devkit-common = { workspace = true, features = ["test-support"] }
 devkit-todo = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
