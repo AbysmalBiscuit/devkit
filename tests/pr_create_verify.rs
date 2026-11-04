@@ -1270,6 +1270,14 @@ fn assert_refused_for_reusing_srv(p: &ghfake::Fake) {
     assert!(!opened(p), "{}", p.calls());
 }
 
+#[test]
+fn a_server_launched_on_a_dirty_tree_records_no_origin() {
+    let p = serving_project(39220);
+    std::fs::write(p.project().join("untracked.txt"), "dirty\n").unwrap();
+    let _srv = Srv::up(&p);
+    assert_eq!(srv_origin(&p), None);
+}
+
 /// `devrun up --supervise` with a daemon that exits once it supervises
 /// nothing, so the test leaves no daemon behind.
 #[cfg(unix)]
