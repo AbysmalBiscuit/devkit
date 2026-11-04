@@ -59,7 +59,8 @@ pub fn prunable(
     window: Window,
     repo: Option<(&str, &TicketSyncConfig)>,
 ) -> Vec<Todo> {
-    let needed = needed_by_open(all);
+    let all: Vec<&Todo> = all.iter().collect();
+    let needed = needed_by_open(&all);
     let no_map = TicketSyncConfig::default();
     scoped
         .into_iter()
@@ -87,9 +88,27 @@ pub fn prunable(
         .collect()
 }
 
+/// The ids of `ids` that a store removes now: each names a done todo of `all`
+/// that no open todo in `all` waits on or nests under. A store calls this with
+/// its whole contents, inside the hold that covers the removal, since the
+/// caller's selection may be stale by then.
+pub fn removable<'a>(all: impl IntoIterator<Item = &'a Todo>, ids: &[String]) -> Vec<String> {
+    let all: Vec<&Todo> = all.into_iter().collect();
+    let needed = needed_by_open(&all);
+    let done: HashSet<&str> = all
+        .iter()
+        .filter(|todo| !todo.status.kind().is_open())
+        .map(|todo| todo.id.as_str())
+        .collect();
+    ids.iter()
+        .filter(|id| done.contains(id.as_str()) && !needed.contains(id.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// The ids each open todo in `all` waits on, and each of its ancestors.
-fn needed_by_open(all: &[Todo]) -> HashSet<&str> {
-    let by_id: HashMap<&str, &Todo> = all.iter().map(|todo| (todo.id.as_str(), todo)).collect();
+fn needed_by_open<'a>(all: &[&'a Todo]) -> HashSet<&'a str> {
+    let by_id: HashMap<&str, &Todo> = all.iter().map(|todo| (todo.id.as_str(), *todo)).collect();
     let mut needed = HashSet::new();
     let mut walked = HashSet::new();
     for todo in all.iter().filter(|todo| todo.status.kind().is_open()) {

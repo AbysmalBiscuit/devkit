@@ -41,6 +41,7 @@ macro_rules! contract_tests {
             prune_removes_only_todos_still_done,
             prune_bounds_a_last_change_inclusively,
             prune_keeps_what_an_open_todo_needs,
+            prune_rechecks_what_an_open_todo_needs_when_it_removes,
             unknown_ids_are_refused,
             get_returns_the_todo,
             move_reorder_and_relocate,
@@ -525,6 +526,90 @@ pub fn prune_keeps_what_an_open_todo_needs(s: &impl TodoStore) {
 
     let ids: Vec<&str> = selected.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(ids, [free.as_str()]);
+}
+
+pub fn prune_rechecks_what_an_open_todo_needs_when_it_removes(s: &impl TodoStore) {
+    use crate::prune::{Window, prunable};
+
+    let (free, blocker, moved_under) = (add(s, "free"), add(s, "blocker"), add(s, "moved under"));
+    let (ancestor, added_under, reopened_under) = (
+        add(s, "ancestor"),
+        add(s, "added under"),
+        add(s, "reopened under"),
+    );
+    let (waiter, moved) = (add(s, "waiter"), add(s, "moved"));
+    let reopened = s
+        .add(NewTodo {
+            parent: Some(reopened_under.clone()),
+            ..new("reopened")
+        })
+        .unwrap();
+    let elsewhere = s
+        .add(NewTodo {
+            project: Some("another/node".into()),
+            ..new("elsewhere")
+        })
+        .unwrap();
+    s.apply(&Edit::Move {
+        id: moved_under.clone(),
+        parent: Some(ancestor.clone()),
+        order: None,
+    })
+    .unwrap();
+    for id in [
+        &free,
+        &blocker,
+        &moved_under,
+        &ancestor,
+        &added_under,
+        &reopened_under,
+        &reopened,
+    ] {
+        set(s, id, StatusKind::Completed, "S").unwrap();
+    }
+    let all = s.list(&Filter::all()).unwrap();
+    let selected = prunable(&all, all.clone(), Window::default(), None);
+
+    s.apply(&Edit::Block {
+        id: waiter,
+        by: vec![blocker.clone()],
+    })
+    .unwrap();
+    s.apply(&Edit::Move {
+        id: moved,
+        parent: Some(moved_under.clone()),
+        order: None,
+    })
+    .unwrap();
+    s.add(NewTodo {
+        parent: Some(added_under.clone()),
+        ..new("added")
+    })
+    .unwrap();
+    set(s, &reopened, StatusKind::Pending, "S").unwrap();
+    let cross_scope = add(s, "cross scope");
+    set(s, &cross_scope, StatusKind::Completed, "S").unwrap();
+    s.apply(&Edit::Block {
+        id: elsewhere,
+        by: vec![cross_scope.clone()],
+    })
+    .unwrap();
+    let selected = [selected.as_slice(), &[get(s, &cross_scope)]].concat();
+
+    let removed = prune_all(s, &selected);
+
+    let removed: Vec<&str> = removed.iter().map(|c| c.todo.as_str()).collect();
+    assert_eq!(removed, [free.as_str()]);
+    for id in [
+        &blocker,
+        &moved_under,
+        &ancestor,
+        &added_under,
+        &reopened_under,
+        &cross_scope,
+    ] {
+        get(s, id);
+    }
 }
 
 pub fn unknown_ids_are_refused(s: &impl TodoStore) {

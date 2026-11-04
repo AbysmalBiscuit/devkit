@@ -168,8 +168,9 @@ pub enum Edit {
     /// Removes the record for good, for a description that must disappear.
     Purge(String),
     /// Removes the record of each todo in `ids`, full ids, that is still
-    /// completed or cancelled when the store writes. A todo reopened since
-    /// the caller read it, or gone, is left as it is.
+    /// completed or cancelled when the store writes, and that no open todo
+    /// in the store then waits on or nests under. A todo that fails either
+    /// check, or is gone, is left as it is.
     Prune {
         ids: Vec<String>,
     },

@@ -244,13 +244,9 @@ impl TodoStore for BuiltinStore {
                     changes.push(StatusChange::of(&todo, None));
                 }
                 Edit::Prune { ids } => {
-                    for key in ids.iter().filter_map(|id| id.parse::<u64>().ok()) {
-                        if doc
-                            .todos
-                            .get(&key)
-                            .is_some_and(|t| !t.status.kind().is_open())
-                            && let Some(todo) = doc.todos.remove(&key)
-                        {
+                    let removable = devkit_todo::prune::removable(doc.todos.values(), ids);
+                    for key in removable.iter().filter_map(|id| id.parse::<u64>().ok()) {
+                        if let Some(todo) = doc.todos.remove(&key) {
                             changes.push(StatusChange::of(&todo, None));
                         }
                     }

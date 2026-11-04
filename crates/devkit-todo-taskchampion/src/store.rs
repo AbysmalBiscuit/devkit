@@ -817,8 +817,9 @@ impl TodoStore for TaskchampionStore {
             Edit::Prune { ids } => {
                 let mut ops = Operations::new();
                 let mut changes = Vec::new();
-                for id in ids {
-                    let Ok(uuid) = Uuid::try_parse(id) else {
+                let all = self.todos(replica).await?;
+                for id in devkit_todo::prune::removable(&all, ids) {
+                    let Ok(uuid) = Uuid::try_parse(&id) else {
                         continue;
                     };
                     let Some(mut data) = replica.get_task_data(uuid).await? else {
@@ -827,10 +828,8 @@ impl TodoStore for TaskchampionStore {
                     let Some(todo) = Self::todo_of(&data) else {
                         continue;
                     };
-                    if !todo.status.kind().is_open() {
-                        data.delete(&mut ops);
-                        changes.push(StatusChange::of(&todo, None));
-                    }
+                    data.delete(&mut ops);
+                    changes.push(StatusChange::of(&todo, None));
                 }
                 replica.commit_operations(ops).await?;
                 Ok(changes)
