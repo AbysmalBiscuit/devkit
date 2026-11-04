@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
 use devkit::completions::Shell;
 use devkit_common::{
+    args,
     disk::human_size,
     progress::Steps,
     supervise, ui,
@@ -817,13 +818,7 @@ fn cmd_task(
         vars.arg_files
             .iter()
             .filter_map(|pair| pair.split_once('='))
-            .map(|(key, path)| {
-                let path = match path {
-                    "-" => PathBuf::from("-"),
-                    path => Path::new(cwd).join(path),
-                };
-                (key.to_string(), path)
-            })
+            .map(|(key, path)| (key.to_string(), args::under(path, Path::new(cwd))))
             .collect(),
         user.keys().cloned().collect(),
         env_file.map(|f| Path::new(cwd).join(f)),

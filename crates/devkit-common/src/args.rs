@@ -2,7 +2,11 @@
 //! that renders templates takes a variable. One parser, so no command accepts
 //! a spelling another refuses.
 
-use std::{collections::BTreeMap, io::Read, path::Path};
+use std::{
+    collections::BTreeMap,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 
@@ -37,8 +41,8 @@ fn parse_with_stdin(
             }
             stdin_read = true;
         }
-        let value =
-            read_path(&path, stdin).with_context(|| format!("reading --arg-file {key}={path}"))?;
+        let value = read_path(Path::new(&path), stdin)
+            .with_context(|| format!("reading --arg-file {key}={path}"))?;
         out.insert(key, value);
     }
     Ok(out)
@@ -46,26 +50,27 @@ fn parse_with_stdin(
 
 /// The contents of the file at `path` unchanged, or of stdin when `path` is
 /// `-`.
-pub fn read_file_or_stdin(path: &str) -> std::io::Result<String> {
+pub fn read_file_or_stdin(path: &Path) -> std::io::Result<String> {
     read_path(path, &mut std::io::stdin())
 }
 
 /// `path` as seen from the directory `base`: a relative path joins onto it,
 /// while an absolute path and stdin stay as they are.
-pub fn under(path: &str, base: &Path) -> String {
-    if path == STDIN || Path::new(path).is_absolute() {
-        return path.to_string();
+pub fn under(path: &str, base: &Path) -> PathBuf {
+    let path = Path::new(path);
+    if path == Path::new(STDIN) || path.is_absolute() {
+        return path.to_path_buf();
     }
-    base.join(path).to_string_lossy().into_owned()
+    base.join(path)
 }
 
 /// Each `--arg-file` pair with its path as seen from the directory `base`.
-pub fn files_under(files: Vec<String>, base: &Path) -> Vec<String> {
+pub fn files_under(files: &[String], base: &Path) -> Vec<String> {
     files
-        .into_iter()
+        .iter()
         .map(|pair| match pair.split_once('=') {
-            Some((key, path)) => format!("{key}={}", under(path, base)),
-            None => pair,
+            Some((key, path)) => format!("{key}={}", under(path, base).display()),
+            None => pair.clone(),
         })
         .collect()
 }
@@ -78,8 +83,8 @@ pub fn reads_stdin(files: &[String]) -> bool {
         .any(|pair| pair.split_once('=').is_some_and(|(_, path)| path == STDIN))
 }
 
-fn read_path(path: &str, stdin: &mut dyn Read) -> std::io::Result<String> {
-    if path != STDIN {
+fn read_path(path: &Path, stdin: &mut dyn Read) -> std::io::Result<String> {
+    if path != Path::new(STDIN) {
         return std::fs::read_to_string(path);
     }
     let mut s = String::new();
@@ -143,14 +148,10 @@ mod tests {
     #[test]
     fn under_joins_only_a_relative_path() {
         let base = Path::new("start");
-        assert_eq!(
-            under("a.md", base),
-            Path::new("start").join("a.md").to_string_lossy()
-        );
-        assert_eq!(under("-", base), "-");
+        assert_eq!(under("a.md", base), Path::new("start").join("a.md"));
+        assert_eq!(under("-", base), Path::new("-"));
         let absolute = std::env::temp_dir().join("a.md");
-        let absolute = absolute.to_str().unwrap();
-        assert_eq!(under(absolute, base), absolute);
+        assert_eq!(under(absolute.to_str().unwrap(), base), absolute);
     }
 
     #[test]

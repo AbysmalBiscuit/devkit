@@ -44,11 +44,11 @@ impl SummaryArgs {
             return Ok(self.pr_body);
         };
         let path = args::under(&path, base);
-        if path == args::STDIN && args::reads_stdin(&vars.arg_files) {
+        if path == Path::new(args::STDIN) && args::reads_stdin(&vars.arg_files) {
             bail!("--pr-body-file and --arg-file cannot both read stdin (`-`)");
         }
         let summary = args::read_file_or_stdin(&path)
-            .with_context(|| format!("reading --pr-body-file {path}"))?;
+            .with_context(|| format!("reading --pr-body-file {}", path.display()))?;
         Ok(Some(summary.trim_end_matches('\n').to_string()))
     }
 }
