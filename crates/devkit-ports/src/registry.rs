@@ -510,12 +510,12 @@ impl Data {
 /// `Ok(Some(resp))` = the daemon answered (the response may be `Response::Err`,
 /// which callers decode into an `Err`). `Err` = a *live* daemon failed
 /// mid-request — surfaced to the caller rather than silently written behind its
-/// back. Returns `Ok(None)` inside the daemon itself (`DEVKITD_SELF`).
+/// back. Returns `Ok(None)` inside the daemon itself.
 #[cfg(feature = "daemon")]
 fn daemon_request(
     req: crate::daemon::proto::Request,
 ) -> Result<Option<crate::daemon::proto::Response>> {
-    if std::env::var_os("DEVKITD_SELF").is_some() {
+    if devkit_common::daemon::in_daemon() {
         return Ok(None);
     }
     let Some(mut c) = crate::daemon::client::try_existing() else {

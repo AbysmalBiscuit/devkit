@@ -17,11 +17,10 @@ use model::{AcquireOutcome, Conflict, LockEntry, Refusal};
 /// Try a running daemon over `locks.sock`. `Ok(None)` = no daemon (caller uses
 /// the flock path). `Ok(Some(resp))` = the daemon answered. `Err` = a live
 /// daemon failed mid-request — surfaced rather than written behind its back.
-/// Inside the daemon itself (`DEVKITD_SELF`) returns `Ok(None)` so its own ops
-/// stay local.
+/// Inside the daemon itself returns `Ok(None)` so its own ops stay local.
 #[cfg(feature = "daemon")]
 fn daemon_request(req: daemon::proto::Request) -> Result<Option<daemon::proto::Response>> {
-    if std::env::var_os("DEVKITD_SELF").is_some() {
+    if devkit_common::daemon::in_daemon() {
         return Ok(None);
     }
     let Some(mut c) = daemon::client::try_existing() else {
