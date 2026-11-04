@@ -228,3 +228,59 @@ fn secret_is_redacted_in_debug() {
     assert!(!shown.contains("hunter2"), "{shown}");
     assert!(!shown.contains("104, 117"), "{shown}");
 }
+
+/// Writes a task row whose data no reader can parse, so any read that loads
+/// it fails. `in_working_set` also files it in the working set, where
+/// taskchampion's dependency map reads every entry.
+fn unreadable_task(data_dir: &Path, in_working_set: bool) {
+    let db = rusqlite::Connection::open(data_dir.join("taskchampion.sqlite3")).unwrap();
+    let uuid = Uuid::new_v4().to_string();
+    db.execute("INSERT INTO tasks (uuid, data) VALUES (?1, 'not json')", [
+        &uuid,
+    ])
+    .unwrap();
+    if in_working_set {
+        db.execute(
+            "INSERT INTO working_set (id, uuid) VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM working_set), ?1)",
+            [&uuid],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn get_by_full_id_reads_only_that_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let id = store.add(new(Some("r.main"), "a")).unwrap();
+    unreadable_task(&data, true);
+    assert_eq!(store.get(&id).unwrap().unwrap().description, "a");
+}
+
+#[test]
+fn get_by_prefix_and_release_read_only_open_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let id = store.add(new(Some("r.main"), "a")).unwrap();
+    store
+        .apply(&Edit::SetStatus {
+            id: id.clone(),
+            to: devkit_todo::StatusKind::InProgress,
+            actor: devkit_todo::Holder::new("s1"),
+        })
+        .unwrap();
+    unreadable_task(&data, false);
+    assert_eq!(store.get(&id[..8]).unwrap().unwrap().id, id);
+    let released = store
+        .apply(&Edit::ReleaseAll {
+            holder: devkit_todo::Holder::new("s1"),
+        })
+        .unwrap();
+    assert_eq!(released.len(), 1, "{released:?}");
+    assert_eq!(
+        store.get(&id).unwrap().unwrap().status,
+        devkit_todo::Status::Pending
+    );
+}

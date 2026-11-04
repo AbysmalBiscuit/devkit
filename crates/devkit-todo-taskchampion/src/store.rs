@@ -13,7 +13,8 @@ use devkit_todo::{
     is_uuid_prefix, one_line, take_over, ticket_todo_uuid, transition,
 };
 use taskchampion::{
-    Operations, Server, ServerConfig, SqliteStorage, Task, Uuid, chrono::Utc, storage::AccessMode,
+    Operations, Server, ServerConfig, SqliteStorage, Task, TaskData, Uuid, chrono::Utc,
+    storage::AccessMode, utc_timestamp,
 };
 use tokio::runtime::Runtime;
 
@@ -275,27 +276,34 @@ impl TaskchampionStore {
         Ok(Replica::new(storage))
     }
 
-    fn todo_of(&self, task: &Task) -> Option<Todo> {
-        let value = |key: &str| task.get_value(key).map(str::to_string);
-        let stamp = |t: Option<taskchampion::chrono::DateTime<Utc>>| {
-            t.map(|t| t.format("%Y%m%dT%H%M%SZ").to_string())
+    /// The todo `task` represents. It reads the stored properties alone,
+    /// never the replica's dependency map, which costs one storage round
+    /// trip per working-set entry.
+    fn todo_of(task: &TaskData) -> Option<Todo> {
+        let value = |key: &str| task.get(key).map(str::to_string);
+        let stamp = |key: &str| {
+            task.get(key)
+                .and_then(|t| t.parse::<i64>().ok())
+                .map(|t| utc_timestamp(t).format("%Y%m%dT%H%M%SZ").to_string())
         };
         Exported {
             uuid: task.get_uuid().to_string(),
-            description: task.get_description().to_string(),
+            description: value("description").unwrap_or_default(),
             status: value("status").unwrap_or_default(),
             start: value("start"),
             holder: value("holder"),
             subof: value("subof"),
             order: task
-                .get_value("order")
+                .get("order")
                 .and_then(|o| o.parse::<f64>().ok())
                 .map(|o| o.round() as i64),
             project: value("project"),
-            entry: stamp(task.get_entry()),
-            modified: stamp(task.get_modified()),
+            entry: stamp("entry"),
+            modified: stamp("modified"),
             depends: task
-                .get_dependencies()
+                .properties()
+                .filter_map(|p| p.strip_prefix("dep_"))
+                .filter_map(|dep| Uuid::try_parse(dep).ok())
                 .map(|uuid| uuid.to_string())
                 .collect(),
             ticket_tracker: value("ticket_tracker"),
@@ -307,22 +315,31 @@ impl TaskchampionStore {
 
     async fn todos(&self, replica: &mut Replica) -> Result<Vec<Todo>> {
         Ok(replica
-            .all_tasks()
+            .all_task_data()
             .await?
             .values()
-            .filter_map(|task| self.todo_of(task))
+            .filter_map(Self::todo_of)
             .collect())
     }
 
+    /// The todo `id` names, by its full uuid or a unique prefix of one. A
+    /// prefix reads the replica's uuids, and only its matches' tasks.
     async fn find(&self, replica: &mut Replica, id: &str) -> Result<Option<Todo>> {
         if !is_uuid_prefix(id) {
             return Ok(None);
         }
         if let Ok(uuid) = Uuid::try_parse(id) {
-            let task = replica.get_task(uuid).await?;
-            return Ok(task.and_then(|task| self.todo_of(&task)));
+            let task = replica.get_task_data(uuid).await?;
+            return Ok(task.as_ref().and_then(Self::todo_of));
         }
-        by_prefix(id, self.todos(replica).await?)
+        let uuids = replica.all_task_uuids().await?;
+        let mut todos = Vec::new();
+        for uuid in uuids.into_iter().filter(|u| u.to_string().starts_with(id)) {
+            if let Some(task) = replica.get_task_data(uuid).await? {
+                todos.extend(Self::todo_of(&task));
+            }
+        }
+        by_prefix(id, todos)
     }
 
     async fn resolve(&self, replica: &mut Replica, id: &str) -> Result<Todo> {
@@ -387,15 +404,9 @@ impl TaskchampionStore {
         if deps.is_empty() {
             return Ok(());
         }
-        let have: std::collections::BTreeSet<Uuid> = replica
-            .get_task(Uuid::try_parse(&todo.id)?)
-            .await?
-            .ok_or_else(|| anyhow!("no todo {}", todo.id))?
-            .get_dependencies()
-            .collect();
         let deps: Vec<Uuid> = deps
             .into_iter()
-            .filter(|dep| have.contains(dep) != add)
+            .filter(|dep| todo.blocked_by.contains(&dep.to_string()) != add)
             .collect();
         if deps.is_empty() {
             return Ok(());
@@ -477,6 +488,15 @@ fn stop(task: &mut Task, ops: &mut Operations) -> Result<(), taskchampion::Error
     }
 }
 
+/// Stops `task` and clears its holder, leaving it pending. It writes the
+/// task's data directly, so a release reads no dependency map.
+fn release(task: &mut TaskData, ops: &mut Operations) {
+    let now = Utc::now().timestamp().to_string();
+    task.update("modified", Some(now), ops);
+    task.update("start", None, ops);
+    task.update("holder", None, ops);
+}
+
 /// Ends `task` as `status`, completed or deleted, recording `by` when known.
 fn close(
     task: &mut Task,
@@ -523,7 +543,7 @@ impl TodoStore for TaskchampionStore {
                     let uuid = Uuid::from_bytes(
                         ticket_todo_uuid("", &ticket.tracker, &ticket.key).into_bytes(),
                     );
-                    if replica.get_task(uuid).await?.is_some() {
+                    if replica.get_task_data(uuid).await?.is_some() {
                         return Ok(uuid.to_string());
                     }
                     uuid
@@ -614,13 +634,12 @@ impl TodoStore for TaskchampionStore {
                 }
                 let mut ops = Operations::new();
                 let mut changes = Vec::new();
-                for task in replica.all_tasks().await?.values_mut() {
-                    let Some(todo) = self.todo_of(task) else {
+                for mut task in replica.pending_task_data().await? {
+                    let Some(todo) = Self::todo_of(&task) else {
                         continue;
                     };
                     if matches!(&todo.status, Status::InProgress { by } if holder.covers(by)) {
-                        task.stop(&mut ops)?;
-                        task.set_value("holder", None, &mut ops)?;
+                        release(&mut task, &mut ops);
                         changes.push(StatusChange::of(&todo, Some(Status::Pending)));
                     }
                 }
