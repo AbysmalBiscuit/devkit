@@ -5,6 +5,7 @@ mod todoenv;
 
 use std::process::Output;
 
+use devkit_todo::{Edit, Holder, NewTodo, StatusKind, TicketRef, TodoStore};
 use serde_json::Value;
 use todoenv::{Proj, stderr, stdout};
 
@@ -248,6 +249,60 @@ fn a_done_todo_an_open_todo_needs_stays() {
         "open waiter",
         "parent"
     ]);
+}
+
+/// A done ticket todo on the repository node, its ticket last synced as
+/// `synced`, last changed in September.
+fn done_ticket(p: &Proj, key: &str, synced: &str) {
+    let id = p
+        .store()
+        .add(NewTodo {
+            project: Some("proj".into()),
+            description: format!("#{key} ticket"),
+            parent: None,
+            order: None,
+            ticket: Some(TicketRef {
+                tracker: "github".into(),
+                key: format!("o/r#{key}"),
+                synced_status: Some(synced.into()),
+            }),
+        })
+        .unwrap();
+    p.store()
+        .apply(&Edit::SetStatus {
+            id: id.clone(),
+            to: StatusKind::Completed,
+            actor: Holder::human(),
+        })
+        .unwrap();
+    changed_at(p, &id, "2026-09-20T12:00:00Z");
+}
+
+#[test]
+fn a_done_ticket_todo_goes_only_when_its_ticket_was_last_synced_done() {
+    let p = Proj::new();
+    std::fs::write(
+        p.path.join("devkit.toml"),
+        "[ticket.sync.statuses]\nTodo = \"pending\"\nShipped = \"completed\"\n",
+    )
+    .unwrap();
+    done_ticket(&p, "1", "Shipped");
+    done_ticket(&p, "2", "closed:not_planned");
+    done_ticket(&p, "3", "Todo");
+    done_ticket(&p, "4", "Unmapped");
+
+    let args = [
+        "prune",
+        "--node",
+        "proj",
+        "--to-date",
+        "2026-10-01",
+        "--yes",
+    ];
+    let out = run(&p, &args, &HUMAN);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(left(&p), ["#3 ticket", "#4 ticket"]);
 }
 
 #[test]

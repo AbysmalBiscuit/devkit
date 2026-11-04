@@ -273,7 +273,9 @@ pub enum TodoCommand {
 const PRUNE_HELP: &str = "Removes completed and cancelled todos from every session in scope, after \
      printing them and asking. The bounds apply to the last change of a done todo, and a later \
      edit makes a todo look newer. An open todo stays, and so does a done todo that an open todo \
-     waits on or nests under. An agent can only --dry-run. On a synced replica, the sync target \
+     waits on or nests under. A ticket todo stays unless [ticket.sync.statuses] maps its last \
+     synced status to completed or cancelled, since a sync brings back a ticket that is still open. \
+     An agent can only --dry-run. On a synced replica, the sync target \
      keeps earlier versions, so prune does not erase their text from there.";
 
 const OVERWRITE_HELP: &str = "Write a ticket todo's change over a status the tracker changed since \
@@ -1440,7 +1442,7 @@ fn prune(
     };
     let filter = scope_filter(fence, &args.within, role)?;
     let scoped = scoped_todos(fence, &args.within, &filter)?;
-    let todos = pruning::prunable(fence.todos()?, scoped, window);
+    let todos = pruning::prunable(fence.todos()?, scoped, window, &fence.store.ticket().sync);
     let names = names::names(style, &todos, cwd);
     for todo in &todos {
         let status = match todo.status.kind() {

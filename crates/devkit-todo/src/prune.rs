@@ -3,8 +3,9 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Days, NaiveDate, NaiveTime, TimeDelta, TimeZone, Utc};
+use devkit_config::TicketSyncConfig;
 
-use crate::{Edit, StatusChange, Todo, TodoStore};
+use crate::{Edit, StatusChange, Todo, TodoStore, ticket::synced_kind};
 
 /// How many todos one [`Edit::Prune`] names, so one request stays small on a
 /// backend that sends it over HTTP.
@@ -49,11 +50,27 @@ pub fn day_end<Tz: TimeZone>(date: NaiveDate, zone: &Tz) -> DateTime<Utc> {
 /// `window`, that no open todo in `all` waits on or nests under, however deep.
 /// A todo with no readable last change stays. `all` is the whole store, since
 /// the open todo that needs one may sit outside the scope.
-pub fn prunable(all: &[Todo], scoped: Vec<Todo>, window: Window) -> Vec<Todo> {
+///
+/// A ticket todo goes only when `sync` maps its ticket's last synced status
+/// to done, since a sync would bring a ticket still open back as open.
+pub fn prunable(
+    all: &[Todo],
+    scoped: Vec<Todo>,
+    window: Window,
+    sync: &TicketSyncConfig,
+) -> Vec<Todo> {
     let needed = needed_by_open(all);
     scoped
         .into_iter()
         .filter(|todo| !todo.status.kind().is_open() && !needed.contains(todo.id.as_str()))
+        .filter(|todo| match &todo.ticket {
+            None => true,
+            Some(ticket) => ticket
+                .synced_status
+                .as_deref()
+                .and_then(|name| synced_kind(name, sync))
+                .is_some_and(|kind| !kind.is_open()),
+        })
         .filter(|todo| {
             todo.modified
                 .as_deref()
@@ -145,7 +162,15 @@ mod tests {
             todo("a", done(), Some("b")),
             todo("b", done(), Some("a")),
         ];
-        assert!(prunable(&all, all.to_vec(), Window::default()).is_empty());
+        assert!(
+            prunable(
+                &all,
+                all.to_vec(),
+                Window::default(),
+                &TicketSyncConfig::default()
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -155,6 +180,14 @@ mod tests {
         let mut unset = todo("unset", done(), None);
         unset.modified = None;
         let all = [unread, unset];
-        assert!(prunable(&all, all.to_vec(), Window::default()).is_empty());
+        assert!(
+            prunable(
+                &all,
+                all.to_vec(),
+                Window::default(),
+                &TicketSyncConfig::default()
+            )
+            .is_empty()
+        );
     }
 }
