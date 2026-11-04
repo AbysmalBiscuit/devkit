@@ -814,9 +814,26 @@ fn a_powershell_repo_flag_before_the_gh_subcommand_does_not_pass_the_create_rule
             "gh issue --repo owner/repo create -t t",
             "devkit ticket create",
         ),
+        (
+            "$R = 'owner/repo'; gh pr --repo=\"$R\" create --fill",
+            "devkit pr create",
+        ),
+        (
+            "$R = 'owner/repo'; gh pr -R\"$R\" create --fill",
+            "devkit pr create",
+        ),
+        ("gh pr --repo=$R create --fill", "devkit pr create"),
+        (
+            "$R = 'owner/repo'; gh issue --repo=\"$R\" create -t t",
+            "devkit ticket create",
+        ),
+        (
+            "$R = 'owner/repo'; gh issue -R\"$R\" create -t t",
+            "devkit ticket create",
+        ),
     ] {
         let out = run_hook(proj.path(), home.path(), &claude_payload(command));
-        assert!(denied(&out), "{command}");
+        assert!(denied(&out), "{command}: {out:?}");
         assert!(
             deny_reason(&out).contains(replacement),
             "{command}: {}",

@@ -374,8 +374,21 @@ fn subexpression_end(chars: &[char], open: usize) -> Option<usize> {
     }
 }
 
-/// A recovered word's value: literal text, or unknown when it expands.
+/// A recovered word's value: literal text, or unknown when it expands. An
+/// option keeps its literal start, so `--repo="$R"` still reads as `--repo=`.
 fn recovered_value(typed: &str) -> Value {
+    match recovered_literal(typed) {
+        Value::Unknown if typed.starts_with('-') => {
+            let end = typed
+                .find(['$', '`', '(', '@', '"', '\''])
+                .unwrap_or(typed.len());
+            Value::Prefixed(typed[..end].to_string())
+        }
+        value => value,
+    }
+}
+
+fn recovered_literal(typed: &str) -> Value {
     let quoted = |q: char| typed.len() >= 2 && typed.starts_with(q) && typed.ends_with(q);
     if quoted('\'') {
         return Value::Known(typed[1..typed.len() - 1].replace("''", "'"));
