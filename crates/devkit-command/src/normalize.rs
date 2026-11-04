@@ -673,11 +673,8 @@ pub(crate) fn program_options(
     cwd: Option<&str>,
     style: PathStyle,
 ) -> ProgramOptions {
-    match program
-        .known()
-        .map(basename)
-        .map(|name| name.strip_suffix(".exe").unwrap_or(name))
-    {
+    let name = program.known().map(|p| basename(p).to_ascii_lowercase());
+    match name.as_deref().map(|n| n.strip_suffix(".exe").unwrap_or(n)) {
         Some("git") => git_options(args, cwd, style),
         Some("gh") => ProgramOptions {
             semantic_args: without_gh_repo_flags(args),

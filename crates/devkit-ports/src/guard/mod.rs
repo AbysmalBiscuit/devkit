@@ -103,11 +103,10 @@ fn rule_match(inv: &Invocation, rule: &CommandRule, own_binary: bool) -> Match {
 }
 
 fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
-    let program = match program.known() {
-        Some(program) => basename(program),
-        None => return Match::Possible,
+    let Some(program) = program.known() else {
+        return Match::Possible;
     };
-    if !rule.programs.iter().any(|p| basename(p) == program) {
+    if !rule.programs.iter().any(|p| norm::runs(program, p)) {
         return Match::No;
     }
     args_match(&rule.args, args)

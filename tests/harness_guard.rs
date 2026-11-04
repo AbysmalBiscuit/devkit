@@ -1041,6 +1041,49 @@ fn a_gh_pr_create_beside_a_todo_command_is_denied_with_every_gate_off() {
 }
 
 #[test]
+fn a_windows_spelling_of_gh_does_not_pass_the_create_rules() {
+    let home = tempfile::tempdir().unwrap();
+    let enforced = project(GH_ISSUE_CREATE);
+    let gates_off = project("[harness]\nenforce_commands = false\nenforce_writes = false\n");
+    for (proj, command, replacement) in [
+        (&enforced, "GH pr create --fill", "devkit pr create"),
+        (&enforced, "gh.EXE pr create --fill", "devkit pr create"),
+        (
+            &enforced,
+            "GH.exe pr -R owner/repo create",
+            "devkit pr create",
+        ),
+        (&enforced, "GH issue create -t t", "devkit ticket create"),
+        (
+            &enforced,
+            "Gh.Exe issue --repo owner/repo create",
+            "devkit ticket create",
+        ),
+        (&gates_off, "GH pr create --fill", "devkit pr create"),
+        (
+            &gates_off,
+            "GH.EXE pr -R owner/repo create",
+            "devkit pr create",
+        ),
+        (&gates_off, "sudo GH pr create --fill", "devkit pr create"),
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains(replacement),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+    let view = run_hook(
+        enforced.path(),
+        home.path(),
+        &claude_payload("GH.EXE pr -R owner/repo view 9"),
+    );
+    assert!(!denied(&view), "{}", deny_reason(&view));
+}
+
+#[test]
 fn a_powershell_gh_pr_create_is_denied_with_every_gate_off() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(

@@ -14,7 +14,18 @@ pub struct Doppler {
 /// The last path component of a program word, without a Windows `.exe`.
 pub fn basename(prog: &str) -> &str {
     let base = prog.rsplit(['/', '\\']).next().unwrap_or(prog);
-    base.strip_suffix(".exe").unwrap_or(base)
+    match base.len().checked_sub(4) {
+        Some(stem) if base.is_char_boundary(stem) && base[stem..].eq_ignore_ascii_case(".exe") => {
+            &base[..stem]
+        }
+        _ => base,
+    }
+}
+
+/// Whether program word `prog` runs the program `name`. Windows and macOS
+/// find executables case-insensitively, so `GH.EXE` runs `gh`.
+pub fn runs(prog: &str, name: &str) -> bool {
+    basename(prog).eq_ignore_ascii_case(basename(name))
 }
 
 /// The Doppler wrapper the analysis removed to reach `inv`, if any.
