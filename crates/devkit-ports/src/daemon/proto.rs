@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::registry::{Data, Role};
 
 /// Wire-format version. Bump on any incompatible change to these types.
-pub const PROTO: u32 = 4;
+pub const PROTO: u32 = 5;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -77,8 +77,8 @@ pub enum Response {
     Ports(Vec<(String, u16)>),
     Snapshot(Data),
     Freed(Vec<u16>),
-    /// (port, ready) for each supervised app started by a `Supervise` request.
-    Supervised(Vec<(u16, bool)>),
+    /// The server a `Supervise` request answers for.
+    Supervised(Supervised),
     Lines(String),
     Ok,
     Err(String),
@@ -138,4 +138,16 @@ mod tests {
         let got: Option<Request> = recv(&mut rdr).unwrap();
         assert!(got.is_none());
     }
+}
+
+/// The server a `Supervise` request answers for: the one it spawned, or the
+/// live one it found already supervised.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Supervised {
+    pub port: u16,
+    pub pid: u32,
+    /// Whether the server accepts connections on `port`.
+    pub ready: bool,
+    /// Whether this request spawned the server.
+    pub spawned: bool,
 }

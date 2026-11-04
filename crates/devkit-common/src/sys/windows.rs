@@ -18,7 +18,7 @@ use std::{
 
 use socket2::{Domain, Socket, Type};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT},
+    Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT},
     Networking::WinSock::{SIO_TCP_INITIAL_RTO, SOCKET, TCP_INITIAL_RTO_PARAMETERS, WSAIoctl},
     System::{
         Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent},
@@ -28,9 +28,10 @@ use windows_sys::Win32::{
         },
         ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
         Threading::{
-            CREATE_UNICODE_ENVIRONMENT, CreateProcessW, GetExitCodeProcess, INFINITE, OpenProcess,
-            PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
-            PROCESS_VM_READ, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
+            CREATE_UNICODE_ENVIRONMENT, CreateProcessW, GetExitCodeProcess, GetProcessTimes,
+            INFINITE, OpenProcess, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, PROCESS_VM_READ, STARTUPINFOW,
+            TerminateProcess, WaitForSingleObject,
         },
     },
 };
@@ -102,6 +103,41 @@ pub(super) fn process_alive(pid: u32) -> bool {
         CloseHandle(handle);
         ok && code == STILL_ACTIVE
     }
+}
+
+/// The process's creation time, in 100 ns intervals since 1601.
+#[allow(
+    unsafe_code,
+    reason = "std does not report another process's start time, and no current dependency \
+              wraps GetProcessTimes"
+)]
+pub(super) fn process_started(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    let mut created = FILETIME::default();
+    let (mut exited, mut kernel, mut user) = (created, created, created);
+    // SAFETY: the handle is null-checked and closed exactly once; each
+    // FILETIME out-pointer is a live local.
+    let ok = unsafe {
+        let handle = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        );
+        if handle.is_null() {
+            return None;
+        }
+        // An exited process stays open while any handle to it remains, so
+        // only a process whose handle is not yet signaled is still running.
+        let ok = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+            && GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0;
+        CloseHandle(handle);
+        ok
+    };
+    ok.then(|| {
+        ((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime)).to_string()
+    })
 }
 
 #[allow(

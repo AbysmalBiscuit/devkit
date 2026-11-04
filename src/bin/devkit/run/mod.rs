@@ -214,8 +214,10 @@ pub(crate) enum RunsCmd {
     /// here. Only runs in this repository's checkouts count, and the answer is
     /// the one `devkit pr create`'s verify gate reaches: a run given other
     /// args, or none when these name some, is no, as is one whose `up` step
-    /// reused a server already running before it started. Exits 0 and
-    /// prints the run for yes, exits 1 for no.
+    /// reused a server already running before it started, unless that
+    /// server launched on a clean tree at the run's commit with the plan the
+    /// step would launch. Exits 0 and prints the run for yes, exits 1 for
+    /// no.
     Passed {
         /// Task name, as given to `devrun task`.
         task: String,
@@ -828,6 +830,7 @@ fn cmd_task(
     let live = std::cell::RefCell::new(Vec::<ledger::LiveServer>::new());
     let mut launched = std::collections::HashSet::new();
     let mut reused = Vec::new();
+    let mut reused_at_head = Vec::new();
     let step = |step_name: &str| -> Result<std::process::ExitStatus> {
         let fresh = task::resolve_step(
             &loaded.config,
@@ -862,7 +865,7 @@ fn cmd_task(
                     SeqItem::Up(app) => {
                         // A server an earlier step of this run launched is
                         // this run's own; only one live before the run began
-                        // may have started at another commit.
+                        // may have started at another commit or plan.
                         steps.borrow_mut().push(ledger::Step {
                             task: String::new(),
                             argv: Vec::new(),
@@ -870,7 +873,18 @@ fn cmd_task(
                             ports: Default::default(),
                         });
                         let report = up(app, false)?;
-                        reused.extend(report.reused.into_iter().filter(|a| !launched.contains(a)));
+                        for server in report.reused {
+                            if launched.contains(&server.app) {
+                                continue;
+                            }
+                            if server.current_plan_commit.is_some()
+                                && server.current_plan_commit.as_deref() == start.head()
+                            {
+                                reused_at_head.push(server);
+                            } else {
+                                reused.push(server.app);
+                            }
+                        }
                         launched.extend(report.launched);
                     }
                 }
@@ -878,12 +892,18 @@ fn cmd_task(
             Ok(std::process::ExitStatus::default())
         })(),
     };
+    // A reused server that stopped or restarted during the task may not be
+    // the process that served it, so it no longer proves the run.
+    let (still, gone) = still_running(reused_at_head);
+    reused.extend(gone);
+    let reused_at_head = still;
     let run = start.finish(
         outcome.as_ref().ok().and_then(child_exit),
         &tail,
         steps.into_inner(),
         ledger::Servers {
             reused,
+            reused_at_head,
             live: live.into_inner(),
         },
     );
@@ -948,7 +968,38 @@ fn print_plan(plan: &devkit_ports::task::CommandPlan) {
 #[derive(Default)]
 struct UpReport {
     launched: Vec<String>,
-    reused: Vec<String>,
+    reused: Vec<ReusedServer>,
+}
+
+/// A server `devrun up` found already running.
+struct ReusedServer {
+    app: String,
+    port: u16,
+    pid: Option<u32>,
+    /// The commit the server launched from, when it launched on a clean
+    /// tree with the plan this `up` would launch.
+    current_plan_commit: Option<String>,
+}
+
+/// Split `servers` into the apps whose process still serves its port with
+/// the origin it had when reused, and the apps of the rest. An unreadable
+/// registry counts every server as gone.
+fn still_running(servers: Vec<ReusedServer>) -> (Vec<String>, Vec<String>) {
+    let data = registry::snapshot().ok();
+    let ledger = devkit_ports::ledger::Ledger::live().ok();
+    let (still, gone): (Vec<_>, Vec<_>) = servers.into_iter().partition(|s| {
+        let Some(pid) = s.pid else { return false };
+        let serves = data
+            .as_ref()
+            .and_then(|d| d.entries.get(&s.port))
+            .is_some_and(|e| e.app == s.app && e.pid == Some(pid) && registry::pid_alive(pid));
+        let origin = ledger.as_ref().and_then(|l| l.origin(s.port, pid));
+        serves && origin.map(|o| o.commit) == s.current_plan_commit
+    });
+    (
+        still.into_iter().map(|s| s.app).collect(),
+        gone.into_iter().map(|s| s.app).collect(),
+    )
 }
 
 /// Bring `apps_arg` up and report which apps it launched and which it found
@@ -1134,7 +1185,17 @@ fn cmd_up(
         )?;
         for s in statuses {
             if s.reused {
-                report.reused.push(s.app.clone());
+                let plan = plans.iter().find(|p| p.app == s.app);
+                report.reused.push(ReusedServer {
+                    app: s.app.clone(),
+                    port: s.port,
+                    pid: s.pid,
+                    current_plan_commit: s
+                        .origin
+                        .clone()
+                        .filter(|o| plan.is_some_and(|p| p.digest() == o.plan))
+                        .map(|o| o.commit),
+                });
             } else {
                 report.launched.push(s.app.clone());
             }

@@ -1181,6 +1181,261 @@ fn a_run_whose_second_up_step_reuses_the_server_its_first_launched_qualifies() {
     assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
 }
 
+/// The value `srv`'s `TOKEN` renders to in [`serving_project`].
+const TOKEN: &str = "s3cret-token-value";
+
+/// A project whose required `e2e` brings `srv` up, this test binary serving
+/// its port, then runs `verify`. `srv`'s `TOKEN` renders [`TOKEN`].
+fn serving_project(base_port: u16) -> ghfake::Fake {
+    let exe = std::env::current_exe().unwrap();
+    project(&format!(
+        "[templates.variables]\nscope = \"all\"\ntoken = \"{TOKEN}\"\n\
+         [apps.srv]\nbase_port = {base_port}\npath = \".\"\n\
+         launch = ['{}', '--exact', 'serve_port_when_launched_as_an_app', '--nocapture']\n\
+         static_env = {{ DEVKIT_TEST_SERVE_PORT = \"{{{{ port }}}}\", TOKEN = \"{{{{ token }}}}\" }}\n\
+         [tasks.e2e]\nsteps = [{{ up = \"srv\" }}, {{ task = \"verify\" }}]\n\
+         [pr.gates]\nverify_task = \"e2e\"\nverify_args = {{ scope = \"all\" }}\n",
+        exe.display()
+    ))
+}
+
+/// `srv` launched by `devrun up`, stopped when dropped.
+struct Srv<'a>(&'a ghfake::Fake);
+
+impl<'a> Srv<'a> {
+    fn up(p: &'a ghfake::Fake) -> Self {
+        let out = p.devkit_here(&["run", "up", "srv"]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Self(p)
+    }
+}
+
+impl Drop for Srv<'_> {
+    fn drop(&mut self) {
+        self.0.devkit_here(&["run", "down", "--app", "srv"]);
+    }
+}
+
+/// The origin the run ledger holds for `srv`'s process.
+fn srv_origin(p: &ghfake::Fake) -> Option<devkit_ports::ledger::Origin> {
+    let data = registry(p);
+    let (port, entry) = data.entries.iter().find(|(_, e)| e.app == "srv").unwrap();
+    devkit_ports::ledger::Ledger::at(p.state().join("devkit").join("runs"))
+        .origin(*port, entry.pid.unwrap())
+}
+
+fn registry(p: &ghfake::Fake) -> devkit_ports::registry::Data {
+    let text = std::fs::read(p.state().join("devkit").join("ports.json")).unwrap();
+    serde_json::from_slice(&text).unwrap()
+}
+
+#[test]
+fn devrun_up_records_the_launch_commit_and_plan_digest() {
+    let p = serving_project(39212);
+    let _srv = Srv::up(&p);
+    let origin = srv_origin(&p).expect("an origin is recorded");
+    assert_eq!(origin.commit, head(&p));
+    assert!(origin.plan.starts_with("sha256:"), "{}", origin.plan);
+    assert!(!origin.plan.contains(TOKEN), "{}", origin.plan);
+    let text = std::fs::read_to_string(p.state().join("devkit").join("ports.json")).unwrap();
+    assert!(!text.contains(TOKEN), "{text}");
+}
+
+#[test]
+fn a_run_reusing_a_server_launched_at_head_with_its_plan_qualifies() {
+    let p = serving_project(39213);
+    let _srv = Srv::up(&p);
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    let body = opened_body(&p);
+    assert!(body.contains("Exit code: 0"), "{body}");
+    assert!(
+        body.contains("Against reused server `srv`, launched at this commit"),
+        "{body}"
+    );
+    let plan = srv_origin(&p).unwrap().plan;
+    let hex = plan.trim_start_matches("sha256:");
+    assert!(!body.contains(hex), "the plan digest stays local: {body}");
+}
+
+/// The refusal an agent gets after a run that reused `srv`.
+fn assert_refused_for_reusing_srv(p: &ghfake::Fake) {
+    let (ok, stderr) = create(p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(stderr.contains("reused"), "says why: {stderr}");
+    assert!(stderr.contains("`srv`"), "names the server: {stderr}");
+    assert!(!opened(p), "{}", p.calls());
+}
+
+#[test]
+fn a_server_launched_on_a_dirty_tree_records_no_origin() {
+    let p = serving_project(39220);
+    std::fs::write(p.project().join("untracked.txt"), "dirty\n").unwrap();
+    let _srv = Srv::up(&p);
+    assert_eq!(srv_origin(&p), None);
+}
+
+/// `devrun up --supervise` with a daemon that exits once it supervises
+/// nothing, so the test leaves no daemon behind.
+#[cfg(unix)]
+fn up_supervised(p: &ghfake::Fake) {
+    let log = p.state().join("up.log");
+    let ok = p.devkit_here_logged(
+        &["run", "up", "srv", "--supervise"],
+        &[("DEVKIT_DAEMON_IDLE_SECS", "1")],
+        &log,
+    );
+    assert!(ok, "{}", std::fs::read_to_string(&log).unwrap_or_default());
+}
+
+/// Wait for the idle daemon to stop accepting. Its shutdown wakes its accept
+/// loop through the socket, so it must exit before the test's state
+/// directory, and the socket in it, is deleted. Each probe is activity that
+/// restarts the daemon's idle timer, so probes stay wider apart than
+/// `DEVKIT_DAEMON_IDLE_SECS`.
+#[cfg(unix)]
+fn await_daemon_exit(p: &ghfake::Fake) {
+    let sock = p.state().join("devkit").join("ports.sock");
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if std::os::unix::net::UnixStream::connect(&sock).is_err() {
+            return;
+        }
+    }
+    panic!("devkitd did not idle out");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_second_supervised_up_at_a_later_commit_keeps_the_first_origin() {
+    let p = serving_project(39221);
+    up_supervised(&p);
+    let srv = Srv(&p);
+    let first = srv_origin(&p).expect("the first up records an origin");
+    std::fs::write(p.project().join("later.txt"), "later\n").unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "later"]);
+    serve_head(&p);
+    up_supervised(&p);
+    assert_eq!(srv_origin(&p), Some(first));
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    assert_refused_for_reusing_srv(&p);
+    drop(srv);
+    await_daemon_exit(&p);
+}
+
+#[test]
+fn a_run_reusing_a_server_launched_at_another_commit_is_refused() {
+    let p = serving_project(39214);
+    let _srv = Srv::up(&p);
+    std::fs::write(p.project().join("later.txt"), "later\n").unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "later"]);
+    serve_head(&p);
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    assert_refused_for_reusing_srv(&p);
+}
+
+#[test]
+fn a_run_reusing_a_server_launched_with_another_plan_is_refused() {
+    let p = serving_project(39215);
+    let _srv = Srv::up(&p);
+    let outside = tempfile::tempdir().unwrap();
+    let layer = outside.path().join("devkit.toml");
+    let toml = std::fs::read_to_string(p.project().join("devkit.toml")).unwrap();
+    let other = toml.replace(
+        "TOKEN = \"{{ token }}\" }",
+        "TOKEN = \"{{ token }}\", EXTRA = \"x\" }",
+    );
+    assert_ne!(other, toml);
+    std::fs::write(&layer, other).unwrap();
+    task(&p, &[
+        "--config",
+        layer.to_str().unwrap(),
+        "e2e",
+        "--arg",
+        "scope=all",
+    ]);
+    assert_refused_for_reusing_srv(&p);
+}
+
+#[test]
+fn a_run_reusing_a_server_whose_env_rendered_another_value_is_refused() {
+    let p = serving_project(39216);
+    let _srv = Srv::up(&p);
+    let outside = tempfile::tempdir().unwrap();
+    let layer = outside.path().join("devkit.toml");
+    let toml = std::fs::read_to_string(p.project().join("devkit.toml")).unwrap();
+    let other = toml.replace(TOKEN, "another-token-value");
+    assert_ne!(other, toml);
+    std::fs::write(&layer, other).unwrap();
+    task(&p, &[
+        "--config",
+        layer.to_str().unwrap(),
+        "e2e",
+        "--arg",
+        "scope=all",
+    ]);
+    assert_refused_for_reusing_srv(&p);
+}
+
+/// The port registry is a file any process can rewrite, so an origin written
+/// there names no commit the gate trusts.
+#[test]
+fn an_origin_forged_in_the_port_registry_does_not_qualify_a_stale_server() {
+    let p = serving_project(39219);
+    let _srv = Srv::up(&p);
+    let launched_at = head(&p);
+    std::fs::write(p.project().join("later.txt"), "later\n").unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "later"]);
+    serve_head(&p);
+    let file = p.state().join("devkit").join("ports.json");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let entry = json["entries"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .find(|e| e["app"] == "srv")
+        .unwrap();
+    entry["origin"] = serde_json::json!({
+        "commit": head(&p),
+        "plan": srv_origin(&p).unwrap().plan,
+    });
+    assert_ne!(launched_at, head(&p));
+    std::fs::write(&file, serde_json::to_string(&json).unwrap()).unwrap();
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    assert_refused_for_reusing_srv(&p);
+}
+
+#[test]
+fn a_run_whose_reused_server_restarts_during_the_task_is_refused() {
+    let p = serving_project(39218);
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    let restarting = toml.replace(
+        "steps = [{ up = \"srv\" }, { task = \"verify\" }]",
+        &format!(
+            "steps = [{{ up = \"srv\" }}, {{ task = \"srv-down\" }}, {{ up = \"srv\" }}, \
+             {{ task = \"verify\" }}]\n\
+             [tasks.srv-down]\nrun = ['{}', 'run', 'down', '--app', 'srv']",
+            env!("CARGO_BIN_EXE_devkit")
+        ),
+    );
+    assert_ne!(restarting, toml);
+    std::fs::write(&config, restarting).unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "restart srv"]);
+    serve_head(&p);
+    let _srv = Srv::up(&p);
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    assert_refused_for_reusing_srv(&p);
+}
+
 /// A run reads the commit and the tree state once before the task and once
 /// after, and the gate reads `devkit.toml` once at the merge base and once
 /// at HEAD; every other question a run and a gated `pr create` ask of git is

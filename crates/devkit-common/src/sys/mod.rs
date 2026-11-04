@@ -58,6 +58,13 @@ pub fn process_alive(pid: u32) -> bool {
     imp::process_alive(pid)
 }
 
+/// When the process `pid` started, as an opaque stamp that a later process
+/// with the same pid does not share. `None` when no process has that pid or
+/// its start cannot be read.
+pub fn process_started(pid: u32) -> Option<String> {
+    imp::process_started(pid)
+}
+
 /// Ask `pid` to terminate, gracefully where the platform supports it.
 pub fn terminate(pid: u32) {
     imp::terminate(pid)
@@ -214,6 +221,25 @@ mod tests {
     #[test]
     fn pid_zero_is_not_alive() {
         assert!(!process_alive(0));
+    }
+
+    #[test]
+    fn a_process_keeps_its_start_stamp_and_an_exited_one_has_none() {
+        let me = std::process::id();
+        let stamp = process_started(me).expect("this process has a start stamp");
+        assert_eq!(process_started(me), Some(stamp));
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert!(process_started(pid).is_some());
+        child.wait().unwrap();
+        // On Windows an open handle keeps an exited process queryable.
+        drop(child);
+        assert_eq!(process_started(pid), None);
     }
 
     /// Callers ask this to decide whether a port row is live and whether a

@@ -14,6 +14,7 @@ use serde::Serialize;
 
 use crate::{
     apps::App,
+    ledger::{Ledger, Origin},
     registry::{self, Data, Role},
 };
 
@@ -150,6 +151,9 @@ pub struct ServerStatus {
     /// [`launch`] found this server already running and did not spawn it.
     #[serde(skip)]
     pub reused: bool,
+    /// The origin the run ledger holds for this server's process.
+    #[serde(skip)]
+    pub origin: Option<Origin>,
 }
 
 /// Classify from already-probed signals: listening -> Ready; else live pid ->
@@ -192,6 +196,7 @@ pub fn server_rows(data: &Data, only_holder: Option<&str>) -> Vec<ServerStatus> 
             logfile: e.logfile.clone(),
             state: server_state(*port, e.pid),
             reused: false,
+            origin: e.pid.and_then(|pid| recorded_origin(*port, pid)),
         });
     }
     rows
@@ -245,6 +250,34 @@ pub struct LaunchPlan {
     pub log: PathBuf,
     /// The app's rendered `url`, as reported to the user.
     pub url: String,
+}
+
+/// What [`LaunchPlan::digest`] hashes.
+#[derive(Serialize)]
+struct DigestInput<'a> {
+    app: &'a str,
+    port: u16,
+    cwd: std::borrow::Cow<'a, str>,
+    argv: &'a [String],
+    env: &'a BTreeMap<String, String>,
+}
+
+impl LaunchPlan {
+    /// The SHA-256 of the app, port, cwd, argv and rendered env. It changes
+    /// with any rendered value and holds none, but a guess at a value can be
+    /// checked against it, so it stays in local state.
+    pub fn digest(&self) -> String {
+        let input = DigestInput {
+            app: &self.app,
+            port: self.port,
+            cwd: self.cwd.to_string_lossy(),
+            argv: &self.argv,
+            env: &self.env,
+        };
+        devkit_common::digest::sha256(
+            &serde_json::to_string(&input).expect("strings and numbers serialize"),
+        )
+    }
 }
 
 /// Ports one (role, holder) group needs: each selected app's own port plus
@@ -357,6 +390,67 @@ pub fn plan_group(
         });
     }
     Ok(plans)
+}
+
+/// The origin the run ledger holds for the server `pid` on `port`.
+fn recorded_origin(port: u16, pid: u32) -> Option<Origin> {
+    Ledger::live().ok()?.origin(port, pid)
+}
+
+/// Record `origin` for the server `pid` on `port`, which this launch
+/// spawned. A failure leaves the server with no origin, which no verify run
+/// trusts.
+fn record_origin(port: u16, pid: u32, origin: Option<Origin>) {
+    if let Ok(ledger) = Ledger::live() {
+        let _ = ledger.set_origin(port, pid, origin.as_ref());
+    }
+}
+
+/// The status of the server a `Supervise` answer for `plan` names.
+/// When that request spawned the server, `origin` is recorded for it in
+/// `ledger`. Otherwise another request spawned it, so it is reused, with the
+/// origin `ledger` holds for it.
+#[cfg(feature = "daemon")]
+pub fn supervised_status(
+    ledger: Option<&Ledger>,
+    plan: &LaunchPlan,
+    role: Role,
+    server: &crate::daemon::proto::Supervised,
+    origin: Option<Origin>,
+) -> ServerStatus {
+    let origin = match ledger {
+        Some(ledger) if server.spawned => {
+            let _ = ledger.set_origin(plan.port, server.pid, origin.as_ref());
+            origin
+        }
+        Some(ledger) => ledger.origin(plan.port, server.pid),
+        None => None,
+    };
+    ServerStatus {
+        app: plan.app.clone(),
+        role,
+        port: plan.port,
+        pid: Some(server.pid),
+        logfile: Some(plan.log.clone()),
+        state: if server.ready {
+            ServerState::Ready
+        } else {
+            ServerState::Starting
+        },
+        reused: !server.spawned,
+        origin,
+    }
+}
+
+/// The origin a server launched from `dir` with `plan` records: `None` when
+/// the tree there has no commit or is dirty, since the server may then run
+/// code no commit holds.
+fn origin_at(dir: &Path, plan: &LaunchPlan) -> Option<Origin> {
+    let (head, clean) = crate::ledger::tree_state(dir);
+    Some(Origin {
+        commit: head.filter(|_| clean)?,
+        plan: plan.digest(),
+    })
 }
 
 /// Result of stopping + releasing a holder's servers.
@@ -498,6 +592,7 @@ fn existing_server(
         logfile: e.logfile.clone(),
         state: server_state(plan.port, Some(pid)),
         reused: true,
+        origin: recorded_origin(plan.port, pid),
     })
 }
 
@@ -555,8 +650,10 @@ fn launch_with(
 
     let mut spawned = Vec::with_capacity(pending.len());
     for p in pending {
+        let origin = origin_at(&p.cwd, p);
         let pid = spawn(p)?;
         registry::record_pid(p.port, &p.app, holder, role, pid, p.log.clone())?;
+        record_origin(p.port, pid, origin);
         spawned.push((p.app.clone(), p.port, p.log.clone(), pid));
     }
 
@@ -590,6 +687,7 @@ fn launch_with(
                     ServerState::Starting
                 },
                 reused: false,
+                origin: None,
             })
             .collect();
         out.extend(existing);
@@ -605,6 +703,7 @@ fn launch_with(
                 logfile: Some(log),
                 state: server_state(port, Some(pid)),
                 reused: false,
+                origin: None,
             })
             .collect();
         out.extend(existing);
@@ -620,8 +719,16 @@ fn supervise_via_daemon(
 ) -> Result<Vec<ServerStatus>> {
     let mut client =
         crate::daemon::client::ensure_running().context("starting supervisor daemon")?;
+    let data = registry::snapshot()?;
     let mut out = Vec::with_capacity(plans.len());
     for p in plans {
+        // devkitd answers for a live server without spawning it, so only a
+        // plan with none gets a fresh origin; a reused one keeps its own.
+        if let Some(existing) = existing_server(&data, p, holder, role) {
+            out.push(existing);
+            continue;
+        }
+        let origin = origin_at(&p.cwd, p);
         let resp = client.request(&crate::daemon::proto::Request::Supervise {
             holder: holder.to_string(),
             app: p.app.clone(),
@@ -632,29 +739,27 @@ fn supervise_via_daemon(
             logfile: p.log.clone(),
             base_port: p.port,
         })?;
-        let ready = match &resp {
-            crate::daemon::proto::Response::Supervised(v) => {
-                v.first().map(|(_, r)| *r).unwrap_or(false)
+        let status = match &resp {
+            crate::daemon::proto::Response::Supervised(s) => {
+                supervised_status(Ledger::live().ok().as_ref(), p, role, s, origin)
             }
-            crate::daemon::proto::Response::Err(msg) => {
-                eprintln!("daemon could not supervise {}: {msg}", p.app);
-                false
+            other => {
+                if let crate::daemon::proto::Response::Err(msg) = other {
+                    eprintln!("daemon could not supervise {}: {msg}", p.app);
+                }
+                ServerStatus {
+                    app: p.app.clone(),
+                    role,
+                    port: p.port,
+                    pid: None,
+                    logfile: Some(p.log.clone()),
+                    state: ServerState::Starting,
+                    reused: false,
+                    origin: None,
+                }
             }
-            _ => false,
         };
-        out.push(ServerStatus {
-            app: p.app.clone(),
-            role,
-            port: p.port,
-            pid: None,
-            logfile: Some(p.log.clone()),
-            state: if ready {
-                ServerState::Ready
-            } else {
-                ServerState::Starting
-            },
-            reused: false,
-        });
+        out.push(status);
     }
     Ok(out)
 }
@@ -869,6 +974,45 @@ mod tests {
         .unwrap();
         assert_eq!(plans[0].argv, vec!["nitro", "dev", "--port", "9100"]);
         assert_eq!(plans[0].env["PEER"], "http://localhost:9101");
+    }
+
+    #[test]
+    fn a_plan_digest_changes_with_a_rendered_env_value_it_never_holds() {
+        let digest = |token: &str, user: &[(&str, &str)]| {
+            let mut catalog = HashMap::new();
+            catalog.insert(
+                "api".to_string(),
+                test_app(&["nitro", "--port", "{{ port }}"], &[(
+                    "TOKEN",
+                    "{{ token }}",
+                )]),
+            );
+            let plans = plan_group(
+                &catalog,
+                &["api".to_string()],
+                &[("api".to_string(), 9100)].into(),
+                None,
+                Path::new("/wt"),
+                Role::Workspace,
+                &user
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                &[("token".to_string(), token.to_string())].into(),
+            )
+            .unwrap();
+            assert_eq!(plans[0].env["TOKEN"], token, "the value renders");
+            plans[0].digest()
+        };
+        let base = digest("s3cret", &[]);
+        assert_eq!(base, digest("s3cret", &[]), "stable");
+        assert_ne!(base, digest("other", &[]), "a rendered value");
+        assert_ne!(
+            digest("s3cret", &[("PASS", "hunter2")]),
+            digest("s3cret", &[("PASS", "other")]),
+            "a user value"
+        );
+        assert!(!base.contains("s3cret"), "{base}");
     }
 
     #[test]

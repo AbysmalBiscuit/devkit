@@ -71,10 +71,18 @@ pub struct Run {
     #[serde(default)]
     pub steps: Vec<Step>,
     /// The apps an `up` step found already running from before the run
-    /// started, and did not launch. Such a server may have started at another
-    /// commit, so a run that reused one satisfies no PR gate.
+    /// started, and did not launch, except those in
+    /// [`reused_at_head`](Self::reused_at_head). Such a server may have
+    /// started at another commit, so a run that reused one satisfies no PR
+    /// gate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reused_servers: Vec<String>,
+    /// The apps an `up` step found already running from before the run
+    /// started, launched on a clean tree at the run's head with the plan the
+    /// step would launch. They do not stop the run satisfying a gate; the PR
+    /// shows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reused_at_head: Vec<String>,
     /// The servers a step's `require_live` ran against, each once. They are
     /// the run's precondition, started before it by design, so they do not
     /// stop it satisfying a gate; the PR shows them.
@@ -154,6 +162,27 @@ pub struct Step {
     pub ports: BTreeMap<String, u16>,
 }
 
+/// The commit a server launched from, and the digest of its launch plan.
+/// The ledger keeps it, so a rewrite of the port registry cannot forge it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Origin {
+    pub commit: String,
+    /// See [`crate::run::LaunchPlan::digest`].
+    pub plan: String,
+}
+
+/// An [`Origin`] and the process it belongs to.
+#[derive(Serialize, Deserialize)]
+struct OriginRecord {
+    pid: u32,
+    /// See [`devkit_common::sys::process_started`]. A pid alone can name a
+    /// later process that reused it.
+    #[serde(default)]
+    started: Option<String>,
+    #[serde(flatten)]
+    origin: Origin,
+}
+
 /// The directory holding the records.
 #[derive(Debug, Clone)]
 pub struct Ledger {
@@ -184,6 +213,46 @@ impl Ledger {
         tmp.persist(&path)
             .with_context(|| format!("writing {}", path.display()))?;
         Ok(path)
+    }
+
+    /// Record that the server `pid` on `port` launched from `origin`,
+    /// replacing what an earlier server on that port recorded. `None` removes
+    /// the earlier record, so a later process with a recycled pid cannot
+    /// match it.
+    pub fn set_origin(&self, port: u16, pid: u32, origin: Option<&Origin>) -> Result<()> {
+        let dir = self.dir.join("origins");
+        let path = dir.join(format!("{port}.json"));
+        let Some(origin) = origin else {
+            return match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    Err(e).with_context(|| format!("removing {}", path.display()))
+                }
+                _ => Ok(()),
+            };
+        };
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let mut tmp = tempfile::NamedTempFile::new_in(&dir)
+            .with_context(|| format!("creating an origin in {}", dir.display()))?;
+        serde_json::to_writer(&mut tmp, &OriginRecord {
+            pid,
+            started: devkit_common::sys::process_started(pid),
+            origin: origin.clone(),
+        })?;
+        tmp.persist(&path)
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(())
+    }
+
+    /// The origin recorded for the server `pid` on `port`, while the process
+    /// that recorded it still runs. A record of another process on that
+    /// port, such as one a supervisor replaced or an earlier holder of `pid`,
+    /// is none.
+    pub fn origin(&self, port: u16, pid: u32) -> Option<Origin> {
+        let text =
+            std::fs::read_to_string(self.dir.join("origins").join(format!("{port}.json"))).ok()?;
+        let record: OriginRecord = serde_json::from_str(&text).ok()?;
+        let started = record.started.filter(|_| record.pid == pid)?;
+        (devkit_common::sys::process_started(pid)? == started).then_some(record.origin)
     }
 
     /// Every readable record, oldest first. A record that does not parse is
@@ -305,6 +374,8 @@ pub fn committed_config(
 pub struct Servers {
     /// See [`Run::reused_servers`].
     pub reused: Vec<String>,
+    /// See [`Run::reused_at_head`].
+    pub reused_at_head: Vec<String>,
     /// See [`Run::live_servers`].
     pub live: Vec<LiveServer>,
 }
@@ -326,7 +397,7 @@ pub struct Start {
 
 /// The commit at `root` and whether its tree is clean. An unreadable answer
 /// reads as no commit and not clean, so it can never prove a pass.
-fn tree_state(root: &Path) -> (Option<String>, bool) {
+pub(crate) fn tree_state(root: &Path) -> (Option<String>, bool) {
     let vcs = vcs::Vcs::at(root);
     let head = vcs.revision(root).ok().filter(|s| !s.is_empty());
     let clean = matches!(vcs.dirty(root, Changes::All), Ok(false));
@@ -374,9 +445,15 @@ impl Start {
         }
     }
 
+    /// The commit checked out when the run started. See [`Run::head`].
+    pub fn head(&self) -> Option<&str> {
+        self.head.as_deref()
+    }
+
     /// The finished run, re-reading the tree so a run that changed it, or
     /// whose head moved under it, is not clean. `servers` holds
-    /// [`Run::reused_servers`] and [`Run::live_servers`].
+    /// [`Run::reused_servers`], [`Run::reused_at_head`] and
+    /// [`Run::live_servers`].
     pub fn finish(
         self,
         exit_code: Option<i32>,
@@ -395,6 +472,7 @@ impl Start {
             env_file: self.env_file,
             steps,
             reused_servers: servers.reused,
+            reused_at_head: servers.reused_at_head,
             live_servers: servers.live,
             task: self.task,
             args: self.args,
@@ -584,6 +662,7 @@ mod tests {
             steps: Vec::new(),
             arg_files: BTreeMap::new(),
             reused_servers: Vec::new(),
+            reused_at_head: Vec::new(),
             live_servers: Vec::new(),
             exit_code,
             started_at: "2026-01-01T00:00:00.000Z".into(),
@@ -647,6 +726,66 @@ mod tests {
     #[test]
     fn an_uncaptured_tail_is_none() {
         assert_eq!(Tail::default().lines(), None);
+    }
+
+    /// A process that reuses an earlier server's pid on the same port must
+    /// not inherit that server's origin when it launched with none.
+    #[test]
+    fn a_launch_with_no_origin_clears_the_ports_earlier_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::at(dir.path());
+        let me = std::process::id();
+        let stale = Origin {
+            commit: "c0ffee".into(),
+            plan: "sha256:00".into(),
+        };
+        ledger.set_origin(4100, me, Some(&stale)).unwrap();
+        assert_eq!(ledger.origin(4100, me), Some(stale));
+        ledger.set_origin(4100, me, None).unwrap();
+        assert_eq!(ledger.origin(4100, me), None);
+        ledger.set_origin(4100, me, None).unwrap();
+    }
+
+    /// Rewrite the origin record of `port` with `edit`.
+    fn edit_origin_record(ledger: &Ledger, port: u16, edit: impl FnOnce(&mut serde_json::Value)) {
+        let path = ledger.dir.join("origins").join(format!("{port}.json"));
+        let mut record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        edit(&mut record);
+        std::fs::write(&path, record.to_string()).unwrap();
+    }
+
+    /// A live process that reuses a dead server's pid, with no launch on the
+    /// port since, must not inherit that server's origin.
+    #[test]
+    fn an_origin_belongs_to_the_process_that_recorded_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::at(dir.path());
+        let me = std::process::id();
+        let origin = Origin {
+            commit: "c0ffee".into(),
+            plan: "sha256:00".into(),
+        };
+        ledger.set_origin(4101, me, Some(&origin)).unwrap();
+        assert_eq!(ledger.origin(4101, me), Some(origin));
+
+        edit_origin_record(&ledger, 4101, |r| {
+            r["started"] = "an earlier process".into();
+        });
+        assert_eq!(
+            ledger.origin(4101, me),
+            None,
+            "an earlier process with this pid recorded the origin"
+        );
+
+        edit_origin_record(&ledger, 4101, |r| {
+            r.as_object_mut().unwrap().remove("started");
+        });
+        assert_eq!(
+            ledger.origin(4101, me),
+            None,
+            "a record that names no process start proves nothing"
+        );
     }
 
     #[test]

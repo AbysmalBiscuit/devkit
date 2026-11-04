@@ -12,7 +12,9 @@ use std::{
 use common::{Harness, pid_in_ports_json};
 use devkit_ports::{
     daemon::proto::{Request, Response},
+    ledger::{Ledger, Origin},
     registry::Role,
+    run::{self, LaunchPlan},
 };
 use nix::{
     sys::signal::{Signal, kill},
@@ -41,7 +43,7 @@ fn supervised_python_server_becomes_ready() {
     });
 
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "expected Supervised([(_, true)]), got {resp:?}"
     );
 
@@ -79,7 +81,7 @@ fn restart_after_kill() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -149,7 +151,7 @@ fn restart_survives_concurrent_snapshot() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -268,7 +270,7 @@ while True:
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -359,7 +361,7 @@ while True:
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -441,7 +443,7 @@ while True:
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -537,7 +539,7 @@ while True:
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -594,7 +596,7 @@ fn cap_requested_without_delegation_falls_back() {
 
     // The spawn must succeed even though cgroup delegation is unavailable.
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "expected ready=true even without cgroup delegation, got {resp:?}"
     );
 
@@ -668,7 +670,7 @@ fn a_supervised_app_and_its_children_join_the_leaf() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
     let app = pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json");
@@ -715,7 +717,7 @@ fn an_unwritable_leaf_leaves_the_app_uncapped() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "an unjoinable leaf must not stop the app: {resp:?}"
     );
     let leaves = leaves(base.path());
@@ -761,7 +763,7 @@ fn a_capped_launch_survives_a_deleted_daemon_binary() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "a deleted daemon binary must not stop a capped launch: {resp:?}"
     );
 
@@ -814,7 +816,7 @@ fn a_capped_launch_without_path_uses_the_default_search_path() {
             base_port: port,
         });
         assert!(
-            matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+            matches!(&resp, Response::Supervised(s) if s.ready),
             "an {label} bare command must resolve without PATH: {resp:?}"
         );
 
@@ -889,6 +891,8 @@ fn a_missing_program_fails_the_launch() {
 
 /// A second Supervise for a key whose server is alive is a no-op: same port,
 /// ready, and the pid in ports.json does not change (no duplicate spawn).
+/// Only the first answer says it spawned the server, so only its caller
+/// records the server's origin.
 #[test]
 fn second_supervise_of_live_server_is_noop() {
     let mut h = Harness::start();
@@ -906,19 +910,72 @@ fn second_supervise_of_live_server_is_noop() {
     };
 
     let first = h.request(&req);
-    assert!(
-        matches!(&first, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
-        "first supervise did not become ready: {first:?}"
-    );
     let pid1 = pid_in_ports_json(&h.ports_json(), "api").expect("no pid after first supervise");
+    assert!(
+        matches!(&first, Response::Supervised(s) if s.ready && s.spawned && s.pid == pid1),
+        "first supervise must report the server it spawned: {first:?}"
+    );
 
     let second = h.request(&req);
     assert!(
-        matches!(&second, Response::Supervised(v) if v.first() == Some(&(port, true))),
+        matches!(&second, Response::Supervised(s)
+            if s.port == port && s.ready && !s.spawned && s.pid == pid1),
         "second supervise must report the live server: {second:?}"
     );
     let pid2 = pid_in_ports_json(&h.ports_json(), "api").expect("no pid after second supervise");
     assert_eq!(pid2, pid1, "second supervise must not respawn");
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
+/// Two Supervise requests for one key that arrive together spawn one server,
+/// and only one answer says it spawned it, so only one caller records an
+/// origin for the server.
+#[test]
+fn concurrent_supervise_spawns_once() {
+    let mut h = Harness::start();
+    let port = common::free_port();
+    let holder = h.home.path().to_str().unwrap().to_string();
+    let req = Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Workspace,
+        argv: common::tcp_server_argv(port),
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.path().join("race.log"),
+        base_port: port,
+    };
+
+    let start = std::sync::Barrier::new(2);
+    let answers: Vec<Response> = std::thread::scope(|s| {
+        let calls: Vec<_> = (0..2)
+            .map(|_| {
+                s.spawn(|| {
+                    start.wait();
+                    h.request(&req)
+                })
+            })
+            .collect();
+        calls.into_iter().map(|c| c.join().unwrap()).collect()
+    });
+
+    let pid = pid_in_ports_json(&h.ports_json(), "api").expect("no pid after supervise");
+    let spawned = answers
+        .iter()
+        .filter(|a| match a {
+            Response::Supervised(s) => {
+                assert_eq!(s.pid, pid, "each answer names the registered server: {a:?}");
+                s.spawned
+            }
+            other => panic!("supervise failed: {other:?}"),
+        })
+        .count();
+    assert_eq!(
+        spawned, 1,
+        "exactly one answer spawned the server: {answers:?}"
+    );
 
     h.request(&Request::Down { holder, role: None });
     h.shutdown();
@@ -944,7 +1001,7 @@ fn down_does_not_restart() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -970,5 +1027,122 @@ fn down_does_not_restart() {
         "daemon restarted the server after a clean Down — entry should be gone: {snap:?}"
     );
 
+    h.shutdown();
+}
+
+/// Two Supervise requests for one app race with different launch plans: the
+/// second arrives while the first one's server is live but not yet ready.
+/// Only the request whose answer says it spawned the server records an
+/// origin, so the ledger holds the spawner's commit and plan digest. The
+/// other request reports the server as reused, with that recorded origin,
+/// so a verify run cannot pass it off as launched from its own plan.
+#[test]
+fn only_the_spawning_supervise_records_an_origin() {
+    let mut h = Harness::start();
+    let port = common::free_port();
+    let holder = h.home.path().to_str().unwrap().to_string();
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let ledger = Ledger::at(ledger_dir.path());
+
+    let plan = |argv: Vec<String>, mode: &str| LaunchPlan {
+        app: "api".into(),
+        port,
+        argv,
+        cwd: ".".into(),
+        env: BTreeMap::from([("MODE".to_string(), mode.to_string())]),
+        log: h.home.path().join(format!("race-{mode}.log")),
+        url: String::new(),
+    };
+    let mut slow_server = vec![
+        "sh".into(),
+        "-c".into(),
+        r#"sleep 2; exec "$@""#.into(),
+        "sh".into(),
+    ];
+    slow_server.extend(common::tcp_server_argv(port));
+    let first = plan(slow_server, "first");
+    let second = plan(common::tcp_server_argv(port), "second");
+    let request = |p: &LaunchPlan| Request::Supervise {
+        holder: holder.clone(),
+        app: p.app.clone(),
+        role: Role::Workspace,
+        argv: p.argv.clone(),
+        cwd: p.cwd.to_str().unwrap().to_string(),
+        env: p.env.clone(),
+        logfile: p.log.clone(),
+        base_port: p.port,
+    };
+    let origin_of = |p: &LaunchPlan, commit: &str| Origin {
+        commit: commit.into(),
+        plan: p.digest(),
+    };
+    let first_origin = origin_of(&first, &"a".repeat(40));
+    let second_origin = origin_of(&second, &"b".repeat(40));
+    assert_ne!(first_origin.plan, second_origin.plan);
+
+    let (first_resp, second_resp) = std::thread::scope(|s| {
+        let first_req = s.spawn(|| h.request(&request(&first)));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while pid_in_ports_json(&h.ports_json(), "api").is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the first server never got a pid"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !first_req.is_finished(),
+            "the first request answered before the race"
+        );
+        let second_resp = h.request(&request(&second));
+        (first_req.join().unwrap(), second_resp)
+    });
+
+    let (Response::Supervised(first_srv), Response::Supervised(second_srv)) =
+        (&first_resp, &second_resp)
+    else {
+        panic!("both requests must be supervised: {first_resp:?}, {second_resp:?}");
+    };
+    assert!(first_srv.spawned && first_srv.ready, "{first_srv:?}");
+    assert!(!second_srv.spawned, "{second_srv:?}");
+    assert_eq!(second_srv.pid, first_srv.pid);
+
+    let status = |p: &LaunchPlan, srv, origin: &Origin| {
+        run::supervised_status(Some(&ledger), p, Role::Workspace, srv, Some(origin.clone()))
+    };
+
+    // The losing request answers first, so it reads the ledger before the
+    // spawner records; the spawner's record must survive it either way.
+    let loser = status(&second, second_srv, &second_origin);
+    assert!(
+        loser.reused,
+        "the losing request reports a launch: {loser:?}"
+    );
+    assert_eq!(loser.pid, Some(first_srv.pid));
+    assert_eq!(loser.origin, None, "{loser:?}");
+    assert_eq!(
+        ledger.origin(port, first_srv.pid),
+        None,
+        "the losing request wrote an origin"
+    );
+
+    let spawner = status(&first, first_srv, &first_origin);
+    assert!(!spawner.reused, "{spawner:?}");
+    assert_eq!(spawner.pid, Some(first_srv.pid));
+    assert_eq!(
+        ledger.origin(port, first_srv.pid),
+        Some(first_origin.clone())
+    );
+
+    let loser = status(&second, second_srv, &second_origin);
+    assert!(loser.reused, "{loser:?}");
+    assert_eq!(
+        loser.origin.as_ref(),
+        Some(&first_origin),
+        "the loser must carry the spawner's provenance, not its own plan"
+    );
+    assert_eq!(ledger.origin(port, first_srv.pid), Some(first_origin));
+
+    h.request(&Request::Down { holder, role: None });
     h.shutdown();
 }

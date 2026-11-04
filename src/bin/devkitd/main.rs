@@ -52,6 +52,10 @@ pub(crate) struct Daemon {
     pub(crate) shutdown: AtomicBool,
     pub(crate) idle_timeout: Duration,
     pub(crate) sup: Mutex<supervisor::Supervisor>,
+    /// Held by a `Supervise` request from its live-server check until its
+    /// spawn is registered, so two requests for one key spawn one server.
+    /// Taken before the registry and `sup`.
+    pub(crate) spawning: Mutex<()>,
     /// Authoritative port registry, served from memory; the file is
     /// write-through.
     pub(crate) ports: std::sync::Arc<std::sync::Mutex<registry::Data>>,
@@ -302,6 +306,7 @@ fn main() -> Result<()> {
             mem_warn,
             mem_limit,
         )),
+        spawning: Mutex::new(()),
         ports,
         locks,
         cgroup_cap,
@@ -626,6 +631,7 @@ pub(crate) fn test_daemon_with_base(base: std::path::PathBuf, max_bytes: u64) ->
             0,
             0,
         )),
+        spawning: Mutex::new(()),
         ports: std::sync::Arc::new(std::sync::Mutex::new(registry::Data::default())),
         locks: std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::model::Data::default())),
         cgroup_cap: Some(CgroupCap { base, max_bytes }),
@@ -649,6 +655,7 @@ mod tests {
                 0,
                 0,
             )),
+            spawning: Mutex::new(()),
             ports: std::sync::Arc::new(std::sync::Mutex::new(registry::Data::default())),
             locks: std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::model::Data::default())),
             cgroup_cap: None,

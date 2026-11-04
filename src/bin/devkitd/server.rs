@@ -9,7 +9,7 @@ use std::{
 
 use devkit_common::supervise;
 use devkit_ports::{
-    daemon::proto::{PROTO, Request, Response},
+    daemon::proto::{PROTO, Request, Response, Supervised},
     registry::{self, Role, Store},
 };
 
@@ -126,6 +126,7 @@ fn supervise_app(
     logfile: std::path::PathBuf,
     base_port: u16,
 ) -> Response {
+    let spawning = daemon.spawning.lock().unwrap();
     // Reserve before bind (same invariant as the flock path).
     let reqs = vec![(app.clone(), base_port)];
     let port = match registry::alloc_with(&daemon.port_store(), &holder, &reqs, role) {
@@ -148,7 +149,12 @@ fn supervise_app(
                 && let Some(pid) = e.pid
                 && registry::pid_alive(pid)
             {
-                return Response::Supervised(vec![(port, registry::listening(port))]);
+                return Response::Supervised(Supervised {
+                    port,
+                    pid,
+                    ready: registry::listening(port),
+                    spawned: false,
+                });
             }
         }
         Err(e) => return Response::Err(format!("{e:#}")),
@@ -181,8 +187,14 @@ fn supervise_app(
         .lock()
         .unwrap()
         .insert_owned(key, pid, port, logfile, launch);
+    drop(spawning);
     let ready = supervise::wait_ready(port, Duration::from_secs(120));
-    Response::Supervised(vec![(port, ready)])
+    Response::Supervised(Supervised {
+        port,
+        pid,
+        ready,
+        spawned: true,
+    })
 }
 
 /// Atomic stop: remove each supervised child for this holder/role from the

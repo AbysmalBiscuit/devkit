@@ -13,6 +13,8 @@
 
 use devkit_config::Fidelity;
 
+use crate::digest;
+
 /// Variable names devkit resolves a credential from. The first three are what
 /// `secrets` stores; `GH_TOKEN` and `GITHUB_TOKEN` are resolved elsewhere and
 /// are the two most likely to be typed into a command.
@@ -42,20 +44,9 @@ const TOKEN_PREFIXES: [(&str, &str); 8] = [
 pub fn apply(command: &str, mode: Fidelity) -> (String, bool) {
     match mode {
         Fidelity::Full => (command.to_string(), false),
-        Fidelity::Hashed => (digest(command), true),
+        Fidelity::Hashed => (digest::sha256(command), true),
         Fidelity::Redacted => redact(command),
     }
-}
-
-/// A stable digest and nothing else. Stable across runs and machines, so a
-/// reader can count distinct commands without holding any of their text.
-pub fn digest(text: &str) -> String {
-    let d = ring::digest::digest(&ring::digest::SHA256, text.as_bytes());
-    let mut out = String::from("sha256:");
-    for b in d.as_ref() {
-        out.push_str(&format!("{b:02x}"));
-    }
-    out
 }
 
 fn substitute(kind: &str) -> String {
@@ -211,16 +202,6 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert!(!a.contains("echo"));
-    }
-
-    /// Pinned against the published SHA-256 vector, so a digest that silently
-    /// changed algorithm would not quietly re-key an accumulated corpus.
-    #[test]
-    fn the_digest_is_sha256_of_the_utf8_bytes() {
-        assert_eq!(
-            digest("abc"),
-            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
     }
 
     #[test]

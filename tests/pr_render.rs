@@ -88,7 +88,7 @@ fn receipts(project: &Path, session: &str) -> Vec<String> {
 /// folded, so a client that trims a trailing newline still matches.
 fn receipt_name(prefix: &str, text: &str) -> String {
     let folded: Vec<&str> = text.lines().map(str::trim_end).collect();
-    let digest = devkit_common::harness_log::redact::digest(folded.join("\n").trim());
+    let digest = devkit_common::digest::sha256(folded.join("\n").trim());
     format!("{prefix}{}", digest.trim_start_matches("sha256:"))
 }
 
