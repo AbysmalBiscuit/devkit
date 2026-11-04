@@ -502,7 +502,7 @@ impl TaskchampionStore {
 }
 
 /// The task statuses devkit writes.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TaskStatus {
     Pending,
     Completed,
@@ -820,7 +820,175 @@ impl TodoStore for TaskchampionStore {
 
 #[cfg(test)]
 mod tests {
-    use super::redacted;
+    use std::collections::BTreeMap;
+
+    use taskchampion::{Operation, Task};
+
+    use super::*;
+
+    /// One write devkit makes to a task.
+    #[derive(Clone, Copy, Debug)]
+    enum Step {
+        Status(TaskStatus),
+        Start,
+        Stop,
+        Set(&'static str, Option<&'static str>),
+        Depend(bool),
+    }
+
+    const BLOCKER: Uuid = Uuid::from_u128(7);
+
+    /// `steps` through taskchampion's `Task` setters, guarded as devkit
+    /// guarded them: a stop only on an active task.
+    fn through_task(task: &mut Task, steps: &[Step], ops: &mut Operations) {
+        for step in steps {
+            match *step {
+                Step::Status(status) => task.set_status(
+                    match status {
+                        TaskStatus::Pending => taskchampion::Status::Pending,
+                        TaskStatus::Completed => taskchampion::Status::Completed,
+                        TaskStatus::Deleted => taskchampion::Status::Deleted,
+                    },
+                    ops,
+                ),
+                Step::Start => task.start(ops),
+                Step::Stop if task.is_active() => task.stop(ops),
+                Step::Stop => Ok(()),
+                Step::Set(key, value) => task.set_value(key, value.map(str::to_string), ops),
+                Step::Depend(true) => task.add_dependency(BLOCKER, ops),
+                Step::Depend(false) => task.remove_dependency(BLOCKER, ops),
+            }
+            .unwrap();
+        }
+    }
+
+    fn through_writer(task: &mut Writer, steps: &[Step]) {
+        for step in steps {
+            match *step {
+                Step::Status(status) => task.status(status),
+                Step::Start => task.start(),
+                Step::Stop => task.stop(),
+                Step::Set(key, value) => task.set(key, value.map(str::to_string)),
+                Step::Depend(add) => task.set(format!("dep_{BLOCKER}"), add.then(String::new)),
+            }
+        }
+    }
+
+    /// `value` with a timestamp taken during the test read as `<now>`, so
+    /// two writers a second apart compare equal and a fixed one does not.
+    fn settled(value: &Option<String>, since: i64) -> Option<String> {
+        value.as_ref().map(|v| match v.parse::<i64>() {
+            Ok(t) if t >= since => "<now>".to_string(),
+            _ => v.clone(),
+        })
+    }
+
+    type Write = (String, Option<String>, Option<String>);
+
+    fn writes(ops: &Operations, since: i64) -> Vec<Write> {
+        ops.iter()
+            .map(|op| match op {
+                Operation::Update {
+                    property,
+                    old_value,
+                    value,
+                    ..
+                } => (
+                    property.clone(),
+                    settled(old_value, since),
+                    settled(value, since),
+                ),
+                other => panic!("unexpected operation {other:?}"),
+            })
+            .collect()
+    }
+
+    fn properties(task: &TaskData, since: i64) -> BTreeMap<String, Option<String>> {
+        task.iter()
+            .map(|(k, v)| (k.clone(), settled(&Some(v.clone()), since)))
+            .collect()
+    }
+
+    #[test]
+    fn the_writer_writes_as_the_task_setters_do() {
+        let dir = tempfile::tempdir().unwrap();
+        let since = Utc::now().timestamp();
+        let statuses = [
+            taskchampion::Status::Pending,
+            taskchampion::Status::Completed,
+            taskchampion::Status::Deleted,
+        ];
+        let scenarios: &[&[Step]] = &[
+            &[Step::Status(TaskStatus::Pending)],
+            &[Step::Status(TaskStatus::Completed)],
+            &[Step::Status(TaskStatus::Deleted)],
+            &[Step::Start],
+            &[Step::Stop],
+            &[Step::Set("description", Some("renamed"))],
+            &[Step::Set("subof", None)],
+            &[Step::Depend(true)],
+            &[Step::Depend(false)],
+            &[
+                Step::Status(TaskStatus::Pending),
+                Step::Stop,
+                Step::Set("holder", None),
+            ],
+            &[
+                Step::Status(TaskStatus::Pending),
+                Step::Start,
+                Step::Set("holder", Some("s1")),
+            ],
+            &[
+                Step::Stop,
+                Step::Status(TaskStatus::Completed),
+                Step::Set("holder", Some("s1")),
+            ],
+        ];
+        block_on(async {
+            let storage = SqliteStorage::new(dir.path(), AccessMode::ReadWrite, true).await?;
+            let mut replica = Replica::new(storage);
+            let mut seeded = Vec::new();
+            for status in &statuses {
+                for start in [None, Some("1700000000")] {
+                    for end in [None, Some("1700000100")] {
+                        let uuid = Uuid::new_v4();
+                        let mut ops = Operations::new();
+                        let mut task = TaskData::create(uuid, &mut ops);
+                        task.update("description", Some("d".into()), &mut ops);
+                        task.update("status", Some(status.to_string().to_lowercase()), &mut ops);
+                        task.update("start", start.map(str::to_string), &mut ops);
+                        task.update("end", end.map(str::to_string), &mut ops);
+                        task.update(format!("dep_{BLOCKER}"), Some(String::new()), &mut ops);
+                        replica.commit_operations(ops).await?;
+                        seeded.push((uuid, status.clone(), start, end));
+                    }
+                }
+            }
+            for (uuid, status, start, end) in seeded {
+                for steps in scenarios {
+                    let label = format!("{status:?} start={start:?} end={end:?} {steps:?}");
+                    let mut task = replica.get_task(uuid).await?.unwrap();
+                    let mut task_ops = Operations::new();
+                    through_task(&mut task, steps, &mut task_ops);
+                    let mut data = replica.get_task_data(uuid).await?.unwrap();
+                    let mut writer_ops = Operations::new();
+                    through_writer(&mut Writer::new(&mut data, &mut writer_ops), steps);
+                    assert_eq!(
+                        writes(&writer_ops, since),
+                        writes(&task_ops, since),
+                        "{label}"
+                    );
+                    assert_eq!(
+                        properties(&data, since),
+                        properties(&task.into_task_data(), since),
+                        "{label}"
+                    );
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn a_urls_user_and_password_are_redacted() {
