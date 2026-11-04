@@ -228,13 +228,17 @@ fn join_cgroup(leaf: &std::path::Path) {
     }
 }
 
+#[allow(
+    unsafe_code,
+    reason = "nix::sys::signal::signal is itself unsafe, std cannot reset a disposition, and \
+              nix's safe raise takes a Signal, which has no variant for a realtime signal"
+)]
 pub(super) fn exit_like(status: std::process::ExitStatus) -> ! {
     use std::os::unix::process::ExitStatusExt;
     let Some(signal) = status.signal() else {
         std::process::exit(status.code().unwrap_or(1));
     };
     // SAFETY: the number came from the child's status and installs no handler.
-    // `nix::sys::signal::Signal` has no variant for a realtime signal.
     unsafe {
         nix::libc::signal(signal, nix::libc::SIG_DFL);
         nix::libc::raise(signal);

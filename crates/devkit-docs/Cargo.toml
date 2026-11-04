@@ -3,6 +3,9 @@ name = "devkit-docs"
 version = "0.14.26"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 clap = { workspace = true }

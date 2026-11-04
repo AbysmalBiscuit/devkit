@@ -4,6 +4,9 @@ description = "Opt-in timing of devkit's subprocess and network IO"
 edition.workspace = true
 version = "0.14.26" # x-release-please-version
 
+[lints]
+workspace = true
+
 [dependencies]
 serde_json.workspace = true
 tracing.workspace = true

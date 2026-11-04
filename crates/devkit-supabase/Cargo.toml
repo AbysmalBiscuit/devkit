@@ -7,6 +7,9 @@ version = "0.14.26" # x-release-please-version
 [features]
 test-support = []
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true

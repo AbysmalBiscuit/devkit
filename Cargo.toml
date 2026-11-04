@@ -17,6 +17,9 @@ required-features = ["daemon"]
 default = ["daemon"]
 daemon = ["devkit-ports/daemon", "devkit-locks/daemon", "devkit-mcp/daemon"]
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
@@ -84,6 +87,9 @@ members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports"
 edition = "2024"
 version = "0.1.0" # x-release-please-version
 
+[workspace.lints.rust]
+unsafe_code = "deny"
+
 [workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "wrap_help"] }
@@ -107,7 +113,7 @@ nix = { version = "0.29", features = ["signal", "process", "term"] }
 same-file = "1"
 similar = "2"
 socket2 = "0.6"
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Networking_WinSock",
     "Win32_Security",

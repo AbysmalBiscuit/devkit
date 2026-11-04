@@ -73,6 +73,7 @@ Each rule's reasoning is documented at the named site. Read it before changing t
 - **Deletion needs certainty.** Baseline and worktree classifications are three-valued, and `Unknown` counts as held. The directory lock is taken before a slot lock (`src/bin/devkit/baseline/`).
 - **Hooks**: no `hook` verb exits 2, only `pre-tool-use`, `stop` and `subagent-stop` write stdout, and logging can never change a verdict (`src/bin/devkit/main.rs`, `hook/`, `harness_log::writer`). The shell guard fails open, and the write gate both paths share fails closed (`hook/gate.rs`). A hook invocation resolves one `vcs::Checkout` and passes it down. Payloads are read and answered through the `pabal` crate, and `--harness` takes its `AnyHarness`, so a harness pabal adds is a compile error at every match that must handle it.
 - **External tools**: the project's repository is reached through `devkit_common::vcs`, whose backends implement `devkit_vcs::VersionControl`. Only the git backend, third-party checkouts and test fixtures spawn git, through `devkit_git::Git`, so a crate that spawns git lists `devkit-git` in its `Cargo.toml`. Every pull-request operation goes through a `forge::Forge`, and repository-scoped `gh` calls go through `cmd::gh_json_in` / `cmd::gh_capture`.
+- **Unsafe**: the workspace denies `unsafe_code`. Only functions in the `devkit_common::sys` backends carry an `#[allow(unsafe_code)]`, and its `reason` says why no safe call exists.
 - Match `Role` and `StateKind` exhaustively.
 
 ## Conventions
