@@ -28,10 +28,9 @@ use windows_sys::Win32::{
         },
         ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
         Threading::{
-            CREATE_UNICODE_ENVIRONMENT, CreateProcessW, GetCurrentProcessId, GetExitCodeProcess,
-            INFINITE, OpenProcess, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-            PROCESS_TERMINATE, PROCESS_VM_READ, STARTUPINFOW, TerminateProcess,
-            WaitForSingleObject,
+            CREATE_UNICODE_ENVIRONMENT, CreateProcessW, GetExitCodeProcess, INFINITE, OpenProcess,
+            PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+            PROCESS_VM_READ, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
         },
     },
 };
@@ -49,6 +48,11 @@ const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 const UNSPECIFIED_RTT: u16 = u16::MAX;
 const NO_SYN_RETRANSMISSIONS: u8 = 0xfe;
 
+#[allow(
+    unsafe_code,
+    reason = "neither std nor socket2 sets SIO_TCP_INITIAL_RTO, so only WSAIoctl can stop SYN \
+              retransmission"
+)]
 pub(super) fn localhost_accepts(port: u16, timeout: Duration) -> bool {
     let Ok(socket) = Socket::new(Domain::IPV4, Type::STREAM, None) else {
         return false;
@@ -77,6 +81,11 @@ pub(super) fn localhost_accepts(port: u16, timeout: Duration) -> bool {
     socket.connect_timeout(&addr.into(), timeout).is_ok()
 }
 
+#[allow(
+    unsafe_code,
+    reason = "std reads an exit status only from a Child it spawned, so only OpenProcess and \
+              GetExitCodeProcess can query an arbitrary pid"
+)]
 pub(super) fn process_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
@@ -95,6 +104,11 @@ pub(super) fn process_alive(pid: u32) -> bool {
     }
 }
 
+#[allow(
+    unsafe_code,
+    reason = "std kills only a Child it spawned, so only GenerateConsoleCtrlEvent and \
+              TerminateProcess can stop an arbitrary pid"
+)]
 pub(super) fn terminate(pid: u32) {
     if pid == 0 {
         return;
@@ -153,6 +167,10 @@ impl BackgroundChild {
             .map(|status| status.expect("an infinite wait ends with the exit"))
     }
 
+    #[allow(
+        unsafe_code,
+        reason = "this handle comes from CreateProcessW, and std waits only on a Child it spawned"
+    )]
     fn wait_for(&self, millis: u32) -> io::Result<Option<ExitStatus>> {
         let handle = self.0.as_raw_handle();
         // SAFETY: `handle` is this child's process handle, open while `self`
@@ -177,14 +195,20 @@ impl BackgroundChild {
 /// every inheritable handle, those this process's own parent passed down
 /// included, and a process cannot list those to withhold them one by one.
 /// The child's stdio is its own console, which has no window.
+#[allow(
+    unsafe_code,
+    reason = "std's spawn always sets bInheritHandles, so only CreateProcessW can start a child \
+              with no inherited handle, and OwnedHandle can only adopt its result unsafely"
+)]
 pub(super) fn spawn_background(cmd: &Command) -> io::Result<BackgroundChild> {
     let mut command_line = command_line(cmd);
     let environment = environment_block(cmd);
     let directory = cmd.get_current_dir().map(|dir| wide(dir.as_os_str()));
-    // SAFETY: zeroed is the documented initial state of both structs.
-    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
-    startup.cb = size_of::<STARTUPINFOW>() as u32;
-    let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    let startup = STARTUPINFOW {
+        cb: size_of::<STARTUPINFOW>() as u32,
+        ..Default::default()
+    };
+    let mut info = PROCESS_INFORMATION::default();
     // SAFETY: every pointer is either null or into a buffer that outlives the
     // call, and the strings are NUL-terminated UTF-16.
     let created = unsafe {
@@ -292,19 +316,22 @@ fn environment_block(cmd: &Command) -> Option<Vec<u16>> {
 /// reader would then wait for a detached child to exit before it sees end of
 /// file. std duplicates a handle it passes as inherited stdio, so clearing
 /// the flag on the originals changes nothing for other spawns.
+#[allow(
+    unsafe_code,
+    reason = "std cannot clear HANDLE_FLAG_INHERIT on a handle that already exists, so only \
+              SetHandleInformation can"
+)]
 fn keep_stdio_from_children() {
-    use windows_sys::Win32::{
-        Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation},
-        System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
-    };
-    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
-        // SAFETY: GetStdHandle returns this process's handle or null/invalid,
-        // and SetHandleInformation only changes a flag on a handle we own.
-        unsafe {
-            let handle = GetStdHandle(which);
-            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
-                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
-            }
+    use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+    for handle in [
+        io::stdin().as_raw_handle(),
+        io::stdout().as_raw_handle(),
+        io::stderr().as_raw_handle(),
+    ] {
+        if !handle.is_null() {
+            // SAFETY: the handle is this process's own, and the call only
+            // changes a flag on it.
+            unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
         }
     }
 }
@@ -337,9 +364,7 @@ pub(super) fn tree_rss_bytes(root: u32) -> u64 {
 }
 
 pub(super) fn parent_pid() -> Option<u32> {
-    // SAFETY: GetCurrentProcessId takes no arguments and cannot fail.
-    let me = unsafe { GetCurrentProcessId() };
-    snapshot_parents()?.get(&me).copied()
+    snapshot_parents()?.get(&std::process::id()).copied()
 }
 
 pub(super) fn controlling_tty() -> Option<String> {
@@ -348,16 +373,22 @@ pub(super) fn controlling_tty() -> Option<String> {
 }
 
 /// Map every running process id to its parent's id via a Toolhelp snapshot.
+#[allow(
+    unsafe_code,
+    reason = "std cannot list processes, and no current dependency wraps the Toolhelp snapshot"
+)]
 fn snapshot_parents() -> Option<HashMap<u32, u32>> {
+    let mut entry = PROCESSENTRY32W {
+        dwSize: size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
     // SAFETY: the snapshot handle is checked against INVALID_HANDLE_VALUE and
-    // closed; `entry` is zeroed with `dwSize` set before the first call.
+    // closed; `entry` has `dwSize` set before the first call.
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snap == INVALID_HANDLE_VALUE {
             return None;
         }
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
         let mut parent = HashMap::new();
         if Process32FirstW(snap, &mut entry) != 0 {
             loop {
@@ -374,19 +405,24 @@ fn snapshot_parents() -> Option<HashMap<u32, u32>> {
 
 /// Resident working-set size (bytes) of a single process, or 0 if it cannot be
 /// opened or queried.
+#[allow(
+    unsafe_code,
+    reason = "std does not report another process's memory, and no current dependency wraps \
+              GetProcessMemoryInfo"
+)]
 fn working_set_bytes(pid: u32) -> u64 {
     if pid == 0 {
         return 0;
     }
-    // SAFETY: the handle is null-checked and closed; the counters struct is
-    // zeroed and its size is passed to GetProcessMemoryInfo.
+    let mut counters = PROCESS_MEMORY_COUNTERS::default();
+    let cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    // SAFETY: the handle is null-checked and closed; the size of the counters
+    // struct is passed to GetProcessMemoryInfo.
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
         if handle.is_null() {
             return 0;
         }
-        let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
-        let cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
         let ok = GetProcessMemoryInfo(handle, &mut counters, cb) != 0;
         CloseHandle(handle);
         if ok {
@@ -430,7 +466,7 @@ pub(super) fn symlink(
 mod tests {
     use std::{path::Path, process::Command, time::Instant};
 
-    use super::{AsRawHandle, Duration};
+    use super::Duration;
     use crate::sys::spawn_background;
 
     /// Set to a file path, this binary's `background_child_console_probe`
@@ -442,6 +478,10 @@ mod tests {
     const CONSOLE_RELAY_ENV: &str = "DEVKIT_TEST_CONSOLE_RELAY";
 
     #[test]
+    #[allow(
+        unsafe_code,
+        reason = "std cannot tell whether this process has a console or a console window"
+    )]
     fn background_child_console_probe() {
         use windows_sys::Win32::System::Console::{GetConsoleCP, GetConsoleWindow};
         let Some(out) = std::env::var_os(CONSOLE_PROBE_ENV) else {
@@ -508,21 +548,19 @@ mod tests {
     /// waiting for end of file until the child exits.
     #[test]
     fn a_background_child_holds_no_handle_its_parent_inherited() {
-        use std::io::Read;
+        use std::{io::Read, os::windows::io::AsHandle};
 
-        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+        use interprocess::os::windows::unnamed_pipe::CreationOptions;
         let tmp = tempfile::tempdir().unwrap();
         let marker = tmp.path().join("running");
         std::fs::write(&marker, "").unwrap();
-        let (mut reader, writer) = std::io::pipe().unwrap();
-        // SAFETY: only sets a flag on a handle this test owns.
-        unsafe {
-            SetHandleInformation(
-                writer.as_raw_handle(),
-                HANDLE_FLAG_INHERIT,
-                HANDLE_FLAG_INHERIT,
-            )
-        };
+        let (writer, inheritable_reader) =
+            CreationOptions::new().inheritable(true).create().unwrap();
+        // A duplicate never inherits, and std reads a closed pipe as end of
+        // file.
+        let mut reader =
+            std::io::PipeReader::from(inheritable_reader.as_handle().try_clone_to_owned().unwrap());
+        drop(inheritable_reader);
         let mut cmd = Command::new(std::env::current_exe().unwrap());
         cmd.args(["--exact", "sys::imp::tests::background_child_wait_probe"])
             .env(WAIT_PROBE_ENV, &marker);

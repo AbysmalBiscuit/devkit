@@ -3,6 +3,9 @@ name = "devkit-ticket"
 edition.workspace = true
 version = "0.14.26" # x-release-please-version
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 serde = { workspace = true }

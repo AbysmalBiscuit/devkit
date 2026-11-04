@@ -3,6 +3,9 @@ name = "devkit-rules"
 edition.workspace = true
 version = "0.14.26" # x-release-please-version
 
+[lints]
+workspace = true
+
 [dependencies]
 ambassador.workspace = true
 anyhow.workspace = true
