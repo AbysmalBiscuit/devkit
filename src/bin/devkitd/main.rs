@@ -186,9 +186,7 @@ fn main() -> Result<()> {
         }
         _ => {}
     }
-    // Mark this process as the daemon so registry facade calls resolve locally
-    // instead of connecting back to this same daemon over the socket.
-    unsafe { std::env::set_var("DEVKITD_SELF", "1") };
+    devkit_common::daemon::mark_in_daemon();
     std::fs::create_dir_all(paths::state_dir()?)?;
     std::fs::create_dir_all(paths::logs_dir()?)?;
     let daemon_paths = DaemonPaths::resolve()?;

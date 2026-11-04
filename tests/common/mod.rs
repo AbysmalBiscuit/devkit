@@ -161,10 +161,7 @@ impl Harness {
         let bin = env!("CARGO_BIN_EXE_devkitd");
         let mut cmd = Command::new(bin);
         cmd.env("HOME", home.path())
-            .env("XDG_STATE_HOME", &xdg_state)
-            // The daemon sets this itself; pre-setting it keeps facade calls in the
-            // child resolving locally rather than connecting back over the socket.
-            .env("DEVKITD_SELF", "1");
+            .env("XDG_STATE_HOME", &xdg_state);
         for (k, v) in extra {
             cmd.env(k, v);
         }

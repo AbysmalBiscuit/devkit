@@ -43,7 +43,6 @@ fn second_instance_exits_immediately() {
         .env("HOME", h.home.path())
         .env("XDG_STATE_HOME", &h.xdg_state)
         .env("DEVKIT_DAEMON_IDLE_SECS", "3600")
-        .env("DEVKITD_SELF", "1")
         .status()
         .expect("spawn second daemon");
 

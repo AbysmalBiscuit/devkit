@@ -10,25 +10,6 @@ use anyhow::{Context, Result};
 
 pub use crate::sys::tree_rss_bytes;
 
-/// Configure a `Command` the same way `spawn_detached` does, minus the stdio
-/// attachment (which requires a real logfile). Extracted so tests can inspect
-/// the resulting env without spawning a real process.
-fn configure_child<'a>(
-    c: &'a mut Command,
-    rest: &[String],
-    cwd: &str,
-    env: &BTreeMap<String, String>,
-) -> &'a mut Command {
-    // The daemon marker must not cross into supervised children: a devkit
-    // subprocess of a child would see it, skip the devkitd.lock gate, and
-    // write ports.json directly behind the live daemon, causing silent
-    // registry desync.
-    c.args(rest)
-        .current_dir(cwd)
-        .envs(env)
-        .env_remove("DEVKITD_SELF")
-}
-
 /// Spawn `argv` detached (own session), env-augmented, stdout+stderr ->
 /// logfile. When `cgroup_leaf` is `Some`, the child joins that cgroup in
 /// `pre_exec` before `exec` (Linux only; a no-op elsewhere). Returns the child
@@ -45,7 +26,9 @@ pub fn spawn_detached(
     let err = out.try_clone()?;
     let (prog, rest) = argv.split_first().context("empty launch argv")?;
     let mut c = Command::new(prog);
-    configure_child(&mut c, rest, cwd, env)
+    c.args(rest)
+        .current_dir(cwd)
+        .envs(env)
         .stdin(Stdio::null())
         .stdout(out)
         .stderr(err);
@@ -96,32 +79,7 @@ pub fn tail(logfile: &PathBuf, lines: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
-
     use super::*;
-
-    /// `configure_child` must remove `DEVKITD_SELF` from the child's env so a
-    /// devkit subprocess of a supervised server cannot write the registry
-    /// behind the live daemon. `env_remove` records the removal as `(key,
-    /// None)` in `get_envs` on every platform, so anything other than an
-    /// explicit removal means the child would inherit the marker — the
-    /// regression this test guards against.
-    #[test]
-    fn spawn_detached_does_not_leak_daemon_marker() {
-        let env = BTreeMap::new();
-        let mut c = Command::new("true"); // program name does not matter
-        configure_child(&mut c, &[], ".", &env);
-        let marker = c.get_envs().find(|(k, _)| *k == OsStr::new("DEVKITD_SELF"));
-        match marker {
-            Some((_, None)) => {} // explicit removal recorded — correct
-            Some((_, Some(v))) => {
-                panic!("DEVKITD_SELF must be removed but child would inherit {v:?}")
-            }
-            None => panic!(
-                "DEVKITD_SELF is not removed from the child env — spawn_detached must env_remove it"
-            ),
-        }
-    }
 
     /// Command prefix that runs a *real* python interpreter, or `None`. The
     /// prefix is `["python3"]`-style for a direct interpreter, or a uv
