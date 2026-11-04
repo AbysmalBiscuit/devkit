@@ -972,7 +972,8 @@ impl<'a> Fence<'a> {
         }
     }
 
-    /// Every todo in the store.
+    /// Every todo in the store, or only the open ones after
+    /// [`Fence::over_open`].
     fn todos(&self) -> Result<&[Todo]> {
         if let Some(todos) = self.todos.get() {
             return Ok(todos);
