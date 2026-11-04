@@ -2587,7 +2587,6 @@ mod tests {
             pid: Some(std::process::id()),
             logfile: None,
             ts: registry::now(),
-            origin: None,
         });
         let err = drop_reference(&f.repo, &f.baseline, &ports, false).unwrap_err();
         assert!(format!("{err:#}").contains("running servers"), "{err:#}");

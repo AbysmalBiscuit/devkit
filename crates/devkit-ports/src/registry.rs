@@ -55,18 +55,6 @@ pub struct Entry {
     pub pid: Option<u32>,
     pub logfile: Option<PathBuf>,
     pub ts: u64,
-    /// What the server launched from. `None` for a reservation, for a
-    /// server launched on a dirty tree, and for one a supervisor restarted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<Origin>,
-}
-
-/// The commit a server launched from, and the digest of its launch plan.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Origin {
-    pub commit: String,
-    /// See [`crate::run::LaunchPlan::digest`].
-    pub plan: String,
 }
 
 /// Current on-disk schema version. Bump when the layout changes in a way that
@@ -257,7 +245,6 @@ mod tests {
             pid: None,
             logfile: None,
             ts: 1,
-            origin: None,
         });
         let s = serde_json::to_string(&d).unwrap();
         let back: Data = serde_json::from_str(&s).unwrap();
@@ -274,7 +261,6 @@ mod tests {
             pid: Some(42),
             logfile: None,
             ts: now(),
-            origin: None,
         });
         let view: std::collections::BTreeMap<u16, bool> = [(4100u16, true)].into_iter().collect();
         let text = status_table_with(&data, Some("/w/root"), &view);
@@ -295,7 +281,6 @@ mod tests {
             pid: Some(42),
             logfile: None,
             ts: now(),
-            origin: None,
         });
         data.entries.insert(4200, Entry {
             app: "web".into(),
@@ -304,7 +289,6 @@ mod tests {
             pid: Some(43),
             logfile: None,
             ts: now(),
-            origin: None,
         });
         let view: BTreeMap<u16, bool> = [(4100u16, true), (4200u16, true)].into_iter().collect();
         let urls: BTreeMap<u16, String> = [(4100u16, "http://localhost:4100".to_string())]
@@ -333,7 +317,6 @@ mod tests {
             pid: Some(42),
             logfile: None,
             ts: now(),
-            origin: None,
         });
         let view: BTreeMap<u16, bool> = [(4100u16, true)].into_iter().collect();
         let text = status_table_linked(&data, Some("/w/root"), &view, &BTreeMap::new());
@@ -461,16 +444,14 @@ impl Data {
             pid: None,
             logfile: None,
             ts: now(),
-            origin: None,
         });
         port
     }
 
-    /// Attach a pid, logfile and origin to a port's reservation,
-    /// re-establishing the row if it was pruned in the gap between reserving
-    /// and spawning, so a live process is never left untracked (which would
-    /// make `devrun down` unable to stop it).
-    #[allow(clippy::too_many_arguments)]
+    /// Attach a pid + logfile to a port's reservation, re-establishing the row
+    /// if it was pruned in the gap between reserving and spawning — so a
+    /// live process is never left untracked (which would make `devrun down`
+    /// unable to stop it).
     pub fn record_pid(
         &mut self,
         port: u16,
@@ -479,7 +460,6 @@ impl Data {
         role: Role,
         pid: u32,
         logfile: PathBuf,
-        origin: Option<Origin>,
     ) {
         let e = self.entries.entry(port).or_insert_with(|| Entry {
             app: app.into(),
@@ -488,14 +468,12 @@ impl Data {
             pid: None,
             logfile: None,
             ts: now(),
-            origin: None,
         });
         e.app = app.into();
         e.holder = holder.into();
         e.role = role;
         e.pid = Some(pid);
         e.logfile = Some(logfile);
-        e.origin = origin;
     }
 
     /// Release exactly the listed ports that are still present. Returns freed
@@ -621,7 +599,6 @@ pub fn alloc_with(
             pid: None,
             logfile: None,
             ts: now(),
-            origin: None,
         });
         chosen.push((app.clone(), port));
     }
@@ -647,7 +624,6 @@ pub fn alloc_with(
                     pid: None,
                     logfile: None,
                     ts: now(),
-                    origin: None,
                 });
                 out.push((app.clone(), *port));
             }
@@ -656,7 +632,6 @@ pub fn alloc_with(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn record_pid_with(
     store: &impl Store,
     port: u16,
@@ -665,10 +640,9 @@ pub fn record_pid_with(
     role: Role,
     pid: u32,
     logfile: PathBuf,
-    origin: Option<Origin>,
 ) -> Result<()> {
     store.commit(|d| {
-        d.record_pid(port, app, holder, role, pid, logfile, origin);
+        d.record_pid(port, app, holder, role, pid, logfile);
         Ok(())
     })
 }
@@ -724,8 +698,7 @@ pub fn alloc(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(St
     alloc_with(&FlockStore::new()?, holder, reqs, role)
 }
 
-/// Attach a pid, logfile and origin to a reservation (re-establishing it if
-/// pruned).
+/// Attach a pid + logfile to a reservation (re-establishing it if pruned).
 pub fn record_pid(
     port: u16,
     app: &str,
@@ -733,7 +706,6 @@ pub fn record_pid(
     role: Role,
     pid: u32,
     logfile: PathBuf,
-    origin: Option<Origin>,
 ) -> Result<()> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(crate::daemon::proto::Request::RecordPid {
@@ -743,7 +715,6 @@ pub fn record_pid(
         role,
         pid,
         logfile: logfile.clone(),
-        origin: origin.clone(),
     })? {
         return match resp {
             crate::daemon::proto::Response::Ok => Ok(()),
@@ -751,16 +722,7 @@ pub fn record_pid(
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    record_pid_with(
-        &FlockStore::new()?,
-        port,
-        app,
-        holder,
-        role,
-        pid,
-        logfile,
-        origin,
-    )
+    record_pid_with(&FlockStore::new()?, port, app, holder, role, pid, logfile)
 }
 
 /// Release all entries for `holder` (optionally one role); returns freed ports.
@@ -1025,7 +987,6 @@ mod ops_tests {
             pid: None,
             logfile: None,
             ts: now(),
-            origin: None,
         });
         d.prune();
         assert!(d.entries.is_empty());
@@ -1055,7 +1016,6 @@ mod ops_tests {
             Role::Workspace,
             4321,
             PathBuf::from("/log"),
-            None,
         );
         assert_eq!(d.entries[&9100].pid, Some(4321));
         assert_eq!(d.entries[&9100].app, "api");
@@ -1072,7 +1032,6 @@ mod ops_tests {
             Role::Workspace,
             99,
             PathBuf::from("/log"),
-            None,
         );
         assert_eq!(d.entries.len(), 1);
         assert_eq!(d.entries[&port].pid, Some(99));
@@ -1117,7 +1076,6 @@ mod ops_tests {
             pid: None,
             logfile: None,
             ts: now(),
-            origin: None,
         });
         assert_eq!(d.dead_ports(), vec![9100]);
     }
@@ -1137,7 +1095,6 @@ mod ops_tests {
             pid: None,
             logfile: None,
             ts: now().saturating_sub(RESERVATION_GRACE_SECS),
-            origin: None,
         });
         assert_eq!(d.dead_ports(), vec![47360]);
 
@@ -1199,7 +1156,6 @@ mod ops_tests {
             pid: None,
             logfile: None,
             ts: now(),
-            origin: None,
         });
         let store = Racing {
             seen: Data::default(),
@@ -1237,12 +1193,11 @@ mod ops_tests {
             Role::Workspace,
             std::process::id(),
             "l".into(),
-            None,
         );
         assert_eq!(live_port(&d, "/wt", "api"), Some(p));
         assert_eq!(live_port(&d, "/other", "api"), None); // wrong holder
         assert_eq!(live_port(&d, "/wt", "web"), None); // wrong app
-        d.record_pid(p, "api", "/wt", Role::Workspace, u32::MAX, "l".into(), None);
+        d.record_pid(p, "api", "/wt", Role::Workspace, u32::MAX, "l".into());
         assert_eq!(live_port(&d, "/wt", "api"), None); // dead pid
     }
 
@@ -1285,7 +1240,6 @@ mod store_seam_tests {
             Role::Workspace,
             4321,
             PathBuf::from("/log"),
-            None,
         )
         .unwrap();
         assert_eq!(store.snapshot().unwrap().entries[&port].pid, Some(4321));
@@ -1344,7 +1298,6 @@ mod store_seam_tests {
                     pid: None,
                     logfile: None,
                     ts: 0,
-                    origin: None,
                 });
                 Ok(())
             })
@@ -1411,7 +1364,6 @@ mod select_tests {
             pid,
             logfile: None,
             ts,
-            origin: None,
         }
     }
 

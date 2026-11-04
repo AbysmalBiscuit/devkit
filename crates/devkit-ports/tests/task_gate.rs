@@ -106,7 +106,6 @@ fn gate_waiver_scoping_and_lazy_resolution_body() {
         Role::Workspace,
         std::process::id(),
         tmp.join("api.log"),
-        None,
     )
     .unwrap();
     let plan = task::resolve_step(&cfg, &cat, &here, mine_s, "build", &none, &none).unwrap();
@@ -126,7 +125,6 @@ fn gate_waiver_scoping_and_lazy_resolution_body() {
         Role::Workspace,
         std::process::id(),
         tmp.join("api.log"),
-        None,
     )
     .unwrap();
     let plan = task::resolve_step(&cfg, &cat, &here, mine_s, "build", &none, &none).unwrap();

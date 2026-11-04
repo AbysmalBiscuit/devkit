@@ -986,16 +986,15 @@ struct ReusedServer {
 /// registry counts every server as gone.
 fn still_running(servers: Vec<ReusedServer>) -> (Vec<String>, Vec<String>) {
     let data = registry::snapshot().ok();
+    let ledger = devkit_ports::ledger::Ledger::live().ok();
     let (still, gone): (Vec<_>, Vec<_>) = servers.into_iter().partition(|s| {
-        data.as_ref()
+        let Some(pid) = s.pid else { return false };
+        let serves = data
+            .as_ref()
             .and_then(|d| d.entries.get(&s.port))
-            .is_some_and(|e| {
-                e.app == s.app
-                    && e.pid.is_some()
-                    && e.pid == s.pid
-                    && e.pid.is_some_and(registry::pid_alive)
-                    && e.origin.as_ref().map(|o| &o.commit) == s.current_plan_commit.as_ref()
-            })
+            .is_some_and(|e| e.app == s.app && e.pid == Some(pid) && registry::pid_alive(pid));
+        let origin = ledger.as_ref().and_then(|l| l.origin(s.port, pid));
+        serves && origin.map(|o| o.commit) == s.current_plan_commit
     });
     (
         still.into_iter().map(|s| s.app).collect(),
@@ -1878,7 +1877,6 @@ mod tests {
             pid: Some(1),
             logfile: None,
             ts: 0,
-            origin: None,
         }
     }
 
@@ -2187,7 +2185,6 @@ mod tests {
             pid: None,
             logfile: None,
             ts: 0,
-            origin: None,
         }
     }
 

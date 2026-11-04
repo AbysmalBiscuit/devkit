@@ -164,7 +164,6 @@ impl Daemon {
                     key.role,
                     pid,
                     log,
-                    None,
                 );
                 self.sup.lock().unwrap().set_pid(key, pid);
             }

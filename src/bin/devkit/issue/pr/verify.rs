@@ -1,5 +1,5 @@
 //! The verify gate: a PR opens at a commit the project's required task is
-//! recorded passing on. Only `devrun task` writes the run ledger, so the
+//! recorded passing on. Only devrun writes the run ledger, so the
 //! record is evidence an agent cannot type into the PR body itself.
 
 use std::{collections::BTreeMap, path::PathBuf};

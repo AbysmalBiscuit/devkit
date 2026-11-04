@@ -1041,7 +1041,6 @@ fn hold_since(p: &ghfake::Fake, app: &str, pid: Option<u32>, ts: u64) -> std::ne
         pid,
         logfile: None,
         ts,
-        origin: None,
     });
     let dir = p.state().join("devkit");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1221,6 +1220,14 @@ impl Drop for Srv<'_> {
     }
 }
 
+/// The origin the run ledger holds for `srv`'s process.
+fn srv_origin(p: &ghfake::Fake) -> Option<devkit_ports::ledger::Origin> {
+    let data = registry(p);
+    let (port, entry) = data.entries.iter().find(|(_, e)| e.app == "srv").unwrap();
+    devkit_ports::ledger::Ledger::at(p.state().join("devkit").join("runs"))
+        .origin(*port, entry.pid.unwrap())
+}
+
 fn registry(p: &ghfake::Fake) -> devkit_ports::registry::Data {
     let text = std::fs::read(p.state().join("devkit").join("ports.json")).unwrap();
     serde_json::from_slice(&text).unwrap()
@@ -1230,11 +1237,10 @@ fn registry(p: &ghfake::Fake) -> devkit_ports::registry::Data {
 fn devrun_up_records_the_launch_commit_and_plan_digest() {
     let p = serving_project(39212);
     let _srv = Srv::up(&p);
-    let data = registry(&p);
-    let entry = data.entries.values().find(|e| e.app == "srv").unwrap();
-    let origin = entry.origin.as_ref().expect("an origin is recorded");
+    let origin = srv_origin(&p).expect("an origin is recorded");
     assert_eq!(origin.commit, head(&p));
     assert!(origin.plan.starts_with("hmac-sha256:"), "{}", origin.plan);
+    assert!(!origin.plan.contains(TOKEN), "{}", origin.plan);
     let text = std::fs::read_to_string(p.state().join("devkit").join("ports.json")).unwrap();
     assert!(!text.contains(TOKEN), "{text}");
 }
@@ -1246,9 +1252,7 @@ fn a_server_launched_with_an_unreadable_digest_key_records_no_origin() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("digest.key"), b"not a key").unwrap();
     let _srv = Srv::up(&p);
-    let data = registry(&p);
-    let entry = data.entries.values().find(|e| e.app == "srv").unwrap();
-    assert_eq!(entry.origin, None);
+    assert_eq!(srv_origin(&p), None);
 }
 
 #[test]
@@ -1325,6 +1329,36 @@ fn a_run_reusing_a_server_whose_env_rendered_another_value_is_refused() {
         "--arg",
         "scope=all",
     ]);
+    assert_refused_for_reusing_srv(&p);
+}
+
+/// The port registry is a file any process can rewrite, so an origin written
+/// there names no commit the gate trusts.
+#[test]
+fn an_origin_forged_in_the_port_registry_does_not_qualify_a_stale_server() {
+    let p = serving_project(39219);
+    let _srv = Srv::up(&p);
+    let launched_at = head(&p);
+    std::fs::write(p.project().join("later.txt"), "later\n").unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "later"]);
+    serve_head(&p);
+    let file = p.state().join("devkit").join("ports.json");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let entry = json["entries"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .find(|e| e["app"] == "srv")
+        .unwrap();
+    entry["origin"] = serde_json::json!({
+        "commit": head(&p),
+        "plan": srv_origin(&p).unwrap().plan,
+    });
+    assert_ne!(launched_at, head(&p));
+    std::fs::write(&file, serde_json::to_string(&json).unwrap()).unwrap();
+    task(&p, &["e2e", "--arg", "scope=all"]);
     assert_refused_for_reusing_srv(&p);
 }
 

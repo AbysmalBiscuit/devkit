@@ -133,7 +133,6 @@ fn supervised_child_reaches_the_daemon() {
         env,
         logfile: h.home.path().join("child.log"),
         base_port: port,
-        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),

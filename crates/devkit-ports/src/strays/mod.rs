@@ -493,7 +493,6 @@ mod tests {
             pid: Some(42),
             logfile: None,
             ts: 0,
-            origin: None,
         });
         let strays = scan_with(&cfg, &data, &Listening(vec![9105]), &NoProcs);
         assert!(strays.is_empty());
@@ -617,7 +616,6 @@ mod tests {
             pid: Some(300),
             logfile: None,
             ts: 0,
-            origin: None,
         });
         let wt = "/home/u/Git/x/swe-1/apps/api";
         let table = Table(vec![

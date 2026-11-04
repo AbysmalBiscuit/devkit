@@ -155,8 +155,9 @@ impl Claims {
 }
 
 /// A refusal for each of `claims`' targets that lands inside devrun's run
-/// ledger. Only `devrun task` writes the ledger, so this holds whether or not
-/// the project enforces write locks.
+/// ledger. Only devrun writes the ledger, its runs and the origins of the
+/// servers it launches, so this holds whether or not the project enforces
+/// write locks.
 pub fn ledger_blocks(claims: &Claims, ledger: &Ledger, cwd: &Path) -> Vec<String> {
     let scopes = claims.scopes.iter().map(|check| match check {
         ScopeCheck::Tree { dir, .. } | ScopeCheck::Fresh { dir } => dir,
@@ -170,7 +171,7 @@ pub fn ledger_blocks(claims: &Claims, ledger: &Ledger, cwd: &Path) -> Vec<String
         .filter(|target| ledger.contains(Path::new(target), cwd))
         .map(|target| {
             format!(
-                "{PREFIX} `{target}` is in devrun's run ledger, which only `devrun task` writes. \
+                "{PREFIX} `{target}` is in devrun's run ledger, which only devrun writes. \
                  Run the task to record a run; `devrun runs list` reads them."
             )
         })

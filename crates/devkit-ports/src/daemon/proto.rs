@@ -2,10 +2,10 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::registry::{Data, Origin, Role};
+use crate::registry::{Data, Role};
 
 /// Wire-format version. Bump on any incompatible change to these types.
-pub const PROTO: u32 = 5;
+pub const PROTO: u32 = 4;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -26,7 +26,6 @@ pub enum Request {
         role: Role,
         pid: u32,
         logfile: PathBuf,
-        origin: Option<Origin>,
     },
     Release {
         holder: String,
@@ -49,7 +48,6 @@ pub enum Request {
         env: BTreeMap<String, String>,
         logfile: PathBuf,
         base_port: u16,
-        origin: Option<Origin>,
     },
     Down {
         holder: String,

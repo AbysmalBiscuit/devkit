@@ -162,6 +162,23 @@ pub struct Step {
     pub ports: BTreeMap<String, u16>,
 }
 
+/// The commit a server launched from, and the digest of its launch plan.
+/// The ledger keeps it, so a rewrite of the port registry cannot forge it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Origin {
+    pub commit: String,
+    /// See [`crate::run::LaunchPlan::digest`].
+    pub plan: String,
+}
+
+/// An [`Origin`] and the process it belongs to.
+#[derive(Serialize, Deserialize)]
+struct OriginRecord {
+    pid: u32,
+    #[serde(flatten)]
+    origin: Origin,
+}
+
 /// The directory holding the records.
 #[derive(Debug, Clone)]
 pub struct Ledger {
@@ -192,6 +209,33 @@ impl Ledger {
         tmp.persist(&path)
             .with_context(|| format!("writing {}", path.display()))?;
         Ok(path)
+    }
+
+    /// Record that the server `pid` on `port` launched from `origin`,
+    /// replacing what an earlier server on that port recorded.
+    pub fn record_origin(&self, port: u16, pid: u32, origin: &Origin) -> Result<()> {
+        let dir = self.dir.join("origins");
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let mut tmp = tempfile::NamedTempFile::new_in(&dir)
+            .with_context(|| format!("creating an origin in {}", dir.display()))?;
+        serde_json::to_writer(&mut tmp, &OriginRecord {
+            pid,
+            origin: origin.clone(),
+        })?;
+        let path = dir.join(format!("{port}.json"));
+        tmp.persist(&path)
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(())
+    }
+
+    /// The origin recorded for the server `pid` on `port`. A record of
+    /// another process on that port, such as one a supervisor replaced, is
+    /// none.
+    pub fn origin(&self, port: u16, pid: u32) -> Option<Origin> {
+        let text =
+            std::fs::read_to_string(self.dir.join("origins").join(format!("{port}.json"))).ok()?;
+        let record: OriginRecord = serde_json::from_str(&text).ok()?;
+        (record.pid == pid).then_some(record.origin)
     }
 
     /// Every readable record, oldest first. A record that does not parse is

@@ -14,7 +14,8 @@ use serde::Serialize;
 
 use crate::{
     apps::App,
-    registry::{self, Data, Origin, Role},
+    ledger::{Ledger, Origin},
+    registry::{self, Data, Role},
 };
 
 /// Env layering (low->high): static_env -> url-wiring -> user overrides.
@@ -150,7 +151,7 @@ pub struct ServerStatus {
     /// [`launch`] found this server already running and did not spawn it.
     #[serde(skip)]
     pub reused: bool,
-    /// See [`registry::Entry::origin`].
+    /// The origin the run ledger holds for this server's process.
     #[serde(skip)]
     pub origin: Option<Origin>,
 }
@@ -195,7 +196,7 @@ pub fn server_rows(data: &Data, only_holder: Option<&str>) -> Vec<ServerStatus> 
             logfile: e.logfile.clone(),
             state: server_state(*port, e.pid),
             reused: false,
-            origin: e.origin.clone(),
+            origin: e.pid.and_then(|pid| recorded_origin(*port, pid)),
         });
     }
     rows
@@ -392,6 +393,19 @@ pub fn plan_group(
     Ok(plans)
 }
 
+/// The origin the run ledger holds for the server `pid` on `port`.
+fn recorded_origin(port: u16, pid: u32) -> Option<Origin> {
+    Ledger::live().ok()?.origin(port, pid)
+}
+
+/// Record `origin` for the server `pid` on `port`. A failure leaves the
+/// server with no origin, which no verify run trusts.
+fn record_origin(port: u16, pid: u32, origin: Option<Origin>) {
+    if let (Some(origin), Ok(ledger)) = (origin, Ledger::live()) {
+        let _ = ledger.record_origin(port, pid, &origin);
+    }
+}
+
 /// The origin a server launched from `dir` with `plan` records: `None` when
 /// the tree there has no commit or is dirty, since the server may then run
 /// code no commit holds, or when the digest key cannot be read.
@@ -543,7 +557,7 @@ fn existing_server(
         logfile: e.logfile.clone(),
         state: server_state(plan.port, Some(pid)),
         reused: true,
-        origin: e.origin.clone(),
+        origin: recorded_origin(plan.port, pid),
     })
 }
 
@@ -603,7 +617,8 @@ fn launch_with(
     for p in pending {
         let origin = origin_at(&p.cwd, p);
         let pid = spawn(p)?;
-        registry::record_pid(p.port, &p.app, holder, role, pid, p.log.clone(), origin)?;
+        registry::record_pid(p.port, &p.app, holder, role, pid, p.log.clone())?;
+        record_origin(p.port, pid, origin);
         spawned.push((p.app.clone(), p.port, p.log.clone(), pid));
     }
 
@@ -671,6 +686,7 @@ fn supervise_via_daemon(
         crate::daemon::client::ensure_running().context("starting supervisor daemon")?;
     let mut out = Vec::with_capacity(plans.len());
     for p in plans {
+        let origin = origin_at(&p.cwd, p);
         let resp = client.request(&crate::daemon::proto::Request::Supervise {
             holder: holder.to_string(),
             app: p.app.clone(),
@@ -680,8 +696,13 @@ fn supervise_via_daemon(
             env: p.env.clone(),
             logfile: p.log.clone(),
             base_port: p.port,
-            origin: origin_at(&p.cwd, p),
         })?;
+        let pid = registry::snapshot()
+            .ok()
+            .and_then(|d| d.entries.get(&p.port).filter(|e| e.holder == holder)?.pid);
+        if let Some(pid) = pid {
+            record_origin(p.port, pid, origin);
+        }
         let ready = match &resp {
             crate::daemon::proto::Response::Supervised(v) => {
                 v.first().map(|(_, r)| *r).unwrap_or(false)
@@ -1007,7 +1028,6 @@ mod tests {
             pid: None,
             logfile: None,
             ts: crate::registry::now(),
-            origin: None,
         });
         let rows = server_rows(&data, Some("/w"));
         assert_eq!(rows.len(), 1);
@@ -1029,7 +1049,6 @@ mod tests {
             pid: None,
             logfile: None,
             ts: crate::registry::now(),
-            origin: None,
         });
         let rows = server_rows(&data, None);
         assert_eq!(
@@ -1205,7 +1224,6 @@ mod tests {
                 pid: None,
                 logfile: Some(logfile.clone()),
                 ts: crate::registry::now(),
-                origin: None,
             });
             Ok(())
         })
@@ -1342,7 +1360,6 @@ mod tests {
             pid,
             logfile: None,
             ts: registry::now(),
-            origin: None,
         }
     }
 
