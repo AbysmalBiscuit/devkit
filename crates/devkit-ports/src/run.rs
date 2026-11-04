@@ -406,6 +406,21 @@ fn record_origin(port: u16, pid: u32, origin: Option<Origin>) {
     }
 }
 
+/// Record `origin` in `ledger` for the server a `Supervise` answer names on
+/// `port`, when that request spawned it. A request that found the server
+/// already live leaves the origin to the request that spawned it.
+#[cfg(feature = "daemon")]
+pub fn record_supervised_origin(
+    ledger: &Ledger,
+    port: u16,
+    server: &crate::daemon::proto::Supervised,
+    origin: Option<&Origin>,
+) {
+    if server.spawned {
+        let _ = ledger.set_origin(port, server.pid, origin);
+    }
+}
+
 /// The origin a server launched from `dir` with `plan` records: `None` when
 /// the tree there has no commit or is dirty, since the server may then run
 /// code no commit holds.
@@ -705,10 +720,8 @@ fn supervise_via_daemon(
         })?;
         let ready = match &resp {
             crate::daemon::proto::Response::Supervised(s) => {
-                // Another caller may have spawned the server since the
-                // snapshot above; its origin is that caller's to record.
-                if s.spawned {
-                    record_origin(p.port, s.pid, origin);
+                if let Ok(ledger) = Ledger::live() {
+                    record_supervised_origin(&ledger, p.port, s, origin.as_ref());
                 }
                 s.ready
             }

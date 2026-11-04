@@ -12,7 +12,9 @@ use std::{
 use common::{Harness, pid_in_ports_json};
 use devkit_ports::{
     daemon::proto::{Request, Response},
+    ledger::{Ledger, Origin},
     registry::Role,
+    run::{self, LaunchPlan},
 };
 use nix::{
     sys::signal::{Signal, kill},
@@ -1025,5 +1027,100 @@ fn down_does_not_restart() {
         "daemon restarted the server after a clean Down — entry should be gone: {snap:?}"
     );
 
+    h.shutdown();
+}
+
+/// Two Supervise requests for one app race with different launch plans: the
+/// second arrives while the first one's server is live but not yet ready.
+/// Only the request whose answer says it spawned the server records an
+/// origin, so the ledger holds the spawner's commit and plan digest.
+#[test]
+fn only_the_spawning_supervise_records_an_origin() {
+    let mut h = Harness::start();
+    let port = common::free_port();
+    let holder = h.home.path().to_str().unwrap().to_string();
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let ledger = Ledger::at(ledger_dir.path());
+
+    let plan = |argv: Vec<String>, mode: &str| LaunchPlan {
+        app: "api".into(),
+        port,
+        argv,
+        cwd: ".".into(),
+        env: BTreeMap::from([("MODE".to_string(), mode.to_string())]),
+        log: h.home.path().join(format!("race-{mode}.log")),
+        url: String::new(),
+    };
+    let mut slow_server = vec![
+        "sh".into(),
+        "-c".into(),
+        r#"sleep 2; exec "$@""#.into(),
+        "sh".into(),
+    ];
+    slow_server.extend(common::tcp_server_argv(port));
+    let first = plan(slow_server, "first");
+    let second = plan(common::tcp_server_argv(port), "second");
+    let request = |p: &LaunchPlan| Request::Supervise {
+        holder: holder.clone(),
+        app: p.app.clone(),
+        role: Role::Workspace,
+        argv: p.argv.clone(),
+        cwd: p.cwd.to_str().unwrap().to_string(),
+        env: p.env.clone(),
+        logfile: p.log.clone(),
+        base_port: p.port,
+    };
+    let origin_of = |p: &LaunchPlan, commit: &str| Origin {
+        commit: commit.into(),
+        plan: p.digest(),
+    };
+    let first_origin = origin_of(&first, &"a".repeat(40));
+    let second_origin = origin_of(&second, &"b".repeat(40));
+    assert_ne!(first_origin.plan, second_origin.plan);
+
+    let (first_resp, second_resp) = std::thread::scope(|s| {
+        let first_req = s.spawn(|| h.request(&request(&first)));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while pid_in_ports_json(&h.ports_json(), "api").is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the first server never got a pid"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !first_req.is_finished(),
+            "the first request answered before the race"
+        );
+        let second_resp = h.request(&request(&second));
+        (first_req.join().unwrap(), second_resp)
+    });
+
+    let (Response::Supervised(first_srv), Response::Supervised(second_srv)) =
+        (&first_resp, &second_resp)
+    else {
+        panic!("both requests must be supervised: {first_resp:?}, {second_resp:?}");
+    };
+    assert!(first_srv.spawned && first_srv.ready, "{first_srv:?}");
+    assert!(!second_srv.spawned, "{second_srv:?}");
+    assert_eq!(second_srv.pid, first_srv.pid);
+
+    // The losing request records first, as it answers first; the spawner's
+    // record must survive it either way.
+    run::record_supervised_origin(&ledger, port, second_srv, Some(&second_origin));
+    assert_eq!(
+        ledger.origin(port, first_srv.pid),
+        None,
+        "the losing request wrote an origin"
+    );
+    run::record_supervised_origin(&ledger, port, first_srv, Some(&first_origin));
+    assert_eq!(
+        ledger.origin(port, first_srv.pid),
+        Some(first_origin.clone())
+    );
+    run::record_supervised_origin(&ledger, port, second_srv, Some(&second_origin));
+    assert_eq!(ledger.origin(port, first_srv.pid), Some(first_origin));
+
+    h.request(&Request::Down { holder, role: None });
     h.shutdown();
 }
