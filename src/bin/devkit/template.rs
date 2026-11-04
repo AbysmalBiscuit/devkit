@@ -27,6 +27,15 @@ pub(crate) struct FieldArgs {
 }
 
 impl VarArgs {
+    /// These args with each `--arg-file` path as seen from `base`, the
+    /// directory `-C` names.
+    pub(crate) fn under(self, base: &Path) -> Self {
+        Self {
+            args: self.args,
+            arg_files: devkit_common::args::files_under(self.arg_files, base),
+        }
+    }
+
     pub(crate) fn parse(&self) -> Result<BTreeMap<String, String>> {
         devkit_common::args::parse(&self.args, &self.arg_files)
     }

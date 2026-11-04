@@ -1048,6 +1048,7 @@ fn run_workspace(dir: Option<String>, config: Option<String>, cmd: WorkspaceCmd)
 }
 
 fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()> {
+    let here = PathBuf::from(start(&dir));
     match cmd {
         PrCmd::Create {
             draft,
@@ -1066,11 +1067,11 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             to,
             base,
             pr_title,
-            pr_body: summary.read(&vars)?,
+            pr_body: summary.read(&vars, &here)?,
             attach,
             no_push,
             pr,
-            vars,
+            vars: vars.under(&here),
             dir,
             config,
         }),
@@ -1083,11 +1084,11 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             vars,
         } => pr::edit::run(pr::edit::Args {
             pr_title,
-            pr_body: summary.read(&vars)?,
+            pr_body: summary.read(&vars, &here)?,
             attach,
             no_push,
             pr,
-            vars,
+            vars: vars.under(&here),
             dir,
             config,
         }),
@@ -1097,8 +1098,8 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             vars,
         } => pr::render::run(pr::render::Args {
             pr_title,
-            pr_body: summary.read(&vars)?,
-            vars,
+            pr_body: summary.read(&vars, &here)?,
+            vars: vars.under(&here),
             dir,
             config,
         }),
@@ -1116,7 +1117,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             base.as_deref(),
         ),
         PrCmd::Proof { issue, vars } => {
-            pr::proof::run(Path::new(&start(&dir)), config.as_deref(), issue, &vars)
+            pr::proof::run(&here, config.as_deref(), issue, &vars.under(&here))
         }
         PrCmd::WeakenedTests {
             base,
@@ -1179,7 +1180,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
                 no_push,
                 no_notify,
                 pr,
-                vars,
+                vars: vars.under(&here),
                 dir,
                 config,
             }),
@@ -1187,7 +1188,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
                 body,
                 to,
                 pr,
-                vars,
+                vars: vars.under(&here),
                 dir,
                 config,
             }),

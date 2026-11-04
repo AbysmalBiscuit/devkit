@@ -228,6 +228,58 @@ fn stdin_read_for_both_the_summary_and_an_arg_is_refused() {
     assert!(err.contains("stdin"), "{err}");
 }
 
+/// A relative path names a file in the `-C` directory, not in the process
+/// directory, even when the process directory has a file of the same name.
+#[test]
+fn relative_paths_resolve_against_the_start_directory() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    fake.create_opens(&PR_7);
+    summary_file(&fake);
+    std::fs::write(fake.project().join("proof.md"), "1. from the project").unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("summary.md"), "Wrong summary.").unwrap();
+    std::fs::write(elsewhere.path().join("proof.md"), "1. wrong proof").unwrap();
+    let relative = [
+        "--pr-title",
+        "add a thing",
+        "--pr-body-file",
+        "summary.md",
+        "--arg-file",
+        "proof=proof.md",
+    ];
+
+    let rendered = fake.issue_from(
+        elsewhere.path(),
+        &[&["pr", "render"][..], &relative].concat(),
+    );
+    let body = rendered_body(&rendered);
+    assert!(body.contains(SUMMARY), "{body}");
+    assert!(body.contains("1. from the project"), "{body}");
+
+    let created = fake.issue_from(
+        elsewhere.path(),
+        &[&["pr", "create", "--no-push"][..], &relative].concat(),
+    );
+    assert!(created.status.success(), "{}", stderr(&created));
+    assert_eq!(fake.created_pr_arg("--body").as_deref(), Some(&*body));
+
+    let edit = ghfake::Fake::new(CONFIG, &PR_7);
+    edit.serve_pr_body(&PR_7, LIVE);
+    summary_file(&edit);
+    let edited = edit.issue_from(elsewhere.path(), &[
+        "pr",
+        "edit",
+        "--no-push",
+        "--pr-body-file",
+        "summary.md",
+    ]);
+    assert!(edited.status.success(), "{}", stderr(&edited));
+    assert_eq!(
+        edited_body(&edit),
+        LIVE.replace("The old summary.", SUMMARY)
+    );
+}
+
 #[test]
 fn a_missing_summary_file_is_named() {
     let fake = ghfake::Fake::without_pr(CONFIG);

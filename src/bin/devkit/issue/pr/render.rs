@@ -37,12 +37,13 @@ pub(crate) struct SummaryArgs {
 }
 
 impl SummaryArgs {
-    /// The summary the flags give. `vars` is what else this run reads: stdin
-    /// can fill one value only.
-    pub(crate) fn read(self, vars: &VarArgs) -> Result<Option<String>> {
+    /// The summary the flags give, a relative path read from `base`. `vars` is
+    /// what else this run reads: stdin can fill one value only.
+    pub(crate) fn read(self, vars: &VarArgs, base: &Path) -> Result<Option<String>> {
         let Some(path) = self.pr_body_file else {
             return Ok(self.pr_body);
         };
+        let path = args::under(&path, base);
         if path == args::STDIN && args::reads_stdin(&vars.arg_files) {
             bail!("--pr-body-file and --arg-file cannot both read stdin (`-`)");
         }

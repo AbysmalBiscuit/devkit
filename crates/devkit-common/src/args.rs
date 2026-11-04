@@ -2,7 +2,7 @@
 //! that renders templates takes a variable. One parser, so no command accepts
 //! a spelling another refuses.
 
-use std::{collections::BTreeMap, io::Read};
+use std::{collections::BTreeMap, io::Read, path::Path};
 
 use anyhow::{Context, Result, bail};
 
@@ -48,6 +48,26 @@ fn parse_with_stdin(
 /// `-`.
 pub fn read_file_or_stdin(path: &str) -> std::io::Result<String> {
     read_path(path, &mut std::io::stdin())
+}
+
+/// `path` as seen from the directory `base`: a relative path joins onto it,
+/// while an absolute path and stdin stay as they are.
+pub fn under(path: &str, base: &Path) -> String {
+    if path == STDIN || Path::new(path).is_absolute() {
+        return path.to_string();
+    }
+    base.join(path).to_string_lossy().into_owned()
+}
+
+/// Each `--arg-file` pair with its path as seen from the directory `base`.
+pub fn files_under(files: Vec<String>, base: &Path) -> Vec<String> {
+    files
+        .into_iter()
+        .map(|pair| match pair.split_once('=') {
+            Some((key, path)) => format!("{key}={}", under(path, base)),
+            None => pair,
+        })
+        .collect()
 }
 
 /// Whether any `--arg-file` pair reads stdin. A second reader of stdin would
@@ -118,6 +138,19 @@ mod tests {
     fn a_pair_without_equals_is_refused() {
         assert!(parse(&strings(&["noeq"]), &[]).is_err());
         assert!(parse(&[], &strings(&["noeq"])).is_err());
+    }
+
+    #[test]
+    fn under_joins_only_a_relative_path() {
+        let base = Path::new("start");
+        assert_eq!(
+            under("a.md", base),
+            Path::new("start").join("a.md").to_string_lossy()
+        );
+        assert_eq!(under("-", base), "-");
+        let absolute = std::env::temp_dir().join("a.md");
+        let absolute = absolute.to_str().unwrap();
+        assert_eq!(under(absolute, base), absolute);
     }
 
     #[test]
