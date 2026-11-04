@@ -94,14 +94,60 @@ pub(super) fn spawn_detached(
     Err(std::io::Error::other(failure))
 }
 
-/// A long-lived daemon outlives an upgrade that replaces its binary. Linux
-/// still execs the running image through `/proc/self/exe` then.
 fn trampoline_exe() -> std::io::Result<std::path::PathBuf> {
-    if cfg!(target_os = "linux") {
-        Ok("/proc/self/exe".into())
-    } else {
-        std::env::current_exe()
+    resolve_trampoline(
+        std::env::current_exe(),
+        std::path::Path::new("/proc/self/exe"),
+        std::env::args_os().next(),
+        std::env::var_os("PATH"),
+        std::env::current_dir().ok(),
+    )
+}
+
+/// The binary that runs the trampoline: `current_exe`, else `running_image`,
+/// else `argv0` as a path under `cwd` or a name on `search_path`.
+///
+/// After an upgrade deletes a long-lived daemon's binary, `current_exe` names
+/// a missing file, and Linux still runs the old image through
+/// `/proc/self/exe`. On Linux `current_exe` itself reads procfs, so without
+/// procfs only `argv0` is left.
+fn resolve_trampoline(
+    current_exe: std::io::Result<std::path::PathBuf>,
+    running_image: &std::path::Path,
+    argv0: Option<std::ffi::OsString>,
+    search_path: Option<std::ffi::OsString>,
+    cwd: Option<std::path::PathBuf>,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+    let err = match current_exe {
+        Ok(exe) if exe.is_file() => return Ok(exe),
+        Ok(exe) => std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("the running binary `{}` is gone", exe.display()),
+        ),
+        Err(err) => err,
+    };
+    if running_image.is_file() {
+        return Ok(running_image.into());
     }
+    let argv0 = PathBuf::from(argv0.ok_or(err)?);
+    let has_dir = argv0
+        .parent()
+        .is_some_and(|dir| !dir.as_os_str().is_empty());
+    let found = match (has_dir, search_path) {
+        (true, _) => Some(cwd.map_or_else(|| argv0.clone(), |cwd| cwd.join(&argv0)))
+            .filter(|path| path.is_file()),
+        (false, Some(search_path)) => {
+            super::find_on_path(&argv0, &search_path, cwd.as_deref(), Path::is_file)
+        }
+        (false, None) => None,
+    };
+    found.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("cannot find the running binary `{}`", argv0.display()),
+        )
+    })
 }
 
 /// Runs the program a [`spawn_detached`] command names when this process was
@@ -488,4 +534,80 @@ pub(super) fn symlink(
     _target_is_dir: bool,
 ) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::resolve_trampoline;
+
+    #[test]
+    fn the_trampoline_is_current_exe_when_its_file_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("devkit");
+        let image = tmp.path().join("image");
+        std::fs::write(&exe, "").unwrap();
+        std::fs::write(&image, "").unwrap();
+        let got = resolve_trampoline(Ok(exe.clone()), &image, None, None, None).unwrap();
+        assert_eq!(got, exe);
+    }
+
+    #[test]
+    fn a_deleted_binary_runs_the_running_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let image = tmp.path().join("image");
+        std::fs::write(&image, "").unwrap();
+        let deleted = tmp.path().join("devkit (deleted)");
+        let got = resolve_trampoline(Ok(deleted), &image, None, None, None).unwrap();
+        assert_eq!(got, image);
+    }
+
+    #[test]
+    fn without_procfs_the_trampoline_is_argv0_on_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::write(bin.join("devkit"), "").unwrap();
+        let no_procfs = tmp.path().join("proc/self/exe");
+        let got = resolve_trampoline(
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            &no_procfs,
+            Some("devkit".into()),
+            Some(bin.clone().into_os_string()),
+            Some(tmp.path().to_path_buf()),
+        )
+        .unwrap();
+        assert_eq!(got, bin.join("devkit"));
+    }
+
+    #[test]
+    fn without_procfs_a_relative_argv0_resolves_against_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("target")).unwrap();
+        std::fs::write(tmp.path().join("target/devkit"), "").unwrap();
+        let got = resolve_trampoline(
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            &tmp.path().join("proc/self/exe"),
+            Some("target/devkit".into()),
+            None,
+            Some(tmp.path().to_path_buf()),
+        )
+        .unwrap();
+        assert_eq!(got, tmp.path().join("target/devkit"));
+    }
+
+    #[test]
+    fn without_procfs_or_argv0_the_error_is_current_exes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = resolve_trampoline(
+            Err(io::Error::other("no procfs")),
+            &tmp.path().join("proc/self/exe"),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no procfs"), "{err}");
+    }
 }
