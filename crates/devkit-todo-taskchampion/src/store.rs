@@ -13,7 +13,7 @@ use devkit_todo::{
     is_uuid_prefix, one_line, take_over, ticket_todo_uuid, transition,
 };
 use taskchampion::{
-    Operations, Server, ServerConfig, SqliteStorage, Task, TaskData, Uuid, chrono::Utc,
+    Operations, Server, ServerConfig, SqliteStorage, TaskData, Uuid, chrono::Utc,
     storage::AccessMode, utc_timestamp,
 };
 use tokio::runtime::Runtime;
@@ -432,15 +432,10 @@ impl TaskchampionStore {
         if deps.is_empty() {
             return Ok(());
         }
-        Self::change(replica, &todo, |task, ops| {
+        Self::change(replica, &todo, |task| {
             for dep in deps {
-                if add {
-                    task.add_dependency(dep, ops)?;
-                } else {
-                    task.remove_dependency(dep, ops)?;
-                }
+                task.set(format!("dep_{dep}"), add.then(String::new));
             }
-            Ok(())
         })
         .await
     }
@@ -449,14 +444,14 @@ impl TaskchampionStore {
     async fn change(
         replica: &mut Replica,
         todo: &Todo,
-        change: impl FnOnce(&mut Task, &mut Operations) -> Result<(), taskchampion::Error>,
+        change: impl FnOnce(&mut Writer),
     ) -> Result<()> {
         let mut task = replica
-            .get_task(Uuid::try_parse(&todo.id)?)
+            .get_task_data(Uuid::try_parse(&todo.id)?)
             .await?
             .ok_or_else(|| anyhow!("no todo {}", todo.id))?;
         let mut ops = Operations::new();
-        change(&mut task, &mut ops)?;
+        change(&mut Writer::new(&mut task, &mut ops));
         replica.commit_operations(ops).await?;
         Ok(())
     }
@@ -472,64 +467,113 @@ impl TaskchampionStore {
             return Ok(Vec::new());
         };
         let change = StatusChange::of(todo, Some(next.clone()));
-        Self::change(replica, todo, |task, ops| write_status(task, &next, ops)).await?;
+        Self::change(replica, todo, |task| write_status(task, &next)).await?;
         Ok(vec![change])
     }
 }
 
-/// Writes `status` the way taskwarrior's `start`, `done` and `delete` do:
-/// `set_status` keeps `end` in step, and `start` keeps an existing start time,
-/// so a claim handed down to a sub-agent keeps its start.
-fn write_status(
-    task: &mut Task,
-    status: &Status,
-    ops: &mut Operations,
-) -> Result<(), taskchampion::Error> {
+/// The task statuses devkit writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TaskStatus {
+    Pending,
+    Completed,
+    Deleted,
+}
+
+impl TaskStatus {
+    /// The value the task data stores, as taskwarrior writes it.
+    fn stored(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Completed => "completed",
+            Self::Deleted => "deleted",
+        }
+    }
+}
+
+/// One task's writes, made to its data as taskchampion's `Task` setters
+/// make them: the first write also stamps `modified`. The replica builds a
+/// `Task` only with a dependency map, read from every working-set entry.
+struct Writer<'a> {
+    task: &'a mut TaskData,
+    ops: &'a mut Operations,
+    stamped: bool,
+}
+
+impl<'a> Writer<'a> {
+    fn new(task: &'a mut TaskData, ops: &'a mut Operations) -> Self {
+        Self {
+            task,
+            ops,
+            stamped: false,
+        }
+    }
+
+    fn now() -> String {
+        Utc::now().timestamp().to_string()
+    }
+
+    fn set(&mut self, key: impl Into<String>, value: Option<String>) {
+        if !self.stamped {
+            self.stamped = true;
+            self.task.update("modified", Some(Self::now()), self.ops);
+        }
+        self.task.update(key, value, self.ops);
+    }
+
+    /// Sets `status` with `end` in step: a completed or deleted task has an
+    /// end time, and a pending task has none.
+    fn status(&mut self, status: TaskStatus) {
+        let closed = status != TaskStatus::Pending;
+        if closed != self.task.has("end") {
+            self.set("end", closed.then(Self::now));
+        }
+        self.set("status", Some(status.stored().to_string()));
+    }
+
+    /// Starts the task, keeping a start time it already has, so a claim
+    /// handed down to a sub-agent keeps its start.
+    fn start(&mut self) {
+        if !self.task.has("start") {
+            self.set("start", Some(Self::now()));
+        }
+    }
+
+    fn stop(&mut self) {
+        if self.task.has("start") {
+            self.set("start", None);
+        }
+    }
+}
+
+/// Writes `status` the way taskwarrior's `start`, `done` and `delete` do.
+fn write_status(task: &mut Writer, status: &Status) {
     let holder = |by: &devkit_todo::Holder| Some(by.to_string());
     match status {
-        Status::Pending => {
-            task.set_status(taskchampion::Status::Pending, ops)?;
-            stop(task, ops)?;
-            task.set_value("holder", None, ops)
-        }
+        Status::Pending => release(task),
         Status::InProgress { by } => {
-            task.set_status(taskchampion::Status::Pending, ops)?;
-            task.start(ops)?;
-            task.set_value("holder", holder(by), ops)
+            task.status(TaskStatus::Pending);
+            task.start();
+            task.set("holder", holder(by));
         }
-        Status::Completed { by } => close(task, taskchampion::Status::Completed, by.as_ref(), ops),
-        Status::Cancelled { by } => close(task, taskchampion::Status::Deleted, by.as_ref(), ops),
+        Status::Completed { by } => close(task, TaskStatus::Completed, by.as_ref()),
+        Status::Cancelled { by } => close(task, TaskStatus::Deleted, by.as_ref()),
     }
 }
 
-fn stop(task: &mut Task, ops: &mut Operations) -> Result<(), taskchampion::Error> {
-    match task.is_active() {
-        true => task.stop(ops),
-        false => Ok(()),
-    }
-}
-
-/// Stops `task` and clears its holder, leaving it pending. It writes the
-/// task's data directly, so a release reads no dependency map.
-fn release(task: &mut TaskData, ops: &mut Operations) {
-    let now = Utc::now().timestamp().to_string();
-    task.update("modified", Some(now), ops);
-    task.update("start", None, ops);
-    task.update("holder", None, ops);
+/// Leaves `task` pending, with no start time and no holder.
+fn release(task: &mut Writer) {
+    task.status(TaskStatus::Pending);
+    task.stop();
+    task.set("holder", None);
 }
 
 /// Ends `task` as `status`, completed or deleted, recording `by` when known.
-fn close(
-    task: &mut Task,
-    status: taskchampion::Status,
-    by: Option<&devkit_todo::Holder>,
-    ops: &mut Operations,
-) -> Result<(), taskchampion::Error> {
-    stop(task, ops)?;
-    task.set_status(status, ops)?;
-    match by {
-        Some(by) => task.set_value("holder", Some(by.to_string()), ops),
-        None => Ok(()),
+fn close(task: &mut Writer, status: TaskStatus, by: Option<&devkit_todo::Holder>) {
+    task.stop();
+    task.status(status);
+    if let Some(by) = by {
+        task.set("holder", Some(by.to_string()));
     }
 }
 
@@ -572,18 +616,18 @@ impl TodoStore for TaskchampionStore {
                 None => Uuid::new_v4(),
             };
             let mut ops = Operations::new();
-            let mut task = replica.create_task(uuid, &mut ops).await?;
-            task.set_description(one_line(&todo.description), &mut ops)?;
-            task.set_status(taskchampion::Status::Pending, &mut ops)?;
-            task.set_entry(Some(Utc::now()), &mut ops)?;
-            let project = project_of(todo.project.as_deref());
-            task.set_value("project", Some(project), &mut ops)?;
-            task.set_value("order", Some(order.to_string()), &mut ops)?;
-            task.set_value("subof", parent, &mut ops)?;
+            let mut data = TaskData::create(uuid, &mut ops);
+            let mut task = Writer::new(&mut data, &mut ops);
+            task.set("description", Some(one_line(&todo.description)));
+            task.status(TaskStatus::Pending);
+            task.set("entry", Some(Writer::now()));
+            task.set("project", Some(project_of(todo.project.as_deref())));
+            task.set("order", Some(order.to_string()));
+            task.set("subof", parent);
             if let Some(ticket) = todo.ticket {
-                task.set_value("ticket_tracker", Some(ticket.tracker), &mut ops)?;
-                task.set_value("ticket_key", Some(ticket.key), &mut ops)?;
-                task.set_value("ticket_status", ticket.synced_status, &mut ops)?;
+                task.set("ticket_tracker", Some(ticket.tracker));
+                task.set("ticket_key", Some(ticket.key));
+                task.set("ticket_status", ticket.synced_status);
             }
             replica.commit_operations(ops).await?;
             Ok(uuid.to_string())
@@ -604,8 +648,8 @@ impl TodoStore for TaskchampionStore {
             }
             Edit::Describe { id, description } => {
                 let todo = self.resolve(replica, id).await?;
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_description(one_line(description), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("description", Some(one_line(description)));
                 })
                 .await?;
                 Ok(Vec::new())
@@ -625,17 +669,17 @@ impl TodoStore for TaskchampionStore {
                         .await?
                     }
                 };
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_value("subof", parent, ops)?;
-                    task.set_value("order", Some(order.to_string()), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("subof", parent);
+                    task.set("order", Some(order.to_string()));
                 })
                 .await?;
                 Ok(Vec::new())
             }
             Edit::Reorder { id, order } => {
                 let todo = self.resolve(replica, id).await?;
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_value("order", Some(order.to_string()), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("order", Some(order.to_string()));
                 })
                 .await?;
                 Ok(Vec::new())
@@ -643,8 +687,8 @@ impl TodoStore for TaskchampionStore {
             Edit::Relocate { id, project } => {
                 let todo = self.resolve(replica, id).await?;
                 let project = project_of(project.as_deref());
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_value("project", Some(project), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("project", Some(project));
                 })
                 .await?;
                 Ok(Vec::new())
@@ -663,7 +707,7 @@ impl TodoStore for TaskchampionStore {
                         continue;
                     };
                     if matches!(&todo.status, Status::InProgress { by } if holder.covers(by)) {
-                        release(&mut task, &mut ops);
+                        release(&mut Writer::new(&mut task, &mut ops));
                         changes.push(StatusChange::of(&todo, Some(Status::Pending)));
                     }
                 }
@@ -683,8 +727,8 @@ impl TodoStore for TaskchampionStore {
                 if todo.ticket.is_none() {
                     anyhow::bail!("todo {id} has no ticket");
                 }
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_value("ticket_status", Some(synced_status.clone()), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("ticket_status", Some(synced_status.clone()));
                 })
                 .await?;
                 Ok(Vec::new())

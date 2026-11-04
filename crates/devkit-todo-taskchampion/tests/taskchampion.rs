@@ -307,3 +307,24 @@ fn release_reads_no_closed_task_in_the_working_set() {
         devkit_todo::Status::Pending
     );
 }
+
+#[test]
+fn a_single_release_reads_no_working_set_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let id = claimed(&store);
+    unreadable_task(&data, true);
+    let changes = store
+        .apply(&Edit::SetStatus {
+            id: id.clone(),
+            to: devkit_todo::StatusKind::Pending,
+            actor: devkit_todo::Holder::new("s1"),
+        })
+        .unwrap();
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert_eq!(
+        store.get(&id).unwrap().unwrap().status,
+        devkit_todo::Status::Pending
+    );
+}
