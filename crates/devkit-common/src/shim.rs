@@ -170,9 +170,46 @@ impl OwnBinary {
             .is_some_and(|path| same_file(exe, &path))
     }
 
-    /// The file `program` runs, judged against this binary's search path.
+    /// The file `program` runs: itself when it names a path, or on Windows
+    /// that path with `.exe` when only that exists, else the first `PATH`
+    /// entry holding it. A relative `PATH` entry, the empty one included, is
+    /// a directory under `cwd`, and with `cwd` unknown it holds nothing.
     fn resolve(&self, program: &str, cwd: Option<&Path>) -> Option<PathBuf> {
-        crate::program::find_program(program, self.search_path.as_deref(), cwd, Path::is_file)
+        if program.contains(['/', '\\']) {
+            let path = Path::new(program);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                cwd?.join(path)
+            };
+            if cfg!(windows) && !path.is_file() && path.extension().is_none() {
+                return Some(path.with_extension("exe"));
+            }
+            return Some(path);
+        }
+        let file = shim_file_name(windows_stem(program));
+        std::env::split_paths(self.search_path.as_ref()?)
+            .filter_map(|dir| match dir.is_absolute() {
+                true => Some(dir),
+                false => cwd.map(|cwd| cwd.join(dir)),
+            })
+            .map(|dir| dir.join(&file))
+            .find(|candidate| candidate.is_file())
+    }
+}
+
+/// `program` without the `.exe` Windows appends when looking a name up, so
+/// `ticket.exe` and `ticket` find the same file there. Elsewhere the suffix
+/// is part of the name.
+fn windows_stem(program: &str) -> &str {
+    if !cfg!(windows) {
+        return program;
+    }
+    match program.len().checked_sub(4) {
+        Some(at) if program.is_char_boundary(at) && program[at..].eq_ignore_ascii_case(".exe") => {
+            &program[..at]
+        }
+        _ => program,
     }
 }
 

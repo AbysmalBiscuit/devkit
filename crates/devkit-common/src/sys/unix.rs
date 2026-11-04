@@ -301,57 +301,47 @@ pub(super) fn cgroup_list_leaves(base: &std::path::Path) -> Vec<String> {
 pub(super) fn cgroup_command(
     leaf: &std::path::Path,
     program: &str,
-    cwd: &str,
-    path_var: Option<&std::ffi::OsStr>,
-) -> anyhow::Result<std::process::Command> {
-    // The trampoline always starts, so a missing program would only show as
-    // an exit of the trampoline. Look it up here to fail the launch instead.
-    anyhow::ensure!(
-        find_program(program, cwd, path_var),
-        "spawning {program}: no such executable"
-    );
+) -> Option<std::process::Command> {
     // `/proc/self/exe` still runs this binary after an upgrade deletes or
     // replaces the file at `current_exe()`.
     let mut cmd = std::process::Command::new("/proc/self/exe");
     cmd.arg(super::CGROUP_EXEC).arg(leaf).arg("--").arg(program);
-    Ok(cmd)
+    Some(cmd)
 }
 
-/// Whether `program` names an executable file the way `execvp` finds it.
-#[cfg(target_os = "linux")]
-fn find_program(program: &str, cwd: &str, path_var: Option<&std::ffi::OsStr>) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    let parent_path = std::env::var_os("PATH");
-    let executable = |p: &std::path::Path| {
-        fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    };
-    // With no PATH at all, execvp searches glibc's default path.
-    let default_path = std::ffi::OsStr::new("/bin:/usr/bin");
-    crate::program::find_program(
-        program,
-        Some(path_var.or(parent_path.as_deref()).unwrap_or(default_path)),
-        Some(std::path::Path::new(cwd)),
-        executable,
-    )
-    .is_some()
-}
-
-#[cfg(target_os = "linux")]
 pub(super) fn exec_in_cgroup(
     leaf: &std::path::Path,
     program: &std::ffi::OsStr,
     args: &[std::ffi::OsString],
 ) -> std::io::Error {
-    use std::{io::Write as _, os::unix::process::CommandExt as _};
+    use std::{
+        io::Write as _,
+        os::{fd::AsFd as _, unix::process::CommandExt as _},
+        process::Stdio,
+    };
+    // The clone is close-on-exec, so a successful exec closes the status pipe.
+    // `exec` replaces stdin before it runs the program, so a failed exec has
+    // only the clone left to report through.
+    let status = std::io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .map(std::fs::File::from);
     // A leaf that cannot be joined leaves the program uncapped. The pid goes
     // in one write, because cgroupfs reads each write as one request.
-    if let Ok(mut procs) = fs::OpenOptions::new()
+    if let Ok(mut procs) = std::fs::OpenOptions::new()
         .write(true)
         .open(leaf.join("cgroup.procs"))
     {
         let _ = procs.write_all(format!("{}\n", std::process::id()).as_bytes());
     }
-    std::process::Command::new(program).args(args).exec()
+    let err = std::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .exec();
+    if let Ok(mut status) = status {
+        let _ = status.write_all(err.to_string().as_bytes());
+    }
+    err
 }
 
 // macOS: no cgroups.
@@ -378,20 +368,9 @@ pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
 #[cfg(not(target_os = "linux"))]
 pub(super) fn cgroup_command(
     _leaf: &std::path::Path,
-    program: &str,
-    _cwd: &str,
-    _path_var: Option<&std::ffi::OsStr>,
-) -> anyhow::Result<std::process::Command> {
-    Ok(std::process::Command::new(program))
-}
-#[cfg(not(target_os = "linux"))]
-pub(super) fn exec_in_cgroup(
-    _leaf: &std::path::Path,
-    program: &std::ffi::OsStr,
-    args: &[std::ffi::OsString],
-) -> std::io::Error {
-    use std::os::unix::process::CommandExt as _;
-    std::process::Command::new(program).args(args).exec()
+    _program: &str,
+) -> Option<std::process::Command> {
+    None
 }
 
 #[cfg(target_os = "linux")]

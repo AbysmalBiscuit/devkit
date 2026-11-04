@@ -1,10 +1,9 @@
 use std::{
     collections::BTreeMap,
-    ffi::OsStr,
     fs::{self, File},
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -26,20 +25,28 @@ pub fn spawn_detached(
     fs::create_dir_all(logfile.parent().unwrap())?;
     let mut out = File::create(logfile)?;
     let (prog, rest) = argv.split_first().context("empty launch argv")?;
-    let spawn = |mut c: Command, out: &File| -> std::io::Result<u32> {
+    let spawn = |mut c: Command, stdin: Stdio, out: &File| -> std::io::Result<Child> {
         c.args(rest)
             .current_dir(cwd)
             .envs(env)
-            .stdin(Stdio::null())
+            .stdin(stdin)
             .stdout(out.try_clone()?)
             .stderr(out.try_clone()?);
         crate::sys::detach(&mut c);
-        Ok(c.spawn()?.id())
+        c.spawn()
     };
-    if let Some(leaf) = cgroup_leaf {
-        let joined = crate::sys::cgroup_command(leaf, prog, cwd, env.get("PATH").map(OsStr::new))?;
-        match spawn(joined, &out) {
-            Ok(pid) => return Ok(pid),
+    if let Some(joined) = cgroup_leaf.and_then(|leaf| crate::sys::cgroup_command(leaf, prog)) {
+        let (mut status, status_writer) = std::io::pipe()?;
+        match spawn(joined, status_writer.into(), &out) {
+            Ok(mut child) => {
+                let mut exec_failure = String::new();
+                let _ = status.read_to_string(&mut exec_failure);
+                if exec_failure.is_empty() {
+                    return Ok(child.id());
+                }
+                let _ = child.wait();
+                anyhow::bail!("spawning {prog}: {exec_failure}");
+            }
             Err(e) => {
                 let _ = writeln!(
                     out,
@@ -48,7 +55,9 @@ pub fn spawn_detached(
             }
         }
     }
-    spawn(Command::new(prog), &out).with_context(|| format!("spawning {prog}"))
+    let child = spawn(Command::new(prog), Stdio::null(), &out)
+        .with_context(|| format!("spawning {prog}"))?;
+    Ok(child.id())
 }
 
 /// One-shot TCP liveness check: does `127.0.0.1:port` accept a connection

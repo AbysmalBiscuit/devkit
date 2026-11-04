@@ -401,11 +401,9 @@ pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
 }
 pub(super) fn cgroup_command(
     _leaf: &std::path::Path,
-    program: &str,
-    _cwd: &str,
-    _path_var: Option<&std::ffi::OsStr>,
-) -> anyhow::Result<std::process::Command> {
-    Ok(std::process::Command::new(program))
+    _program: &str,
+) -> Option<std::process::Command> {
+    None
 }
 
 pub(super) fn symlink(

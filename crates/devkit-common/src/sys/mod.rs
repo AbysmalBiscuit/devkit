@@ -57,24 +57,21 @@ pub fn cgroup_list_leaves(base: &Path) -> Vec<String> {
 /// itself with a program: `devkitd __cgroup-exec <leaf> -- <program> <args>`.
 pub const CGROUP_EXEC: &str = "__cgroup-exec";
 
-/// A command that runs `program` inside the cgroup `leaf`. On Linux it runs
-/// this binary's [`CGROUP_EXEC`] subcommand, so only `devkitd` may call it.
-/// The caller appends the program's arguments. `path_var` is the `PATH` the
-/// program runs under, when it differs from this process's. Errors when no
-/// executable named `program` exists. Off Linux it runs `program` uncapped.
-pub fn cgroup_command(
-    leaf: &Path,
-    program: &str,
-    cwd: &str,
-    path_var: Option<&std::ffi::OsStr>,
-) -> anyhow::Result<std::process::Command> {
-    imp::cgroup_command(leaf, program, cwd, path_var)
+/// A command that runs `program` inside the cgroup `leaf`, or `None` off Linux,
+/// where a leaf has no meaning. It runs this binary's [`CGROUP_EXEC`]
+/// subcommand, so only `devkitd` may call it. The caller appends the program's
+/// arguments and gives the command the write end of a pipe as its stdin. That
+/// pipe closes empty when the program starts, and carries the error when the
+/// program cannot start.
+pub fn cgroup_command(leaf: &Path, program: &str) -> Option<std::process::Command> {
+    imp::cgroup_command(leaf, program)
 }
 
 /// Move this process into `leaf`, then replace it with `program`. The pid
 /// stays the same, so the program and every process it starts are in the
-/// leaf. A leaf that cannot be joined leaves the program uncapped. Returns
-/// only when the exec fails.
+/// leaf, with stdin at the null device. A leaf that cannot be joined leaves the
+/// program uncapped. Returns only when the exec fails, after it writes the
+/// error to the status pipe that stdin holds on entry.
 #[cfg(unix)]
 pub fn exec_in_cgroup(
     leaf: &Path,

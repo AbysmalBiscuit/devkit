@@ -779,13 +779,11 @@ fn a_capped_launch_survives_a_deleted_daemon_binary() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_capped_launch_without_path_uses_the_default_search_path() {
-    let python = devkit_common::program::find_program(
-        "python3",
-        std::env::var_os("PATH").as_deref(),
-        None,
-        std::path::Path::is_file,
-    )
-    .expect("python3 on PATH");
+    let path = std::env::var_os("PATH").expect("the test runs with a PATH");
+    let python = std::env::split_paths(&path)
+        .map(|dir| dir.join("python3"))
+        .find(|candidate| candidate.is_file())
+        .expect("python3 on PATH");
     let base = unjoinable_cgroup_base();
     let uncapped = vec![("DEVKIT_DAEMON_IDLE_SECS", "3600".to_string())];
     let mut capped = uncapped.clone();
@@ -828,6 +826,40 @@ fn a_capped_launch_without_path_uses_the_default_search_path() {
         h.request(&Request::Down { holder, role: None });
         h.shutdown();
     }
+}
+
+/// A capped launch of a program that exists but cannot exec fails the request,
+/// as an uncapped launch does.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_program_that_cannot_exec_fails_the_launch() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let base = unjoinable_cgroup_base();
+    let mut h = Harness::start_with_cgroup_cap(3600, base.path().to_str().unwrap(), 64);
+    let port = common::free_port();
+    let holder = h.home.path().to_str().unwrap().to_string();
+    let script = h.home.path().join("no-interpreter");
+    std::fs::write(&script, "#!/nonexistent/interpreter\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let program = script.to_str().unwrap().to_string();
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Workspace,
+        argv: vec![program.clone()],
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.path().join("no-interpreter.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Err(msg) if msg.contains(&program)),
+        "expected an error naming {program}, got {resp:?}"
+    );
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
 }
 
 /// A capped launch of a program that does not exist fails the request with an
