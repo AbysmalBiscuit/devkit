@@ -67,13 +67,15 @@ pub fn prunable(all: &[Todo], scoped: Vec<Todo>, window: Window) -> Vec<Todo> {
 fn needed_by_open(all: &[Todo]) -> HashSet<&str> {
     let by_id: HashMap<&str, &Todo> = all.iter().map(|todo| (todo.id.as_str(), todo)).collect();
     let mut needed = HashSet::new();
+    let mut walked = HashSet::new();
     for todo in all.iter().filter(|todo| todo.status.kind().is_open()) {
         needed.extend(todo.blocked_by.iter().map(String::as_str));
         let mut parent = todo.parent.as_deref();
         while let Some(id) = parent {
-            if !needed.insert(id) {
+            if !walked.insert(id) {
                 break;
             }
+            needed.insert(id);
             parent = by_id.get(id).and_then(|todo| todo.parent.as_deref());
         }
     }

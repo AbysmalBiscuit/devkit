@@ -218,6 +218,11 @@ fn a_done_todo_an_open_todo_needs_stays() {
             .status
             .success()
     );
+    assert!(
+        run(&p, &["block", &child, "--by", &parent], &HUMAN)
+            .status
+            .success()
+    );
     let waiter = add(&p, "proj.other.claude-s2", "open waiter");
     assert!(
         run(&p, &["block", &waiter, "--by", &blocker], &HUMAN)

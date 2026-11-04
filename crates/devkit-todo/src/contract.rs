@@ -477,20 +477,34 @@ pub fn prune_bounds_a_last_change_inclusively(s: &impl TodoStore) {
 pub fn prune_keeps_what_an_open_todo_needs(s: &impl TodoStore) {
     use crate::prune::{Window, prunable};
 
-    let (blocker, parent, free) = (add(s, "blocker"), add(s, "parent"), add(s, "free"));
-    let (waiter, child) = (add(s, "waiter"), add(s, "child"));
+    let (blocker, grandparent, parent) =
+        (add(s, "blocker"), add(s, "grandparent"), add(s, "parent"));
+    let (free, waiter, child) = (add(s, "free"), add(s, "waiter"), add(s, "child"));
     s.apply(&Edit::Block {
         id: waiter.clone(),
         by: vec![blocker.clone()],
     })
     .unwrap();
     s.apply(&Edit::Move {
-        id: child,
+        id: parent.clone(),
+        parent: Some(grandparent.clone()),
+        order: None,
+    })
+    .unwrap();
+    s.apply(&Edit::Move {
+        id: child.clone(),
         parent: Some(parent.clone()),
         order: None,
     })
     .unwrap();
-    for id in [&blocker, &parent, &free] {
+    // The child also waits on its parent, so the parent is protected as a
+    // blocker before the ancestor walk reaches it.
+    s.apply(&Edit::Block {
+        id: child,
+        by: vec![parent.clone()],
+    })
+    .unwrap();
+    for id in [&blocker, &grandparent, &parent, &free] {
         set(s, id, StatusKind::Completed, "S").unwrap();
     }
 
