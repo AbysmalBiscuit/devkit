@@ -3300,22 +3300,73 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
         .unwrap_or(false)
 }
 
+/// The environment variable that names one config file to load in place of
+/// every layer, as `--config` does. The harness also reads it as the global
+/// config.
+pub const CONFIG_VAR: &str = "DEVKIT_CONFIG";
+
+/// The environment variable that names the `--config` file of the devkit
+/// that started this process. It applies only in the checkout that
+/// [`PARENT_CONFIG_CHECKOUT_VAR`] names, and it never changes the global
+/// config.
+pub const PARENT_CONFIG_VAR: &str = "DEVKIT_PARENT_CONFIG";
+
+/// The environment variable that holds the root of the checkout where
+/// [`PARENT_CONFIG_VAR`] applies, or empty for a directory outside any
+/// checkout.
+pub const PARENT_CONFIG_CHECKOUT_VAR: &str = "DEVKIT_PARENT_CONFIG_CHECKOUT";
+
+/// The one config file the environment selects for a process in the checkout
+/// at the root `checkout_root` answers: the parent's `--config` file when
+/// [`PARENT_CONFIG_CHECKOUT_VAR`] names that checkout, else the
+/// [`CONFIG_VAR`] file. `checkout_root` runs only when [`PARENT_CONFIG_VAR`]
+/// is set, since finding a checkout can spawn a process.
+pub fn env_config(checkout_root: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+    env_config_from(checkout_root).map(|(_, path)| path)
+}
+
+/// [`env_config`], with the name of the variable that selected the file.
+pub fn env_config_from(
+    checkout_root: impl FnOnce() -> Option<PathBuf>,
+) -> Option<(&'static str, PathBuf)> {
+    let inherited = std::env::var_os(PARENT_CONFIG_VAR).filter(|_| {
+        let owner = std::env::var_os(PARENT_CONFIG_CHECKOUT_VAR).unwrap_or_default();
+        same_checkout(Path::new(&owner), checkout_root().as_deref())
+    });
+    match inherited {
+        Some(path) => Some((PARENT_CONFIG_VAR, PathBuf::from(path))),
+        None => std::env::var_os(CONFIG_VAR).map(|path| (CONFIG_VAR, PathBuf::from(path))),
+    }
+}
+
+/// Whether `owner`, a [`PARENT_CONFIG_CHECKOUT_VAR`] value, names the
+/// checkout at `root`. Both resolve symlinks first, since a checkout root
+/// reads the same directory through different paths.
+fn same_checkout(owner: &Path, root: Option<&Path>) -> bool {
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    match root {
+        None => owner.as_os_str().is_empty(),
+        Some(root) => !owner.as_os_str().is_empty() && canonical(owner) == canonical(root),
+    }
+}
+
 /// Build the ordered layer list (lowest->highest precedence): the home config
 /// (only its `[todo]` table when a `root = true` marker cuts it off), then the
 /// project layers `project_layers` finds for `start`, then the `--option`
-/// values. An explicit path or `$DEVKIT_CONFIG` replaces the project layers
-/// and the home config, all but its `[todo]` table.
-/// `pending` stands in for its file. The `--option` values alone are a
+/// values. An explicit path or the [`env_config`] file for `checkout_root`
+/// replaces the project layers and the home config, all but its `[todo]`
+/// table. `pending` stands in for its file. The `--option` values alone are a
 /// config, so `NoConfig` means that no file and no option applies.
 fn discover(
     explicit: Option<&Path>,
     start: &Path,
     main_checkout: Option<&Path>,
+    checkout_root: Option<&Path>,
     home: Option<&Path>,
     pending: Option<PendingLayer<'_>>,
     options: &Options,
 ) -> Result<Vec<(PathBuf, toml::Table)>> {
-    let mut layers = discover_files(explicit, start, main_checkout, home, pending)?;
+    let mut layers = discover_files(explicit, start, main_checkout, checkout_root, home, pending)?;
     layers.extend(options.layers());
     if layers.is_empty() {
         return Err(anyhow::Error::new(NoConfig));
@@ -3328,12 +3379,13 @@ fn discover_files(
     explicit: Option<&Path>,
     start: &Path,
     main_checkout: Option<&Path>,
+    checkout_root: Option<&Path>,
     home: Option<&Path>,
     pending: Option<PendingLayer<'_>>,
 ) -> Result<Vec<(PathBuf, toml::Table)>> {
     let explicit = explicit
         .map(Path::to_path_buf)
-        .or_else(|| std::env::var_os("DEVKIT_CONFIG").map(PathBuf::from));
+        .or_else(|| env_config(|| checkout_root.map(Path::to_path_buf)));
     if let Some(p) = explicit {
         let mut layers: Vec<_> = home_todo_layer(home)?.into_iter().collect();
         match pending.filter(|l| l.is(&p)) {
@@ -3541,7 +3593,15 @@ fn resolve_layers(
     // passing `.`) must not leak into that value.
     let start_buf = absolutize(start)?;
     let start = start_buf.as_path();
-    let mut layers = discover(explicit, start, main_checkout, home, pending, options)?;
+    let mut layers = discover(
+        explicit,
+        start,
+        main_checkout,
+        checkout_root,
+        home,
+        pending,
+        options,
+    )?;
     for (path, table) in &mut layers {
         read_renamed_keys(table)
             .with_context(|| format!("reading config layer {}", path.display()))?;

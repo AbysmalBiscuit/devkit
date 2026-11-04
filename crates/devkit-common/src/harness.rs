@@ -44,7 +44,7 @@ pub fn parse_env_override(val: Option<&str>) -> Option<bool> {
 /// layer the resolver loads, so the harness reads the same global config the
 /// other binaries do.
 pub fn global_config_path() -> Option<PathBuf> {
-    std::env::var_os("DEVKIT_CONFIG")
+    std::env::var_os(devkit_config::CONFIG_VAR)
         .map(PathBuf::from)
         .or_else(devkit_config::home_config_path)
 }

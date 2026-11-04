@@ -1181,7 +1181,12 @@ pub fn exec(
     cmd.args(&plan.argv[1..])
         .current_dir(&plan.cwd)
         .envs(&plan.env);
-    devkit_common::config::pass_options(&mut cmd)?;
+    devkit_common::config::pass_config(&mut cmd)?;
+    // A task that names its own config file keeps it over the parent's.
+    if plan.env.contains_key(devkit_config::CONFIG_VAR) {
+        cmd.env_remove(devkit_config::PARENT_CONFIG_VAR)
+            .env_remove(devkit_config::PARENT_CONFIG_CHECKOUT_VAR);
+    }
     let exited = Arc::new(AtomicBool::new(false));
     let (out_tty, err_tty) = (
         std::io::stdout().is_terminal(),

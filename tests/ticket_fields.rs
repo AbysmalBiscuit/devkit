@@ -489,6 +489,30 @@ fn discover_into_refuses_devkit_config() {
 }
 
 #[test]
+fn discover_into_refuses_the_parents_config_naming_it() {
+    let fake = fields_fake();
+    let named = fake.state().join("named.toml");
+    std::fs::write(&named, devkit_toml(&fake)).unwrap();
+    let out = fake.issue_with_env(&["fields", "discover", "--into", "devkit.local.toml"], &[
+        ("DEVKIT_CALLER", "agent"),
+        ("DEVKIT_PARENT_CONFIG", named.to_str().unwrap()),
+        (
+            "DEVKIT_PARENT_CONFIG_CHECKOUT",
+            fake.project().to_str().unwrap(),
+        ),
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--config") && stderr.contains("$DEVKIT_PARENT_CONFIG"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("$DEVKIT_CONFIG "), "{stderr}");
+    assert_eq!(fake.calls(), "", "no tracker read");
+    assert_eq!(local_toml(&fake), None);
+}
+
+#[test]
 fn discover_into_refuses_config() {
     let fake = fields_fake();
     let named = fake.state().join("named.toml");
