@@ -880,7 +880,7 @@ fn cmd_task(
                             if server.current_plan_commit.is_some()
                                 && server.current_plan_commit.as_deref() == start.head()
                             {
-                                reused_at_head.push(server.app);
+                                reused_at_head.push(server);
                             } else {
                                 reused.push(server.app);
                             }
@@ -892,6 +892,11 @@ fn cmd_task(
             Ok(std::process::ExitStatus::default())
         })(),
     };
+    // A reused server that stopped or restarted during the task may not be
+    // the process that served it, so it no longer proves the run.
+    let (still, gone) = still_running(reused_at_head);
+    reused.extend(gone);
+    let reused_at_head = still;
     let run = start.finish(
         outcome.as_ref().ok().and_then(child_exit),
         &tail,
@@ -969,9 +974,33 @@ struct UpReport {
 /// A server `devrun up` found already running.
 struct ReusedServer {
     app: String,
+    port: u16,
+    pid: Option<u32>,
     /// The commit the server launched from, when it launched on a clean
     /// tree with the plan this `up` would launch.
     current_plan_commit: Option<String>,
+}
+
+/// Split `servers` into the apps whose process still serves its port with
+/// the origin it had when reused, and the apps of the rest. An unreadable
+/// registry counts every server as gone.
+fn still_running(servers: Vec<ReusedServer>) -> (Vec<String>, Vec<String>) {
+    let data = registry::snapshot().ok();
+    let (still, gone): (Vec<_>, Vec<_>) = servers.into_iter().partition(|s| {
+        data.as_ref()
+            .and_then(|d| d.entries.get(&s.port))
+            .is_some_and(|e| {
+                e.app == s.app
+                    && e.pid.is_some()
+                    && e.pid == s.pid
+                    && e.pid.is_some_and(registry::pid_alive)
+                    && e.origin.as_ref().map(|o| &o.commit) == s.current_plan_commit.as_ref()
+            })
+    });
+    (
+        still.into_iter().map(|s| s.app).collect(),
+        gone.into_iter().map(|s| s.app).collect(),
+    )
 }
 
 /// Bring `apps_arg` up and report which apps it launched and which it found
@@ -1161,6 +1190,8 @@ fn cmd_up(
                 let plan = plans.iter().find(|p| p.app == s.app);
                 report.reused.push(ReusedServer {
                     app: s.app.clone(),
+                    port: s.port,
+                    pid: s.pid,
                     current_plan_commit: s
                         .origin
                         .clone()

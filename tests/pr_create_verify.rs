@@ -1328,6 +1328,30 @@ fn a_run_reusing_a_server_whose_env_rendered_another_value_is_refused() {
     assert_refused_for_reusing_srv(&p);
 }
 
+#[test]
+fn a_run_whose_reused_server_restarts_during_the_task_is_refused() {
+    let p = serving_project(39218);
+    let config = p.project().join("devkit.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    let restarting = toml.replace(
+        "steps = [{ up = \"srv\" }, { task = \"verify\" }]",
+        &format!(
+            "steps = [{{ up = \"srv\" }}, {{ task = \"srv-down\" }}, {{ up = \"srv\" }}, \
+             {{ task = \"verify\" }}]\n\
+             [tasks.srv-down]\nrun = ['{}', 'run', 'down', '--app', 'srv']",
+            env!("CARGO_BIN_EXE_devkit")
+        ),
+    );
+    assert_ne!(restarting, toml);
+    std::fs::write(&config, restarting).unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "restart srv"]);
+    serve_head(&p);
+    let _srv = Srv::up(&p);
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    assert_refused_for_reusing_srv(&p);
+}
+
 /// A run reads the commit and the tree state once before the task and once
 /// after, and the gate reads `devkit.toml` once at the merge base and once
 /// at HEAD; every other question a run and a gated `pr create` ask of git is
