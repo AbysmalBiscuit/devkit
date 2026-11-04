@@ -548,13 +548,19 @@ mod tests {
     /// waiting for end of file until the child exits.
     #[test]
     fn a_background_child_holds_no_handle_its_parent_inherited() {
-        use std::io::Read;
+        use std::{io::Read, os::windows::io::AsHandle};
 
         use interprocess::os::windows::unnamed_pipe::CreationOptions;
         let tmp = tempfile::tempdir().unwrap();
         let marker = tmp.path().join("running");
         std::fs::write(&marker, "").unwrap();
-        let (writer, mut reader) = CreationOptions::new().inheritable(true).create().unwrap();
+        let (writer, inheritable_reader) =
+            CreationOptions::new().inheritable(true).create().unwrap();
+        // A duplicate never inherits, and std reads a closed pipe as end of
+        // file.
+        let mut reader =
+            std::io::PipeReader::from(inheritable_reader.as_handle().try_clone_to_owned().unwrap());
+        drop(inheritable_reader);
         let mut cmd = Command::new(std::env::current_exe().unwrap());
         cmd.args(["--exact", "sys::imp::tests::background_child_wait_probe"])
             .env(WAIT_PROBE_ENV, &marker);
