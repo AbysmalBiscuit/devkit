@@ -31,6 +31,30 @@ pub(super) fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// The boot id and the start time in clock ticks since boot, so a process
+/// after a reboot with the same pid and ticks still differs.
+#[cfg(target_os = "linux")]
+pub(super) fn process_started(pid: u32) -> Option<String> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // `starttime` is field 22, and the fields after `comm` start at field 3.
+    let ticks = stat.rsplit_once(')')?.1.split_whitespace().nth(19)?;
+    let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+    Some(format!("{}:{ticks}", boot.trim()))
+}
+
+/// The start date `ps` reports, to the second. macOS has no `/proc`, and
+/// no current dependency wraps `proc_pidinfo`.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn process_started(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .env("LC_ALL", "C")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let started = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (out.status.success() && !started.is_empty()).then_some(started)
+}
+
 pub(super) fn terminate(pid: u32) {
     use nix::{
         sys::signal::{Signal, kill},

@@ -175,6 +175,10 @@ pub struct Origin {
 #[derive(Serialize, Deserialize)]
 struct OriginRecord {
     pid: u32,
+    /// See [`devkit_common::sys::process_started`]. A pid alone can name a
+    /// later process that reused it.
+    #[serde(default)]
+    started: Option<String>,
     #[serde(flatten)]
     origin: Origin,
 }
@@ -231,6 +235,7 @@ impl Ledger {
             .with_context(|| format!("creating an origin in {}", dir.display()))?;
         serde_json::to_writer(&mut tmp, &OriginRecord {
             pid,
+            started: devkit_common::sys::process_started(pid),
             origin: origin.clone(),
         })?;
         tmp.persist(&path)
@@ -238,14 +243,16 @@ impl Ledger {
         Ok(())
     }
 
-    /// The origin recorded for the server `pid` on `port`. A record of
-    /// another process on that port, such as one a supervisor replaced, is
-    /// none.
+    /// The origin recorded for the server `pid` on `port`, while the process
+    /// that recorded it still runs. A record of another process on that
+    /// port, such as one a supervisor replaced or an earlier holder of `pid`,
+    /// is none.
     pub fn origin(&self, port: u16, pid: u32) -> Option<Origin> {
         let text =
             std::fs::read_to_string(self.dir.join("origins").join(format!("{port}.json"))).ok()?;
         let record: OriginRecord = serde_json::from_str(&text).ok()?;
-        (record.pid == pid).then_some(record.origin)
+        let started = record.started.filter(|_| record.pid == pid)?;
+        (devkit_common::sys::process_started(pid)? == started).then_some(record.origin)
     }
 
     /// Every readable record, oldest first. A record that does not parse is
@@ -727,15 +734,58 @@ mod tests {
     fn a_launch_with_no_origin_clears_the_ports_earlier_one() {
         let dir = tempfile::tempdir().unwrap();
         let ledger = Ledger::at(dir.path());
+        let me = std::process::id();
         let stale = Origin {
             commit: "c0ffee".into(),
             plan: "sha256:00".into(),
         };
-        ledger.set_origin(4100, 42, Some(&stale)).unwrap();
-        assert_eq!(ledger.origin(4100, 42), Some(stale));
-        ledger.set_origin(4100, 42, None).unwrap();
-        assert_eq!(ledger.origin(4100, 42), None);
-        ledger.set_origin(4100, 42, None).unwrap();
+        ledger.set_origin(4100, me, Some(&stale)).unwrap();
+        assert_eq!(ledger.origin(4100, me), Some(stale));
+        ledger.set_origin(4100, me, None).unwrap();
+        assert_eq!(ledger.origin(4100, me), None);
+        ledger.set_origin(4100, me, None).unwrap();
+    }
+
+    /// Rewrite the origin record of `port` with `edit`.
+    fn edit_origin_record(ledger: &Ledger, port: u16, edit: impl FnOnce(&mut serde_json::Value)) {
+        let path = ledger.dir.join("origins").join(format!("{port}.json"));
+        let mut record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        edit(&mut record);
+        std::fs::write(&path, record.to_string()).unwrap();
+    }
+
+    /// A live process that reuses a dead server's pid, with no launch on the
+    /// port since, must not inherit that server's origin.
+    #[test]
+    fn an_origin_belongs_to_the_process_that_recorded_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::at(dir.path());
+        let me = std::process::id();
+        let origin = Origin {
+            commit: "c0ffee".into(),
+            plan: "sha256:00".into(),
+        };
+        ledger.set_origin(4101, me, Some(&origin)).unwrap();
+        assert_eq!(ledger.origin(4101, me), Some(origin));
+
+        edit_origin_record(&ledger, 4101, |r| {
+            r["started"] = "an earlier process".into();
+        });
+        assert_eq!(
+            ledger.origin(4101, me),
+            None,
+            "an earlier process with this pid recorded the origin"
+        );
+
+        edit_origin_record(&ledger, 4101, |r| {
+            r.as_object_mut().unwrap().remove("started");
+        });
+        assert_eq!(
+            ledger.origin(4101, me),
+            None,
+            "a record that names no process start proves nothing"
+        );
     }
 
     #[test]
