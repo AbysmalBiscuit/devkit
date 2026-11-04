@@ -1,8 +1,9 @@
 use std::{
     collections::BTreeMap,
     fs::{self, File},
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -11,9 +12,9 @@ use anyhow::{Context, Result};
 pub use crate::sys::tree_rss_bytes;
 
 /// Spawn `argv` detached (own session), env-augmented, stdout+stderr ->
-/// logfile. When `cgroup_leaf` is `Some`, the child joins that cgroup in
-/// `pre_exec` before `exec` (Linux only; a no-op elsewhere). Returns the child
-/// pid.
+/// logfile. When `cgroup_leaf` is `Some`, the child joins that cgroup before
+/// the program runs (Linux only; see [`crate::sys::cgroup_command`]). Returns
+/// the child pid.
 pub fn spawn_detached(
     argv: &[String],
     cwd: &str,
@@ -22,21 +23,40 @@ pub fn spawn_detached(
     cgroup_leaf: Option<&Path>,
 ) -> Result<u32> {
     fs::create_dir_all(logfile.parent().unwrap())?;
-    let out = File::create(logfile)?;
-    let err = out.try_clone()?;
+    let mut out = File::create(logfile)?;
     let (prog, rest) = argv.split_first().context("empty launch argv")?;
-    let mut c = Command::new(prog);
-    c.args(rest)
-        .current_dir(cwd)
-        .envs(env)
-        .stdin(Stdio::null())
-        .stdout(out)
-        .stderr(err);
-    crate::sys::detach(&mut c);
-    if let Some(leaf) = cgroup_leaf {
-        crate::sys::join_cgroup(&mut c, leaf);
+    let spawn = |mut c: Command, stdin: Stdio, out: &File| -> std::io::Result<Child> {
+        c.args(rest)
+            .current_dir(cwd)
+            .envs(env)
+            .stdin(stdin)
+            .stdout(out.try_clone()?)
+            .stderr(out.try_clone()?);
+        crate::sys::detach(&mut c);
+        c.spawn()
+    };
+    if let Some(joined) = cgroup_leaf.and_then(|leaf| crate::sys::cgroup_command(leaf, prog)) {
+        let (mut status, status_writer) = std::io::pipe()?;
+        match spawn(joined, status_writer.into(), &out) {
+            Ok(mut child) => {
+                let mut exec_failure = String::new();
+                let _ = status.read_to_string(&mut exec_failure);
+                if exec_failure.is_empty() {
+                    return Ok(child.id());
+                }
+                let _ = child.wait();
+                anyhow::bail!("spawning {prog}: {exec_failure}");
+            }
+            Err(e) => {
+                let _ = writeln!(
+                    out,
+                    "devkitd: running {prog} uncapped, the cgroup join did not start: {e}"
+                );
+            }
+        }
     }
-    let child = c.spawn().with_context(|| format!("spawning {prog}"))?;
+    let child = spawn(Command::new(prog), Stdio::null(), &out)
+        .with_context(|| format!("spawning {prog}"))?;
     Ok(child.id())
 }
 

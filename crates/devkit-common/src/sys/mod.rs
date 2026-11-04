@@ -53,30 +53,32 @@ pub fn cgroup_list_leaves(base: &Path) -> Vec<String> {
     imp::cgroup_list_leaves(base)
 }
 
-/// Register a `pre_exec` step that moves the child into `leaf` before `exec`,
-/// best-effort (fail-open). No-op off-Linux. Call after `detach`.
-pub fn join_cgroup(cmd: &mut std::process::Command, leaf: &Path) {
-    imp::join_cgroup(cmd, leaf)
+/// The hidden `devkitd` subcommand that joins a cgroup leaf and then replaces
+/// itself with a program: `devkitd __cgroup-exec <leaf> -- <program> <args>`.
+pub const CGROUP_EXEC: &str = "__cgroup-exec";
+
+/// A command that runs `program` inside the cgroup `leaf`, or `None` off Linux,
+/// where a leaf has no meaning. It runs this binary's [`CGROUP_EXEC`]
+/// subcommand, so only `devkitd` may call it. The caller appends the program's
+/// arguments and gives the command the write end of a pipe as its stdin. That
+/// pipe closes empty when the program starts, and carries the error when the
+/// program cannot start.
+pub fn cgroup_command(leaf: &Path, program: &str) -> Option<std::process::Command> {
+    imp::cgroup_command(leaf, program)
 }
 
-/// Format a non-negative pid into `buf` as decimal ASCII, returning the written
-/// slice. Async-signal-safe: pure arithmetic into a caller buffer, no
-/// allocation, so it is safe to call from a post-fork `pre_exec` closure.
-#[allow(dead_code)]
-fn fmt_pid(pid: i64, buf: &mut [u8; 20]) -> &[u8] {
-    let mut n = pid.max(0) as u64;
-    let mut i = buf.len();
-    if n == 0 {
-        i -= 1;
-        buf[i] = b'0';
-        return &buf[i..];
-    }
-    while n > 0 {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    &buf[i..]
+/// Move this process into `leaf`, then replace it with `program`. The pid
+/// stays the same, so the program and every process it starts are in the
+/// leaf, with stdin at the null device. A leaf that cannot be joined leaves the
+/// program uncapped. Returns only when the exec fails, after it writes the
+/// error to the status pipe that stdin holds on entry.
+#[cfg(unix)]
+pub fn exec_in_cgroup(
+    leaf: &Path,
+    program: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+) -> std::io::Error {
+    imp::exec_in_cgroup(leaf, program, args)
 }
 
 /// True if a process with `pid` currently exists.
@@ -193,16 +195,6 @@ mod tests {
     #[test]
     fn parent_pid_is_present() {
         assert!(parent_pid().is_some());
-    }
-
-    #[test]
-    fn fmt_pid_formats_decimal() {
-        let mut buf = [0u8; 20];
-        assert_eq!(fmt_pid(0, &mut buf), b"0");
-        assert_eq!(fmt_pid(7, &mut buf), b"7");
-        assert_eq!(fmt_pid(12345, &mut buf), b"12345");
-        // pid_t max on Linux is 2^22, but format the full i32 range to be safe.
-        assert_eq!(fmt_pid(2147483647, &mut buf), b"2147483647");
     }
 
     /// Set to a file path, this binary's `background_child_console_probe`

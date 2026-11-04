@@ -151,6 +151,25 @@ impl Harness {
     /// Spawn a daemon bound to a throwaway HOME, with `extra` env on top of the
     /// fixed test env, then wait for its socket.
     fn start_with_env(extra: &[(&str, String)]) -> Self {
+        Self::start_binary(std::path::Path::new(env!("CARGO_BIN_EXE_devkitd")), extra)
+    }
+
+    /// [`Self::start_with_env`], running the daemon binary at `bin`.
+    pub fn start_binary(bin: &std::path::Path, extra: &[(&str, String)]) -> Self {
+        Self::launch(bin, extra, &[])
+    }
+
+    /// [`Self::start_with_env`], with each variable in `removed` unset in the
+    /// daemon's environment.
+    pub fn start_without(removed: &[&str], extra: &[(&str, String)]) -> Self {
+        Self::launch(
+            std::path::Path::new(env!("CARGO_BIN_EXE_devkitd")),
+            extra,
+            removed,
+        )
+    }
+
+    fn launch(bin: &std::path::Path, extra: &[(&str, String)], removed: &[&str]) -> Self {
         let home = tempfile::tempdir().unwrap();
         // XDG_STATE_HOME is set explicitly so the daemon's state_dir() resolves
         // to a path inside the throwaway temp dir, even when the real user's
@@ -158,12 +177,14 @@ impl Harness {
         let xdg_state = home.path().join("state");
         std::fs::create_dir_all(xdg_state.join("devkit/logs")).expect("create test HOME dirs");
 
-        let bin = env!("CARGO_BIN_EXE_devkitd");
         let mut cmd = Command::new(bin);
         cmd.env("HOME", home.path())
             .env("XDG_STATE_HOME", &xdg_state);
         for (k, v) in extra {
             cmd.env(k, v);
+        }
+        for k in removed {
+            cmd.env_remove(k);
         }
         let child = cmd.spawn().expect("spawn devkitd");
 
