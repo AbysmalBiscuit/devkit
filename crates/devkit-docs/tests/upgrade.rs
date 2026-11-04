@@ -1,4 +1,6 @@
-use std::{path::PathBuf, process::Command};
+use std::path::PathBuf;
+
+use devkit_git::child_env::{child_env, in_child};
 
 mod common;
 
@@ -602,27 +604,57 @@ fn a_journal_that_cannot_be_read_survives_the_heal_pass() {
 /// permanently giving up on a checkout git could still have rebuilt.
 #[test]
 fn a_git_that_cannot_spawn_is_not_a_commit_the_repository_lost() {
-    if let Some(cache) = std::env::var_os("DEVKIT_DOCS_TEST_NO_GIT_CACHE") {
-        let cache = PathBuf::from(cache);
-        let journal = cache.join("registry.locks/@scope~pkg.migration.json");
-        assert!(
-            journal.is_file(),
-            "the fixture journal did not survive setup"
-        );
+    // The fixture needs git, so only the parent builds it. The parent keeps it
+    // alive until the child is done with it.
+    let fixture = (!in_child()).then(no_git_fixture);
+    let (cache, no_git) = fixture
+        .as_ref()
+        .map(|f| (f.cache.clone(), f.no_git.clone()))
+        .unwrap_or_default();
 
-        let result = devkit_docs::upgrade::run(&cache);
+    // A PATH with no `git` on it is the portable way to make the spawn fail:
+    // it needs no permission bits and behaves the same on every platform.
+    child_env()
+        .set("DEVKIT_DOCS_TEST_NO_GIT_CACHE", &cache)
+        .set("PATH", &no_git)
+        .run(|| {
+            let cache = PathBuf::from(std::env::var_os("DEVKIT_DOCS_TEST_NO_GIT_CACHE").unwrap());
+            let journal = cache.join("registry.locks/@scope~pkg.migration.json");
+            assert!(
+                journal.is_file(),
+                "the fixture journal did not survive setup"
+            );
 
+            let result = devkit_docs::upgrade::run(&cache);
+
+            assert!(
+                result.is_err(),
+                "a `git` that cannot be spawned must not read as a commit repo.git no longer has"
+            );
+            assert!(
+                journal.is_file(),
+                "the checkout's commit record was dropped because git could not be spawned"
+            );
+        });
+
+    if let Some(f) = fixture {
         assert!(
-            result.is_err(),
-            "a `git` that cannot be spawned must not read as a commit repo.git no longer has"
-        );
-        assert!(
-            journal.is_file(),
+            f.journal.is_file(),
             "the checkout's commit record was dropped because git could not be spawned"
         );
-        return;
     }
+}
 
+struct NoGitFixture {
+    _base: tempfile::TempDir,
+    cache: PathBuf,
+    journal: PathBuf,
+    no_git: PathBuf,
+}
+
+/// A cache whose only record of its checkout is the migration journal, and an
+/// empty directory to serve as a PATH with no `git` on it.
+fn no_git_fixture() -> NoGitFixture {
     let base_dir = tempfile::tempdir().unwrap();
     let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
@@ -640,33 +672,14 @@ fn a_git_that_cannot_spawn_is_not_a_commit_the_repository_lost() {
     // record is unrecoverable rather than merely wasteful.
     let journal = write_journal(&cache, "@scope~pkg", "v1.0.0", &head);
     assert!(!lib.join("v1.0.0").exists());
-
-    // A PATH with no `git` on it is the portable way to make the spawn fail:
-    // it needs no permission bits and behaves the same on every platform. It
-    // has to be a child process, because PATH is per-process state and the
-    // rest of the suite runs git concurrently.
     let no_git = base.join("empty-path");
     std::fs::create_dir_all(&no_git).unwrap();
-    let output = Command::new(std::env::current_exe().unwrap())
-        .env("DEVKIT_DOCS_TEST_NO_GIT_CACHE", &cache)
-        .env("PATH", &no_git)
-        .args([
-            "--exact",
-            "a_git_that_cannot_spawn_is_not_a_commit_the_repository_lost",
-            "--nocapture",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "worker failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        journal.is_file(),
-        "the checkout's commit record was dropped because git could not be spawned"
-    );
+    NoGitFixture {
+        _base: base_dir,
+        cache,
+        journal,
+        no_git,
+    }
 }
 
 /// A worktree administration `read_dir` cannot list is not one with no

@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use devkit_git::child_env::child_env;
+use devkit_git::child_env::{child_env, in_child};
 
 /// Set, `a_failing_child_probe` runs a body that panics in a child.
 const FAILING_PROBE_ENV: &str = "DEVKIT_TEST_FAILING_CHILD_PROBE";
@@ -39,6 +39,15 @@ fn the_body_runs_with_the_given_variables() {
             );
             assert_eq!(std::env::var_os("PATH"), None);
         });
+}
+
+/// A test that measures its own stdout, such as a terminal probe, gives the
+/// child a stdout the helper does not read.
+#[test]
+fn a_body_runs_with_the_stdout_the_test_gives_it() {
+    child_env()
+        .stdout(std::process::Stdio::null())
+        .run(|| assert!(in_child()));
 }
 
 /// A child whose filter matches no test exits with success, which would read

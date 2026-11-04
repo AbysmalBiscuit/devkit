@@ -672,37 +672,15 @@ mod tests {
         }
     }
 
-    /// Where [`term_width_probe`] writes the width it measured. Set only by the
-    /// tests that re-run this binary; the probe does nothing without it.
-    const WIDTH_OUT: &str = "DEVKIT_TEST_TERM_WIDTH_OUT";
-
-    #[test]
-    fn term_width_probe() {
-        if let Some(out) = std::env::var_os(WIDTH_OUT) {
-            std::fs::write(out, term_width_on(Stream::Stdout).to_string()).unwrap();
-        }
-    }
-
-    /// The width [`term_width_on`] gives stdout in a fresh copy of this test
+    /// Assert the width [`term_width_on`] gives stdout in a child of this test
     /// binary whose stdout is `stdout` and whose `COLUMNS` is `columns`.
-    fn width_in_child(stdout: std::process::Stdio, columns: Option<&str>) -> usize {
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("width");
-        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
-        cmd.args(["ui::tests::term_width_probe", "--exact", "--test-threads=1"])
-            .env(WIDTH_OUT, &out)
-            .stdout(stdout)
-            .stderr(std::process::Stdio::null());
-        match columns {
-            Some(c) => cmd.env("COLUMNS", c),
-            None => cmd.env_remove("COLUMNS"),
+    fn assert_width_in_child(stdout: std::process::Stdio, columns: Option<&str>, expected: usize) {
+        let child = devkit_git::child_env::child_env().stdout(stdout);
+        let child = match columns {
+            Some(c) => child.set("COLUMNS", c),
+            None => child.remove("COLUMNS"),
         };
-        let status = cmd.status().unwrap();
-        assert!(status.success(), "probe failed: {status}");
-        std::fs::read_to_string(&out)
-            .expect("the probe ran")
-            .parse()
-            .unwrap()
+        child.run(|| assert_eq!(term_width_on(Stream::Stdout), expected));
     }
 
     /// A pseudoterminal `cols` columns wide: the master end, which must stay
@@ -723,19 +701,19 @@ mod tests {
     #[test]
     fn term_width_reads_the_terminal_size() {
         let (_master, slave) = pty(137);
-        assert_eq!(width_in_child(slave, None), 137);
+        assert_width_in_child(slave, None, 137);
     }
 
     #[cfg(unix)]
     #[test]
     fn term_width_on_prefers_columns_over_the_terminal() {
         let (_master, slave) = pty(137);
-        assert_eq!(width_in_child(slave, Some("57")), 57);
+        assert_width_in_child(slave, Some("57"), 57);
     }
 
     #[test]
     fn term_width_on_a_stream_that_is_not_a_terminal_is_100() {
-        assert_eq!(width_in_child(std::process::Stdio::piped(), None), 100);
+        assert_width_in_child(std::process::Stdio::piped(), None, 100);
     }
 
     #[test]
