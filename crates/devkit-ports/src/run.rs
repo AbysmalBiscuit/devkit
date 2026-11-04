@@ -682,8 +682,15 @@ fn supervise_via_daemon(
 ) -> Result<Vec<ServerStatus>> {
     let mut client =
         crate::daemon::client::ensure_running().context("starting supervisor daemon")?;
+    let data = registry::snapshot()?;
     let mut out = Vec::with_capacity(plans.len());
     for p in plans {
+        // devkitd answers for a live server without spawning it, so only a
+        // plan with none gets a fresh origin; a reused one keeps its own.
+        if let Some(existing) = existing_server(&data, p, holder, role) {
+            out.push(existing);
+            continue;
+        }
         let origin = origin_at(&p.cwd, p);
         let resp = client.request(&crate::daemon::proto::Request::Supervise {
             holder: holder.to_string(),

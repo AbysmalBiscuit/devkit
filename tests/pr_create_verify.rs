@@ -1270,6 +1270,55 @@ fn assert_refused_for_reusing_srv(p: &ghfake::Fake) {
     assert!(!opened(p), "{}", p.calls());
 }
 
+/// `devrun up --supervise` with a daemon that exits once it supervises
+/// nothing, so the test leaves no daemon behind.
+#[cfg(unix)]
+fn up_supervised(p: &ghfake::Fake) {
+    let log = p.state().join("up.log");
+    let ok = p.devkit_here_logged(
+        &["run", "up", "srv", "--supervise"],
+        &[("DEVKIT_DAEMON_IDLE_SECS", "1")],
+        &log,
+    );
+    assert!(ok, "{}", std::fs::read_to_string(&log).unwrap_or_default());
+}
+
+/// Wait for the idle daemon to stop accepting. Its shutdown wakes its accept
+/// loop through the socket, so it must exit before the test's state
+/// directory, and the socket in it, is deleted. Each probe is activity that
+/// restarts the daemon's idle timer, so probes stay wider apart than
+/// `DEVKIT_DAEMON_IDLE_SECS`.
+#[cfg(unix)]
+fn await_daemon_exit(p: &ghfake::Fake) {
+    let sock = p.state().join("devkit").join("ports.sock");
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if std::os::unix::net::UnixStream::connect(&sock).is_err() {
+            return;
+        }
+    }
+    panic!("devkitd did not idle out");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_second_supervised_up_at_a_later_commit_keeps_the_first_origin() {
+    let p = serving_project(39221);
+    up_supervised(&p);
+    let srv = Srv(&p);
+    let first = srv_origin(&p).expect("the first up records an origin");
+    std::fs::write(p.project().join("later.txt"), "later\n").unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "later"]);
+    serve_head(&p);
+    up_supervised(&p);
+    assert_eq!(srv_origin(&p), Some(first));
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    assert_refused_for_reusing_srv(&p);
+    drop(srv);
+    await_daemon_exit(&p);
+}
+
 #[test]
 fn a_run_reusing_a_server_launched_at_another_commit_is_refused() {
     let p = serving_project(39214);

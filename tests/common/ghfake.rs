@@ -451,6 +451,25 @@ github = "sweeper[bot]"
             .expect("spawn devkit")
     }
 
+    /// [`Fake::devkit_here_with_env`] with stdout and stderr in `log`, for a
+    /// command that leaves a process behind holding them, such as an
+    /// autostarted `devkitd`. Returns whether it exited 0.
+    #[allow(dead_code)]
+    pub fn devkit_here_logged(&self, args: &[&str], env: &[(&str, &str)], log: &Path) -> bool {
+        let out = std::fs::File::create(log).expect("create the log");
+        self.devkit_cmd()
+            .current_dir(self.project.path())
+            .env_remove("LINEAR_API_KEY")
+            .args(args)
+            .envs(env.iter().copied())
+            .stdin(std::process::Stdio::null())
+            .stdout(out.try_clone().expect("share the log"))
+            .stderr(out)
+            .status()
+            .expect("spawn devkit")
+            .success()
+    }
+
     fn issue_cmd(&self, args: &[&str]) -> Command {
         let mut cmd = self.devkit_cmd();
         cmd.args(["issue", "-C"])
