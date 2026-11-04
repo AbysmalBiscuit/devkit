@@ -42,6 +42,7 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             role,
             pid,
             logfile,
+            origin,
         } => match registry::record_pid_with(
             &daemon.port_store(),
             port,
@@ -50,6 +51,7 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             role,
             pid,
             logfile,
+            origin,
         ) {
             Ok(()) => (Response::Ok, false),
             Err(e) => (Response::Err(format!("{e:#}")), false),
@@ -84,9 +86,10 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             env,
             logfile,
             base_port,
+            origin,
         } => (
             supervise_app(
-                daemon, holder, app, role, argv, cwd, env, logfile, base_port,
+                daemon, holder, app, role, argv, cwd, env, logfile, base_port, origin,
             ),
             false,
         ),
@@ -125,6 +128,7 @@ fn supervise_app(
     env: std::collections::BTreeMap<String, String>,
     logfile: std::path::PathBuf,
     base_port: u16,
+    origin: Option<registry::Origin>,
 ) -> Response {
     // Reserve before bind (same invariant as the flock path).
     let reqs = vec![(app.clone(), base_port)];
@@ -172,6 +176,7 @@ fn supervise_app(
         role,
         pid,
         logfile.clone(),
+        origin,
     ) {
         return Response::Err(format!("{e:#}"));
     }

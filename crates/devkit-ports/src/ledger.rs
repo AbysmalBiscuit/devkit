@@ -71,10 +71,18 @@ pub struct Run {
     #[serde(default)]
     pub steps: Vec<Step>,
     /// The apps an `up` step found already running from before the run
-    /// started, and did not launch. Such a server may have started at another
-    /// commit, so a run that reused one satisfies no PR gate.
+    /// started, and did not launch, except those in
+    /// [`reused_at_head`](Self::reused_at_head). Such a server may have
+    /// started at another commit, so a run that reused one satisfies no PR
+    /// gate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reused_servers: Vec<String>,
+    /// The apps an `up` step found already running from before the run
+    /// started, launched on a clean tree at the run's head with the plan the
+    /// step would launch. They do not stop the run satisfying a gate; the PR
+    /// shows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reused_at_head: Vec<String>,
     /// The servers a step's `require_live` ran against, each once. They are
     /// the run's precondition, started before it by design, so they do not
     /// stop it satisfying a gate; the PR shows them.
@@ -305,6 +313,8 @@ pub fn committed_config(
 pub struct Servers {
     /// See [`Run::reused_servers`].
     pub reused: Vec<String>,
+    /// See [`Run::reused_at_head`].
+    pub reused_at_head: Vec<String>,
     /// See [`Run::live_servers`].
     pub live: Vec<LiveServer>,
 }
@@ -326,7 +336,7 @@ pub struct Start {
 
 /// The commit at `root` and whether its tree is clean. An unreadable answer
 /// reads as no commit and not clean, so it can never prove a pass.
-fn tree_state(root: &Path) -> (Option<String>, bool) {
+pub(crate) fn tree_state(root: &Path) -> (Option<String>, bool) {
     let vcs = vcs::Vcs::at(root);
     let head = vcs.revision(root).ok().filter(|s| !s.is_empty());
     let clean = matches!(vcs.dirty(root, Changes::All), Ok(false));
@@ -374,9 +384,15 @@ impl Start {
         }
     }
 
+    /// The commit checked out when the run started. See [`Run::head`].
+    pub fn head(&self) -> Option<&str> {
+        self.head.as_deref()
+    }
+
     /// The finished run, re-reading the tree so a run that changed it, or
     /// whose head moved under it, is not clean. `servers` holds
-    /// [`Run::reused_servers`] and [`Run::live_servers`].
+    /// [`Run::reused_servers`], [`Run::reused_at_head`] and
+    /// [`Run::live_servers`].
     pub fn finish(
         self,
         exit_code: Option<i32>,
@@ -395,6 +411,7 @@ impl Start {
             env_file: self.env_file,
             steps,
             reused_servers: servers.reused,
+            reused_at_head: servers.reused_at_head,
             live_servers: servers.live,
             task: self.task,
             args: self.args,
@@ -584,6 +601,7 @@ mod tests {
             steps: Vec::new(),
             arg_files: BTreeMap::new(),
             reused_servers: Vec::new(),
+            reused_at_head: Vec::new(),
             live_servers: Vec::new(),
             exit_code,
             started_at: "2026-01-01T00:00:00.000Z".into(),

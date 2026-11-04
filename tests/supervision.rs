@@ -38,6 +38,7 @@ fn supervised_python_server_becomes_ready() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("sup.log"),
         base_port: port,
+        origin: None,
     });
 
     assert!(
@@ -77,6 +78,7 @@ fn restart_after_kill() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("kill.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -147,6 +149,7 @@ fn restart_survives_concurrent_snapshot() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("snap.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -266,6 +269,7 @@ while True:
         env: BTreeMap::new(),
         logfile: h.home.path().join("hung.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -357,6 +361,7 @@ while True:
         env: BTreeMap::new(),
         logfile: h.home.path().join("balloon.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -439,6 +444,7 @@ while True:
         env: BTreeMap::new(),
         logfile: h.home.path().join("balloon-loop.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -535,6 +541,7 @@ while True:
         env: BTreeMap::new(),
         logfile: h.home.path().join("cgroup-balloon.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -590,6 +597,7 @@ fn cap_requested_without_delegation_falls_back() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("fallback.log"),
         base_port: port,
+        origin: None,
     });
 
     // The spawn must succeed even though cgroup delegation is unavailable.
@@ -666,6 +674,7 @@ fn a_supervised_app_and_its_children_join_the_leaf() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("join.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -713,6 +722,7 @@ fn an_unwritable_leaf_leaves_the_app_uncapped() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("unjoinable.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -759,6 +769,7 @@ fn a_capped_launch_survives_a_deleted_daemon_binary() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("deleted.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -812,6 +823,7 @@ fn a_capped_launch_without_path_uses_the_default_search_path() {
             env: BTreeMap::new(),
             logfile: h.home.path().join("no-path.log"),
             base_port: port,
+            origin: None,
         });
         assert!(
             matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
@@ -847,6 +859,7 @@ fn a_program_that_cannot_exec_fails_the_launch() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("no-interpreter.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Err(msg) if msg.contains(&program)),
@@ -877,6 +890,7 @@ fn a_missing_program_fails_the_launch() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("missing.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Err(msg) if msg.contains(program)),
@@ -903,6 +917,7 @@ fn second_supervise_of_live_server_is_noop() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("noop.log"),
         base_port: port,
+        origin: None,
     };
 
     let first = h.request(&req);
@@ -942,6 +957,7 @@ fn down_does_not_restart() {
         env: BTreeMap::new(),
         logfile: h.home.path().join("down.log"),
         base_port: port,
+        origin: None,
     });
     assert!(
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),

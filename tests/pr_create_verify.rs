@@ -1041,6 +1041,7 @@ fn hold_since(p: &ghfake::Fake, app: &str, pid: Option<u32>, ts: u64) -> std::ne
         pid,
         logfile: None,
         ts,
+        origin: None,
     });
     let dir = p.state().join("devkit");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1179,6 +1180,114 @@ fn a_run_whose_second_up_step_reuses_the_server_its_first_launched_qualifies() {
     let (ok, stderr) = create(&p, "agent");
     assert!(ok, "{stderr}");
     assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
+}
+
+/// A project whose required `e2e` brings `srv` up, this test binary serving
+/// its port, then runs `verify`.
+fn serving_project(base_port: u16) -> ghfake::Fake {
+    let exe = std::env::current_exe().unwrap();
+    project(&format!(
+        "[apps.srv]\nbase_port = {base_port}\npath = \".\"\n\
+         launch = ['{}', '--exact', 'serve_port_when_launched_as_an_app', '--nocapture']\n\
+         static_env = {{ DEVKIT_TEST_SERVE_PORT = \"{{{{ port }}}}\" }}\n\
+         [tasks.e2e]\nsteps = [{{ up = \"srv\" }}, {{ task = \"verify\" }}]\n\
+         [pr.gates]\nverify_task = \"e2e\"\nverify_args = {{ scope = \"all\" }}\n",
+        exe.display()
+    ))
+}
+
+/// `srv` launched by `devrun up`, stopped when dropped.
+struct Srv<'a>(&'a ghfake::Fake);
+
+impl<'a> Srv<'a> {
+    fn up(p: &'a ghfake::Fake) -> Self {
+        let out = p.devkit_here(&["run", "up", "srv"]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Self(p)
+    }
+}
+
+impl Drop for Srv<'_> {
+    fn drop(&mut self) {
+        self.0.devkit_here(&["run", "down", "--app", "srv"]);
+    }
+}
+
+fn registry(p: &ghfake::Fake) -> devkit_ports::registry::Data {
+    let text = std::fs::read(p.state().join("devkit").join("ports.json")).unwrap();
+    serde_json::from_slice(&text).unwrap()
+}
+
+#[test]
+fn devrun_up_records_the_launch_commit_and_plan_digest() {
+    let p = serving_project(39212);
+    let _srv = Srv::up(&p);
+    let data = registry(&p);
+    let entry = data.entries.values().find(|e| e.app == "srv").unwrap();
+    let origin = entry.origin.as_ref().expect("an origin is recorded");
+    assert_eq!(origin.commit, head(&p));
+    assert!(origin.plan.starts_with("sha256:"), "{}", origin.plan);
+}
+
+#[test]
+fn a_run_reusing_a_server_launched_at_head_with_its_plan_qualifies() {
+    let p = serving_project(39213);
+    let _srv = Srv::up(&p);
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    let body = opened_body(&p);
+    assert!(body.contains("Exit code: 0"), "{body}");
+    assert!(
+        body.contains("Against reused server `srv`, launched at this commit"),
+        "{body}"
+    );
+}
+
+/// The refusal an agent gets after a run that reused `srv`.
+fn assert_refused_for_reusing_srv(p: &ghfake::Fake) {
+    let (ok, stderr) = create(p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(stderr.contains("reused"), "says why: {stderr}");
+    assert!(stderr.contains("`srv`"), "names the server: {stderr}");
+    assert!(!opened(p), "{}", p.calls());
+}
+
+#[test]
+fn a_run_reusing_a_server_launched_at_another_commit_is_refused() {
+    let p = serving_project(39214);
+    let _srv = Srv::up(&p);
+    std::fs::write(p.project().join("later.txt"), "later\n").unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "later"]);
+    serve_head(&p);
+    task(&p, &["e2e", "--arg", "scope=all"]);
+    assert_refused_for_reusing_srv(&p);
+}
+
+#[test]
+fn a_run_reusing_a_server_launched_with_another_plan_is_refused() {
+    let p = serving_project(39215);
+    let _srv = Srv::up(&p);
+    let outside = tempfile::tempdir().unwrap();
+    let layer = outside.path().join("devkit.toml");
+    let toml = std::fs::read_to_string(p.project().join("devkit.toml")).unwrap();
+    let other = toml.replace(
+        "static_env = { DEVKIT_TEST_SERVE_PORT = \"{{ port }}\" }",
+        "static_env = { DEVKIT_TEST_SERVE_PORT = \"{{ port }}\", EXTRA = \"x\" }",
+    );
+    assert_ne!(other, toml);
+    std::fs::write(&layer, other).unwrap();
+    task(&p, &[
+        "--config",
+        layer.to_str().unwrap(),
+        "e2e",
+        "--arg",
+        "scope=all",
+    ]);
+    assert_refused_for_reusing_srv(&p);
 }
 
 /// A run reads the commit and the tree state once before the task and once

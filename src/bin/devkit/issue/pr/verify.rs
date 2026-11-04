@@ -172,6 +172,11 @@ impl Gate {
                 server.app, server.started_at
             ));
         }
+        for app in &run.reused_at_head {
+            out.push_str(&format!(
+                "- Against reused server `{app}`, launched at this commit with the same plan\n"
+            ));
+        }
         out.push_str(&self.ran);
         out.push_str(self.change.as_deref().unwrap_or_default());
         out
@@ -225,12 +230,13 @@ impl Gate {
 
 /// Why `run`, which passed at the PR's head with the required args, does
 /// not qualify: its `up` step reused a server already running before it
-/// started, which may have started at another commit.
+/// started, with no record of launching at that commit with the plan the
+/// step would launch.
 fn reused_note(required: &RequiredTask, run: &Run) -> String {
     format!(
         "A run at that commit passed, but its `up` step reused the server already running for \
-         {apps}, which may have started at an earlier commit: stop it with `devrun down \
-         {names}` and run `{command}` again.",
+         {apps}, which has no record of launching at that commit with the plan the step would \
+         launch: stop it with `devrun down {names}` and run `{command}` again.",
         apps = run
             .reused_servers
             .iter()

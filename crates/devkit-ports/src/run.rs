@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::{
     apps::App,
-    registry::{self, Data, Role},
+    registry::{self, Data, Origin, Role},
 };
 
 /// Env layering (low->high): static_env -> url-wiring -> user overrides.
@@ -150,6 +150,9 @@ pub struct ServerStatus {
     /// [`launch`] found this server already running and did not spawn it.
     #[serde(skip)]
     pub reused: bool,
+    /// See [`registry::Entry::origin`].
+    #[serde(skip)]
+    pub origin: Option<Origin>,
 }
 
 /// Classify from already-probed signals: listening -> Ready; else live pid ->
@@ -192,6 +195,7 @@ pub fn server_rows(data: &Data, only_holder: Option<&str>) -> Vec<ServerStatus> 
             logfile: e.logfile.clone(),
             state: server_state(*port, e.pid),
             reused: false,
+            origin: e.origin.clone(),
         });
     }
     rows
@@ -245,6 +249,21 @@ pub struct LaunchPlan {
     pub log: PathBuf,
     /// The app's rendered `url`, as reported to the user.
     pub url: String,
+    /// A SHA-256 of the app, port, cwd and argv, the ports its templates
+    /// read, and each env name with the `static_env` template config gave
+    /// it. Rendered env values never enter it: they may be secrets.
+    pub digest: String,
+}
+
+/// What [`LaunchPlan::digest`] hashes.
+#[derive(Serialize)]
+struct DigestInput<'a> {
+    app: &'a str,
+    port: u16,
+    cwd: &'a Path,
+    argv: &'a [String],
+    ports: BTreeMap<&'a str, u16>,
+    env: BTreeMap<&'a str, Option<&'a str>>,
 }
 
 /// Ports one (role, holder) group needs: each selected app's own port plus
@@ -346,6 +365,9 @@ pub fn plan_group(
         let log = paths::logs_dir()?
             .join(holder_slug(base_dir.to_str().unwrap_or("wt")))
             .join(format!("{}-{}.log", role.as_str(), a));
+        let digest = plan_digest(
+            app, port, &cwd, &argv, ports, provider, &env, user_env, variables,
+        )?;
         plans.push(LaunchPlan {
             app: a.clone(),
             port,
@@ -354,9 +376,66 @@ pub fn plan_group(
             env,
             log,
             url,
+            digest,
         });
     }
     Ok(plans)
+}
+
+/// [`LaunchPlan::digest`] of `app`'s plan at `port`, which renders `env`.
+#[allow(clippy::too_many_arguments)]
+fn plan_digest(
+    app: &App,
+    port: u16,
+    cwd: &Path,
+    argv: &[String],
+    ports: &BTreeMap<String, u16>,
+    provider: Option<&str>,
+    env: &BTreeMap<String, String>,
+    user_env: &BTreeMap<String, String>,
+    variables: &BTreeMap<String, String>,
+) -> Result<String> {
+    let mut templates: Vec<&str> = app.launch.iter().map(String::as_str).collect();
+    templates.extend(app.static_env.values().map(String::as_str));
+    templates.push(app.url_template());
+    let mut read = devkit_common::template::referenced_ports(&templates, variables)
+        .with_context(|| format!("scanning templates of app `{}`", app.name))?
+        .apps;
+    if url_consumer_var(app).is_some() {
+        read.extend(provider.map(str::to_string));
+    }
+    let input = DigestInput {
+        app: &app.name,
+        port,
+        cwd,
+        argv,
+        ports: ports
+            .iter()
+            .filter(|(name, _)| read.contains(*name))
+            .map(|(name, port)| (name.as_str(), *port))
+            .collect(),
+        env: env
+            .keys()
+            .map(|k| {
+                let template = app.static_env.get(k).filter(|_| !user_env.contains_key(k));
+                (k.as_str(), template.map(String::as_str))
+            })
+            .collect(),
+    };
+    Ok(devkit_common::harness_log::redact::digest(
+        &serde_json::to_string(&input)?,
+    ))
+}
+
+/// The origin a server launched from `dir` with `plan` records: `None` when
+/// the tree there has no commit or is dirty, since the server may then run
+/// code no commit holds.
+fn origin_at(dir: &Path, plan: &LaunchPlan) -> Option<Origin> {
+    let (head, clean) = crate::ledger::tree_state(dir);
+    Some(Origin {
+        commit: head.filter(|_| clean)?,
+        plan: plan.digest.clone(),
+    })
 }
 
 /// Result of stopping + releasing a holder's servers.
@@ -498,6 +577,7 @@ fn existing_server(
         logfile: e.logfile.clone(),
         state: server_state(plan.port, Some(pid)),
         reused: true,
+        origin: e.origin.clone(),
     })
 }
 
@@ -555,8 +635,9 @@ fn launch_with(
 
     let mut spawned = Vec::with_capacity(pending.len());
     for p in pending {
+        let origin = origin_at(&p.cwd, p);
         let pid = spawn(p)?;
-        registry::record_pid(p.port, &p.app, holder, role, pid, p.log.clone())?;
+        registry::record_pid(p.port, &p.app, holder, role, pid, p.log.clone(), origin)?;
         spawned.push((p.app.clone(), p.port, p.log.clone(), pid));
     }
 
@@ -590,6 +671,7 @@ fn launch_with(
                     ServerState::Starting
                 },
                 reused: false,
+                origin: None,
             })
             .collect();
         out.extend(existing);
@@ -605,6 +687,7 @@ fn launch_with(
                 logfile: Some(log),
                 state: server_state(port, Some(pid)),
                 reused: false,
+                origin: None,
             })
             .collect();
         out.extend(existing);
@@ -631,6 +714,7 @@ fn supervise_via_daemon(
             env: p.env.clone(),
             logfile: p.log.clone(),
             base_port: p.port,
+            origin: origin_at(&p.cwd, p),
         })?;
         let ready = match &resp {
             crate::daemon::proto::Response::Supervised(v) => {
@@ -654,6 +738,7 @@ fn supervise_via_daemon(
                 ServerState::Starting
             },
             reused: false,
+            origin: None,
         });
     }
     Ok(out)
@@ -872,6 +957,49 @@ mod tests {
     }
 
     #[test]
+    fn a_plan_digest_never_holds_a_rendered_env_value() {
+        let digest = |template: &str, token: &str, user: &[(&str, &str)]| {
+            let mut catalog = HashMap::new();
+            catalog.insert(
+                "api".to_string(),
+                test_app(&["nitro", "--port", "{{ port }}"], &[("TOKEN", template)]),
+            );
+            let plans = plan_group(
+                &catalog,
+                &["api".to_string()],
+                &[("api".to_string(), 9100)].into(),
+                None,
+                Path::new("/wt"),
+                Role::Workspace,
+                &user
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                &[("token".to_string(), token.to_string())].into(),
+            )
+            .unwrap();
+            assert!(
+                plans[0].env["TOKEN"].starts_with(token),
+                "the value renders"
+            );
+            plans[0].digest.clone()
+        };
+        let base = digest("{{ token }}", "s3cret", &[]);
+        assert_eq!(base, digest("{{ token }}", "other", &[]), "rendered value");
+        assert_eq!(
+            digest("{{ token }}", "s3cret", &[("PASS", "hunter2")]),
+            digest("{{ token }}", "s3cret", &[("PASS", "other")]),
+            "a user value"
+        );
+        assert_ne!(base, digest("{{ token }}-v2", "s3cret", &[]), "template");
+        assert_ne!(
+            base,
+            digest("{{ token }}", "s3cret", &[("PASS", "hunter2")]),
+            "an env name"
+        );
+    }
+
+    #[test]
     fn plan_group_rejects_leftover_brace_port() {
         let mut catalog = HashMap::new();
         catalog.insert(
@@ -915,6 +1043,7 @@ mod tests {
             pid: None,
             logfile: None,
             ts: crate::registry::now(),
+            origin: None,
         });
         let rows = server_rows(&data, Some("/w"));
         assert_eq!(rows.len(), 1);
@@ -936,6 +1065,7 @@ mod tests {
             pid: None,
             logfile: None,
             ts: crate::registry::now(),
+            origin: None,
         });
         let rows = server_rows(&data, None);
         assert_eq!(
@@ -1111,6 +1241,7 @@ mod tests {
                 pid: None,
                 logfile: Some(logfile.clone()),
                 ts: crate::registry::now(),
+                origin: None,
             });
             Ok(())
         })
@@ -1194,6 +1325,7 @@ mod tests {
             env: BTreeMap::new(),
             log: tmp.clone(),
             url: format!("http://localhost:{port}"),
+            digest: String::new(),
         };
         // Non-blocking, so the server is "starting".
         let out = launch_with(
@@ -1247,6 +1379,7 @@ mod tests {
             pid,
             logfile: None,
             ts: registry::now(),
+            origin: None,
         }
     }
 
@@ -1259,6 +1392,7 @@ mod tests {
             env: BTreeMap::new(),
             log: PathBuf::from("x.log"),
             url: format!("http://localhost:{port}"),
+            digest: String::new(),
         }
     }
 

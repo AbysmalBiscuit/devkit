@@ -28,6 +28,8 @@ Default `--role workspace`, the workspace's own servers; `--role issue` is its o
 
 Ports are allocated dynamically from the live registry at start time, and `workspace setup` reserves none.
 
+A server that `devrun up` launches on a clean tree records its `origin` in the registry: the commit it launched from, and a digest of its launch plan. The digest covers the app, port, cwd and argv, the ports its templates read, and each env name with its `static_env` template, never a rendered env value. A server launched on a dirty tree, or restarted by the supervisor, records no origin. The verify gate reads the origin (`references/pr.md`).
+
 `up` is idempotent: an (app, role) row that already has a live pid reports the existing server instead of spawning a duplicate.
 
 ### `status`
