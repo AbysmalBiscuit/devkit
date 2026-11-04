@@ -51,25 +51,32 @@ pub fn day_end<Tz: TimeZone>(date: NaiveDate, zone: &Tz) -> DateTime<Utc> {
 /// A todo with no readable last change stays. `all` is the whole store, since
 /// the open todo that needs one may sit outside the scope.
 ///
-/// A ticket todo goes only when `sync` maps its ticket's last synced status
-/// to done, since a sync would bring a ticket still open back as open.
+/// A ticket todo needs a done last synced status: `repo`'s map reads those on
+/// its own node, and elsewhere only `closed:*` counts.
 pub fn prunable(
     all: &[Todo],
     scoped: Vec<Todo>,
     window: Window,
-    sync: &TicketSyncConfig,
+    repo: Option<(&str, &TicketSyncConfig)>,
 ) -> Vec<Todo> {
     let needed = needed_by_open(all);
+    let no_map = TicketSyncConfig::default();
     scoped
         .into_iter()
         .filter(|todo| !todo.status.kind().is_open() && !needed.contains(todo.id.as_str()))
-        .filter(|todo| match &todo.ticket {
-            None => true,
-            Some(ticket) => ticket
+        .filter(|todo| {
+            let Some(ticket) = &todo.ticket else {
+                return true;
+            };
+            let map = match repo {
+                Some((node, map)) if todo.node() == node => map,
+                _ => &no_map,
+            };
+            ticket
                 .synced_status
                 .as_deref()
-                .and_then(|name| synced_kind(name, sync))
-                .is_some_and(|kind| !kind.is_open()),
+                .and_then(|name| synced_kind(name, map))
+                .is_some_and(|kind| !kind.is_open())
         })
         .filter(|todo| {
             todo.modified
@@ -170,7 +177,7 @@ mod tests {
             todo("a", done(), Some("b")),
             todo("b", done(), Some("a")),
         ];
-        assert!(prunable(&all, all.to_vec(), Window::default(), &Default::default()).is_empty());
+        assert!(prunable(&all, all.to_vec(), Window::default(), None).is_empty());
     }
 
     /// Removes every todo of its first prune, and fails every later one.
@@ -229,6 +236,6 @@ mod tests {
         let mut unset = todo("unset", done(), None);
         unset.modified = None;
         let all = [unread, unset];
-        assert!(prunable(&all, all.to_vec(), Window::default(), &Default::default()).is_empty());
+        assert!(prunable(&all, all.to_vec(), Window::default(), None).is_empty());
     }
 }

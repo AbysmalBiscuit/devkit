@@ -254,10 +254,15 @@ fn a_done_todo_an_open_todo_needs_stays() {
 /// A done ticket todo on the repository node, its ticket last synced as
 /// `synced`, last changed in September.
 fn done_ticket(p: &Proj, key: &str, synced: &str) {
+    done_ticket_on(p, "proj", key, synced);
+}
+
+/// [`done_ticket`] on `node`.
+fn done_ticket_on(p: &Proj, node: &str, key: &str, synced: &str) {
     let id = p
         .store()
         .add(NewTodo {
-            project: Some("proj".into()),
+            project: Some(node.into()),
             description: format!("#{key} ticket"),
             parent: None,
             order: None,
@@ -303,6 +308,25 @@ fn a_done_ticket_todo_goes_only_when_its_ticket_was_last_synced_done() {
 
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(left(&p), ["#3 ticket", "#4 ticket"]);
+}
+
+#[test]
+fn another_repositorys_ticket_todo_keeps_unless_its_ticket_closed() {
+    let p = Proj::new();
+    std::fs::write(
+        p.path.join("devkit.toml"),
+        "[ticket.sync.statuses]\nShipped = \"completed\"\n",
+    )
+    .unwrap();
+    done_ticket(&p, "1", "Shipped");
+    done_ticket_on(&p, "other", "2", "Shipped");
+    done_ticket_on(&p, "other", "3", "closed:completed");
+
+    let args = ["prune", "--all", "--to-date", "2026-10-01", "--yes"];
+    let out = run(&p, &args, &HUMAN);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(left(&p), ["#2 ticket"]);
 }
 
 #[test]

@@ -478,7 +478,7 @@ pub fn prune_bounds_a_last_change_inclusively(s: &impl TodoStore) {
     let second = TimeDelta::seconds(1);
     let selected = |from, to| {
         let all = s.list(&Filter::all()).unwrap();
-        prunable(&all, all.clone(), Window { from, to }, &Default::default()).len()
+        prunable(&all, all.clone(), Window { from, to }, None).len()
     };
     assert_eq!(selected(Some(at), Some(at)), 1);
     assert_eq!(selected(None, Some(at + second)), 1);
@@ -521,7 +521,7 @@ pub fn prune_keeps_what_an_open_todo_needs(s: &impl TodoStore) {
     }
 
     let all = s.list(&Filter::all()).unwrap();
-    let selected = prunable(&all, all.clone(), Window::default(), &Default::default());
+    let selected = prunable(&all, all.clone(), Window::default(), None);
 
     let ids: Vec<&str> = selected.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(ids, [free.as_str()]);
