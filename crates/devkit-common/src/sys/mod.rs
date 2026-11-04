@@ -67,7 +67,9 @@ pub fn terminate(pid: u32) {
 /// device and the given stdout and stderr. It holds none of this process's
 /// other stdio, so a caller reading this process's output to its end is not
 /// held open by the child. The child keeps `cmd`'s program, arguments,
-/// environment changes and directory, and nothing else of `cmd`.
+/// directory, and the variables that `cmd` sets or removes, and nothing else
+/// of `cmd`. An `env_clear` on `cmd` is not carried, because std has no
+/// getter that shows it.
 ///
 /// On Unix the child leads a session of its own, through this binary's
 /// [`run_detach_trampoline`], so each binary that calls this calls that first.
