@@ -113,6 +113,14 @@ impl TodoStore for Store {
         Ok(todos)
     }
 
+    fn list_open(&self, filter: &Filter) -> Result<Vec<Todo>> {
+        self.store.list_open(filter)
+    }
+
+    fn closed_counts(&self, filter: &Filter) -> Result<devkit_todo::ClosedCounts> {
+        self.store.closed_counts(filter)
+    }
+
     fn get(&self, id: &str) -> Result<Option<Todo>> {
         self.store.get(id)
     }

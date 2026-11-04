@@ -1,5 +1,6 @@
 use std::{
     cell::Cell,
+    collections::HashMap,
     fmt,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -9,8 +10,8 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use devkit_common::store::{LockBusy, with_file_lock, with_file_lock_for};
 use devkit_todo::{
-    Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore, by_prefix,
-    is_uuid_prefix, one_line, take_over, ticket_todo_uuid, transition,
+    ClosedCounts, Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore,
+    by_prefix, is_uuid_prefix, one_line, take_over, ticket_todo_uuid, transition,
 };
 use taskchampion::{
     Operations, Server, ServerConfig, SqliteStorage, TaskData, Uuid, chrono::Utc,
@@ -18,7 +19,7 @@ use taskchampion::{
 };
 use tokio::runtime::Runtime;
 
-use crate::schema::{Exported, project_of};
+use crate::schema::{Exported, node_of, project_of};
 
 type Replica = taskchampion::Replica<SqliteStorage>;
 
@@ -269,25 +270,47 @@ impl TaskchampionStore {
         })
     }
 
-    /// The uuids of the pending tasks with a start time, each a claim. SQLite
-    /// filters the rows, so devkit decodes no closed task. A row whose data
-    /// is not JSON, which taskchampion cannot read either, never matches.
-    fn started_uuids(&self) -> Result<Vec<Uuid>> {
-        let db = rusqlite::Connection::open_with_flags(
-            self.data_dir.join("taskchampion.sqlite3"),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .with_context(|| format!("opening the todo replica at {}", self.data_dir.display()))?;
+    /// The replica's database opened read-only for direct SQL, `None` for a
+    /// replica not created yet. taskchampion answers a read only with whole
+    /// decoded tasks, so counting closed tasks needs this. The queries read
+    /// its private `tasks` table of `uuid` and JSON `data`, and a test pins
+    /// them to what taskchampion's own reads return.
+    fn database(&self) -> Result<Option<rusqlite::Connection>> {
+        let path = self.data_dir.join("taskchampion.sqlite3");
+        if !path.exists() {
+            return Ok(None);
+        }
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map(Some)
+            .with_context(|| format!("opening the todo replica at {}", self.data_dir.display()))
+    }
+
+    /// Every open todo, read without decoding a closed task. A row whose data
+    /// is not JSON, which taskchampion cannot read either, is skipped.
+    fn open_todos(&self) -> Result<Vec<Todo>> {
+        let Some(db) = self.database()? else {
+            return Ok(Vec::new());
+        };
         let mut query = db.prepare(
-            "SELECT uuid FROM tasks WHERE CASE WHEN json_valid(data) THEN \
-             json_extract(data, '$.status') = 'pending' \
-             AND json_extract(data, '$.start') IS NOT NULL END",
+            "SELECT uuid, data FROM tasks WHERE CASE WHEN json_valid(data) THEN \
+             json_extract(data, '$.status') = 'pending' END",
         )?;
-        let uuids = query
-            .query_map([], |row| row.get::<_, String>(0))?
-            .filter_map(|uuid| uuid.ok().and_then(|u| Uuid::try_parse(&u).ok()))
-            .collect();
-        Ok(uuids)
+        let rows = query.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut todos = Vec::new();
+        for row in rows {
+            let (uuid, data) = row?;
+            let props: HashMap<String, String> = serde_json::from_str(&data)
+                .with_context(|| format!("reading todo {uuid} in the replica"))?;
+            let value = |key: &str| props.get(key).map(String::as_str);
+            todos.extend(Self::todo_from(
+                Uuid::try_parse(&uuid)?,
+                props.keys(),
+                value,
+            ));
+        }
+        Ok(todos)
     }
 
     async fn open(&self) -> Result<Replica> {
@@ -301,28 +324,34 @@ impl TaskchampionStore {
     /// never the replica's dependency map, which costs one storage round
     /// trip per working-set entry.
     fn todo_of(task: &TaskData) -> Option<Todo> {
-        let value = |key: &str| task.get(key).map(str::to_string);
+        Self::todo_from(task.get_uuid(), task.properties(), |key| task.get(key))
+    }
+
+    fn todo_from<'a>(
+        uuid: Uuid,
+        properties: impl Iterator<Item = &'a String>,
+        get: impl Fn(&str) -> Option<&'a str>,
+    ) -> Option<Todo> {
+        let value = |key: &str| get(key).map(str::to_string);
         let stamp = |key: &str| {
-            task.get(key)
+            get(key)
                 .and_then(|t| t.parse::<i64>().ok())
                 .map(|t| utc_timestamp(t).format("%Y%m%dT%H%M%SZ").to_string())
         };
         Exported {
-            uuid: task.get_uuid().to_string(),
+            uuid: uuid.to_string(),
             description: value("description").unwrap_or_default(),
             status: value("status").unwrap_or_default(),
             start: value("start"),
             holder: value("holder"),
             subof: value("subof"),
-            order: task
-                .get("order")
+            order: get("order")
                 .and_then(|o| o.parse::<f64>().ok())
                 .map(|o| o.round() as i64),
             project: value("project"),
             entry: stamp("entry"),
             modified: stamp("modified"),
-            depends: task
-                .properties()
+            depends: properties
                 .filter_map(|p| p.strip_prefix("dep_"))
                 .filter_map(|dep| Uuid::try_parse(dep).ok())
                 .map(|uuid| uuid.to_string())
@@ -589,6 +618,48 @@ impl TodoStore for TaskchampionStore {
         })
     }
 
+    fn list_open(&self, filter: &Filter) -> Result<Vec<Todo>> {
+        let mut todos = self.open_todos()?;
+        todos.retain(|t| filter.matches(t.project.as_deref()));
+        Ok(todos)
+    }
+
+    /// Counted by SQLite over the stored status and project, so no closed
+    /// task is decoded. A project that names no node holds no todo.
+    fn closed_counts(&self, filter: &Filter) -> Result<ClosedCounts> {
+        let Some(db) = self.database()? else {
+            return Ok(ClosedCounts::new());
+        };
+        let mut query = db.prepare(
+            "SELECT json_extract(data, '$.project'), json_extract(data, '$.status'), count(*) \
+             FROM tasks WHERE CASE WHEN json_valid(data) THEN \
+             json_extract(data, '$.status') IN ('completed', 'deleted') END GROUP BY 1, 2",
+        )?;
+        let rows = query.query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, usize>(2)?,
+            ))
+        })?;
+        let mut counts = ClosedCounts::new();
+        for row in rows {
+            let (project, status, count) = row?;
+            let Some(project) = project.filter(|p| node_of(p).is_some()) else {
+                continue;
+            };
+            if !filter.matches(node_of(&project).flatten().as_deref()) {
+                continue;
+            }
+            let at = counts.entry(project).or_default();
+            match status.as_str() {
+                "completed" => at.completed += count,
+                _ => at.cancelled += count,
+            }
+        }
+        Ok(counts)
+    }
+
     fn get(&self, id: &str) -> Result<Option<Todo>> {
         self.reading(None, async |replica| self.find(replica, id).await)
     }
@@ -699,17 +770,16 @@ impl TodoStore for TaskchampionStore {
                 }
                 let mut ops = Operations::new();
                 let mut changes = Vec::new();
-                for uuid in self.started_uuids()? {
-                    let Some(mut task) = replica.get_task_data(uuid).await? else {
+                for todo in self.open_todos()? {
+                    if !matches!(&todo.status, Status::InProgress { by } if holder.covers(by)) {
                         continue;
-                    };
-                    let Some(todo) = Self::todo_of(&task) else {
-                        continue;
-                    };
-                    if matches!(&todo.status, Status::InProgress { by } if holder.covers(by)) {
-                        release(&mut Writer::new(&mut task, &mut ops));
-                        changes.push(StatusChange::of(&todo, Some(Status::Pending)));
                     }
+                    let mut task = replica
+                        .get_task_data(Uuid::try_parse(&todo.id)?)
+                        .await?
+                        .ok_or_else(|| anyhow!("no todo {}", todo.id))?;
+                    release(&mut Writer::new(&mut task, &mut ops));
+                    changes.push(StatusChange::of(&todo, Some(Status::Pending)));
                 }
                 replica.commit_operations(ops).await?;
                 Ok(changes)

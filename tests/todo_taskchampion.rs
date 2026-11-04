@@ -1182,3 +1182,32 @@ fn a_large_replica_lists_its_open_todos_and_closed_counts() {
         .collect();
     assert_eq!(listed_lines(text), expected);
 }
+
+/// A closed row whose data taskchampion cannot decode, since its values must
+/// be strings: only a read that decodes closed rows fails on it.
+fn undecodable_closed_task(dir: &std::path::Path, node: &str) {
+    let db = rusqlite::Connection::open(dir.join("taskchampion.sqlite3")).unwrap();
+    let data = json!({"status": "completed", "project": node, "order": 1}).to_string();
+    db.execute("INSERT INTO tasks (uuid, data) VALUES (?1, ?2)", [
+        Uuid::new_v4().to_string(),
+        data,
+    ])
+    .unwrap();
+}
+
+#[test]
+fn context_counts_closed_todos_without_decoding_them() {
+    let p = Proj::new();
+    let dir = replica_dir(&p);
+    add_on(
+        &TaskchampionStore::at(dir.clone()),
+        "proj.main",
+        "still open",
+    );
+    undecodable_closed_task(&dir, "proj.main");
+    let out = context(&p, "UserPromptSubmit", &backend("taskchampion"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("still open"), "{text}");
+    assert!(text.contains("1 done"), "{text}");
+}

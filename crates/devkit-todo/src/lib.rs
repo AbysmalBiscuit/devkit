@@ -221,6 +221,24 @@ pub trait TodoStore {
         &self,
         filter: &::devkit_todo::Filter,
     ) -> ::anyhow::Result<::std::vec::Vec<::devkit_todo::Todo>>;
+    /// The pending and in-progress todos `filter` covers. A backend that can
+    /// read them without its closed todos overrides this.
+    fn list_open(
+        &self,
+        filter: &::devkit_todo::Filter,
+    ) -> ::anyhow::Result<::std::vec::Vec<::devkit_todo::Todo>> {
+        let mut todos = self.list(filter)?;
+        todos.retain(|todo| todo.status.kind().is_open());
+        Ok(todos)
+    }
+    /// How many todos `filter` covers ended, per node. A backend that can
+    /// count them without reading each one overrides this.
+    fn closed_counts(
+        &self,
+        filter: &::devkit_todo::Filter,
+    ) -> ::anyhow::Result<::devkit_todo::ClosedCounts> {
+        Ok(::devkit_todo::closed_counts(&self.list(filter)?))
+    }
     /// The todo `id` names. A backend whose ids can be abbreviated resolves a
     /// unique abbreviation; an ambiguous one is an error that names the
     /// matches.
@@ -239,6 +257,14 @@ pub trait TodoStore {
 impl<T: TodoStore + ?Sized> TodoStore for &T {
     fn list(&self, filter: &Filter) -> anyhow::Result<Vec<Todo>> {
         (**self).list(filter)
+    }
+
+    fn list_open(&self, filter: &Filter) -> anyhow::Result<Vec<Todo>> {
+        (**self).list_open(filter)
+    }
+
+    fn closed_counts(&self, filter: &Filter) -> anyhow::Result<ClosedCounts> {
+        (**self).closed_counts(filter)
     }
 
     fn get(&self, id: &str) -> anyhow::Result<Option<Todo>> {
@@ -300,6 +326,32 @@ pub fn by_prefix(id: &str, todos: impl IntoIterator<Item = Todo>) -> anyhow::Res
         anyhow::bail!("todo id {id} is ambiguous: {}", uuids.join(", "));
     }
     Ok(matches.pop())
+}
+
+/// How many todos on one node ended, by how they ended.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClosedCount {
+    pub completed: usize,
+    pub cancelled: usize,
+}
+
+/// Each node holding a closed todo, with its [`ClosedCount`].
+pub type ClosedCounts = std::collections::BTreeMap<String, ClosedCount>;
+
+/// The closed todos among `todos`, counted per node.
+pub fn closed_counts(todos: &[Todo]) -> ClosedCounts {
+    let mut counts = ClosedCounts::new();
+    for todo in todos {
+        let kind = todo.status.kind();
+        if !kind.is_open() {
+            let count = counts.entry(todo.node().to_string()).or_default();
+            match kind {
+                StatusKind::Completed => count.completed += 1,
+                _ => count.cancelled += 1,
+            }
+        }
+    }
+    counts
 }
 
 /// `text` on one line, every whitespace run collapsed to a single space.

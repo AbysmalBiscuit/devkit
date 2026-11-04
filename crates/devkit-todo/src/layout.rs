@@ -225,21 +225,26 @@ impl Layout {
     /// reads, an open template's only once an anchored todo names its repo,
     /// and every synced ticket's todo, which devkit itself filed.
     pub fn fence(&self, todos: Vec<Todo>) -> Vec<Todo> {
-        let mut anchored_repos = BTreeSet::new();
-        for todo in &todos {
-            for template in self
-                .templates
+        self.fence_among(todos, std::iter::empty())
+    }
+
+    /// As [`Self::fence`], with `closed_nodes` also marking their repositories
+    /// as anchored, for a caller that read `todos` without the closed ones.
+    pub fn fence_among<'a>(
+        &self,
+        todos: Vec<Todo>,
+        closed_nodes: impl Iterator<Item = &'a str>,
+    ) -> Vec<Todo> {
+        let repo_of = |node: &str| -> Vec<String> {
+            self.templates
                 .values()
                 .filter(|template| template.anchored())
-            {
-                if let Some(repo) = template
-                    .read(todo.node())
-                    .and_then(|mut values| values.remove("repo"))
-                {
-                    anchored_repos.insert(repo);
-                }
-            }
-        }
+                .filter_map(|template| template.read(node)?.remove("repo"))
+                .collect()
+        };
+        let mut anchored_repos: BTreeSet<String> =
+            todos.iter().flat_map(|t| repo_of(t.node())).collect();
+        anchored_repos.extend(closed_nodes.flat_map(repo_of));
         todos
             .into_iter()
             .filter(|todo| todo.ticket.is_some() || self.is_devkit(todo.node(), &anchored_repos))

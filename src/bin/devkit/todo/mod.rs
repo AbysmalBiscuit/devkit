@@ -926,7 +926,8 @@ struct Fence<'a> {
     facts: &'a Facts,
     role: &'a str,
     checkout: &'a Checkout,
-    /// Every todo in the store, read once.
+    /// Every todo in the store, read once, or only the open ones after
+    /// [`Fence::over_open`].
     todos: std::cell::OnceCell<Vec<Todo>>,
     /// The ticket todos worktrees of this repository record, read once.
     workspaces: std::cell::OnceCell<Vec<tickets::TicketWorkspace>>,
@@ -948,6 +949,16 @@ impl<'a> Fence<'a> {
             checkout,
             todos: std::cell::OnceCell::new(),
             workspaces: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// This fence over `open`, the store's open todos, for a caller whose
+    /// output reads no closed todo: a closed ticket shows no work, and a
+    /// closed todo is never offered.
+    fn over_open(self, open: Vec<Todo>) -> Self {
+        Self {
+            todos: std::cell::OnceCell::from(open),
+            ..self
         }
     }
 
@@ -1439,31 +1450,38 @@ fn context(args: &ContextArgs, id_style: Option<IdStyle>) -> Option<String> {
         eprintln!("devkit todo: {reason}; listing local todos");
     }
     refresh_tickets(&store, &cwd, &layout, &facts);
-    let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout);
+    let open = store.list_open(&Filter::all()).ok()?;
+    let closed = store.closed_counts(&Filter::all()).ok()?;
+    let fence = Fence::new(&store, &layout, &facts, &role.name, &checkout).over_open(open);
     let all = fence.todos().ok()?;
     let todos: Vec<Todo> = all
         .iter()
         .filter(|t| visible.matches(t.project.as_deref()))
         .cloned()
         .collect();
-    let graph_todos = graph::with_blockers(&store, todos.clone()).ok()?;
-    let siblings = layout.fence(all.to_vec()).into_iter().filter(|t| {
-        filter.matches(t.project.as_deref())
-            && !visible.matches(t.project.as_deref())
-            && layout.is_other_session(t.node(), &facts)
-    });
+    let closed_nodes = closed.keys().map(String::as_str);
+    let siblings = layout
+        .fence_among(all.to_vec(), closed_nodes)
+        .into_iter()
+        .filter(|t| {
+            filter.matches(t.project.as_deref())
+                && !visible.matches(t.project.as_deref())
+                && layout.is_other_session(t.node(), &facts)
+        });
     let nodes = list_nodes(&visible, &todos);
-    let graph = Graph::new(&graph_todos);
+    // Holding every open todo, the graph holds each open blocker of a listed
+    // todo, wherever it sits. A closed blocker blocks nothing.
+    let graph = Graph::new(all);
     let work = fence.work(&todos, false).ok()?;
     let style = id_style.unwrap_or(store.config().ids);
-    let names = names::names(style, &graph_todos, &cwd);
+    let names = names::names(style, all, &cwd);
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
         work: &work,
         names: &names,
     };
-    let mut lists = render::render_lists(&nodes, &todos, &viewer, &notes);
+    let mut lists = render::render_counted(&nodes, &todos, &closed, &viewer, &notes);
     let own_open = todos.iter().any(|t| {
         t.node() == own
             && matches!(

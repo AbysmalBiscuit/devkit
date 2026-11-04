@@ -231,6 +231,9 @@ fn store_scans_require_anchors_for_open_templates() {
             "global"
         ]
     );
+    assert!(layout.fence(vec![todo("r")]).is_empty());
+    let among_closed = layout.fence_among(vec![todo("r")], ["r.main.codex-S"].into_iter());
+    assert_eq!(among_closed.len(), 1, "{among_closed:?}");
     let literal = Layout::new(
         &Config::parse("[todo.scopes.fixed]\nnode = 'notes'\nparent = 'global'")
             .unwrap()
