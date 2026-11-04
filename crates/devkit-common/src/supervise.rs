@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 
 pub use crate::sys::tree_rss_bytes;
 
-/// Spawn `argv` detached (own session), env-augmented, stdout+stderr ->
+/// Spawn `argv` detached (own process group), env-augmented, stdout+stderr ->
 /// logfile. When `cgroup_leaf` is `Some`, the child joins that cgroup before
 /// the program runs (Linux only; see [`crate::sys::cgroup_command`]). Returns
 /// the child pid.

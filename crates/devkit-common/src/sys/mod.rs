@@ -91,7 +91,7 @@ pub fn terminate(pid: u32) {
     imp::terminate(pid)
 }
 
-/// Configure `cmd` to start detached from the caller's session/process group,
+/// Configure `cmd` to start detached from the caller's process group,
 /// holding none of this process's stdio, so a caller reading this process's
 /// output to its end is not held open by the child. Must be called before
 /// `spawn`.
@@ -194,6 +194,25 @@ mod tests {
     #[test]
     fn a_process_this_user_cannot_signal_is_alive() {
         assert!(process_alive(1));
+    }
+
+    /// Ctrl-C and a terminal hangup signal the caller's foreground process
+    /// group, so a detached child must lead a group of its own.
+    #[cfg(unix)]
+    #[test]
+    fn a_detached_child_leads_its_own_process_group() {
+        use nix::unistd::{Pid, getpgid, getpgrp};
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("30");
+        detach(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        let pid = Pid::from_raw(child.id() as i32);
+        let group = getpgid(Some(pid));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let group = group.unwrap();
+        assert_eq!(group, pid);
+        assert_ne!(group, getpgrp());
     }
 
     #[test]

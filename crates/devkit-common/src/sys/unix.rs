@@ -41,13 +41,9 @@ pub(super) fn terminate(pid: u32) {
 
 pub(super) fn detach(cmd: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
-    // Start a new session so the child outlives the launching shell and is
-    // insulated from its controlling terminal's signals.
-    // SAFETY: setsid only mutates the child after fork; it is
-    // async-signal-safe.
-    unsafe {
-        cmd.pre_exec(|| nix::unistd::setsid().map(|_| ()).map_err(|e| e.into()));
-    }
+    // Ctrl-C and hangup go to the caller's foreground group, not this one.
+    // std has no stable safe `setsid`, so the child keeps the caller's session.
+    cmd.process_group(0);
 }
 
 pub(super) fn exit_like(status: std::process::ExitStatus) -> ! {
