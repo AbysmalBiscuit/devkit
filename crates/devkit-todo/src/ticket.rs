@@ -42,6 +42,18 @@ pub fn status_name(status: &TicketStatus) -> String {
     }
 }
 
+/// The todo status that `config` maps the recorded name `name` to, the
+/// reverse of [`status_name`]. `None` for a name the map lacks.
+pub fn synced_kind(name: &str, config: &TicketSyncConfig) -> Option<StatusKind> {
+    let status = match name {
+        "closed:completed" => TicketStatus::Closed(CloseReason::Completed),
+        "closed:not_planned" => TicketStatus::Closed(CloseReason::NotPlanned),
+        "closed:duplicate" => TicketStatus::Closed(CloseReason::Duplicate),
+        other => TicketStatus::Named(other.to_string()),
+    };
+    target(&status, config)
+}
+
 /// One change to a ticket's todo, naming todos by ticket key, since a
 /// ticket added in the same sync has no id until its add lands.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -422,6 +422,40 @@ BEGIN
 END
 $$;
 
+-- Removes each todo of `p_ids` that is completed or cancelled and that no open
+-- todo waits on or nests under, however deep, as devkit_todo::prune::removable
+-- states it, in the statement that deletes. An id that is not a uuid, or
+-- names no todo, removes nothing. A row another transaction holds stays, since
+-- that write may reopen or relink it, and prune does not wait for it.
+CREATE OR REPLACE FUNCTION devkit.todo_prune(p_root text, p_ids text[])
+RETURNS TABLE (
+    todo uuid, node text, from_status text, from_holder text,
+    to_status text, to_holder text, at timestamptz
+)
+LANGUAGE sql AS $$
+    WITH RECURSIVE still_open AS (
+        SELECT o.parent, o.blocked_by FROM devkit.todos AS o
+        WHERE o.root = p_root AND o.status IN ('pending', 'in_progress')
+    ), ancestors(id) AS (
+        SELECT o.parent FROM still_open AS o WHERE o.parent IS NOT NULL
+        UNION
+        SELECT a.parent FROM ancestors AS d
+        JOIN devkit.todos AS a ON a.id = d.id
+        WHERE a.root = p_root AND a.parent IS NOT NULL
+    ), doomed AS (
+        SELECT c.id FROM devkit.todos AS c
+        WHERE c.root = p_root AND c.id = ANY (devkit.todo_uuids(p_ids))
+          AND c.status IN ('completed', 'cancelled')
+          AND NOT EXISTS (SELECT 1 FROM ancestors AS a WHERE a.id = c.id)
+          AND NOT EXISTS (SELECT 1 FROM still_open AS o WHERE c.id = ANY (o.blocked_by))
+        FOR UPDATE OF c SKIP LOCKED
+    )
+    DELETE FROM devkit.todos AS t USING doomed
+    WHERE t.id = doomed.id
+    RETURNING t.id, t.node, t.status, t.holder,
+        NULL::text, NULL::text, clock_timestamp()
+$$;
+
 -- Appends each of `p_events`, in order: activity log lines, each stamped by
 -- its `at`, or by the database's clock when it has none.
 CREATE OR REPLACE FUNCTION devkit.activity_record(p_root text, p_events jsonb)

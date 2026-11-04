@@ -243,6 +243,14 @@ impl TodoStore for BuiltinStore {
                     let todo = doc.todos.remove(&key).ok_or_else(|| no_todo(id))?;
                     changes.push(StatusChange::of(&todo, None));
                 }
+                Edit::Prune { ids } => {
+                    let removable = devkit_todo::prune::removable(doc.todos.values(), ids);
+                    for key in removable.iter().filter_map(|id| id.parse::<u64>().ok()) {
+                        if let Some(todo) = doc.todos.remove(&key) {
+                            changes.push(StatusChange::of(&todo, None));
+                        }
+                    }
+                }
                 Edit::Block { id, by } => set_blockers(doc, id, by, true)?,
                 Edit::Unblock { id, by } => set_blockers(doc, id, by, false)?,
                 Edit::RecordSync { id, synced_status } => {

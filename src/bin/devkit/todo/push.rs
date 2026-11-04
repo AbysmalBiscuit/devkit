@@ -404,7 +404,7 @@ fn take_tracker_value(store: &Store, cwd: &Path, node: &str, key: &str) -> Resul
     Ok(())
 }
 
-fn confirm(question: &str) -> bool {
+pub(super) fn confirm(question: &str) -> bool {
     eprint!("{question} [y/N] ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();

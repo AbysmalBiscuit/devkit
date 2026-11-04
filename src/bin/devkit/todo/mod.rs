@@ -11,9 +11,10 @@ pub(crate) mod sync;
 pub(crate) mod ticket_event;
 pub(crate) mod tickets;
 
-use std::{cell::LazyCell, collections::BTreeSet, path::Path};
+use std::{cell::LazyCell, collections::BTreeSet, io::IsTerminal as _, path::Path};
 
 use anyhow::{Result, bail};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use clap::{Args, Subcommand, ValueEnum, builder::TypedValueParser as _};
 use devkit::completions::Shell;
 use devkit_common::{
@@ -29,6 +30,7 @@ use devkit_todo::{
     layout::{Facts, Layout},
     native::NativeMap,
     node::{self, GLOBAL, Place},
+    prune::{self as pruning, Window, day_end, day_start},
     push::LocalStatus,
     render,
     roles::{ResolvedRole, Roles},
@@ -188,6 +190,9 @@ pub enum TodoCommand {
     /// For text that must disappear, such as a pasted secret. Agents cancel
     /// instead, which keeps the record.
     Purge { id: String },
+    /// Remove done todos for good. Needs a person at a terminal to remove.
+    #[command(after_help = PRUNE_HELP)]
+    Prune(PruneArgs),
     /// Sync the todo store with its sync target, then the repo's tickets.
     ///
     /// Only a taskchampion store with a sync target syncs. A failure is
@@ -265,6 +270,16 @@ pub enum TodoCommand {
     },
 }
 
+const PRUNE_HELP: &str = "Removes completed and cancelled todos from every session in scope, after \
+     printing them and asking. The bounds apply to the last change of a done todo, and a later \
+     edit makes a todo look newer. An open todo stays, and so does a done todo that an open todo \
+     waits on or nests under. A ticket todo stays unless its last synced status is done, since a \
+     sync brings back a ticket that is still open. On this repository's node, \
+     [ticket.sync.statuses] decides which statuses are done. On another repository's node, only a \
+     closed GitHub issue counts; prune those from their own repository. An agent can only \
+     --dry-run. On a synced replica, the sync target \
+     keeps earlier versions, so prune does not erase their text from there.";
+
 const OVERWRITE_HELP: &str = "Write a ticket todo's change over a status the tracker changed since \
      the last sync. Only on the user's word.";
 
@@ -321,8 +336,10 @@ pub enum Guide {
     None,
 }
 
+/// Which nodes a command reads. Defaults to the caller's own node and every
+/// node above it.
 #[derive(Args)]
-pub struct ListArgs {
+pub struct ScopeArgs {
     /// Only todos on this named scope, filled with the caller's identity.
     #[arg(long, conflicts_with_all = ["node", "subtree", "all"])]
     pub scope: Option<String>,
@@ -335,6 +352,59 @@ pub struct ListArgs {
     /// Every todo on every node.
     #[arg(long)]
     pub all: bool,
+}
+
+#[derive(Args)]
+pub struct PruneArgs {
+    #[command(flatten)]
+    pub within: ScopeArgs,
+    /// Keep todos last changed before this local day (YYYY-MM-DD).
+    #[arg(long, value_name = "DATE", value_parser = parse_date, conflicts_with = "from_timestamp")]
+    pub from_date: Option<NaiveDate>,
+    /// Keep todos last changed after this local day (YYYY-MM-DD).
+    #[arg(long, value_name = "DATE", value_parser = parse_date, conflicts_with = "to_timestamp")]
+    pub to_date: Option<NaiveDate>,
+    /// Keep todos last changed before this instant (RFC 3339).
+    #[arg(long, value_name = "TIME", value_parser = parse_instant)]
+    pub from_timestamp: Option<DateTime<Utc>>,
+    /// Keep todos last changed after this instant (RFC 3339).
+    #[arg(long, value_name = "TIME", value_parser = parse_instant)]
+    pub to_timestamp: Option<DateTime<Utc>>,
+    /// Remove without asking.
+    #[arg(long, conflicts_with = "dry_run")]
+    pub yes: bool,
+    /// Print the todos it would remove, and remove nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+fn parse_date(text: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(text, "%Y-%m-%d").map_err(|e| format!("expected YYYY-MM-DD: {e}"))
+}
+
+fn parse_instant(text: &str) -> Result<DateTime<Utc>, String> {
+    DateTime::parse_from_rfc3339(text)
+        .map(|at| at.to_utc())
+        .map_err(|e| format!("expected an RFC 3339 time: {e}"))
+}
+
+impl PruneArgs {
+    /// The bounds the flags name in the local time zone, `None` with no flag.
+    fn window(&self) -> Option<Window> {
+        let from = self
+            .from_timestamp
+            .or_else(|| self.from_date.map(|day| day_start(day, &Local)));
+        let to = self
+            .to_timestamp
+            .or_else(|| self.to_date.map(|day| day_end(day, &Local)));
+        (from.is_some() || to.is_some()).then_some(Window { from, to })
+    }
+}
+
+#[derive(Args)]
+pub struct ListArgs {
+    #[command(flatten)]
+    pub within: ScopeArgs,
     /// Print alacritree's task shape as JSON. Cancelled todos are left out.
     #[arg(long)]
     pub json: bool,
@@ -673,6 +743,15 @@ pub fn run(cli: TodoCli) -> Result<()> {
             let todo = resolve_id(&store, &id)?;
             store.apply(&Edit::Purge(todo.id.clone()))?;
             NativeMap::at(devkit_todo::state_dir()?).forget(&todo.id)?;
+        }
+        TodoCommand::Prune(args) => {
+            if caller == Caller::Agent && !args.dry_run {
+                bail!(
+                    "devkit todo prune needs a person at a terminal; agents cancel instead \
+                     (devkit todo cancel <id>), and may preview with --dry-run"
+                );
+            }
+            writes = prune(&fence, &args, &cwd, &role, style)?;
         }
     }
     if writes {
@@ -1318,6 +1397,97 @@ fn move_todo(
     }
 }
 
+/// The filter `within` names for a caller of `role`.
+fn scope_filter(fence: &Fence, within: &ScopeArgs, role: &ResolvedRole) -> Result<Filter> {
+    Ok(
+        match (&within.scope, &within.node, &within.subtree, within.all) {
+            (Some(scope), ..) => Filter::exact([fence.layout.fill(scope, fence.facts)?]),
+            (_, Some(n), ..) => Filter::exact([n.clone()]),
+            (_, _, Some(n), _) => Filter {
+                nodes: vec![NodeMatch::Subtree(n.clone())],
+            },
+            (_, _, _, true) => Filter::all(),
+            _ => fence.layout.visible(fence.facts, &role.name)?,
+        },
+    )
+}
+
+/// The todos `filter` covers. A store-wide scan reads only the nodes the
+/// layout's fence shows.
+fn scoped_todos(fence: &Fence, within: &ScopeArgs, filter: &Filter) -> Result<Vec<Todo>> {
+    if within.all || within.subtree.is_some() {
+        Ok(fence
+            .layout
+            .fence(fence.todos()?.to_vec())
+            .into_iter()
+            .filter(|todo| filter.matches(todo.project.as_deref()))
+            .collect())
+    } else {
+        fence.store.list(filter)
+    }
+}
+
+/// Prints the done todos in scope that `args` bounds and removes them, once
+/// confirmed. Returns whether it changed the store.
+fn prune(
+    fence: &Fence,
+    args: &PruneArgs,
+    cwd: &Path,
+    role: &ResolvedRole,
+    style: IdStyle,
+) -> Result<bool> {
+    let Some(window) = args.window() else {
+        bail!(
+            "devkit todo prune needs at least one of --from-date, --to-date, --from-timestamp \
+             or --to-timestamp; to remove every done todo, pass --to-date with today's date"
+        );
+    };
+    let filter = scope_filter(fence, &args.within, role)?;
+    let scoped = scoped_todos(fence, &args.within, &filter)?;
+    let repo = fence.layout.fill("repo", fence.facts).ok();
+    let map = repo
+        .as_deref()
+        .map(|node| (node, &fence.store.ticket().sync));
+    let todos = pruning::prunable(fence.todos()?, scoped, window, map);
+    let names = names::names(style, &todos, cwd);
+    for todo in &todos {
+        let status = match todo.status.kind() {
+            StatusKind::Completed => "completed",
+            _ => "cancelled",
+        };
+        println!(
+            "{}  {status}  {}  {}",
+            devkit_common::ui::printable(&names.id(&todo.id)),
+            todo.modified.as_deref().unwrap_or_default(),
+            devkit_common::ui::printable(names.text(todo))
+        );
+    }
+    let count = todos.len();
+    if args.dry_run {
+        println!("would remove {count} done todos");
+        return Ok(false);
+    }
+    if todos.is_empty() {
+        println!("no done todos to remove");
+        return Ok(false);
+    }
+    if !args.yes {
+        if !std::io::stdin().is_terminal() {
+            bail!("devkit todo prune cannot ask with no terminal; pass --yes to remove them");
+        }
+        if !push::confirm(&format!("Remove these {count} done todos for good?")) {
+            return Ok(false);
+        }
+    }
+    let native = NativeMap::at(devkit_todo::state_dir()?);
+    let removed = pruning::remove(fence.store, &todos, |changes| {
+        let ids: Vec<&str> = changes.iter().map(|change| change.todo.as_str()).collect();
+        native.forget_all(&ids)
+    })?;
+    println!("removed {removed} done todos");
+    Ok(true)
+}
+
 fn list(
     fence: &Fence,
     args: &ListArgs,
@@ -1327,15 +1497,7 @@ fn list(
     style: IdStyle,
 ) -> Result<()> {
     let (store, layout, facts) = (fence.store, fence.layout, fence.facts);
-    let filter = match (&args.scope, &args.node, &args.subtree, args.all) {
-        (Some(scope), ..) => Filter::exact([layout.fill(scope, facts)?]),
-        (_, Some(n), ..) => Filter::exact([n.clone()]),
-        (_, _, Some(n), _) => Filter {
-            nodes: vec![NodeMatch::Subtree(n.clone())],
-        },
-        (_, _, _, true) => Filter::all(),
-        _ => layout.visible(facts, &role.name)?,
-    };
+    let filter = scope_filter(fence, &args.within, role)?;
     if args.sync {
         match store.sync(cwd, sync::FRESH_WAIT) {
             SyncOutcome::Failed(reason) => eprintln!("{}", sync::failure_text(&reason)),
@@ -1347,15 +1509,7 @@ fn list(
             SyncOutcome::Done | SyncOutcome::NoTarget => refresh_tickets(store, cwd, layout, facts),
         }
     }
-    let todos = if args.all || args.subtree.is_some() {
-        layout
-            .fence(fence.todos()?.to_vec())
-            .into_iter()
-            .filter(|todo| filter.matches(todo.project.as_deref()))
-            .collect()
-    } else {
-        store.list(&filter)?
-    };
+    let todos = scoped_todos(fence, &args.within, &filter)?;
     let graph_todos = graph::with_blockers(store, todos.clone())?;
     if args.json {
         let rows: Vec<Value> = todos.iter().filter_map(alacritree_json).collect();

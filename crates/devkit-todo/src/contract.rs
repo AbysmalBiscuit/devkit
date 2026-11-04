@@ -38,6 +38,10 @@ macro_rules! contract_tests {
             a_cancelled_todo_can_be_finished,
             release_all_returns_covered_claims_to_pending,
             purge_removes_the_record,
+            prune_removes_only_todos_still_done,
+            prune_bounds_a_last_change_inclusively,
+            prune_keeps_what_an_open_todo_needs,
+            prune_rechecks_what_an_open_todo_needs_when_it_removes,
             unknown_ids_are_refused,
             get_returns_the_todo,
             move_reorder_and_relocate,
@@ -421,6 +425,191 @@ pub fn purge_removes_the_record(s: &impl TodoStore) {
     assert!(s.list(&Filter::all()).unwrap().is_empty());
     let err = s.apply(&Edit::Purge("99999999".into())).unwrap_err();
     assert!(err.to_string().contains("no todo 99999999"), "{err:#}");
+}
+
+pub fn prune_removes_only_todos_still_done(s: &impl TodoStore) {
+    let (done, cancelled, reopened) = (add(s, "done"), add(s, "cancelled"), add(s, "reopened"));
+    let (pending, claimed) = (add(s, "pending"), add(s, "claimed"));
+    set(s, &done, StatusKind::Completed, "S").unwrap();
+    set(s, &cancelled, StatusKind::Cancelled, "S").unwrap();
+    set(s, &reopened, StatusKind::Completed, "S").unwrap();
+    let stale = [get(s, &done), get(s, &cancelled), get(s, &reopened)];
+    set(s, &reopened, StatusKind::Pending, "S").unwrap();
+    set(s, &claimed, StatusKind::InProgress, "S").unwrap();
+
+    let named = [stale.as_slice(), &[get(s, &pending), get(s, &claimed)]].concat();
+    let changes = prune_all(s, &named);
+
+    let mut removed: Vec<&str> = changes.iter().map(|c| c.todo.as_str()).collect();
+    removed.sort();
+    let mut want = [done.as_str(), cancelled.as_str()];
+    want.sort();
+    assert_eq!(removed, want);
+    assert!(changes.iter().all(|c| c.to.is_none()));
+    assert_eq!(s.get(&done).unwrap(), None);
+    assert_eq!(s.get(&cancelled).unwrap(), None);
+    assert_eq!(get(s, &reopened).status, Status::Pending);
+    assert_eq!(get(s, &pending).status, Status::Pending);
+    assert_eq!(get(s, &claimed).status, in_progress("S"));
+
+    let again = prune_all(s, &stale[..2]);
+    assert!(again.is_empty(), "{again:?}");
+}
+
+/// Every change [`crate::prune::remove`] reports for `todos`.
+fn prune_all(s: &impl TodoStore, todos: &[Todo]) -> Vec<StatusChange> {
+    let mut changes = Vec::new();
+    let count = crate::prune::remove(s, todos, |batch| {
+        changes.extend_from_slice(batch);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(count, changes.len());
+    changes
+}
+
+pub fn prune_bounds_a_last_change_inclusively(s: &impl TodoStore) {
+    use chrono::{DateTime, TimeDelta, Utc};
+
+    use crate::prune::{Window, prunable};
+
+    let id = add(s, "done");
+    set(s, &id, StatusKind::Completed, "S").unwrap();
+    let at: DateTime<Utc> = get(s, &id).modified.unwrap().parse().unwrap();
+    let second = TimeDelta::seconds(1);
+    let selected = |from, to| {
+        let all = s.list(&Filter::all()).unwrap();
+        prunable(&all, all.clone(), Window { from, to }, None).len()
+    };
+    assert_eq!(selected(Some(at), Some(at)), 1);
+    assert_eq!(selected(None, Some(at + second)), 1);
+    assert_eq!(selected(Some(at + second), None), 0);
+    assert_eq!(selected(None, Some(at - second)), 0);
+}
+
+pub fn prune_keeps_what_an_open_todo_needs(s: &impl TodoStore) {
+    use crate::prune::{Window, prunable};
+
+    let (blocker, grandparent, parent) =
+        (add(s, "blocker"), add(s, "grandparent"), add(s, "parent"));
+    let (free, waiter, child) = (add(s, "free"), add(s, "waiter"), add(s, "child"));
+    s.apply(&Edit::Block {
+        id: waiter.clone(),
+        by: vec![blocker.clone()],
+    })
+    .unwrap();
+    s.apply(&Edit::Move {
+        id: parent.clone(),
+        parent: Some(grandparent.clone()),
+        order: None,
+    })
+    .unwrap();
+    s.apply(&Edit::Move {
+        id: child.clone(),
+        parent: Some(parent.clone()),
+        order: None,
+    })
+    .unwrap();
+    // The child also waits on its parent, so the parent is protected as a
+    // blocker before the ancestor walk reaches it.
+    s.apply(&Edit::Block {
+        id: child,
+        by: vec![parent.clone()],
+    })
+    .unwrap();
+    for id in [&blocker, &grandparent, &parent, &free] {
+        set(s, id, StatusKind::Completed, "S").unwrap();
+    }
+
+    let all = s.list(&Filter::all()).unwrap();
+    let selected = prunable(&all, all.clone(), Window::default(), None);
+
+    let ids: Vec<&str> = selected.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids, [free.as_str()]);
+}
+
+pub fn prune_rechecks_what_an_open_todo_needs_when_it_removes(s: &impl TodoStore) {
+    use crate::prune::{Window, prunable};
+
+    let (free, blocker, moved_under) = (add(s, "free"), add(s, "blocker"), add(s, "moved under"));
+    let (ancestor, added_under, reopened_under) = (
+        add(s, "ancestor"),
+        add(s, "added under"),
+        add(s, "reopened under"),
+    );
+    let (waiter, moved) = (add(s, "waiter"), add(s, "moved"));
+    let reopened = s
+        .add(NewTodo {
+            parent: Some(reopened_under.clone()),
+            ..new("reopened")
+        })
+        .unwrap();
+    let elsewhere = s
+        .add(NewTodo {
+            project: Some("another/node".into()),
+            ..new("elsewhere")
+        })
+        .unwrap();
+    s.apply(&Edit::Move {
+        id: moved_under.clone(),
+        parent: Some(ancestor.clone()),
+        order: None,
+    })
+    .unwrap();
+    for id in [
+        &free,
+        &blocker,
+        &moved_under,
+        &ancestor,
+        &added_under,
+        &reopened_under,
+        &reopened,
+    ] {
+        set(s, id, StatusKind::Completed, "S").unwrap();
+    }
+    let all = s.list(&Filter::all()).unwrap();
+    let selected = prunable(&all, all.clone(), Window::default(), None);
+
+    s.apply(&Edit::Block {
+        id: waiter,
+        by: vec![blocker.clone()],
+    })
+    .unwrap();
+    s.apply(&Edit::Move {
+        id: moved,
+        parent: Some(moved_under.clone()),
+        order: None,
+    })
+    .unwrap();
+    s.add(NewTodo {
+        parent: Some(added_under.clone()),
+        ..new("added")
+    })
+    .unwrap();
+    set(s, &reopened, StatusKind::Pending, "S").unwrap();
+    let cross_scope = add(s, "cross scope");
+    set(s, &cross_scope, StatusKind::Completed, "S").unwrap();
+    s.apply(&Edit::Block {
+        id: elsewhere,
+        by: vec![cross_scope.clone()],
+    })
+    .unwrap();
+    let selected = [selected.as_slice(), &[get(s, &cross_scope)]].concat();
+
+    let removed = prune_all(s, &selected);
+
+    let removed: Vec<&str> = removed.iter().map(|c| c.todo.as_str()).collect();
+    assert_eq!(removed, [free.as_str()]);
+    for id in [
+        &blocker,
+        &moved_under,
+        &ancestor,
+        &added_under,
+        &reopened_under,
+        &cross_scope,
+    ] {
+        get(s, id);
+    }
 }
 
 pub fn unknown_ids_are_refused(s: &impl TodoStore) {

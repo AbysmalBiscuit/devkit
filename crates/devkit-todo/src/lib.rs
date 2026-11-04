@@ -13,6 +13,7 @@ pub mod holder;
 pub mod layout;
 pub mod names;
 pub mod node;
+pub mod prune;
 pub mod push;
 pub mod roles;
 pub mod ticket;
@@ -122,8 +123,8 @@ pub struct NewTodo {
     pub ticket: Option<TicketRef>,
 }
 
-/// One change to the store. Every edit but `ReleaseAll` names an existing
-/// todo.
+/// One change to the store. Every edit but `ReleaseAll` and `Prune` names an
+/// existing todo.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Edit {
     /// The stored status comes from [`transition`], never from the caller.
@@ -166,6 +167,13 @@ pub enum Edit {
     },
     /// Removes the record for good, for a description that must disappear.
     Purge(String),
+    /// Removes the record of each todo in `ids`, full ids, that is still
+    /// completed or cancelled when the store writes, and that no open todo
+    /// in the store then waits on or nests under. A todo that fails either
+    /// check, or is gone, is left as it is.
+    Prune {
+        ids: Vec<String>,
+    },
     /// Adds each blocker in `by` to `id`. A blocker already recorded is
     /// left as it is. The store does not check that a blocker exists.
     Block {

@@ -36,7 +36,8 @@ toml_edit.workspace = true
 similar.workspace = true
 fd-lock.workspace = true
 interprocess.workspace = true
-chrono.workspace = true
+# `clock` reads the local time zone that `todo prune --to-date` needs.
+chrono = { workspace = true, features = ["clock"] }
 textplots.workspace = true
 rgb.workspace = true
 indicatif.workspace = true

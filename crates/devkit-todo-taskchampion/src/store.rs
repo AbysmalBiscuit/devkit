@@ -814,6 +814,26 @@ impl TodoStore for TaskchampionStore {
                 replica.commit_operations(ops).await?;
                 Ok(vec![StatusChange::of(&todo, None)])
             }
+            Edit::Prune { ids } => {
+                let mut ops = Operations::new();
+                let mut changes = Vec::new();
+                let all = self.todos(replica).await?;
+                for id in devkit_todo::prune::removable(&all, ids) {
+                    let Ok(uuid) = Uuid::try_parse(&id) else {
+                        continue;
+                    };
+                    let Some(mut data) = replica.get_task_data(uuid).await? else {
+                        continue;
+                    };
+                    let Some(todo) = Self::todo_of(&data) else {
+                        continue;
+                    };
+                    data.delete(&mut ops);
+                    changes.push(StatusChange::of(&todo, None));
+                }
+                replica.commit_operations(ops).await?;
+                Ok(changes)
+            }
         })
     }
 }

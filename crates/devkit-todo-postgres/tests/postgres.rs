@@ -578,3 +578,48 @@ fn a_database_from_before_blocking_gains_the_column() {
     assert_eq!(todo.status, Status::Pending);
     assert_eq!(todo.order, Some(1024));
 }
+
+/// A store under a root of its own, that root, and the id of a done todo in it.
+fn one_done(direct: &str) -> (PostgresStore, String, String) {
+    let root = fresh_root();
+    let store = open(direct, &root);
+    let done = store.add(new_todo(Some("n"), "done")).unwrap();
+    store
+        .apply(&Edit::SetStatus {
+            id: done.clone(),
+            to: StatusKind::Completed,
+            actor: Holder::human(),
+        })
+        .unwrap();
+    (store, root, done)
+}
+
+#[test]
+fn prune_keeps_a_row_another_writer_holds_without_waiting() {
+    let Some(direct) = url(DIRECT) else {
+        return;
+    };
+    let scratch = Scratch::new(&direct);
+    let (store, root, done) = one_done(&scratch.url);
+    connected(&scratch.url, async |writer| {
+        writer.batch_execute("BEGIN").await.unwrap();
+        writer
+            .execute(
+                "SELECT devkit.todo_describe($1::text, $2::text, 'held')",
+                &[&root, &done],
+            )
+            .await
+            .unwrap();
+        let ids = vec![done.clone()];
+        let changes = std::thread::spawn({
+            let store = open(&scratch.url, &root);
+            move || store.apply(&Edit::Prune { ids })
+        })
+        .join()
+        .unwrap()
+        .unwrap();
+        assert!(changes.is_empty(), "{changes:?}");
+        writer.batch_execute("COMMIT").await.unwrap();
+    });
+    assert!(store.get(&done).unwrap().is_some());
+}
