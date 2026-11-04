@@ -16,6 +16,10 @@ static OPTIONS: OnceLock<Options> = OnceLock::new();
 /// resolves, which anchor a relative path in the `--option` values.
 static ANCHORS: OnceLock<(PathBuf, Option<PathBuf>)> = OnceLock::new();
 
+/// The absolute `--config` file of the first config this process resolves
+/// with one, and the root of the checkout that resolve ran in.
+static EXPLICIT: OnceLock<(PathBuf, Option<PathBuf>)> = OnceLock::new();
+
 /// Set the `--option` values every later resolve in this process merges over
 /// its layers, the values of `$DEVKIT_OPTIONS` included. The command line is
 /// parsed once, so a second call is a bug.
@@ -31,20 +35,30 @@ pub fn options() -> &'static Options {
     OPTIONS.get_or_init(Options::default)
 }
 
-/// A command that runs this devkit executable with this process's `--option`
-/// values, so the child resolves the config this process resolves.
+/// A command that runs this devkit executable with this process's `--config`
+/// and `--option` values, so the child resolves the config this process
+/// resolves.
 pub fn devkit_command() -> Result<std::process::Command> {
     let exe = std::env::current_exe().context("locating the devkit executable")?;
     let mut cmd = std::process::Command::new(exe);
-    pass_options(&mut cmd)?;
+    pass_config(&mut cmd)?;
     Ok(cmd)
 }
 
-/// Give `cmd` the `--option` values of this process in `$DEVKIT_OPTIONS`, so a
-/// devkit it runs resolves the config this process resolves. A relative path
-/// value anchors as this process anchors it, at its first resolved config or,
-/// before one, at its working directory.
-pub fn pass_options(cmd: &mut std::process::Command) -> Result<()> {
+/// Give `cmd` the config selection of this process, so a devkit it runs
+/// resolves the config this process resolves. The `--option` values go in
+/// `$DEVKIT_OPTIONS`. A relative path value anchors as this process anchors
+/// it, at its first resolved config or, before one, at its working directory.
+/// The `--config` file goes in `$DEVKIT_CONFIG` with this process's checkout
+/// in `$DEVKIT_CONFIG_CHECKOUT`, so a child in another checkout ignores it.
+/// A child's own `--config` still wins.
+pub fn pass_config(cmd: &mut std::process::Command) -> Result<()> {
+    if let Some((file, root)) = EXPLICIT.get() {
+        cmd.env(devkit_config::CONFIG_VAR, file).env(
+            devkit_config::CONFIG_CHECKOUT_VAR,
+            root.as_deref().unwrap_or(Path::new("")),
+        );
+    }
     let (start, root) = match ANCHORS.get() {
         Some((start, root)) => (start.clone(), root.clone()),
         None => (std::env::current_dir()?, None),
@@ -99,8 +113,12 @@ pub fn resolve_in(
     if let Ok((cfg, _)) = &resolved {
         crate::pool::configure(cfg.parallelism.threads);
         crate::github::configure(cfg.github.no_graphql);
+        let root = checkout.root().map(Path::to_path_buf);
         if let Ok(start) = std::path::absolute(start) {
-            let _ = ANCHORS.set((start, checkout.root().map(Path::to_path_buf)));
+            let _ = ANCHORS.set((start, root.clone()));
+        }
+        if let Some(file) = explicit.and_then(|p| std::path::absolute(p).ok()) {
+            let _ = EXPLICIT.set((file, root));
         }
     }
     resolved
