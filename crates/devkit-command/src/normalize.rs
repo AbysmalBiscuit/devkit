@@ -673,17 +673,47 @@ pub(crate) fn program_options(
     cwd: Option<&str>,
     style: PathStyle,
 ) -> ProgramOptions {
-    if program
+    match program
         .known()
         .map(basename)
         .map(|name| name.strip_suffix(".exe").unwrap_or(name))
-        != Some("git")
     {
-        return ProgramOptions {
+        Some("git") => git_options(args, cwd, style),
+        Some("gh") => ProgramOptions {
+            semantic_args: without_gh_repo_flags(args),
+            cwd: CwdChange::Inherit,
+        },
+        _ => ProgramOptions {
             semantic_args: args.to_vec(),
             cwd: CwdChange::Inherit,
-        };
+        },
     }
+}
+
+/// `gh` takes `-R`/`--repo` between a command group and its subcommand
+/// (`gh pr -R owner/repo create`), so the flag and its value are removed
+/// wherever they appear before `--`.
+fn without_gh_repo_flags(args: &[Value]) -> Vec<Value> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.known() {
+            Some("--") => {
+                kept.push(arg.clone());
+                kept.extend(rest.cloned());
+                break;
+            }
+            Some("-R" | "--repo") => {
+                rest.next();
+            }
+            Some(text) if text.starts_with("--repo=") || text.starts_with("-R") => {}
+            _ => kept.push(arg.clone()),
+        }
+    }
+    kept
+}
+
+fn git_options(args: &[Value], cwd: Option<&str>, style: PathStyle) -> ProgramOptions {
     let mut change = CwdChange::Inherit;
     let mut current = cwd.map(str::to_string);
     let mut i = 0;

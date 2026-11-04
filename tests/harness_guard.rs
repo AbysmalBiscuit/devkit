@@ -759,6 +759,58 @@ fn an_agents_gh_pr_create_is_denied_in_any_devkit_project_naming_devkit_pr_creat
     }
 }
 
+const GH_ISSUE_CREATE: &str = r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.gh-issue-create]
+programs = ["gh"]
+args = ["issue", "create"]
+reason = "file tickets with `devkit ticket create`"
+"#;
+
+#[test]
+fn a_repo_flag_before_the_gh_subcommand_does_not_pass_the_create_rules() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GH_ISSUE_CREATE);
+    for (command, replacement) in [
+        ("gh pr -R owner/repo create --fill", "devkit pr create"),
+        ("gh pr --repo owner/repo create --fill", "devkit pr create"),
+        ("gh pr --repo=owner/repo create --fill", "devkit pr create"),
+        ("gh pr -Rowner/repo new --fill", "devkit pr create"),
+        ("gh -R owner/repo pr create --fill", "devkit pr create"),
+        ("gh issue -R owner/repo create -t t", "devkit ticket create"),
+        (
+            "gh issue --repo owner/repo create -t t",
+            "devkit ticket create",
+        ),
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains(replacement),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
+fn a_repo_flag_before_a_read_only_gh_subcommand_still_passes() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GH_ISSUE_CREATE);
+    for command in [
+        "gh pr -R owner/repo list",
+        "gh pr --repo owner/repo view 9",
+        "gh issue -R owner/repo list",
+        "gh issue --repo=owner/repo view 3",
+        "gh pr view create -R owner/repo",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
+}
+
 #[test]
 fn a_project_rule_naming_another_caller_spelling_still_matches() {
     let home = tempfile::tempdir().unwrap();

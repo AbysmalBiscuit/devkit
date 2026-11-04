@@ -387,13 +387,13 @@ impl<'c> Analyzer<'c> {
             .iter()
             .map(|w| w.value.clone())
             .collect();
-        let git =
+        let options =
             normalize::program_options(&program_value, &args, cwd.as_deref(), self.ctx.path_style);
 
         self.out.invocations.push(Invocation {
             program: program_value.clone(),
             args: args.clone(),
-            semantic_args: git.semantic_args.clone(),
+            semantic_args: options.semantic_args.clone(),
             wrappers: assignment_wrapper(&raw.assignments)
                 .into_iter()
                 .chain(
@@ -461,8 +461,8 @@ impl<'c> Analyzer<'c> {
             embed::Exec::Plain => {}
         }
 
-        let effective_cwd = git.cwd.apply(cwd.clone());
-        for hit in catalog::effects(&name, &git.semantic_args) {
+        let effective_cwd = options.cwd.apply(cwd.clone());
+        for hit in catalog::effects(&name, &options.semantic_args) {
             match hit {
                 catalog::Hit::File(op, path) => {
                     self.file_effect(op, &path, effective_cwd.as_deref(), location.clone())
