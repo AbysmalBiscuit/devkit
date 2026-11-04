@@ -3,8 +3,9 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use devkit_common::{
+    args,
     caller::Caller,
     record::IssueRecord,
     required::Missing,
@@ -21,6 +22,35 @@ use crate::{
     },
     template::VarArgs,
 };
+
+/// `--pr-body` and `--pr-body-file`, the two ways `pr create`, `pr edit` and
+/// `pr render` take a summary.
+#[derive(clap::Args, Debug, Default, PartialEq)]
+pub(crate) struct SummaryArgs {
+    /// PR summary, the `input` of the `pr_body` template.
+    #[arg(short = 'b', long = "pr-body", conflicts_with = "pr_body_file")]
+    pr_body: Option<String>,
+    /// Read the `input` of the `pr_body` template from a file, or from stdin
+    /// for `-`. Drops trailing newlines, as `--pr-body "$(cat file)"` does.
+    #[arg(long = "pr-body-file", value_name = "PATH")]
+    pr_body_file: Option<String>,
+}
+
+impl SummaryArgs {
+    /// The summary the flags give. `vars` is what else this run reads: stdin
+    /// can fill one value only.
+    pub(crate) fn read(self, vars: &VarArgs) -> Result<Option<String>> {
+        let Some(path) = self.pr_body_file else {
+            return Ok(self.pr_body);
+        };
+        if path == args::STDIN && args::reads_stdin(&vars.arg_files) {
+            bail!("--pr-body-file and --arg-file cannot both read stdin (`-`)");
+        }
+        let summary = args::read_file_or_stdin(&path)
+            .with_context(|| format!("reading --pr-body-file {path}"))?;
+        Ok(Some(summary.trim_end_matches('\n').to_string()))
+    }
+}
 
 /// Reject an empty rendered PR title. Opening or rendering a PR needs one;
 /// reusing an open PR does not.
@@ -48,7 +78,7 @@ pub(crate) fn refuse_template_headings(tmpls: &Templates, summary: &str) -> Resu
         return Ok(());
     }
     bail!(
-        "--pr-body writes {}, a heading the pr_body template emits itself. Drop it from \
+        "the PR summary writes {}, a heading the pr_body template emits itself. Drop it from \
          the summary: the template fills its own sections from their --arg values \
          (`devkit template show pr_body` lists them)",
         repeated.join(", ")

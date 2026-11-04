@@ -543,9 +543,9 @@ pub(crate) enum PrCmd {
         /// PR title, instead of the one the template renders.
         #[arg(short = 't', long = "pr-title")]
         pr_title: Option<String>,
-        /// PR body, instead of the one the template renders.
-        #[arg(short = 'b', long = "pr-body")]
-        pr_body: Option<String>,
+        // Boxed because this variant sets the size of `Action`.
+        #[command(flatten)]
+        summary: Box<pr::render::SummaryArgs>,
         /// Image or video to upload into the body of the PR this run opens.
         /// Repeatable. Alt text follows `#`. A body reference to the same path,
         /// like `![alt](./after.png)`, becomes the uploaded URL; an attachment
@@ -575,9 +575,8 @@ pub(crate) enum PrCmd {
         /// New PR title, the `input` of the `pr_title` template.
         #[arg(short = 't', long = "pr-title")]
         pr_title: Option<String>,
-        /// New summary, the `input` of the `pr_body` template.
-        #[arg(short = 'b', long = "pr-body")]
-        pr_body: Option<String>,
+        #[command(flatten)]
+        summary: pr::render::SummaryArgs,
         /// Image or video to upload into the edited text. Repeatable. Alt text
         /// follows `#`. The text must embed it by the same path, like
         /// `![alt](./after.png)`, which becomes the uploaded URL. GitHub only;
@@ -605,9 +604,8 @@ pub(crate) enum PrCmd {
         /// PR title, the `input` of the `pr_title` template.
         #[arg(short = 't', long = "pr-title")]
         pr_title: Option<String>,
-        /// PR body, the `input` of the `pr_body` template.
-        #[arg(short = 'b', long = "pr-body")]
-        pr_body: Option<String>,
+        #[command(flatten)]
+        summary: pr::render::SummaryArgs,
         #[command(flatten)]
         vars: VarArgs,
     },
@@ -1057,7 +1055,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             to,
             base,
             pr_title,
-            pr_body,
+            summary,
             attach,
             no_push,
             pr,
@@ -1068,7 +1066,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             to,
             base,
             pr_title,
-            pr_body,
+            pr_body: summary.read(&vars)?,
             attach,
             no_push,
             pr,
@@ -1078,14 +1076,14 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
         }),
         PrCmd::Edit {
             pr_title,
-            pr_body,
+            summary,
             attach,
             no_push,
             pr,
             vars,
         } => pr::edit::run(pr::edit::Args {
             pr_title,
-            pr_body,
+            pr_body: summary.read(&vars)?,
             attach,
             no_push,
             pr,
@@ -1095,11 +1093,11 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
         }),
         PrCmd::Render {
             pr_title,
-            pr_body,
+            summary,
             vars,
         } => pr::render::run(pr::render::Args {
             pr_title,
-            pr_body,
+            pr_body: summary.read(&vars)?,
             vars,
             dir,
             config,

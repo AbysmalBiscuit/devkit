@@ -97,7 +97,9 @@ pub fn run(args: Args) -> Result<()> {
         edits.insert("input".into(), body);
     }
     if edits.is_empty() && args.pr_title.is_none() {
-        bail!("nothing to edit: pass --pr-title, --pr-body, or --arg for a part of the body");
+        bail!(
+            "nothing to edit: pass --pr-title, --pr-body, --pr-body-file, or --arg for a part of the body"
+        );
     }
     let caller = devkit_common::caller::caller();
     let blanked: Vec<_> = missing(&loaded.config, &edits, caller)?

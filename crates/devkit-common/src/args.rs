@@ -6,6 +6,9 @@ use std::{collections::BTreeMap, io::Read};
 
 use anyhow::{Context, Result, bail};
 
+/// The path that names stdin.
+pub const STDIN: &str = "-";
+
 /// Parse `--arg` pairs and `--arg-file` pairs into one map. A file's contents
 /// become the value unchanged, trailing newline included; a path of `-` reads
 /// stdin. Naming one key through both flags, or `-` twice, is refused.
@@ -28,23 +31,40 @@ fn parse_with_stdin(
         if out.contains_key(&key) {
             bail!("`{key}` is given more than once across --arg and --arg-file");
         }
-        let value = if path == "-" {
+        if path == STDIN {
             if stdin_read {
                 bail!("--arg-file reads stdin (`-`) at most once");
             }
             stdin_read = true;
-            let mut s = String::new();
-            stdin
-                .read_to_string(&mut s)
-                .with_context(|| format!("reading --arg-file {key} from stdin"))?;
-            s
-        } else {
-            std::fs::read_to_string(&path)
-                .with_context(|| format!("reading --arg-file {key}={path}"))?
-        };
+        }
+        let value =
+            read_path(&path, stdin).with_context(|| format!("reading --arg-file {key}={path}"))?;
         out.insert(key, value);
     }
     Ok(out)
+}
+
+/// The contents of the file at `path` unchanged, or of stdin when `path` is
+/// `-`.
+pub fn read_file_or_stdin(path: &str) -> std::io::Result<String> {
+    read_path(path, &mut std::io::stdin())
+}
+
+/// Whether any `--arg-file` pair reads stdin. A second reader of stdin would
+/// get an empty value.
+pub fn reads_stdin(files: &[String]) -> bool {
+    files
+        .iter()
+        .any(|pair| pair.split_once('=').is_some_and(|(_, path)| path == STDIN))
+}
+
+fn read_path(path: &str, stdin: &mut dyn Read) -> std::io::Result<String> {
+    if path != STDIN {
+        return std::fs::read_to_string(path);
+    }
+    let mut s = String::new();
+    stdin.read_to_string(&mut s)?;
+    Ok(s)
 }
 
 fn split(pair: &str, flag: &str, shape: &str) -> Result<(String, String)> {
