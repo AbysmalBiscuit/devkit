@@ -119,10 +119,16 @@ impl NativeMap {
     /// Drops every native id and snapshot step that points at `todo`, so a
     /// purged todo's text leaves no copy here.
     pub fn forget(&self, todo: &str) -> Result<()> {
+        self.forget_all(&[todo])
+    }
+
+    /// [`NativeMap::forget`] for each of `todos`, in one write.
+    pub fn forget_all(&self, todos: &[&str]) -> Result<()> {
+        let todos: std::collections::HashSet<&str> = todos.iter().copied().collect();
         self.with_doc(|doc| {
-            doc.ids.retain(|_, id| id != todo);
+            doc.ids.retain(|_, id| !todos.contains(id.as_str()));
             for steps in doc.snapshots.values_mut() {
-                steps.retain(|step| step.todo != todo);
+                steps.retain(|step| !todos.contains(step.todo.as_str()));
             }
             Ok(())
         })

@@ -135,6 +135,10 @@ Codex offers `update_plan` only when its config sets `[tools.update_plan] enable
 
 `devkit todo purge` deletes a record for good, for text that must disappear such as a pasted secret. It needs a person at a terminal and refuses an agent; cancel instead.
 
+`devkit todo prune` removes done todos, completed or cancelled, from every session in its scope. It takes the scope flags of `devkit todo list`, so `--all` and `--subtree` stay inside the same fence. It needs at least one date flag: `--from-date` and `--to-date` name a local day, and `--from-timestamp` and `--to-timestamp` name an exact instant. All bounds are inclusive. The bounds apply to the last change of a done todo, so a later edit makes a todo look newer. An open todo stays, and so does a done todo that an open todo waits on or nests under. The command prints the todos and asks, and `--yes` skips the question.
+
+Prune refuses an agent, even with `--yes`. An agent can run `devkit todo prune --dry-run`, which prints the todos and changes nothing. On a synced replica, the sync target keeps earlier versions, so prune does not erase their text from there. The postgres backend creates the function that prune calls when it first needs it. On the supabase backend, run `devkit todo schema update` first.
+
 ## Activity
 
 devkit records each subagent run and each stretch a todo spends in progress, whether or not the harness log is on: in the todo database on the postgres and supabase backends, and beside the todo state on every other. `devkit activity` reports them over a date range, grouped by session, agent type and todo, and `--json` gives the same report as JSON. `devkit activity -h` gives the range's defaults.

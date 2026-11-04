@@ -305,6 +305,13 @@ impl TodoStore for PostgresStore {
                 ])
                 .await
             }
+            Edit::Prune { ids } => {
+                changes(client, "todo_prune", &[
+                    (&root, Type::TEXT),
+                    (ids, Type::TEXT_ARRAY),
+                ])
+                .await
+            }
             Edit::Block { id, by } => {
                 call(client, "SELECT devkit.todo_block($1, $2, $3)", &[
                     (&root, Type::TEXT),

@@ -422,6 +422,22 @@ BEGIN
 END
 $$;
 
+-- Removes each todo of `p_ids` that is completed or cancelled, in one
+-- statement, so a todo reopened since the caller read it stays. An id that is
+-- not a uuid, or names no todo, removes nothing.
+CREATE OR REPLACE FUNCTION devkit.todo_prune(p_root text, p_ids text[])
+RETURNS TABLE (
+    todo uuid, node text, from_status text, from_holder text,
+    to_status text, to_holder text, at timestamptz
+)
+LANGUAGE sql AS $$
+    DELETE FROM devkit.todos AS t
+    WHERE t.root = p_root AND t.id = ANY (devkit.todo_uuids(p_ids))
+      AND t.status IN ('completed', 'cancelled')
+    RETURNING t.id, t.node, t.status, t.holder,
+        NULL::text, NULL::text, clock_timestamp()
+$$;
+
 -- Appends each of `p_events`, in order: activity log lines, each stamped by
 -- its `at`, or by the database's clock when it has none.
 CREATE OR REPLACE FUNCTION devkit.activity_record(p_root text, p_events jsonb)

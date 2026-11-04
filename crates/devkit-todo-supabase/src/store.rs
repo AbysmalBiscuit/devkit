@@ -332,6 +332,9 @@ impl TodoStore for SupabaseStore {
                 json!({ "p_root": root, "p_holder": holder }),
             ),
             Edit::Purge(id) => self.changes("todo_purge", json!({ "p_root": root, "p_id": id })),
+            Edit::Prune { ids } => {
+                self.changes("todo_prune", json!({ "p_root": root, "p_ids": ids }))
+            }
             Edit::Block { id, by } => self.call(
                 "todo_block",
                 json!({ "p_root": root, "p_id": id, "p_by": by }),
