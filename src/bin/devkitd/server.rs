@@ -9,7 +9,7 @@ use std::{
 
 use devkit_common::supervise;
 use devkit_ports::{
-    daemon::proto::{PROTO, Request, Response},
+    daemon::proto::{PROTO, Request, Response, Supervised},
     registry::{self, Role, Store},
 };
 
@@ -148,7 +148,12 @@ fn supervise_app(
                 && let Some(pid) = e.pid
                 && registry::pid_alive(pid)
             {
-                return Response::Supervised(vec![(port, registry::listening(port))]);
+                return Response::Supervised(Supervised {
+                    port,
+                    pid,
+                    ready: registry::listening(port),
+                    spawned: false,
+                });
             }
         }
         Err(e) => return Response::Err(format!("{e:#}")),
@@ -182,7 +187,12 @@ fn supervise_app(
         .unwrap()
         .insert_owned(key, pid, port, logfile, launch);
     let ready = supervise::wait_ready(port, Duration::from_secs(120));
-    Response::Supervised(vec![(port, ready)])
+    Response::Supervised(Supervised {
+        port,
+        pid,
+        ready,
+        spawned: true,
+    })
 }
 
 /// Atomic stop: remove each supervised child for this holder/role from the

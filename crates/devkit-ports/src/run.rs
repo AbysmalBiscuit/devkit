@@ -703,15 +703,14 @@ fn supervise_via_daemon(
             logfile: p.log.clone(),
             base_port: p.port,
         })?;
-        let pid = registry::snapshot()
-            .ok()
-            .and_then(|d| d.entries.get(&p.port).filter(|e| e.holder == holder)?.pid);
-        if let Some(pid) = pid {
-            record_origin(p.port, pid, origin);
-        }
         let ready = match &resp {
-            crate::daemon::proto::Response::Supervised(v) => {
-                v.first().map(|(_, r)| *r).unwrap_or(false)
+            crate::daemon::proto::Response::Supervised(s) => {
+                // Another caller may have spawned the server since the
+                // snapshot above; its origin is that caller's to record.
+                if s.spawned {
+                    record_origin(p.port, s.pid, origin);
+                }
+                s.ready
             }
             crate::daemon::proto::Response::Err(msg) => {
                 eprintln!("daemon could not supervise {}: {msg}", p.app);

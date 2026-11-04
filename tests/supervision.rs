@@ -41,7 +41,7 @@ fn supervised_python_server_becomes_ready() {
     });
 
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "expected Supervised([(_, true)]), got {resp:?}"
     );
 
@@ -79,7 +79,7 @@ fn restart_after_kill() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -149,7 +149,7 @@ fn restart_survives_concurrent_snapshot() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -268,7 +268,7 @@ while True:
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -359,7 +359,7 @@ while True:
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -441,7 +441,7 @@ while True:
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -537,7 +537,7 @@ while True:
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
@@ -594,7 +594,7 @@ fn cap_requested_without_delegation_falls_back() {
 
     // The spawn must succeed even though cgroup delegation is unavailable.
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "expected ready=true even without cgroup delegation, got {resp:?}"
     );
 
@@ -668,7 +668,7 @@ fn a_supervised_app_and_its_children_join_the_leaf() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
     let app = pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json");
@@ -715,7 +715,7 @@ fn an_unwritable_leaf_leaves_the_app_uncapped() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "an unjoinable leaf must not stop the app: {resp:?}"
     );
     let leaves = leaves(base.path());
@@ -761,7 +761,7 @@ fn a_capped_launch_survives_a_deleted_daemon_binary() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "a deleted daemon binary must not stop a capped launch: {resp:?}"
     );
 
@@ -814,7 +814,7 @@ fn a_capped_launch_without_path_uses_the_default_search_path() {
             base_port: port,
         });
         assert!(
-            matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+            matches!(&resp, Response::Supervised(s) if s.ready),
             "an {label} bare command must resolve without PATH: {resp:?}"
         );
 
@@ -889,6 +889,8 @@ fn a_missing_program_fails_the_launch() {
 
 /// A second Supervise for a key whose server is alive is a no-op: same port,
 /// ready, and the pid in ports.json does not change (no duplicate spawn).
+/// Only the first answer says it spawned the server, so only its caller
+/// records the server's origin.
 #[test]
 fn second_supervise_of_live_server_is_noop() {
     let mut h = Harness::start();
@@ -906,15 +908,16 @@ fn second_supervise_of_live_server_is_noop() {
     };
 
     let first = h.request(&req);
-    assert!(
-        matches!(&first, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
-        "first supervise did not become ready: {first:?}"
-    );
     let pid1 = pid_in_ports_json(&h.ports_json(), "api").expect("no pid after first supervise");
+    assert!(
+        matches!(&first, Response::Supervised(s) if s.ready && s.spawned && s.pid == pid1),
+        "first supervise must report the server it spawned: {first:?}"
+    );
 
     let second = h.request(&req);
     assert!(
-        matches!(&second, Response::Supervised(v) if v.first() == Some(&(port, true))),
+        matches!(&second, Response::Supervised(s)
+            if s.port == port && s.ready && !s.spawned && s.pid == pid1),
         "second supervise must report the live server: {second:?}"
     );
     let pid2 = pid_in_ports_json(&h.ports_json(), "api").expect("no pid after second supervise");
@@ -944,7 +947,7 @@ fn down_does_not_restart() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 

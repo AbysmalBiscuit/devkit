@@ -135,7 +135,7 @@ fn supervised_child_reaches_the_daemon() {
         base_port: port,
     });
     assert!(
-        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        matches!(&resp, Response::Supervised(s) if s.ready),
         "supervise did not become ready: {resp:?}"
     );
 
