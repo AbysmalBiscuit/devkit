@@ -50,7 +50,8 @@ pub fn of(text: &str, policy: Policy<'_>) -> String {
     out
 }
 
-/// An HMAC-SHA-256 key read from a file only its owner can read.
+/// An HMAC-SHA-256 key read from a file only its owner can read, created by
+/// [`crate::sys::create_private`].
 pub struct Key(hmac::Key);
 
 impl Key {
@@ -78,8 +79,8 @@ impl Key {
 }
 
 /// Write fresh key bytes to `path` and return the bytes the file then holds.
-/// The temporary file is readable only by its owner, and a concurrent writer
-/// that renames first wins.
+/// The temporary file is private from creation, and a concurrent writer that
+/// renames first wins.
 fn create(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = vec![0u8; KEY_LEN];
     SystemRandom::new()
@@ -87,7 +88,8 @@ fn create(path: &Path) -> Result<Vec<u8>> {
         .map_err(|_| anyhow::anyhow!("the system random source failed"))?;
     let dir: PathBuf = path.parent().context("a key path has a parent")?.into();
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let mut tmp = tempfile::NamedTempFile::new_in(&dir)
+    let mut tmp = tempfile::Builder::new()
+        .make_in(&dir, crate::sys::create_private)
         .with_context(|| format!("creating a key in {}", dir.display()))?;
     tmp.write_all(&bytes)?;
     match tmp.persist_noclobber(path) {
@@ -128,6 +130,37 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
+    }
+
+    /// A key file under a directory everyone can read grants access to its
+    /// owner alone, with nothing inherited from the directory.
+    #[cfg(windows)]
+    #[test]
+    fn a_key_under_a_directory_everyone_reads_is_private() {
+        let icacls = |args: &[&std::ffi::OsStr]| {
+            let out = std::process::Command::new("icacls")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        icacls(&[
+            dir.path().as_os_str(),
+            "/grant".as_ref(),
+            "*S-1-1-0:(OI)(CI)R".as_ref(),
+        ]);
+        let path = dir.path().join("digest.key");
+        Key::at(&path).unwrap();
+        let listing = icacls(&[path.as_os_str()]);
+        let aces: Vec<&str> = listing
+            .lines()
+            .take_while(|l| !l.trim().is_empty())
+            .map(|l| l.trim().trim_start_matches(path.to_str().unwrap()).trim())
+            .collect();
+        assert_eq!(aces.len(), 1, "{listing}");
+        assert!(!aces[0].contains("(I)"), "{listing}");
     }
 
     #[test]

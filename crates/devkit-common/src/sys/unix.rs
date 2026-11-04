@@ -532,6 +532,16 @@ fn resident_pages(pid: u32) -> u64 {
         .unwrap_or(0)
 }
 
+pub(super) fn create_private(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
 pub(super) fn symlink(
     target: &std::path::Path,
     link: &std::path::Path,

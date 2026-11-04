@@ -18,8 +18,16 @@ use std::{
 
 use socket2::{Domain, Socket, Type};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT},
+    Foundation::{
+        CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
+        WAIT_TIMEOUT,
+    },
     Networking::WinSock::{SIO_TCP_INITIAL_RTO, SOCKET, TCP_INITIAL_RTO_PARAMETERS, WSAIoctl},
+    Security::{
+        Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1},
+        PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    },
+    Storage::FileSystem::{CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL},
     System::{
         Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent},
         Diagnostics::ToolHelp::{
@@ -238,6 +246,61 @@ pub(super) fn spawn_background(cmd: &Command) -> io::Result<BackgroundChild> {
         CloseHandle(info.hThread);
         Ok(BackgroundChild(OwnedHandle::from_raw_handle(info.hProcess)))
     }
+}
+
+/// A protected DACL with one ACE: full access for the file's owner.
+const OWNER_ONLY_SDDL: &str = "D:P(A;;FA;;;OW)";
+
+#[allow(
+    unsafe_code,
+    reason = "std cannot create a file with a security descriptor, so only CreateFileW makes \
+              it private before any byte is written"
+)]
+pub(super) fn create_private(path: &std::path::Path) -> io::Result<std::fs::File> {
+    let sddl = wide(OsStr::new(OWNER_ONLY_SDDL));
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: `sddl` is NUL-terminated, and `descriptor` receives a
+    // LocalAlloc'd buffer that is freed below.
+    let converted = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    if converted == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor,
+        bInheritHandle: 0,
+    };
+    let name = wide(path.as_os_str());
+    // SAFETY: `name` is NUL-terminated and `attributes` outlives the call.
+    let handle = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            &attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    let error = io::Error::last_os_error();
+    // SAFETY: `descriptor` came from the conversion above and is not used
+    // after this.
+    unsafe { LocalFree(descriptor) };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(error);
+    }
+    // SAFETY: CreateFileW returned a valid handle that nothing else owns.
+    Ok(std::fs::File::from(unsafe {
+        OwnedHandle::from_raw_handle(handle)
+    }))
 }
 
 fn wide(s: &OsStr) -> Vec<u16> {
