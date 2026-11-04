@@ -122,6 +122,10 @@ pub(super) fn detach(cmd: &mut std::process::Command) {
     cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
+pub(super) fn exit_like(status: ExitStatus) -> ! {
+    std::process::exit(status.code().unwrap_or(1));
+}
+
 /// A console with no window. A child with no console at all would give each
 /// console program it runs, git among them, a window of its own.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -415,5 +419,119 @@ pub(super) fn symlink(
         std::os::windows::fs::symlink_dir(target, link)
     } else {
         std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::Path, process::Command, time::Instant};
+
+    use super::{AsRawHandle, Duration};
+    use crate::sys::spawn_background;
+
+    /// Set to a file path, this binary's `background_child_console_probe`
+    /// writes whether it has a console and whether that console shows a
+    /// window, as `<has console> <has window>`.
+    const CONSOLE_PROBE_ENV: &str = "DEVKIT_TEST_CONSOLE_PROBE";
+
+    /// Set, the probe runs itself as a plain child and lets that child report.
+    const CONSOLE_RELAY_ENV: &str = "DEVKIT_TEST_CONSOLE_RELAY";
+
+    #[test]
+    fn background_child_console_probe() {
+        use windows_sys::Win32::System::Console::{GetConsoleCP, GetConsoleWindow};
+        let Some(out) = std::env::var_os(CONSOLE_PROBE_ENV) else {
+            return;
+        };
+        if std::env::var_os(CONSOLE_RELAY_ENV).is_some() {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "sys::imp::tests::background_child_console_probe"])
+                .env_remove(CONSOLE_RELAY_ENV)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        // SAFETY: both calls take no arguments and only read process state.
+        let (console, window) = unsafe { (GetConsoleCP() != 0, !GetConsoleWindow().is_null()) };
+        std::fs::write(out, format!("{console} {window}")).unwrap();
+    }
+
+    /// A background child spawns git and other console programs. Without a
+    /// console of its own, Windows gives each of them a new console window.
+    #[test]
+    fn a_background_child_has_a_console_with_no_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("probe");
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "sys::imp::tests::background_child_console_probe"])
+            .env(CONSOLE_PROBE_ENV, &out);
+        let mut child = spawn_background(&mut cmd).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "true false");
+    }
+
+    #[test]
+    fn a_program_a_background_child_runs_gets_no_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("probe");
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "sys::imp::tests::background_child_console_probe"])
+            .env(CONSOLE_PROBE_ENV, &out)
+            .env(CONSOLE_RELAY_ENV, "1");
+        let mut child = spawn_background(&mut cmd).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "true false");
+    }
+
+    /// Set to a file path, `background_child_wait_probe` runs until that file
+    /// is gone, for at most fifteen seconds.
+    const WAIT_PROBE_ENV: &str = "DEVKIT_TEST_WAIT_PROBE";
+
+    #[test]
+    fn background_child_wait_probe() {
+        let Some(marker) = std::env::var_os(WAIT_PROBE_ENV) else {
+            return;
+        };
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Path::new(&marker).exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// A process holds handles its own parent passed down, a caller's output
+    /// pipe among them. A background child given one keeps that caller
+    /// waiting for end of file until the child exits.
+    #[test]
+    fn a_background_child_holds_no_handle_its_parent_inherited() {
+        use std::io::Read;
+
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("running");
+        std::fs::write(&marker, "").unwrap();
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        // SAFETY: only sets a flag on a handle this test owns.
+        unsafe {
+            SetHandleInformation(
+                writer.as_raw_handle(),
+                HANDLE_FLAG_INHERIT,
+                HANDLE_FLAG_INHERIT,
+            )
+        };
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "sys::imp::tests::background_child_wait_probe"])
+            .env(WAIT_PROBE_ENV, &marker);
+        let mut child = spawn_background(&mut cmd).unwrap();
+        drop(writer);
+        let start = Instant::now();
+        reader.read_to_end(&mut Vec::new()).unwrap();
+        let took = start.elapsed();
+        std::fs::remove_file(&marker).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(
+            took < Duration::from_secs(5),
+            "the background child held the pipe for {took:?}"
+        );
     }
 }

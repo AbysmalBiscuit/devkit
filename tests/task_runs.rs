@@ -35,6 +35,9 @@ run = ["git", "-c", "alias.mix=!echo out1; echo err1 >&2; echo out2; echo err2 >
 
 [tasks.peek]
 run = ["git", "-c", "alias.peek=!ls -A \"$XDG_STATE_HOME/devkit/output\"; echo end", "peek"]
+
+[tasks.realtime_kill]
+run = ["sh", "-c", "kill -34 $$"]
 "#;
 
 /// A repository with one commit, and a state home beside it rather than in it.
@@ -121,6 +124,16 @@ impl Fixture {
         }
         self.run(&args)
     }
+}
+
+/// A realtime signal is a signal like any other to the parent reading the
+/// status, though `nix::sys::signal::Signal` has no variant for one.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_child_a_realtime_signal_kills_gives_devrun_that_signal_status() {
+    use std::os::unix::process::ExitStatusExt;
+    let out = Fixture::new().task("realtime_kill");
+    assert_eq!(out.status.signal(), Some(34), "{out:?}");
 }
 
 impl Fixture {
