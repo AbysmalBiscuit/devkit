@@ -466,7 +466,7 @@ pub(super) fn symlink(
 mod tests {
     use std::{path::Path, process::Command, time::Instant};
 
-    use super::{AsRawHandle, Duration};
+    use super::Duration;
     use crate::sys::spawn_background;
 
     /// Set to a file path, this binary's `background_child_console_probe`
@@ -547,27 +547,14 @@ mod tests {
     /// pipe among them. A background child given one keeps that caller
     /// waiting for end of file until the child exits.
     #[test]
-    #[allow(
-        unsafe_code,
-        reason = "std creates every handle non-inheritable, so only SetHandleInformation can make \
-                  the inheritable handle this test needs"
-    )]
     fn a_background_child_holds_no_handle_its_parent_inherited() {
         use std::io::Read;
 
-        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+        use interprocess::os::windows::unnamed_pipe::CreationOptions;
         let tmp = tempfile::tempdir().unwrap();
         let marker = tmp.path().join("running");
         std::fs::write(&marker, "").unwrap();
-        let (mut reader, writer) = std::io::pipe().unwrap();
-        // SAFETY: only sets a flag on a handle this test owns.
-        unsafe {
-            SetHandleInformation(
-                writer.as_raw_handle(),
-                HANDLE_FLAG_INHERIT,
-                HANDLE_FLAG_INHERIT,
-            )
-        };
+        let (writer, mut reader) = CreationOptions::new().inheritable(true).create().unwrap();
         let mut cmd = Command::new(std::env::current_exe().unwrap());
         cmd.args(["--exact", "sys::imp::tests::background_child_wait_probe"])
             .env(WAIT_PROBE_ENV, &marker);

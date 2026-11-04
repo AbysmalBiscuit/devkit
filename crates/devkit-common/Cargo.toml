@@ -60,3 +60,7 @@ nix.workspace = true
 [target.'cfg(windows)'.dependencies]
 socket2.workspace = true
 windows-sys.workspace = true
+
+# An inheritable pipe, which std cannot create, for the background-child tests.
+[target.'cfg(windows)'.dev-dependencies]
+interprocess.workspace = true
