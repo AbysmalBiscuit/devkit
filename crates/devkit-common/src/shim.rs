@@ -188,13 +188,12 @@ impl OwnBinary {
             return Some(path);
         }
         let file = shim_file_name(windows_stem(program));
-        std::env::split_paths(self.search_path.as_ref()?)
-            .filter_map(|dir| match dir.is_absolute() {
-                true => Some(dir),
-                false => cwd.map(|cwd| cwd.join(dir)),
-            })
-            .map(|dir| dir.join(&file))
-            .find(|candidate| candidate.is_file())
+        crate::sys::find_on_path(
+            Path::new(&file),
+            self.search_path.as_ref()?,
+            cwd,
+            Path::is_file,
+        )
     }
 }
 

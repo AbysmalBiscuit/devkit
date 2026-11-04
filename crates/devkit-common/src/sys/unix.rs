@@ -101,7 +101,7 @@ fn program_exists(cmd: &std::process::Command) -> bool {
     );
     // With no `PATH`, exec searches the C library's default path.
     let path = path.unwrap_or_else(|| "/bin:/usr/bin".into());
-    std::env::split_paths(&path).any(|dir| executable(&dir.join(program)))
+    super::find_on_path(program, &path, Some(base), executable).is_some()
 }
 
 /// Runs the program a [`detach`]ed command names, in a session of its own,

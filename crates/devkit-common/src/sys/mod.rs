@@ -113,6 +113,24 @@ pub fn exit_like(status: std::process::ExitStatus) -> ! {
     imp::exit_like(status)
 }
 
+/// The first `search_path` entry that holds `file` and that `eligible`
+/// accepts. A relative entry, the empty one included, is a directory under
+/// `cwd`, and with `cwd` unknown it holds nothing.
+pub fn find_on_path(
+    file: &Path,
+    search_path: &std::ffi::OsStr,
+    cwd: Option<&Path>,
+    eligible: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    std::env::split_paths(search_path)
+        .filter_map(|dir| match dir.is_absolute() {
+            true => Some(dir),
+            false => cwd.map(|cwd| cwd.join(dir)),
+        })
+        .map(|dir| dir.join(file))
+        .find(|candidate| eligible(candidate))
+}
+
 /// Runs the program of a [`detach`]ed command, and never returns, when this
 /// process is its trampoline. Returns at once otherwise. Call it first in
 /// `main`.
@@ -187,6 +205,25 @@ pub fn symlink(target: &Path, link: &Path, target_is_dir: bool) -> std::io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_on_path_takes_the_first_eligible_entry() {
+        let root = tempfile::tempdir().unwrap();
+        for dir in ["skipped", "found"] {
+            std::fs::create_dir(root.path().join(dir)).unwrap();
+            std::fs::write(root.path().join(dir).join("tool"), "").unwrap();
+        }
+        let search = std::env::join_paths([root.path().join("skipped"), "found".into()]).unwrap();
+        let eligible = |path: &Path| !path.starts_with(root.path().join("skipped"));
+        assert_eq!(
+            find_on_path(Path::new("tool"), &search, Some(root.path()), eligible),
+            Some(root.path().join("found/tool"))
+        );
+        assert_eq!(
+            find_on_path(Path::new("tool"), &search, None, eligible),
+            None
+        );
+    }
 
     #[test]
     fn self_is_alive() {
