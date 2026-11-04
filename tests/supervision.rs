@@ -729,6 +729,51 @@ fn an_unwritable_leaf_leaves_the_app_uncapped() {
     h.shutdown();
 }
 
+/// A capped launch still starts the app after the daemon's binary is deleted,
+/// as an upgrade that replaces it does.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_capped_launch_survives_a_deleted_daemon_binary() {
+    let base = unjoinable_cgroup_base();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let bin = bin_dir.path().join("devkitd");
+    std::fs::copy(env!("CARGO_BIN_EXE_devkitd"), &bin).unwrap();
+    let mut h = Harness::start_binary(&bin, &[
+        ("DEVKIT_DAEMON_IDLE_SECS", "3600".to_string()),
+        ("DEVKIT_DAEMON_MEM_MAX_MB", "64".to_string()),
+        (
+            "DEVKIT_DAEMON_CGROUP_ROOT",
+            base.path().to_str().unwrap().to_string(),
+        ),
+    ]);
+    std::fs::remove_file(&bin).unwrap();
+    let port = common::free_port();
+    let holder = h.home.path().to_str().unwrap().to_string();
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Workspace,
+        argv: common::tcp_server_argv(port),
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.path().join("deleted.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "a deleted daemon binary must not stop a capped launch: {resp:?}"
+    );
+    let log = std::fs::read_to_string(h.home.path().join("deleted.log")).unwrap();
+    assert!(
+        !log.contains("cgroup join did not start"),
+        "the app launched without the cgroup join: {log}"
+    );
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
 /// A capped launch of a program that does not exist fails the request with an
 /// error that names the program.
 #[cfg(target_os = "linux")]

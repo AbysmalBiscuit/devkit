@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     ffi::OsStr,
     fs::{self, File},
+    io::Write as _,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -23,22 +24,31 @@ pub fn spawn_detached(
     cgroup_leaf: Option<&Path>,
 ) -> Result<u32> {
     fs::create_dir_all(logfile.parent().unwrap())?;
-    let out = File::create(logfile)?;
-    let err = out.try_clone()?;
+    let mut out = File::create(logfile)?;
     let (prog, rest) = argv.split_first().context("empty launch argv")?;
-    let mut c = match cgroup_leaf {
-        Some(leaf) => crate::sys::cgroup_command(leaf, prog, cwd, env.get("PATH").map(OsStr::new))?,
-        None => Command::new(prog),
+    let spawn = |mut c: Command, out: &File| -> std::io::Result<u32> {
+        c.args(rest)
+            .current_dir(cwd)
+            .envs(env)
+            .stdin(Stdio::null())
+            .stdout(out.try_clone()?)
+            .stderr(out.try_clone()?);
+        crate::sys::detach(&mut c);
+        Ok(c.spawn()?.id())
     };
-    c.args(rest)
-        .current_dir(cwd)
-        .envs(env)
-        .stdin(Stdio::null())
-        .stdout(out)
-        .stderr(err);
-    crate::sys::detach(&mut c);
-    let child = c.spawn().with_context(|| format!("spawning {prog}"))?;
-    Ok(child.id())
+    if let Some(leaf) = cgroup_leaf {
+        let joined = crate::sys::cgroup_command(leaf, prog, cwd, env.get("PATH").map(OsStr::new))?;
+        match spawn(joined, &out) {
+            Ok(pid) => return Ok(pid),
+            Err(e) => {
+                let _ = writeln!(
+                    out,
+                    "devkitd: running {prog} uncapped, the cgroup join did not start: {e}"
+                );
+            }
+        }
+    }
+    spawn(Command::new(prog), &out).with_context(|| format!("spawning {prog}"))
 }
 
 /// One-shot TCP liveness check: does `127.0.0.1:port` accept a connection

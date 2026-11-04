@@ -304,15 +304,15 @@ pub(super) fn cgroup_command(
     cwd: &str,
     path_var: Option<&std::ffi::OsStr>,
 ) -> anyhow::Result<std::process::Command> {
-    use anyhow::Context as _;
     // The trampoline always starts, so a missing program would only show as
     // an exit of the trampoline. Look it up here to fail the launch instead.
     anyhow::ensure!(
         find_program(program, cwd, path_var),
         "spawning {program}: no such executable"
     );
-    let exe = std::env::current_exe().context("locating devkitd for the cgroup join")?;
-    let mut cmd = std::process::Command::new(exe);
+    // `/proc/self/exe` still runs this binary after an upgrade deletes or
+    // replaces the file at `current_exe()`.
+    let mut cmd = std::process::Command::new("/proc/self/exe");
     cmd.arg(super::CGROUP_EXEC).arg(leaf).arg("--").arg(program);
     Ok(cmd)
 }
