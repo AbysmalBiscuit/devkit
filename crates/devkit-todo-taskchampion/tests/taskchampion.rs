@@ -228,3 +228,209 @@ fn secret_is_redacted_in_debug() {
     assert!(!shown.contains("hunter2"), "{shown}");
     assert!(!shown.contains("104, 117"), "{shown}");
 }
+
+/// Writes a task row whose data no reader can parse, so any read that loads
+/// it fails. `in_working_set` also files it in the working set, where
+/// taskchampion's dependency map reads every entry.
+fn unreadable_task(data_dir: &Path, in_working_set: bool) {
+    let db = rusqlite::Connection::open(data_dir.join("taskchampion.sqlite3")).unwrap();
+    let uuid = Uuid::new_v4().to_string();
+    db.execute("INSERT INTO tasks (uuid, data) VALUES (?1, 'not json')", [
+        &uuid,
+    ])
+    .unwrap();
+    if in_working_set {
+        db.execute(
+            "INSERT INTO working_set (id, uuid) VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM working_set), ?1)",
+            [&uuid],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn get_by_full_id_reads_only_that_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let id = store.add(new(Some("r.main"), "a")).unwrap();
+    unreadable_task(&data, true);
+    assert_eq!(store.get(&id).unwrap().unwrap().description, "a");
+}
+
+/// A todo on `r.main` that `s1` claims.
+fn claimed(store: &TaskchampionStore) -> String {
+    let id = store.add(new(Some("r.main"), "a")).unwrap();
+    store
+        .apply(&Edit::SetStatus {
+            id: id.clone(),
+            to: devkit_todo::StatusKind::InProgress,
+            actor: devkit_todo::Holder::new("s1"),
+        })
+        .unwrap();
+    id
+}
+
+#[test]
+fn get_by_prefix_reads_only_matching_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let id = claimed(&store);
+    unreadable_task(&data, false);
+    assert_eq!(store.get(&id[..8]).unwrap().unwrap().id, id);
+}
+
+#[test]
+fn release_reads_no_closed_task_in_the_working_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let id = claimed(&store);
+    let closed = store.add(new(Some("r.main"), "closed")).unwrap();
+    store
+        .apply(&Edit::SetStatus {
+            id: closed,
+            to: devkit_todo::StatusKind::Completed,
+            actor: devkit_todo::Holder::new("s1"),
+        })
+        .unwrap();
+    unreadable_task(&data, true);
+    let released = store
+        .apply(&Edit::ReleaseAll {
+            holder: devkit_todo::Holder::new("s1"),
+        })
+        .unwrap();
+    assert_eq!(released.len(), 1, "{released:?}");
+    assert_eq!(
+        store.get(&id).unwrap().unwrap().status,
+        devkit_todo::Status::Pending
+    );
+}
+
+#[test]
+fn a_single_release_reads_no_working_set_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    let store = TaskchampionStore::at(data.clone());
+    let id = claimed(&store);
+    unreadable_task(&data, true);
+    let changes = store
+        .apply(&Edit::SetStatus {
+            id: id.clone(),
+            to: devkit_todo::StatusKind::Pending,
+            actor: devkit_todo::Holder::new("s1"),
+        })
+        .unwrap();
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert_eq!(
+        store.get(&id).unwrap().unwrap().status,
+        devkit_todo::Status::Pending
+    );
+}
+
+/// A store answering only the required methods, so `list_open` and
+/// `closed_counts` run their default bodies.
+struct DefaultBodies<'a>(&'a TaskchampionStore);
+
+impl TodoStore for DefaultBodies<'_> {
+    fn list(&self, filter: &Filter) -> anyhow::Result<Vec<devkit_todo::Todo>> {
+        self.0.list(filter)
+    }
+
+    fn get(&self, id: &str) -> anyhow::Result<Option<devkit_todo::Todo>> {
+        self.0.get(id)
+    }
+
+    fn add(&self, todo: NewTodo) -> anyhow::Result<String> {
+        self.0.add(todo)
+    }
+
+    fn apply(&self, edit: &Edit) -> anyhow::Result<Vec<devkit_todo::StatusChange>> {
+        self.0.apply(edit)
+    }
+}
+
+/// Reads taskchampion's private storage schema through the store's SQL, so a
+/// taskchampion upgrade that changes the schema fails here.
+#[test]
+fn the_sql_reads_match_the_default_bodies_on_a_real_replica() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("tc");
+    std::fs::create_dir_all(&data).unwrap();
+    let store = TaskchampionStore::at(data.clone());
+    let rows: [(Option<&str>, Status, bool); 12] = [
+        (Some("r.main"), Status::Pending, false),
+        (Some("r.main"), Status::Pending, true),
+        (Some("r.main"), Status::Completed, false),
+        (Some("r.main"), Status::Completed, false),
+        (Some("r.main"), Status::Deleted, false),
+        (Some("r.main.claude-s"), Status::Completed, false),
+        (Some("r2.main"), Status::Deleted, false),
+        (Some("global"), Status::Pending, false),
+        (Some("global"), Status::Completed, false),
+        (Some(""), Status::Completed, false),
+        (None, Status::Pending, false),
+        (Some("r.main"), Status::Recurring, false),
+    ];
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let storage = SqliteStorage::new(&data, AccessMode::ReadWrite, true)
+                .await
+                .unwrap();
+            let mut replica = Replica::new(storage);
+            let mut ops = Operations::new();
+            for (at, (project, status, started)) in rows.into_iter().enumerate() {
+                let mut task = replica.create_task(Uuid::new_v4(), &mut ops).await.unwrap();
+                task.set_description(format!("task {at}"), &mut ops)
+                    .unwrap();
+                task.set_status(status, &mut ops).unwrap();
+                if let Some(project) = project {
+                    task.set_value("project", Some(project.into()), &mut ops)
+                        .unwrap();
+                }
+                if started {
+                    task.start(&mut ops).unwrap();
+                }
+            }
+            replica.commit_operations(ops).await.unwrap();
+        });
+
+    let sorted = |mut todos: Vec<devkit_todo::Todo>| {
+        todos.sort_by(|a, b| a.id.cmp(&b.id));
+        todos
+    };
+    let defaults = DefaultBodies(&store);
+    let filters = [
+        Filter::all(),
+        Filter::exact(["r.main".to_string()]),
+        Filter::exact(["global".to_string()]),
+        Filter::exact(["absent".to_string()]),
+    ];
+    for filter in &filters {
+        assert_eq!(
+            sorted(store.list_open(filter).unwrap()),
+            sorted(defaults.list_open(filter).unwrap()),
+            "{filter:?}"
+        );
+        assert_eq!(
+            store.closed_counts(filter).unwrap(),
+            defaults.closed_counts(filter).unwrap(),
+            "{filter:?}"
+        );
+    }
+    let counts = store.closed_counts(&Filter::all()).unwrap();
+    assert_eq!(counts["r.main"].completed, 2, "{counts:?}");
+    assert_eq!(counts["r.main"].cancelled, 1, "{counts:?}");
+    assert_eq!(store.list_open(&Filter::all()).unwrap().len(), 3);
+}
+
+#[test]
+fn the_sql_reads_of_a_replica_not_created_yet_are_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TaskchampionStore::at(dir.path().join("tc"));
+    assert!(store.list_open(&Filter::all()).unwrap().is_empty());
+    assert!(store.closed_counts(&Filter::all()).unwrap().is_empty());
+}

@@ -1112,3 +1112,102 @@ fn a_todo_command_reads_its_worktrees_and_origin_once() {
         assert!(origin.count() <= 1, "{command:?}: {calls:#?}");
     }
 }
+
+/// A replica at `dir` holding `open` pending todos and `closed` todos
+/// completed or deleted, all on `node`. Every closed todo was pending first
+/// and stays in the working set, as taskwarrior leaves it until its next
+/// garbage collection.
+fn large_replica(dir: &std::path::Path, node: &str, open: u128, closed: u128) {
+    use taskchampion::{Operations, Replica, SqliteStorage, TaskData, storage::AccessMode};
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let storage = SqliteStorage::new(dir, AccessMode::ReadWrite, true)
+                .await
+                .unwrap();
+            let mut replica = Replica::new(storage);
+            let mut ops = Operations::new();
+            for i in 0..open + closed {
+                let mut task = TaskData::create(Uuid::from_u128(i + 1), &mut ops);
+                let mut set = |key: &str, value: String| task.update(key, Some(value), &mut ops);
+                set("description", format!("todo {i}"));
+                set("project", node.into());
+                set("order", ((i + 1) * 1024).to_string());
+                set("entry", "1767225600".into());
+                set("status", "pending".into());
+                if i >= open {
+                    let end = if i % 2 == 0 { "completed" } else { "deleted" };
+                    set("end", "1767229200".into());
+                    set("status", end.into());
+                }
+            }
+            replica.commit_operations(ops).await.unwrap();
+        });
+}
+
+/// `text`'s lines from `## <node>` on, each todo's id in parentheses dropped.
+fn listed_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .skip_while(|line| !line.starts_with("## "))
+        .map(|line| line.split(" (").next().unwrap_or(line).to_string())
+        .collect()
+}
+
+#[test]
+fn a_large_replica_lists_its_open_todos_and_closed_counts() {
+    let p = Proj::new();
+    large_replica(&replica_dir(&p), "proj.main", 50, 20_000);
+    let open = (0..50).map(|i| format!("- [ ] todo {i}"));
+
+    let list = p.devkit(&["todo", "list"], &backend("taskchampion"));
+    assert!(list.status.success(), "{}", stderr(&list));
+    let completed = (50..20_050).step_by(2).map(|i| format!("- [x] todo {i}"));
+    let expected: Vec<String> = std::iter::once("## proj.main".to_string())
+        .chain(open.clone())
+        .chain(completed)
+        .chain(["10000 cancelled".to_string()])
+        .collect();
+    assert_eq!(listed_lines(&stdout(&list)), expected);
+
+    let out = context(&p, "UserPromptSubmit", &backend("taskchampion"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let text = answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    let expected: Vec<String> = std::iter::once("## proj.main".to_string())
+        .chain(open)
+        .chain(["10000 done, 10000 cancelled".to_string()])
+        .collect();
+    assert_eq!(listed_lines(text), expected);
+}
+
+/// A closed row whose data taskchampion cannot decode, since its values must
+/// be strings: only a read that decodes closed rows fails on it.
+fn undecodable_closed_task(dir: &std::path::Path, node: &str) {
+    let db = rusqlite::Connection::open(dir.join("taskchampion.sqlite3")).unwrap();
+    let data = json!({"status": "completed", "project": node, "order": 1}).to_string();
+    db.execute("INSERT INTO tasks (uuid, data) VALUES (?1, ?2)", [
+        Uuid::new_v4().to_string(),
+        data,
+    ])
+    .unwrap();
+}
+
+#[test]
+fn context_counts_closed_todos_without_decoding_them() {
+    let p = Proj::new();
+    let dir = replica_dir(&p);
+    add_on(
+        &TaskchampionStore::at(dir.clone()),
+        "proj.main",
+        "still open",
+    );
+    undecodable_closed_task(&dir, "proj.main");
+    let out = context(&p, "UserPromptSubmit", &backend("taskchampion"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("still open"), "{text}");
+    assert!(text.contains("1 done"), "{text}");
+}

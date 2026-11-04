@@ -677,6 +677,14 @@ impl<S: TodoStore, L: ActivityStore> TodoStore for Recorded<S, L> {
         self.store.list(filter)
     }
 
+    fn list_open(&self, filter: &Filter) -> Result<Vec<Todo>> {
+        self.store.list_open(filter)
+    }
+
+    fn closed_counts(&self, filter: &Filter) -> Result<crate::ClosedCounts> {
+        self.store.closed_counts(filter)
+    }
+
     fn get(&self, id: &str) -> Result<Option<Todo>> {
         self.store.get(id)
     }

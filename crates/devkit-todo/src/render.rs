@@ -216,18 +216,38 @@ pub fn render_lists(
     viewer: &Holder,
     notes: &Notes<'_>,
 ) -> String {
-    render(nodes, todos, viewer, false, notes)
+    render_counted(nodes, todos, &crate::closed_counts(todos), viewer, notes)
+}
+
+/// As [`render_lists`], with each node's finished count given by `closed`, for
+/// a caller that read `todos` without the closed ones.
+pub fn render_counted(
+    nodes: &[String],
+    todos: &[Todo],
+    closed: &crate::ClosedCounts,
+    viewer: &Holder,
+    notes: &Notes<'_>,
+) -> String {
+    render(nodes, todos, closed, viewer, false, notes)
 }
 
 /// As [`render_lists`], with completed todos shown in full as `- [x]`, for a
 /// person or agent asking for the listing.
 pub fn render_full(nodes: &[String], todos: &[Todo], viewer: &Holder, notes: &Notes<'_>) -> String {
-    render(nodes, todos, viewer, true, notes)
+    render(
+        nodes,
+        todos,
+        &crate::closed_counts(todos),
+        viewer,
+        true,
+        notes,
+    )
 }
 
 fn render(
     nodes: &[String],
     todos: &[Todo],
+    closed: &crate::ClosedCounts,
     viewer: &Holder,
     full: bool,
     notes: &Notes<'_>,
@@ -236,7 +256,8 @@ fn render(
         .iter()
         .filter_map(|node| {
             let here: Vec<&Todo> = todos.iter().filter(|t| t.node() == node).collect();
-            section(node, &here, viewer, full, notes)
+            let closed = closed.get(node.as_str()).copied().unwrap_or_default();
+            section(node, &here, closed, viewer, full, notes)
         })
         .collect();
     sections.join("\n")
@@ -245,6 +266,7 @@ fn render(
 fn section(
     node: &str,
     todos: &[&Todo],
+    closed: crate::ClosedCount,
     viewer: &Holder,
     full: bool,
     notes: &Notes<'_>,
@@ -258,10 +280,9 @@ fn section(
             StatusKind::Cancelled => false,
         })
         .collect();
-    let count = |kind| todos.iter().filter(|t| t.status.kind() == kind).count();
     // A full listing keeps a node whose todos were all cancelled, so a person
     // can still see what was abandoned there.
-    if shown.is_empty() && !(full && count(StatusKind::Cancelled) > 0) {
+    if shown.is_empty() && !(full && closed.cancelled > 0) {
         return None;
     }
     let mut out = format!("## {}\n", printable(node));
@@ -277,11 +298,11 @@ fn section(
         }
     }
     let mut finished = Vec::new();
-    if !full && count(StatusKind::Completed) > 0 {
-        finished.push(format!("{} done", count(StatusKind::Completed)));
+    if !full && closed.completed > 0 {
+        finished.push(format!("{} done", closed.completed));
     }
-    if count(StatusKind::Cancelled) > 0 {
-        finished.push(format!("{} cancelled", count(StatusKind::Cancelled)));
+    if closed.cancelled > 0 {
+        finished.push(format!("{} cancelled", closed.cancelled));
     }
     if !finished.is_empty() {
         let _ = writeln!(out, "{}", finished.join(", "));

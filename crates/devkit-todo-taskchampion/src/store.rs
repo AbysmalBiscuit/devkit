@@ -1,5 +1,6 @@
 use std::{
     cell::Cell,
+    collections::HashMap,
     fmt,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -9,15 +10,16 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use devkit_common::store::{LockBusy, with_file_lock, with_file_lock_for};
 use devkit_todo::{
-    Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore, by_prefix,
-    is_uuid_prefix, one_line, take_over, ticket_todo_uuid, transition,
+    ClosedCounts, Edit, Filter, NewTodo, ORDER_GAP, Status, StatusChange, Todo, TodoStore,
+    by_prefix, is_uuid_prefix, one_line, take_over, ticket_todo_uuid, transition,
 };
 use taskchampion::{
-    Operations, Server, ServerConfig, SqliteStorage, Task, Uuid, chrono::Utc, storage::AccessMode,
+    Operations, Server, ServerConfig, SqliteStorage, TaskData, Uuid, chrono::Utc,
+    storage::AccessMode, utc_timestamp,
 };
 use tokio::runtime::Runtime;
 
-use crate::schema::{Exported, project_of};
+use crate::schema::{Exported, node_of, project_of};
 
 type Replica = taskchampion::Replica<SqliteStorage>;
 
@@ -268,6 +270,49 @@ impl TaskchampionStore {
         })
     }
 
+    /// The replica's database opened read-only for direct SQL, `None` for a
+    /// replica not created yet. taskchampion answers a read only with whole
+    /// decoded tasks, so counting closed tasks needs this. The queries read
+    /// its private `tasks` table of `uuid` and JSON `data`, and a test pins
+    /// them to what taskchampion's own reads return.
+    fn database(&self) -> Result<Option<rusqlite::Connection>> {
+        let path = self.data_dir.join("taskchampion.sqlite3");
+        if !path.exists() {
+            return Ok(None);
+        }
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map(Some)
+            .with_context(|| format!("opening the todo replica at {}", self.data_dir.display()))
+    }
+
+    /// Every open todo, read without decoding a closed task. A row whose data
+    /// is not JSON, which taskchampion cannot read either, is skipped.
+    fn open_todos(&self) -> Result<Vec<Todo>> {
+        let Some(db) = self.database()? else {
+            return Ok(Vec::new());
+        };
+        let mut query = db.prepare(
+            "SELECT uuid, data FROM tasks WHERE CASE WHEN json_valid(data) THEN \
+             json_extract(data, '$.status') = 'pending' END",
+        )?;
+        let rows = query.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut todos = Vec::new();
+        for row in rows {
+            let (uuid, data) = row?;
+            let props: HashMap<String, String> = serde_json::from_str(&data)
+                .with_context(|| format!("reading todo {uuid} in the replica"))?;
+            let value = |key: &str| props.get(key).map(String::as_str);
+            todos.extend(Self::todo_from(
+                Uuid::try_parse(&uuid)?,
+                props.keys(),
+                value,
+            ));
+        }
+        Ok(todos)
+    }
+
     async fn open(&self) -> Result<Replica> {
         let storage = SqliteStorage::new(&self.data_dir, AccessMode::ReadWrite, true)
             .await
@@ -275,27 +320,40 @@ impl TaskchampionStore {
         Ok(Replica::new(storage))
     }
 
-    fn todo_of(&self, task: &Task) -> Option<Todo> {
-        let value = |key: &str| task.get_value(key).map(str::to_string);
-        let stamp = |t: Option<taskchampion::chrono::DateTime<Utc>>| {
-            t.map(|t| t.format("%Y%m%dT%H%M%SZ").to_string())
+    /// The todo `task` represents. It reads the stored properties alone,
+    /// never the replica's dependency map, which costs one storage round
+    /// trip per working-set entry.
+    fn todo_of(task: &TaskData) -> Option<Todo> {
+        Self::todo_from(task.get_uuid(), task.properties(), |key| task.get(key))
+    }
+
+    fn todo_from<'a>(
+        uuid: Uuid,
+        properties: impl Iterator<Item = &'a String>,
+        get: impl Fn(&str) -> Option<&'a str>,
+    ) -> Option<Todo> {
+        let value = |key: &str| get(key).map(str::to_string);
+        let stamp = |key: &str| {
+            get(key)
+                .and_then(|t| t.parse::<i64>().ok())
+                .map(|t| utc_timestamp(t).format("%Y%m%dT%H%M%SZ").to_string())
         };
         Exported {
-            uuid: task.get_uuid().to_string(),
-            description: task.get_description().to_string(),
+            uuid: uuid.to_string(),
+            description: value("description").unwrap_or_default(),
             status: value("status").unwrap_or_default(),
             start: value("start"),
             holder: value("holder"),
             subof: value("subof"),
-            order: task
-                .get_value("order")
+            order: get("order")
                 .and_then(|o| o.parse::<f64>().ok())
                 .map(|o| o.round() as i64),
             project: value("project"),
-            entry: stamp(task.get_entry()),
-            modified: stamp(task.get_modified()),
-            depends: task
-                .get_dependencies()
+            entry: stamp("entry"),
+            modified: stamp("modified"),
+            depends: properties
+                .filter_map(|p| p.strip_prefix("dep_"))
+                .filter_map(|dep| Uuid::try_parse(dep).ok())
                 .map(|uuid| uuid.to_string())
                 .collect(),
             ticket_tracker: value("ticket_tracker"),
@@ -307,22 +365,31 @@ impl TaskchampionStore {
 
     async fn todos(&self, replica: &mut Replica) -> Result<Vec<Todo>> {
         Ok(replica
-            .all_tasks()
+            .all_task_data()
             .await?
             .values()
-            .filter_map(|task| self.todo_of(task))
+            .filter_map(Self::todo_of)
             .collect())
     }
 
+    /// The todo `id` names, by its full uuid or a unique prefix of one. A
+    /// prefix reads the replica's uuids, and only its matches' tasks.
     async fn find(&self, replica: &mut Replica, id: &str) -> Result<Option<Todo>> {
         if !is_uuid_prefix(id) {
             return Ok(None);
         }
         if let Ok(uuid) = Uuid::try_parse(id) {
-            let task = replica.get_task(uuid).await?;
-            return Ok(task.and_then(|task| self.todo_of(&task)));
+            let task = replica.get_task_data(uuid).await?;
+            return Ok(task.as_ref().and_then(Self::todo_of));
         }
-        by_prefix(id, self.todos(replica).await?)
+        let uuids = replica.all_task_uuids().await?;
+        let mut todos = Vec::new();
+        for uuid in uuids.into_iter().filter(|u| u.to_string().starts_with(id)) {
+            if let Some(task) = replica.get_task_data(uuid).await? {
+                todos.extend(Self::todo_of(&task));
+            }
+        }
+        by_prefix(id, todos)
     }
 
     async fn resolve(&self, replica: &mut Replica, id: &str) -> Result<Todo> {
@@ -387,28 +454,17 @@ impl TaskchampionStore {
         if deps.is_empty() {
             return Ok(());
         }
-        let have: std::collections::BTreeSet<Uuid> = replica
-            .get_task(Uuid::try_parse(&todo.id)?)
-            .await?
-            .ok_or_else(|| anyhow!("no todo {}", todo.id))?
-            .get_dependencies()
-            .collect();
         let deps: Vec<Uuid> = deps
             .into_iter()
-            .filter(|dep| have.contains(dep) != add)
+            .filter(|dep| todo.blocked_by.contains(&dep.to_string()) != add)
             .collect();
         if deps.is_empty() {
             return Ok(());
         }
-        Self::change(replica, &todo, |task, ops| {
+        Self::change(replica, &todo, |task| {
             for dep in deps {
-                if add {
-                    task.add_dependency(dep, ops)?;
-                } else {
-                    task.remove_dependency(dep, ops)?;
-                }
+                task.set(format!("dep_{dep}"), add.then(String::new));
             }
-            Ok(())
         })
         .await
     }
@@ -417,14 +473,14 @@ impl TaskchampionStore {
     async fn change(
         replica: &mut Replica,
         todo: &Todo,
-        change: impl FnOnce(&mut Task, &mut Operations) -> Result<(), taskchampion::Error>,
+        change: impl FnOnce(&mut Writer),
     ) -> Result<()> {
         let mut task = replica
-            .get_task(Uuid::try_parse(&todo.id)?)
+            .get_task_data(Uuid::try_parse(&todo.id)?)
             .await?
             .ok_or_else(|| anyhow!("no todo {}", todo.id))?;
         let mut ops = Operations::new();
-        change(&mut task, &mut ops)?;
+        change(&mut Writer::new(&mut task, &mut ops));
         replica.commit_operations(ops).await?;
         Ok(())
     }
@@ -440,55 +496,113 @@ impl TaskchampionStore {
             return Ok(Vec::new());
         };
         let change = StatusChange::of(todo, Some(next.clone()));
-        Self::change(replica, todo, |task, ops| write_status(task, &next, ops)).await?;
+        Self::change(replica, todo, |task| write_status(task, &next)).await?;
         Ok(vec![change])
     }
 }
 
-/// Writes `status` the way taskwarrior's `start`, `done` and `delete` do:
-/// `set_status` keeps `end` in step, and `start` keeps an existing start time,
-/// so a claim handed down to a sub-agent keeps its start.
-fn write_status(
-    task: &mut Task,
-    status: &Status,
-    ops: &mut Operations,
-) -> Result<(), taskchampion::Error> {
-    let holder = |by: &devkit_todo::Holder| Some(by.to_string());
-    match status {
-        Status::Pending => {
-            task.set_status(taskchampion::Status::Pending, ops)?;
-            stop(task, ops)?;
-            task.set_value("holder", None, ops)
+/// The task statuses devkit writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskStatus {
+    Pending,
+    Completed,
+    Deleted,
+}
+
+impl TaskStatus {
+    /// The value the task data stores, as taskwarrior writes it.
+    fn stored(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Completed => "completed",
+            Self::Deleted => "deleted",
         }
-        Status::InProgress { by } => {
-            task.set_status(taskchampion::Status::Pending, ops)?;
-            task.start(ops)?;
-            task.set_value("holder", holder(by), ops)
-        }
-        Status::Completed { by } => close(task, taskchampion::Status::Completed, by.as_ref(), ops),
-        Status::Cancelled { by } => close(task, taskchampion::Status::Deleted, by.as_ref(), ops),
     }
 }
 
-fn stop(task: &mut Task, ops: &mut Operations) -> Result<(), taskchampion::Error> {
-    match task.is_active() {
-        true => task.stop(ops),
-        false => Ok(()),
+/// One task's writes, made to its data as taskchampion's `Task` setters
+/// make them: the first write also stamps `modified`. The replica builds a
+/// `Task` only with a dependency map, read from every working-set entry.
+struct Writer<'a> {
+    task: &'a mut TaskData,
+    ops: &'a mut Operations,
+    stamped: bool,
+}
+
+impl<'a> Writer<'a> {
+    fn new(task: &'a mut TaskData, ops: &'a mut Operations) -> Self {
+        Self {
+            task,
+            ops,
+            stamped: false,
+        }
     }
+
+    fn now() -> String {
+        Utc::now().timestamp().to_string()
+    }
+
+    fn set(&mut self, key: impl Into<String>, value: Option<String>) {
+        if !self.stamped {
+            self.stamped = true;
+            self.task.update("modified", Some(Self::now()), self.ops);
+        }
+        self.task.update(key, value, self.ops);
+    }
+
+    /// Sets `status` with `end` in step: a completed or deleted task has an
+    /// end time, and a pending task has none.
+    fn status(&mut self, status: TaskStatus) {
+        let closed = status != TaskStatus::Pending;
+        if closed != self.task.has("end") {
+            self.set("end", closed.then(Self::now));
+        }
+        self.set("status", Some(status.stored().to_string()));
+    }
+
+    /// Starts the task, keeping a start time it already has, so a claim
+    /// handed down to a sub-agent keeps its start.
+    fn start(&mut self) {
+        if !self.task.has("start") {
+            self.set("start", Some(Self::now()));
+        }
+    }
+
+    fn stop(&mut self) {
+        if self.task.has("start") {
+            self.set("start", None);
+        }
+    }
+}
+
+/// Writes `status` the way taskwarrior's `start`, `done` and `delete` do.
+fn write_status(task: &mut Writer, status: &Status) {
+    let holder = |by: &devkit_todo::Holder| Some(by.to_string());
+    match status {
+        Status::Pending => release(task),
+        Status::InProgress { by } => {
+            task.status(TaskStatus::Pending);
+            task.start();
+            task.set("holder", holder(by));
+        }
+        Status::Completed { by } => close(task, TaskStatus::Completed, by.as_ref()),
+        Status::Cancelled { by } => close(task, TaskStatus::Deleted, by.as_ref()),
+    }
+}
+
+/// Leaves `task` pending, with no start time and no holder.
+fn release(task: &mut Writer) {
+    task.status(TaskStatus::Pending);
+    task.stop();
+    task.set("holder", None);
 }
 
 /// Ends `task` as `status`, completed or deleted, recording `by` when known.
-fn close(
-    task: &mut Task,
-    status: taskchampion::Status,
-    by: Option<&devkit_todo::Holder>,
-    ops: &mut Operations,
-) -> Result<(), taskchampion::Error> {
-    stop(task, ops)?;
-    task.set_status(status, ops)?;
-    match by {
-        Some(by) => task.set_value("holder", Some(by.to_string()), ops),
-        None => Ok(()),
+fn close(task: &mut Writer, status: TaskStatus, by: Option<&devkit_todo::Holder>) {
+    task.stop();
+    task.status(status);
+    if let Some(by) = by {
+        task.set("holder", Some(by.to_string()));
     }
 }
 
@@ -502,6 +616,48 @@ impl TodoStore for TaskchampionStore {
                 .filter(|t| filter.matches(t.project.as_deref()))
                 .collect())
         })
+    }
+
+    fn list_open(&self, filter: &Filter) -> Result<Vec<Todo>> {
+        let mut todos = self.open_todos()?;
+        todos.retain(|t| filter.matches(t.project.as_deref()));
+        Ok(todos)
+    }
+
+    /// Counted by SQLite over the stored status and project, so no closed
+    /// task is decoded. A project that names no node holds no todo.
+    fn closed_counts(&self, filter: &Filter) -> Result<ClosedCounts> {
+        let Some(db) = self.database()? else {
+            return Ok(ClosedCounts::new());
+        };
+        let mut query = db.prepare(
+            "SELECT json_extract(data, '$.project'), json_extract(data, '$.status'), count(*) \
+             FROM tasks WHERE CASE WHEN json_valid(data) THEN \
+             json_extract(data, '$.status') IN ('completed', 'deleted') END GROUP BY 1, 2",
+        )?;
+        let rows = query.query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, usize>(2)?,
+            ))
+        })?;
+        let mut counts = ClosedCounts::new();
+        for row in rows {
+            let (project, status, count) = row?;
+            let Some(project) = project.filter(|p| node_of(p).is_some()) else {
+                continue;
+            };
+            if !filter.matches(node_of(&project).flatten().as_deref()) {
+                continue;
+            }
+            let at = counts.entry(project).or_default();
+            match status.as_str() {
+                "completed" => at.completed += count,
+                _ => at.cancelled += count,
+            }
+        }
+        Ok(counts)
     }
 
     fn get(&self, id: &str) -> Result<Option<Todo>> {
@@ -523,7 +679,7 @@ impl TodoStore for TaskchampionStore {
                     let uuid = Uuid::from_bytes(
                         ticket_todo_uuid("", &ticket.tracker, &ticket.key).into_bytes(),
                     );
-                    if replica.get_task(uuid).await?.is_some() {
+                    if replica.get_task_data(uuid).await?.is_some() {
                         return Ok(uuid.to_string());
                     }
                     uuid
@@ -531,18 +687,18 @@ impl TodoStore for TaskchampionStore {
                 None => Uuid::new_v4(),
             };
             let mut ops = Operations::new();
-            let mut task = replica.create_task(uuid, &mut ops).await?;
-            task.set_description(one_line(&todo.description), &mut ops)?;
-            task.set_status(taskchampion::Status::Pending, &mut ops)?;
-            task.set_entry(Some(Utc::now()), &mut ops)?;
-            let project = project_of(todo.project.as_deref());
-            task.set_value("project", Some(project), &mut ops)?;
-            task.set_value("order", Some(order.to_string()), &mut ops)?;
-            task.set_value("subof", parent, &mut ops)?;
+            let mut data = TaskData::create(uuid, &mut ops);
+            let mut task = Writer::new(&mut data, &mut ops);
+            task.set("description", Some(one_line(&todo.description)));
+            task.status(TaskStatus::Pending);
+            task.set("entry", Some(Writer::now()));
+            task.set("project", Some(project_of(todo.project.as_deref())));
+            task.set("order", Some(order.to_string()));
+            task.set("subof", parent);
             if let Some(ticket) = todo.ticket {
-                task.set_value("ticket_tracker", Some(ticket.tracker), &mut ops)?;
-                task.set_value("ticket_key", Some(ticket.key), &mut ops)?;
-                task.set_value("ticket_status", ticket.synced_status, &mut ops)?;
+                task.set("ticket_tracker", Some(ticket.tracker));
+                task.set("ticket_key", Some(ticket.key));
+                task.set("ticket_status", ticket.synced_status);
             }
             replica.commit_operations(ops).await?;
             Ok(uuid.to_string())
@@ -563,8 +719,8 @@ impl TodoStore for TaskchampionStore {
             }
             Edit::Describe { id, description } => {
                 let todo = self.resolve(replica, id).await?;
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_description(one_line(description), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("description", Some(one_line(description)));
                 })
                 .await?;
                 Ok(Vec::new())
@@ -584,17 +740,17 @@ impl TodoStore for TaskchampionStore {
                         .await?
                     }
                 };
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_value("subof", parent, ops)?;
-                    task.set_value("order", Some(order.to_string()), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("subof", parent);
+                    task.set("order", Some(order.to_string()));
                 })
                 .await?;
                 Ok(Vec::new())
             }
             Edit::Reorder { id, order } => {
                 let todo = self.resolve(replica, id).await?;
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_value("order", Some(order.to_string()), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("order", Some(order.to_string()));
                 })
                 .await?;
                 Ok(Vec::new())
@@ -602,8 +758,8 @@ impl TodoStore for TaskchampionStore {
             Edit::Relocate { id, project } => {
                 let todo = self.resolve(replica, id).await?;
                 let project = project_of(project.as_deref());
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_value("project", Some(project), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("project", Some(project));
                 })
                 .await?;
                 Ok(Vec::new())
@@ -614,15 +770,16 @@ impl TodoStore for TaskchampionStore {
                 }
                 let mut ops = Operations::new();
                 let mut changes = Vec::new();
-                for task in replica.all_tasks().await?.values_mut() {
-                    let Some(todo) = self.todo_of(task) else {
+                for todo in self.open_todos()? {
+                    if !matches!(&todo.status, Status::InProgress { by } if holder.covers(by)) {
                         continue;
-                    };
-                    if matches!(&todo.status, Status::InProgress { by } if holder.covers(by)) {
-                        task.stop(&mut ops)?;
-                        task.set_value("holder", None, &mut ops)?;
-                        changes.push(StatusChange::of(&todo, Some(Status::Pending)));
                     }
+                    let mut task = replica
+                        .get_task_data(Uuid::try_parse(&todo.id)?)
+                        .await?
+                        .ok_or_else(|| anyhow!("no todo {}", todo.id))?;
+                    release(&mut Writer::new(&mut task, &mut ops));
+                    changes.push(StatusChange::of(&todo, Some(Status::Pending)));
                 }
                 replica.commit_operations(ops).await?;
                 Ok(changes)
@@ -640,8 +797,8 @@ impl TodoStore for TaskchampionStore {
                 if todo.ticket.is_none() {
                     anyhow::bail!("todo {id} has no ticket");
                 }
-                Self::change(replica, &todo, |task, ops| {
-                    task.set_value("ticket_status", Some(synced_status.clone()), ops)
+                Self::change(replica, &todo, |task| {
+                    task.set("ticket_status", Some(synced_status.clone()));
                 })
                 .await?;
                 Ok(Vec::new())
@@ -663,7 +820,240 @@ impl TodoStore for TaskchampionStore {
 
 #[cfg(test)]
 mod tests {
-    use super::redacted;
+    use std::collections::BTreeMap;
+
+    use taskchampion::{Operation, Task};
+
+    use super::*;
+
+    /// One write devkit makes to a task.
+    #[derive(Clone, Copy, Debug)]
+    enum Step {
+        Status(TaskStatus),
+        Start,
+        Stop,
+        Set(&'static str, Option<&'static str>),
+        Depend(bool),
+    }
+
+    const BLOCKER: Uuid = Uuid::from_u128(7);
+
+    /// `steps` through taskchampion's `Task` setters, guarded as devkit
+    /// guarded them: a stop only on an active task.
+    fn through_task(task: &mut Task, steps: &[Step], ops: &mut Operations) {
+        for step in steps {
+            match *step {
+                Step::Status(status) => task.set_status(
+                    match status {
+                        TaskStatus::Pending => taskchampion::Status::Pending,
+                        TaskStatus::Completed => taskchampion::Status::Completed,
+                        TaskStatus::Deleted => taskchampion::Status::Deleted,
+                    },
+                    ops,
+                ),
+                Step::Start => task.start(ops),
+                Step::Stop if task.is_active() => task.stop(ops),
+                Step::Stop => Ok(()),
+                Step::Set(key, value) => task.set_value(key, value.map(str::to_string), ops),
+                Step::Depend(true) => task.add_dependency(BLOCKER, ops),
+                Step::Depend(false) => task.remove_dependency(BLOCKER, ops),
+            }
+            .unwrap();
+        }
+    }
+
+    fn through_writer(task: &mut Writer, steps: &[Step]) {
+        for step in steps {
+            match *step {
+                Step::Status(status) => task.status(status),
+                Step::Start => task.start(),
+                Step::Stop => task.stop(),
+                Step::Set(key, value) => task.set(key, value.map(str::to_string)),
+                Step::Depend(add) => task.set(format!("dep_{BLOCKER}"), add.then(String::new)),
+            }
+        }
+    }
+
+    /// `value` with a timestamp taken during the test read as `<now>`, so
+    /// two writers a second apart compare equal and a fixed one does not.
+    fn settled(value: &Option<String>, since: i64) -> Option<String> {
+        value.as_ref().map(|v| match v.parse::<i64>() {
+            Ok(t) if t >= since => "<now>".to_string(),
+            _ => v.clone(),
+        })
+    }
+
+    type Write = (String, Option<String>, Option<String>);
+
+    fn writes(ops: &Operations, since: i64) -> Vec<Write> {
+        ops.iter()
+            .map(|op| match op {
+                Operation::Update {
+                    property,
+                    old_value,
+                    value,
+                    ..
+                } => (
+                    property.clone(),
+                    settled(old_value, since),
+                    settled(value, since),
+                ),
+                other => panic!("unexpected operation {other:?}"),
+            })
+            .collect()
+    }
+
+    fn properties(task: &TaskData, since: i64) -> BTreeMap<String, Option<String>> {
+        task.iter()
+            .map(|(k, v)| (k.clone(), settled(&Some(v.clone()), since)))
+            .collect()
+    }
+
+    #[test]
+    fn the_writer_writes_as_the_task_setters_do() {
+        let dir = tempfile::tempdir().unwrap();
+        let since = Utc::now().timestamp();
+        let statuses = [
+            taskchampion::Status::Pending,
+            taskchampion::Status::Completed,
+            taskchampion::Status::Deleted,
+        ];
+        let scenarios: &[&[Step]] = &[
+            &[Step::Status(TaskStatus::Pending)],
+            &[Step::Status(TaskStatus::Completed)],
+            &[Step::Status(TaskStatus::Deleted)],
+            &[Step::Start],
+            &[Step::Stop],
+            &[Step::Set("description", Some("renamed"))],
+            &[Step::Set("subof", None)],
+            &[Step::Depend(true)],
+            &[Step::Depend(false)],
+            &[
+                Step::Status(TaskStatus::Pending),
+                Step::Stop,
+                Step::Set("holder", None),
+            ],
+            &[
+                Step::Status(TaskStatus::Pending),
+                Step::Start,
+                Step::Set("holder", Some("s1")),
+            ],
+            &[
+                Step::Stop,
+                Step::Status(TaskStatus::Completed),
+                Step::Set("holder", Some("s1")),
+            ],
+        ];
+        let (setters_dir, writer_dir) = (dir.path().join("setters"), dir.path().join("writer"));
+        block_on(async {
+            let mut setters =
+                Replica::new(SqliteStorage::new(&setters_dir, AccessMode::ReadWrite, true).await?);
+            let mut writer =
+                Replica::new(SqliteStorage::new(&writer_dir, AccessMode::ReadWrite, true).await?);
+            let mut seeded = Vec::new();
+            for status in &statuses {
+                for start in [None, Some("1700000000")] {
+                    for end in [None, Some("1700000100")] {
+                        for steps in scenarios {
+                            let uuid = Uuid::new_v4();
+                            let mut ops = Operations::new();
+                            let mut task = TaskData::create(uuid, &mut ops);
+                            let stored = Some(status.to_string().to_lowercase());
+                            task.update("description", Some("d".into()), &mut ops);
+                            task.update("status", stored, &mut ops);
+                            task.update("start", start.map(str::to_string), &mut ops);
+                            task.update("end", end.map(str::to_string), &mut ops);
+                            task.update(format!("dep_{BLOCKER}"), Some(String::new()), &mut ops);
+                            setters.commit_operations(ops.clone()).await?;
+                            writer.commit_operations(ops).await?;
+                            let label = format!("{status:?} start={start:?} end={end:?} {steps:?}");
+                            seeded.push((uuid, label, *steps));
+                        }
+                    }
+                }
+            }
+            for (uuid, label, steps) in seeded {
+                let mut task = setters.get_task(uuid).await?.unwrap();
+                let mut task_ops = Operations::new();
+                through_task(&mut task, steps, &mut task_ops);
+                let mut data = writer.get_task_data(uuid).await?.unwrap();
+                let mut writer_ops = Operations::new();
+                through_writer(&mut Writer::new(&mut data, &mut writer_ops), steps);
+                assert_eq!(
+                    writes(&writer_ops, since),
+                    writes(&task_ops, since),
+                    "{label}"
+                );
+                setters.commit_operations(task_ops).await?;
+                writer.commit_operations(writer_ops).await?;
+                assert_eq!(
+                    properties(&writer.get_task_data(uuid).await?.unwrap(), since),
+                    properties(&setters.get_task_data(uuid).await?.unwrap(), since),
+                    "{label}"
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn todos_decode_as_the_task_getters_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let rfc3339 = |t: Option<taskchampion::chrono::DateTime<Utc>>| {
+            t.map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        };
+        let tasks = block_on(async {
+            let storage = SqliteStorage::new(dir.path(), AccessMode::ReadWrite, true).await?;
+            let mut replica = Replica::new(storage);
+            let blockers = [Uuid::new_v4(), Uuid::new_v4()];
+            let mut uuids = Vec::new();
+            for (i, done) in [false, true, false].into_iter().enumerate() {
+                let uuid = Uuid::new_v4();
+                let mut ops = Operations::new();
+                let mut task = replica.create_task(uuid, &mut ops).await?;
+                task.set_description(format!("task {i}"), &mut ops)?;
+                task.set_status(taskchampion::Status::Pending, &mut ops)?;
+                task.set_value("project", Some(project_of(None)), &mut ops)?;
+                task.set_entry(Some(utc_timestamp(1_700_000_000 + i as i64)), &mut ops)?;
+                for blocker in &blockers[..i] {
+                    task.add_dependency(*blocker, &mut ops)?;
+                }
+                if done {
+                    task.done(&mut ops)?;
+                }
+                task.set_modified(utc_timestamp(1_700_000_500 + i as i64), &mut ops)?;
+                replica.commit_operations(ops).await?;
+                uuids.push(uuid);
+            }
+            let mut tasks = Vec::new();
+            for uuid in uuids {
+                let task = replica.get_task(uuid).await?.unwrap();
+                let data = replica.get_task_data(uuid).await?.unwrap();
+                tasks.push((task, data));
+            }
+            Ok(tasks)
+        })
+        .unwrap();
+        let open = TaskchampionStore::at(dir.path().to_path_buf())
+            .open_todos()
+            .unwrap();
+        assert_eq!(open.len(), 2);
+        for (task, data) in &tasks {
+            let mut blockers: Vec<String> =
+                task.get_dependencies().map(|d| d.to_string()).collect();
+            blockers.sort();
+            let decoded = TaskchampionStore::todo_of(data).unwrap();
+            let read = std::iter::once(&decoded).chain(open.iter().filter(|t| t.id == decoded.id));
+            for todo in read {
+                let label = task.get_description();
+                assert_eq!(todo.blocked_by, blockers, "{label}");
+                assert_eq!(todo.entry, rfc3339(task.get_entry()), "{label}");
+                assert_eq!(todo.modified, rfc3339(task.get_modified()), "{label}");
+            }
+        }
+        assert!(tasks.iter().any(|(t, _)| t.get_dependencies().count() == 2));
+    }
 
     #[test]
     fn a_urls_user_and_password_are_redacted() {
