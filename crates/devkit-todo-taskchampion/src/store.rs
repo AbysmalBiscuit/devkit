@@ -944,46 +944,53 @@ mod tests {
                 Step::Set("holder", Some("s1")),
             ],
         ];
+        let (setters_dir, writer_dir) = (dir.path().join("setters"), dir.path().join("writer"));
         block_on(async {
-            let storage = SqliteStorage::new(dir.path(), AccessMode::ReadWrite, true).await?;
-            let mut replica = Replica::new(storage);
+            let mut setters =
+                Replica::new(SqliteStorage::new(&setters_dir, AccessMode::ReadWrite, true).await?);
+            let mut writer =
+                Replica::new(SqliteStorage::new(&writer_dir, AccessMode::ReadWrite, true).await?);
             let mut seeded = Vec::new();
             for status in &statuses {
                 for start in [None, Some("1700000000")] {
                     for end in [None, Some("1700000100")] {
-                        let uuid = Uuid::new_v4();
-                        let mut ops = Operations::new();
-                        let mut task = TaskData::create(uuid, &mut ops);
-                        task.update("description", Some("d".into()), &mut ops);
-                        task.update("status", Some(status.to_string().to_lowercase()), &mut ops);
-                        task.update("start", start.map(str::to_string), &mut ops);
-                        task.update("end", end.map(str::to_string), &mut ops);
-                        task.update(format!("dep_{BLOCKER}"), Some(String::new()), &mut ops);
-                        replica.commit_operations(ops).await?;
-                        seeded.push((uuid, status.clone(), start, end));
+                        for steps in scenarios {
+                            let uuid = Uuid::new_v4();
+                            let mut ops = Operations::new();
+                            let mut task = TaskData::create(uuid, &mut ops);
+                            let stored = Some(status.to_string().to_lowercase());
+                            task.update("description", Some("d".into()), &mut ops);
+                            task.update("status", stored, &mut ops);
+                            task.update("start", start.map(str::to_string), &mut ops);
+                            task.update("end", end.map(str::to_string), &mut ops);
+                            task.update(format!("dep_{BLOCKER}"), Some(String::new()), &mut ops);
+                            setters.commit_operations(ops.clone()).await?;
+                            writer.commit_operations(ops).await?;
+                            let label = format!("{status:?} start={start:?} end={end:?} {steps:?}");
+                            seeded.push((uuid, label, *steps));
+                        }
                     }
                 }
             }
-            for (uuid, status, start, end) in seeded {
-                for steps in scenarios {
-                    let label = format!("{status:?} start={start:?} end={end:?} {steps:?}");
-                    let mut task = replica.get_task(uuid).await?.unwrap();
-                    let mut task_ops = Operations::new();
-                    through_task(&mut task, steps, &mut task_ops);
-                    let mut data = replica.get_task_data(uuid).await?.unwrap();
-                    let mut writer_ops = Operations::new();
-                    through_writer(&mut Writer::new(&mut data, &mut writer_ops), steps);
-                    assert_eq!(
-                        writes(&writer_ops, since),
-                        writes(&task_ops, since),
-                        "{label}"
-                    );
-                    assert_eq!(
-                        properties(&data, since),
-                        properties(&task.into_task_data(), since),
-                        "{label}"
-                    );
-                }
+            for (uuid, label, steps) in seeded {
+                let mut task = setters.get_task(uuid).await?.unwrap();
+                let mut task_ops = Operations::new();
+                through_task(&mut task, steps, &mut task_ops);
+                let mut data = writer.get_task_data(uuid).await?.unwrap();
+                let mut writer_ops = Operations::new();
+                through_writer(&mut Writer::new(&mut data, &mut writer_ops), steps);
+                assert_eq!(
+                    writes(&writer_ops, since),
+                    writes(&task_ops, since),
+                    "{label}"
+                );
+                setters.commit_operations(task_ops).await?;
+                writer.commit_operations(writer_ops).await?;
+                assert_eq!(
+                    properties(&writer.get_task_data(uuid).await?.unwrap(), since),
+                    properties(&setters.get_task_data(uuid).await?.unwrap(), since),
+                    "{label}"
+                );
             }
             Ok(())
         })
