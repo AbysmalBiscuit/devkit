@@ -1239,20 +1239,10 @@ fn devrun_up_records_the_launch_commit_and_plan_digest() {
     let _srv = Srv::up(&p);
     let origin = srv_origin(&p).expect("an origin is recorded");
     assert_eq!(origin.commit, head(&p));
-    assert!(origin.plan.starts_with("hmac-sha256:"), "{}", origin.plan);
+    assert!(origin.plan.starts_with("sha256:"), "{}", origin.plan);
     assert!(!origin.plan.contains(TOKEN), "{}", origin.plan);
     let text = std::fs::read_to_string(p.state().join("devkit").join("ports.json")).unwrap();
     assert!(!text.contains(TOKEN), "{text}");
-}
-
-#[test]
-fn a_server_launched_with_an_unreadable_digest_key_records_no_origin() {
-    let p = serving_project(39217);
-    let dir = p.state().join("devkit");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("digest.key"), b"not a key").unwrap();
-    let _srv = Srv::up(&p);
-    assert_eq!(srv_origin(&p), None);
 }
 
 #[test]
@@ -1266,6 +1256,9 @@ fn a_run_reusing_a_server_launched_at_head_with_its_plan_qualifies() {
         body.contains("Against reused server `srv`, launched at this commit"),
         "{body}"
     );
+    let plan = srv_origin(&p).unwrap().plan;
+    let hex = plan.trim_start_matches("sha256:");
+    assert!(!body.contains(hex), "the plan digest stays local: {body}");
 }
 
 /// The refusal an agent gets after a run that reused `srv`.

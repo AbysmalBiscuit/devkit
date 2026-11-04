@@ -172,13 +172,6 @@ pub fn controlling_tty() -> Option<String> {
     imp::controlling_tty()
 }
 
-/// Create a new file at `path` that only its owner can read or write. The
-/// restriction holds from creation, before any byte is written, and does not
-/// inherit from the directory. An existing file is an error.
-pub fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
-    imp::create_private(path)
-}
-
 /// Create a symlink at `link` pointing at `target`, where `target` is written
 /// verbatim rather than resolved. Windows needs to know at creation time
 /// whether the target is a directory and has no way to infer it from the path,

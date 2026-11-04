@@ -12,7 +12,7 @@ use devkit_command::{
     ANALYZER_VERSION, Analysis, Location, Target, Uncertainty, UncertaintyKind, Value,
 };
 use devkit_common::{
-    digest::{self, Policy},
+    digest,
     harness_log::{
         self, AnalysisProjection, Counts, FrameEnd, Kind, Permission, Prompt, Record,
         SCHEMA_VERSION, SessionFrame, ShellPost, UnresolvedWrite, Worktree, WorktreeChange,
@@ -213,7 +213,7 @@ fn prompt(payload: &Json, settings: &harness_log::Settings) -> Prompt {
     let chars = Some(raw.chars().count());
     let text = match settings.prompt {
         PromptFidelity::Off => None,
-        PromptFidelity::Hashed => Some(digest::of(&raw, Policy::Shared)),
+        PromptFidelity::Hashed => Some(digest::sha256(&raw)),
         PromptFidelity::Redacted => Some(harness_log::redact::apply(&raw, Fidelity::Redacted).0),
         PromptFidelity::Full => Some(raw),
     };

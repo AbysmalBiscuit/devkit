@@ -13,7 +13,7 @@
 
 use devkit_config::Fidelity;
 
-use crate::digest::{self, Policy};
+use crate::digest;
 
 /// Variable names devkit resolves a credential from. The first three are what
 /// `secrets` stores; `GH_TOKEN` and `GITHUB_TOKEN` are resolved elsewhere and
@@ -44,7 +44,7 @@ const TOKEN_PREFIXES: [(&str, &str); 8] = [
 pub fn apply(command: &str, mode: Fidelity) -> (String, bool) {
     match mode {
         Fidelity::Full => (command.to_string(), false),
-        Fidelity::Hashed => (digest::of(command, Policy::Shared), true),
+        Fidelity::Hashed => (digest::sha256(command), true),
         Fidelity::Redacted => redact(command),
     }
 }
