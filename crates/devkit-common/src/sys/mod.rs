@@ -91,11 +91,16 @@ pub fn terminate(pid: u32) {
     imp::terminate(pid)
 }
 
-/// Configure `cmd` to start detached from the caller's process group,
-/// holding none of this process's stdio, so a caller reading this process's
-/// output to its end is not held open by the child. Must be called before
-/// `spawn`.
-pub fn detach(cmd: &mut std::process::Command) {
+/// Configure `cmd` to start detached from the caller's terminal, holding none
+/// of this process's stdio, so a caller reading this process's output to its
+/// end is not held open by the child.
+///
+/// On Unix the child leads a session of its own, through this binary's
+/// [`run_detach_trampoline`], so each binary that calls `detach` calls that
+/// first. `cmd` keeps only its program, arguments, environment changes and
+/// directory, so call `detach` before setting stdio. A program that `cmd`'s
+/// `PATH` does not find is an error that names it.
+pub fn detach(cmd: &mut std::process::Command) -> std::io::Result<()> {
     imp::detach(cmd)
 }
 
@@ -106,6 +111,14 @@ pub fn detach(cmd: &mut std::process::Command) {
 /// exits with that code.
 pub fn exit_like(status: std::process::ExitStatus) -> ! {
     imp::exit_like(status)
+}
+
+/// Runs the program of a [`detach`]ed command, and never returns, when this
+/// process is its trampoline. Returns at once otherwise. Call it first in
+/// `main`.
+#[cfg(unix)]
+pub fn run_detach_trampoline() {
+    imp::run_detach_trampoline()
 }
 
 /// Spawns `cmd` detached as [`detach`] does, holding no handle of this
@@ -194,25 +207,6 @@ mod tests {
     #[test]
     fn a_process_this_user_cannot_signal_is_alive() {
         assert!(process_alive(1));
-    }
-
-    /// Ctrl-C and a terminal hangup signal the caller's foreground process
-    /// group, so a detached child must lead a group of its own.
-    #[cfg(unix)]
-    #[test]
-    fn a_detached_child_leads_its_own_process_group() {
-        use nix::unistd::{Pid, getpgid, getpgrp};
-        let mut cmd = std::process::Command::new("sleep");
-        cmd.arg("30");
-        detach(&mut cmd);
-        let mut child = cmd.spawn().unwrap();
-        let pid = Pid::from_raw(child.id() as i32);
-        let group = getpgid(Some(pid));
-        child.kill().unwrap();
-        child.wait().unwrap();
-        let group = group.unwrap();
-        assert_eq!(group, pid);
-        assert_ne!(group, getpgrp());
     }
 
     #[test]

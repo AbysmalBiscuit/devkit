@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 
 pub use crate::sys::tree_rss_bytes;
 
-/// Spawn `argv` detached (own process group), env-augmented, stdout+stderr ->
+/// Spawn `argv` detached (see `sys::detach`), env-augmented, stdout+stderr ->
 /// logfile. When `cgroup_leaf` is `Some`, the child joins that cgroup before
 /// the program runs (Linux only; see [`crate::sys::cgroup_command`]). Returns
 /// the child pid.
@@ -26,13 +26,11 @@ pub fn spawn_detached(
     let mut out = File::create(logfile)?;
     let (prog, rest) = argv.split_first().context("empty launch argv")?;
     let spawn = |mut c: Command, stdin: Stdio, out: &File| -> std::io::Result<Child> {
-        c.args(rest)
-            .current_dir(cwd)
-            .envs(env)
-            .stdin(stdin)
+        c.args(rest).current_dir(cwd).envs(env);
+        crate::sys::detach(&mut c)?;
+        c.stdin(stdin)
             .stdout(out.try_clone()?)
             .stderr(out.try_clone()?);
-        crate::sys::detach(&mut c);
         c.spawn()
     };
     if let Some(joined) = cgroup_leaf.and_then(|leaf| crate::sys::cgroup_command(leaf, prog)) {
@@ -108,6 +106,7 @@ mod tests {
     /// was not found …" instead of a version. `None` when nothing real is
     /// found, in which case the dependent test skips rather than failing on
     /// a missing or fake tool.
+    #[cfg(windows)]
     fn python_cmd() -> Option<Vec<String>> {
         // Direct interpreters first.
         for cand in ["python3", "python", "py"] {
@@ -137,6 +136,7 @@ mod tests {
 
     /// Path of an interpreter `uv python find` resolves, if uv is installed and
     /// finds one. The path is validated by the caller before use.
+    #[cfg(windows)]
     fn uv_python_path() -> Option<String> {
         let out = Command::new("uv")
             .args(["python", "find"])
@@ -155,6 +155,7 @@ mod tests {
     /// 3.4+, stderr on older); the Store shim writes "Python was not found
     /// …", so requiring a digit right after "Python " rejects the shim even
     /// though it borrows the "Python" prefix.
+    #[cfg(windows)]
     fn is_real_python(prefix: &[String]) -> bool {
         let Some((prog, rest)) = prefix.split_first() else {
             return false;
@@ -217,6 +218,7 @@ mod tests {
     /// written to the log until it completes. The readiness probe only needs a
     /// TCP accept, and binding 127.0.0.1 explicitly matches `probe_port`'s IPv4
     /// connect.
+    #[cfg(windows)]
     fn python_listener_script(port: u16) -> String {
         format!(
             "import socket\n\
@@ -228,6 +230,9 @@ mod tests {
         )
     }
 
+    /// On Unix a detached child starts through its parent binary, which a
+    /// unit-test binary is not; `tests/run_up_server_lifetime.rs` covers Unix.
+    #[cfg(windows)]
     #[test]
     fn spawn_and_ready_on_python_tcp() {
         let Some(py) = python_cmd() else {

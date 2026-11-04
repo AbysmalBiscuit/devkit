@@ -116,10 +116,11 @@ pub(super) fn terminate(pid: u32) {
     }
 }
 
-pub(super) fn detach(cmd: &mut std::process::Command) {
+pub(super) fn detach(cmd: &mut std::process::Command) -> io::Result<()> {
     use std::os::windows::process::CommandExt;
     keep_stdio_from_children();
     cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    Ok(())
 }
 
 pub(super) fn exit_like(status: ExitStatus) -> ! {

@@ -523,6 +523,26 @@ pub fn launch(
     #[cfg(not(feature = "daemon"))]
     let _ = supervise_daemon;
 
+    launch_with(plans, holder, role, wait, |p| {
+        supervise::spawn_detached(
+            &p.argv,
+            p.cwd.to_str().context("app cwd not UTF-8")?,
+            &p.env,
+            &p.log,
+            None,
+        )
+    })
+}
+
+/// [`launch`] without the daemon, with `spawn` starting each plan and
+/// returning its pid.
+fn launch_with(
+    plans: &[LaunchPlan],
+    holder: &str,
+    role: Role,
+    wait: bool,
+    spawn: impl Fn(&LaunchPlan) -> Result<u32>,
+) -> Result<Vec<ServerStatus>> {
     let data = registry::snapshot()?;
     let mut existing = Vec::new();
     let mut pending: Vec<&LaunchPlan> = Vec::new();
@@ -535,13 +555,7 @@ pub fn launch(
 
     let mut spawned = Vec::with_capacity(pending.len());
     for p in pending {
-        let pid = supervise::spawn_detached(
-            &p.argv,
-            p.cwd.to_str().context("app cwd not UTF-8")?,
-            &p.env,
-            &p.log,
-            None,
-        )?;
+        let pid = spawn(p)?;
         registry::record_pid(p.port, &p.app, holder, role, pid, p.log.clone())?;
         spawned.push((p.app.clone(), p.port, p.log.clone(), pid));
     }
@@ -1154,9 +1168,19 @@ mod tests {
             log: tmp.clone(),
             url: format!("http://localhost:{port}"),
         };
-        // Non-blocking: returns immediately; the just-spawned server is
-        // "starting".
-        let out = launch(&[plan], "/w-launch-test", Role::Workspace, false, false).unwrap();
+        // Non-blocking, so the server is "starting". The child is a plain one
+        // because a test binary cannot host the Unix detach trampoline.
+        let out = launch_with(&[plan], "/w-launch-test", Role::Workspace, false, |p| {
+            let log = std::fs::File::create(&p.log)?;
+            let child = std::process::Command::new(&p.argv[0])
+                .args(&p.argv[1..])
+                .current_dir(&p.cwd)
+                .stdout(log.try_clone()?)
+                .stderr(log)
+                .spawn()?;
+            Ok(child.id())
+        })
+        .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].port, port);
         let pid = out[0].pid.expect("a spawned server has a pid");

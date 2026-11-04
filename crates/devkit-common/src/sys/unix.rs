@@ -39,11 +39,90 @@ pub(super) fn terminate(pid: u32) {
     let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
 }
 
-pub(super) fn detach(cmd: &mut std::process::Command) {
-    use std::os::unix::process::CommandExt;
-    // Ctrl-C and hangup go to the caller's foreground group, not this one.
-    // std has no stable safe `setsid`, so the child keeps the caller's session.
-    cmd.process_group(0);
+/// The first argument that makes a devkit binary run [`run_detach_trampoline`].
+const DETACH_EXEC: &str = "__detach-exec";
+
+/// std has no stable safe `setsid` for a child, so `cmd` becomes this binary
+/// run as [`run_detach_trampoline`], which calls `setsid` on itself and then
+/// execs the program in place, keeping its pid.
+pub(super) fn detach(cmd: &mut std::process::Command) -> std::io::Result<()> {
+    let program = cmd.get_program().to_owned();
+    if !program_exists(cmd) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("program `{}` not found", program.to_string_lossy()),
+        ));
+    }
+    let mut trampoline = std::process::Command::new(trampoline_exe()?);
+    trampoline
+        .arg(DETACH_EXEC)
+        .arg("--")
+        .arg(&program)
+        .args(cmd.get_args());
+    if let Some(dir) = cmd.get_current_dir() {
+        trampoline.current_dir(dir);
+    }
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(value) => trampoline.env(key, value),
+            None => trampoline.env_remove(key),
+        };
+    }
+    *cmd = trampoline;
+    Ok(())
+}
+
+/// A long-lived daemon outlives an upgrade that replaces its binary. Linux
+/// still execs the running image through `/proc/self/exe` then.
+fn trampoline_exe() -> std::io::Result<std::path::PathBuf> {
+    if cfg!(target_os = "linux") {
+        Ok("/proc/self/exe".into())
+    } else {
+        std::env::current_exe()
+    }
+}
+
+/// Whether `cmd`'s program names an executable file, searched the way the
+/// child searches: through `cmd`'s `PATH`, relative to its directory.
+fn program_exists(cmd: &std::process::Command) -> bool {
+    use std::{os::unix::fs::PermissionsExt as _, path::Path};
+    let base = cmd.get_current_dir().unwrap_or(Path::new("."));
+    let executable = |path: &Path| {
+        std::fs::metadata(base.join(path))
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    let program = Path::new(cmd.get_program());
+    if program.components().count() > 1 {
+        return executable(program);
+    }
+    let path = cmd.get_envs().find(|(key, _)| *key == "PATH").map_or_else(
+        || std::env::var_os("PATH"),
+        |(_, value)| value.map(ToOwned::to_owned),
+    );
+    // With no `PATH`, exec searches the C library's default path.
+    let path = path.unwrap_or_else(|| "/bin:/usr/bin".into());
+    std::env::split_paths(&path).any(|dir| executable(&dir.join(program)))
+}
+
+/// Runs the program a [`detach`]ed command names, in a session of its own,
+/// when this process was started as its trampoline, and returns otherwise.
+pub(super) fn run_detach_trampoline() {
+    use std::os::unix::process::CommandExt as _;
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(std::ffi::OsStr::new(DETACH_EXEC)) {
+        return;
+    }
+    let _separator = args.next();
+    let Some(program) = args.next() else {
+        eprintln!("{DETACH_EXEC}: no program to run");
+        std::process::exit(127);
+    };
+    let err = match nix::unistd::setsid() {
+        Ok(_) => std::process::Command::new(&program).args(args).exec(),
+        Err(errno) => errno.into(),
+    };
+    eprintln!("cannot run `{}`: {err}", program.to_string_lossy());
+    std::process::exit(127);
 }
 
 pub(super) fn exit_like(status: std::process::ExitStatus) -> ! {
@@ -68,10 +147,10 @@ pub(super) fn spawn_background(
     cmd: &mut std::process::Command,
 ) -> std::io::Result<BackgroundChild> {
     use std::process::Stdio;
+    detach(cmd)?;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    detach(cmd);
     cmd.spawn()
 }
 

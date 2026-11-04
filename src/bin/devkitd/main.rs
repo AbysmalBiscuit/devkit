@@ -194,6 +194,8 @@ fn cgroup_exec() -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    #[cfg(unix)]
+    devkit_common::sys::run_detach_trampoline();
     devkit_common::report::install_abort_hook("devkitd");
     match std::env::args().nth(1).as_deref() {
         Some("install-service") => return service::install(),
