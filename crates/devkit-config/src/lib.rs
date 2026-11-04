@@ -3322,13 +3322,21 @@ pub const PARENT_CONFIG_CHECKOUT_VAR: &str = "DEVKIT_PARENT_CONFIG_CHECKOUT";
 /// [`CONFIG_VAR`] file. `checkout_root` runs only when [`PARENT_CONFIG_VAR`]
 /// is set, since finding a checkout can spawn a process.
 pub fn env_config(checkout_root: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
-    std::env::var_os(PARENT_CONFIG_VAR)
-        .filter(|_| {
-            let owner = std::env::var_os(PARENT_CONFIG_CHECKOUT_VAR).unwrap_or_default();
-            same_checkout(Path::new(&owner), checkout_root().as_deref())
-        })
-        .or_else(|| std::env::var_os(CONFIG_VAR))
-        .map(PathBuf::from)
+    env_config_from(checkout_root).map(|(_, path)| path)
+}
+
+/// [`env_config`], with the name of the variable that selected the file.
+pub fn env_config_from(
+    checkout_root: impl FnOnce() -> Option<PathBuf>,
+) -> Option<(&'static str, PathBuf)> {
+    let inherited = std::env::var_os(PARENT_CONFIG_VAR).filter(|_| {
+        let owner = std::env::var_os(PARENT_CONFIG_CHECKOUT_VAR).unwrap_or_default();
+        same_checkout(Path::new(&owner), checkout_root().as_deref())
+    });
+    match inherited {
+        Some(path) => Some((PARENT_CONFIG_VAR, PathBuf::from(path))),
+        None => std::env::var_os(CONFIG_VAR).map(|path| (CONFIG_VAR, PathBuf::from(path))),
+    }
 }
 
 /// Whether `owner`, a [`PARENT_CONFIG_CHECKOUT_VAR`] value, names the

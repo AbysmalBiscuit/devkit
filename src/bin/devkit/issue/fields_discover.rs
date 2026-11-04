@@ -66,11 +66,17 @@ pub(crate) fn run(args: DiscoverArgs) -> Result<()> {
                  with one file; pass one of them"
             );
         }
-        if env_config(Path::new(&start)).is_some() {
-            bail!(
-                "--into writes one layer of the config stack, and $DEVKIT_CONFIG replaces the \
-                 stack with one file; unset it or drop --into"
-            );
+        match env_config_from(Path::new(&start)) {
+            Some((var, _)) if var == devkit_config::PARENT_CONFIG_VAR => bail!(
+                "--into writes one layer of the config stack, and the --config file of the \
+                 devkit that started this one (${var}) replaces the stack with one file; unset \
+                 ${var} or drop --into"
+            ),
+            Some((var, _)) => bail!(
+                "--into writes one layer of the config stack, and ${var} replaces the stack \
+                 with one file; unset it or drop --into"
+            ),
+            None => {}
         }
     }
     let mut sel = devkit_common::tracker::select_unfilled(config, &start);
@@ -147,18 +153,24 @@ fn destination(into: Option<&str>, config: Option<&Path>, start: &Path) -> Resul
     }
 }
 
-/// The `$DEVKIT_CONFIG` file that applies in the checkout of `start`.
-fn env_config(start: &Path) -> Option<PathBuf> {
-    devkit_config::env_config(|| devkit_common::vcs::checkout_root_opt(start).ok().flatten())
+/// The config file the environment selects in the checkout of `start`, and
+/// the variable that selected it: the parent devkit's `--config` file in
+/// `$DEVKIT_PARENT_CONFIG`, else `$DEVKIT_CONFIG`.
+fn env_config_from(start: &Path) -> Option<(&'static str, PathBuf)> {
+    devkit_config::env_config_from(|| devkit_common::vcs::checkout_root_opt(start).ok().flatten())
 }
 
-/// The file [`destination`] picks with no `--into`: `--config`, else
-/// `$DEVKIT_CONFIG`, each the one file the run read, else the nearest tracked
-/// `devkit.toml`, else a new one beside the nearest layer inside the checkout,
-/// which a `[config] root = true` barrier leaves standing where the checkout
-/// root's file may be cut off, else a new one at the checkout root.
+/// The file [`destination`] picks with no `--into`: `--config`, else the file
+/// [`env_config_from`] selects, each the one file the run read, else the
+/// nearest tracked `devkit.toml`, else a new one beside the nearest layer
+/// inside the checkout, which a `[config] root = true` barrier leaves standing
+/// where the checkout root's file may be cut off, else a new one at the
+/// checkout root.
 fn target(config: Option<&Path>, start: &Path) -> Result<PathBuf> {
-    if let Some(p) = config.map(Path::to_path_buf).or_else(|| env_config(start)) {
+    if let Some(p) = config
+        .map(Path::to_path_buf)
+        .or_else(|| env_config_from(start).map(|(_, p)| p))
+    {
         return Ok(p);
     }
     let main = devkit_common::vcs::main_checkout(start).ok().flatten();
