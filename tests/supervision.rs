@@ -774,6 +774,62 @@ fn a_capped_launch_survives_a_deleted_daemon_binary() {
     h.shutdown();
 }
 
+/// With no `PATH` in the daemon or the launch, a capped launch finds a bare
+/// command in the default search path, as an uncapped launch does.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_capped_launch_without_path_uses_the_default_search_path() {
+    let python = devkit_common::program::find_program(
+        "python3",
+        std::env::var_os("PATH").as_deref(),
+        None,
+        std::path::Path::is_file,
+    )
+    .expect("python3 on PATH");
+    let base = unjoinable_cgroup_base();
+    let uncapped = vec![("DEVKIT_DAEMON_IDLE_SECS", "3600".to_string())];
+    let mut capped = uncapped.clone();
+    capped.extend([
+        ("DEVKIT_DAEMON_MEM_MAX_MB", "64".to_string()),
+        (
+            "DEVKIT_DAEMON_CGROUP_ROOT",
+            base.path().to_str().unwrap().to_string(),
+        ),
+    ]);
+    for (label, env) in [("uncapped", uncapped), ("capped", capped)] {
+        let mut h = Harness::start_without(&["PATH"], &env);
+        let port = common::free_port();
+        let holder = h.home.path().to_str().unwrap().to_string();
+        let mut server = common::tcp_server_argv(port);
+        server[0] = python.to_str().unwrap().to_string();
+        let mut argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            r#"exec "$@""#.to_string(),
+            "sh".to_string(),
+        ];
+        argv.extend(server);
+
+        let resp = h.request(&Request::Supervise {
+            holder: holder.clone(),
+            app: "api".into(),
+            role: Role::Workspace,
+            argv,
+            cwd: ".".into(),
+            env: BTreeMap::new(),
+            logfile: h.home.path().join("no-path.log"),
+            base_port: port,
+        });
+        assert!(
+            matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+            "an {label} bare command must resolve without PATH: {resp:?}"
+        );
+
+        h.request(&Request::Down { holder, role: None });
+        h.shutdown();
+    }
+}
+
 /// A capped launch of a program that does not exist fails the request with an
 /// error that names the program.
 #[cfg(target_os = "linux")]

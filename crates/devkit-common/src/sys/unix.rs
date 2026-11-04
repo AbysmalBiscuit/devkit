@@ -325,9 +325,11 @@ fn find_program(program: &str, cwd: &str, path_var: Option<&std::ffi::OsStr>) ->
     let executable = |p: &std::path::Path| {
         fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
     };
+    // With no PATH at all, execvp searches glibc's default path.
+    let default_path = std::ffi::OsStr::new("/bin:/usr/bin");
     crate::program::find_program(
         program,
-        path_var.or(parent_path.as_deref()),
+        Some(path_var.or(parent_path.as_deref()).unwrap_or(default_path)),
         Some(std::path::Path::new(cwd)),
         executable,
     )

@@ -156,6 +156,20 @@ impl Harness {
 
     /// [`Self::start_with_env`], running the daemon binary at `bin`.
     pub fn start_binary(bin: &std::path::Path, extra: &[(&str, String)]) -> Self {
+        Self::launch(bin, extra, &[])
+    }
+
+    /// [`Self::start_with_env`], with each variable in `removed` unset in the
+    /// daemon's environment.
+    pub fn start_without(removed: &[&str], extra: &[(&str, String)]) -> Self {
+        Self::launch(
+            std::path::Path::new(env!("CARGO_BIN_EXE_devkitd")),
+            extra,
+            removed,
+        )
+    }
+
+    fn launch(bin: &std::path::Path, extra: &[(&str, String)], removed: &[&str]) -> Self {
         let home = tempfile::tempdir().unwrap();
         // XDG_STATE_HOME is set explicitly so the daemon's state_dir() resolves
         // to a path inside the throwaway temp dir, even when the real user's
@@ -168,6 +182,9 @@ impl Harness {
             .env("XDG_STATE_HOME", &xdg_state);
         for (k, v) in extra {
             cmd.env(k, v);
+        }
+        for k in removed {
+            cmd.env_remove(k);
         }
         let child = cmd.spawn().expect("spawn devkitd");
 
