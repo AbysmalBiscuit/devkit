@@ -413,7 +413,7 @@ fn respond(
 fn runs_builtin_program(analysis: &Analysis) -> bool {
     let programs = harness::builtin_programs();
     let named = |program: Option<&str>| {
-        program.is_some_and(|p| programs.iter().any(|b| guard::norm::basename(p) == b))
+        program.is_some_and(|p| programs.iter().any(|b| guard::norm::runs(p, b)))
     };
     analysis.invocations.iter().any(|inv| {
         named(inv.program.known())

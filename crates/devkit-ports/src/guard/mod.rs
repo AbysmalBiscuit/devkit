@@ -92,16 +92,21 @@ fn rule_match(inv: &Invocation, rule: &CommandRule, own_binary: bool) -> Match {
         .iter()
         .filter_map(|w| w.split_first())
         .map(|(program, args)| program_match(program, args, rule));
-    let inner = (!own_binary).then(|| program_match(&inv.program, &inv.semantic_args, rule));
+    let inner = (!own_binary).then(|| {
+        program_match(&inv.program, &inv.semantic_args, rule).max(program_match(
+            &inv.program,
+            &inv.args,
+            rule,
+        ))
+    });
     wrapped.chain(inner).max().unwrap_or(Match::No)
 }
 
 fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
-    let program = match program.known() {
-        Some(program) => basename(program),
-        None => return Match::Possible,
+    let Some(program) = program.known() else {
+        return Match::Possible;
     };
-    if !rule.programs.iter().any(|p| basename(p) == program) {
+    if !rule.programs.iter().any(|p| norm::runs(program, p)) {
         return Match::No;
     }
     args_match(&rule.args, args)
@@ -114,6 +119,9 @@ fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
 /// argument as written. An argument known only by its start, such as an
 /// assignment of an unknown value, matches a pattern that accepts any rest,
 /// and a `DEVKIT_CALLER=` pattern whose value the unknown rest could complete.
+/// An option known only by its start, such as `-C"$D"`, can be one whose
+/// value a normalization did not skip, so a pattern it does not start still
+/// possibly matches.
 fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((pattern, patterns)) = patterns.split_first() else {
         return Match::Yes;
@@ -145,7 +153,10 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
             {
                 Some(true) => Match::Yes,
                 Some(false) => Match::No,
-                None => prefix_match(pattern, start),
+                None => match prefix_match(pattern, start) {
+                    Match::No if start.starts_with('-') => Match::Possible,
+                    here => here,
+                },
             };
             if here == Match::No {
                 return Match::No;

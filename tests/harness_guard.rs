@@ -759,6 +759,171 @@ fn an_agents_gh_pr_create_is_denied_in_any_devkit_project_naming_devkit_pr_creat
     }
 }
 
+const GH_ISSUE_CREATE: &str = r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.gh-issue-create]
+programs = ["gh"]
+args = ["issue", "create"]
+reason = "file tickets with `devkit ticket create`"
+"#;
+
+#[test]
+fn a_repo_flag_before_the_gh_subcommand_does_not_pass_the_create_rules() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GH_ISSUE_CREATE);
+    for (command, replacement) in [
+        ("gh pr -R owner/repo create --fill", "devkit pr create"),
+        ("gh pr --repo owner/repo create --fill", "devkit pr create"),
+        ("gh pr --repo=owner/repo create --fill", "devkit pr create"),
+        ("gh pr -Rowner/repo new --fill", "devkit pr create"),
+        ("gh -R owner/repo pr create --fill", "devkit pr create"),
+        ("gh pr --repo=\"$R\" create --fill", "devkit pr create"),
+        ("gh pr -R\"$R\" create --fill", "devkit pr create"),
+        ("gh issue -R owner/repo create -t t", "devkit ticket create"),
+        ("gh issue --repo=\"$R\" create -t t", "devkit ticket create"),
+        ("gh issue -R\"$R\" create -t t", "devkit ticket create"),
+        (
+            "gh issue --repo owner/repo create -t t",
+            "devkit ticket create",
+        ),
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains(replacement),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
+fn a_powershell_repo_flag_before_the_gh_subcommand_does_not_pass_the_create_rules() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(&GH_ISSUE_CREATE.replace(
+        "enforce_commands = true\n",
+        "enforce_commands = true\nshell = \"powershell\"\n",
+    ));
+    for (command, replacement) in [
+        ("gh pr -R owner/repo create --fill", "devkit pr create"),
+        ("gh pr --repo owner/repo create --fill", "devkit pr create"),
+        ("gh issue -R owner/repo create -t t", "devkit ticket create"),
+        (
+            "gh issue --repo owner/repo create -t t",
+            "devkit ticket create",
+        ),
+        (
+            "$R = 'owner/repo'; gh pr --repo=\"$R\" create --fill",
+            "devkit pr create",
+        ),
+        (
+            "$R = 'owner/repo'; gh pr -R\"$R\" create --fill",
+            "devkit pr create",
+        ),
+        ("gh pr --repo=$R create --fill", "devkit pr create"),
+        (
+            "$R = 'owner/repo'; gh issue --repo=\"$R\" create -t t",
+            "devkit ticket create",
+        ),
+        (
+            "$R = 'owner/repo'; gh issue -R\"$R\" create -t t",
+            "devkit ticket create",
+        ),
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}: {out:?}");
+        assert!(
+            deny_reason(&out).contains(replacement),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
+fn an_option_with_an_unknown_value_before_a_ruled_subcommand_is_unresolved() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.git-push]
+programs = ["git"]
+args = ["push"]
+reason = "push with the release task"
+
+[harness.commands.npm-publish]
+programs = ["npm"]
+args = ["publish"]
+reason = "publish with the release task"
+"#,
+    );
+    for command in [r#"git -C"$D" push"#, r#"npm --prefix="$D" publish"#] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(
+            notes(&out)
+                .iter()
+                .any(|n| n.contains("could not be fully resolved")),
+            "{command}: {:?}",
+            notes(&out)
+        );
+    }
+}
+
+#[test]
+fn a_rule_naming_the_gh_repo_flag_still_matches() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.prod-merge]
+programs = ["gh"]
+args = ["**", "--repo", "acme/prod"]
+reason = "merge prod PRs through the release train"
+"#,
+    );
+    for command in [
+        "gh pr merge 9 --repo acme/prod",
+        "gh pr --repo acme/prod merge 9",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains("release train"),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+    for command in [
+        "gh pr merge 9 --repo acme/dev",
+        "gh pr merge 9 -R acme/prod",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
+}
+
+#[test]
+fn a_repo_flag_before_a_read_only_gh_subcommand_still_passes() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GH_ISSUE_CREATE);
+    for command in [
+        "gh pr -R owner/repo list",
+        "gh pr --repo owner/repo view 9",
+        "gh issue -R owner/repo list",
+        "gh issue --repo=owner/repo view 3",
+        "gh pr view create -R owner/repo",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
+}
+
 #[test]
 fn a_project_rule_naming_another_caller_spelling_still_matches() {
     let home = tempfile::tempdir().unwrap();
@@ -873,6 +1038,49 @@ fn a_gh_pr_create_beside_a_todo_command_is_denied_with_every_gate_off() {
             deny_reason(&out)
         );
     }
+}
+
+#[test]
+fn a_windows_spelling_of_gh_does_not_pass_the_create_rules() {
+    let home = tempfile::tempdir().unwrap();
+    let enforced = project(GH_ISSUE_CREATE);
+    let gates_off = project("[harness]\nenforce_commands = false\nenforce_writes = false\n");
+    for (proj, command, replacement) in [
+        (&enforced, "GH pr create --fill", "devkit pr create"),
+        (&enforced, "gh.EXE pr create --fill", "devkit pr create"),
+        (
+            &enforced,
+            "GH.exe pr -R owner/repo create",
+            "devkit pr create",
+        ),
+        (&enforced, "GH issue create -t t", "devkit ticket create"),
+        (
+            &enforced,
+            "Gh.Exe issue --repo owner/repo create",
+            "devkit ticket create",
+        ),
+        (&gates_off, "GH pr create --fill", "devkit pr create"),
+        (
+            &gates_off,
+            "GH.EXE pr -R owner/repo create",
+            "devkit pr create",
+        ),
+        (&gates_off, "sudo GH pr create --fill", "devkit pr create"),
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains(replacement),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+    let view = run_hook(
+        enforced.path(),
+        home.path(),
+        &claude_payload("GH.EXE pr -R owner/repo view 9"),
+    );
+    assert!(!denied(&view), "{}", deny_reason(&view));
 }
 
 #[test]

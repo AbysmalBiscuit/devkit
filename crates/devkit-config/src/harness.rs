@@ -208,11 +208,15 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 /// # assert_eq!(glob.args, ["**", "*nitro", "dev"]);
 /// ```
 ///
-/// `args` matches the typed arguments after the program's own global options
-/// are removed, so `git -C /repo worktree add` fires the first rule and
-/// `git worktree list` does not. In the second rule, `**` skips any flags
-/// before the server and `*nitro` matches the binary at any path, so it
-/// refuses `bun --filter=api nitro dev` and allows `bun nitro build`.
+/// `args` matches the typed arguments, and the same arguments after the
+/// program's own global options are removed, so `git -C /repo worktree add`
+/// fires the first rule and `git worktree list` does not. For `gh`, these
+/// options are `-R` and `--repo`, so `gh pr -R owner/repo create` matches
+/// `["pr", "create"]`. A pattern that names a repository flag matches the typed
+/// spelling only, so `-R` and `--repo` each need their own rule. In the
+/// second rule, `**` skips any flags before the server and `*nitro` matches the
+/// binary at any path, so it refuses `bun --filter=api nitro dev` and allows
+/// `bun nitro build`.
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
 pub struct CommandRule {
     /// Program names this rule refuses, matched against the segment's command

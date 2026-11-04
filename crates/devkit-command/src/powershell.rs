@@ -374,8 +374,21 @@ fn subexpression_end(chars: &[char], open: usize) -> Option<usize> {
     }
 }
 
-/// A recovered word's value: literal text, or unknown when it expands.
+/// A recovered word's value: literal text, or unknown when it expands. An
+/// option keeps its literal start, so `--repo="$R"` still reads as `--repo=`.
 fn recovered_value(typed: &str) -> Value {
+    match recovered_literal(typed) {
+        Value::Unknown if typed.starts_with('-') => {
+            let end = typed
+                .find(['$', '`', '(', '@', '"', '\''])
+                .unwrap_or(typed.len());
+            Value::Prefixed(typed[..end].to_string())
+        }
+        value => value,
+    }
+}
+
+fn recovered_literal(typed: &str) -> Value {
     let quoted = |q: char| typed.len() >= 2 && typed.starts_with(q) && typed.ends_with(q);
     if quoted('\'') {
         return Value::Known(typed[1..typed.len() - 1].replace("''", "'"));
@@ -1149,7 +1162,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
         &mut self,
         node: Node<'t>,
         scope: &mut Scope,
-    ) -> (Option<Value>, Vec<(Option<String>, Word)>) {
+    ) -> (Option<Value>, Vec<(Option<Param>, Word)>) {
         let mut name = None;
         let mut elements = Vec::new();
         let mut pending = None;
@@ -1169,11 +1182,11 @@ impl<'t> Walker<'_, '_, '_, 't> {
                                         span: el.byte_range(),
                                     }));
                                 }
-                                pending = Some(
-                                    ts::text(el, self.source)
-                                        .trim_start_matches('-')
-                                        .to_ascii_lowercase(),
-                                );
+                                let typed = ts::text(el, self.source);
+                                pending = Some(Param {
+                                    name: typed.trim_start_matches('-').to_ascii_lowercase(),
+                                    typed: typed.to_string(),
+                                });
                             }
                             k if k == kinds::REDIRECTION => self.redirection(el, scope),
                             "command_argument_sep" => {}
@@ -1233,8 +1246,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
             .chain(elements.into_iter().flat_map(|(param, word)| {
                 param
                     .map(|p| Word {
-                        value: Value::Known(format!("-{p}")),
-                        typed: format!("-{p}"),
+                        value: Value::Known(p.typed.clone()),
+                        typed: p.typed,
                         span: word.span.clone(),
                     })
                     .into_iter()
@@ -1282,8 +1295,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
         };
         let switch = |k| bound.contains_key(k);
         let literal = elements.iter().any(|(p, _)| {
-            p.as_deref()
-                .is_some_and(|p| "literalpath".starts_with(p) && p.len() > 1)
+            p.as_ref()
+                .is_some_and(|p| "literalpath".starts_with(&p.name) && p.name.len() > 1)
         });
         match c.verb {
             Verb::SetContent | Verb::ClearContent | Verb::ExportFile => {
@@ -1322,8 +1335,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     );
                 } else {
                     for (_, w) in elements.iter().filter(|(p, _)| {
-                        p.as_deref()
-                            .is_none_or(|p| "path".starts_with(p) || "literalpath".starts_with(p))
+                        p.as_ref().is_none_or(|p| {
+                            "path".starts_with(&p.name) || "literalpath".starts_with(&p.name)
+                        })
                     }) {
                         file(self, FileOp::Delete, Some(w.value.clone()), literal);
                     }
@@ -1411,7 +1425,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
     }
 }
 
-fn bind(c: &Cmdlet, elements: &[(Option<String>, Word)]) -> HashMap<&'static str, Value> {
+/// A `-Name` parameter token. A cmdlet binds `name`, its canonical form,
+/// and a native command receives `typed`, the spelling as written.
+struct Param {
+    name: String,
+    typed: String,
+}
+
+fn bind(c: &Cmdlet, elements: &[(Option<Param>, Word)]) -> HashMap<&'static str, Value> {
     let mut out = HashMap::new();
     let mut positional = Vec::new();
     for (param, word) in elements {
@@ -1419,7 +1440,7 @@ fn bind(c: &Cmdlet, elements: &[(Option<String>, Word)]) -> HashMap<&'static str
             positional.push(word);
             continue;
         };
-        match resolve_param(c, p) {
+        match resolve_param(c, &p.name) {
             Some(name) if c.switches.contains(&name) => {
                 out.insert(name, Value::Known("$true".into()));
                 if !word.typed.is_empty() {
