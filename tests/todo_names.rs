@@ -3,6 +3,8 @@
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
+#[path = "common/gittrace.rs"]
+mod gittrace;
 #[path = "common/tickets.rs"]
 mod tickets;
 #[path = "common/todoenv.rs"]
@@ -642,4 +644,51 @@ fn activity_names_held_todos_as_the_config_says() {
         assert!(report.contains(&shown), "{ids}: {report}");
         assert!(!report.contains(&hidden), "{ids}: {report}");
     }
+}
+
+/// Injected lists read the caller's tracker only for a ticket todo they
+/// show, so a GitHub todo on an unrelated node costs no git calls.
+#[test]
+fn context_reads_no_tracker_for_a_todo_it_does_not_show() {
+    let p = Proj::new();
+    ok(p.devkit(&["todo", "add", "one"], &S1));
+    let payload = serde_json::json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "s1",
+        "cwd": p.path,
+    })
+    .to_string();
+    let trace = gittrace::GitTrace::new();
+    let env = [
+        S1[0],
+        (gittrace::GitTrace::VAR, trace.dir().to_str().unwrap()),
+    ];
+    let args = [
+        "todo",
+        "context",
+        "--harness",
+        "claude-code",
+        "--ids",
+        "short",
+    ];
+    let context = || {
+        let out = p.devkit_in(&p.path, &args, &env, &payload);
+        assert!(out.status.success(), "{}", stderr(&out));
+        (String::from_utf8(out.stdout).unwrap(), trace.take())
+    };
+    let (shown, calls) = context();
+    p.store()
+        .add(devkit_todo::NewTodo {
+            description: "#7 Elsewhere".into(),
+            project: Some("other".into()),
+            parent: None,
+            order: None,
+            ticket: Some(devkit_todo::TicketRef {
+                tracker: "github".into(),
+                key: "x/y#7".into(),
+                synced_status: None,
+            }),
+        })
+        .unwrap();
+    assert_eq!(context(), (shown, calls));
 }

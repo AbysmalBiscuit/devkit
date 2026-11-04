@@ -1475,7 +1475,12 @@ fn context(args: &ContextArgs, id_style: Option<IdStyle>) -> Option<String> {
     let graph = Graph::new(all);
     let work = fence.work(&todos, false).ok()?;
     let style = id_style.unwrap_or(store.config().ids);
-    let names = names::names(style, all, &cwd);
+    let named: Vec<Todo> = todos
+        .iter()
+        .chain(todos.iter().flat_map(|t| graph.open_blockers(t)))
+        .cloned()
+        .collect();
+    let names = names::names(style, &named, &cwd);
     let notes = render::Notes {
         graph: &graph,
         show_ready: &|todo| fence.offers(todo) && (!facts.subagent || todo.node() == own),
