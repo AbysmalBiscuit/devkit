@@ -991,6 +991,64 @@ mod tests {
     }
 
     #[test]
+    fn todos_decode_as_the_task_getters_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let rfc3339 = |t: Option<taskchampion::chrono::DateTime<Utc>>| {
+            t.map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        };
+        let tasks = block_on(async {
+            let storage = SqliteStorage::new(dir.path(), AccessMode::ReadWrite, true).await?;
+            let mut replica = Replica::new(storage);
+            let blockers = [Uuid::new_v4(), Uuid::new_v4()];
+            let mut uuids = Vec::new();
+            for (i, done) in [false, true, false].into_iter().enumerate() {
+                let uuid = Uuid::new_v4();
+                let mut ops = Operations::new();
+                let mut task = replica.create_task(uuid, &mut ops).await?;
+                task.set_description(format!("task {i}"), &mut ops)?;
+                task.set_status(taskchampion::Status::Pending, &mut ops)?;
+                task.set_value("project", Some(project_of(None)), &mut ops)?;
+                task.set_entry(Some(utc_timestamp(1_700_000_000 + i as i64)), &mut ops)?;
+                for blocker in &blockers[..i] {
+                    task.add_dependency(*blocker, &mut ops)?;
+                }
+                if done {
+                    task.done(&mut ops)?;
+                }
+                task.set_modified(utc_timestamp(1_700_000_500 + i as i64), &mut ops)?;
+                replica.commit_operations(ops).await?;
+                uuids.push(uuid);
+            }
+            let mut tasks = Vec::new();
+            for uuid in uuids {
+                let task = replica.get_task(uuid).await?.unwrap();
+                let data = replica.get_task_data(uuid).await?.unwrap();
+                tasks.push((task, data));
+            }
+            Ok(tasks)
+        })
+        .unwrap();
+        let open = TaskchampionStore::at(dir.path().to_path_buf())
+            .open_todos()
+            .unwrap();
+        assert_eq!(open.len(), 2);
+        for (task, data) in &tasks {
+            let mut blockers: Vec<String> =
+                task.get_dependencies().map(|d| d.to_string()).collect();
+            blockers.sort();
+            let decoded = TaskchampionStore::todo_of(data).unwrap();
+            let read = std::iter::once(&decoded).chain(open.iter().filter(|t| t.id == decoded.id));
+            for todo in read {
+                let label = task.get_description();
+                assert_eq!(todo.blocked_by, blockers, "{label}");
+                assert_eq!(todo.entry, rfc3339(task.get_entry()), "{label}");
+                assert_eq!(todo.modified, rfc3339(task.get_modified()), "{label}");
+            }
+        }
+        assert!(tasks.iter().any(|(t, _)| t.get_dependencies().count() == 2));
+    }
+
+    #[test]
     fn a_urls_user_and_password_are_redacted() {
         let url = "http://alice:hunter2@sync.example/";
         let text = "GET http://alice:hunter2@sync.example/v1: refused; hunter2";
