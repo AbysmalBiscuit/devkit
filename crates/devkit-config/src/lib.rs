@@ -4015,6 +4015,8 @@ pub fn tests_sample() -> &'static str {
 mod tests {
     use std::io::Write as _;
 
+    use devkit_git::child_env::child_env;
+
     use super::*;
     pub(crate) const SAMPLE: &str = r#"
 [defaults]
@@ -5322,9 +5324,10 @@ steps = [
 
     #[test]
     fn expand_vars_substitutes_a_set_variable() {
-        unsafe { std::env::set_var("DEVKIT_TEST_ROOT", "/srv/work") };
-        let got = expand_vars("${DEVKIT_TEST_ROOT}/trees", "defaults.worktree_root").unwrap();
-        assert_eq!(got, "/srv/work/trees");
+        child_env().set("DEVKIT_TEST_ROOT", "/srv/work").run(|| {
+            let got = expand_vars("${DEVKIT_TEST_ROOT}/trees", "defaults.worktree_root").unwrap();
+            assert_eq!(got, "/srv/work/trees");
+        });
     }
 
     #[test]
@@ -5503,17 +5506,18 @@ steps = [
 
     #[test]
     fn branch_prefix_expands_vars_but_is_not_a_path() {
-        unsafe { std::env::set_var("DEVKIT_TEST_DEV", "lev") };
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(
-            tmp.path(),
-            "[defaults]\n\
-             worktree_root = \"/srv/trees\"\n\
-             branch_prefix = \"${DEVKIT_TEST_DEV}/\"\n\
-             baseline_ref = \"origin/main\"\n",
-        );
-        let (cfg, _) = resolve_with_home(None, tmp.path(), None, None, None, None).unwrap();
-        assert_eq!(cfg.defaults.branch_prefix, "lev/");
+        child_env().set("DEVKIT_TEST_DEV", "lev").run(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            write_cfg(
+                tmp.path(),
+                "[defaults]\n\
+                 worktree_root = \"/srv/trees\"\n\
+                 branch_prefix = \"${DEVKIT_TEST_DEV}/\"\n\
+                 baseline_ref = \"origin/main\"\n",
+            );
+            let (cfg, _) = resolve_with_home(None, tmp.path(), None, None, None, None).unwrap();
+            assert_eq!(cfg.defaults.branch_prefix, "lev/");
+        });
     }
 
     #[test]
@@ -5540,21 +5544,22 @@ steps = [
         // to the empty string (`export FOO=`, common under direnv/CI) expands
         // to `""` and must be treated the same as an unset optional path, not
         // silently resolved to the declaring layer's own directory.
-        unsafe { std::env::set_var("DEVKIT_TEST_EMPTY", "") };
-        let tmp = tempfile::tempdir().unwrap();
-        write_cfg(
-            tmp.path(),
-            "[defaults]\n\
-             worktree_root = \"/srv/trees\"\n\
-             branch_prefix = \"lev/\"\n\
-             baseline_ref = \"origin/main\"\n\
-             doppler_yaml = \"${DEVKIT_TEST_EMPTY}\"\n",
-        );
-        let (cfg, _) = resolve_with_home(None, tmp.path(), None, None, None, None).unwrap();
-        assert_eq!(
-            cfg.defaults.doppler_yaml, "",
-            "a set-but-empty variable must not become the layer dir"
-        );
+        child_env().set("DEVKIT_TEST_EMPTY", "").run(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            write_cfg(
+                tmp.path(),
+                "[defaults]\n\
+                 worktree_root = \"/srv/trees\"\n\
+                 branch_prefix = \"lev/\"\n\
+                 baseline_ref = \"origin/main\"\n\
+                 doppler_yaml = \"${DEVKIT_TEST_EMPTY}\"\n",
+            );
+            let (cfg, _) = resolve_with_home(None, tmp.path(), None, None, None, None).unwrap();
+            assert_eq!(
+                cfg.defaults.doppler_yaml, "",
+                "a set-but-empty variable must not become the layer dir"
+            );
+        });
     }
 
     #[test]

@@ -61,13 +61,12 @@ fn call(action: &str, args: Value) -> Value {
     serde_json::from_str(text).unwrap()
 }
 
-/// A `DEVKIT_CONFIG` in the environment is the sole config layer, which would
-/// hide each fixture's own file. Every test calls this before touching
-/// anything else, and `Once` holds the others until the removal is done, so
-/// no thread reads the environment while it changes.
-fn clear_devkit_config() {
-    static CLEAR: std::sync::Once = std::sync::Once::new();
-    CLEAR.call_once(|| unsafe { std::env::remove_var("DEVKIT_CONFIG") });
+/// Run `body` in a child with no `DEVKIT_CONFIG`. That variable is the sole
+/// config layer when set, which would hide each fixture's own file.
+fn without_devkit_config(body: impl FnOnce()) {
+    devkit_git::child_env::child_env()
+        .remove("DEVKIT_CONFIG")
+        .run(body);
 }
 
 /// A `doppler.yaml` devkit cannot parse says nothing about `devkit.toml`, so
@@ -76,8 +75,10 @@ fn clear_devkit_config() {
 /// expects a list.
 #[test]
 fn an_unparseable_doppler_yaml_keeps_the_declared_tracker() {
-    clear_devkit_config();
+    without_devkit_config(an_unparseable_doppler_yaml_body);
+}
 
+fn an_unparseable_doppler_yaml_body() {
     let dir = fixture(None);
     std::fs::write(
         dir.path().join("devkit.toml"),
@@ -113,8 +114,10 @@ fn an_unparseable_doppler_yaml_keeps_the_declared_tracker() {
 /// same environment — so only the config can account for the difference.
 #[test]
 fn the_status_action_reports_the_configured_tracker_kind() {
-    clear_devkit_config();
+    without_devkit_config(the_status_action_body);
+}
 
+fn the_status_action_body() {
     for kind in ["linear", "none"] {
         let dir = fixture(Some(kind));
         // No worktree matches the filter, so nothing is fetched over the

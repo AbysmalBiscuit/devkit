@@ -25,3 +25,6 @@ daemon = ["dep:interprocess", "devkit-common/daemon"]
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
+
+[dev-dependencies]
+devkit-git = { workspace = true, features = ["test-support"] }

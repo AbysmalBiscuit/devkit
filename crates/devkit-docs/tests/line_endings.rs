@@ -2,9 +2,7 @@
 //! end-of-line settings must not make one look modified.
 //!
 //! The user's config reaches every production git call through
-//! `GIT_CONFIG_GLOBAL`, which is process-global. This file compiles to its own
-//! binary and holds one `#[test]`, so no other thread reads the environment
-//! while it is set.
+//! `GIT_CONFIG_GLOBAL`.
 
 use std::path::Path;
 
@@ -54,41 +52,45 @@ fn normalizing_global_config(dir: &Path) -> std::path::PathBuf {
 
 #[test]
 fn user_line_ending_normalization_leaves_crlf_checkouts_clean() {
-    let base = tempfile::tempdir().unwrap();
-    let repo = crlf_upstream(&base.path().join("upstream"));
-    let config = normalizing_global_config(&base.path().join("home"));
-    let cache = base.path().join("cache");
-    let entry = LibEntry {
-        name: "up".into(),
-        ecosystem: Some(Ecosystem::Git),
-        repo: Some(repo),
-        r#ref: Some("v1".into()),
-        ..Default::default()
-    };
+    let home = tempfile::tempdir().unwrap();
+    let config = normalizing_global_config(home.path());
 
-    // SAFETY: the only environment mutation in this binary.
-    unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &config) };
+    devkit_git::child_env::child_env()
+        .set("GIT_CONFIG_GLOBAL", &config)
+        .run(|| {
+            let base = tempfile::tempdir().unwrap();
+            let repo = crlf_upstream(&base.path().join("upstream"));
+            let cache = base.path().join("cache");
+            let entry = LibEntry {
+                name: "up".into(),
+                ecosystem: Some(Ecosystem::Git),
+                repo: Some(repo),
+                r#ref: Some("v1".into()),
+                ..Default::default()
+            };
 
-    let resolved = resolve::resolve(&entry, base.path(), &cache, &Options::default())
-        .expect("a fresh checkout of upstream's own bytes is clean");
-    let skill = resolved.path.join("skills/SKILL.md");
-    assert_eq!(std::fs::read(&skill).unwrap(), CRLF);
-    let summary = devkit_docs::doctor_summary(&cache);
-    assert!(summary.problems.is_empty(), "{:?}", summary.problems);
+            let resolved = resolve::resolve(&entry, base.path(), &cache, &Options::default())
+                .expect("a fresh checkout of upstream's own bytes is clean");
+            let skill = resolved.path.join("skills/SKILL.md");
+            assert_eq!(std::fs::read(&skill).unwrap(), CRLF);
+            let summary = devkit_docs::doctor_summary(&cache);
+            assert!(summary.problems.is_empty(), "{:?}", summary.problems);
 
-    // A clone made before docm pinned line endings has no `info/attributes`.
-    // Rewriting the file with the same bytes makes git compare content again.
-    std::fs::remove_file(cache.join("up/repo.git/info/attributes")).unwrap();
-    std::fs::write(&skill, CRLF).unwrap();
-    let summary = devkit_docs::doctor_summary(&cache);
-    assert!(
-        summary.problems.iter().any(|p| p.contains("SKILL.md")),
-        "without the pin, user normalization reports the file: {:?}",
-        summary.problems
-    );
+            // A clone made before docm pinned line endings has no
+            // `info/attributes`. Rewriting the file with the same
+            // bytes makes git compare content again.
+            std::fs::remove_file(cache.join("up/repo.git/info/attributes")).unwrap();
+            std::fs::write(&skill, CRLF).unwrap();
+            let summary = devkit_docs::doctor_summary(&cache);
+            assert!(
+                summary.problems.iter().any(|p| p.contains("SKILL.md")),
+                "without the pin, user normalization reports the file: {:?}",
+                summary.problems
+            );
 
-    resolve::resolve(&entry, base.path(), &cache, &Options::default())
-        .expect("the next resolve repairs an existing clone");
-    let summary = devkit_docs::doctor_summary(&cache);
-    assert!(summary.problems.is_empty(), "{:?}", summary.problems);
+            resolve::resolve(&entry, base.path(), &cache, &Options::default())
+                .expect("the next resolve repairs an existing clone");
+            let summary = devkit_docs::doctor_summary(&cache);
+            assert!(summary.problems.is_empty(), "{:?}", summary.problems);
+        });
 }

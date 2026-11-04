@@ -278,26 +278,24 @@ mod tests {
         assert_ne!(fired_path("S").unwrap(), fired_path("S/a1").unwrap());
     }
 
-    /// nextest runs every test in its own process, so pointing `HOME` and
-    /// `XDG_STATE_HOME` at a private tempdir here does not race any other
-    /// test's fired-set.
     #[test]
     fn stamp_ids_is_visible_to_already_fired_until_cleared() {
         let home = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("HOME", home.path());
-            std::env::set_var("XDG_STATE_HOME", home.path());
-        }
-        let holder = "unit-test-holder";
-        assert!(already_fired(holder).is_empty());
+        devkit_git::child_env::child_env()
+            .set("HOME", home.path())
+            .set("XDG_STATE_HOME", home.path())
+            .run(|| {
+                let holder = "unit-test-holder";
+                assert!(already_fired(holder).is_empty());
 
-        stamp_ids(holder, &["r-a".to_string(), "r-b".to_string()]);
-        let fired = already_fired(holder);
-        assert!(fired.contains("r-a"));
-        assert!(fired.contains("r-b"));
+                stamp_ids(holder, &["r-a".to_string(), "r-b".to_string()]);
+                let fired = already_fired(holder);
+                assert!(fired.contains("r-a"));
+                assert!(fired.contains("r-b"));
 
-        clear_for_holder(holder);
-        assert!(already_fired(holder).is_empty());
+                clear_for_holder(holder);
+                assert!(already_fired(holder).is_empty());
+            });
     }
 
     #[test]

@@ -199,40 +199,41 @@ mod tests {
 
     #[test]
     fn an_env_condition_accepts_presence_or_a_value() {
-        // SAFETY: single-threaded test, and the variable is unique to it.
-        unsafe { std::env::set_var("DEVKIT_RULES_TEST_ENV", "staging") };
-        let present = FileCondition {
-            env: [("DEVKIT_RULES_TEST_ENV".to_string(), String::new())].into(),
-            ..Default::default()
-        };
-        let exact = FileCondition {
-            env: [("DEVKIT_RULES_TEST_ENV".to_string(), "staging".to_string())].into(),
-            ..Default::default()
-        };
-        let wrong = FileCondition {
-            env: [("DEVKIT_RULES_TEST_ENV".to_string(), "prod".to_string())].into(),
-            ..Default::default()
-        };
-        let entry = |w| ContextFile {
-            path: "docs/x.md".to_string(),
-            when: Some(w),
-        };
-        assert!(fires(
-            &entry(present),
-            Path::new("/repo"),
-            &subject(&["a.rs"])
-        ));
-        assert!(fires(
-            &entry(exact),
-            Path::new("/repo"),
-            &subject(&["a.rs"])
-        ));
-        assert!(!fires(
-            &entry(wrong),
-            Path::new("/repo"),
-            &subject(&["a.rs"])
-        ));
-        unsafe { std::env::remove_var("DEVKIT_RULES_TEST_ENV") };
+        devkit_git::child_env::child_env()
+            .set("DEVKIT_RULES_TEST_ENV", "staging")
+            .run(|| {
+                let present = FileCondition {
+                    env: [("DEVKIT_RULES_TEST_ENV".to_string(), String::new())].into(),
+                    ..Default::default()
+                };
+                let exact = FileCondition {
+                    env: [("DEVKIT_RULES_TEST_ENV".to_string(), "staging".to_string())].into(),
+                    ..Default::default()
+                };
+                let wrong = FileCondition {
+                    env: [("DEVKIT_RULES_TEST_ENV".to_string(), "prod".to_string())].into(),
+                    ..Default::default()
+                };
+                let entry = |w| ContextFile {
+                    path: "docs/x.md".to_string(),
+                    when: Some(w),
+                };
+                assert!(fires(
+                    &entry(present),
+                    Path::new("/repo"),
+                    &subject(&["a.rs"])
+                ));
+                assert!(fires(
+                    &entry(exact),
+                    Path::new("/repo"),
+                    &subject(&["a.rs"])
+                ));
+                assert!(!fires(
+                    &entry(wrong),
+                    Path::new("/repo"),
+                    &subject(&["a.rs"])
+                ));
+            });
     }
 
     /// A directory, a missing file, and invalid UTF-8 each read as nothing;
