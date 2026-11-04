@@ -1125,6 +1125,33 @@ mod tests {
         let _ = registry::release(&holder, None);
     }
 
+    /// A plain child, because a test binary cannot host the Unix detach
+    /// trampoline.
+    #[cfg(unix)]
+    fn spawn_test_server(p: &LaunchPlan) -> Result<u32> {
+        let log = std::fs::File::create(&p.log)?;
+        let child = std::process::Command::new(&p.argv[0])
+            .args(&p.argv[1..])
+            .current_dir(&p.cwd)
+            .stdout(log.try_clone()?)
+            .stderr(log)
+            .spawn()?;
+        Ok(child.id())
+    }
+
+    /// A child in its own process group, because stopping one that shares the
+    /// test runner's console group sends the runner a console control event.
+    #[cfg(windows)]
+    fn spawn_test_server(p: &LaunchPlan) -> Result<u32> {
+        supervise::spawn_detached(
+            &p.argv,
+            p.cwd.to_str().context("app cwd not UTF-8")?,
+            &p.env,
+            &p.log,
+            None,
+        )
+    }
+
     #[test]
     fn launch_non_blocking_returns_before_readiness_then_status_flips() {
         let Some(py) = python_cmd() else {
@@ -1168,18 +1195,14 @@ mod tests {
             log: tmp.clone(),
             url: format!("http://localhost:{port}"),
         };
-        // Non-blocking, so the server is "starting". The child is a plain one
-        // because a test binary cannot host the Unix detach trampoline.
-        let out = launch_with(&[plan], "/w-launch-test", Role::Workspace, false, |p| {
-            let log = std::fs::File::create(&p.log)?;
-            let child = std::process::Command::new(&p.argv[0])
-                .args(&p.argv[1..])
-                .current_dir(&p.cwd)
-                .stdout(log.try_clone()?)
-                .stderr(log)
-                .spawn()?;
-            Ok(child.id())
-        })
+        // Non-blocking, so the server is "starting".
+        let out = launch_with(
+            &[plan],
+            "/w-launch-test",
+            Role::Workspace,
+            false,
+            spawn_test_server,
+        )
         .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].port, port);
