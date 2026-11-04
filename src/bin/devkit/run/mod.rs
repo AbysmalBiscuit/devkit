@@ -628,7 +628,7 @@ fn cmd_runs_passed(
     json: bool,
 ) -> Result<()> {
     anyhow::ensure!(!task.trim().is_empty(), "name the task to ask about");
-    let args = vars.parse()?;
+    let args = vars.under(Path::new(cwd)).parse()?;
     let sha = match sha {
         Some(sha) => sha.trim().to_string(),
         None => {
@@ -768,7 +768,7 @@ fn cmd_task(
     };
 
     let user = parse_user_env(env_pairs, env_file)?;
-    let args = vars.parse()?;
+    let args = vars.under(Path::new(cwd)).parse()?;
     let worktree = checkout.worktree()?;
     let root = worktree.path.to_string_lossy().into_owned();
     let resolved = task::resolve(

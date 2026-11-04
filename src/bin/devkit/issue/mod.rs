@@ -885,11 +885,12 @@ fn run_verb(dir: Option<String>, config: Option<String>, verb: Verb) -> Result<(
 }
 
 fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Result<()> {
+    let here = PathBuf::from(start(&dir));
     match cmd {
         TicketCmd::Render { title, body, vars } => render::run(render::RenderArgs {
             title,
             body,
-            vars,
+            vars: vars.under(&here),
             dir,
             config,
         }),
@@ -901,7 +902,7 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
         } => create::run(create::CreateArgs {
             title,
             body,
-            vars,
+            vars: vars.under(&here),
             fields,
             dir,
             config,
@@ -919,7 +920,7 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             issue,
             title,
             body,
-            vars,
+            vars: vars.under(&here),
             fields,
             dir,
             config,
@@ -940,7 +941,7 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             cmd: None,
         } => fields::run(fields::FieldsArgs {
             json,
-            vars,
+            vars: vars.under(&here),
             dir,
             config,
         }),

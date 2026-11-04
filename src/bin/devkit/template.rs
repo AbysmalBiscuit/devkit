@@ -147,7 +147,7 @@ pub fn run(cli: TemplateCli) -> Result<()> {
                 Path::new(start),
                 &name,
                 (&message.parts(), templates::PartNames::Flags),
-                &vars.parse()?,
+                &vars.under(Path::new(start)).parse()?,
                 caller,
             )?;
             if json {

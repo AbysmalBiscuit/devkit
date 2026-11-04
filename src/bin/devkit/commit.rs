@@ -81,7 +81,7 @@ pub fn run(cli: CommitCli) -> Result<()> {
         &config,
         &start,
         &cli.message.parts(),
-        &cli.vars.parse()?,
+        &cli.vars.under(&start).parse()?,
         devkit_common::caller::caller(),
         cli.amend,
     )?;
