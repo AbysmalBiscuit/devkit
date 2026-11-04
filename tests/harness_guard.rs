@@ -826,6 +826,37 @@ fn a_powershell_repo_flag_before_the_gh_subcommand_does_not_pass_the_create_rule
 }
 
 #[test]
+fn an_option_with_an_unknown_value_before_a_ruled_subcommand_is_unresolved() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.git-push]
+programs = ["git"]
+args = ["push"]
+reason = "push with the release task"
+
+[harness.commands.npm-publish]
+programs = ["npm"]
+args = ["publish"]
+reason = "publish with the release task"
+"#,
+    );
+    for command in [r#"git -C"$D" push"#, r#"npm --prefix="$D" publish"#] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(
+            notes(&out)
+                .iter()
+                .any(|n| n.contains("could not be fully resolved")),
+            "{command}: {:?}",
+            notes(&out)
+        );
+    }
+}
+
+#[test]
 fn a_rule_naming_the_gh_repo_flag_still_matches() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(

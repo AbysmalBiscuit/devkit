@@ -120,6 +120,9 @@ fn program_match(program: &Value, args: &[Value], rule: &CommandRule) -> Match {
 /// argument as written. An argument known only by its start, such as an
 /// assignment of an unknown value, matches a pattern that accepts any rest,
 /// and a `DEVKIT_CALLER=` pattern whose value the unknown rest could complete.
+/// An option known only by its start, such as `-C"$D"`, can be one whose
+/// value a normalization did not skip, so a pattern it does not start still
+/// possibly matches.
 fn args_match(patterns: &[String], args: &[Value]) -> Match {
     let Some((pattern, patterns)) = patterns.split_first() else {
         return Match::Yes;
@@ -151,7 +154,10 @@ fn args_match(patterns: &[String], args: &[Value]) -> Match {
             {
                 Some(true) => Match::Yes,
                 Some(false) => Match::No,
-                None => prefix_match(pattern, start),
+                None => match prefix_match(pattern, start) {
+                    Match::No if start.starts_with('-') => Match::Possible,
+                    here => here,
+                },
             };
             if here == Match::No {
                 return Match::No;
