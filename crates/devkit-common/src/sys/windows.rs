@@ -30,8 +30,8 @@ use windows_sys::Win32::{
         Threading::{
             CREATE_UNICODE_ENVIRONMENT, CreateProcessW, GetExitCodeProcess, GetProcessTimes,
             INFINITE, OpenProcess, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-            PROCESS_TERMINATE, PROCESS_VM_READ, STARTUPINFOW, TerminateProcess,
-            WaitForSingleObject,
+            PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, PROCESS_VM_READ, STARTUPINFOW,
+            TerminateProcess, WaitForSingleObject,
         },
     },
 };
@@ -120,11 +120,18 @@ pub(super) fn process_started(pid: u32) -> Option<String> {
     // SAFETY: the handle is null-checked and closed exactly once; each
     // FILETIME out-pointer is a live local.
     let ok = unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        let handle = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        );
         if handle.is_null() {
             return None;
         }
-        let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0;
+        // An exited process stays open while any handle to it remains, so
+        // only a process whose handle is not yet signaled is still running.
+        let ok = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+            && GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0;
         CloseHandle(handle);
         ok
     };
