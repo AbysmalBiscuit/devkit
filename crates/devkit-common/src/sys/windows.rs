@@ -669,10 +669,11 @@ mod tests {
         run_on_own_console("terminate_group_leader_probe");
     }
 
-    /// A long-lived daemon restarts crashed servers, and each entry holds a
-    /// handle open.
     #[test]
-    fn starting_a_leader_forgets_the_leaders_that_exited() {
+    fn forget_exited_leaders_probe() {
+        if std::env::var_os(TERMINATE_PROBE_ENV).is_none() {
+            return;
+        }
         let spawn_exiting = || {
             let mut cmd = Command::new(std::env::current_exe().unwrap());
             cmd.args(["--exact", "sys::imp::tests::background_child_wait_probe"]);
@@ -685,5 +686,13 @@ mod tests {
         let leaders = GROUP_LEADERS.lock().unwrap();
         assert!(!leaders.contains_key(&first));
         assert!(leaders.contains_key(&second));
+    }
+
+    /// A long-lived daemon restarts crashed servers, and each entry holds a
+    /// handle open. The probe runs in a process of its own, because another
+    /// test's spawn in this process also forgets exited leaders.
+    #[test]
+    fn starting_a_leader_forgets_the_leaders_that_exited() {
+        run_on_own_console("forget_exited_leaders_probe");
     }
 }
