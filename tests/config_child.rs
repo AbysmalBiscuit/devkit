@@ -125,6 +125,24 @@ fn a_child_with_its_own_config_file_reads_that_file() {
 }
 
 #[test]
+fn a_task_step_that_sets_devkit_config_reads_that_file() {
+    let p = project("github");
+    let own = p.path().join("own.toml");
+    std::fs::write(&own, "[tracker]\nkind = \"linear\"\n").unwrap();
+    write_ci_config(p.path(), &["config", "show", "--json"]);
+    let mut ci = std::fs::read_to_string(p.path().join("ci.toml")).unwrap();
+    ci.push_str(&format!(
+        "env = {{ DEVKIT_CONFIG = '{}' }}\n",
+        own.display()
+    ));
+    std::fs::write(p.path().join("ci.toml"), ci).unwrap();
+    let shown = run_show(p.path(), None, &[]);
+    let json = &shown[shown.find('{').unwrap()..=shown.rfind('}').unwrap()];
+    let cfg: Value = serde_json::from_str(json).unwrap();
+    assert_eq!(cfg["tracker"]["kind"], "linear", "{shown}");
+}
+
+#[test]
 fn a_child_in_another_checkout_reads_that_checkouts_config() {
     let p = project("github");
     let other = project("linear");
