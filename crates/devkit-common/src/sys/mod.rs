@@ -53,34 +53,6 @@ pub fn cgroup_list_leaves(base: &Path) -> Vec<String> {
     imp::cgroup_list_leaves(base)
 }
 
-/// The hidden `devkitd` subcommand that joins a cgroup leaf and then replaces
-/// itself with a program: `devkitd __cgroup-exec <leaf> -- <program> <args>`.
-pub const CGROUP_EXEC: &str = "__cgroup-exec";
-
-/// A command that runs `program` inside the cgroup `leaf`, or `None` off Linux,
-/// where a leaf has no meaning. It runs this binary's [`CGROUP_EXEC`]
-/// subcommand, so only `devkitd` may call it. The caller appends the program's
-/// arguments and gives the command the write end of a pipe as its stdin. That
-/// pipe closes empty when the program starts, and carries the error when the
-/// program cannot start.
-pub fn cgroup_command(leaf: &Path, program: &str) -> Option<std::process::Command> {
-    imp::cgroup_command(leaf, program)
-}
-
-/// Move this process into `leaf`, then replace it with `program`. The pid
-/// stays the same, so the program and every process it starts are in the
-/// leaf, with stdin at the null device. A leaf that cannot be joined leaves the
-/// program uncapped. Returns only when the exec fails, after it writes the
-/// error to the status pipe that stdin holds on entry.
-#[cfg(unix)]
-pub fn exec_in_cgroup(
-    leaf: &Path,
-    program: &std::ffi::OsStr,
-    args: &[std::ffi::OsString],
-) -> std::io::Error {
-    imp::exec_in_cgroup(leaf, program, args)
-}
-
 /// True if a process with `pid` currently exists.
 pub fn process_alive(pid: u32) -> bool {
     imp::process_alive(pid)
@@ -91,17 +63,24 @@ pub fn terminate(pid: u32) {
     imp::terminate(pid)
 }
 
-/// Configure `cmd` to start detached from the caller's terminal, holding none
-/// of this process's stdio, so a caller reading this process's output to its
-/// end is not held open by the child.
+/// Spawns `cmd` detached from the caller's terminal, with stdin at the null
+/// device and the given stdout and stderr. It holds none of this process's
+/// other stdio, so a caller reading this process's output to its end is not
+/// held open by the child. The child keeps `cmd`'s program, arguments,
+/// environment changes and directory, and nothing else of `cmd`.
 ///
 /// On Unix the child leads a session of its own, through this binary's
-/// [`run_detach_trampoline`], so each binary that calls `detach` calls that
-/// first. `cmd` keeps only its program, arguments, environment changes and
-/// directory, so call `detach` before setting stdio. A program that `cmd`'s
-/// `PATH` does not find is an error that names it.
-pub fn detach(cmd: &mut std::process::Command) -> std::io::Result<()> {
-    imp::detach(cmd)
+/// [`run_detach_trampoline`], so each binary that calls this calls that first.
+/// The child's pid is the program's. On Linux the program joins `cgroup_leaf`
+/// before it runs, and runs uncapped when the join fails. A program that
+/// cannot start, a failed exec included, is an error that names it.
+pub fn spawn_detached(
+    cmd: &mut std::process::Command,
+    cgroup_leaf: Option<&Path>,
+    stdout: std::process::Stdio,
+    stderr: std::process::Stdio,
+) -> std::io::Result<std::process::Child> {
+    imp::spawn_detached(cmd, cgroup_leaf, stdout, stderr)
 }
 
 /// Ends this process the way a child ended, so a parent reads the child's
@@ -131,15 +110,15 @@ pub fn find_on_path(
         .find(|candidate| eligible(candidate))
 }
 
-/// Runs the program of a [`detach`]ed command, and never returns, when this
-/// process is its trampoline. Returns at once otherwise. Call it first in
+/// Runs the program of a [`spawn_detached`] command, and never returns, when
+/// this process is its trampoline. Returns at once otherwise. Call it first in
 /// `main`.
 #[cfg(unix)]
 pub fn run_detach_trampoline() {
     imp::run_detach_trampoline()
 }
 
-/// Spawns `cmd` detached as [`detach`] does, holding no handle of this
+/// Spawns `cmd` detached as [`spawn_detached`] does, holding no handle of this
 /// process, its stdio included: a caller that reads this process's output to
 /// its end is not held open by the child. On Windows the child's console has
 /// no window.

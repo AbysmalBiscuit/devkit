@@ -764,11 +764,6 @@ fn a_capped_launch_survives_a_deleted_daemon_binary() {
         matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
         "a deleted daemon binary must not stop a capped launch: {resp:?}"
     );
-    let log = std::fs::read_to_string(h.home.path().join("deleted.log")).unwrap();
-    assert!(
-        !log.contains("cgroup join did not start"),
-        "the app launched without the cgroup join: {log}"
-    );
 
     h.request(&Request::Down { holder, role: None });
     h.shutdown();

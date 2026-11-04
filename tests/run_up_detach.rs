@@ -128,3 +128,24 @@ fn a_missing_program_fails_the_launch_with_its_name() {
         "the error does not name the program: {stderr}"
     );
 }
+
+/// The program exists and is executable, but exec fails: its interpreter
+/// does not exist. The launch fails with the program's name instead of
+/// reporting a server that then exits.
+#[test]
+fn a_program_that_cannot_exec_fails_the_launch_with_its_name() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let scripts = tempfile::tempdir().unwrap();
+    let script = scripts.path().join("no-interpreter-406");
+    std::fs::write(&script, "#!/nonexistent/interpreter\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dir = setup(39411, &format!("['{}']", script.display()));
+    let up = run(dir.path(), &["up", "srv"]);
+    let stderr = String::from_utf8_lossy(&up.stderr);
+    let _ = run(dir.path(), &["down", "--app", "srv"]);
+    assert!(!up.status.success(), "up succeeded: {stderr}");
+    assert!(
+        stderr.contains("no-interpreter-406"),
+        "the error does not name the program: {stderr}"
+    );
+}

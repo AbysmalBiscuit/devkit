@@ -116,11 +116,20 @@ pub(super) fn terminate(pid: u32) {
     }
 }
 
-pub(super) fn detach(cmd: &mut std::process::Command) -> io::Result<()> {
+/// Windows has no cgroups, so `cgroup_leaf` has no effect.
+pub(super) fn spawn_detached(
+    cmd: &mut std::process::Command,
+    _cgroup_leaf: Option<&std::path::Path>,
+    stdout: std::process::Stdio,
+    stderr: std::process::Stdio,
+) -> io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
     keep_stdio_from_children();
-    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
-    Ok(())
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP)
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
 }
 
 pub(super) fn exit_like(status: ExitStatus) -> ! {
@@ -403,12 +412,6 @@ pub(super) fn cgroup_remove_leaf(_leaf: &std::path::Path) -> anyhow::Result<()> 
 }
 pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
     Vec::new()
-}
-pub(super) fn cgroup_command(
-    _leaf: &std::path::Path,
-    _program: &str,
-) -> Option<std::process::Command> {
-    None
 }
 
 pub(super) fn symlink(

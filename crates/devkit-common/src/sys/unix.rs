@@ -42,77 +42,28 @@ pub(super) fn terminate(pid: u32) {
 /// The first argument that makes a devkit binary run [`run_detach_trampoline`].
 const DETACH_EXEC: &str = "__detach-exec";
 
-/// std has no stable safe `setsid` for a child, so `cmd` becomes this binary
-/// run as [`run_detach_trampoline`], which calls `setsid` on itself and then
-/// execs the program in place, keeping its pid.
-pub(super) fn detach(cmd: &mut std::process::Command) -> std::io::Result<()> {
-    let program = cmd.get_program().to_owned();
-    if !program_exists(cmd) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("program `{}` not found", program.to_string_lossy()),
-        ));
-    }
-    *cmd = self_exec(DETACH_EXEC, &[], cmd)?;
-    Ok(())
-}
+/// The trampoline argument before the cgroup leaf the program joins.
+const CGROUP_ARG: &str = "--cgroup";
 
-/// A long-lived daemon outlives an upgrade that replaces its binary. Linux
-/// still execs the running image through `/proc/self/exe` then.
-fn trampoline_exe() -> std::io::Result<std::path::PathBuf> {
-    if cfg!(target_os = "linux") {
-        Ok("/proc/self/exe".into())
-    } else {
-        std::env::current_exe()
-    }
-}
-
-/// Whether `cmd`'s program names an executable file, searched the way the
-/// child searches: through `cmd`'s `PATH`, relative to its directory.
-fn program_exists(cmd: &std::process::Command) -> bool {
-    use std::{os::unix::fs::PermissionsExt as _, path::Path};
-    let base = cmd.get_current_dir().unwrap_or(Path::new("."));
-    let executable = |path: &Path| {
-        std::fs::metadata(base.join(path))
-            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    };
-    let program = Path::new(cmd.get_program());
-    if program.components().count() > 1 {
-        return executable(program);
-    }
-    let path = cmd.get_envs().find(|(key, _)| *key == "PATH").map_or_else(
-        || std::env::var_os("PATH"),
-        |(_, value)| value.map(ToOwned::to_owned),
-    );
-    // With no `PATH`, exec searches the C library's default path.
-    let path = path.unwrap_or_else(|| "/bin:/usr/bin".into());
-    super::find_on_path(program, &path, Some(base), executable).is_some()
-}
-
-/// Runs the program a [`detach`]ed command names, in a session of its own,
-/// when this process was started as its trampoline, and returns otherwise.
-pub(super) fn run_detach_trampoline() {
-    let session = |_: &[std::ffi::OsString], _: &mut std::process::Command| {
-        nix::unistd::setsid().map(drop).map_err(Into::into)
-    };
-    if let Some(err) = run_self_exec(DETACH_EXEC, 0, session) {
-        eprintln!("{DETACH_EXEC}: {err}");
-        std::process::exit(127);
-    }
-}
-
-/// A command that runs this binary as `verb`'s trampoline:
-/// `<this binary> <verb> <prefix> -- <program> <args>`, where program and
-/// args are `cmd`'s. It keeps `cmd`'s directory and environment changes.
-fn self_exec(
-    verb: &str,
-    prefix: &[&std::ffi::OsStr],
-    cmd: &std::process::Command,
-) -> std::io::Result<std::process::Command> {
+/// std has no stable safe `setsid` for a child, so the child is this binary
+/// run as [`run_detach_trampoline`]:
+/// `__detach-exec [--cgroup <leaf>] -- <program> <args>`. It calls `setsid` on
+/// itself, joins the leaf, and execs the program in place, keeping its pid.
+/// Its stdin is the write end of a status pipe. The pipe closes empty when
+/// the program starts, and carries the error when it cannot start.
+pub(super) fn spawn_detached(
+    cmd: &mut std::process::Command,
+    cgroup_leaf: Option<&std::path::Path>,
+    stdout: std::process::Stdio,
+    stderr: std::process::Stdio,
+) -> std::io::Result<std::process::Child> {
+    use std::io::Read as _;
     let mut trampoline = std::process::Command::new(trampoline_exe()?);
+    trampoline.arg(DETACH_EXEC);
+    if let Some(leaf) = cgroup_leaf {
+        trampoline.arg(CGROUP_ARG).arg(leaf);
+    }
     trampoline
-        .arg(verb)
-        .args(prefix)
         .arg("--")
         .arg(cmd.get_program())
         .args(cmd.get_args());
@@ -125,52 +76,110 @@ fn self_exec(
             None => trampoline.env_remove(key),
         };
     }
-    Ok(trampoline)
+    let (mut status, status_writer) = std::io::pipe()?;
+    trampoline
+        .stdin(status_writer)
+        .stdout(stdout)
+        .stderr(stderr);
+    let mut child = trampoline.spawn()?;
+    // The command holds this process's copy of the write end, and the read
+    // below ends only when every copy is closed.
+    drop(trampoline);
+    let mut failure = String::new();
+    status.read_to_string(&mut failure)?;
+    if failure.is_empty() {
+        return Ok(child);
+    }
+    let _ = child.wait();
+    Err(std::io::Error::other(failure))
 }
 
-/// Execs the program of a [`self_exec`] command in place, after `prepare`
-/// gets the `prefix_len` arguments and the program's command. Returns `None`
-/// when this process is not `verb`'s trampoline, else what stopped the exec.
-fn run_self_exec(
-    verb: &str,
-    prefix_len: usize,
-    prepare: impl FnOnce(&[std::ffi::OsString], &mut std::process::Command) -> std::io::Result<()>,
-) -> Option<std::io::Error> {
-    use std::os::unix::process::CommandExt as _;
+/// A long-lived daemon outlives an upgrade that replaces its binary. Linux
+/// still execs the running image through `/proc/self/exe` then.
+fn trampoline_exe() -> std::io::Result<std::path::PathBuf> {
+    if cfg!(target_os = "linux") {
+        Ok("/proc/self/exe".into())
+    } else {
+        std::env::current_exe()
+    }
+}
+
+/// Runs the program a [`spawn_detached`] command names when this process was
+/// started as its trampoline, and returns otherwise.
+pub(super) fn run_detach_trampoline() {
+    use std::{io::Write as _, os::fd::AsFd as _};
     let mut args = std::env::args_os().skip(1);
-    if args.next().as_deref() != Some(std::ffi::OsStr::new(verb)) {
-        return None;
+    if args.next().as_deref() != Some(std::ffi::OsStr::new(DETACH_EXEC)) {
+        return;
     }
-    let prefix: Vec<_> = args.by_ref().take(prefix_len).collect();
-    let (Some(separator), Some(program)) = (args.next(), args.next()) else {
-        return Some(usage(verb, prefix_len));
-    };
-    if prefix.len() != prefix_len || separator != "--" {
-        return Some(usage(verb, prefix_len));
+    // The clone is close-on-exec, so a successful exec closes the status pipe.
+    // `exec` replaces stdin before it runs the program, so a failed exec has
+    // only the clone left to report through.
+    let status = std::io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .map(std::fs::File::from);
+    let err = exec_detached(args);
+    if let Ok(mut status) = status {
+        let _ = status.write_all(err.to_string().as_bytes());
     }
-    let mut command = std::process::Command::new(&program);
-    command.args(args);
-    let err = match prepare(&prefix, &mut command) {
-        Ok(()) => command.exec(),
-        Err(err) => err,
+    eprintln!("{DETACH_EXEC}: {err}");
+    std::process::exit(127);
+}
+
+/// Reads `[--cgroup <leaf>] -- <program> <args>`, starts a session, joins the
+/// leaf, and execs the program with stdin at the null device. Returns only
+/// the error that stopped the program.
+fn exec_detached(mut args: impl Iterator<Item = std::ffi::OsString>) -> std::io::Error {
+    use std::os::unix::process::CommandExt as _;
+    let mut next = args.next();
+    let mut leaf = None;
+    if next.as_deref() == Some(std::ffi::OsStr::new(CGROUP_ARG)) {
+        leaf = args.next();
+        next = args.next();
+    }
+    let (Some(separator), Some(program)) = (next, args.next()) else {
+        return usage();
     };
-    Some(std::io::Error::new(
+    if separator != "--" {
+        return usage();
+    }
+    let err = match nix::unistd::setsid() {
+        Ok(_) => {
+            if let Some(leaf) = leaf {
+                join_cgroup(std::path::Path::new(&leaf));
+            }
+            std::process::Command::new(&program)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .exec()
+        }
+        Err(errno) => errno.into(),
+    };
+    std::io::Error::new(
         err.kind(),
         format!("cannot run `{}`: {err}", program.to_string_lossy()),
-    ))
+    )
 }
 
-fn usage(verb: &str, prefix_len: usize) -> std::io::Error {
+fn usage() -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::InvalidInput,
-        format!(
-            "usage: {} -- <program> [args...]",
-            std::iter::once(verb)
-                .chain(std::iter::repeat_n("<arg>", prefix_len))
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
+        format!("usage: {DETACH_EXEC} [{CGROUP_ARG} <leaf>] -- <program> [args...]"),
     )
+}
+
+/// Moves this process into `leaf`. A leaf that cannot be joined leaves the
+/// program uncapped. The pid goes in one write, because cgroupfs reads each
+/// write as one request.
+fn join_cgroup(leaf: &std::path::Path) {
+    use std::io::Write as _;
+    if let Ok(mut procs) = std::fs::OpenOptions::new()
+        .write(true)
+        .open(leaf.join("cgroup.procs"))
+    {
+        let _ = procs.write_all(format!("{}\n", std::process::id()).as_bytes());
+    }
 }
 
 pub(super) fn exit_like(status: std::process::ExitStatus) -> ! {
@@ -195,11 +204,7 @@ pub(super) fn spawn_background(
     cmd: &mut std::process::Command,
 ) -> std::io::Result<BackgroundChild> {
     use std::process::Stdio;
-    detach(cmd)?;
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    cmd.spawn()
+    spawn_detached(cmd, None, Stdio::null(), Stdio::null())
 }
 
 pub(super) fn reap_owned(pid: u32) -> bool {
@@ -434,53 +439,6 @@ pub(super) fn cgroup_list_leaves(base: &std::path::Path) -> Vec<String> {
     names
 }
 
-#[cfg(target_os = "linux")]
-pub(super) fn cgroup_command(
-    leaf: &std::path::Path,
-    program: &str,
-) -> Option<std::process::Command> {
-    // `/proc/self/exe` still runs this binary after an upgrade deletes or
-    // replaces the file at `current_exe()`.
-    let mut cmd = std::process::Command::new("/proc/self/exe");
-    cmd.arg(super::CGROUP_EXEC).arg(leaf).arg("--").arg(program);
-    Some(cmd)
-}
-
-pub(super) fn exec_in_cgroup(
-    leaf: &std::path::Path,
-    program: &std::ffi::OsStr,
-    args: &[std::ffi::OsString],
-) -> std::io::Error {
-    use std::{
-        io::Write as _,
-        os::{fd::AsFd as _, unix::process::CommandExt as _},
-        process::Stdio,
-    };
-    // The clone is close-on-exec, so a successful exec closes the status pipe.
-    // `exec` replaces stdin before it runs the program, so a failed exec has
-    // only the clone left to report through.
-    let status = std::io::stdin()
-        .as_fd()
-        .try_clone_to_owned()
-        .map(std::fs::File::from);
-    // A leaf that cannot be joined leaves the program uncapped. The pid goes
-    // in one write, because cgroupfs reads each write as one request.
-    if let Ok(mut procs) = std::fs::OpenOptions::new()
-        .write(true)
-        .open(leaf.join("cgroup.procs"))
-    {
-        let _ = procs.write_all(format!("{}\n", std::process::id()).as_bytes());
-    }
-    let err = std::process::Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .exec();
-    if let Ok(mut status) = status {
-        let _ = status.write_all(err.to_string().as_bytes());
-    }
-    err
-}
-
 // macOS: no cgroups.
 #[cfg(not(target_os = "linux"))]
 pub(super) fn cgroup_caps() -> super::CgroupCaps {
@@ -501,13 +459,6 @@ pub(super) fn cgroup_remove_leaf(_leaf: &std::path::Path) -> anyhow::Result<()> 
 #[cfg(not(target_os = "linux"))]
 pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
     Vec::new()
-}
-#[cfg(not(target_os = "linux"))]
-pub(super) fn cgroup_command(
-    _leaf: &std::path::Path,
-    _program: &str,
-) -> Option<std::process::Command> {
-    None
 }
 
 #[cfg(target_os = "linux")]
