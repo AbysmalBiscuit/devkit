@@ -1155,6 +1155,7 @@ fn cmd_up(
             ),
             || run::launch(&plans, holder, *grp_role, supervise, true),
         )?;
+        let key = devkit_common::keyed::Key::live().ok();
         for s in statuses {
             if s.reused {
                 let plan = plans.iter().find(|p| p.app == s.app);
@@ -1163,7 +1164,10 @@ fn cmd_up(
                     current_plan_commit: s
                         .origin
                         .clone()
-                        .filter(|o| plan.is_some_and(|p| p.digest == o.plan))
+                        .filter(|o| {
+                            plan.zip(key.as_ref())
+                                .is_some_and(|(p, key)| p.digest(key) == o.plan)
+                        })
                         .map(|o| o.commit),
                 });
             } else {

@@ -30,6 +30,7 @@ rustls.workspace = true
 webpki-roots.workspace = true
 rustls-native-certs.workspace = true
 ring.workspace = true
+tempfile.workspace = true
 chrono.workspace = true
 minijinja.workspace = true
 tracing.workspace = true
@@ -48,7 +49,6 @@ test-support = []
 # InMemoryTerm: lets tests drive a visible (non-hidden) MultiProgress and
 # assert what actually reaches the terminal.
 indicatif = { workspace = true, features = ["in_memory"] }
-tempfile.workspace = true
 devkit-git = { workspace = true, features = ["test-support"] }
 
 # Unix process primitives (signals, sessions); unavailable on Windows.

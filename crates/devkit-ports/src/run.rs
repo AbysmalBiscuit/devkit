@@ -249,10 +249,6 @@ pub struct LaunchPlan {
     pub log: PathBuf,
     /// The app's rendered `url`, as reported to the user.
     pub url: String,
-    /// A SHA-256 of the app, port, cwd and argv, the ports its templates
-    /// read, and each env name with the `static_env` template config gave
-    /// it. Rendered env values never enter it: they may be secrets.
-    pub digest: String,
 }
 
 /// What [`LaunchPlan::digest`] hashes.
@@ -260,10 +256,25 @@ pub struct LaunchPlan {
 struct DigestInput<'a> {
     app: &'a str,
     port: u16,
-    cwd: &'a Path,
+    cwd: std::borrow::Cow<'a, str>,
     argv: &'a [String],
-    ports: BTreeMap<&'a str, u16>,
-    env: BTreeMap<&'a str, Option<&'a str>>,
+    env: &'a BTreeMap<String, String>,
+}
+
+impl LaunchPlan {
+    /// The HMAC under `key` of the app, port, cwd, argv and rendered env.
+    /// It changes with any rendered value, and holds none: the values may be
+    /// secrets.
+    pub fn digest(&self, key: &devkit_common::keyed::Key) -> String {
+        let input = DigestInput {
+            app: &self.app,
+            port: self.port,
+            cwd: self.cwd.to_string_lossy(),
+            argv: &self.argv,
+            env: &self.env,
+        };
+        key.digest(&serde_json::to_string(&input).expect("strings and numbers serialize"))
+    }
 }
 
 /// Ports one (role, holder) group needs: each selected app's own port plus
@@ -365,9 +376,6 @@ pub fn plan_group(
         let log = paths::logs_dir()?
             .join(holder_slug(base_dir.to_str().unwrap_or("wt")))
             .join(format!("{}-{}.log", role.as_str(), a));
-        let digest = plan_digest(
-            app, port, &cwd, &argv, ports, provider, &env, user_env, variables,
-        )?;
         plans.push(LaunchPlan {
             app: a.clone(),
             port,
@@ -376,65 +384,20 @@ pub fn plan_group(
             env,
             log,
             url,
-            digest,
         });
     }
     Ok(plans)
 }
 
-/// [`LaunchPlan::digest`] of `app`'s plan at `port`, which renders `env`.
-#[allow(clippy::too_many_arguments)]
-fn plan_digest(
-    app: &App,
-    port: u16,
-    cwd: &Path,
-    argv: &[String],
-    ports: &BTreeMap<String, u16>,
-    provider: Option<&str>,
-    env: &BTreeMap<String, String>,
-    user_env: &BTreeMap<String, String>,
-    variables: &BTreeMap<String, String>,
-) -> Result<String> {
-    let mut templates: Vec<&str> = app.launch.iter().map(String::as_str).collect();
-    templates.extend(app.static_env.values().map(String::as_str));
-    templates.push(app.url_template());
-    let mut read = devkit_common::template::referenced_ports(&templates, variables)
-        .with_context(|| format!("scanning templates of app `{}`", app.name))?
-        .apps;
-    if url_consumer_var(app).is_some() {
-        read.extend(provider.map(str::to_string));
-    }
-    let input = DigestInput {
-        app: &app.name,
-        port,
-        cwd,
-        argv,
-        ports: ports
-            .iter()
-            .filter(|(name, _)| read.contains(*name))
-            .map(|(name, port)| (name.as_str(), *port))
-            .collect(),
-        env: env
-            .keys()
-            .map(|k| {
-                let template = app.static_env.get(k).filter(|_| !user_env.contains_key(k));
-                (k.as_str(), template.map(String::as_str))
-            })
-            .collect(),
-    };
-    Ok(devkit_common::harness_log::redact::digest(
-        &serde_json::to_string(&input)?,
-    ))
-}
-
 /// The origin a server launched from `dir` with `plan` records: `None` when
 /// the tree there has no commit or is dirty, since the server may then run
-/// code no commit holds.
+/// code no commit holds, or when the digest key cannot be read.
 fn origin_at(dir: &Path, plan: &LaunchPlan) -> Option<Origin> {
+    let key = devkit_common::keyed::Key::live().ok()?;
     let (head, clean) = crate::ledger::tree_state(dir);
     Some(Origin {
         commit: head.filter(|_| clean)?,
-        plan: plan.digest.clone(),
+        plan: plan.digest(&key),
     })
 }
 
@@ -957,12 +920,17 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_digest_never_holds_a_rendered_env_value() {
-        let digest = |template: &str, token: &str, user: &[(&str, &str)]| {
+    fn a_plan_digest_changes_with_a_rendered_env_value_it_never_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = devkit_common::keyed::Key::at(&dir.path().join("key")).unwrap();
+        let digest = |token: &str, user: &[(&str, &str)]| {
             let mut catalog = HashMap::new();
             catalog.insert(
                 "api".to_string(),
-                test_app(&["nitro", "--port", "{{ port }}"], &[("TOKEN", template)]),
+                test_app(&["nitro", "--port", "{{ port }}"], &[(
+                    "TOKEN",
+                    "{{ token }}",
+                )]),
             );
             let plans = plan_group(
                 &catalog,
@@ -978,25 +946,18 @@ mod tests {
                 &[("token".to_string(), token.to_string())].into(),
             )
             .unwrap();
-            assert!(
-                plans[0].env["TOKEN"].starts_with(token),
-                "the value renders"
-            );
-            plans[0].digest.clone()
+            assert_eq!(plans[0].env["TOKEN"], token, "the value renders");
+            plans[0].digest(&key)
         };
-        let base = digest("{{ token }}", "s3cret", &[]);
-        assert_eq!(base, digest("{{ token }}", "other", &[]), "rendered value");
-        assert_eq!(
-            digest("{{ token }}", "s3cret", &[("PASS", "hunter2")]),
-            digest("{{ token }}", "s3cret", &[("PASS", "other")]),
+        let base = digest("s3cret", &[]);
+        assert_eq!(base, digest("s3cret", &[]), "stable");
+        assert_ne!(base, digest("other", &[]), "a rendered value");
+        assert_ne!(
+            digest("s3cret", &[("PASS", "hunter2")]),
+            digest("s3cret", &[("PASS", "other")]),
             "a user value"
         );
-        assert_ne!(base, digest("{{ token }}-v2", "s3cret", &[]), "template");
-        assert_ne!(
-            base,
-            digest("{{ token }}", "s3cret", &[("PASS", "hunter2")]),
-            "an env name"
-        );
+        assert!(!base.contains("s3cret"), "{base}");
     }
 
     #[test]
@@ -1325,7 +1286,6 @@ mod tests {
             env: BTreeMap::new(),
             log: tmp.clone(),
             url: format!("http://localhost:{port}"),
-            digest: String::new(),
         };
         // Non-blocking, so the server is "starting".
         let out = launch_with(
@@ -1392,7 +1352,6 @@ mod tests {
             env: BTreeMap::new(),
             log: PathBuf::from("x.log"),
             url: format!("http://localhost:{port}"),
-            digest: String::new(),
         }
     }
 

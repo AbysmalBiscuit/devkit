@@ -1182,14 +1182,18 @@ fn a_run_whose_second_up_step_reuses_the_server_its_first_launched_qualifies() {
     assert!(body(&p).contains("Exit code: 0"), "{}", body(&p));
 }
 
+/// The value `srv`'s `TOKEN` renders to in [`serving_project`].
+const TOKEN: &str = "s3cret-token-value";
+
 /// A project whose required `e2e` brings `srv` up, this test binary serving
-/// its port, then runs `verify`.
+/// its port, then runs `verify`. `srv`'s `TOKEN` renders [`TOKEN`].
 fn serving_project(base_port: u16) -> ghfake::Fake {
     let exe = std::env::current_exe().unwrap();
     project(&format!(
-        "[apps.srv]\nbase_port = {base_port}\npath = \".\"\n\
+        "[templates.variables]\nscope = \"all\"\ntoken = \"{TOKEN}\"\n\
+         [apps.srv]\nbase_port = {base_port}\npath = \".\"\n\
          launch = ['{}', '--exact', 'serve_port_when_launched_as_an_app', '--nocapture']\n\
-         static_env = {{ DEVKIT_TEST_SERVE_PORT = \"{{{{ port }}}}\" }}\n\
+         static_env = {{ DEVKIT_TEST_SERVE_PORT = \"{{{{ port }}}}\", TOKEN = \"{{{{ token }}}}\" }}\n\
          [tasks.e2e]\nsteps = [{{ up = \"srv\" }}, {{ task = \"verify\" }}]\n\
          [pr.gates]\nverify_task = \"e2e\"\nverify_args = {{ scope = \"all\" }}\n",
         exe.display()
@@ -1230,7 +1234,21 @@ fn devrun_up_records_the_launch_commit_and_plan_digest() {
     let entry = data.entries.values().find(|e| e.app == "srv").unwrap();
     let origin = entry.origin.as_ref().expect("an origin is recorded");
     assert_eq!(origin.commit, head(&p));
-    assert!(origin.plan.starts_with("sha256:"), "{}", origin.plan);
+    assert!(origin.plan.starts_with("hmac-sha256:"), "{}", origin.plan);
+    let text = std::fs::read_to_string(p.state().join("devkit").join("ports.json")).unwrap();
+    assert!(!text.contains(TOKEN), "{text}");
+}
+
+#[test]
+fn a_server_launched_with_an_unreadable_digest_key_records_no_origin() {
+    let p = serving_project(39217);
+    let dir = p.state().join("devkit");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("digest.key"), b"not a key").unwrap();
+    let _srv = Srv::up(&p);
+    let data = registry(&p);
+    let entry = data.entries.values().find(|e| e.app == "srv").unwrap();
+    assert_eq!(entry.origin, None);
 }
 
 #[test]
@@ -1275,9 +1293,29 @@ fn a_run_reusing_a_server_launched_with_another_plan_is_refused() {
     let layer = outside.path().join("devkit.toml");
     let toml = std::fs::read_to_string(p.project().join("devkit.toml")).unwrap();
     let other = toml.replace(
-        "static_env = { DEVKIT_TEST_SERVE_PORT = \"{{ port }}\" }",
-        "static_env = { DEVKIT_TEST_SERVE_PORT = \"{{ port }}\", EXTRA = \"x\" }",
+        "TOKEN = \"{{ token }}\" }",
+        "TOKEN = \"{{ token }}\", EXTRA = \"x\" }",
     );
+    assert_ne!(other, toml);
+    std::fs::write(&layer, other).unwrap();
+    task(&p, &[
+        "--config",
+        layer.to_str().unwrap(),
+        "e2e",
+        "--arg",
+        "scope=all",
+    ]);
+    assert_refused_for_reusing_srv(&p);
+}
+
+#[test]
+fn a_run_reusing_a_server_whose_env_rendered_another_value_is_refused() {
+    let p = serving_project(39216);
+    let _srv = Srv::up(&p);
+    let outside = tempfile::tempdir().unwrap();
+    let layer = outside.path().join("devkit.toml");
+    let toml = std::fs::read_to_string(p.project().join("devkit.toml")).unwrap();
+    let other = toml.replace(TOKEN, "another-token-value");
     assert_ne!(other, toml);
     std::fs::write(&layer, other).unwrap();
     task(&p, &[
