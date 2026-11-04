@@ -901,34 +901,7 @@ fn cmd_task(
     if status.success() {
         return Ok(());
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        if let Some(signal) = status.signal() {
-            raise_signal(signal);
-        }
-    }
-    std::process::exit(status.code().unwrap_or(1));
-}
-
-/// Replace this process with a death by `signal`, so the parent reads a
-/// signal status rather than an exit code. `process::exit` can only report
-/// a code, which would make a killed child look like `exit 143`.
-#[cfg(unix)]
-fn raise_signal(sig: i32) -> ! {
-    // The symbols libc itself links. A crate dependency would pull signal
-    // handling into every target for one Unix exit path.
-    unsafe extern "C" {
-        fn signal(sig: i32, handler: usize) -> usize;
-        fn raise(sig: i32) -> i32;
-    }
-    // SAFETY: the signal number came from the child's own status, and the
-    // default handler is what a killed process dies by.
-    unsafe {
-        signal(sig, 0);
-        raise(sig);
-    }
-    std::process::exit(128 + sig);
+    devkit_common::sys::exit_like(status)
 }
 
 /// The exit the ledger records. A child killed by a signal has no code,
