@@ -317,23 +317,21 @@ pub(super) fn cgroup_command(
     Ok(cmd)
 }
 
-/// Whether `program` names an executable file the way `execvp` finds it: a
-/// name with a `/` relative to `cwd`, any other name in a `PATH` entry.
+/// Whether `program` names an executable file the way `execvp` finds it.
 #[cfg(target_os = "linux")]
 fn find_program(program: &str, cwd: &str, path_var: Option<&std::ffi::OsStr>) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
-    let cwd = std::path::Path::new(cwd);
-    let executable = |p: std::path::PathBuf| {
+    let parent_path = std::env::var_os("PATH");
+    let executable = |p: &std::path::Path| {
         fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
     };
-    if program.contains('/') {
-        return executable(cwd.join(program));
-    }
-    let path_var = path_var
-        .map(std::ffi::OsString::from)
-        .or_else(|| std::env::var_os("PATH"))
-        .unwrap_or_default();
-    std::env::split_paths(&path_var).any(|dir| executable(cwd.join(dir).join(program)))
+    crate::program::find_program(
+        program,
+        path_var.or(parent_path.as_deref()),
+        Some(std::path::Path::new(cwd)),
+        executable,
+    )
+    .is_some()
 }
 
 #[cfg(target_os = "linux")]

@@ -16,6 +16,7 @@ pub mod http;
 pub mod livetable;
 pub mod paths;
 pub mod pool;
+pub mod program;
 pub mod progress;
 pub mod record;
 pub mod report;
