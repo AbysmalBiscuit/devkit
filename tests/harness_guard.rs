@@ -882,12 +882,13 @@ reason = "merge prod PRs through the release train"
             deny_reason(&out)
         );
     }
-    let other = run_hook(
-        proj.path(),
-        home.path(),
-        &claude_payload("gh pr merge 9 --repo acme/dev"),
-    );
-    assert!(!denied(&other), "{}", deny_reason(&other));
+    for command in [
+        "gh pr merge 9 --repo acme/dev",
+        "gh pr merge 9 -R acme/prod",
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(!denied(&out), "{command}: {}", deny_reason(&out));
+    }
 }
 
 #[test]

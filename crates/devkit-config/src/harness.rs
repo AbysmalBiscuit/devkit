@@ -212,7 +212,8 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 /// program's own global options are removed, so `git -C /repo worktree add`
 /// fires the first rule and `git worktree list` does not. For `gh`, these
 /// options are `-R` and `--repo`, so `gh pr -R owner/repo create` matches
-/// `["pr", "create"]` and `["**", "--repo", "owner/repo"]`. In the
+/// `["pr", "create"]`. A pattern that names a repository flag matches the typed
+/// spelling only, so `-R` and `--repo` each need their own rule. In the
 /// second rule, `**` skips any flags before the server and `*nitro` matches the
 /// binary at any path, so it refuses `bun --filter=api nitro dev` and allows
 /// `bun nitro build`.
