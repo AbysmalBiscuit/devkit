@@ -800,6 +800,32 @@ fn a_repo_flag_before_the_gh_subcommand_does_not_pass_the_create_rules() {
 }
 
 #[test]
+fn a_powershell_repo_flag_before_the_gh_subcommand_does_not_pass_the_create_rules() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(&GH_ISSUE_CREATE.replace(
+        "enforce_commands = true\n",
+        "enforce_commands = true\nshell = \"powershell\"\n",
+    ));
+    for (command, replacement) in [
+        ("gh pr -R owner/repo create --fill", "devkit pr create"),
+        ("gh pr --repo owner/repo create --fill", "devkit pr create"),
+        ("gh issue -R owner/repo create -t t", "devkit ticket create"),
+        (
+            "gh issue --repo owner/repo create -t t",
+            "devkit ticket create",
+        ),
+    ] {
+        let out = run_hook(proj.path(), home.path(), &claude_payload(command));
+        assert!(denied(&out), "{command}");
+        assert!(
+            deny_reason(&out).contains(replacement),
+            "{command}: {}",
+            deny_reason(&out)
+        );
+    }
+}
+
+#[test]
 fn a_repo_flag_before_a_read_only_gh_subcommand_still_passes() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(GH_ISSUE_CREATE);
