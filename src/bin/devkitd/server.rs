@@ -126,6 +126,7 @@ fn supervise_app(
     logfile: std::path::PathBuf,
     base_port: u16,
 ) -> Response {
+    let spawning = daemon.spawning.lock().unwrap();
     // Reserve before bind (same invariant as the flock path).
     let reqs = vec![(app.clone(), base_port)];
     let port = match registry::alloc_with(&daemon.port_store(), &holder, &reqs, role) {
@@ -186,6 +187,7 @@ fn supervise_app(
         .lock()
         .unwrap()
         .insert_owned(key, pid, port, logfile, launch);
+    drop(spawning);
     let ready = supervise::wait_ready(port, Duration::from_secs(120));
     Response::Supervised(Supervised {
         port,

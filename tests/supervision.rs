@@ -927,6 +927,58 @@ fn second_supervise_of_live_server_is_noop() {
     h.shutdown();
 }
 
+/// Two Supervise requests for one key that arrive together spawn one server,
+/// and only one answer says it spawned it, so only one caller records an
+/// origin for the server.
+#[test]
+fn concurrent_supervise_spawns_once() {
+    let mut h = Harness::start();
+    let port = common::free_port();
+    let holder = h.home.path().to_str().unwrap().to_string();
+    let req = Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Workspace,
+        argv: common::tcp_server_argv(port),
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.path().join("race.log"),
+        base_port: port,
+    };
+
+    let start = std::sync::Barrier::new(2);
+    let answers: Vec<Response> = std::thread::scope(|s| {
+        let calls: Vec<_> = (0..2)
+            .map(|_| {
+                s.spawn(|| {
+                    start.wait();
+                    h.request(&req)
+                })
+            })
+            .collect();
+        calls.into_iter().map(|c| c.join().unwrap()).collect()
+    });
+
+    let pid = pid_in_ports_json(&h.ports_json(), "api").expect("no pid after supervise");
+    let spawned = answers
+        .iter()
+        .filter(|a| match a {
+            Response::Supervised(s) => {
+                assert_eq!(s.pid, pid, "each answer names the registered server: {a:?}");
+                s.spawned
+            }
+            other => panic!("supervise failed: {other:?}"),
+        })
+        .count();
+    assert_eq!(
+        spawned, 1,
+        "exactly one answer spawned the server: {answers:?}"
+    );
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
 /// After a clean `Down`, the supervision thread must NOT restart the server —
 /// `Down` removes the key from the supervisor table before stopping the child,
 /// so the exit is never reaped as a crash.
