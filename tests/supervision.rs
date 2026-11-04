@@ -1033,7 +1033,9 @@ fn down_does_not_restart() {
 /// Two Supervise requests for one app race with different launch plans: the
 /// second arrives while the first one's server is live but not yet ready.
 /// Only the request whose answer says it spawned the server records an
-/// origin, so the ledger holds the spawner's commit and plan digest.
+/// origin, so the ledger holds the spawner's commit and plan digest. The
+/// other request reports the server as reused, with that recorded origin,
+/// so a verify run cannot pass it off as launched from its own plan.
 #[test]
 fn only_the_spawning_supervise_records_an_origin() {
     let mut h = Harness::start();
@@ -1105,20 +1107,40 @@ fn only_the_spawning_supervise_records_an_origin() {
     assert!(!second_srv.spawned, "{second_srv:?}");
     assert_eq!(second_srv.pid, first_srv.pid);
 
-    // The losing request records first, as it answers first; the spawner's
-    // record must survive it either way.
-    run::record_supervised_origin(&ledger, port, second_srv, Some(&second_origin));
+    let status = |p: &LaunchPlan, srv, origin: &Origin| {
+        run::supervised_status(Some(&ledger), p, Role::Workspace, srv, Some(origin.clone()))
+    };
+
+    // The losing request answers first, so it reads the ledger before the
+    // spawner records; the spawner's record must survive it either way.
+    let loser = status(&second, second_srv, &second_origin);
+    assert!(
+        loser.reused,
+        "the losing request reports a launch: {loser:?}"
+    );
+    assert_eq!(loser.pid, Some(first_srv.pid));
+    assert_eq!(loser.origin, None, "{loser:?}");
     assert_eq!(
         ledger.origin(port, first_srv.pid),
         None,
         "the losing request wrote an origin"
     );
-    run::record_supervised_origin(&ledger, port, first_srv, Some(&first_origin));
+
+    let spawner = status(&first, first_srv, &first_origin);
+    assert!(!spawner.reused, "{spawner:?}");
+    assert_eq!(spawner.pid, Some(first_srv.pid));
     assert_eq!(
         ledger.origin(port, first_srv.pid),
         Some(first_origin.clone())
     );
-    run::record_supervised_origin(&ledger, port, second_srv, Some(&second_origin));
+
+    let loser = status(&second, second_srv, &second_origin);
+    assert!(loser.reused, "{loser:?}");
+    assert_eq!(
+        loser.origin.as_ref(),
+        Some(&first_origin),
+        "the loser must carry the spawner's provenance, not its own plan"
+    );
     assert_eq!(ledger.origin(port, first_srv.pid), Some(first_origin));
 
     h.request(&Request::Down { holder, role: None });

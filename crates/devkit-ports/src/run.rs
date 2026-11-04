@@ -406,18 +406,39 @@ fn record_origin(port: u16, pid: u32, origin: Option<Origin>) {
     }
 }
 
-/// Record `origin` in `ledger` for the server a `Supervise` answer names on
-/// `port`, when that request spawned it. A request that found the server
-/// already live leaves the origin to the request that spawned it.
+/// The status of the server a `Supervise` answer for `plan` names.
+/// When that request spawned the server, `origin` is recorded for it in
+/// `ledger`. Otherwise another request spawned it, so it is reused, with the
+/// origin `ledger` holds for it.
 #[cfg(feature = "daemon")]
-pub fn record_supervised_origin(
-    ledger: &Ledger,
-    port: u16,
+pub fn supervised_status(
+    ledger: Option<&Ledger>,
+    plan: &LaunchPlan,
+    role: Role,
     server: &crate::daemon::proto::Supervised,
-    origin: Option<&Origin>,
-) {
-    if server.spawned {
-        let _ = ledger.set_origin(port, server.pid, origin);
+    origin: Option<Origin>,
+) -> ServerStatus {
+    let origin = match ledger {
+        Some(ledger) if server.spawned => {
+            let _ = ledger.set_origin(plan.port, server.pid, origin.as_ref());
+            origin
+        }
+        Some(ledger) => ledger.origin(plan.port, server.pid),
+        None => None,
+    };
+    ServerStatus {
+        app: plan.app.clone(),
+        role,
+        port: plan.port,
+        pid: Some(server.pid),
+        logfile: Some(plan.log.clone()),
+        state: if server.ready {
+            ServerState::Ready
+        } else {
+            ServerState::Starting
+        },
+        reused: !server.spawned,
+        origin,
     }
 }
 
@@ -718,33 +739,27 @@ fn supervise_via_daemon(
             logfile: p.log.clone(),
             base_port: p.port,
         })?;
-        let ready = match &resp {
+        let status = match &resp {
             crate::daemon::proto::Response::Supervised(s) => {
-                if let Ok(ledger) = Ledger::live() {
-                    record_supervised_origin(&ledger, p.port, s, origin.as_ref());
+                supervised_status(Ledger::live().ok().as_ref(), p, role, s, origin)
+            }
+            other => {
+                if let crate::daemon::proto::Response::Err(msg) = other {
+                    eprintln!("daemon could not supervise {}: {msg}", p.app);
                 }
-                s.ready
+                ServerStatus {
+                    app: p.app.clone(),
+                    role,
+                    port: p.port,
+                    pid: None,
+                    logfile: Some(p.log.clone()),
+                    state: ServerState::Starting,
+                    reused: false,
+                    origin: None,
+                }
             }
-            crate::daemon::proto::Response::Err(msg) => {
-                eprintln!("daemon could not supervise {}: {msg}", p.app);
-                false
-            }
-            _ => false,
         };
-        out.push(ServerStatus {
-            app: p.app.clone(),
-            role,
-            port: p.port,
-            pid: None,
-            logfile: Some(p.log.clone()),
-            state: if ready {
-                ServerState::Ready
-            } else {
-                ServerState::Starting
-            },
-            reused: false,
-            origin: None,
-        });
+        out.push(status);
     }
     Ok(out)
 }
