@@ -407,6 +407,15 @@ github = "sweeper[bot]"
         cmd.output().expect("spawn devkit issue")
     }
 
+    /// [`Fake::issue`] from the process directory `cwd`, with `-C` still
+    /// naming the project.
+    pub fn issue_from(&self, cwd: &Path, args: &[&str]) -> std::process::Output {
+        self.issue_cmd(args)
+            .current_dir(cwd)
+            .output()
+            .expect("spawn devkit issue")
+    }
+
     /// [`Fake::issue`] with `stdin` piped in.
     pub fn issue_with_stdin(&self, args: &[&str], stdin: &[u8]) -> std::process::Output {
         with_stdin(self.issue_cmd(args), stdin)

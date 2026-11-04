@@ -543,9 +543,9 @@ pub(crate) enum PrCmd {
         /// PR title, instead of the one the template renders.
         #[arg(short = 't', long = "pr-title")]
         pr_title: Option<String>,
-        /// PR body, instead of the one the template renders.
-        #[arg(short = 'b', long = "pr-body")]
-        pr_body: Option<String>,
+        // Boxed because this variant sets the size of `Action`.
+        #[command(flatten)]
+        summary: Box<pr::render::SummaryArgs>,
         /// Image or video to upload into the body of the PR this run opens.
         /// Repeatable. Alt text follows `#`. A body reference to the same path,
         /// like `![alt](./after.png)`, becomes the uploaded URL; an attachment
@@ -575,9 +575,8 @@ pub(crate) enum PrCmd {
         /// New PR title, the `input` of the `pr_title` template.
         #[arg(short = 't', long = "pr-title")]
         pr_title: Option<String>,
-        /// New summary, the `input` of the `pr_body` template.
-        #[arg(short = 'b', long = "pr-body")]
-        pr_body: Option<String>,
+        #[command(flatten)]
+        summary: pr::render::SummaryArgs,
         /// Image or video to upload into the edited text. Repeatable. Alt text
         /// follows `#`. The text must embed it by the same path, like
         /// `![alt](./after.png)`, which becomes the uploaded URL. GitHub only;
@@ -605,9 +604,8 @@ pub(crate) enum PrCmd {
         /// PR title, the `input` of the `pr_title` template.
         #[arg(short = 't', long = "pr-title")]
         pr_title: Option<String>,
-        /// PR body, the `input` of the `pr_body` template.
-        #[arg(short = 'b', long = "pr-body")]
-        pr_body: Option<String>,
+        #[command(flatten)]
+        summary: pr::render::SummaryArgs,
         #[command(flatten)]
         vars: VarArgs,
     },
@@ -887,11 +885,12 @@ fn run_verb(dir: Option<String>, config: Option<String>, verb: Verb) -> Result<(
 }
 
 fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Result<()> {
+    let here = PathBuf::from(start(&dir));
     match cmd {
         TicketCmd::Render { title, body, vars } => render::run(render::RenderArgs {
             title,
             body,
-            vars,
+            vars: vars.under(&here),
             dir,
             config,
         }),
@@ -903,7 +902,7 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
         } => create::run(create::CreateArgs {
             title,
             body,
-            vars,
+            vars: vars.under(&here),
             fields,
             dir,
             config,
@@ -921,7 +920,7 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             issue,
             title,
             body,
-            vars,
+            vars: vars.under(&here),
             fields,
             dir,
             config,
@@ -942,7 +941,7 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
             cmd: None,
         } => fields::run(fields::FieldsArgs {
             json,
-            vars,
+            vars: vars.under(&here),
             dir,
             config,
         }),
@@ -1050,6 +1049,7 @@ fn run_workspace(dir: Option<String>, config: Option<String>, cmd: WorkspaceCmd)
 }
 
 fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()> {
+    let here = PathBuf::from(start(&dir));
     match cmd {
         PrCmd::Create {
             draft,
@@ -1057,7 +1057,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             to,
             base,
             pr_title,
-            pr_body,
+            summary,
             attach,
             no_push,
             pr,
@@ -1068,39 +1068,39 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             to,
             base,
             pr_title,
-            pr_body,
+            pr_body: summary.read(&vars, &here)?,
             attach,
             no_push,
             pr,
-            vars,
+            vars: vars.under(&here),
             dir,
             config,
         }),
         PrCmd::Edit {
             pr_title,
-            pr_body,
+            summary,
             attach,
             no_push,
             pr,
             vars,
         } => pr::edit::run(pr::edit::Args {
             pr_title,
-            pr_body,
+            pr_body: summary.read(&vars, &here)?,
             attach,
             no_push,
             pr,
-            vars,
+            vars: vars.under(&here),
             dir,
             config,
         }),
         PrCmd::Render {
             pr_title,
-            pr_body,
+            summary,
             vars,
         } => pr::render::run(pr::render::Args {
             pr_title,
-            pr_body,
-            vars,
+            pr_body: summary.read(&vars, &here)?,
+            vars: vars.under(&here),
             dir,
             config,
         }),
@@ -1118,7 +1118,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             base.as_deref(),
         ),
         PrCmd::Proof { issue, vars } => {
-            pr::proof::run(Path::new(&start(&dir)), config.as_deref(), issue, &vars)
+            pr::proof::run(&here, config.as_deref(), issue, &vars.under(&here))
         }
         PrCmd::WeakenedTests {
             base,
@@ -1181,7 +1181,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
                 no_push,
                 no_notify,
                 pr,
-                vars,
+                vars: vars.under(&here),
                 dir,
                 config,
             }),
@@ -1189,7 +1189,7 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
                 body,
                 to,
                 pr,
-                vars,
+                vars: vars.under(&here),
                 dir,
                 config,
             }),

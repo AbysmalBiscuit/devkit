@@ -2,9 +2,16 @@
 //! that renders templates takes a variable. One parser, so no command accepts
 //! a spelling another refuses.
 
-use std::{collections::BTreeMap, io::Read};
+use std::{
+    collections::BTreeMap,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
+
+/// The path that names stdin.
+pub const STDIN: &str = "-";
 
 /// Parse `--arg` pairs and `--arg-file` pairs into one map. A file's contents
 /// become the value unchanged, trailing newline included; a path of `-` reads
@@ -28,23 +35,61 @@ fn parse_with_stdin(
         if out.contains_key(&key) {
             bail!("`{key}` is given more than once across --arg and --arg-file");
         }
-        let value = if path == "-" {
+        if path == STDIN {
             if stdin_read {
                 bail!("--arg-file reads stdin (`-`) at most once");
             }
             stdin_read = true;
-            let mut s = String::new();
-            stdin
-                .read_to_string(&mut s)
-                .with_context(|| format!("reading --arg-file {key} from stdin"))?;
-            s
-        } else {
-            std::fs::read_to_string(&path)
-                .with_context(|| format!("reading --arg-file {key}={path}"))?
-        };
+        }
+        let value = read_path(Path::new(&path), stdin)
+            .with_context(|| format!("reading --arg-file {key}={path}"))?;
         out.insert(key, value);
     }
     Ok(out)
+}
+
+/// The contents of the file at `path` unchanged, or of stdin when `path` is
+/// `-`.
+pub fn read_file_or_stdin(path: &Path) -> std::io::Result<String> {
+    read_path(path, &mut std::io::stdin())
+}
+
+/// `path` as seen from the directory `base`: a relative path joins onto it,
+/// while an absolute path and stdin stay as they are.
+pub fn under(path: &str, base: &Path) -> PathBuf {
+    let path = Path::new(path);
+    if path == Path::new(STDIN) || path.is_absolute() {
+        return path.to_path_buf();
+    }
+    base.join(path)
+}
+
+/// Each `--arg-file` pair with its path as seen from the directory `base`.
+pub fn files_under(files: &[String], base: &Path) -> Vec<String> {
+    files
+        .iter()
+        .map(|pair| match pair.split_once('=') {
+            Some((key, path)) => format!("{key}={}", under(path, base).display()),
+            None => pair.clone(),
+        })
+        .collect()
+}
+
+/// Whether any `--arg-file` pair reads stdin. A second reader of stdin would
+/// get an empty value.
+pub fn reads_stdin(files: &[String]) -> bool {
+    files
+        .iter()
+        .any(|pair| pair.split_once('=').is_some_and(|(_, path)| path == STDIN))
+}
+
+fn read_path(path: &Path, stdin: &mut dyn Read) -> std::io::Result<String> {
+    if path != Path::new(STDIN) {
+        return std::fs::read_to_string(path);
+    }
+    let mut s = String::new();
+    stdin.read_to_string(&mut s)?;
+    Ok(s)
 }
 
 fn split(pair: &str, flag: &str, shape: &str) -> Result<(String, String)> {
@@ -98,6 +143,15 @@ mod tests {
     fn a_pair_without_equals_is_refused() {
         assert!(parse(&strings(&["noeq"]), &[]).is_err());
         assert!(parse(&[], &strings(&["noeq"])).is_err());
+    }
+
+    #[test]
+    fn under_joins_only_a_relative_path() {
+        let base = Path::new("start");
+        assert_eq!(under("a.md", base), Path::new("start").join("a.md"));
+        assert_eq!(under("-", base), Path::new("-"));
+        let absolute = std::env::temp_dir().join("a.md");
+        assert_eq!(under(absolute.to_str().unwrap(), base), absolute);
     }
 
     #[test]

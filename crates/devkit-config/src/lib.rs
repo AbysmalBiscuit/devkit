@@ -2736,8 +2736,9 @@ pub struct Templates {
     /// must not be empty.
     pub pr_title: Option<String>,
     /// Body of a PR rendered by `pr render` or opened by `pr
-    /// create`. `{{ input }}` is the `--pr-body` argument. `pr create`
-    /// renders it only when it opens a PR, not when it reuses an open one.
+    /// create`. `{{ input }}` is the `--pr-body` or `--pr-body-file` argument.
+    /// `pr create` renders it only when it opens a PR, not when it reuses an
+    /// open one.
     pub pr_body: Option<String>,
     /// Title of a ticket rendered by `ticket render`, created by `ticket
     /// create`, or written by `ticket edit --title`. `{{ input }}` is the

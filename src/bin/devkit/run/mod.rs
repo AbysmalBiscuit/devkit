@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
 use devkit::completions::Shell;
 use devkit_common::{
+    args,
     disk::human_size,
     progress::Steps,
     supervise, ui,
@@ -627,7 +628,7 @@ fn cmd_runs_passed(
     json: bool,
 ) -> Result<()> {
     anyhow::ensure!(!task.trim().is_empty(), "name the task to ask about");
-    let args = vars.parse()?;
+    let args = vars.under(Path::new(cwd)).parse()?;
     let sha = match sha {
         Some(sha) => sha.trim().to_string(),
         None => {
@@ -767,7 +768,7 @@ fn cmd_task(
     };
 
     let user = parse_user_env(env_pairs, env_file)?;
-    let args = vars.parse()?;
+    let args = vars.under(Path::new(cwd)).parse()?;
     let worktree = checkout.worktree()?;
     let root = worktree.path.to_string_lossy().into_owned();
     let resolved = task::resolve(
@@ -817,13 +818,7 @@ fn cmd_task(
         vars.arg_files
             .iter()
             .filter_map(|pair| pair.split_once('='))
-            .map(|(key, path)| {
-                let path = match path {
-                    "-" => PathBuf::from("-"),
-                    path => Path::new(cwd).join(path),
-                };
-                (key.to_string(), path)
-            })
+            .map(|(key, path)| (key.to_string(), args::under(path, Path::new(cwd))))
             .collect(),
         user.keys().cloned().collect(),
         env_file.map(|f| Path::new(cwd).join(f)),
