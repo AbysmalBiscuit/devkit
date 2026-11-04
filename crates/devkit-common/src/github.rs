@@ -277,8 +277,9 @@ impl Api {
 
     /// A REST write to a pull request: its create, an edit, or a reviewer
     /// request. The write goes through `gh api` whatever token devkit holds,
-    /// so a `gh` wrapper on `PATH` sees each PR write. With no `gh` to run,
-    /// it goes direct as [`Api::rest`] does.
+    /// so a `gh` wrapper on `PATH` sees each PR write. When devkit holds a
+    /// token and finds no `gh` to run, the write goes direct as
+    /// [`Api::rest`] does. Without a token, a missing `gh` is an error.
     pub fn pr_write(
         &self,
         method: Method,
