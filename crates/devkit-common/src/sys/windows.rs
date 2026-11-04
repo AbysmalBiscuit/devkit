@@ -9,11 +9,10 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
     os::windows::{
         ffi::OsStrExt,
-        io::{AsHandle, AsRawHandle, AsRawSocket, BorrowedHandle, FromRawHandle, OwnedHandle},
+        io::{AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle},
         process::ExitStatusExt,
     },
     process::{Command, ExitStatus},
-    sync::Mutex,
     time::Duration,
 };
 
@@ -49,28 +48,6 @@ const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 /// retransmission. windows-sys types both constants as `u16`.
 const UNSPECIFIED_RTT: u16 = u16::MAX;
 const NO_SYN_RETRANSMISSIONS: u8 = 0xfe;
-
-/// The process groups this process started, by leader pid. A console control
-/// event for a pid that leads no group can reach every process on the console,
-/// and no documented API says whether a pid leads one. Each open handle keeps
-/// its pid from being reused by another process.
-static GROUP_LEADERS: Mutex<BTreeMap<u32, OwnedHandle>> = Mutex::new(BTreeMap::new());
-
-/// Records a child started with `CREATE_NEW_PROCESS_GROUP`. A child that goes
-/// unrecorded is only stopped less gently, so a failed duplicate is ignored.
-fn record_group_leader(pid: u32, process: BorrowedHandle<'_>) {
-    let Ok(handle) = process.try_clone_to_owned() else {
-        return;
-    };
-    let mut leaders = GROUP_LEADERS.lock().unwrap();
-    leaders.retain(|_, leader| is_running(leader));
-    leaders.insert(pid, handle);
-}
-
-fn is_running(process: &OwnedHandle) -> bool {
-    // SAFETY: `process` is an open handle for this call, which only reads it.
-    unsafe { WaitForSingleObject(process.as_raw_handle(), 0) == WAIT_TIMEOUT }
-}
 
 pub(super) fn localhost_accepts(port: u16, timeout: Duration) -> bool {
     let Ok(socket) = Socket::new(Domain::IPV4, Type::STREAM, None) else {
@@ -122,17 +99,15 @@ pub(super) fn terminate(pid: u32) {
     if pid == 0 {
         return;
     }
-    // Held across the event, so the pid still names this leader.
-    let leader = GROUP_LEADERS.lock().unwrap().remove(&pid);
     // SAFETY: each opened handle is null-checked and closed; the
     // console-control call takes no handle.
     unsafe {
-        // CTRL_BREAK gives a leader this process started a chance to shut down
-        // cleanly.
-        if leader.is_some() && GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) != 0 {
+        // CTRL_BREAK reaches a child started in its own process group (see
+        // `detach`) and gives it a chance to shut down cleanly.
+        if GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) != 0 {
             return;
         }
-        // Not known to lead a group, or no shared console: terminate directly.
+        // No shared console or not a group leader: terminate directly.
         let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
         if !handle.is_null() {
             TerminateProcess(handle, 1);
@@ -150,14 +125,11 @@ pub(super) fn spawn_detached(
 ) -> io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
     keep_stdio_from_children();
-    let child = cmd
-        .creation_flags(CREATE_NEW_PROCESS_GROUP)
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP)
         .stdin(std::process::Stdio::null())
         .stdout(stdout)
         .stderr(stderr)
-        .spawn()?;
-    record_group_leader(child.id(), child.as_handle());
-    Ok(child)
+        .spawn()
 }
 
 pub(super) fn exit_like(status: ExitStatus) -> ! {
@@ -238,12 +210,10 @@ pub(super) fn spawn_background(cmd: &Command) -> io::Result<BackgroundChild> {
     }
     // SAFETY: CreateProcessW returned both handles open and owned by the
     // caller.
-    let process = unsafe {
+    unsafe {
         CloseHandle(info.hThread);
-        OwnedHandle::from_raw_handle(info.hProcess)
-    };
-    record_group_leader(info.dwProcessId, process.as_handle());
-    Ok(BackgroundChild(process))
+        Ok(BackgroundChild(OwnedHandle::from_raw_handle(info.hProcess)))
+    }
 }
 
 fn wide(s: &OsStr) -> Vec<u16> {
@@ -458,13 +428,9 @@ pub(super) fn symlink(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::Path,
-        process::{Command, Stdio},
-        time::Instant,
-    };
+    use std::{path::Path, process::Command, time::Instant};
 
-    use super::{AsRawHandle, Duration, GROUP_LEADERS, spawn_detached, terminate};
+    use super::{AsRawHandle, Duration};
     use crate::sys::spawn_background;
 
     /// Set to a file path, this binary's `background_child_console_probe`
@@ -526,29 +492,11 @@ mod tests {
     /// is gone, for at most fifteen seconds.
     const WAIT_PROBE_ENV: &str = "DEVKIT_TEST_WAIT_PROBE";
 
-    /// Set to a file path, `background_child_wait_probe` writes that file once
-    /// it runs.
-    const WAIT_STARTED_ENV: &str = "DEVKIT_TEST_WAIT_STARTED";
-
-    /// Set to a directory, the terminate probes run their checks with scratch
-    /// files there.
-    const TERMINATE_PROBE_ENV: &str = "DEVKIT_TEST_TERMINATE_PROBE";
-
-    /// The exit code `terminate` passes to `TerminateProcess`.
-    const KILLED_DIRECTLY: i32 = 1;
-
-    /// `STATUS_CONTROL_C_EXIT`, the exit code of a process that a console
-    /// control event ended.
-    const ENDED_BY_CONTROL_EVENT: i32 = 0xc000_013a_u32 as i32;
-
     #[test]
     fn background_child_wait_probe() {
         let Some(marker) = std::env::var_os(WAIT_PROBE_ENV) else {
             return;
         };
-        if let Some(started) = std::env::var_os(WAIT_STARTED_ENV) {
-            std::fs::write(started, "").unwrap();
-        }
         let deadline = Instant::now() + Duration::from_secs(15);
         while Path::new(&marker).exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
@@ -589,110 +537,5 @@ mod tests {
             took < Duration::from_secs(5),
             "the background child held the pipe for {took:?}"
         );
-    }
-
-    fn wait_probe(marker: &Path, started: &Path) -> Command {
-        std::fs::write(marker, "").unwrap();
-        let mut cmd = Command::new(std::env::current_exe().unwrap());
-        cmd.args(["--exact", "sys::imp::tests::background_child_wait_probe"])
-            .env(WAIT_PROBE_ENV, marker)
-            .env(WAIT_STARTED_ENV, started);
-        cmd
-    }
-
-    fn await_file(path: &Path) {
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while !path.exists() {
-            assert!(
-                Instant::now() < deadline,
-                "{} never appeared",
-                path.display()
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    /// Runs `probe` in a background child, whose console holds nothing else: a
-    /// control event that reaches the whole console ends only that child.
-    fn run_on_own_console(probe: &str) {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut cmd = Command::new(std::env::current_exe().unwrap());
-        cmd.args(["--exact", &format!("sys::imp::tests::{probe}")])
-            .env(TERMINATE_PROBE_ENV, tmp.path());
-        let status = spawn_background(&mut cmd).unwrap().wait().unwrap();
-        assert!(status.success(), "{probe} ended with {status:?}");
-    }
-
-    #[test]
-    fn terminate_plain_child_probe() {
-        let Some(dir) = std::env::var_os(TERMINATE_PROBE_ENV) else {
-            return;
-        };
-        let dir = Path::new(&dir);
-        let started = dir.join("started");
-        let mut child = wait_probe(&dir.join("running"), &started).spawn().unwrap();
-        await_file(&started);
-        terminate(child.id());
-        assert_eq!(child.wait().unwrap().code(), Some(KILLED_DIRECTLY));
-    }
-
-    /// The event for a pid that leads no group can end the caller as well, so
-    /// this probe's success is half of what it checks.
-    #[test]
-    fn terminate_kills_a_child_that_leads_no_group_without_an_event() {
-        run_on_own_console("terminate_plain_child_probe");
-    }
-
-    #[test]
-    fn terminate_group_leader_probe() {
-        let Some(dir) = std::env::var_os(TERMINATE_PROBE_ENV) else {
-            return;
-        };
-        let dir = Path::new(&dir);
-        let started = dir.join("started");
-        let mut child = spawn_detached(
-            &mut wait_probe(&dir.join("running"), &started),
-            None,
-            Stdio::null(),
-            Stdio::null(),
-        )
-        .unwrap();
-        await_file(&started);
-        assert!(GROUP_LEADERS.lock().unwrap().contains_key(&child.id()));
-        terminate(child.id());
-        assert_eq!(child.wait().unwrap().code(), Some(ENDED_BY_CONTROL_EVENT));
-        assert!(!GROUP_LEADERS.lock().unwrap().contains_key(&child.id()));
-    }
-
-    #[test]
-    fn terminate_sends_a_group_leader_this_process_started_the_event() {
-        run_on_own_console("terminate_group_leader_probe");
-    }
-
-    #[test]
-    fn forget_exited_leaders_probe() {
-        if std::env::var_os(TERMINATE_PROBE_ENV).is_none() {
-            return;
-        }
-        let spawn_exiting = || {
-            let mut cmd = Command::new(std::env::current_exe().unwrap());
-            cmd.args(["--exact", "sys::imp::tests::background_child_wait_probe"]);
-            let mut child = spawn_detached(&mut cmd, None, Stdio::null(), Stdio::null()).unwrap();
-            child.wait().unwrap();
-            child.id()
-        };
-        let first = spawn_exiting();
-        let second = spawn_exiting();
-        let leaders = GROUP_LEADERS.lock().unwrap();
-        assert!(!leaders.contains_key(&first));
-        assert!(leaders.contains_key(&second));
-    }
-
-    /// A long-lived daemon restarts crashed servers, and each entry holds a
-    /// handle open. The probe runs in a process of its own, because another
-    /// test's spawn in this process also forgets exited leaders.
-    #[test]
-    fn starting_a_leader_forgets_the_leaders_that_exited() {
-        run_on_own_console("forget_exited_leaders_probe");
     }
 }
