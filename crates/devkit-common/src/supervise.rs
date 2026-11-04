@@ -70,6 +70,9 @@ pub fn tail(logfile: &PathBuf, lines: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use std::process::Stdio;
+
     use super::*;
 
     /// Command prefix that runs a *real* python interpreter, or `None`. The
