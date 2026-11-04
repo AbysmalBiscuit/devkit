@@ -1,6 +1,6 @@
 [package]
 name = "devkit-docs"
-version = "0.14.26"
+version = "0.14.27"
 edition = "2024"
 
 [lints]

@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.14.27](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.26...v0.14.27) (2026-11-04)
+
+
+### Features
+
+* **config:** carry --option values in DEVKIT_OPTIONS ([848d711](https://github.com/AbysmalBiscuit/devkit/commit/848d711c048125ed4b82bedfb0984073cec9c83b))
+* **config:** set one config value with -o/--option ([#442](https://github.com/AbysmalBiscuit/devkit/issues/442)) ([2c77757](https://github.com/AbysmalBiscuit/devkit/commit/2c77757ce8e4d3680e8cddfb4a45fec7de47004e)), closes [#425](https://github.com/AbysmalBiscuit/devkit/issues/425)
+* **pr:** run the proof gate with no pr ([2887320](https://github.com/AbysmalBiscuit/devkit/commit/2887320b1dddbd6227d1e313321fbe8303eca50d)), closes [#441](https://github.com/AbysmalBiscuit/devkit/issues/441)
+* **ticket:** accept blockers in other repositories ([0a23b43](https://github.com/AbysmalBiscuit/devkit/commit/0a23b43cc4b1a616e07432c3fdae9112d4f891a5))
+* **ticket:** let fields discover write into a layer ([003a36d](https://github.com/AbysmalBiscuit/devkit/commit/003a36d7b51eff941991748a56161009a754eb8f)), closes [#427](https://github.com/AbysmalBiscuit/devkit/issues/427)
+
+
+### Bug Fixes
+
+* **ports:** stop the launch test breaking windows ci ([e96c450](https://github.com/AbysmalBiscuit/devkit/commit/e96c450444c645d02d1d7d395bfb4058c93a0e8b)), closes [#460](https://github.com/AbysmalBiscuit/devkit/issues/460)
+* **pr:** let a gh wrapper see every PR write ([b7e2d16](https://github.com/AbysmalBiscuit/devkit/commit/b7e2d16d5d578a59692802d46b1fe627112ee3b9)), closes [#421](https://github.com/AbysmalBiscuit/devkit/issues/421)
+* **pr:** open the REST fallback PR through gh api ([d322088](https://github.com/AbysmalBiscuit/devkit/commit/d322088320cf9d9edefa2c0f8708c59d16674c7a)), closes [#423](https://github.com/AbysmalBiscuit/devkit/issues/423)
+* **workspace:** let end reach every finished worktree ([3b65ae0](https://github.com/AbysmalBiscuit/devkit/commit/3b65ae0cafbf2ae7466982e065a693084f1d4d1d)), closes [#422](https://github.com/AbysmalBiscuit/devkit/issues/422)
+
+
+### Performance Improvements
+
+* **todo:** keep taskchampion reads off closed todos ([b85b015](https://github.com/AbysmalBiscuit/devkit/commit/b85b0156628124a662e58477d6887723d70111c7)), closes [#456](https://github.com/AbysmalBiscuit/devkit/issues/456)
+
 ## [0.14.26](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.25...v0.14.26) (2026-11-03)
 
 
