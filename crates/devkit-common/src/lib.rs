@@ -4,6 +4,7 @@ pub mod cmd;
 pub mod config;
 #[cfg(feature = "daemon")]
 pub mod daemon;
+pub mod digest;
 pub mod disk;
 pub mod fields;
 pub mod forge;
@@ -13,7 +14,6 @@ pub mod gitignore;
 pub mod harness;
 pub mod harness_log;
 pub mod http;
-pub mod keyed;
 pub mod livetable;
 pub mod paths;
 pub mod pool;

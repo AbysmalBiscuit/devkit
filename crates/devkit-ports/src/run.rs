@@ -265,7 +265,7 @@ impl LaunchPlan {
     /// The HMAC under `key` of the app, port, cwd, argv and rendered env.
     /// It changes with any rendered value, and holds none: the values may be
     /// secrets.
-    pub fn digest(&self, key: &devkit_common::keyed::Key) -> String {
+    pub fn digest(&self, key: &devkit_common::digest::Key) -> String {
         let input = DigestInput {
             app: &self.app,
             port: self.port,
@@ -273,7 +273,10 @@ impl LaunchPlan {
             argv: &self.argv,
             env: &self.env,
         };
-        key.digest(&serde_json::to_string(&input).expect("strings and numbers serialize"))
+        devkit_common::digest::of(
+            &serde_json::to_string(&input).expect("strings and numbers serialize"),
+            devkit_common::digest::Policy::Machine(key),
+        )
     }
 }
 
@@ -393,7 +396,7 @@ pub fn plan_group(
 /// the tree there has no commit or is dirty, since the server may then run
 /// code no commit holds, or when the digest key cannot be read.
 fn origin_at(dir: &Path, plan: &LaunchPlan) -> Option<Origin> {
-    let key = devkit_common::keyed::Key::live().ok()?;
+    let key = devkit_common::digest::Key::live().ok()?;
     let (head, clean) = crate::ledger::tree_state(dir);
     Some(Origin {
         commit: head.filter(|_| clean)?,
@@ -922,7 +925,7 @@ mod tests {
     #[test]
     fn a_plan_digest_changes_with_a_rendered_env_value_it_never_holds() {
         let dir = tempfile::tempdir().unwrap();
-        let key = devkit_common::keyed::Key::at(&dir.path().join("key")).unwrap();
+        let key = devkit_common::digest::Key::at(&dir.path().join("key")).unwrap();
         let digest = |token: &str, user: &[(&str, &str)]| {
             let mut catalog = HashMap::new();
             catalog.insert(

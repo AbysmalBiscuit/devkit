@@ -1155,7 +1155,7 @@ fn cmd_up(
             ),
             || run::launch(&plans, holder, *grp_role, supervise, true),
         )?;
-        let key = devkit_common::keyed::Key::live().ok();
+        let key = devkit_common::digest::Key::live().ok();
         for s in statuses {
             if s.reused {
                 let plan = plans.iter().find(|p| p.app == s.app);

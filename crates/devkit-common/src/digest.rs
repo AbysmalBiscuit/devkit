@@ -1,6 +1,10 @@
-//! A per-machine key for digests of text that may hold secrets. A plain hash
-//! of a low-entropy secret can be guessed offline; an HMAC under a key that
-//! never leaves this machine cannot be guessed from the digest alone.
+//! Hex digests of text, under a policy each caller names.
+//!
+//! The two policies give different guarantees. A [`Policy::Shared`] digest is
+//! the same on every machine, so a reader anywhere can count or match texts,
+//! but anyone can hash a guess and compare it. A [`Policy::Machine`] digest
+//! needs this machine's key, so a guess at a low-entropy secret cannot be
+//! checked against the digest offline.
 
 use std::{
     io::Write,
@@ -14,6 +18,37 @@ use ring::{
 };
 
 const KEY_LEN: usize = 32;
+
+/// How [`of`] digests its text.
+pub enum Policy<'a> {
+    /// SHA-256, prefixed `sha256:`. Stable across runs and machines. Use it
+    /// only for text whose guesses are not a secret.
+    Shared,
+    /// HMAC-SHA-256 under this machine's key, prefixed `hmac-sha256:`. Use it
+    /// for text that may hold a secret.
+    Machine(&'a Key),
+}
+
+/// The hex digest of `text` under `policy`.
+pub fn of(text: &str, policy: Policy<'_>) -> String {
+    let (prefix, bytes) = match policy {
+        Policy::Shared => (
+            "sha256:",
+            ring::digest::digest(&ring::digest::SHA256, text.as_bytes())
+                .as_ref()
+                .to_vec(),
+        ),
+        Policy::Machine(key) => (
+            "hmac-sha256:",
+            hmac::sign(&key.0, text.as_bytes()).as_ref().to_vec(),
+        ),
+    };
+    let mut out = String::from(prefix);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
 
 /// An HMAC-SHA-256 key read from a file only its owner can read.
 pub struct Key(hmac::Key);
@@ -39,16 +74,6 @@ impl Key {
             bytes.len()
         );
         Ok(Self(hmac::Key::new(hmac::HMAC_SHA256, &bytes)))
-    }
-
-    /// The hex HMAC of `text`, prefixed `hmac-sha256:`.
-    pub fn digest(&self, text: &str) -> String {
-        let tag = hmac::sign(&self.0, text.as_bytes());
-        let mut out = String::from("hmac-sha256:");
-        for b in tag.as_ref() {
-            out.push_str(&format!("{b:02x}"));
-        }
-        out
     }
 }
 
@@ -78,14 +103,25 @@ fn create(path: &Path) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// Pinned against the published SHA-256 vector, so a shared digest that
+    /// changed algorithm would not quietly re-key an accumulated corpus.
+    #[test]
+    fn the_shared_digest_is_sha256_of_the_utf8_bytes() {
+        assert_eq!(
+            of("abc", Policy::Shared),
+            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
     #[test]
     fn a_key_is_created_once_and_read_back() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state").join("digest.key");
-        let first = Key::at(&path).unwrap().digest("text");
+        let digest = |text| of(text, Policy::Machine(&Key::at(&path).unwrap()));
+        let first = digest("text");
         assert!(first.starts_with("hmac-sha256:"), "{first}");
-        assert_eq!(Key::at(&path).unwrap().digest("text"), first);
-        assert_ne!(Key::at(&path).unwrap().digest("other"), first);
+        assert_eq!(digest("text"), first);
+        assert_ne!(digest("other"), first);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -97,7 +133,7 @@ mod tests {
     #[test]
     fn another_machines_key_gives_another_digest() {
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let digest = |dir: &Path| Key::at(&dir.join("k")).unwrap().digest("text");
+        let digest = |dir: &Path| of("text", Policy::Machine(&Key::at(&dir.join("k")).unwrap()));
         assert_ne!(digest(a.path()), digest(b.path()));
     }
 

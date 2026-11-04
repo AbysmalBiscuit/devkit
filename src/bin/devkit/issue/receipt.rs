@@ -9,7 +9,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use devkit_common::{caller::HARNESS_SESSION_VARS, gitignore, harness_log::redact, vcs::Checkout};
+use devkit_common::{
+    caller::HARNESS_SESSION_VARS,
+    digest::{self, Policy},
+    gitignore,
+    vcs::Checkout,
+};
 
 /// What a receipt vouches for. Each kind has its own store, so a PR render
 /// never vouches for an issue write.
@@ -65,7 +70,7 @@ pub(crate) fn normalize(text: &str) -> String {
 /// `sha256:` prefix is dropped because a colon is not a legal NTFS filename
 /// character.
 pub(crate) fn hex(text: &str) -> String {
-    let digest = redact::digest(&normalize(text));
+    let digest = digest::of(&normalize(text), Policy::Shared);
     digest
         .strip_prefix("sha256:")
         .unwrap_or(&digest)
