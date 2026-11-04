@@ -137,7 +137,7 @@ Codex offers `update_plan` only when its config sets `[tools.update_plan] enable
 
 `devkit todo prune` removes done todos, completed or cancelled, from every session in its scope. It takes the scope flags of `devkit todo list`, so `--all` and `--subtree` stay inside the same fence. It needs at least one date flag: `--from-date` and `--to-date` name a local day, and `--from-timestamp` and `--to-timestamp` name an exact instant. All bounds are inclusive. The bounds apply to the last change of a done todo, so a later edit makes a todo look newer. An open todo stays, and so does a done todo that an open todo waits on or nests under. A ticket todo stays unless `[ticket.sync.statuses]` maps its last synced status to completed or cancelled, because a sync brings back a ticket that is still open. Prune reads that status from the store and makes no tracker request. The command prints the todos and asks, and `--yes` skips the question.
 
-Prune refuses an agent, even with `--yes`. An agent can run `devkit todo prune --dry-run`, which prints the todos and changes nothing. On a synced replica, the sync target keeps earlier versions, so prune does not erase their text from there. The postgres backend creates the function that prune calls when it first needs it. On the supabase backend, run `devkit todo schema update` first.
+Prune refuses an agent, even with `--yes`. An agent can run `devkit todo prune --dry-run`, which prints the todos and changes nothing. On a synced replica, the sync target keeps earlier versions, so prune does not erase their text from there. The postgres backend creates the function that prune calls when it first needs it. On the supabase backend, create it first with step 1 of the [Supabase](#supabase) setup.
 
 ## Activity
 
