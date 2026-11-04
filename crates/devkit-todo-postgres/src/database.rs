@@ -422,46 +422,17 @@ BEGIN
 END
 $$;
 
--- A write that can make an open todo need another holds this lock shared until
--- it commits, so todo_prune, which holds it exclusive, reads no link in flight.
--- A trigger takes it, so every writer does, whichever devkit version runs it.
--- A parent the write checked before todo_prune removed it is checked again.
-CREATE OR REPLACE FUNCTION devkit.todo_hold_links() RETURNS trigger
-LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_advisory_xact_lock_shared(hashtext('devkit todo links'), hashtext(NEW.root));
-    IF NEW.parent IS NOT NULL
-        AND (TG_OP = 'INSERT' OR NEW.parent IS DISTINCT FROM OLD.parent)
-        AND NOT EXISTS (SELECT 1 FROM devkit.todos WHERE id = NEW.parent) THEN
-        RAISE EXCEPTION 'no todo %', NEW.parent USING ERRCODE = '{UNKNOWN_TODO}';
-    END IF;
-    RETURN NEW;
-END
-$$;
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_trigger
-        WHERE tgname = 'todo_hold_links' AND tgrelid = 'devkit.todos'::regclass
-    ) THEN
-        CREATE TRIGGER todo_hold_links BEFORE INSERT OR UPDATE OF parent, blocked_by, status
-            ON devkit.todos FOR EACH ROW EXECUTE FUNCTION devkit.todo_hold_links();
-    END IF;
-END
-$$;
-
 -- Removes each todo of `p_ids` that is completed or cancelled and that no open
 -- todo waits on or nests under, however deep, as devkit_todo::prune::removable
--- states it. An id that is not a uuid, or names no todo, removes nothing. A
--- row another transaction has locked stays, since a writer that holds its row
--- and waits for the links lock would otherwise deadlock with this function.
+-- states it, in the statement that deletes. An id that is not a uuid, or
+-- names no todo, removes nothing. A row another transaction holds stays, since
+-- that write may reopen or relink it, and prune does not wait for it.
 CREATE OR REPLACE FUNCTION devkit.todo_prune(p_root text, p_ids text[])
 RETURNS TABLE (
     todo uuid, node text, from_status text, from_holder text,
     to_status text, to_holder text, at timestamptz
 )
 LANGUAGE sql AS $$
-    SELECT pg_advisory_xact_lock(hashtext('devkit todo links'), hashtext(p_root));
     WITH RECURSIVE still_open AS (
         SELECT o.parent, o.blocked_by FROM devkit.todos AS o
         WHERE o.root = p_root AND o.status IN ('pending', 'in_progress')

@@ -579,13 +579,11 @@ fn a_database_from_before_blocking_gains_the_column() {
     assert_eq!(todo.order, Some(1024));
 }
 
-/// The ids of a done todo and an open one under a root of their own, with the
-/// store that holds them.
-fn done_and_open(direct: &str) -> (PostgresStore, String, String, String) {
+/// A store under a root of its own, that root, and the id of a done todo in it.
+fn one_done(direct: &str) -> (PostgresStore, String, String) {
     let root = fresh_root();
     let store = open(direct, &root);
     let done = store.add(new_todo(Some("n"), "done")).unwrap();
-    let open_todo = store.add(new_todo(Some("n"), "open")).unwrap();
     store
         .apply(&Edit::SetStatus {
             id: done.clone(),
@@ -593,68 +591,16 @@ fn done_and_open(direct: &str) -> (PostgresStore, String, String, String) {
             actor: Holder::human(),
         })
         .unwrap();
-    (store, root, done, open_todo)
-}
-
-/// Polls until a session waits for an advisory lock.
-async fn await_advisory_wait(client: &tokio_postgres::Client) {
-    for _ in 0..500 {
-        let waiting = client
-            .query_one(
-                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted",
-                &[],
-            )
-            .await
-            .unwrap()
-            .get::<_, i64>(0);
-        if waiting > 0 {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("no session waited for the links lock");
+    (store, root, done)
 }
 
 #[test]
-fn prune_waits_for_a_write_in_flight_and_keeps_what_it_links() {
+fn prune_keeps_a_row_another_writer_holds_without_waiting() {
     let Some(direct) = url(DIRECT) else {
         return;
     };
     let scratch = Scratch::new(&direct);
-    let (store, root, done, open_todo) = done_and_open(&scratch.url);
-    connected(&scratch.url, async |writer| {
-        writer.batch_execute("BEGIN").await.unwrap();
-        writer
-            .execute(
-                "SELECT devkit.todo_move($1::text, $2::text, $3::text, NULL)",
-                &[&root, &open_todo, &done],
-            )
-            .await
-            .unwrap();
-        let ids = vec![done.clone()];
-        let prune = std::thread::spawn({
-            let store = open(&scratch.url, &root);
-            move || store.apply(&Edit::Prune { ids })
-        });
-        let observer = tokio_postgres::connect(&scratch.url, tokio_postgres::NoTls)
-            .await
-            .unwrap();
-        tokio::spawn(observer.1);
-        await_advisory_wait(&observer.0).await;
-        writer.batch_execute("COMMIT").await.unwrap();
-        let changes = prune.join().unwrap().unwrap();
-        assert!(changes.is_empty(), "{changes:?}");
-    });
-    assert!(store.get(&done).unwrap().is_some());
-}
-
-#[test]
-fn prune_skips_a_row_a_writer_holds_instead_of_deadlocking() {
-    let Some(direct) = url(DIRECT) else {
-        return;
-    };
-    let scratch = Scratch::new(&direct);
-    let (store, root, done, _) = done_and_open(&scratch.url);
+    let (store, root, done) = one_done(&scratch.url);
     connected(&scratch.url, async |writer| {
         writer.batch_execute("BEGIN").await.unwrap();
         writer
@@ -676,23 +622,4 @@ fn prune_skips_a_row_a_writer_holds_instead_of_deadlocking() {
         writer.batch_execute("COMMIT").await.unwrap();
     });
     assert!(store.get(&done).unwrap().is_some());
-}
-
-#[test]
-fn a_write_that_links_a_removed_parent_is_refused() {
-    let Some(direct) = url(DIRECT) else {
-        return;
-    };
-    let scratch = Scratch::new(&direct);
-    let (_store, root, _, open_todo) = done_and_open(&scratch.url);
-    connected(&scratch.url, async |client| {
-        let err = client
-            .execute(
-                "UPDATE devkit.todos SET parent = gen_random_uuid() WHERE root = $1 AND id = $2::text::uuid",
-                &[&root, &open_todo],
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(err.code().map(|c| c.code()), Some("DK002"), "{err:#}");
-    });
 }
