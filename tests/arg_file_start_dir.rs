@@ -170,7 +170,7 @@ fn devrun_task_reads_from_the_start_directory() {
 }
 
 #[test]
-fn an_absolute_path_and_stdin_are_kept() {
+fn an_absolute_path_is_kept() {
     let d = dirs();
     let absolute = d.elsewhere.path().join("note.md");
     let out = stdout(&run(&d, &[
