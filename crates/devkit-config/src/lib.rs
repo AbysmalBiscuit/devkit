@@ -3301,31 +3301,39 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
 }
 
 /// The environment variable that names one config file to load in place of
-/// every layer, as `--config` does.
+/// every layer, as `--config` does. The harness also reads it as the global
+/// config.
 pub const CONFIG_VAR: &str = "DEVKIT_CONFIG";
 
-/// The environment variable that limits [`CONFIG_VAR`] to one checkout: the
-/// root of the checkout it applies in, or empty for a directory outside any
-/// checkout. A devkit sets both for a devkit it runs, so the child loads the
-/// file the parent's `--config` named in the parent's checkout alone.
-pub const CONFIG_CHECKOUT_VAR: &str = "DEVKIT_CONFIG_CHECKOUT";
+/// The environment variable that names the `--config` file of the devkit
+/// that started this process. It applies only in the checkout that
+/// [`PARENT_CONFIG_CHECKOUT_VAR`] names, and it never changes the global
+/// config.
+pub const PARENT_CONFIG_VAR: &str = "DEVKIT_PARENT_CONFIG";
 
-/// The file [`CONFIG_VAR`] names for a process in the checkout at the root
-/// `checkout_root` answers, or `None` when it is unset or
-/// [`CONFIG_CHECKOUT_VAR`] names another checkout. `checkout_root` runs only
-/// when [`CONFIG_CHECKOUT_VAR`] is set, since finding a checkout can spawn a
-/// process.
+/// The environment variable that holds the root of the checkout where
+/// [`PARENT_CONFIG_VAR`] applies, or empty for a directory outside any
+/// checkout.
+pub const PARENT_CONFIG_CHECKOUT_VAR: &str = "DEVKIT_PARENT_CONFIG_CHECKOUT";
+
+/// The one config file the environment selects for a process in the checkout
+/// at the root `checkout_root` answers: the parent's `--config` file when
+/// [`PARENT_CONFIG_CHECKOUT_VAR`] names that checkout, else the
+/// [`CONFIG_VAR`] file. `checkout_root` runs only when [`PARENT_CONFIG_VAR`]
+/// is set, since finding a checkout can spawn a process.
 pub fn env_config(checkout_root: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
-    let path = std::env::var_os(CONFIG_VAR)?;
-    match std::env::var_os(CONFIG_CHECKOUT_VAR) {
-        Some(owner) if !same_checkout(Path::new(&owner), checkout_root().as_deref()) => None,
-        _ => Some(PathBuf::from(path)),
-    }
+    std::env::var_os(PARENT_CONFIG_VAR)
+        .filter(|_| {
+            let owner = std::env::var_os(PARENT_CONFIG_CHECKOUT_VAR).unwrap_or_default();
+            same_checkout(Path::new(&owner), checkout_root().as_deref())
+        })
+        .or_else(|| std::env::var_os(CONFIG_VAR))
+        .map(PathBuf::from)
 }
 
-/// Whether `owner`, a [`CONFIG_CHECKOUT_VAR`] value, names the checkout at
-/// `root`. Both resolve symlinks first, since a checkout root reads the same
-/// directory through different paths.
+/// Whether `owner`, a [`PARENT_CONFIG_CHECKOUT_VAR`] value, names the
+/// checkout at `root`. Both resolve symlinks first, since a checkout root
+/// reads the same directory through different paths.
 fn same_checkout(owner: &Path, root: Option<&Path>) -> bool {
     let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     match root {

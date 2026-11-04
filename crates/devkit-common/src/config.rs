@@ -49,13 +49,15 @@ pub fn devkit_command() -> Result<std::process::Command> {
 /// resolves the config this process resolves. The `--option` values go in
 /// `$DEVKIT_OPTIONS`. A relative path value anchors as this process anchors
 /// it, at its first resolved config or, before one, at its working directory.
-/// The `--config` file goes in `$DEVKIT_CONFIG` with this process's checkout
-/// in `$DEVKIT_CONFIG_CHECKOUT`, so a child in another checkout ignores it.
-/// A child's own `--config` still wins.
+/// The `--config` file goes in `$DEVKIT_PARENT_CONFIG` with this process's
+/// checkout in `$DEVKIT_PARENT_CONFIG_CHECKOUT`, so a child in another
+/// checkout ignores it. A child's own `--config` still wins.
+/// `$DEVKIT_CONFIG` reaches the child unchanged, so the child keeps this
+/// process's global config.
 pub fn pass_config(cmd: &mut std::process::Command) -> Result<()> {
     if let Some((file, root)) = EXPLICIT.get() {
-        cmd.env(devkit_config::CONFIG_VAR, file).env(
-            devkit_config::CONFIG_CHECKOUT_VAR,
+        cmd.env(devkit_config::PARENT_CONFIG_VAR, file).env(
+            devkit_config::PARENT_CONFIG_CHECKOUT_VAR,
             root.as_deref().unwrap_or(Path::new("")),
         );
     }
