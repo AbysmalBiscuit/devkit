@@ -7,12 +7,16 @@
 //! found in the live body in order, and the ones on either side of a
 //! variable's slot bound the span that it shares with every slot inside it.
 //! A variable on a line with template text has that line as its opening bound,
-//! so its span runs from that line up to the next anchor.
+//! so its span runs from that line up to the next anchor, and it shares that
+//! span with every slot below it.
 
 use anyhow::{Result, bail};
 
 const OPEN: &str = "@@devkit-slot:";
 const CLOSE: &str = "@@";
+
+/// The variable a body renders the PR's title into. An edit cannot pass it.
+pub(crate) const TITLE: &str = "pr_title";
 
 /// What variable `name` renders as in a skeleton.
 pub(crate) fn slot(name: &str) -> String {
@@ -31,10 +35,8 @@ pub(crate) fn section(
     let at = slot_line(&sk, &slot(name), name)?;
     let (before, after) = bounds(&sk, at, name)?;
     let mut names = vec![name.to_string()];
-    for other in sk[before + 1..after]
-        .iter()
-        .flat_map(|l| slot_names(l.text))
-    {
+    let first = before + usize::from(!opens_with_values(sk[before].text));
+    for other in sk[first..after].iter().flat_map(|l| slot_names(l.text)) {
         if !names.iter().any(|n| n == other) {
             names.push(other.to_string());
         }
@@ -108,7 +110,7 @@ pub(crate) fn splice(
     };
     let (start, opens) = match (found(before), shown) {
         // The line fits, so the render writes its template text back unchanged.
-        (Some(l), _) if before == at => (body[l].start, sk[at].start),
+        (Some(l), _) if opens_with_values(sk[before].text) => (body[l].start, sk[before].start),
         (Some(l), _) => (body[l].end, sk[before].end),
         (None, Shown::Hidden) => return Ok(live.to_string()),
         (None, Shown::Part(full)) => {
@@ -219,8 +221,8 @@ fn visible_part<'a>(
 
 /// The template lines that bound skeleton line `at`: the line itself when
 /// template text comes before its slot, else the one before it, and the one
-/// after it. Text only after the slot cannot open the span, because a multi-line
-/// value's first row does not show it.
+/// after it. Text only after the slot cannot open the span, because a
+/// multi-line value's first row does not show it.
 fn bounds(sk: &[Line<'_>], at: usize, name: &str) -> Result<(usize, usize)> {
     let anchor = |i: &usize| is_anchor(sk[*i].text);
     let opens_itself = !segments(sk[at].text)[0].trim().is_empty();
@@ -316,6 +318,13 @@ fn fits(pattern: &str, text: &str) -> bool {
         }
     }
     rest.ends_with(last)
+}
+
+/// Whether a span's opening line holds variables an edit can pass. A value on
+/// that line can run on into the span, so the line belongs to the span. A title
+/// cannot be passed and stays on one row, so its line only bounds the span.
+fn opens_with_values(text: &str) -> bool {
+    slot_names(text).next().is_some() && slot_names(text).all(|n| n != TITLE)
 }
 
 /// Every variable whose slot is on a skeleton line, in order.

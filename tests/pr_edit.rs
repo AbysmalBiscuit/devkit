@@ -923,3 +923,88 @@ fn a_multi_line_value_with_only_literal_text_after_it_is_replaced_whole() {
         "## Merge danger\n\nnew\nnew too (checked)\n\n---\n\nFooter\n"
     );
 }
+
+const LABEL_THEN_OWN_LINE_TEMPLATE: &str = r#"
+[templates]
+pr_body = """
+## Merge danger
+
+**Door:** {{ door | trim }}
+{{ extra | trim }}
+
+---
+
+Footer"""
+
+[templates.variables]
+door = { default = "" }
+extra = { default = "" }
+"#;
+
+const LABEL_THEN_OWN_LINE_LIVE: &str =
+    "## Merge danger\n\n**Door:** old\n- more\nold extra\n\n---\n\nFooter\n";
+
+/// The door's continuation lines sit in the span `extra` renders into, so
+/// replacing `extra` alone would delete them.
+#[test]
+fn a_variable_below_a_label_line_needs_the_labels_variable() {
+    let fake = ghfake::Fake::new(LABEL_THEN_OWN_LINE_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, LABEL_THEN_OWN_LINE_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "extra=new extra"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("also pass `door`"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+#[test]
+fn a_label_line_and_the_variable_below_it_are_replaced_together() {
+    let fake = ghfake::Fake::new(LABEL_THEN_OWN_LINE_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, LABEL_THEN_OWN_LINE_LIVE);
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "door=new\n- bullet",
+        "--arg",
+        "extra=new extra",
+    ]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\n**Door:** new\n- bullet\nnew extra\n\n---\n\nFooter\n"
+    );
+}
+
+/// The title cannot be passed to an edit and never spans lines, so a line
+/// holding it stays an ordinary bound.
+#[test]
+fn a_variable_below_the_title_line_is_replaced_alone() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+Title: {{ pr_title }}
+
+{{ extra | trim }}
+
+---
+"""
+
+[templates.variables]
+extra = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, "Title: A title\n\nold\n\n---\n");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "extra=new"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(sent_body(&fake), "Title: A title\n\nnew\n\n---\n");
+}
