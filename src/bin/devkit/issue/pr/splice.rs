@@ -388,7 +388,8 @@ fn align(
 
 /// The first line of the section `heading` opens, when none of it is in the
 /// live body: the earliest of the unmatched template lines run together above
-/// it, so a section opened by several lines is inserted whole.
+/// it, so a section opened by several lines is inserted whole. A line with a
+/// variable ends the run, since that variable is not this section's to render.
 fn section_start(sk: &[Line<'_>], heading: usize, matched: impl Fn(usize) -> bool) -> usize {
     let mut opens = heading;
     for k in (0..heading).rev() {
@@ -396,7 +397,7 @@ fn section_start(sk: &[Line<'_>], heading: usize, matched: impl Fn(usize) -> boo
         if line.text.is_empty() {
             continue;
         }
-        if !is_anchor(line.text) || matched(k) {
+        if slot_names(line.text).next().is_some() || matched(k) {
             break;
         }
         opens = k;

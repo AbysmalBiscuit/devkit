@@ -841,3 +841,20 @@ owner = { default = "" }
     assert!(stderr.contains("`owner`"), "{stderr}");
     assert!(!wrote(&fake), "{}", fake.calls());
 }
+
+/// The body lacks both label lines, and the edit passes only the second, so
+/// the first stays out rather than landing as an unresolved slot.
+#[test]
+fn inserting_a_label_section_stops_at_a_variable_the_edit_did_not_pass() {
+    let live = "## Merge danger\n\n---\n\nFooter\n";
+    let fake = ghfake::Fake::new(LABELLED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, live);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "blast_radius=wide"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\n**Blast Radius:** wide\n\n---\n\nFooter\n"
+    );
+}
