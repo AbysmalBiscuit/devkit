@@ -737,3 +737,538 @@ fn a_section_another_variable_hides_in_part_keeps_the_visible_edit() {
         PART_GATED_LIVE.replace("Old tail", "New tail")
     );
 }
+
+const LABELLED_TEMPLATE: &str = r#"
+[templates]
+pr_body = """
+## Merge danger
+
+**Door:** {{ door | trim }}
+
+**Blast Radius:** {{ blast_radius | trim }}
+
+---
+
+Footer"""
+
+[templates.variables]
+door = { default = "" }
+blast_radius = { default = "" }
+"#;
+
+const LABELLED_LIVE: &str = "\
+## Merge danger
+
+**Door:** one-way
+
+**Blast Radius:** only the old line
+- and an old bullet
+
+---
+
+Footer
+
+## Review bot
+Details the bot keeps current.
+";
+
+#[test]
+fn a_variable_after_a_label_is_replaced_and_keeps_the_label() {
+    let fake = ghfake::Fake::new(LABELLED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, LABELLED_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=two-way"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        LABELLED_LIVE.replace("**Door:** one-way", "**Door:** two-way")
+    );
+}
+
+#[test]
+fn a_multi_line_value_after_a_label_replaces_the_old_lines() {
+    let fake = ghfake::Fake::new(LABELLED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, LABELLED_LIVE);
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "blast_radius=the new line\n- first bullet\n- second bullet",
+    ]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        LABELLED_LIVE.replace(
+            "only the old line\n- and an old bullet",
+            "the new line\n- first bullet\n- second bullet"
+        )
+    );
+}
+
+#[test]
+fn a_variable_sharing_its_line_with_another_is_refused_by_name() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+## Merge danger
+
+**Door:** {{ door }} **Owner:** {{ owner }}
+
+---
+"""
+
+[templates.variables]
+door = { default = "" }
+owner = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(
+        &PR_7,
+        "## Merge danger\n\n**Door:** a **Owner:** b\n\n---\n",
+    );
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=two-way"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("shares its line"), "{stderr}");
+    assert!(stderr.contains("`owner`"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// The body lacks both label lines, and the edit passes only the second, so
+/// the first stays out rather than landing as an unresolved slot.
+#[test]
+fn inserting_a_label_section_stops_at_a_variable_the_edit_did_not_pass() {
+    let live = "## Merge danger\n\n---\n\nFooter\n";
+    let fake = ghfake::Fake::new(LABELLED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, live);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "blast_radius=wide"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\n**Blast Radius:** wide\n\n---\n\nFooter\n"
+    );
+}
+
+const SUFFIX_TEMPLATE: &str = r#"
+[templates]
+pr_body = """
+## Merge danger
+
+Door {{ door | trim }} (checked)
+
+---
+
+Footer"""
+
+[templates.variables]
+door = { default = "" }
+"#;
+
+#[test]
+fn a_multi_line_value_before_literal_text_is_replaced_whole() {
+    let live = "## Merge danger\n\nDoor old\nold too (checked)\n\n---\n\nFooter\n";
+    let fake = ghfake::Fake::new(SUFFIX_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, live);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=new\nnew too"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\nDoor new\nnew too (checked)\n\n---\n\nFooter\n"
+    );
+}
+
+#[test]
+fn a_multi_line_value_before_literal_text_is_inserted_when_the_body_lacks_it() {
+    let live = "## Merge danger\n\n---\n\nFooter\n";
+    let fake = ghfake::Fake::new(SUFFIX_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, live);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=new\nnew too"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\nDoor new\nnew too (checked)\n\n---\n\nFooter\n"
+    );
+}
+
+/// With no text before the value, the old value's first line cannot be
+/// recognised, so the span opens at the template line above it.
+#[test]
+fn a_multi_line_value_with_only_literal_text_after_it_is_replaced_whole() {
+    let live = "## Merge danger\n\nold\nold too (checked)\n\n---\n\nFooter\n";
+    let fake = ghfake::Fake::new(
+        &SUFFIX_TEMPLATE.replace("Door {{ door | trim }}", "{{ door | trim }}"),
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, live);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=new\nnew too"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\nnew\nnew too (checked)\n\n---\n\nFooter\n"
+    );
+}
+
+const LABEL_THEN_OWN_LINE_TEMPLATE: &str = r#"
+[templates]
+pr_body = """
+## Merge danger
+
+**Door:** {{ door | trim }}
+{{ extra | trim }}
+
+---
+
+Footer"""
+
+[templates.variables]
+door = { default = "" }
+extra = { default = "" }
+"#;
+
+const LABEL_THEN_OWN_LINE_LIVE: &str =
+    "## Merge danger\n\n**Door:** old\n- more\nold extra\n\n---\n\nFooter\n";
+
+/// The door's continuation lines sit in the span `extra` renders into, so
+/// replacing `extra` alone would delete them.
+#[test]
+fn a_variable_below_a_label_line_needs_the_labels_variable() {
+    let fake = ghfake::Fake::new(LABEL_THEN_OWN_LINE_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, LABEL_THEN_OWN_LINE_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "extra=new extra"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("also pass `door`"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+#[test]
+fn a_label_line_and_the_variable_below_it_are_replaced_together() {
+    let fake = ghfake::Fake::new(LABEL_THEN_OWN_LINE_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, LABEL_THEN_OWN_LINE_LIVE);
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "door=new\n- bullet",
+        "--arg",
+        "extra=new extra",
+    ]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\n**Door:** new\n- bullet\nnew extra\n\n---\n\nFooter\n"
+    );
+}
+
+/// The title cannot be passed to an edit and never spans lines, so a line
+/// holding it stays an ordinary bound.
+#[test]
+fn a_variable_below_the_title_line_is_replaced_alone() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+Title: {{ pr_title }}
+
+{{ extra | trim }}
+
+---
+"""
+
+[templates.variables]
+extra = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, "Title: A title\n\nold\n\n---\n");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "extra=new"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(sent_body(&fake), "Title: A title\n\nnew\n\n---\n");
+}
+
+/// A section of `upper` and, below it, `lower` on a line with text only after
+/// its slot. That text sits on the value's last row, so it cannot bound
+/// `upper`.
+fn text_after_slot_project(upper: &str, lower: &str) -> ghfake::Fake {
+    let fake = ghfake::Fake::new(
+        &format!(
+            r#"
+[templates]
+pr_body = """
+## Merge danger
+
+{{{{ {upper} | trim }}}}
+
+{{{{ {lower} | trim }}}} (checked)
+
+---
+
+Footer"""
+
+[templates.variables]
+{upper} = {{ default = "" }}
+{lower} = {{ default = "" }}
+"#
+        ),
+        &PR_7,
+    );
+    fake.serve_pr_body(
+        &PR_7,
+        "## Merge danger\n\nold upper\n\nold lower\nmore lower (checked)\n\n---\n\nFooter\n",
+    );
+    fake
+}
+
+#[test]
+fn a_variable_above_a_line_with_text_only_after_its_slot_needs_that_variable() {
+    let fake = text_after_slot_project("upper", "lower");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "upper=new upper"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("also pass `lower`"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// Sections are placed in the order their variables sort, which must not
+/// change what the edit replaces.
+#[test]
+fn a_line_with_text_only_after_its_slot_is_replaced_with_the_variable_above_it() {
+    for (upper, lower) in [("a", "z"), ("z", "a")] {
+        let fake = text_after_slot_project(upper, lower);
+
+        let out = fake.issue(&[
+            "pr",
+            "edit",
+            "--no-push",
+            "--arg",
+            &format!("{upper}=new upper"),
+            "--arg",
+            &format!("{lower}=new lower\nnew more"),
+        ]);
+
+        assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+        assert_eq!(
+            sent_body(&fake),
+            "## Merge danger\n\nnew upper\n\nnew lower\nnew more (checked)\n\n---\n\nFooter\n"
+        );
+    }
+}
+
+/// `enabled` hides `detail`, and the body lacks its heading, so the edit would
+/// replace from the door's line. That would delete the door's continuation.
+#[test]
+fn a_part_shown_section_refuses_to_replace_from_a_line_holding_a_value() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = '''
+## Summary
+
+**Door:** {{ door | trim }}
+{%- if enabled %}
+
+### Optional
+
+{{ detail | trim }}
+{%- endif %}
+
+{{ tail | trim }}
+
+## Proof
+'''
+
+[templates.variables]
+enabled = { default = "" }
+door = { default = "" }
+detail = { default = "" }
+tail = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(
+        &PR_7,
+        "## Summary\n\n**Door:** old\n- door continuation\n\nold tail\n\n## Proof\n",
+    );
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "detail=new detail",
+        "--arg",
+        "tail=new tail",
+    ]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("`door`"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// The title cannot be passed, so the line cannot be rewritten, and `who` can
+/// run on into the section below it.
+#[test]
+fn a_variable_below_a_line_with_the_title_and_a_value_is_refused_by_name() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+Title: {{ pr_title }} by {{ who | trim }}
+{{ extra | trim }}
+
+---
+"""
+
+[templates.variables]
+who = { default = "" }
+extra = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, "Title: T by me\n- who continuation\nold\n\n---\n");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "extra=new"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("`who`") && stderr.contains("title"),
+        "{stderr}"
+    );
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// An edit has no title to render, so the insert starts below the title line.
+#[test]
+fn inserting_below_a_missing_title_line_leaves_the_title_out() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+Title: {{ pr_title }}
+
+{{ extra | trim }}
+
+---
+"""
+
+[templates.variables]
+extra = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, "A bot's banner.\n\n---\n");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "extra=new"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(sent_body(&fake), "A bot's banner.\n\nnew\n\n---\n");
+}
+
+/// `door` and `owner` share a line, so the section below it, which that line
+/// opens, cannot be replaced, whichever of the edit's variables sorts first.
+#[test]
+fn a_section_opened_by_a_line_of_two_variables_is_refused_in_any_order() {
+    for extra in ["extra", "aextra"] {
+        let fake = ghfake::Fake::new(
+            &format!(
+                r#"
+[templates]
+pr_body = """
+## H
+
+**Door:** {{{{ door }}}} **Owner:** {{{{ owner }}}}
+{{{{ {extra} | trim }}}}
+
+---
+"""
+
+[templates.variables]
+door = {{ default = "" }}
+owner = {{ default = "" }}
+{extra} = {{ default = "" }}
+"#
+            ),
+            &PR_7,
+        );
+        fake.serve_pr_body(&PR_7, "## H\n\n**Door:** a **Owner:** b\nold\n\n---\n");
+
+        let out = fake.issue(&[
+            "pr",
+            "edit",
+            "--no-push",
+            "--arg",
+            "door=x",
+            "--arg",
+            "owner=y",
+            "--arg",
+            &format!("{extra}=new"),
+        ]);
+
+        assert!(!out.status.success(), "{extra}: {}", fake.calls());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            ["`door`", "`owner`", "share"]
+                .iter()
+                .all(|w| stderr.contains(w)),
+            "{extra}: {stderr}"
+        );
+        assert!(!wrote(&fake), "{extra}: {}", fake.calls());
+    }
+}
+
+/// An edit cannot pass the title, so a section that renders it is refused by
+/// name instead of asking for an argument that cannot be given.
+#[test]
+fn a_section_that_renders_the_title_is_refused_naming_it() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+**Door:** {{ door | trim }}
+{{ pr_title }}
+
+---
+"""
+
+[templates.variables]
+door = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, "**Door:** old\nA title\n\n---\n");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=new"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("title"), "{stderr}");
+    assert!(!stderr.contains("also pass"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}

@@ -3,11 +3,16 @@
 //! body, so only the span the section owns is rewritten.
 //!
 //! The template is rendered once with every variable as its [`slot`]. That
-//! skeleton's anchors, the lines carrying any of the template's own text, are
-//! found in the live body in order, and the ones on either side of a
-//! variable's slot bound the span that it shares with every slot inside it.
+//! skeleton's anchors, the lines the template's own text can identify (see
+//! [`is_anchor`]), are found in the live body in order, and the ones on either
+//! side of a variable's slot bound the span that it shares with every slot
+//! inside it. A variable on a line with template text has that line as its
+//! opening bound, so its span runs from that line up to the next anchor, and it
+//! shares that span with every slot below it.
 
 use anyhow::{Result, bail};
+
+use super::render::TITLE;
 
 const OPEN: &str = "@@devkit-slot:";
 const CLOSE: &str = "@@";
@@ -28,11 +33,34 @@ pub(crate) fn section(
     let sk = lines(skeleton);
     let at = slot_line(&sk, &slot(name), name)?;
     let (before, after) = bounds(&sk, at, name)?;
+    if opens_with_values(sk[before].text) && slot_names(sk[before].text).any(|n| n == TITLE) {
+        let values = values_on(sk[before].text);
+        bail!(
+            "`{name}` renders below a line of the pr_body template that holds the PR \
+             title and {}. That value can run on into `{name}`'s section, and an edit \
+             cannot rewrite the title's line, so the section cannot be replaced",
+            values
+        );
+    }
     let mut names = vec![name.to_string()];
-    for other in sk[before + 1..after]
+    let first = before + usize::from(!opens_with_values(sk[before].text));
+    if let Some(shared) = sk[first..after].iter().find_map(|l| shared_line(l.text)) {
+        bail!(
+            "`{name}` shares its section of the pr_body template with a line that holds \
+             {shared}, and variables that share a line cannot be replaced"
+        );
+    }
+    if sk[first..after]
         .iter()
-        .flat_map(|l| slot_names(l.text))
+        .any(|l| slot_names(l.text).any(|n| n == TITLE))
     {
+        bail!(
+            "`{name}` shares its section of the pr_body template with a line that \
+             holds the PR title, and an edit cannot pass the title, so the section \
+             cannot be replaced"
+        );
+    }
+    for other in sk[first..after].iter().flat_map(|l| slot_names(l.text)) {
         if !names.iter().any(|n| n == other) {
             names.push(other.to_string());
         }
@@ -100,13 +128,14 @@ pub(crate) fn splice(
         );
     }
 
-    let span_start = sk[before].end;
     let span_end = sk[after].start;
     let Some(end) = found(after).map(|l| body[l].start) else {
         bail!(lost(name));
     };
     let (start, opens) = match (found(before), shown) {
-        (Some(l), _) => (body[l].end, span_start),
+        // The line fits, so the render writes its template text back unchanged.
+        (Some(l), _) if opens_with_values(sk[before].text) => (body[l].start, sk[before].start),
+        (Some(l), _) => (body[l].end, sk[before].end),
         (None, Shown::Hidden) => return Ok(live.to_string()),
         (None, Shown::Part(full)) => {
             let Some((open, row)) = (0..before)
@@ -118,6 +147,11 @@ pub(crate) fn splice(
             };
             let text = visible_part(&sk, open, after, names, full)?;
             return Ok(format!("{}{text}{}", &live[..body[row].end], &live[end..]));
+        }
+        // An edit has no title to render, so the insert starts below its line.
+        (None, Shown::Whole) if slot_names(sk[before].text).any(|n| n == TITLE) => {
+            let first = (before + 1..after).find(|&k| !sk[k].text.is_empty());
+            (end, first.map_or(span_end, |k| sk[k].start))
         }
         (None, Shown::Whole) => (
             end,
@@ -182,6 +216,14 @@ fn visible_part<'a>(
     full: &'a str,
 ) -> Result<&'a str> {
     let name = &names[0];
+    let on_open = values_on(sk[open].text);
+    if !on_open.is_empty() {
+        bail!(
+            "the body lacks the line that opens `{name}`'s section, and the line \
+             before it holds {}, whose value can run on into what the edit replaces",
+            on_open
+        );
+    }
     let left_out: Vec<String> = sk[open + 1..after]
         .iter()
         .flat_map(|l| slot_names(l.text))
@@ -214,10 +256,11 @@ fn visible_part<'a>(
     Ok(&full[from..to])
 }
 
-/// The template lines on either side of skeleton line `at`.
+/// The template lines that bound skeleton line `at`: the line itself when it is
+/// an anchor, else the one before it, and the one after it.
 fn bounds(sk: &[Line<'_>], at: usize, name: &str) -> Result<(usize, usize)> {
     let anchor = |i: &usize| is_anchor(sk[*i].text);
-    let Some(before) = (0..at).rev().find(anchor) else {
+    let Some(before) = (0..=at).rev().find(anchor) else {
         bail!(unbounded(name, "before"));
     };
     let Some(after) = (at + 1..sk.len()).find(anchor) else {
@@ -279,17 +322,27 @@ fn segments(text: &str) -> Vec<&str> {
     out
 }
 
-/// Whether a skeleton line carries any of the template's own text, and so
-/// can be found in the live body. A line that is nothing but slots cannot.
+/// Whether a skeleton line can be found in the live body. That takes template
+/// text before its first slot: a multi-line value moves any text after a slot
+/// to a later row, so that text cannot mark where the value starts. The title
+/// stays on one row, so text after it is enough.
 fn is_anchor(text: &str) -> bool {
-    segments(text).iter().any(|s| !s.trim().is_empty())
+    let parts = segments(text);
+    !parts[0].trim().is_empty()
+        || (parts.iter().any(|s| !s.trim().is_empty()) && !opens_with_values(text))
 }
 
 /// Whether live line `text` is what skeleton line `pattern` renders to: its
-/// own text in order, with anything where its slots are.
+/// own text in order, with anything where its slots are. A line with text
+/// before its first slot fits by that text alone: a multi-line value moves the
+/// text after a slot to a later row, and a blank value can leave no space after
+/// the text before it.
 fn fits(pattern: &str, text: &str) -> bool {
     let parts = segments(pattern);
     let (first, after_first) = parts.split_first().expect("a line has a first segment");
+    if !after_first.is_empty() && !first.trim().is_empty() {
+        return text.starts_with(first) || text == first.trim_end();
+    }
     let Some(mut rest) = text.strip_prefix(first) else {
         return false;
     };
@@ -305,6 +358,42 @@ fn fits(pattern: &str, text: &str) -> bool {
     rest.ends_with(last)
 }
 
+/// Whether a span's opening line holds variables an edit can pass. A value on
+/// that line can run on into the span, so the line belongs to the span. A title
+/// alone cannot be passed and stays on one row, so its line only bounds the
+/// span.
+fn opens_with_values(text: &str) -> bool {
+    slot_names(text).any(|n| n != TITLE)
+}
+
+/// The variables an edit can pass on a skeleton line, every one but the title,
+/// listed for an error. Empty when there are none.
+fn values_on(text: &str) -> String {
+    slot_names(text)
+        .filter(|n| *n != TITLE)
+        .map(|n| format!("`{n}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The variables on a skeleton line, listed for an error, when there is more
+/// than one. An edit renders a line from its section's values, so it cannot
+/// hold another section's variable.
+fn shared_line(text: &str) -> Option<String> {
+    let mut on: Vec<&str> = Vec::new();
+    for n in slot_names(text) {
+        if !on.contains(&n) {
+            on.push(n);
+        }
+    }
+    (on.len() > 1).then(|| {
+        on.iter()
+            .map(|n| format!("`{n}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
+}
+
 /// Every variable whose slot is on a skeleton line, in order.
 fn slot_names(text: &str) -> impl Iterator<Item = &str> {
     text.split(OPEN)
@@ -312,7 +401,7 @@ fn slot_names(text: &str) -> impl Iterator<Item = &str> {
         .filter_map(|rest| rest.find(CLOSE).map(|end| &rest[..end]))
 }
 
-/// The skeleton line that is `marker` and nothing else.
+/// The one skeleton line that holds `marker`, with no other variable on it.
 fn slot_line(sk: &[Line<'_>], marker: &str, name: &str) -> Result<usize> {
     let mut holding = sk
         .iter()
@@ -321,10 +410,16 @@ fn slot_line(sk: &[Line<'_>], marker: &str, name: &str) -> Result<usize> {
     let Some((at, line)) = holding.next() else {
         bail!("`{name}` is not in the pr_body template");
     };
-    if line.text.trim() != marker || holding.next().is_some() {
+    if holding.next().is_some() || line.text.matches(marker).count() > 1 {
         bail!(
-            "`{name}` does not render on a line of its own in the pr_body \
-             template, so it cannot be replaced alone"
+            "`{name}` renders in more than one place in the pr_body template, so \
+             no one place can be replaced alone"
+        );
+    }
+    if let Some(shared) = shared_line(line.text) {
+        bail!(
+            "`{name}` shares its line of the pr_body template, which holds {shared}, \
+             so it cannot be replaced alone"
         );
     }
     Ok(at)
@@ -369,7 +464,8 @@ fn align(
 
 /// The first line of the section `heading` opens, when none of it is in the
 /// live body: the earliest of the unmatched template lines run together above
-/// it, so a section opened by several lines is inserted whole.
+/// it, so a section opened by several lines is inserted whole. A line with a
+/// variable ends the run, since that variable is not this section's to render.
 fn section_start(sk: &[Line<'_>], heading: usize, matched: impl Fn(usize) -> bool) -> usize {
     let mut opens = heading;
     for k in (0..heading).rev() {
@@ -377,7 +473,7 @@ fn section_start(sk: &[Line<'_>], heading: usize, matched: impl Fn(usize) -> boo
         if line.text.is_empty() {
             continue;
         }
-        if !is_anchor(line.text) || matched(k) {
+        if slot_names(line.text).next().is_some() || matched(k) {
             break;
         }
         opens = k;
@@ -474,8 +570,10 @@ Footer by @@devkit-slot:agent_model@@";
         assert!(err.to_string().contains("before it"), "{err}");
     }
 
+    /// The text below a label line at the end of the template cannot be told
+    /// from what a bot appended there, as for a variable on its own line.
     #[test]
-    fn an_inline_variable_is_refused() {
+    fn a_label_line_with_no_template_line_after_it_is_refused() {
         let err = splice(
             SKELETON,
             SKELETON,
@@ -484,7 +582,96 @@ Footer by @@devkit-slot:agent_model@@";
             Shown::Whole,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("line of its own"), "{err}");
+        assert!(err.to_string().contains("after it"), "{err}");
+    }
+
+    const LABELS: &str = "## Merge danger\n\n**Door:** @@devkit-slot:door@@\n\n\
+                          **Blast Radius:** @@devkit-slot:blast_radius@@\n\n---\n";
+
+    fn replace_on_label_line(skeleton: &str, name: &str, value: &str, live: &str) -> String {
+        splice(
+            skeleton,
+            &fill(skeleton, name, value),
+            live,
+            &names(&[name]),
+            Shown::Whole,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_label_line_keeps_its_text_when_its_variable_is_replaced() {
+        let live = "## Merge danger\n\n**Door:** a\n\n**Blast Radius:** b\n\n---\nbot\n";
+
+        assert_eq!(
+            replace_on_label_line(LABELS, "door", "x", live),
+            "## Merge danger\n\n**Door:** x\n\n**Blast Radius:** b\n\n---\nbot\n"
+        );
+    }
+
+    #[test]
+    fn a_multi_line_value_fills_the_label_line_and_the_lines_after_it() {
+        let live = "## Merge danger\n\n**Door:** a\n\n**Blast Radius:** old\n- old\n\n---\nbot\n";
+
+        assert_eq!(
+            replace_on_label_line(LABELS, "blast_radius", "new\n- one\n- two", live),
+            "## Merge danger\n\n**Door:** a\n\n**Blast Radius:** new\n- one\n- two\n\n---\nbot\n"
+        );
+    }
+
+    #[test]
+    fn a_label_line_keeps_the_text_after_its_variable() {
+        let skeleton = "## H\n\nDoor @@devkit-slot:door@@ (checked)\n\n---\n";
+        let live = "## H\n\nDoor a (checked)\n\n---\nbot\n";
+
+        assert_eq!(
+            replace_on_label_line(skeleton, "door", "x", live),
+            "## H\n\nDoor x (checked)\n\n---\nbot\n"
+        );
+    }
+
+    /// A blank value leaves a label line whose trailing space the body may
+    /// have lost, and that line is still the one to replace.
+    #[test]
+    fn a_label_line_whose_value_is_blank_is_found() {
+        let live = "## Merge danger\n\n**Door:**\n\n**Blast Radius:** b\n\n---\n";
+
+        assert_eq!(
+            replace_on_label_line(LABELS, "door", "x", live),
+            "## Merge danger\n\n**Door:** x\n\n**Blast Radius:** b\n\n---\n"
+        );
+    }
+
+    #[test]
+    fn a_label_line_shares_its_section_with_the_slots_below_it() {
+        let skeleton = "## H\n\n**Door:** @@devkit-slot:door@@\n@@devkit-slot:extra@@\n\n---\n";
+
+        let err = section(skeleton, "door", |n| n == "door").unwrap_err();
+        assert!(err.to_string().contains("also pass `extra`"), "{err}");
+        assert_eq!(section(skeleton, "door", |_| true).unwrap(), [
+            "door", "extra"
+        ]);
+    }
+
+    #[test]
+    fn a_variable_on_a_line_with_another_variable_is_refused_naming_it() {
+        let skeleton =
+            "## H\n\n**Door:** @@devkit-slot:door@@ **Owner:** @@devkit-slot:owner@@\n\n---\n";
+
+        let err = section(skeleton, "door", |_| true).unwrap_err().to_string();
+        assert!(err.contains("shares its line"), "{err}");
+        assert!(err.contains("`owner`"), "{err}");
+    }
+
+    #[test]
+    fn a_variable_rendered_twice_is_refused_naming_the_reason() {
+        for skeleton in [
+            "## H\n\nDoor @@devkit-slot:door@@ again @@devkit-slot:door@@\n\n---\n",
+            "## H\n\n@@devkit-slot:door@@\n\n## I\n\n@@devkit-slot:door@@\n\n---\n",
+        ] {
+            let err = section(skeleton, "door", |_| true).unwrap_err().to_string();
+            assert!(err.contains("more than one place"), "{err}");
+        }
     }
 
     const SHARED: &str =

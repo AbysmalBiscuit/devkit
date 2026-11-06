@@ -15,7 +15,7 @@ use devkit_config::Templates;
 use super::{
     create::{attached_file, check_attachments},
     proof::gate_proof,
-    render::{Texts, missing, refuse_template_headings, require_pr_title, with_defaults},
+    render::{TITLE, Texts, missing, refuse_template_headings, require_pr_title, with_defaults},
     require_existing_pr,
     resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
     splice::{section, shown, slot, splice},
@@ -74,7 +74,7 @@ fn render_body(
         None,
         Some(value("input")),
     )
-    .body(&slot("pr_title"))
+    .body(&slot(TITLE))
 }
 
 pub fn run(args: Args) -> Result<()> {
