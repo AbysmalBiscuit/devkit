@@ -19,3 +19,7 @@ non_author = false
 [standard.parameters]
 merge_auto = "yes"
 merge_rebase = "every-push"
+
+# The tracker that holds the tickets of this repo. workcell requires it.
+[tracker]
+kind = "github"
