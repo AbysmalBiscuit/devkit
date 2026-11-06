@@ -670,6 +670,7 @@ impl Throwaway {
                 path: &worktree.path(),
                 start: head,
                 branch: None,
+                no_hooks: false,
             })
             .context("creating the throwaway worktree")?;
         Ok(worktree)

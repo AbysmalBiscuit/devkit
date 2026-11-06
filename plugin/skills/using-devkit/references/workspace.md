@@ -5,8 +5,8 @@
 Every verb works from the primary checkout, which git resolves: the main worktree when you stand in a linked one, otherwise the checkout root. The directory's name does not matter.
 
 ```sh
-workspace setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary|--no-summary] [--dry-run] [--no-gitignore]
-workspace setup --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore]
+workspace setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary|--no-summary] [--dry-run] [--no-gitignore] [--no-git-hooks]
+workspace setup --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore] [--no-git-hooks]
 workspace setup --here <ID|URL> [--slug <slug>] [--summary|--no-summary] [--dry-run] [--no-gitignore]
 workspace status [ids...]                                 # read-only triage (also the bare `workspace`)
 workspace end [ids...] [-y] [--force] [--pr-only] [--clean-worktree] [--no-preserve]
@@ -42,6 +42,7 @@ The branch is created with no upstream. git would otherwise track the baseline's
 | `--apps <a,b>` | Comma-separated apps to bootstrap: writes each one's prep files, runs its setup commands. Omit for a worktree with no per-app setup. |
 | `--summary` | Also write a markdown summary file. A tracker that keeps its own summary supplies the file verbatim: under GitHub that is the issue body, so a handoff written into the issue comes back down as the summary. Otherwise, and for a GitHub issue with an empty body, the file is the issue's tracker facts (url, parent, project, state, assignee, priority, estimate, labels) and its description verbatim, then empty `## Summary` and `## Pointers` headings to fill in. A tracker with no equivalent of a field leaves it empty, as GitHub does for parent, project, priority, and estimate. Default path `.devkit/ISSUE_SUMMARY_<ID>.md` inside the worktree (with `--here`, the checkout), untracked like the rest of `.devkit/`, so it goes when the worktree is removed unless a `[preserve]` pattern copies it out; `templates.issue_summary_path` and `templates.issue_summary` override placement and body, and a relative path there is taken from `worktree_root`, beside the worktree, and refused where there is none. Needs the tracker's credential. An existing file is left byte-for-byte and its path still reported. The fetch runs before the worktree is created, so an unknown issue fails clean. `workspace end` removes the recorded file when it cleans the worktree up. `defaults.issue_summary = true` makes this the default. Under `--dry-run` the resolved path is reported without the file being written. Only an explicit `--summary` together with `--dry-run` adds `summary_text`, the text a fresh file gets; `defaults.issue_summary = true` with a plain `--dry-run` reports `summary` but no `summary_text`. |
 | `--no-summary` | Skip the summary file for this run, whatever `defaults.issue_summary` says. |
+| `--no-git-hooks` | Run the `git worktree add` with no hooks, so no `post-checkout` hook fires. The `after_worktree_create` commands and later git commands in the worktree still run the installed hooks. `--here` refuses this flag, because it creates no worktree. |
 
 `devkit pr checkout` is the review-side counterpart: it builds a workspace around someone else's PR, and `workspace status`, `workspace end` and `workspace sync-includes` treat it like any other.
 

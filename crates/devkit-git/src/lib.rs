@@ -343,8 +343,8 @@ fn ssh_remedy(stderr: &str) -> Option<&'static str> {
     }
 }
 
-/// The path that makes git skip a config level entirely.
-#[cfg(any(test, feature = "test-support"))]
+/// The path that makes git skip a config level entirely, and that holds no
+/// hooks as a `core.hooksPath`.
 const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 #[cfg(test)]

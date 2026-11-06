@@ -7,7 +7,7 @@ use devkit_vcs::{
     Changes, DETACHED, FileChange, NewWorktree, Ownership, Selection, VersionControl, Worktree,
 };
 
-use super::{Git, SLOW_TIMEOUT};
+use super::{Git, NULL_DEVICE, SLOW_TIMEOUT};
 
 /// Holds no state: every call spawns git against the directory it is given.
 #[derive(Debug, Clone, Copy, Default)]
@@ -258,7 +258,11 @@ impl VersionControl for GitBackend {
             Some(branch) => args.extend(["--no-track", "-b", branch]),
         }
         args.extend([path, new.start]);
-        Git::at(new.main).args(args).network().output()?;
+        let mut git = Git::at(new.main);
+        if new.no_hooks {
+            git = git.args(["-c", &format!("core.hooksPath={NULL_DEVICE}")]);
+        }
+        git.args(args).network().output()?;
         Ok(())
     }
 

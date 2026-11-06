@@ -28,6 +28,8 @@ pub struct SetupArgs {
     /// Skip that file for this run even when `defaults.issue_summary` is set.
     pub no_summary: bool,
     pub no_gitignore: bool,
+    /// Keep the repository's hooks out of the `git worktree add`.
+    pub no_git_hooks: bool,
     /// Bind the checkout `dir` sits in instead of creating a worktree.
     pub here: bool,
     pub dir: Option<String>,
@@ -824,6 +826,7 @@ fn setup(
             path: &worktree,
             start: &baseline_target,
             branch: Some(&branch),
+            no_hooks: args.no_git_hooks,
         })
     })?;
 
@@ -1177,6 +1180,7 @@ mod tests {
                 summary,
                 no_summary: false,
                 no_gitignore: true,
+                no_git_hooks: false,
                 here: false,
                 dir: Some(self.app().display().to_string()),
                 config: None,
