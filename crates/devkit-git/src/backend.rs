@@ -260,7 +260,7 @@ impl VersionControl for GitBackend {
         args.extend([path, new.start]);
         let mut git = Git::at(new.main);
         if new.no_hooks {
-            git = git.args(["-c", &format!("core.hooksPath={NULL_DEVICE}")]);
+            git = git.hooks_path(NULL_DEVICE);
         }
         git.args(args).network().output()?;
         Ok(())

@@ -141,7 +141,7 @@ impl Drop for Held {
 /// repository's.
 fn private(top: &Path, index: &Path, hooks: &Path) -> Result<Git> {
     Ok(Git::at(top)
-        .args(["-c", &format!("core.hooksPath={}", slashed(hooks)?)])
+        .hooks_path(&slashed(hooks)?)
         .env("GIT_INDEX_FILE", index))
 }
 
@@ -660,13 +660,9 @@ pub fn run_hook(state_path: &Path, hook: &str, args: &[String]) -> Result<i32> {
             git = git.env(var, value);
         }
     }
-    let mut git = git.args([
-        "-c",
-        &format!("core.hooksPath={}", slashed(&state.hooks)?),
-        "hook",
-        "run",
-        "--ignore-missing",
-    ]);
+    let mut git = git
+        .hooks_path(&slashed(&state.hooks)?)
+        .args(["hook", "run", "--ignore-missing"]);
     let stdin_file = state_path.with_extension(format!("stdin-{}", std::process::id()));
     if let Some(payload) = &payload {
         fs::write(&stdin_file, payload)?;
