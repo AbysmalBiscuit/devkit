@@ -407,15 +407,10 @@ fn slot_line(sk: &[Line<'_>], marker: &str, name: &str) -> Result<usize> {
              no one place can be replaced alone"
         );
     }
-    let others: Vec<String> = slot_names(line.text)
-        .filter(|other| *other != name)
-        .map(|other| format!("`{other}`"))
-        .collect();
-    if !others.is_empty() {
+    if let Some(shared) = shared_line(line.text) {
         bail!(
-            "`{name}` shares its line of the pr_body template with {}, so it cannot \
-             be replaced alone",
-            others.join(", ")
+            "`{name}` shares its line of the pr_body template, which holds {shared}, \
+             so it cannot be replaced alone"
         );
     }
     Ok(at)
