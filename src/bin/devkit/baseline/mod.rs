@@ -469,6 +469,7 @@ fn create(primary: &Path, path: &Path, sha: &str, steps: &Steps) -> Result<()> {
             path,
             start: sha,
             branch: None,
+            no_hooks: false,
         })
     })?;
     Ok(())

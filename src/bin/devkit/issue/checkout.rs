@@ -379,6 +379,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             path: &worktree,
             start: &baseline_target,
             branch: None,
+            no_hooks: false,
         })
     })?;
 

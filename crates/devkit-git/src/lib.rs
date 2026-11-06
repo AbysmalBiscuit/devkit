@@ -143,6 +143,12 @@ impl Git {
         self
     }
 
+    /// Run the repository's hooks from `path` for this call alone. A path
+    /// that holds no hooks, such as [`NULL_DEVICE`], runs none.
+    pub fn hooks_path(self, path: &str) -> Self {
+        self.args(["-c", &format!("core.hooksPath={path}")])
+    }
+
     /// Set one of git's own behavior variables, e.g. `GIT_NO_LAZY_FETCH`.
     pub fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
         self.command.env(key, value);
@@ -343,8 +349,8 @@ fn ssh_remedy(stderr: &str) -> Option<&'static str> {
     }
 }
 
-/// The path that makes git skip a config level entirely.
-#[cfg(any(test, feature = "test-support"))]
+/// The path that makes git skip a config level entirely, and that holds no
+/// hooks as a `core.hooksPath`.
 const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 #[cfg(test)]

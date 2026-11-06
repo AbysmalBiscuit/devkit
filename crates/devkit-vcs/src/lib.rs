@@ -63,6 +63,9 @@ pub struct NewWorktree<'a> {
     /// branch name. A new branch tracks nothing, so a plain push publishes it
     /// under its own name.
     pub branch: Option<&'a str>,
+    /// Keep the repository's hooks out of the creation alone. Later operations
+    /// in the worktree still run them.
+    pub no_hooks: bool,
 }
 
 /// One file [`VersionControl::changed_files`] reports, by its path on each

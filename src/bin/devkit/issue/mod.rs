@@ -416,6 +416,11 @@ pub(crate) enum WorkspaceCmd {
         /// per-worktree artifacts and `*.local` config layers to it.
         #[arg(long = "no-gitignore")]
         no_gitignore: bool,
+        /// Run the `git worktree add` with no hooks, so no `post-checkout`
+        /// hook fires. The `after_worktree_create` commands and later git
+        /// commands in the worktree still run the installed hooks.
+        #[arg(long = "no-git-hooks", conflicts_with = "here")]
+        no_git_hooks: bool,
         /// Bind the checkout this runs in to the issue instead of creating a
         /// worktree: write its issue record (and summary) on the branch
         /// already checked out, creating no branch and running no worktree
@@ -993,6 +998,7 @@ fn run_workspace(dir: Option<String>, config: Option<String>, cmd: WorkspaceCmd)
             no_summary,
             dry_run,
             no_gitignore,
+            no_git_hooks,
             here,
         } => setup::run(setup::SetupArgs {
             issue: issue_pos.or(issue),
@@ -1002,6 +1008,7 @@ fn run_workspace(dir: Option<String>, config: Option<String>, cmd: WorkspaceCmd)
             no_summary,
             dry_run,
             no_gitignore,
+            no_git_hooks,
             here,
             dir,
             config,
