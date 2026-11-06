@@ -219,14 +219,11 @@ fn visible_part<'a>(
     Ok(&full[from..to])
 }
 
-/// The template lines that bound skeleton line `at`: the line itself when
-/// template text comes before its slot, else the one before it, and the one
-/// after it. Text only after the slot cannot open the span, because a
-/// multi-line value's first row does not show it.
+/// The template lines that bound skeleton line `at`: the line itself when it is
+/// an anchor, else the one before it, and the one after it.
 fn bounds(sk: &[Line<'_>], at: usize, name: &str) -> Result<(usize, usize)> {
     let anchor = |i: &usize| is_anchor(sk[*i].text);
-    let opens_itself = !segments(sk[at].text)[0].trim().is_empty();
-    let Some(before) = (0..at + usize::from(opens_itself)).rev().find(anchor) else {
+    let Some(before) = (0..=at).rev().find(anchor) else {
         bail!(unbounded(name, "before"));
     };
     let Some(after) = (at + 1..sk.len()).find(anchor) else {
@@ -288,10 +285,14 @@ fn segments(text: &str) -> Vec<&str> {
     out
 }
 
-/// Whether a skeleton line carries any of the template's own text, and so
-/// can be found in the live body. A line that is nothing but slots cannot.
+/// Whether a skeleton line can be found in the live body. That takes template
+/// text before its first slot: a multi-line value moves any text after a slot to
+/// a later row, so that text cannot mark where the value starts. The title stays
+/// on one row, so text after it is enough.
 fn is_anchor(text: &str) -> bool {
-    segments(text).iter().any(|s| !s.trim().is_empty())
+    let parts = segments(text);
+    !parts[0].trim().is_empty()
+        || (parts.iter().any(|s| !s.trim().is_empty()) && slot_names(text).all(|n| n == TITLE))
 }
 
 /// Whether live line `text` is what skeleton line `pattern` renders to: its

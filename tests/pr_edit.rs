@@ -1008,3 +1008,72 @@ extra = { default = "" }
     assert!(out.status.success(), "{out:?}\n{}", fake.calls());
     assert_eq!(sent_body(&fake), "Title: A title\n\nnew\n\n---\n");
 }
+
+/// A section of `upper` and, below it, `lower` on a line with text only after
+/// its slot. That text sits on the value's last row, so it cannot bound `upper`.
+fn text_after_slot_project(upper: &str, lower: &str) -> ghfake::Fake {
+    let fake = ghfake::Fake::new(
+        &format!(
+            r#"
+[templates]
+pr_body = """
+## Merge danger
+
+{{{{ {upper} | trim }}}}
+
+{{{{ {lower} | trim }}}} (checked)
+
+---
+
+Footer"""
+
+[templates.variables]
+{upper} = {{ default = "" }}
+{lower} = {{ default = "" }}
+"#
+        ),
+        &PR_7,
+    );
+    fake.serve_pr_body(
+        &PR_7,
+        "## Merge danger\n\nold upper\n\nold lower\nmore lower (checked)\n\n---\n\nFooter\n",
+    );
+    fake
+}
+
+#[test]
+fn a_variable_above_a_line_with_text_only_after_its_slot_needs_that_variable() {
+    let fake = text_after_slot_project("upper", "lower");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "upper=new upper"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("also pass `lower`"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// Sections are placed in the order their variables sort, which must not
+/// change what the edit replaces.
+#[test]
+fn a_line_with_text_only_after_its_slot_is_replaced_with_the_variable_above_it() {
+    for (upper, lower) in [("a", "z"), ("z", "a")] {
+        let fake = text_after_slot_project(upper, lower);
+
+        let out = fake.issue(&[
+            "pr",
+            "edit",
+            "--no-push",
+            "--arg",
+            &format!("{upper}=new upper"),
+            "--arg",
+            &format!("{lower}=new lower\nnew more"),
+        ]);
+
+        assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+        assert_eq!(
+            sent_body(&fake),
+            "## Merge danger\n\nnew upper\n\nnew lower\nnew more (checked)\n\n---\n\nFooter\n"
+        );
+    }
+}
