@@ -35,15 +35,12 @@ pub(crate) fn section(
     let at = slot_line(&sk, &slot(name), name)?;
     let (before, after) = bounds(&sk, at, name)?;
     if opens_with_values(sk[before].text) && slot_names(sk[before].text).any(|n| n == TITLE) {
-        let values: Vec<String> = slot_names(sk[before].text)
-            .filter(|n| *n != TITLE)
-            .map(|n| format!("`{n}`"))
-            .collect();
+        let values = values_on(sk[before].text);
         bail!(
             "`{name}` renders below a line of the pr_body template that holds the PR \
              title and {}. That value can run on into `{name}`'s section, and an edit \
              cannot rewrite the title's line, so the section cannot be replaced",
-            values.join(", ")
+            values
         );
     }
     let mut names = vec![name.to_string()];
@@ -210,15 +207,12 @@ fn visible_part<'a>(
     full: &'a str,
 ) -> Result<&'a str> {
     let name = &names[0];
-    let on_open: Vec<String> = slot_names(sk[open].text)
-        .filter(|n| *n != TITLE)
-        .map(|n| format!("`{n}`"))
-        .collect();
+    let on_open = values_on(sk[open].text);
     if !on_open.is_empty() {
         bail!(
             "the body lacks the line that opens `{name}`'s section, and the line \
              before it holds {}, whose value can run on into what the edit replaces",
-            on_open.join(", ")
+            on_open
         );
     }
     let left_out: Vec<String> = sk[open + 1..after]
@@ -361,6 +355,16 @@ fn fits(pattern: &str, text: &str) -> bool {
 /// span.
 fn opens_with_values(text: &str) -> bool {
     slot_names(text).any(|n| n != TITLE)
+}
+
+/// The variables an edit can pass on a skeleton line, every one but the title,
+/// listed for an error. Empty when there are none.
+fn values_on(text: &str) -> String {
+    slot_names(text)
+        .filter(|n| *n != TITLE)
+        .map(|n| format!("`{n}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The variables on a skeleton line, listed for an error, when there is more
