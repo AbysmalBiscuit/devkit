@@ -326,7 +326,7 @@ fn segments(text: &str) -> Vec<&str> {
 fn is_anchor(text: &str) -> bool {
     let parts = segments(text);
     !parts[0].trim().is_empty()
-        || (parts.iter().any(|s| !s.trim().is_empty()) && slot_names(text).all(|n| n == TITLE))
+        || (parts.iter().any(|s| !s.trim().is_empty()) && !opens_with_values(text))
 }
 
 /// Whether live line `text` is what skeleton line `pattern` renders to: its
