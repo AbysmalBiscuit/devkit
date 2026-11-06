@@ -15,10 +15,10 @@ use devkit_config::Templates;
 use super::{
     create::{attached_file, check_attachments},
     proof::gate_proof,
-    render::{Texts, missing, refuse_template_headings, require_pr_title, with_defaults},
+    render::{TITLE, Texts, missing, refuse_template_headings, require_pr_title, with_defaults},
     require_existing_pr,
     resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
-    splice::{TITLE, section, shown, slot, splice},
+    splice::{section, shown, slot, splice},
 };
 use crate::{
     issue::review::{guard_branch, parse_args},

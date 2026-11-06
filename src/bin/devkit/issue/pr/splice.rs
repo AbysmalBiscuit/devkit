@@ -12,11 +12,10 @@
 
 use anyhow::{Result, bail};
 
+use super::render::TITLE;
+
 const OPEN: &str = "@@devkit-slot:";
 const CLOSE: &str = "@@";
-
-/// The variable a body renders the PR's title into. An edit cannot pass it.
-pub(crate) const TITLE: &str = "pr_title";
 
 /// What variable `name` renders as in a skeleton.
 pub(crate) fn slot(name: &str) -> String {

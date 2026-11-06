@@ -23,6 +23,10 @@ use crate::{
     template::VarArgs,
 };
 
+/// The variable the `pr_body` template reads the PR's title from. An edit
+/// cannot pass it.
+pub(crate) const TITLE: &str = "pr_title";
+
 /// `--pr-body` and `--pr-body-file`, the two ways `pr create`, `pr edit` and
 /// `pr render` take a summary.
 #[derive(clap::Args, Debug, Default, PartialEq)]
@@ -272,7 +276,7 @@ impl<'a> Texts<'a> {
     pub(crate) fn body(&self, title: &str) -> Result<String> {
         let ctx = with_fields(&self.ctx, &[
             ("input", serde_json::json!(self.body_input)),
-            ("pr_title", serde_json::json!(title)),
+            (TITLE, serde_json::json!(title)),
         ]);
         render_review(
             self.tmpls.pr_body(),
