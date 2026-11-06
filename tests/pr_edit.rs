@@ -1077,3 +1077,55 @@ fn a_line_with_text_only_after_its_slot_is_replaced_with_the_variable_above_it()
         );
     }
 }
+
+/// `enabled` hides `detail`, and the body lacks its heading, so the edit would
+/// replace from the door's line. That would delete the door's continuation.
+#[test]
+fn a_part_shown_section_refuses_to_replace_from_a_line_holding_a_value() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = '''
+## Summary
+
+**Door:** {{ door | trim }}
+{%- if enabled %}
+
+### Optional
+
+{{ detail | trim }}
+{%- endif %}
+
+{{ tail | trim }}
+
+## Proof
+'''
+
+[templates.variables]
+enabled = { default = "" }
+door = { default = "" }
+detail = { default = "" }
+tail = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(
+        &PR_7,
+        "## Summary\n\n**Door:** old\n- door continuation\n\nold tail\n\n## Proof\n",
+    );
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "detail=new detail",
+        "--arg",
+        "tail=new tail",
+    ]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("`door`"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}

@@ -187,6 +187,17 @@ fn visible_part<'a>(
     full: &'a str,
 ) -> Result<&'a str> {
     let name = &names[0];
+    let on_open: Vec<String> = slot_names(sk[open].text)
+        .filter(|n| *n != TITLE)
+        .map(|n| format!("`{n}`"))
+        .collect();
+    if !on_open.is_empty() {
+        bail!(
+            "the body lacks the line that opens `{name}`'s section, and the line \
+             before it holds {}, whose value can run on into what the edit replaces",
+            on_open.join(", ")
+        );
+    }
     let left_out: Vec<String> = sk[open + 1..after]
         .iter()
         .flat_map(|l| slot_names(l.text))
