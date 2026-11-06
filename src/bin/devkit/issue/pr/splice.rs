@@ -50,6 +50,16 @@ pub(crate) fn section(
              {shared}, and variables that share a line cannot be replaced"
         );
     }
+    if sk[first..after]
+        .iter()
+        .any(|l| slot_names(l.text).any(|n| n == TITLE))
+    {
+        bail!(
+            "`{name}` shares its section of the pr_body template with a line that \
+             holds the PR title, and an edit cannot pass the title, so the section \
+             cannot be replaced"
+        );
+    }
     for other in sk[first..after].iter().flat_map(|l| slot_names(l.text)) {
         if !names.iter().any(|n| n == other) {
             names.push(other.to_string());

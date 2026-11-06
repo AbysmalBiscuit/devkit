@@ -1242,3 +1242,33 @@ owner = {{ default = "" }}
         assert!(!wrote(&fake), "{extra}: {}", fake.calls());
     }
 }
+
+/// An edit cannot pass the title, so a section that renders it is refused by
+/// name instead of asking for an argument that cannot be given.
+#[test]
+fn a_section_that_renders_the_title_is_refused_naming_it() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+**Door:** {{ door | trim }}
+{{ pr_title }}
+
+---
+"""
+
+[templates.variables]
+door = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, "**Door:** old\nA title\n\n---\n");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=new"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("title"), "{stderr}");
+    assert!(!stderr.contains("also pass"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
