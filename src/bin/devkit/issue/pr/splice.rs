@@ -48,6 +48,12 @@ pub(crate) fn section(
     }
     let mut names = vec![name.to_string()];
     let first = before + usize::from(!opens_with_values(sk[before].text));
+    if let Some(shared) = sk[first..after].iter().find_map(|l| shared_line(l.text)) {
+        bail!(
+            "`{name}` shares its section of the pr_body template with a line that holds \
+             {shared}, and variables that share a line cannot be replaced"
+        );
+    }
     for other in sk[first..after].iter().flat_map(|l| slot_names(l.text)) {
         if !names.iter().any(|n| n == other) {
             names.push(other.to_string());
@@ -355,6 +361,24 @@ fn fits(pattern: &str, text: &str) -> bool {
 /// span.
 fn opens_with_values(text: &str) -> bool {
     slot_names(text).any(|n| n != TITLE)
+}
+
+/// The variables on a skeleton line, listed for an error, when there is more
+/// than one. An edit renders a line from its section's values, so it cannot
+/// hold another section's variable.
+fn shared_line(text: &str) -> Option<String> {
+    let mut on: Vec<&str> = Vec::new();
+    for n in slot_names(text) {
+        if !on.contains(&n) {
+            on.push(n);
+        }
+    }
+    (on.len() > 1).then(|| {
+        on.iter()
+            .map(|n| format!("`{n}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
 }
 
 /// Every variable whose slot is on a skeleton line, in order.

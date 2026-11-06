@@ -1190,3 +1190,55 @@ extra = { default = "" }
     assert!(out.status.success(), "{out:?}\n{}", fake.calls());
     assert_eq!(sent_body(&fake), "A bot's banner.\n\nnew\n\n---\n");
 }
+
+/// `door` and `owner` share a line, so the section below it, which that line
+/// opens, cannot be replaced, whichever of the edit's variables sorts first.
+#[test]
+fn a_section_opened_by_a_line_of_two_variables_is_refused_in_any_order() {
+    for extra in ["extra", "aextra"] {
+        let fake = ghfake::Fake::new(
+            &format!(
+                r#"
+[templates]
+pr_body = """
+## H
+
+**Door:** {{{{ door }}}} **Owner:** {{{{ owner }}}}
+{{{{ {extra} | trim }}}}
+
+---
+"""
+
+[templates.variables]
+door = {{ default = "" }}
+owner = {{ default = "" }}
+{extra} = {{ default = "" }}
+"#
+            ),
+            &PR_7,
+        );
+        fake.serve_pr_body(&PR_7, "## H\n\n**Door:** a **Owner:** b\nold\n\n---\n");
+
+        let out = fake.issue(&[
+            "pr",
+            "edit",
+            "--no-push",
+            "--arg",
+            "door=x",
+            "--arg",
+            "owner=y",
+            "--arg",
+            &format!("{extra}=new"),
+        ]);
+
+        assert!(!out.status.success(), "{extra}: {}", fake.calls());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            ["`door`", "`owner`", "share"]
+                .iter()
+                .all(|w| stderr.contains(w)),
+            "{extra}: {stderr}"
+        );
+        assert!(!wrote(&fake), "{extra}: {}", fake.calls());
+    }
+}
