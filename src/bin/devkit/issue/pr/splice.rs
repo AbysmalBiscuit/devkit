@@ -6,6 +6,8 @@
 //! skeleton's anchors, the lines carrying any of the template's own text, are
 //! found in the live body in order, and the ones on either side of a
 //! variable's slot bound the span that it shares with every slot inside it.
+//! A variable on a line with template text has that line as its opening bound,
+//! so its span runs from that line up to the next anchor.
 
 use anyhow::{Result, bail};
 
@@ -100,13 +102,14 @@ pub(crate) fn splice(
         );
     }
 
-    let span_start = sk[before].end;
     let span_end = sk[after].start;
     let Some(end) = found(after).map(|l| body[l].start) else {
         bail!(lost(name));
     };
     let (start, opens) = match (found(before), shown) {
-        (Some(l), _) => (body[l].end, span_start),
+        // The line fits, so the render writes its template text back unchanged.
+        (Some(l), _) if before == at => (body[l].start, sk[at].start),
+        (Some(l), _) => (body[l].end, sk[before].end),
         (None, Shown::Hidden) => return Ok(live.to_string()),
         (None, Shown::Part(full)) => {
             let Some((open, row)) = (0..before)
@@ -214,10 +217,11 @@ fn visible_part<'a>(
     Ok(&full[from..to])
 }
 
-/// The template lines on either side of skeleton line `at`.
+/// The template lines that bound skeleton line `at`: the line itself when it
+/// carries template text, else the one before it, and the one after it.
 fn bounds(sk: &[Line<'_>], at: usize, name: &str) -> Result<(usize, usize)> {
     let anchor = |i: &usize| is_anchor(sk[*i].text);
-    let Some(before) = (0..at).rev().find(anchor) else {
+    let Some(before) = (0..=at).rev().find(anchor) else {
         bail!(unbounded(name, "before"));
     };
     let Some(after) = (at + 1..sk.len()).find(anchor) else {
@@ -286,10 +290,14 @@ fn is_anchor(text: &str) -> bool {
 }
 
 /// Whether live line `text` is what skeleton line `pattern` renders to: its
-/// own text in order, with anything where its slots are.
+/// own text in order, with anything where its slots are. A line ending in a
+/// slot also fits with a blank value, which leaves no space after its text.
 fn fits(pattern: &str, text: &str) -> bool {
     let parts = segments(pattern);
     let (first, after_first) = parts.split_first().expect("a line has a first segment");
+    if after_first == [""] && text == first.trim_end() {
+        return true;
+    }
     let Some(mut rest) = text.strip_prefix(first) else {
         return false;
     };
@@ -312,7 +320,7 @@ fn slot_names(text: &str) -> impl Iterator<Item = &str> {
         .filter_map(|rest| rest.find(CLOSE).map(|end| &rest[..end]))
 }
 
-/// The skeleton line that is `marker` and nothing else.
+/// The one skeleton line that holds `marker`, with no other variable on it.
 fn slot_line(sk: &[Line<'_>], marker: &str, name: &str) -> Result<usize> {
     let mut holding = sk
         .iter()
@@ -321,10 +329,21 @@ fn slot_line(sk: &[Line<'_>], marker: &str, name: &str) -> Result<usize> {
     let Some((at, line)) = holding.next() else {
         bail!("`{name}` is not in the pr_body template");
     };
-    if line.text.trim() != marker || holding.next().is_some() {
+    if holding.next().is_some() || line.text.matches(marker).count() > 1 {
         bail!(
-            "`{name}` does not render on a line of its own in the pr_body \
-             template, so it cannot be replaced alone"
+            "`{name}` renders in more than one place in the pr_body template, so \
+             no one place can be replaced alone"
+        );
+    }
+    let others: Vec<String> = slot_names(line.text)
+        .filter(|other| *other != name)
+        .map(|other| format!("`{other}`"))
+        .collect();
+    if !others.is_empty() {
+        bail!(
+            "`{name}` shares its line of the pr_body template with {}, so it cannot \
+             be replaced alone",
+            others.join(", ")
         );
     }
     Ok(at)
@@ -474,8 +493,10 @@ Footer by @@devkit-slot:agent_model@@";
         assert!(err.to_string().contains("before it"), "{err}");
     }
 
+    /// The text below a label line at the end of the template cannot be told
+    /// from what a bot appended there, as for a variable on its own line.
     #[test]
-    fn an_inline_variable_is_refused() {
+    fn a_label_line_with_no_template_line_after_it_is_refused() {
         let err = splice(
             SKELETON,
             SKELETON,
@@ -484,7 +505,96 @@ Footer by @@devkit-slot:agent_model@@";
             Shown::Whole,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("line of its own"), "{err}");
+        assert!(err.to_string().contains("after it"), "{err}");
+    }
+
+    const LABELS: &str = "## Merge danger\n\n**Door:** @@devkit-slot:door@@\n\n\
+                          **Blast Radius:** @@devkit-slot:blast_radius@@\n\n---\n";
+
+    fn replace_on_label_line(skeleton: &str, name: &str, value: &str, live: &str) -> String {
+        splice(
+            skeleton,
+            &fill(skeleton, name, value),
+            live,
+            &names(&[name]),
+            Shown::Whole,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_label_line_keeps_its_text_when_its_variable_is_replaced() {
+        let live = "## Merge danger\n\n**Door:** a\n\n**Blast Radius:** b\n\n---\nbot\n";
+
+        assert_eq!(
+            replace_on_label_line(LABELS, "door", "x", live),
+            "## Merge danger\n\n**Door:** x\n\n**Blast Radius:** b\n\n---\nbot\n"
+        );
+    }
+
+    #[test]
+    fn a_multi_line_value_fills_the_label_line_and_the_lines_after_it() {
+        let live = "## Merge danger\n\n**Door:** a\n\n**Blast Radius:** old\n- old\n\n---\nbot\n";
+
+        assert_eq!(
+            replace_on_label_line(LABELS, "blast_radius", "new\n- one\n- two", live),
+            "## Merge danger\n\n**Door:** a\n\n**Blast Radius:** new\n- one\n- two\n\n---\nbot\n"
+        );
+    }
+
+    #[test]
+    fn a_label_line_keeps_the_text_after_its_variable() {
+        let skeleton = "## H\n\nDoor @@devkit-slot:door@@ (checked)\n\n---\n";
+        let live = "## H\n\nDoor a (checked)\n\n---\nbot\n";
+
+        assert_eq!(
+            replace_on_label_line(skeleton, "door", "x", live),
+            "## H\n\nDoor x (checked)\n\n---\nbot\n"
+        );
+    }
+
+    /// A blank value leaves a label line whose trailing space the body may
+    /// have lost, and that line is still the one to replace.
+    #[test]
+    fn a_label_line_whose_value_is_blank_is_found() {
+        let live = "## Merge danger\n\n**Door:**\n\n**Blast Radius:** b\n\n---\n";
+
+        assert_eq!(
+            replace_on_label_line(LABELS, "door", "x", live),
+            "## Merge danger\n\n**Door:** x\n\n**Blast Radius:** b\n\n---\n"
+        );
+    }
+
+    #[test]
+    fn a_label_line_shares_its_section_with_the_slots_below_it() {
+        let skeleton = "## H\n\n**Door:** @@devkit-slot:door@@\n@@devkit-slot:extra@@\n\n---\n";
+
+        let err = section(skeleton, "door", |n| n == "door").unwrap_err();
+        assert!(err.to_string().contains("also pass `extra`"), "{err}");
+        assert_eq!(section(skeleton, "door", |_| true).unwrap(), [
+            "door", "extra"
+        ]);
+    }
+
+    #[test]
+    fn a_variable_on_a_line_with_another_variable_is_refused_naming_it() {
+        let skeleton =
+            "## H\n\n**Door:** @@devkit-slot:door@@ **Owner:** @@devkit-slot:owner@@\n\n---\n";
+
+        let err = section(skeleton, "door", |_| true).unwrap_err().to_string();
+        assert!(err.contains("shares its line"), "{err}");
+        assert!(err.contains("`owner`"), "{err}");
+    }
+
+    #[test]
+    fn a_variable_rendered_twice_is_refused_naming_the_reason() {
+        for skeleton in [
+            "## H\n\nDoor @@devkit-slot:door@@ again @@devkit-slot:door@@\n\n---\n",
+            "## H\n\n@@devkit-slot:door@@\n\n## I\n\n@@devkit-slot:door@@\n\n---\n",
+        ] {
+            let err = section(skeleton, "door", |_| true).unwrap_err().to_string();
+            assert!(err.contains("more than one place"), "{err}");
+        }
     }
 
     const SHARED: &str =

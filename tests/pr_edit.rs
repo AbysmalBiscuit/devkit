@@ -737,3 +737,107 @@ fn a_section_another_variable_hides_in_part_keeps_the_visible_edit() {
         PART_GATED_LIVE.replace("Old tail", "New tail")
     );
 }
+
+const LABELLED_TEMPLATE: &str = r#"
+[templates]
+pr_body = """
+## Merge danger
+
+**Door:** {{ door | trim }}
+
+**Blast Radius:** {{ blast_radius | trim }}
+
+---
+
+Footer"""
+
+[templates.variables]
+door = { default = "" }
+blast_radius = { default = "" }
+"#;
+
+const LABELLED_LIVE: &str = "\
+## Merge danger
+
+**Door:** one-way
+
+**Blast Radius:** only the old line
+- and an old bullet
+
+---
+
+Footer
+
+## Review bot
+Details the bot keeps current.
+";
+
+#[test]
+fn a_variable_after_a_label_is_replaced_and_keeps_the_label() {
+    let fake = ghfake::Fake::new(LABELLED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, LABELLED_LIVE);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=two-way"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        LABELLED_LIVE.replace("**Door:** one-way", "**Door:** two-way")
+    );
+}
+
+#[test]
+fn a_multi_line_value_after_a_label_replaces_the_old_lines() {
+    let fake = ghfake::Fake::new(LABELLED_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, LABELLED_LIVE);
+
+    let out = fake.issue(&[
+        "pr",
+        "edit",
+        "--no-push",
+        "--arg",
+        "blast_radius=the new line\n- first bullet\n- second bullet",
+    ]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        LABELLED_LIVE.replace(
+            "only the old line\n- and an old bullet",
+            "the new line\n- first bullet\n- second bullet"
+        )
+    );
+}
+
+#[test]
+fn a_variable_sharing_its_line_with_another_is_refused_by_name() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+## Merge danger
+
+**Door:** {{ door }} **Owner:** {{ owner }}
+
+---
+"""
+
+[templates.variables]
+door = { default = "" }
+owner = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(
+        &PR_7,
+        "## Merge danger\n\n**Door:** a **Owner:** b\n\n---\n",
+    );
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=two-way"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("shares its line"), "{stderr}");
+    assert!(stderr.contains("`owner`"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
