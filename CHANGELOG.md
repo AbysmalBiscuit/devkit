@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.29](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.28...v0.14.29) (2026-11-06)
+
+
+### Features
+
+* **workspace:** let setup skip git hooks ([c4c4c50](https://github.com/AbysmalBiscuit/devkit/commit/c4c4c5006d232365dc4fb849eb82d433efd797b9)), closes [#470](https://github.com/AbysmalBiscuit/devkit/issues/470)
+
+
+### Bug Fixes
+
+* **pr:** replace a variable on a label line ([ccea6af](https://github.com/AbysmalBiscuit/devkit/commit/ccea6affe081f5f4cab2209a39a8201348f59060))
+
 ## [0.14.28](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.27...v0.14.28) (2026-11-04)
 
 
