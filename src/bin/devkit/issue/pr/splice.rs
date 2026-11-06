@@ -3,12 +3,12 @@
 //! body, so only the span the section owns is rewritten.
 //!
 //! The template is rendered once with every variable as its [`slot`]. That
-//! skeleton's anchors, the lines carrying any of the template's own text, are
-//! found in the live body in order, and the ones on either side of a
-//! variable's slot bound the span that it shares with every slot inside it.
-//! A variable on a line with template text has that line as its opening bound,
-//! so its span runs from that line up to the next anchor, and it shares that
-//! span with every slot below it.
+//! skeleton's anchors, the lines the template's own text can identify (see
+//! [`is_anchor`]), are found in the live body in order, and the ones on either
+//! side of a variable's slot bound the span that it shares with every slot
+//! inside it. A variable on a line with template text has that line as its
+//! opening bound, so its span runs from that line up to the next anchor, and it
+//! shares that span with every slot below it.
 
 use anyhow::{Result, bail};
 
@@ -135,6 +135,11 @@ pub(crate) fn splice(
             };
             let text = visible_part(&sk, open, after, names, full)?;
             return Ok(format!("{}{text}{}", &live[..body[row].end], &live[end..]));
+        }
+        // An edit has no title to render, so the insert starts below its line.
+        (None, Shown::Whole) if slot_names(sk[before].text).any(|n| n == TITLE) => {
+            let first = (before + 1..after).find(|&k| !sk[k].text.is_empty());
+            (end, first.map_or(span_end, |k| sk[k].start))
         }
         (None, Shown::Whole) => (
             end,
@@ -309,9 +314,9 @@ fn segments(text: &str) -> Vec<&str> {
 }
 
 /// Whether a skeleton line can be found in the live body. That takes template
-/// text before its first slot: a multi-line value moves any text after a slot to
-/// a later row, so that text cannot mark where the value starts. The title stays
-/// on one row, so text after it is enough.
+/// text before its first slot: a multi-line value moves any text after a slot
+/// to a later row, so that text cannot mark where the value starts. The title
+/// stays on one row, so text after it is enough.
 fn is_anchor(text: &str) -> bool {
     let parts = segments(text);
     !parts[0].trim().is_empty()
@@ -346,7 +351,8 @@ fn fits(pattern: &str, text: &str) -> bool {
 
 /// Whether a span's opening line holds variables an edit can pass. A value on
 /// that line can run on into the span, so the line belongs to the span. A title
-/// alone cannot be passed and stays on one row, so its line only bounds the span.
+/// alone cannot be passed and stays on one row, so its line only bounds the
+/// span.
 fn opens_with_values(text: &str) -> bool {
     slot_names(text).any(|n| n != TITLE)
 }

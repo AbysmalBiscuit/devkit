@@ -1010,7 +1010,8 @@ extra = { default = "" }
 }
 
 /// A section of `upper` and, below it, `lower` on a line with text only after
-/// its slot. That text sits on the value's last row, so it cannot bound `upper`.
+/// its slot. That text sits on the value's last row, so it cannot bound
+/// `upper`.
 fn text_after_slot_project(upper: &str, lower: &str) -> ghfake::Fake {
     let fake = ghfake::Fake::new(
         &format!(
@@ -1156,6 +1157,36 @@ extra = { default = "" }
 
     assert!(!out.status.success(), "{}", fake.calls());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("`who`") && stderr.contains("title"), "{stderr}");
+    assert!(
+        stderr.contains("`who`") && stderr.contains("title"),
+        "{stderr}"
+    );
     assert!(!wrote(&fake), "{}", fake.calls());
+}
+
+/// An edit has no title to render, so the insert starts below the title line.
+#[test]
+fn inserting_below_a_missing_title_line_leaves_the_title_out() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+Title: {{ pr_title }}
+
+{{ extra | trim }}
+
+---
+"""
+
+[templates.variables]
+extra = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, "A bot's banner.\n\n---\n");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "extra=new"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(sent_body(&fake), "A bot's banner.\n\nnew\n\n---\n");
 }
