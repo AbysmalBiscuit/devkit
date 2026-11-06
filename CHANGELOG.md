@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.30](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.29...v0.14.30) (2026-11-06)
+
+
+### Bug Fixes
+
+* **release:** build arm64 macOS on macos-latest ([#475](https://github.com/AbysmalBiscuit/devkit/issues/475)) ([818f7f8](https://github.com/AbysmalBiscuit/devkit/commit/818f7f861d40312dde2f7626c62fa3cd53d89710))
+
 ## [0.14.29](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.28...v0.14.29) (2026-11-06)
 
 
