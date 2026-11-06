@@ -34,6 +34,18 @@ pub(crate) fn section(
     let sk = lines(skeleton);
     let at = slot_line(&sk, &slot(name), name)?;
     let (before, after) = bounds(&sk, at, name)?;
+    if opens_with_values(sk[before].text) && slot_names(sk[before].text).any(|n| n == TITLE) {
+        let values: Vec<String> = slot_names(sk[before].text)
+            .filter(|n| *n != TITLE)
+            .map(|n| format!("`{n}`"))
+            .collect();
+        bail!(
+            "`{name}` renders below a line of the pr_body template that holds the PR \
+             title and {}. That value can run on into `{name}`'s section, and an edit \
+             cannot rewrite the title's line, so the section cannot be replaced",
+            values.join(", ")
+        );
+    }
     let mut names = vec![name.to_string()];
     let first = before + usize::from(!opens_with_values(sk[before].text));
     for other in sk[first..after].iter().flat_map(|l| slot_names(l.text)) {
@@ -334,9 +346,9 @@ fn fits(pattern: &str, text: &str) -> bool {
 
 /// Whether a span's opening line holds variables an edit can pass. A value on
 /// that line can run on into the span, so the line belongs to the span. A title
-/// cannot be passed and stays on one row, so its line only bounds the span.
+/// alone cannot be passed and stays on one row, so its line only bounds the span.
 fn opens_with_values(text: &str) -> bool {
-    slot_names(text).next().is_some() && slot_names(text).all(|n| n != TITLE)
+    slot_names(text).any(|n| n != TITLE)
 }
 
 /// Every variable whose slot is on a skeleton line, in order.

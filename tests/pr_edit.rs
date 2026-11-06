@@ -1129,3 +1129,33 @@ tail = { default = "" }
     assert!(stderr.contains("`door`"), "{stderr}");
     assert!(!wrote(&fake), "{}", fake.calls());
 }
+
+/// The title cannot be passed, so the line cannot be rewritten, and `who` can
+/// run on into the section below it.
+#[test]
+fn a_variable_below_a_line_with_the_title_and_a_value_is_refused_by_name() {
+    let fake = ghfake::Fake::new(
+        r#"
+[templates]
+pr_body = """
+Title: {{ pr_title }} by {{ who | trim }}
+{{ extra | trim }}
+
+---
+"""
+
+[templates.variables]
+who = { default = "" }
+extra = { default = "" }
+"#,
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, "Title: T by me\n- who continuation\nold\n\n---\n");
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "extra=new"]);
+
+    assert!(!out.status.success(), "{}", fake.calls());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("`who`") && stderr.contains("title"), "{stderr}");
+    assert!(!wrote(&fake), "{}", fake.calls());
+}
