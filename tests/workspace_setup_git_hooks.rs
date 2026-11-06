@@ -8,7 +8,7 @@ mod testenv;
 
 use std::{
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::Output,
 };
 
 const CONFIG: &str = r#"
@@ -76,22 +76,18 @@ fn project() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn setup(project: &Path, flags: &[&str]) -> Output {
-    let state = tempfile::tempdir().unwrap();
     let (_dir, exe) = shimtest::linked("workspace");
-    let mut cmd = Command::new(&exe);
+    let (home, mut cmd) = testenv::isolated(&exe);
     cmd.arg("setup")
         .args(flags)
         .current_dir(project)
-        .env("HOME", state.path())
-        .env("XDG_STATE_HOME", state.path())
-        .env("XDG_CONFIG_HOME", state.path().join("config"))
-        .env("GIT_CONFIG_GLOBAL", state.path().join("no-gitconfig"))
+        .env("XDG_CONFIG_HOME", home.path().join("config"))
+        .env("GIT_CONFIG_GLOBAL", home.path().join("no-gitconfig"))
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_AUTHOR_NAME", AUTHOR)
         .env("GIT_AUTHOR_EMAIL", EMAIL)
         .env("GIT_COMMITTER_NAME", AUTHOR)
-        .env("GIT_COMMITTER_EMAIL", EMAIL)
-        .env("DEVKIT_SKIP_AUTOLINK", "1");
+        .env("GIT_COMMITTER_EMAIL", EMAIL);
     testenv::scrub_identity(&mut cmd);
     cmd.output().unwrap_or_else(|e| panic!("spawn setup: {e}"))
 }
