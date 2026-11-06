@@ -217,11 +217,14 @@ fn visible_part<'a>(
     Ok(&full[from..to])
 }
 
-/// The template lines that bound skeleton line `at`: the line itself when it
-/// carries template text, else the one before it, and the one after it.
+/// The template lines that bound skeleton line `at`: the line itself when
+/// template text comes before its slot, else the one before it, and the one
+/// after it. Text only after the slot cannot open the span, because a multi-line
+/// value's first row does not show it.
 fn bounds(sk: &[Line<'_>], at: usize, name: &str) -> Result<(usize, usize)> {
     let anchor = |i: &usize| is_anchor(sk[*i].text);
-    let Some(before) = (0..=at).rev().find(anchor) else {
+    let opens_itself = !segments(sk[at].text)[0].trim().is_empty();
+    let Some(before) = (0..at + usize::from(opens_itself)).rev().find(anchor) else {
         bail!(unbounded(name, "before"));
     };
     let Some(after) = (at + 1..sk.len()).find(anchor) else {
@@ -290,13 +293,15 @@ fn is_anchor(text: &str) -> bool {
 }
 
 /// Whether live line `text` is what skeleton line `pattern` renders to: its
-/// own text in order, with anything where its slots are. A line ending in a
-/// slot also fits with a blank value, which leaves no space after its text.
+/// own text in order, with anything where its slots are. A line with text
+/// before its first slot fits by that text alone: a multi-line value moves the
+/// text after a slot to a later row, and a blank value can leave no space after
+/// the text before it.
 fn fits(pattern: &str, text: &str) -> bool {
     let parts = segments(pattern);
     let (first, after_first) = parts.split_first().expect("a line has a first segment");
-    if after_first == [""] && text == first.trim_end() {
-        return true;
+    if !after_first.is_empty() && !first.trim().is_empty() {
+        return text.starts_with(first) || text == first.trim_end();
     }
     let Some(mut rest) = text.strip_prefix(first) else {
         return false;

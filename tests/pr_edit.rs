@@ -858,3 +858,68 @@ fn inserting_a_label_section_stops_at_a_variable_the_edit_did_not_pass() {
         "## Merge danger\n\n**Blast Radius:** wide\n\n---\n\nFooter\n"
     );
 }
+
+const SUFFIX_TEMPLATE: &str = r#"
+[templates]
+pr_body = """
+## Merge danger
+
+Door {{ door | trim }} (checked)
+
+---
+
+Footer"""
+
+[templates.variables]
+door = { default = "" }
+"#;
+
+#[test]
+fn a_multi_line_value_before_literal_text_is_replaced_whole() {
+    let live = "## Merge danger\n\nDoor old\nold too (checked)\n\n---\n\nFooter\n";
+    let fake = ghfake::Fake::new(SUFFIX_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, live);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=new\nnew too"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\nDoor new\nnew too (checked)\n\n---\n\nFooter\n"
+    );
+}
+
+#[test]
+fn a_multi_line_value_before_literal_text_is_inserted_when_the_body_lacks_it() {
+    let live = "## Merge danger\n\n---\n\nFooter\n";
+    let fake = ghfake::Fake::new(SUFFIX_TEMPLATE, &PR_7);
+    fake.serve_pr_body(&PR_7, live);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=new\nnew too"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\nDoor new\nnew too (checked)\n\n---\n\nFooter\n"
+    );
+}
+
+/// With no text before the value, the old value's first line cannot be
+/// recognised, so the span opens at the template line above it.
+#[test]
+fn a_multi_line_value_with_only_literal_text_after_it_is_replaced_whole() {
+    let live = "## Merge danger\n\nold\nold too (checked)\n\n---\n\nFooter\n";
+    let fake = ghfake::Fake::new(
+        &SUFFIX_TEMPLATE.replace("Door {{ door | trim }}", "{{ door | trim }}"),
+        &PR_7,
+    );
+    fake.serve_pr_body(&PR_7, live);
+
+    let out = fake.issue(&["pr", "edit", "--no-push", "--arg", "door=new\nnew too"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    assert_eq!(
+        sent_body(&fake),
+        "## Merge danger\n\nnew\nnew too (checked)\n\n---\n\nFooter\n"
+    );
+}
