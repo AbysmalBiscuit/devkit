@@ -2691,7 +2691,7 @@
   },
   "$id": "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Configuration for the devkit CLIs (devrun, portm, issue, lockm, docm, devkit).",
+  "description": "Configuration for the devkit CLIs (devkit, ticket, workspace, devrun, portm, lockm, docm).",
   "properties": {
     "apps": {
       "additionalProperties": {

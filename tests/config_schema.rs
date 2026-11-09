@@ -190,3 +190,16 @@ fn the_schema_names_the_renamed_keys_by_their_ticket_names_only() {
         assert!(!props.contains_key(old), "{def} still shows `{old}`");
     }
 }
+
+#[test]
+fn the_schema_names_the_ticket_commands_and_not_the_old_issue_command() {
+    let s: serde_json::Value = serde_json::from_str(&generated()).unwrap();
+    let description = s["description"].as_str().unwrap();
+    let commands: Vec<&str> = description
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+        .collect();
+    for current in ["ticket", "workspace"] {
+        assert!(commands.contains(&current), "{description:?} lacks `{current}`");
+    }
+    assert!(!commands.contains(&"issue"), "{description:?} names `issue`");
+}

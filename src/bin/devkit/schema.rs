@@ -127,7 +127,7 @@ pub fn document() -> Result<String> {
     obj.insert("title".into(), "devkit.toml".into());
     obj.insert(
         "description".into(),
-        "Configuration for the devkit CLIs (devrun, portm, issue, lockm, docm, devkit).".into(),
+        "Configuration for the devkit CLIs (devkit, ticket, workspace, devrun, portm, lockm, docm).".into(),
     );
 
     // `Config` requires `[defaults]`, but that holds for the *merged* config,
