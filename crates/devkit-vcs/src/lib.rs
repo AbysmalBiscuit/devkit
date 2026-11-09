@@ -189,6 +189,14 @@ pub trait VersionControl {
     /// Whether `rev` names a commit the local repository has.
     fn has_revision(&self, dir: &::std::path::Path, rev: &str) -> ::anyhow::Result<bool>;
 
+    /// The full id of the commit `rev` names, or an error when `rev` names
+    /// no commit the local repository has.
+    fn revision_of(
+        &self,
+        dir: &::std::path::Path,
+        rev: &str,
+    ) -> ::anyhow::Result<::std::string::String>;
+
     /// Files that differ between revisions `from` and `to`, relative to the
     /// repository root, a file the backend reads as renamed being one change.
     fn changed_files(
@@ -407,6 +415,10 @@ mod tests {
         }
 
         fn has_revision(&self, _: &Path, _: &str) -> anyhow::Result<bool> {
+            unimplemented!()
+        }
+
+        fn revision_of(&self, _: &Path, _: &str) -> anyhow::Result<String> {
             unimplemented!()
         }
 
