@@ -6,6 +6,7 @@ use devkit_common::{
     slack,
     tracker::{Resolved, TrackerKind, linear},
 };
+use devkit_config::renamed::{self, Renamed};
 use strum::IntoEnumIterator;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1151,9 +1152,12 @@ fn print_human(rows: &[Row]) {
     }
 }
 
-/// Rows renamed from their `issue_` spelling, current key first. The JSON
-/// repeats each under its old key, so readers of the old key keep working.
-const RENAMED_KEYS: [(&str, &str); 1] = [("ticket_events", "issue_events")];
+/// Rows renamed from their `issue_` spelling. The JSON repeats each under its
+/// old key, so readers of the old key keep working.
+const RENAMED_KEYS: [Renamed; 1] = [Renamed {
+    old: "issue_events",
+    new: "ticket_events",
+}];
 
 fn print_json(rows: &[Row]) {
     let arr: Vec<_> = rows
@@ -1180,14 +1184,11 @@ fn print_json(rows: &[Row]) {
                     target.insert(k.clone(), v.clone());
                 }
             }
-            let old = RENAMED_KEYS
-                .iter()
-                .find_map(|(new, old)| (*new == r.key).then_some(*old))
-                .map(|old| {
-                    let mut alias = obj.clone();
-                    alias["key"] = old.into();
-                    alias
-                });
+            let old = renamed::old(&RENAMED_KEYS, r.key).map(|old| {
+                let mut alias = obj.clone();
+                alias["key"] = old.into();
+                alias
+            });
             std::iter::once(obj).chain(old)
         })
         .collect();

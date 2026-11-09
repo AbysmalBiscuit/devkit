@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 mod layers;
 mod options;
+pub mod renamed;
 pub mod todo;
 pub use layers::{
     BrokenLayer, CONFIG_FILE, Layer, LayerKind, PendingLayer, ReadLayers, nearest_tracked,
@@ -3080,11 +3081,23 @@ impl Config {
 
 /// Templates renamed from their `issue_` spelling, old name first. A layer
 /// may still set the old name, and `devkit template` still takes it.
-pub const RENAMED_TEMPLATES: [(&str, &str); 4] = [
-    ("issue_title", "ticket_title"),
-    ("issue_body", "ticket_body"),
-    ("issue_summary_path", "ticket_summary_path"),
-    ("issue_summary", "ticket_summary"),
+pub const RENAMED_TEMPLATES: [renamed::Renamed; 4] = [
+    renamed::Renamed {
+        old: "issue_title",
+        new: "ticket_title",
+    },
+    renamed::Renamed {
+        old: "issue_body",
+        new: "ticket_body",
+    },
+    renamed::Renamed {
+        old: "issue_summary_path",
+        new: "ticket_summary_path",
+    },
+    renamed::Renamed {
+        old: "issue_summary",
+        new: "ticket_summary",
+    },
 ];
 
 /// Move each key a layer sets under its old name to its current one, so
@@ -3094,7 +3107,7 @@ pub const RENAMED_TEMPLATES: [(&str, &str); 4] = [
 fn read_renamed_keys(layer: &mut toml::Table) -> Result<()> {
     rename_key(layer, "", "issue", "ticket")?;
     if let Some(toml::Value::Table(templates)) = layer.get_mut("templates") {
-        for (old, new) in RENAMED_TEMPLATES {
+        for renamed::Renamed { old, new } in RENAMED_TEMPLATES {
             rename_key(templates, "templates.", old, new)?;
         }
     }

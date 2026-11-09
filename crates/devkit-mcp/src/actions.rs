@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use devkit_config::renamed::{self, Renamed};
 use serde_json::Value;
 
 use crate::ServerCtx;
@@ -28,18 +29,21 @@ pub fn actions() -> Vec<Action> {
     v
 }
 
-/// Actions renamed from their `issue.` spelling, old name first. A call or a
-/// describe may still name the old one; the action list names only the new.
-const RENAMED_ACTIONS: [(&str, &str); 2] = [
-    ("issue.status", "ticket.status"),
-    ("issue.prs", "ticket.prs"),
+/// Actions renamed from their `issue.` spelling. A call or a describe may
+/// still name the old one; the action list names only the new.
+const RENAMED_ACTIONS: [Renamed; 2] = [
+    Renamed {
+        old: "issue.status",
+        new: "ticket.status",
+    },
+    Renamed {
+        old: "issue.prs",
+        new: "ticket.prs",
+    },
 ];
 
 pub fn find(name: &str) -> Option<Action> {
-    let name = RENAMED_ACTIONS
-        .iter()
-        .find_map(|(old, new)| (*old == name).then_some(*new))
-        .unwrap_or(name);
+    let name = renamed::current(&RENAMED_ACTIONS, name);
     actions().into_iter().find(|a| a.name == name)
 }
 

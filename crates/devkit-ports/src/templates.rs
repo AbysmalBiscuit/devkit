@@ -492,10 +492,7 @@ fn lookup<'a>(cfg: &'a Config, name: &str) -> Result<(Kind, String, &'a str)> {
             &c.body,
         ));
     }
-    let name = RENAMED_TEMPLATES
-        .iter()
-        .find_map(|(old, new)| (*old == name).then_some(*new))
-        .unwrap_or(name);
+    let name = devkit_config::renamed::current(&RENAMED_TEMPLATES, name);
     BUILT_INS
         .iter()
         .find(|b| b.name == name)
