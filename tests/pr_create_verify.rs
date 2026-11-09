@@ -1532,6 +1532,41 @@ fn pr_verification_prints_not_run_to_an_agent_with_no_run_at_head() {
     assert!(body(&p).contains(section.trim_end()), "{}", body(&p));
 }
 
+/// A detached linked worktree has no branch and no worktree record, as a
+/// checkout that only refreshes a PR body can be.
+#[test]
+fn pr_verification_runs_in_a_checkout_with_no_worktree_record() {
+    let p = project(GATE);
+    verify(&p);
+    let scratch = tempfile::tempdir().unwrap();
+    let detached = scratch.path().join("detached");
+    git(&p, &[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        detached.to_str().unwrap(),
+        "HEAD",
+    ]);
+    assert!(!detached.join(".devkit").exists());
+
+    let out = p.issue_as_in("agent", &detached, &["pr", "verification"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let section = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        section.starts_with("### Verification\n\n- Command:"),
+        "{section}"
+    );
+    assert!(
+        section.contains(&format!("- SHA: `{}`\n", head(&p))),
+        "{section}"
+    );
+}
+
 #[test]
 fn pr_verification_renders_the_head_it_is_given() {
     let p = project(GATE);
