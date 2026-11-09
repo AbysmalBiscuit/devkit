@@ -21,7 +21,7 @@ use devkit_config::{Config, expand_tilde};
 use devkit_ports::{apps::App, registry};
 use serde::{Deserialize, Serialize};
 
-use crate::issue::{
+use crate::ticket::{
     checkout::with_cleanup,
     setup::{backfill_includes, prep_apps, run_after_worktree_create},
 };

@@ -14,7 +14,7 @@ use devkit_common::{
 use devkit_config::expand_tilde;
 use devkit_ports::load;
 
-use crate::issue::slug::{budget, cap, slugify};
+use crate::ticket::slug::{budget, cap, slugify};
 
 pub struct CheckoutArgs {
     pub target: String,
@@ -331,7 +331,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
 
     let meta: PrBrief = steps
         .during_result(&format!("Fetching PR #{}...", resolved.loc.number), || {
-            crate::issue::pr::resolve::existing(forge, &pr_repo, resolved.loc.number)
+            crate::ticket::pr::resolve::existing(forge, &pr_repo, resolved.loc.number)
         })
         .with_context(|| format!("fetching PR #{}", resolved.loc.number))?;
 
@@ -342,7 +342,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let worktree = match &args.worktree_path {
         Some(p) => absolute(expand_tilde(p))?,
         None => {
-            let wt_root = crate::issue::setup::worktree_root(cfg)?;
+            let wt_root = crate::ticket::setup::worktree_root(cfg)?;
             let ctx = dir_ctx(
                 &cfg.templates,
                 meta.number,
@@ -398,9 +398,9 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         // until the checkout lands — validated immediately after, before the
         // record is written, rather than pre-gated.
         let head = vcs.revision(&worktree)?;
-        let checked_out = crate::issue::pr::resolve::existing(forge, &pr_repo, meta.number)
+        let checked_out = crate::ticket::pr::resolve::existing(forge, &pr_repo, meta.number)
             .with_context(|| format!("verifying PR #{}", meta.number))?;
-        crate::issue::pr::resolve::assert_belongs(&checked_out, &head)?;
+        crate::ticket::pr::resolve::assert_belongs(&checked_out, &head)?;
 
         let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
         devkit_common::record::write(&worktree, &devkit_common::record::IssueRecord {
@@ -428,7 +428,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         Ok(issue)
     })?;
 
-    crate::issue::setup::backfill_includes(
+    crate::ticket::setup::backfill_includes(
         primary_s,
         &worktree,
         &cfg.defaults.worktree_include,
@@ -445,7 +445,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             "role": "issue",
         });
         steps.during_result("Preparing apps...", || {
-            crate::issue::setup::prep_apps(
+            crate::ticket::setup::prep_apps(
                 &worktree,
                 &meta.head_ref_name,
                 &args.apps,
@@ -468,7 +468,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     });
     steps.suspend(|| report(meta.number, &meta.head_ref_name, worktree_s))?;
 
-    crate::issue::setup::run_after_worktree_create(
+    crate::ticket::setup::run_after_worktree_create(
         &worktree,
         &cfg.hooks.after_worktree_create,
         &hook_ctx,

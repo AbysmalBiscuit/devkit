@@ -8,7 +8,7 @@ use devkit_common::{
 };
 use devkit_ticket::status::{self as st, IssueWorktree, StatusReport, TrackerInfo, Tree};
 
-use crate::issue::triage::{self, render};
+use crate::ticket::triage::{self, render};
 
 pub(crate) const COL_TREE: usize = 2;
 pub(crate) const COL_PR: usize = 3;

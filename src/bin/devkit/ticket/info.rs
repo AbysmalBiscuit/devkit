@@ -8,7 +8,7 @@ use devkit_common::{
 };
 use devkit_ticket::status::{self as st, IssueWorktree, PrStatus, StatusReport, TrackerInfo};
 
-use crate::issue::triage::render;
+use crate::ticket::triage::render;
 
 /// One source's report to the live-table event loop: the row's PRs, its
 /// tracker state, or the tracker's issue-link base.
@@ -74,9 +74,9 @@ fn recorded_pr(row: &IssueWorktree) -> Option<devkit_common::forge::PrLocator> {
 fn cached_pr(
     row: &IssueWorktree,
     recorded: Option<&devkit_common::forge::PrLocator>,
-) -> Option<crate::issue::info_cache::CachedPr> {
+) -> Option<crate::ticket::info_cache::CachedPr> {
     seedable_cached_pr(
-        crate::issue::info_cache::read(Path::new(&row.worktree)),
+        crate::ticket::info_cache::read(Path::new(&row.worktree)),
         recorded,
     )
 }
@@ -151,9 +151,9 @@ pub fn run(
             ..
         } = &row.pr
         {
-            let _ = crate::issue::info_cache::write(
+            let _ = crate::ticket::info_cache::write(
                 Path::new(&row.worktree),
-                &crate::issue::info_cache::CachedPr {
+                &crate::ticket::info_cache::CachedPr {
                     number: *number,
                     state: state.clone(),
                     url: url.clone(),
@@ -191,24 +191,24 @@ fn live_enrich(
 ) -> Result<Option<String>> {
     let t = resolved.tracker.as_ref();
     let mut lt = if render {
-        LiveTable::new("ISSUE WORKTREES", &crate::issue::triage::HEADERS, 1)
+        LiveTable::new("ISSUE WORKTREES", &crate::ticket::triage::HEADERS, 1)
     } else {
-        LiveTable::hidden("ISSUE WORKTREES", &crate::issue::triage::HEADERS, 1)
+        LiveTable::hidden("ISSUE WORKTREES", &crate::ticket::triage::HEADERS, 1)
     };
     lt.set(
         0,
         0,
-        Cell::Ready(crate::issue::triage::issue_cell(row, None)),
+        Cell::Ready(crate::ticket::triage::issue_cell(row, None)),
     );
     lt.set(
         0,
         1,
-        Cell::Ready(crate::issue::triage::branch_cell(&row.branch)),
+        Cell::Ready(crate::ticket::triage::branch_cell(&row.branch)),
     );
     lt.set(
         0,
         2,
-        Cell::Ready(crate::issue::triage::tree_cell(&row.tree)),
+        Cell::Ready(crate::ticket::triage::tree_cell(&row.tree)),
     );
     let tracker_id = row.issue_id.tracker().map(str::to_owned);
     let want_state = tracker_id.is_some();
@@ -219,7 +219,7 @@ fn live_enrich(
         lt.set(
             0,
             4,
-            Cell::Ready(crate::issue::triage::state_cell(row, t.ready())),
+            Cell::Ready(crate::ticket::triage::state_cell(row, t.ready())),
         );
     }
     lt.redraw();
@@ -259,7 +259,7 @@ fn live_enrich(
                     res?.apply(row);
                     st::check_landed_rows([&mut *row]);
                     got_prs = true;
-                    lt.set(0, 3, Cell::Ready(crate::issue::triage::pr_cell(row)));
+                    lt.set(0, 3, Cell::Ready(crate::ticket::triage::pr_cell(row)));
                 }
                 Update::States(states) => {
                     if let Some(s) = row.issue_id.tracker().and_then(|id| states.get(id)) {
@@ -269,7 +269,7 @@ fn live_enrich(
                     lt.set(
                         0,
                         4,
-                        Cell::Ready(crate::issue::triage::state_cell(row, t.ready())),
+                        Cell::Ready(crate::ticket::triage::state_cell(row, t.ready())),
                     );
                 }
                 Update::LinkBase(base) => {
@@ -282,7 +282,7 @@ fn live_enrich(
                 lt.set(
                     0,
                     5,
-                    Cell::Ready(crate::issue::triage::verdict_cell(row, false)),
+                    Cell::Ready(crate::ticket::triage::verdict_cell(row, false)),
                 );
             }
             Ok(got_prs && got_state && got_link_base)
@@ -312,9 +312,9 @@ fn local_row(top: &str) -> Result<IssueWorktree> {
 /// different pull request discards the cache: that cache was written before
 /// the binding, from a branch lookup the record has since superseded.
 fn seedable_cached_pr(
-    cached: Option<crate::issue::info_cache::CachedPr>,
+    cached: Option<crate::ticket::info_cache::CachedPr>,
     recorded: Option<&devkit_common::forge::PrLocator>,
-) -> Option<crate::issue::info_cache::CachedPr> {
+) -> Option<crate::ticket::info_cache::CachedPr> {
     let cached = cached?;
     match recorded {
         Some(loc) if loc.number != cached.number => None,
@@ -325,7 +325,7 @@ fn seedable_cached_pr(
 /// Overlay a cached PR onto an offline row. The verdict is cleared because it
 /// cannot be computed without a tracker fetch, and a `NO_PR` verdict would
 /// contradict the cached PR.
-fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::issue::info_cache::CachedPr) {
+fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::ticket::info_cache::CachedPr) {
     row.pr = PrStatus::Unique {
         number: pr.number,
         state: pr.state,
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn a_cache_the_record_contradicts_never_seeds_the_row() {
-        let cached = crate::issue::info_cache::CachedPr {
+        let cached = crate::ticket::info_cache::CachedPr {
             number: 7,
             state: "MERGED".into(),
             url: "https://github.com/o/r/pull/7".into(),
@@ -429,7 +429,7 @@ mod tests {
     fn cache_overlay_sets_pr_and_clears_verdict() {
         let mut r = row("/a", "lev/eng-1-x", "ENG-1");
         r.verdict = st::Verdict::Unknown(vec!["no PR".into(), "tracker state unknown".into()]);
-        apply_cached_pr(&mut r, crate::issue::info_cache::CachedPr {
+        apply_cached_pr(&mut r, crate::ticket::info_cache::CachedPr {
             number: 123,
             state: "OPEN".into(),
             url: "https://x/pr/123".into(),

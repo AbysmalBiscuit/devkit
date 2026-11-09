@@ -12,7 +12,7 @@ use super::{
     resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
     reviewer_logins,
 };
-use crate::issue::review::{Target, guard_branch, resolve_target};
+use crate::ticket::review::{Target, guard_branch, resolve_target};
 
 pub struct Args {
     pub to: Vec<String>,

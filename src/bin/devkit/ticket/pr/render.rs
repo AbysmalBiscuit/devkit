@@ -15,7 +15,7 @@ use devkit_config::{Config, Templates};
 use devkit_ports::templates::worktree_context;
 
 use crate::{
-    issue::{
+    ticket::{
         receipt,
         render::Rendered,
         review::{PR_CONTEXT_KEYS, missing_required, parse_args, render_review, with_fields},

@@ -25,7 +25,7 @@ use super::{
     payload::{self, Payload},
     print_envelope,
 };
-use crate::issue::{
+use crate::ticket::{
     pr,
     receipt::{self, Field, Kind},
     render,

@@ -60,7 +60,7 @@ use crate::{
         HookEvent,
         payload::{Holder, Payload},
     },
-    issue::pr::create,
+    ticket::pr::create,
 };
 
 /// The hook a brief or a rules block answers: its payload, and whether the

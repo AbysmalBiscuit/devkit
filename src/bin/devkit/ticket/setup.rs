@@ -176,7 +176,7 @@ pub(crate) fn run_after_worktree_create(
     env: &[(&str, &str)],
     steps: &Steps,
 ) {
-    crate::issue::hooks::run_all(
+    crate::ticket::hooks::run_all(
         worktree,
         "after_worktree_create",
         hooks,
@@ -345,7 +345,7 @@ fn resolve_slug(
     }
     let issue = issue.context("pass an issue or --slug")?;
     if let Some(s) = &issue.slug {
-        return Ok(crate::issue::slug::cap(s, budget));
+        return Ok(crate::ticket::slug::cap(s, budget));
     }
     let title = match details {
         Some(d) => d.title.clone(),
@@ -354,7 +354,7 @@ fn resolve_slug(
             .with_context(|| format!("fetching the title for {}", issue.id))?
             .with_context(|| format!("no issue {} \u{2014} pass --slug", issue.id))?,
     };
-    let slug = crate::issue::slug::cap(&crate::issue::slug::from_title(&issue.id, &title)?, budget);
+    let slug = crate::ticket::slug::cap(&crate::ticket::slug::from_title(&issue.id, &title)?, budget);
     eprintln!("slug from {}: {slug}", t.kind().as_str());
     Ok(slug)
 }
@@ -409,7 +409,7 @@ fn branch_budget(
     issue: &str,
     apps: &[String],
 ) -> Result<usize> {
-    let budget = crate::issue::slug::budget(
+    let budget = crate::ticket::slug::budget(
         cfg.templates.branch(),
         &probe_ctx(cfg, issue, apps, "", ""),
         vars,
@@ -434,7 +434,7 @@ fn short_slug(
     apps: &[String],
     slug: &str,
 ) -> Result<String> {
-    let budget = crate::issue::slug::budget(
+    let budget = crate::ticket::slug::budget(
         cfg.templates.worktree_dir(),
         &probe_ctx(cfg, issue, apps, slug, ""),
         vars,
@@ -444,7 +444,7 @@ fn short_slug(
         None,
     )
     .context("measuring the `worktree_dir` template")?;
-    Ok(crate::issue::slug::cap(slug, budget))
+    Ok(crate::ticket::slug::cap(slug, budget))
 }
 
 /// A declared tracker owns parsing completely. An undeclared one keeps
@@ -454,7 +454,7 @@ fn parse_input(resolved: &Resolved, input: &str) -> Result<IssueRef> {
     if resolved.declared {
         resolved.tracker.issue_ref(input)
     } else {
-        Ok(crate::issue::slug::parse_issue_ref(input))
+        Ok(crate::ticket::slug::parse_issue_ref(input))
     }
 }
 
@@ -582,7 +582,7 @@ fn bind_here(
     let summary = match &details {
         Some(d) => {
             let tracker_summary = read_tracker_summary(t, issue)?;
-            let (path, written) = crate::issue::summary::write(
+            let (path, written) = crate::ticket::summary::write(
                 cfg,
                 d,
                 tracker_summary.as_deref(),
@@ -630,7 +630,7 @@ fn bind_here(
     };
     out.report()?;
     if fires_setup {
-        crate::issue::event::fire_inline(
+        crate::ticket::event::fire_inline(
             Path::new(start),
             args.config.as_deref().map(Path::new),
             IssueEvent::Setup,
@@ -676,12 +676,12 @@ fn dry_run_report(
         apps,
     } = plan;
     let summary = details
-        .map(|d| crate::issue::summary::plan_path(cfg, d, &worktree, &branch, slug, apps))
+        .map(|d| crate::ticket::summary::plan_path(cfg, d, &worktree, &branch, slug, apps))
         .transpose()?;
     let summary_text = match (details.filter(|_| args.summary), issue.as_deref()) {
         (Some(d), Some(id)) => {
             let tracker_summary = read_tracker_summary(t, id)?;
-            Some(crate::issue::summary::text(
+            Some(crate::ticket::summary::text(
                 cfg,
                 d,
                 tracker_summary.as_deref(),
@@ -791,7 +791,7 @@ fn setup(
     // Resolved before anything is created, so a summary path that cannot be
     // rendered fails while there is no worktree to clean up.
     if let Some(d) = &details {
-        crate::issue::summary::plan_path(cfg, d, &holder, &branch, &slug, &args.apps)?;
+        crate::ticket::summary::plan_path(cfg, d, &holder, &branch, &slug, &args.apps)?;
     }
     anyhow::ensure!(
         !worktree.exists(),
@@ -835,7 +835,7 @@ fn setup(
     // template said at setup time.
     let summary_path = match &details {
         Some(d) => {
-            let (path, written) = crate::issue::summary::write(
+            let (path, written) = crate::ticket::summary::write(
                 cfg,
                 d,
                 tracker_summary.as_deref(),
@@ -920,7 +920,7 @@ fn setup(
         &steps,
     );
     if fires_setup {
-        crate::issue::event::fire_inline(
+        crate::ticket::event::fire_inline(
             Path::new(&start),
             args.config.as_deref().map(Path::new),
             IssueEvent::Setup,
@@ -1041,7 +1041,7 @@ mod tests {
             ..Templates::default()
         });
         let budget = branch_budget(&cfg, &novars(), "142", &[]).unwrap();
-        let slug = crate::issue::slug::cap("group-sync-includes-file-lists-in-the-output", budget);
+        let slug = crate::ticket::slug::cap("group-sync-includes-file-lists-in-the-output", budget);
         assert_eq!(slug, "group-sync-includes-file-lists-in-the");
         let dir_slug = short_slug(&cfg, &novars(), "142", &[], &slug).unwrap();
         assert_eq!(dir_slug, "group-sync-includes-file");

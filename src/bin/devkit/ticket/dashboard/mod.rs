@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use devkit_common::vcs::{Vcs, VersionControl};
 
-use crate::issue::{prs, triage};
+use crate::ticket::{prs, triage};
 
 mod bucket;
 mod cache;
@@ -45,7 +45,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
 
     // At-a-glance: worktree triage, then my PRs + PRs awaiting my review.
-    let report = crate::issue::status::gather_live(&start, &[], args.config.as_deref())?;
+    let report = crate::ticket::status::gather_live(&start, &[], args.config.as_deref())?;
     triage::render(&report, false);
     println!();
     // The PR tables are a secondary panel; if gh is unavailable the rest of the

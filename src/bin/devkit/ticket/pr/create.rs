@@ -19,7 +19,7 @@ use super::{
     reviewer_logins, verify, weakened,
 };
 use crate::{
-    issue::review::{PrAction, Target, action_for, guard_branch, resolve_target},
+    ticket::review::{PrAction, Target, action_for, guard_branch, resolve_target},
     template::VarArgs,
 };
 
@@ -580,7 +580,7 @@ pub fn run(args: Args) -> Result<()> {
 
     println!("{}", resolved.url);
     if let (true, Some(issue)) = (resolved.pr_open_claimed, tracker_issue.as_deref()) {
-        crate::issue::event::fire_inline(
+        crate::ticket::event::fire_inline(
             here,
             args.config.as_deref().map(Path::new),
             IssueEvent::PrOpen,
@@ -595,7 +595,7 @@ mod tests {
     use devkit_ports::templates::worktree_context;
 
     use super::*;
-    use crate::issue::review::render_review;
+    use crate::ticket::review::render_review;
 
     #[test]
     fn an_absent_flag_takes_the_configured_state() {

@@ -111,7 +111,7 @@ pub(crate) fn plan_path(
     let (vars, ctx) = render_inputs(cfg, d, worktree, branch, slug, apps);
     resolve_path(
         cfg.templates.issue_summary_path(),
-        || crate::issue::setup::worktree_root(cfg),
+        || crate::ticket::setup::worktree_root(cfg),
         &ctx,
         &vars,
     )
@@ -163,7 +163,7 @@ pub(crate) fn write(
     let (vars, ctx) = render_inputs(cfg, d, worktree, branch, slug, apps);
     let path = resolve_path(
         cfg.templates.issue_summary_path(),
-        || crate::issue::setup::worktree_root(cfg),
+        || crate::ticket::setup::worktree_root(cfg),
         &ctx,
         &vars,
     )?;

@@ -4,7 +4,7 @@ use devkit_common::{
     progress::Steps,
 };
 
-use crate::issue::review::{PrAction, Target, action_for, is_human_login};
+use crate::ticket::review::{PrAction, Target, action_for, is_human_login};
 
 pub(crate) mod create;
 pub(crate) mod edit;

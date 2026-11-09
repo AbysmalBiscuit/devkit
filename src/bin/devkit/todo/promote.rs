@@ -13,7 +13,7 @@ use devkit_todo::{
 
 use super::{push, store::Store, tickets};
 use crate::{
-    issue::create::{self, CreateArgs},
+    ticket::create::{self, CreateArgs},
     template::{FieldArgs, VarArgs},
 };
 
