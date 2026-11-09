@@ -106,3 +106,31 @@ fn a_missing_from_name_fails_naming_its_key() {
         "{row}"
     );
 }
+
+/// Readers of the old key find the same row under `issue_events`, from the
+/// one check: the tracker is asked once.
+#[test]
+fn the_json_also_names_the_row_by_its_old_key() {
+    let gh = board(EVENTS);
+    gh.serve_graphql(BOARD);
+    let out = gh.devkit_here(&["doctor", "--json"]);
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let find = |key: &str| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["key"] == key)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {key} row: {rows}"))
+    };
+    let (current, old) = (find("ticket_events"), find("issue_events"));
+    assert_eq!(old["status"], current["status"]);
+    assert_eq!(old["detail"], current["detail"]);
+    assert_eq!(gh.calls().matches("graphql").count(), 1, "{}", gh.calls());
+
+    let text = gh.devkit_here(&["doctor"]);
+    assert!(
+        !String::from_utf8_lossy(&text.stdout).contains("issue_events"),
+        "the table names the row once"
+    );
+}

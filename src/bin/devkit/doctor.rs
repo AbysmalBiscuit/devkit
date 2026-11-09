@@ -1151,10 +1151,14 @@ fn print_human(rows: &[Row]) {
     }
 }
 
+/// Rows renamed from their `issue_` spelling, current key first. The JSON
+/// repeats each under its old key, so readers of the old key keep working.
+const RENAMED_KEYS: [(&str, &str); 1] = [("ticket_events", "issue_events")];
+
 fn print_json(rows: &[Row]) {
     let arr: Vec<_> = rows
         .iter()
-        .map(|r| {
+        .flat_map(|r| {
             let (status, detail): (&str, Option<String>) = match &r.check {
                 Check::Ok(d) => ("ok", Some(d.clone())),
                 Check::Warn(d) => ("warn", Some(d.clone())),
@@ -1176,7 +1180,15 @@ fn print_json(rows: &[Row]) {
                     target.insert(k.clone(), v.clone());
                 }
             }
-            obj
+            let old = RENAMED_KEYS
+                .iter()
+                .find_map(|(new, old)| (*new == r.key).then_some(*old))
+                .map(|old| {
+                    let mut alias = obj.clone();
+                    alias["key"] = old.into();
+                    alias
+                });
+            std::iter::once(obj).chain(old)
         })
         .collect();
     println!("{}", serde_json::to_string_pretty(&arr).unwrap());
