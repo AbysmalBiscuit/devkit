@@ -143,7 +143,7 @@ enum IssueCmd {
     /// Check out an existing PR into a new worktree, as `pr checkout`.
     #[command(hide = true)]
     CheckoutPr(PrCheckout),
-    /// Show one worktree's PR and issue id, as `pr status`.
+    /// Show one worktree's PR and ticket id, as `pr status`.
     #[command(hide = true)]
     Info(PrStatus),
     /// At-a-glance triage of your open PRs, as `pr list`.
@@ -241,17 +241,17 @@ impl IssueCli {
 
 #[derive(Subcommand, Debug, PartialEq)]
 pub(crate) enum TicketCmd {
-    /// Render an issue title and body for a tracker MCP call.
+    /// Render a ticket title and body for a tracker MCP call.
     ///
     /// Uses the `ticket_title` and `ticket_body` templates. Prints
     /// {"title": ..., "body": ...}. Pass both unchanged to the tracker's MCP
     /// tool: inside an agent session this records a receipt, and the
-    /// pre-tool-use hook denies an issue write whose text has none.
+    /// pre-tool-use hook denies a ticket write whose text has none.
     Render {
-        /// Issue title, the `input` of the `ticket_title` template.
+        /// Ticket title, the `input` of the `ticket_title` template.
         #[arg(long)]
         title: String,
-        /// Issue body, the `input` of the `ticket_body` template.
+        /// Ticket body, the `input` of the `ticket_body` template.
         #[arg(long)]
         body: Option<String>,
         #[command(flatten)]
@@ -267,10 +267,10 @@ pub(crate) enum TicketCmd {
     /// Linear a create passes an id derived from its team, title and body, so
     /// rerunning one that may have gone through returns the first ticket.
     Create {
-        /// Issue title, the `input` of the `ticket_title` template.
+        /// Ticket title, the `input` of the `ticket_title` template.
         #[arg(long)]
         title: String,
-        /// Issue body, the `input` of the `ticket_body` template.
+        /// Ticket body, the `input` of the `ticket_body` template.
         #[arg(long)]
         body: Option<String>,
         #[command(flatten)]
@@ -280,19 +280,20 @@ pub(crate) enum TicketCmd {
     },
     /// Rewrite a ticket's body, title or declared fields.
     ///
-    /// `--body` and `--title` render the issue templates. Without `--title`
-    /// the issue keeps its current title, which the `ticket_body` template
+    /// `--body` and `--title` render the ticket templates. Without `--title`
+    /// the ticket keeps its current title, which the `ticket_body` template
     /// reads as `ticket_title` and `issue_title`. Each field `--arg` sets
     /// exactly that field (a list to exactly the values given), `--none`
     /// clears one, and fields not named are left alone. With only field args
     /// the title and body are left alone.
     Edit {
         /// GitHub issue number, Linear identifier (`ENG-42`), or either's URL.
+        #[arg(value_name = "TICKET")]
         issue: String,
-        /// New issue title, the `input` of the `ticket_title` template.
+        /// New ticket title, the `input` of the `ticket_title` template.
         #[arg(long)]
         title: Option<String>,
-        /// New issue body, the `input` of the `ticket_body` template.
+        /// New ticket body, the `input` of the `ticket_body` template.
         #[arg(long)]
         body: Option<String>,
         #[command(flatten)]
@@ -316,7 +317,7 @@ pub(crate) enum TicketCmd {
         #[command(subcommand)]
         cmd: Option<FieldsCmd>,
     },
-    /// Move the issue's tracker status as [ticket.events] configures EVENT.
+    /// Move the ticket's tracker status as [ticket.events] configures EVENT.
     ///
     /// Reads the status and moves it to the event's `to` when it is in the
     /// event's `from`. Every event already fires on its own; this reruns
@@ -324,7 +325,8 @@ pub(crate) enum TicketCmd {
     Event {
         /// The event whose transition to apply.
         event: event::EventArg,
-        /// Issue id or issue URL. Defaults to this worktree's issue.
+        /// Ticket id or ticket URL. Defaults to this worktree's ticket.
+        #[arg(value_name = "TICKET")]
         issue: Option<String>,
         /// Also append the outcome, or the error, to FILE with a timestamp.
         /// The background run the SessionStart hook spawns writes here.
@@ -336,7 +338,7 @@ pub(crate) enum TicketCmd {
         #[arg(long, value_name = "ID", hide = true)]
         todo: Option<String>,
     },
-    /// Combined at-a-glance view plus issue/PR/commit timelines.
+    /// Combined at-a-glance view plus ticket/PR/commit timelines.
     Dashboard {
         /// Timeline bucket width: auto, day, week, or month.
         #[arg(long, default_value = "auto")]
@@ -344,10 +346,10 @@ pub(crate) enum TicketCmd {
         /// Plot style: bar or line.
         #[arg(long, default_value = "bar")]
         chart: String,
-        /// Issue-status plot scale: absolute counts or proportional shares.
+        /// Ticket-status plot scale: absolute counts or proportional shares.
         #[arg(long, default_value = "absolute")]
         mode: String,
-        /// Fold each timeline cumulatively or per period. Unset, the issue
+        /// Fold each timeline cumulatively or per period. Unset, the ticket
         /// chart is cumulative and the commit and PR charts are per period.
         #[arg(long, value_enum)]
         aggregate: Option<dashboard::Aggregate>,
@@ -370,30 +372,30 @@ pub(crate) enum TicketCmd {
 
 #[derive(Subcommand, Debug, PartialEq)]
 pub(crate) enum WorkspaceCmd {
-    /// Prepare an issue worktree: branch, setup commands, ports.
+    /// Prepare a ticket worktree: branch, setup commands, ports.
     Setup {
-        /// Issue id or issue URL (equivalent to --issue). Omit it, and pass
-        /// --slug, for work that has no tracker issue.
-        #[arg(value_name = "ISSUE", conflicts_with = "issue", group = "issue_ref")]
-        issue_pos: Option<String>,
-        /// Issue id or issue URL (equivalent to the positional ISSUE).
-        #[arg(long, group = "issue_ref")]
-        issue: Option<String>,
-        /// Short kebab title, without the issue id, rendered into the branch
+        /// Ticket id or ticket URL (equivalent to --ticket). Omit it, and
+        /// pass --slug, for work that has no tracker ticket.
+        #[arg(value_name = "TICKET", conflicts_with = "ticket", group = "ticket_ref")]
+        ticket_pos: Option<String>,
+        /// Ticket id or ticket URL (equivalent to the positional TICKET).
+        #[arg(long, alias = "issue", group = "ticket_ref")]
+        ticket: Option<String>,
+        /// Short kebab title, without the ticket id, rendered into the branch
         /// and worktree names (e.g. `fix-bli-export`). Omit to take the
-        /// slug a pasted issue URL already spells out, else the tracker's
-        /// title. Required when no issue is given.
+        /// slug a pasted ticket URL already spells out, else the tracker's
+        /// title. Required when no ticket is given.
         #[arg(
             short = 'l',
             long,
-            required_unless_present_any = ["issue_pos", "issue"]
+            required_unless_present_any = ["ticket_pos", "ticket"]
         )]
         slug: Option<String>,
         /// Apps to bootstrap: writes each one's prep files and runs its setup
         /// commands. Omit for a worktree with no per-app setup.
         #[arg(long, value_delimiter = ',')]
         apps: Vec<String>,
-        /// Also write an issue summary file at the path
+        /// Also write a ticket summary file at the path
         /// `templates.ticket_summary_path` names: the tracker's own summary
         /// (a GitHub issue's body) verbatim, else the tracker facts and
         /// description as a markdown scaffold. Needs the tracker's credential,
@@ -403,11 +405,11 @@ pub(crate) enum WorkspaceCmd {
         /// as `summary_text` instead.
         #[arg(short = 's', long)]
         summary: bool,
-        /// Skip the issue summary file for this run, whatever
+        /// Skip the ticket summary file for this run, whatever
         /// `defaults.ticket_summary` says.
         #[arg(long = "no-summary", conflicts_with = "summary")]
         no_summary: bool,
-        /// Print the resolved issue, worktree, and branch as JSON without
+        /// Print the resolved ticket, worktree, and branch as JSON without
         /// creating anything. With --summary, also the summary file's path
         /// and its text as `summary_text`.
         #[arg(long)]
@@ -421,28 +423,28 @@ pub(crate) enum WorkspaceCmd {
         /// commands in the worktree still run the installed hooks.
         #[arg(long = "no-git-hooks", conflicts_with = "here")]
         no_git_hooks: bool,
-        /// Bind the checkout this runs in to the issue instead of creating a
-        /// worktree: write its issue record (and summary) on the branch
+        /// Bind the checkout this runs in to the ticket instead of creating a
+        /// worktree: write its ticket record (and summary) on the branch
         /// already checked out, creating no branch and running no worktree
         /// hooks. Refuses on the default branch. For a session that works
         /// in one checkout on a branch it was handed.
-        #[arg(long, requires = "issue_ref", conflicts_with = "apps")]
+        #[arg(long, requires = "ticket_ref", conflicts_with = "apps")]
         here: bool,
     },
-    /// Read-only report of every issue worktree (optionally filtered by ID).
+    /// Read-only report of every ticket worktree (optionally filtered by ID).
     Status {
-        /// Issue ids, branches, worktree paths, or PR numbers to report on;
-        /// omit for every issue worktree.
+        /// Ticket ids, branches, worktree paths, or PR numbers to report on;
+        /// omit for every ticket worktree.
         ids: Vec<String>,
     },
-    /// Remove FINISHED worktrees (PR merged + issue done + clean).
+    /// Remove FINISHED worktrees (PR merged + ticket done + clean).
     ///
-    /// A worktree with no issue id or no PR is FINISHED when its tree is
+    /// A worktree with no ticket id or no PR is FINISHED when its tree is
     /// clean, its HEAD is on the remote's default branch, and no open PR has
     /// its branch as head.
     End {
-        /// Issue ids, branches, worktree paths, or PR numbers to consider; omit
-        /// to scan every issue worktree.
+        /// Ticket ids, branches, worktree paths, or PR numbers to consider; omit
+        /// to scan every ticket worktree.
         ids: Vec<String>,
         /// Remove without asking for confirmation.
         #[arg(short = 'y', long)]
@@ -452,7 +454,7 @@ pub(crate) enum WorkspaceCmd {
         #[arg(short = 'f', long)]
         force: bool,
         /// Count a merged PR plus a clean tree as finished, ignoring the
-        /// tracker state and the issue-id gate.
+        /// tracker state and the ticket-id gate.
         #[arg(short = 'p', long = "pr-only")]
         pr_only: bool,
         /// Remove the selected worktrees whether or not they are finished.
@@ -467,7 +469,7 @@ pub(crate) enum WorkspaceCmd {
     ///
     /// Copies `defaults.worktree_include` files from the primary checkout.
     SyncIncludes {
-        /// Issue ids, branches, worktree basenames, or paths to sync; omit for
+        /// Ticket ids, branches, worktree basenames, or paths to sync; omit for
         /// every worktree.
         selectors: Vec<String>,
         /// Replace files the worktree already has instead of leaving them
@@ -496,7 +498,7 @@ pub(crate) enum WorkspaceCmd {
 /// The proof-line format that every proof-checking verb's help ends with.
 macro_rules! proof_format {
     () => {
-        "answers every item of the issue's `Done when` or `Acceptance criteria`
+        "answers every item of the ticket's `Done when` or `Acceptance criteria`
 section, each on an unindented line starting with the item's number:
 
 --arg proof='1. test `refuses_a_gap`
@@ -506,7 +508,7 @@ section, each on an unindented line starting with the item's number:
 
 const PROOF_HELP: &str = concat!(
     "\
-Proof check: with `defaults.pr_proof_variable` set, an agent in an issue
+Proof check: with `defaults.pr_proof_variable` set, an agent in a ticket
 worktree is refused before the push unless that variable
 ",
     proof_format!()
@@ -515,7 +517,7 @@ worktree is refused before the push unless that variable
 const PROOF_ALONE_HELP: &str = concat!(
     "\
 Proof check: with `defaults.pr_proof_variable` set, an agent's run against the
-worktree's issue, or the one --issue names, exits nonzero unless that variable
+worktree's ticket, or the one --ticket names, exits nonzero unless that variable
 ",
     proof_format!()
 );
@@ -633,7 +635,7 @@ pub(crate) enum PrCmd {
     },
     /// Run the repro gate's check on this branch without opening a PR.
     ///
-    /// Checks each item of the worktree's issue `Done when` section that
+    /// Checks each item of the worktree's ticket `Done when` section that
     /// ends `(proof: repro <selector>)`, the same way `pr create` does:
     /// the selector must fail with the branch's non-test changes reverted
     /// and pass at HEAD. Prints each item's verdict (`PASSED`, `FAILED`,
@@ -672,15 +674,15 @@ pub(crate) enum PrCmd {
     /// Run the proof check of `pr create` without opening a PR.
     ///
     /// Checks the `defaults.pr_proof_variable` argument against each item of
-    /// the issue's `Done when` or `Acceptance criteria` section, on an agent's
+    /// the ticket's `Done when` or `Acceptance criteria` section, on an agent's
     /// run. Exits nonzero with the refusal `pr create` gives. A run
-    /// `pr create` would not check, a human's or one with no issue, exits
+    /// `pr create` would not check, a human's or one with no ticket, exits
     /// zero saying why. Touches no branch and opens no PR.
     #[command(after_help = PROOF_ALONE_HELP)]
     Proof {
-        /// Tracker issue to check against, instead of the worktree's issue.
-        #[arg(long)]
-        issue: Option<String>,
+        /// Ticket to check against, instead of the worktree's ticket.
+        #[arg(long, alias = "issue")]
+        ticket: Option<String>,
         #[command(flatten)]
         vars: VarArgs,
     },
@@ -705,13 +707,13 @@ pub(crate) enum PrCmd {
         #[arg(long, value_name = "FILE")]
         body_file: Option<std::path::PathBuf>,
     },
-    /// Show one worktree's PR and issue id.
+    /// Show one worktree's PR and ticket id.
     ///
     /// Reports the current worktree, or the one SELECTOR names.
     Status(PrStatus),
     /// Check out an existing PR into a new worktree.
     ///
-    /// Accepts a PR number, issue id, or URL.
+    /// Accepts a PR number, ticket id, or URL.
     Checkout(PrCheckout),
     /// At-a-glance triage of your open PRs on the project's forge.
     List(PrList),
@@ -724,21 +726,21 @@ pub(crate) enum PrCmd {
 
 #[derive(clap::Args, Debug, Default, PartialEq)]
 pub(crate) struct PrStatus {
-    /// Issue id, branch, worktree basename, path, or PR number (`7` or `#7`).
+    /// Ticket id, branch, worktree basename, path, or PR number (`7` or `#7`).
     /// Defaults to cwd.
     selector: Option<String>,
     /// Emit the worktree as one JSON object instead of a table.
     #[arg(long)]
     json: bool,
     /// Skip the network: take the PR number from the worktree's cache and
-    /// leave the issue state blank.
+    /// leave the ticket state blank.
     #[arg(long = "cache-only")]
     cache_only: bool,
 }
 
 #[derive(clap::Args, Debug, PartialEq)]
 pub(crate) struct PrCheckout {
-    /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue
+    /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker ticket
     /// URL.
     target: String,
     /// Worktree path; defaults to the config-resolved placement.
@@ -1006,8 +1008,8 @@ fn run_ticket(dir: Option<String>, config: Option<String>, cmd: TicketCmd) -> Re
 fn run_workspace(dir: Option<String>, config: Option<String>, cmd: WorkspaceCmd) -> Result<()> {
     match cmd {
         WorkspaceCmd::Setup {
-            issue_pos,
-            issue,
+            ticket_pos,
+            ticket,
             slug,
             apps,
             summary,
@@ -1017,7 +1019,7 @@ fn run_workspace(dir: Option<String>, config: Option<String>, cmd: WorkspaceCmd)
             no_git_hooks,
             here,
         } => setup::run(setup::SetupArgs {
-            issue: issue_pos.or(issue),
+            issue: ticket_pos.or(ticket),
             slug,
             apps,
             summary,
@@ -1146,8 +1148,8 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             head.as_deref(),
             base.as_deref(),
         ),
-        PrCmd::Proof { issue, vars } => {
-            pr::proof::run(&here, config.as_deref(), issue, &vars.under(&here))
+        PrCmd::Proof { ticket, vars } => {
+            pr::proof::run(&here, config.as_deref(), ticket, &vars.under(&here))
         }
         PrCmd::WeakenedTests {
             base,

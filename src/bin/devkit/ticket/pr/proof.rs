@@ -33,7 +33,7 @@ impl Skip {
         match self {
             Skip::Unset => "defaults.pr_proof_variable is unset",
             Skip::NoIssue => {
-                "no tracker issue is recorded for this worktree (pass --issue <ID> to name one)"
+                "no tracker issue is recorded for this worktree (pass --ticket <ID> to name one)"
             }
             Skip::Human => "the caller is human",
         }

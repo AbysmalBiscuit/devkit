@@ -12,10 +12,10 @@ mod data;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Aggregate {
     /// Everything up to each bucket's end: running totals of commits and PRs,
-    /// and each issue's status as of the bucket's end.
+    /// and each ticket's status as of the bucket's end.
     Cumulative,
     /// Only what happened inside each bucket: commits and PRs in it, and
-    /// issues entering each status in it.
+    /// tickets entering each status in it.
     Period,
 }
 
