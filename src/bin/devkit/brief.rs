@@ -60,7 +60,7 @@ use crate::{
         HookEvent,
         payload::{Holder, Payload},
     },
-    issue::pr::weakened,
+    issue::pr::create,
 };
 
 /// The hook a brief or a rules block answers: its payload, and whether the
@@ -985,11 +985,8 @@ impl GateOn {
 fn gates_on(root: &Path, config: &config::Config) -> Vec<(config::Gate, GateOn)> {
     static GATES: OnceLock<config::PrGates> = OnceLock::new();
     let gates = GATES.get_or_init(|| {
-        weakened::merge_base(root, &config.defaults.pr_base)
-            .ok()
-            .flatten()
-            .and_then(|base| weakened::config_at(&Checkout::at(root), &base).ok())
-            .map_or_else(|| config.pr.gates.clone(), |pr| pr.gates)
+        create::gate_settings(&Checkout::at(root), &config.defaults.pr_base, "HEAD")
+            .map_or_else(|_| config.pr.gates.clone(), |(_, pr)| pr.gates)
     });
     gates
         .all()

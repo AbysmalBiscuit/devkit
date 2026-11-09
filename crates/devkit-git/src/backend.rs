@@ -165,6 +165,24 @@ impl VersionControl for GitBackend {
             .success()
     }
 
+    fn revision_of(&self, dir: &Path, rev: &str) -> Result<String> {
+        let out = Git::at(dir)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &format!("{rev}^{{commit}}"),
+            ])
+            .wait()?;
+        let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        anyhow::ensure!(
+            out.status.success() && !sha.is_empty(),
+            "`{rev}` is not a commit in this repository"
+        );
+        Ok(sha)
+    }
+
     fn changed_files(&self, dir: &Path, from: &str, to: &str) -> Result<Vec<FileChange>> {
         let out = Git::at(dir)
             .args([
@@ -690,6 +708,20 @@ mod tests {
         assert!(GitBackend.file_at(repo.path(), "HEAD", "").is_err());
         assert!(GitBackend.has_revision(repo.path(), "main").unwrap());
         assert!(!GitBackend.has_revision(repo.path(), "nope").unwrap());
+    }
+
+    #[test]
+    fn revision_of_names_the_full_commit_id_or_refuses_a_non_commit() {
+        let repo = repo_with_commit();
+        let head = GitBackend.revision(repo.path()).unwrap();
+        assert_eq!(
+            GitBackend.revision_of(repo.path(), &head[..7]).unwrap(),
+            head
+        );
+        assert_eq!(GitBackend.revision_of(repo.path(), "main").unwrap(), head);
+        let tree = run(&["rev-parse", "HEAD^{tree}"], repo.path()).unwrap();
+        assert!(GitBackend.revision_of(repo.path(), tree.trim()).is_err());
+        assert!(GitBackend.revision_of(repo.path(), "nope").is_err());
     }
 
     #[test]

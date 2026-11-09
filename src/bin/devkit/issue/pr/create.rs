@@ -182,7 +182,7 @@ pub(crate) struct Gates {
 }
 
 impl Gates {
-    /// The gates the `devkit.toml` committed at the merge base of HEAD with
+    /// The gates the `devkit.toml` committed at the merge base of `head` with
     /// PR base branch `base` sets for a PR opened at `head`. The
     /// weakened-tests gate applies to an agent's PR only; the verify gate
     /// renders its section into either caller's PR and refuses only an
@@ -229,23 +229,8 @@ impl Gates {
             verify: None,
             repro: None,
         };
-        let settings = weakened::merge_base(dir, base).and_then(|merge_base| {
-            merge_base
-                .map(|mb| weakened::config_at(checkout, &mb).map(|cfg| (mb, cfg)))
-                .transpose()
-        });
-        let unresolved = anyhow!(
-            "the PR gates read their settings from the merge base with `{base}`, and \
-             neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
-        );
-        let (merge_base, cfg) = match settings {
-            Ok(Some(settings)) => settings,
-            Ok(None) => {
-                return Ok(GateLoad::Unread {
-                    reason: unresolved,
-                    ungated,
-                });
-            }
+        let (merge_base, cfg) = match gate_settings(checkout, base, head) {
+            Ok(settings) => settings,
             Err(reason) => return Ok(GateLoad::Unread { reason, ungated }),
         };
         let weakened = match caller {
@@ -328,6 +313,35 @@ pub(crate) fn gate_inputs(
         head,
         items: Box::new(move || done_when_items(&dir, kind, &repos, issue.as_deref())),
     })
+}
+
+/// The merge base of `head` with PR base branch `base`, which resolves as
+/// `origin/<base>`, else `<base>`, and the `[pr]` settings the `devkit.toml`
+/// committed there holds. Every gate reads its settings there, so a branch
+/// cannot change the gates on its own PR.
+pub(crate) fn gate_settings(
+    checkout: &Checkout,
+    base: &str,
+    head: &str,
+) -> Result<(String, devkit_config::PrConfig)> {
+    let dir = checkout.dir();
+    let vcs = Vcs::at(dir);
+    let origin = format!("origin/{base}");
+    let mut merge_base = None;
+    for rev in [origin.as_str(), base] {
+        if vcs.has_revision(dir, rev)? {
+            merge_base = Some(vcs.merge_base(dir, rev, head)?);
+            break;
+        }
+    }
+    let merge_base = merge_base.ok_or_else(|| {
+        anyhow!(
+            "the PR gates read their settings from the merge base with `{base}`, and \
+             neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
+        )
+    })?;
+    let cfg = weakened::config_at(checkout, &merge_base)?;
+    Ok((merge_base, cfg))
 }
 
 /// The `Done when` items of `issue`, `None` when the worktree has none.

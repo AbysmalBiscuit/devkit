@@ -2,12 +2,15 @@
 //! recorded passing on. Only devrun writes the run ledger, so the
 //! record is evidence an agent cannot type into the PR body itself.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
 use devkit_common::{
     caller::Caller,
-    vcs::{Checkout, Worktree},
+    vcs::{Checkout, Vcs, VersionControl, Worktree},
 };
 use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask};
 use devkit_ports::{
@@ -129,9 +132,8 @@ impl Gate {
     /// `body` with the Verification section appended, or a refusal when an
     /// agent's PR under `require` has no qualifying run.
     pub(crate) fn apply(&self, body: String) -> Result<String> {
-        let section = match &self.run {
-            Some(run) => self.passed(run),
-            None => match (self.mode, self.caller) {
+        if self.run.is_none() {
+            match (self.mode, self.caller) {
                 (GateMode::Require, Caller::Agent) => bail!(
                     "refusing to open the PR: the `verify` gate needs a run of `{task}` that \
                      exited 0 on a clean tree at {head}, with the required args, and the run \
@@ -142,15 +144,25 @@ impl Gate {
                     command = self.required.command(),
                     rejected = self.rejected_note(),
                 ),
-                (GateMode::Off | GateMode::Advise | GateMode::Require, _) => self.not_run(),
-            },
-        };
+                (GateMode::Off | GateMode::Advise | GateMode::Require, _) => {}
+            }
+        }
+        let section = self.section();
         let body = body.trim_end();
         Ok(if body.is_empty() {
             section
         } else {
             format!("{body}\n\n{section}")
         })
+    }
+
+    /// The Verification section: the qualifying run, or NOT RUN when the
+    /// ledger has none.
+    fn section(&self) -> String {
+        match &self.run {
+            Some(run) => self.passed(run),
+            None => self.not_run(),
+        }
     }
 
     fn passed(&self, run: &Run) -> String {
@@ -226,6 +238,42 @@ impl Gate {
             .map(|why| format!(" {why}"))
             .unwrap_or_default()
     }
+}
+
+/// `pr verification`: print the Verification section `pr create` writes
+/// for a PR opened at `head`, HEAD when `None`, against PR base `base`.
+/// Prints the NOT RUN form, never the refusal, when no run qualifies.
+pub(crate) fn run(
+    dir: &Path,
+    config: Option<&str>,
+    head: Option<&str>,
+    base: Option<&str>,
+) -> Result<()> {
+    let checkout = Checkout::at(dir);
+    let loaded = devkit_ports::load::load_in(&checkout, config.map(Path::new), dir)?;
+    let caller = devkit_common::caller::caller();
+    let base = base.unwrap_or(&loaded.config.defaults.pr_base);
+    let vcs = Vcs::at(dir);
+    let head = match head {
+        Some(rev) => vcs.revision_of(dir, rev)?,
+        None => vcs.revision(dir)?,
+    };
+    let (merge_base, cfg) = super::create::gate_settings(&checkout, base, &head)?;
+    match Gate::read(
+        &checkout,
+        &merge_base,
+        &cfg.gates,
+        &head,
+        caller,
+        &Ledger::live()?,
+    )? {
+        Some(gate) => print!("{}", gate.section()),
+        None => eprintln!(
+            "no Verification section: the `devkit.toml` committed at the merge base turns the \
+             verify gate off or names no `verify_task`"
+        ),
+    }
+    Ok(())
 }
 
 /// Why `run`, which passed at the PR's head with the required args, does

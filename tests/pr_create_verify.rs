@@ -1485,3 +1485,109 @@ fn a_run_and_its_gated_pr_ask_git_each_question_once() {
         "{calls:#?}"
     );
 }
+
+/// `pr verification` run as `caller` with `extra` args: its success and
+/// standard output, failing the test on a nonzero exit.
+fn verification(p: &ghfake::Fake, caller: &str, extra: &[&str]) -> String {
+    let mut args = vec!["pr", "verification"];
+    args.extend_from_slice(extra);
+    let out = p.issue_as(caller, &args);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn pr_verification_prints_the_section_pr_create_writes() {
+    let p = project(GATE);
+    verify(&p);
+    let section = verification(&p, "agent", &[]);
+    assert!(
+        section.starts_with("### Verification\n\n- Command:"),
+        "{section}"
+    );
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+    let body = body(&p);
+    assert!(body.contains(section.trim_end()), "{section}\n---\n{body}");
+}
+
+#[test]
+fn pr_verification_prints_not_run_to_an_agent_with_no_run_at_head() {
+    let p = project(GATE);
+    let section = verification(&p, "agent", &[]);
+    assert!(
+        section.starts_with(&format!(
+            "### Verification\n\nNOT RUN: the run ledger records no run of \
+             `devrun task verify --arg scope=all` that exited 0 on a clean tree at `{}`.",
+            head(&p)
+        )),
+        "{section}"
+    );
+    let (ok, _) = create(&p, "human");
+    assert!(ok);
+    assert!(body(&p).contains(section.trim_end()), "{}", body(&p));
+}
+
+/// A detached linked worktree has no branch and no worktree record, as a
+/// checkout that only refreshes a PR body can be.
+#[test]
+fn pr_verification_runs_in_a_checkout_with_no_worktree_record() {
+    let p = project(GATE);
+    verify(&p);
+    let scratch = tempfile::tempdir().unwrap();
+    let detached = scratch.path().join("detached");
+    git(&p, &[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        detached.to_str().unwrap(),
+        "HEAD",
+    ]);
+    assert!(!detached.join(".devkit").exists());
+
+    let out = p.issue_as_in("agent", &detached, &["pr", "verification"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let section = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        section.starts_with("### Verification\n\n- Command:"),
+        "{section}"
+    );
+    assert!(
+        section.contains(&format!("- SHA: `{}`\n", head(&p))),
+        "{section}"
+    );
+}
+
+#[test]
+fn pr_verification_renders_the_head_it_is_given() {
+    let p = project(GATE);
+    verify(&p);
+    let verified = head(&p);
+    std::fs::write(p.project().join("feature.txt"), "a fix\n").unwrap();
+    git(&p, &["commit", "-q", "-am", "a fix"]);
+
+    let section = verification(&p, "agent", &["--head", &verified]);
+    assert!(section.contains("- Exit code: 0\n"), "{section}");
+    assert!(
+        section.contains(&format!("- SHA: `{verified}`\n")),
+        "{section}"
+    );
+    assert_eq!(
+        verification(&p, "agent", &["--head", &verified[..12]]),
+        section,
+        "a short id names the same commit"
+    );
+
+    let now = verification(&p, "agent", &[]);
+    assert!(now.contains("NOT RUN"), "{now}");
+    assert!(now.contains(&head(&p)), "{now}");
+}
