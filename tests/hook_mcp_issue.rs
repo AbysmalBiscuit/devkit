@@ -167,6 +167,23 @@ fn a_rendered_create_is_allowed() {
     assert_eq!(denial(&out), None);
 }
 
+/// A render by an older devkit filed its receipts under `issue-receipts`.
+/// A session that upgrades devkit between the render and the call still
+/// passes, and its session end clears them.
+#[test]
+fn a_receipt_an_older_devkit_filed_still_allows_the_create() {
+    let p = project();
+    let (t, b) = render(p.path(), "S1", "T", "B");
+    let legacy = p.path().join(".devkit").join("issue-receipts");
+    std::fs::rename(receipts_dir(p.path(), "S1").parent().unwrap(), &legacy).unwrap();
+
+    let out = pre_tool_use(p.path(), &claude(p.path(), "S1", LINEAR, create(&t, &b)));
+    assert_eq!(denial(&out), None);
+
+    session_end(p.path(), "S1");
+    assert!(!legacy.join("S1").exists());
+}
+
 #[test]
 fn crlf_and_trailing_spaces_still_match() {
     let p = project();
@@ -310,7 +327,10 @@ fn session_end(project: &Path, session: &str) -> Output {
 }
 
 fn receipts_dir(project: &Path, session: &str) -> std::path::PathBuf {
-    project.join(".devkit").join("issue-receipts").join(session)
+    project
+        .join(".devkit")
+        .join("ticket-receipts")
+        .join(session)
 }
 
 #[test]

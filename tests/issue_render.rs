@@ -48,13 +48,17 @@ fn stderr(out: &Output) -> String {
 }
 
 fn receipts(project: &Path, session: &str) -> Vec<String> {
-    let mut names: Vec<String> =
-        std::fs::read_dir(project.join(".devkit").join("issue-receipts").join(session))
-            .map(|d| {
-                d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-                    .collect()
-            })
-            .unwrap_or_default();
+    let mut names: Vec<String> = std::fs::read_dir(
+        project
+            .join(".devkit")
+            .join("ticket-receipts")
+            .join(session),
+    )
+    .map(|d| {
+        d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    })
+    .unwrap_or_default();
     names.sort();
     names
 }
@@ -203,7 +207,7 @@ fn an_empty_title_is_refused() {
 fn a_symlinked_devkit_dir_is_refused_and_its_target_survives() {
     let p = project();
     let outside = tempfile::tempdir().unwrap();
-    let old = outside.path().join("issue-receipts").join("old-session");
+    let old = outside.path().join("ticket-receipts").join("old-session");
     std::fs::create_dir_all(&old).unwrap();
     std::fs::File::open(&old)
         .unwrap()
@@ -225,7 +229,7 @@ fn a_symlinked_devkit_dir_is_refused_and_its_target_survives() {
     assert!(err.contains("symlink"), "{err}");
     assert!(err.contains(".devkit"), "{err}");
     assert!(old.exists(), "the symlink's target was swept");
-    assert!(!outside.path().join("issue-receipts").join("S1").exists());
+    assert!(!outside.path().join("ticket-receipts").join("S1").exists());
 }
 
 /// A project at `config`, under a `devkit.local.toml` of `local` when given.

@@ -262,7 +262,7 @@ pub(crate) fn run(args: RenderArgs) -> Result<()> {
 
     receipt::record(
         Path::new(&start),
-        receipt::Kind::Issue,
+        receipt::Kind::Ticket,
         &rendered.title,
         &rendered.body,
     )?;

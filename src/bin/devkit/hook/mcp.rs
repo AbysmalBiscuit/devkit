@@ -45,7 +45,7 @@ pub(super) struct Gate {
 }
 
 pub(super) const ISSUE: Gate = Gate {
-    kind: Kind::Issue,
+    kind: Kind::Ticket,
     with_article: "an issue",
     noun: "issue",
     render: "devkit ticket render",
@@ -163,7 +163,7 @@ fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: 
         receipt::has(&root, gate.kind, session, field, text)
     })
     .unwrap_or_else(|e| Verdict::Deny(format!("devkit render guard: {e:#}")));
-    if rendered != Verdict::Allow || gate.kind != Kind::Issue || rule.tracker.is_none() {
+    if rendered != Verdict::Allow || gate.kind != Kind::Ticket || rule.tracker.is_none() {
         return rendered;
     }
     match devkit_common::config::resolve_in(checkout, None, cwd) {
@@ -183,7 +183,7 @@ fn required_hint(checkout: &Checkout, cwd: &Path, kind: Kind) -> String {
         return String::new();
     };
     let missing = match kind {
-        Kind::Issue => render::missing(
+        Kind::Ticket => render::missing(
             &cfg,
             render::Title::Input(""),
             true,

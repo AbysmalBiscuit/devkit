@@ -130,10 +130,12 @@ fn a_session_render_records_a_receipt_for_that_session() {
         receipt_name("body-", &body),
         receipt_name("title-", &title),
     ]);
-    assert!(
-        !fake.project().join(".devkit/issue-receipts").exists(),
-        "a PR render vouches for no issue write"
-    );
+    for tickets in ["ticket-receipts", "issue-receipts"] {
+        assert!(
+            !fake.project().join(".devkit").join(tickets).exists(),
+            "a PR render vouches for no ticket write"
+        );
+    }
     assert!(!fake.calls().contains("pr create"), "{}", fake.calls());
 }
 
