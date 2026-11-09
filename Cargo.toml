@@ -140,7 +140,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 # An embedded taskchampion replica, on the 3.1 line taskwarrior 3.5 links, so
 # the replica matches the `task` a person reads the lists with. Sync builds its
 # own reqwest client, so its roots come from `tls-native-roots`.
-taskchampion = { version = "3.1", default-features = false, features = ["server-sync", "server-local", "storage-sqlite", "bundled", "tls-native-roots"] }
+# A 3.1 commit, since 3.1.0 links a SQLite with RUSTSEC-2026-0459.
+taskchampion = { git = "https://github.com/GothenburgBitFactory/taskchampion", rev = "015fd136fb5fb46ed627b4118ccf21fdd8ed3d59", default-features = false, features = ["server-sync", "server-local", "storage-sqlite", "bundled", "tls-native-roots"] }
 # Drives taskchampion's async API. Sync's HTTP client needs the timer driver.
 tokio = { version = "1", default-features = false, features = ["rt", "time", "net"] }
 # The Postgres todo backend's client. Its own unnamed statements
@@ -189,9 +190,9 @@ tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-fish = "3.6"
 tempfile = "3"
-# The SQLite rule store `repo-rules-agent` writes. The 0.39 line taskchampion
+# The SQLite rule store `repo-rules-agent` writes. The 0.41 line taskchampion
 # already links, bundled the same way, so the binary carries one SQLite.
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 # Storage keys for rules and sources added to a SQLite rule store.
 uuid = { version = "1", features = ["v4", "v5"] }
 frizbee = "0.13"
