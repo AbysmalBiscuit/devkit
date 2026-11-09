@@ -2679,11 +2679,11 @@ impl From<&str> for VariableDecl {
 /// # use devkit_config::Config;
 /// # let cfg = Config::parse(r#"
 /// [templates]
-/// branch             = "{{ prefix }}{{ ticket }}-{{ slug }}"
-/// worktree_dir       = "{{ slug }}"
-/// pr_title           = "{{ ticket }}: {{ input }}"
-/// pr_body            = "Closes {{ ticket }}.\n\n{{ input }}"
-/// ticket_summary_path = "{{ worktree }}/.devkit/issue.md"
+/// branch              = "{{ prefix }}{{ ticket }}-{{ slug }}"
+/// worktree_dir        = "{{ slug }}"
+/// pr_title            = "{{ ticket }}: {{ input }}"
+/// pr_body             = "Closes {{ ticket }}.\n\n{{ input }}"
+/// ticket_summary_path = "{{ worktree }}/.devkit/ticket.md"
 ///
 /// [templates.variables]
 /// team = "platform"
