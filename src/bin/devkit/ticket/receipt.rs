@@ -118,23 +118,30 @@ pub(crate) fn store_root(checkout: &Checkout) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+fn store_dir(checkout: &Path, dir: &str) -> PathBuf {
+    checkout.join(".devkit").join(dir)
+}
+
 fn receipts_root(checkout: &Path, kind: Kind) -> PathBuf {
-    checkout.join(".devkit").join(kind.dir())
+    store_dir(checkout, kind.dir())
 }
 
 /// [`receipts_root`], then the store an older devkit filed `kind` under.
 fn receipts_roots(checkout: &Path, kind: Kind) -> impl Iterator<Item = PathBuf> + '_ {
-    std::iter::once(kind.dir())
-        .chain(kind.legacy_dir())
-        .map(move |dir| checkout.join(".devkit").join(dir))
+    std::iter::once(receipts_root(checkout, kind))
+        .chain(kind.legacy_dir().map(|dir| store_dir(checkout, dir)))
 }
 
 pub(crate) fn session_dir(checkout: &Path, kind: Kind, session: &str) -> PathBuf {
     receipts_root(checkout, kind).join(session)
 }
 
+fn receipt_name(field: Field, text: &str) -> String {
+    format!("{}{}", field.prefix(), hex(text))
+}
+
 fn receipt_path(checkout: &Path, kind: Kind, session: &str, field: Field, text: &str) -> PathBuf {
-    session_dir(checkout, kind, session).join(format!("{}{}", field.prefix(), hex(text)))
+    session_dir(checkout, kind, session).join(receipt_name(field, text))
 }
 
 /// Refuse an invalid session id, and a store that is not a plain directory.
@@ -197,7 +204,7 @@ pub(crate) fn has(
     text: &str,
 ) -> Result<bool> {
     check_store(checkout, kind, session)?;
-    let name = format!("{}{}", field.prefix(), hex(text));
+    let name = receipt_name(field, text);
     for root in receipts_roots(checkout, kind) {
         let path = root.join(session).join(&name);
         if path
