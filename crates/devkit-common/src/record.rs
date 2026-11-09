@@ -84,18 +84,20 @@ const RECORD: &str = "ticket.toml";
 /// it a copy of [`RECORD`].
 const LEGACY_RECORD: &str = "issue.toml";
 
-/// `<worktree>/.devkit/ticket.toml`, or `issue.toml` in a worktree an older
-/// devkit set up that has no `ticket.toml`. This is the one spelling of the
+/// `<worktree>/.devkit/ticket.toml`, or `issue.toml` when it is the newer of
+/// the two: a worktree an older devkit set up has no `ticket.toml`, and an
+/// older devkit updates only `issue.toml`. This is the one spelling of the
 /// record path, so a caller reporting a record it refused to touch names the
 /// same file the readers and the writer use.
 pub fn path(worktree: &Path) -> std::path::PathBuf {
     let dir = worktree.join(".devkit");
     let current = dir.join(RECORD);
     let legacy = dir.join(LEGACY_RECORD);
-    if !current.exists() && legacy.exists() {
-        legacy
-    } else {
-        current
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    match (modified(&current), modified(&legacy)) {
+        (None, Some(_)) => legacy,
+        (Some(c), Some(l)) if l > c => legacy,
+        _ => current,
     }
 }
 
@@ -105,13 +107,14 @@ pub fn path(worktree: &Path) -> std::path::PathBuf {
 /// Writes each to a temporary sibling and renames it into place: other
 /// processes scan these files to count a baseline's referencers, and a rename
 /// is atomic where a plain write is not, so a concurrent reader never observes
-/// a half-written file.
+/// a half-written file. `issue.toml` goes first, so [`path`] reads the new
+/// record between the two renames too.
 pub fn write(worktree: &Path, rec: &IssueRecord) -> Result<()> {
     let dir = worktree.join(".devkit");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     crate::gitignore::write_self_ignore(&dir);
     let body = toml::to_string(rec).context("serializing ticket record")?;
-    for name in [RECORD, LEGACY_RECORD] {
+    for name in [LEGACY_RECORD, RECORD] {
         let p = dir.join(name);
         let tmp = p.with_extension("toml.tmp");
         std::fs::write(&tmp, &body).with_context(|| format!("writing {}", tmp.display()))?;
@@ -284,6 +287,40 @@ mod tests {
             panic!("the updated record did not read");
         };
         assert_eq!(read.slug, "t");
+    }
+
+    #[test]
+    fn an_older_devkits_update_to_issue_toml_reads_and_survives_the_next_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let devkit = dir.path().join(".devkit");
+        write(dir.path(), &rec("ENG-3")).unwrap();
+        let legacy = devkit.join("issue.toml");
+        std::fs::write(&legacy, "issue = \"ENG-3\"\nslug = \"old\"\napps = []\n").unwrap();
+        let later = std::fs::metadata(devkit.join("ticket.toml"))
+            .and_then(|m| m.modified())
+            .unwrap()
+            + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&legacy)
+            .and_then(|f| f.set_modified(later))
+            .unwrap();
+
+        let RecordState::Ok(read) = read_state(dir.path()) else {
+            panic!("the record did not read");
+        };
+        assert_eq!(read.slug, "old", "the older devkit's update reads");
+
+        update(dir.path(), |r| r.as_mut().unwrap().apps = vec!["web".into()]).unwrap();
+        let RecordState::Ok(read) = read_state(dir.path()) else {
+            panic!("the updated record did not read");
+        };
+        assert_eq!((read.slug.as_str(), read.apps.as_slice()), ("old", &["web".to_string()][..]));
+        assert_eq!(path(dir.path()), devkit.join("ticket.toml"));
+        assert_eq!(
+            std::fs::read_to_string(&legacy).unwrap(),
+            std::fs::read_to_string(devkit.join("ticket.toml")).unwrap(),
+        );
     }
 
     #[test]
