@@ -120,4 +120,8 @@ fn pr_only_renders_the_verdict_it_removes_by() {
         output.contains("FINISHED") && !output.contains("no tracker key"),
         "the table disagrees with the removal: {output}"
     );
+    assert!(
+        output.contains("ticket-id gates are skipped") && !output.contains("issue-id"),
+        "the skipped gates are not named as ticket gates: {output}"
+    );
 }

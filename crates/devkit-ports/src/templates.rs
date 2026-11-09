@@ -1,6 +1,6 @@
 //! Named templates a caller renders and reads back instead of a command
-//! rendering them: `[templates.custom]`, and the built-ins the issue commands
-//! render. Shared by `devkit template` and MCP.
+//! rendering them: `[templates.custom]`, and the built-ins the ticket,
+//! workspace and pr commands render. Shared by `devkit template` and MCP.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -46,9 +46,9 @@ pub struct Template {
     pub args: Vec<TaskArg>,
 }
 
-/// A built-in an issue command renders. Every context key the command
-/// computes that [`checkout_context`] does not supply (`input`, `pr_url`,
-/// `short_slug`, ...) is an arg here.
+/// A built-in a ticket, workspace or pr command renders. Every context key
+/// the command computes that [`checkout_context`] does not supply (`input`,
+/// `pr_url`, `short_slug`, ...) is an arg here.
 struct BuiltIn {
     name: &'static str,
     description: &'static str,

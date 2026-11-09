@@ -409,7 +409,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
         render(&report, false);
         if pr_only {
             println!(
-                "--pr-only: the {} state and issue-id gates are skipped.",
+                "--pr-only: the {} state and ticket-id gates are skipped.",
                 label(report.tracker.kind)
             );
         }
