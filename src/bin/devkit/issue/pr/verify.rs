@@ -252,27 +252,13 @@ pub(crate) fn run(
     let checkout = Checkout::at(dir);
     let loaded = devkit_ports::load::load_in(&checkout, config.map(Path::new), dir)?;
     let caller = devkit_common::caller::caller();
-    let repos = devkit_common::forge::resolve(
-        &loaded.config.forge,
-        &loaded.config.github,
-        &dir.display().to_string(),
-        None,
-    )
-    .repos;
-    let inputs = super::create::gate_inputs(&checkout, &loaded, &repos, base)?;
+    let base = base.unwrap_or(&loaded.config.defaults.pr_base);
     let vcs = Vcs::at(dir);
     let head = match head {
-        Some(rev) => {
-            if !vcs.has_revision(dir, rev)? {
-                bail!("`{rev}` is not a commit in this repository");
-            }
-            // A commit's merge base with itself is its full id, the form the
-            // run ledger records.
-            vcs.merge_base(dir, rev, rev)?
-        }
-        None => inputs.head,
+        Some(rev) => vcs.revision_of(dir, rev)?,
+        None => vcs.revision(dir)?,
     };
-    let (merge_base, cfg) = super::create::gate_settings(&checkout, &inputs.base, &head)?;
+    let (merge_base, cfg) = super::create::gate_settings(&checkout, base, &head)?;
     match Gate::read(
         &checkout,
         &merge_base,
