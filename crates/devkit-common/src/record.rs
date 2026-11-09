@@ -311,11 +311,17 @@ mod tests {
         };
         assert_eq!(read.slug, "old", "the older devkit's update reads");
 
-        update(dir.path(), |r| r.as_mut().unwrap().apps = vec!["web".into()]).unwrap();
+        update(dir.path(), |r| {
+            r.as_mut().unwrap().apps = vec!["web".into()]
+        })
+        .unwrap();
         let RecordState::Ok(read) = read_state(dir.path()) else {
             panic!("the updated record did not read");
         };
-        assert_eq!((read.slug.as_str(), read.apps.as_slice()), ("old", &["web".to_string()][..]));
+        assert_eq!(
+            (read.slug.as_str(), read.apps.as_slice()),
+            ("old", &["web".to_string()][..])
+        );
         assert_eq!(path(dir.path()), devkit.join("ticket.toml"));
         assert_eq!(
             std::fs::read_to_string(&legacy).unwrap(),

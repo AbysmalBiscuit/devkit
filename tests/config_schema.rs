@@ -199,7 +199,13 @@ fn the_schema_names_the_ticket_commands_and_not_the_old_issue_command() {
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
         .collect();
     for current in ["ticket", "workspace"] {
-        assert!(commands.contains(&current), "{description:?} lacks `{current}`");
+        assert!(
+            commands.contains(&current),
+            "{description:?} lacks `{current}`"
+        );
     }
-    assert!(!commands.contains(&"issue"), "{description:?} names `issue`");
+    assert!(
+        !commands.contains(&"issue"),
+        "{description:?} names `issue`"
+    );
 }
