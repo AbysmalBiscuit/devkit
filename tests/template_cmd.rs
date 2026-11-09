@@ -505,10 +505,10 @@ fn branch_templates_read_the_ticket_by_either_name() {
     assert_eq!(json["branch"], "lev/65-65-fix", "{json}");
 }
 
-/// This repository's own `pr_body` keys its closing line on
-/// `ticket_magic_word`, and `issue_magic_word`, its old name, still sets it.
+/// This repository's own `pr_body` keys its closing line on `ticket` and
+/// `ticket_magic_word`.
 #[test]
-fn the_magic_word_renders_by_either_name() {
+fn the_closing_line_renders_from_the_ticket_and_its_magic_word() {
     let config = concat!(env!("CARGO_MANIFEST_DIR"), "/devkit.toml");
     let dir = setup();
     let body = |args: &[&str]| {
@@ -525,10 +525,8 @@ fn the_magic_word_renders_by_either_name() {
         stdout(&out)
     };
     assert!(body(&[]).contains("\nCloses ENG-1\n"), "{}", body(&[]));
-    for name in ["ticket_magic_word", "issue_magic_word"] {
-        let text = body(&["--arg", &format!("{name}=Refs")]);
-        assert!(text.contains("\nRefs ENG-1\n"), "{name}: {text}");
-    }
+    let text = body(&["--arg", "ticket_magic_word=Refs"]);
+    assert!(text.contains("\nRefs ENG-1\n"), "{text}");
     let text = body(&["--arg", "ticket=12"]);
     assert!(text.contains("\nCloses #12\n"), "{text}");
 }

@@ -134,43 +134,40 @@ worktree_dir = '''
 '''
 
 # PR body for `devkit pr create`; `input` comes from `--pr-body`.
-# Only a human supplies `human_tldr`.
+# The TL;DR heading renders only when no `agent_model` or `agent_harness` is set.
 pr_body = '''
-{%- set id = ticket or issue -%}
-{%- set magic = issue_magic_word or ticket_magic_word -%}
-{%- set own = (magic ~ " " ~ ("#" if id and id[0] in "0123456789" else "") ~ id) if id else "" -%}
+{%- set own = (ticket_magic_word ~ " " ~ ("#" if ticket and ticket[0] in "0123456789" else "") ~ ticket) if ticket else "" -%}
 {%- set ref_lines = ((own ~ ";" ~ refs) if own else refs) | split(";") | map("trim") | reject("eq", "") | list -%}
 {%- set agent = agent_model or agent_harness -%}
-{%- set tldr = human_tldr | trim or not agent -%}
-{%- if tldr -%}
+{%- if not agent -%}
 ## TL;DR (human written)
 {{ human_tldr }}
-{%- endif -%}
-{%- if ref_lines -%}
-{{ "\n\n---\n\n" if tldr else "" }}{{ ref_lines | join("\n") }}
-{%- endif -%}
-{%- if agent -%}
-{{ "\n\n---\n\n" if tldr or ref_lines else "" }}## Agent summary
+{%- endif %}
+{%- if ref_lines %}
+{%- if not agent %}
+
+---
+
+{% endif %}{{ ref_lines | join("\n") }}
+{%- endif %}
+{%- if agent %}
+{%- if ref_lines %}
+
+---
+
+{% endif %}## Agent summary
 {%- endif %}
 
 {{ input | trim }}
-{%- if agent or departures | trim %}
+{%- set caveats = [["departures", departures], ["loose ends", loose_ends], ["assumptions", assumptions]] %}
+{%- set filled = [departures, loose_ends, assumptions] | map("trim") | reject("eq", "") | reject("eq", "**None**") | list %}
+{%- if agent or filled %}
 
-## Departures
+## Caveats
+{%- for kind, value in caveats %}
 
-{{ departures | trim or "**None**" }}
-{%- endif %}
-{%- if agent or loose_ends | trim %}
-
-## Loose Ends
-
-{{ loose_ends | trim or "**None**" }}
-{%- endif %}
-{%- if agent or assumptions | trim %}
-
-## Assumptions
-
-{{ assumptions | trim or "**None**" }}
+{{ value | trim if value | trim not in ["", "**None**"] else "**0 " ~ kind ~ "**" }}
+{%- endfor %}
 {%- endif %}
 {%- if agent or conceptual_changes | trim %}
 
@@ -184,25 +181,25 @@ pr_body = '''
 
 {{ proof | trim }}
 {%- endif %}
-{%- if agent or change_risk | trim or change_risk_reason | trim %}
+{%- if change_risk | trim or change_risk_reason | trim or door | trim or blast_radius | trim %}
 
 ## Change Risk
+{%- if change_risk | trim %}
 
-**Change risk:**
-{{ change_risk | trim or "**None**" }}
-
-**Classifier:**
-{{ change_risk_reason | trim or "**None**" }}
+**Change risk:** {{ change_risk | trim }}
 {%- endif %}
-{%- if agent or door | trim or blast_radius | trim %}
+{%- if change_risk_reason | trim %}
 
-## Merge Danger
+**Classifier:** {{ change_risk_reason | trim }}
+{%- endif %}
+{%- if door | trim %}
 
-**Door:**
-{{ door | trim or "**None**" }}
+**Door:** {{ door | trim }}
+{%- endif %}
+{%- if blast_radius | trim %}
 
-**Blast Radius:**
-{{ blast_radius | trim or "**None**" }}
+**Blast Radius:** {{ blast_radius | trim }}
+{%- endif %}
 {%- endif %}
 {%- if agent %}
 
