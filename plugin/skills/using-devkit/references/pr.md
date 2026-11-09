@@ -15,18 +15,18 @@ devkit pr review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg 
 devkit pr weakened-tests <base> [<head>] [--body-file <file|->]
 devkit pr repro [--json] [--base <branch>]
 devkit pr verification [--head <commit>] [--base <branch>]
-devkit pr proof [--issue <id>] [--arg k=v] [--arg-file k=path]
+devkit pr proof [--ticket <id>] [--arg k=v] [--arg-file k=path]
 ```
 
 ## `checkout`: review someone else's work
 
-Checks out an **existing** PR into a new worktree, the review-side counterpart of `workspace setup`. The target is `#3340`, `3340`, an issue id the tracker recognises (`PREFIX-3340`, whose linked PR is used), a PR URL on the project's forge, or an issue URL the tracker recognises.
+Checks out an **existing** PR into a new worktree, the review-side counterpart of `workspace setup`. The target is `#3340`, `3340`, a ticket id the tracker recognises (`PREFIX-3340`, whose linked PR is used), a PR URL on the project's forge, or an issue URL the tracker recognises.
 
 A bare `3340` is probed against both the PRs and the tracker's issues. A real collision prompts at a terminal and is an error without one. On a GitHub project, where issues and PRs share one numbering, it is always the PR. An issue with no attached PR is an error.
 
-The optional second positional overrides the worktree path (default: `templates.checkout_worktree_dir`, e.g. `3340-fix-login`). The PR's own branch name is kept. `--setup` also runs the per-app setup commands; `--apps a,b` narrows which apps that covers. The worktree gets a `.devkit/issue.toml` record so `workspace status` and `workspace end` recognise it, and `after_worktree_create` fires with or without `--setup`. Prints `pr`, `worktree`, and `branch`: JSON to a pipe, a table to a terminal.
+The optional second positional overrides the worktree path (default: `templates.checkout_worktree_dir`, e.g. `3340-fix-login`). The PR's own branch name is kept. `--setup` also runs the per-app setup commands; `--apps a,b` narrows which apps that covers. The worktree gets a `.devkit/ticket.toml` record so `workspace status` and `workspace end` recognise it, and `after_worktree_create` fires with or without `--setup`. Prints `pr`, `worktree`, and `branch`: JSON to a pipe, a table to a terminal.
 
-Where GitHub refuses GraphQL, as in a Claude Code cloud session, the PR's head is fetched from `origin` as `refs/pull/<n>/head` instead of through `gh pr checkout`, and its branch gets no upstream, so pushing to a fork's branch needs that remote added by hand. A local branch with the head's name at any other commit is left alone and the checkout fails naming it, since it may hold unpushed work. An issue id finds only a PR whose description closes the issue (`Closes`, `Fixes` or `Resolves`), not one linked only through the issue's Development sidebar, and it accepts such a PR into any base branch, where GraphQL counts only PRs into the default branch.
+Where GitHub refuses GraphQL, as in a Claude Code cloud session, the PR's head is fetched from `origin` as `refs/pull/<n>/head` instead of through `gh pr checkout`, and its branch gets no upstream, so pushing to a fork's branch needs that remote added by hand. A local branch with the head's name at any other commit is left alone and the checkout fails naming it, since it may hold unpushed work. A ticket id finds only a PR whose description closes the issue (`Closes`, `Fixes` or `Resolves`), not one linked only through the issue's Development sidebar, and it accepts such a PR into any base branch, where GraphQL counts only PRs into the default branch.
 
 ## `create` and `ready`: open the PR
 
@@ -72,7 +72,7 @@ The repro gate is off until `[pr.gates] repro_task` names a task, as the verify 
 
 `render` takes `create`'s `--pr-title`, `--pr-body` and template arguments and prints `{"title": ..., "body": ...}`, byte for byte what `create` would send from this worktree, issue line included. It touches no forge and runs no proof check. Use it when the PR is opened some other way, and pass both strings unchanged. A required argument missing is refused by name before anything renders. Inside an agent session it records a receipt of each string under `.devkit/pr-receipts/` in the repository's main worktree, kept apart from ticket receipts; outside one it says no receipt was written. Session end deletes that session's receipts.
 
-A forge MCP tool that opens or edits PRs (the GitHub MCP server's `create_pull_request` and `update_pull_request`) is gated on those receipts once a `[harness.pr_tools.<name>]` entry names it, the same way `[harness.issue_tools]` gates ticket writes (`references/ticket.md`): a create, or an update that rewrites the title or body, is denied naming `devkit pr render` unless the text matches a render from the same session; an update touching neither is allowed, and an in-place body patch is always denied. A ticket render never vouches for a PR, nor a PR render for a ticket.
+A forge MCP tool that opens or edits PRs (the GitHub MCP server's `create_pull_request` and `update_pull_request`) is gated on those receipts once a `[harness.pr_tools.<name>]` entry names it, the same way `[harness.ticket_tools]` gates ticket writes (`references/ticket.md`): a create, or an update that rewrites the title or body, is denied naming `devkit pr render` unless the text matches a render from the same session; an update touching neither is allowed, and an in-place body patch is always denied. A ticket render never vouches for a PR, nor a PR render for a ticket.
 
 ### `--attach`: images and video in the PR body
 
@@ -133,11 +133,11 @@ devkit pr create --pr-title 'feat(login): show the error state' --arg proof='1. 
 ```
 
 - A numbered line indented two columns or more belongs to the entry above it and answers nothing.
-- Not gated: a human caller, a worktree with no issue record, and one set up with only `--slug` or checked out from a PR that names no issue.
+- Not gated: a human caller, a worktree with no ticket record, and one set up with only `--slug` or checked out from a PR that names no issue.
 - An issue the tracker cannot return is refused, since the items cannot be checked.
 - The check runs on every agent run, a reused PR included, because it comes before the push that finds the PR. Whether the evidence holds is left to review.
 
-`devkit pr proof` runs the same check alone. It reads the worktree's issue, or the issue that `--issue` names, and the proof from `--arg` or `--arg-file` for `defaults.pr_proof_variable`. It exits nonzero with the refusal that `create` gives, and exits zero when the proof answers each item. It skips each run that `create` does not gate: a human caller, an unset `defaults.pr_proof_variable`, and no issue. A skipped run exits zero and says why. It pushes nothing and opens no PR.
+`devkit pr proof` runs the same check alone. It reads the worktree's issue, or the issue that `--ticket` names, and the proof from `--arg` or `--arg-file` for `defaults.pr_proof_variable`. It exits nonzero with the refusal that `create` gives, and exits zero when the proof answers each item. It skips each run that `create` does not gate: a human caller, an unset `defaults.pr_proof_variable`, and no issue. A skipped run exits zero and says why. It pushes nothing and opens no PR.
 
 ## `review request`: ship for review
 
@@ -173,7 +173,7 @@ No head-commit check here: this is the reviewer's command, run in a worktree `ch
 
 ## Triage
 
-- **`status`** (also the bare `devkit pr`): one worktree's PR number and issue id. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single `IssueWorktree` object (scripts read `.pr_number` / `.issue_id`). `--cache-only` skips the network: the PR number comes from `<worktree>/.devkit/pr.json` and the tracker columns render as a placeholder dash. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
+- **`status`** (also the bare `devkit pr`): one worktree's PR number and issue id. The optional selector is a ticket id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single `IssueWorktree` object (scripts read `.pr_number` / `.ticket_id`). `--cache-only` skips the network: the PR number comes from `<worktree>/.devkit/pr.json` and the tracker columns render as a placeholder dash. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
 - **`list`**: triage of your open PRs and PRs awaiting your review. The authored, review-requested and reviewed-by searches run concurrently and page to exhaustion, and a per-repo cache renders `old -> new` for anything changed since the last run. The repository is `[forge] repo`, defaulting to the `origin` remote; `-R owner/repo` overrides it for one run. `--no-cache` forces a fresh fetch. On a repo with many open PRs the forge can return HTTP 504: lower `--batch-size` (PRs per search page, 1 to 100) and raise `--retries` (extra attempts per page with backoff, 0 to 10).
 
 At a terminal, `status` and `list` render live on stderr: cells fill in with spinners, and `list` shows the last run's tables dimmed until fresh ones swap in. Piped or redirected output is unaffected.

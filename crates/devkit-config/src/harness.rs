@@ -257,11 +257,11 @@ pub struct CommandRule {
 }
 
 /// One `[harness.ticket_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an
-/// MCP tool that creates or edits issues or PRs, whose title and body the
-/// pre-tool-use hook allows only when `devkit ticket render` (an issue) or
+/// MCP tool that creates or edits tickets or PRs, whose title and body the
+/// pre-tool-use hook allows only when `devkit ticket render` (a ticket) or
 /// `devkit pr render` (a PR) produced them in the same agent session.
 ///
-/// An issue entry naming its `tracker` also holds the call to that tracker's
+/// A ticket entry naming its `tracker` also holds the call to that tracker's
 /// `[ticket.fields]` levels, reading each field's values from the input keys
 /// `fields` maps it to.
 ///
@@ -581,7 +581,7 @@ pub struct HarnessSection {
     /// layer adds to a built-in rule's `programs` goes unchecked.
     #[serde(default)]
     pub commands: BTreeMap<String, CommandRule>,
-    /// MCP tools that create or edit issues, whose title and body must come
+    /// MCP tools that create or edit tickets, whose title and body must come
     /// from `devkit ticket render`. Merged across config layers by name.
     /// Enforces on its own presence, independent of `enforce_commands`.
     #[serde(default)]

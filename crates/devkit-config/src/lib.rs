@@ -85,7 +85,7 @@ pub struct Config {
     /// `{before,after}_<event>`.
     #[serde(default)]
     pub hooks: HooksConfig,
-    /// Files copied out of an issue worktree before `workspace end` removes it,
+    /// Files copied out of a ticket worktree before `workspace end` removes it,
     /// keyed by the name that labels the entry's progress step and its
     /// warnings.
     #[serde(default)]
@@ -2112,7 +2112,7 @@ impl std::fmt::Display for PrCreateState {
 /// `"${USER}/"`.
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct Defaults {
-    /// Directory issue worktrees are created under. Names a location on this
+    /// Directory ticket worktrees are created under. Names a location on this
     /// machine, so a relative value anchors to the directory of the config
     /// layer that declared it, even when that layer is the repository's main
     /// checkout. Defaults to the primary checkout's `_worktrees` sibling, e.g.
@@ -2164,7 +2164,7 @@ pub struct Defaults {
     #[serde(default)]
     pub require_pr_reviewer: bool,
     /// The `[templates.variables]` name whose `--arg` carries a PR's proof.
-    /// When set, an agent's `pr create` or `pr edit` in an issue worktree is
+    /// When set, an agent's `pr create` or `pr edit` in a ticket worktree is
     /// refused before the push unless that proof answers every item of the
     /// issue's `Done when` or `Acceptance criteria` section, each on a line
     /// starting with the item's number (`2. <evidence>`). An issue with no
@@ -2198,7 +2198,7 @@ pub struct Defaults {
     /// (`linked/**`) is walked through; write `linked/` to get the link.
     #[serde(default)]
     pub worktree_include: Vec<String>,
-    /// Write the issue summary file on every `workspace setup`, as though
+    /// Write the ticket summary file on every `workspace setup`, as though
     /// `--summary` were passed. `--summary` / `--no-summary` still win for one
     /// run. Its path and body come from `templates.ticket_summary_path` and
     /// `templates.ticket_summary`.
@@ -2452,7 +2452,7 @@ pub struct TaskConfig {
     /// read is an arg of the task, required unless a variable supplies a
     /// default. Minijinja's `default` filter and `is defined` do not make
     /// an arg optional. `ticket`, `issue`, `slug` and `branch` are
-    /// undefined outside an issue worktree, so a task run in both guards
+    /// undefined outside a ticket worktree, so a task run in both guards
     /// them with `{% if ticket is defined %}`. The program must be a plain
     /// string. A Doppler invocation is refused for `prd` the same as an
     /// app's `launch`. Mutually exclusive with `steps`.
@@ -2668,7 +2668,7 @@ impl From<&str> for VariableDecl {
     }
 }
 
-/// Config-driven minijinja templates for the issue-lifecycle strings. Each
+/// Config-driven minijinja templates for the ticket-lifecycle strings. Each
 /// `None` field falls back to its `DEFAULT_*` constant, which reproduces the
 /// historical hardcoded output. `variables` are user constants merged under
 /// every render context. Rendering is strict: an undefined variable is an
@@ -2769,7 +2769,7 @@ pub struct Templates {
     /// `--coauthor`, `;`-separated. Defaults to the subject, then the body
     /// after a blank line, then a `Co-authored-by` trailer per co-author.
     pub commit_message: Option<String>,
-    /// Where `workspace setup --summary` writes the issue summary file. A
+    /// Where `workspace setup --summary` writes the ticket summary file. A
     /// relative path is taken from `defaults.worktree_root`, so the file
     /// sits beside the worktree and outlives it, and is refused when there
     /// is no `worktree_root`. Context: the `ticket_summary` context below.

@@ -388,7 +388,7 @@
           "description": "State `pr create` opens a PR in when neither `--draft` nor\n`--ready` is given. Draft by default, so a new PR never lands in\nanyone's review queue until it is marked ready."
         },
         "pr_proof_variable": {
-          "description": "The `[templates.variables]` name whose `--arg` carries a PR's proof.\nWhen set, an agent's `pr create` or `pr edit` in an issue worktree is\nrefused before the push unless that proof answers every item of the\nissue's `Done when` or `Acceptance criteria` section, each on a line\nstarting with the item's number (`2. <evidence>`). An issue with no\nsuch section is refused too. `pr proof` runs the same check alone,\nwith no push and no PR. Unset by default.",
+          "description": "The `[templates.variables]` name whose `--arg` carries a PR's proof.\nWhen set, an agent's `pr create` or `pr edit` in a ticket worktree is\nrefused before the push unless that proof answers every item of the\nissue's `Done when` or `Acceptance criteria` section, each on a line\nstarting with the item's number (`2. <evidence>`). An issue with no\nsuch section is refused too. `pr proof` runs the same check alone,\nwith no push and no PR. Unset by default.",
           "type": [
             "string",
             "null"
@@ -409,7 +409,7 @@
         },
         "ticket_summary": {
           "default": false,
-          "description": "Write the issue summary file on every `workspace setup`, as though\n`--summary` were passed. `--summary` / `--no-summary` still win for one\nrun. Its path and body come from `templates.ticket_summary_path` and\n`templates.ticket_summary`.",
+          "description": "Write the ticket summary file on every `workspace setup`, as though\n`--summary` were passed. `--summary` / `--no-summary` still win for one\nrun. Its path and body come from `templates.ticket_summary_path` and\n`templates.ticket_summary`.",
           "type": "boolean"
         },
         "worktree_include": {
@@ -422,7 +422,7 @@
         },
         "worktree_root": {
           "default": "",
-          "description": "Directory issue worktrees are created under. Names a location on this\nmachine, so a relative value anchors to the directory of the config\nlayer that declared it, even when that layer is the repository's main\ncheckout. Defaults to the primary checkout's `_worktrees` sibling, e.g.\n`~/git/example_worktrees` beside `~/git/example`.",
+          "description": "Directory ticket worktrees are created under. Names a location on this\nmachine, so a relative value anchors to the directory of the config\nlayer that declared it, even when that layer is the repository's main\ncheckout. Defaults to the primary checkout's `_worktrees` sibling, e.g.\n`~/git/example_worktrees` beside `~/git/example`.",
           "type": "string"
         }
       },
@@ -849,7 +849,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/RenderedToolRule"
           },
-          "description": "MCP tools that create or edit issues, whose title and body must come\nfrom `devkit ticket render`. Merged across config layers by name.\nEnforces on its own presence, independent of `enforce_commands`.",
+          "description": "MCP tools that create or edit tickets, whose title and body must come\nfrom `devkit ticket render`. Merged across config layers by name.\nEnforces on its own presence, independent of `enforce_commands`.",
           "type": "object"
         },
         "unresolved_writes": {
@@ -1594,7 +1594,7 @@
       ]
     },
     "RenderedToolRule": {
-      "description": "One `[harness.ticket_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits issues or PRs, whose title and body the\npre-tool-use hook allows only when `devkit ticket render` (an issue) or\n`devkit pr render` (a PR) produced them in the same agent session.\n\nAn issue entry naming its `tracker` also holds the call to that tracker's\n`[ticket.fields]` levels, reading each field's values from the input keys\n`fields` maps it to.\n\n```toml\n[harness.ticket_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\ntracker    = \"linear\"\nfields     = { labels = [\"labels\", \"addLabels\"], priority = \"priority\", team = \"team\" }\n\n[harness.ticket_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\ntracker = \"github\"\nfields  = { labels = \"labels\", assignees = \"assignees\" }\n\n[harness.pr_tools.github-create]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\"]\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-update]\nservers = [\"*github*\"]\ntools   = [\"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
+      "description": "One `[harness.ticket_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an\nMCP tool that creates or edits tickets or PRs, whose title and body the\npre-tool-use hook allows only when `devkit ticket render` (a ticket) or\n`devkit pr render` (a PR) produced them in the same agent session.\n\nA ticket entry naming its `tracker` also holds the call to that tracker's\n`[ticket.fields]` levels, reading each field's values from the input keys\n`fields` maps it to.\n\n```toml\n[harness.ticket_tools.linear]\nservers    = [\"*linear*\"]\ntools      = [\"save_issue\"]\nabsent     = [\"id\"]\ntitle      = \"title\"\nbody       = \"description\"\nbody_patch = [\"patch\"]\ntracker    = \"linear\"\nfields     = { labels = [\"labels\", \"addLabels\"], priority = \"priority\", team = \"team\" }\n\n[harness.ticket_tools.github]\nservers = [\"*github*\"]\ntools   = [\"issue_write\"]\nequals  = { method = \"create\" }\ntitle   = \"title\"\nbody    = \"body\"\ntracker = \"github\"\nfields  = { labels = \"labels\", assignees = \"assignees\" }\n\n[harness.pr_tools.github-create]\nservers = [\"*github*\"]\ntools   = [\"create_pull_request\"]\ntitle   = \"title\"\nbody    = \"body\"\n\n[harness.pr_tools.github-update]\nservers = [\"*github*\"]\ntools   = [\"update_pull_request\"]\nabsent  = [\"pullNumber\"]\ntitle   = \"title\"\nbody    = \"body\"\n```",
       "properties": {
         "absent": {
           "default": [],
@@ -2113,7 +2113,7 @@
         },
         "run": {
           "default": [],
-          "description": "The command as one argv (program + args), run in the foreground with\nits exit code propagated. Every entry is a minijinja template over\n`{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `ticket`\n(also named `issue`), `slug`, `branch` from the worktree; any other name\nread is an arg of the task, required unless a variable supplies a\ndefault. Minijinja's `default` filter and `is defined` do not make\nan arg optional. `ticket`, `issue`, `slug` and `branch` are\nundefined outside an issue worktree, so a task run in both guards\nthem with `{% if ticket is defined %}`. The program must be a plain\nstring. A Doppler invocation is refused for `prd` the same as an\napp's `launch`. Mutually exclusive with `steps`.",
+          "description": "The command as one argv (program + args), run in the foreground with\nits exit code propagated. Every entry is a minijinja template over\n`{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `ticket`\n(also named `issue`), `slug`, `branch` from the worktree; any other name\nread is an arg of the task, required unless a variable supplies a\ndefault. Minijinja's `default` filter and `is defined` do not make\nan arg optional. `ticket`, `issue`, `slug` and `branch` are\nundefined outside a ticket worktree, so a task run in both guards\nthem with `{% if ticket is defined %}`. The program must be a plain\nstring. A Doppler invocation is refused for `prd` the same as an\napp's `launch`. Mutually exclusive with `steps`.",
           "items": {
             "$ref": "#/$defs/RunArg"
           },
@@ -2170,7 +2170,7 @@
       "type": "object"
     },
     "Templates": {
-      "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context. Rendering is strict: an undefined variable is an\nerror, so a typo surfaces on the first run.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ ticket }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ ticket }}: {{ input }}\"\npr_body            = \"Closes {{ ticket }}.\\n\\n{{ input }}\"\nticket_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`ticket_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
+      "description": "Config-driven minijinja templates for the ticket-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context. Rendering is strict: an undefined variable is an\nerror, so a typo surfaces on the first run.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ ticket }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ ticket }}: {{ input }}\"\npr_body            = \"Closes {{ ticket }}.\\n\\n{{ input }}\"\nticket_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`ticket_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
       "properties": {
         "branch": {
           "description": "Branch name created by `workspace setup`. Context: `prefix`, `ticket`\n(also named `issue`), `slug`, `short_slug`, `apps`. Defaults to\n`{{ prefix }}{{ slug }}`.",
@@ -2262,7 +2262,7 @@
           ]
         },
         "ticket_summary_path": {
-          "description": "Where `workspace setup --summary` writes the issue summary file. A\nrelative path is taken from `defaults.worktree_root`, so the file\nsits beside the worktree and outlives it, and is refused when there\nis no `worktree_root`. Context: the `ticket_summary` context below.\nDefaults to `{{ worktree }}/.devkit/TICKET_SUMMARY_{{ ticket }}.md`:\ninside the worktree, or the checkout `workspace setup --here` binds,\nwhere it stays untracked and goes when `workspace end` removes the\nworktree.",
+          "description": "Where `workspace setup --summary` writes the ticket summary file. A\nrelative path is taken from `defaults.worktree_root`, so the file\nsits beside the worktree and outlives it, and is refused when there\nis no `worktree_root`. Context: the `ticket_summary` context below.\nDefaults to `{{ worktree }}/.devkit/TICKET_SUMMARY_{{ ticket }}.md`:\ninside the worktree, or the checkout `workspace setup --here` binds,\nwhere it stays untracked and goes when `workspace end` removes the\nworktree.",
           "type": [
             "string",
             "null"
@@ -2863,7 +2863,7 @@
         "$ref": "#/$defs/PreserveConfig"
       },
       "default": {},
-      "description": "Files copied out of an issue worktree before `workspace end` removes it,\nkeyed by the name that labels the entry's progress step and its\nwarnings.",
+      "description": "Files copied out of a ticket worktree before `workspace end` removes it,\nkeyed by the name that labels the entry's progress step and its\nwarnings.",
       "type": "object"
     },
     "rules": {
