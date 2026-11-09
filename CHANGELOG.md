@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.31](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.30...v0.14.31) (2026-11-09)
+
+
+### Features
+
+* **pr:** print the verification section for a head ([3333d93](https://github.com/AbysmalBiscuit/devkit/commit/3333d93f0691d1d3ff0f7150b7a1f13da59e8518)), closes [#478](https://github.com/AbysmalBiscuit/devkit/issues/478)
+
+
+### Bug Fixes
+
+* rename the remaining issue names to ticket ([2dfd1d8](https://github.com/AbysmalBiscuit/devkit/commit/2dfd1d8ba608918735dcf780676f99ecec0d87ec))
+
 ## [0.14.30](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.29...v0.14.30) (2026-11-06)
 
 
