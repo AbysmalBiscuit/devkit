@@ -36,19 +36,37 @@ pub struct SetupArgs {
     pub config: Option<String>,
 }
 
-#[derive(serde::Serialize)]
 struct Prepared {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    issue: Option<String>,
+    ticket: Option<String>,
     worktree: String,
     branch: String,
     /// The summary file's path, present only when one was asked for.
-    #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
     /// The text the summary file gets, present only on `--dry-run --summary`,
     /// which writes no file to hold it.
-    #[serde(skip_serializing_if = "Option::is_none")]
     summary_text: Option<String>,
+}
+
+/// Emits `issue` beside `ticket`, for readers of the old field. A field that
+/// is `None` is left out.
+impl serde::Serialize for Prepared {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = s.serialize_map(None)?;
+        if let Some(ticket) = &self.ticket {
+            map.serialize_entry("ticket", ticket)?;
+            map.serialize_entry("issue", ticket)?;
+        }
+        map.serialize_entry("worktree", &self.worktree)?;
+        map.serialize_entry("branch", &self.branch)?;
+        if let Some(summary) = &self.summary {
+            map.serialize_entry("summary", summary)?;
+        }
+        if let Some(text) = &self.summary_text {
+            map.serialize_entry("summary_text", text)?;
+        }
+        map.end()
+    }
 }
 
 impl Prepared {
@@ -64,10 +82,10 @@ impl Prepared {
         Ok(())
     }
 
-    /// The terminal form. The summary text is the tracker's issue body, so each
+    /// The terminal form. The summary text is the tracker's own text, so each
     /// line is made printable; its line breaks stay real.
     fn terminal_report(&self) -> String {
-        let mut rows: Vec<_> = self.issue.iter().map(|i| ("issue", i.clone())).collect();
+        let mut rows: Vec<_> = self.ticket.iter().map(|t| ("ticket", t.clone())).collect();
         rows.push(("worktree", self.worktree.clone()));
         rows.push(("branch", self.branch.clone()));
         if let Some(s) = &self.summary {
@@ -623,7 +641,7 @@ fn bind_here(
     }
 
     let out = Prepared {
-        issue: Some(issue.to_string()),
+        ticket: Some(issue.to_string()),
         worktree: holder,
         branch,
         summary,
@@ -695,7 +713,7 @@ fn dry_run_report(
         _ => None,
     };
     let out = Prepared {
-        issue,
+        ticket: issue,
         worktree,
         branch,
         summary: summary.map(|p| p.display().to_string()),
@@ -900,7 +918,7 @@ fn setup(
     // and no unused reservation can be reclaimed by another session in the
     // meantime.
     let out = Prepared {
-        issue: issue_ref.map(|r| r.id),
+        ticket: issue_ref.map(|r| r.id),
         worktree: holder,
         branch,
         summary: summary_path,
@@ -1272,6 +1290,31 @@ mod tests {
             report.contains("first \\u{1b}]8;;https://evil\\u{7}line\nsecond line"),
             "{report:?}"
         );
+    }
+
+    #[test]
+    fn the_report_names_the_ticket_and_keeps_its_old_issue_field() {
+        let prepared = |ticket: Option<&str>| Prepared {
+            ticket: ticket.map(str::to_owned),
+            worktree: "/w".into(),
+            branch: "b".into(),
+            summary: None,
+            summary_text: None,
+        };
+
+        let json = serde_json::to_value(prepared(Some("ENG-7"))).unwrap();
+        assert_eq!(json["ticket"], "ENG-7", "{json}");
+        assert_eq!(
+            json["issue"], "ENG-7",
+            "older readers parse `issue`: {json}"
+        );
+        let report = prepared(Some("ENG-7")).terminal_report();
+        assert!(report.contains("ticket"), "{report}");
+        assert!(!report.contains("issue"), "{report}");
+
+        let json = serde_json::to_value(prepared(None)).unwrap();
+        assert!(json.get("ticket").is_none(), "{json}");
+        assert!(json.get("issue").is_none(), "{json}");
     }
 
     #[test]
