@@ -148,7 +148,7 @@ fn a_dirty_scratch_checkout_is_held() {
 
     assert!(wt.exists(), "a dirty worktree was removed: {output}");
     assert!(
-        output.contains("dirty") && !output.contains("not an issue worktree"),
+        output.contains("dirty") && !output.contains("not a ticket worktree"),
         "the tree alone holds the row: {output}"
     );
 }
@@ -200,4 +200,40 @@ fn a_failed_fetch_holds_a_scratch_checkout() {
 
     assert!(wt.exists(), "the worktree was removed: {output}");
     assert!(output.contains("fetch of origin/main failed"), "{output}");
+}
+
+/// A worktree an older devkit set up: its record is `.devkit/issue.toml` and
+/// its summary `ISSUE_SUMMARY_<ID>.md`, outside the worktree as a relative
+/// `issue_summary_path` puts it.
+#[test]
+fn a_worktree_an_older_devkit_made_reports_and_ends_with_its_summary() {
+    let fake = project();
+    let wt = worktree(&fake, "count-asks");
+    let summary = fake.project().join("wts").join("ISSUE_SUMMARY_ENG-50.md");
+    std::fs::write(&summary, "# ENG-50\n").unwrap();
+    std::fs::create_dir_all(wt.join(".devkit")).unwrap();
+    std::fs::write(wt.join(".devkit").join(".gitignore"), "*\n").unwrap();
+    std::fs::write(
+        wt.join(".devkit").join("issue.toml"),
+        format!(
+            "issue = \"ENG-50\"\nslug = \"count-asks\"\napps = []\nsummary = {:?}\n",
+            summary.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    serve_prs(&fake, &[]);
+
+    let status = fake.issue(&["status"]);
+    let text = String::from_utf8_lossy(&status.stdout);
+    assert!(status.status.success(), "{status:?}");
+    assert!(
+        text.contains("ENG-50"),
+        "the record's id is missing: {text}"
+    );
+
+    serve_prs(&fake, &[]);
+    let output = end(&fake);
+
+    assert!(!wt.exists(), "the worktree survived: {output}");
+    assert!(!summary.exists(), "the summary survived: {output}");
 }

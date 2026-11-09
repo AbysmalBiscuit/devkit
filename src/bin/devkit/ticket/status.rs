@@ -8,7 +8,7 @@ use devkit_common::{
 };
 use devkit_ticket::status::{self as st, IssueWorktree, StatusReport, TrackerInfo, Tree};
 
-use crate::issue::triage::{self, render};
+use crate::ticket::triage::{self, render};
 
 pub(crate) const COL_TREE: usize = 2;
 pub(crate) const COL_PR: usize = 3;
@@ -184,7 +184,7 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
     let ids_v: Vec<String> = d.issue_ids().to_vec();
     let disp = display_order(d.rows());
 
-    let mut lt = LiveTable::new("ISSUE WORKTREES", &triage::HEADERS, m);
+    let mut lt = LiveTable::new("TICKET WORKTREES", &triage::HEADERS, m);
     for (i, row) in d.rows().iter().enumerate() {
         // The link base is unknown until the tracker responds; links appear in
         // the final stdout render.
@@ -284,7 +284,7 @@ fn tracker_hint(t: &TrackerInfo) -> Option<String> {
     }
     if let Some(why) = devkit_common::tracker::unbuilt_reason(t.kind, t.declared, &t.reason) {
         return Some(format!(
-            "{why} — issue state gates stay closed, so nothing reports finished"
+            "{why} — ticket state gates stay closed, so nothing reports finished"
         ));
     }
     let generic = match t.kind {
@@ -298,7 +298,7 @@ fn tracker_hint(t: &TrackerInfo) -> Option<String> {
         }
         TrackerKind::None if t.declared => return None,
         TrackerKind::None => {
-            "No issue tracker devkit can read — issue state gates stay closed, so nothing \
+            "No issue tracker devkit can read — ticket state gates stay closed, so nothing \
              reports finished. Set `[tracker] kind` to name this project's tracker"
         }
     };

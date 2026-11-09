@@ -23,9 +23,9 @@ pub struct SetupArgs {
     pub apps: Vec<String>,
     pub dry_run: bool,
     /// Also write the issue summary file named by
-    /// `templates.issue_summary_path`.
+    /// `templates.ticket_summary_path`.
     pub summary: bool,
-    /// Skip that file for this run even when `defaults.issue_summary` is set.
+    /// Skip that file for this run even when `defaults.ticket_summary` is set.
     pub no_summary: bool,
     pub no_gitignore: bool,
     /// Keep the repository's hooks out of the `git worktree add`.
@@ -36,19 +36,37 @@ pub struct SetupArgs {
     pub config: Option<String>,
 }
 
-#[derive(serde::Serialize)]
 struct Prepared {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    issue: Option<String>,
+    ticket: Option<String>,
     worktree: String,
     branch: String,
     /// The summary file's path, present only when one was asked for.
-    #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
     /// The text the summary file gets, present only on `--dry-run --summary`,
     /// which writes no file to hold it.
-    #[serde(skip_serializing_if = "Option::is_none")]
     summary_text: Option<String>,
+}
+
+/// Emits `issue` beside `ticket`, for readers of the old field. A field that
+/// is `None` is left out.
+impl serde::Serialize for Prepared {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = s.serialize_map(None)?;
+        if let Some(ticket) = &self.ticket {
+            map.serialize_entry("ticket", ticket)?;
+            map.serialize_entry("issue", ticket)?;
+        }
+        map.serialize_entry("worktree", &self.worktree)?;
+        map.serialize_entry("branch", &self.branch)?;
+        if let Some(summary) = &self.summary {
+            map.serialize_entry("summary", summary)?;
+        }
+        if let Some(text) = &self.summary_text {
+            map.serialize_entry("summary_text", text)?;
+        }
+        map.end()
+    }
 }
 
 impl Prepared {
@@ -64,10 +82,10 @@ impl Prepared {
         Ok(())
     }
 
-    /// The terminal form. The summary text is the tracker's issue body, so each
+    /// The terminal form. The summary text is the tracker's own text, so each
     /// line is made printable; its line breaks stay real.
     fn terminal_report(&self) -> String {
-        let mut rows: Vec<_> = self.issue.iter().map(|i| ("issue", i.clone())).collect();
+        let mut rows: Vec<_> = self.ticket.iter().map(|t| ("ticket", t.clone())).collect();
         rows.push(("worktree", self.worktree.clone()));
         rows.push(("branch", self.branch.clone()));
         if let Some(s) = &self.summary {
@@ -84,7 +102,7 @@ impl Prepared {
 }
 
 /// Whether this run writes a summary file: each flag decides outright, and with
-/// neither `defaults.issue_summary` does.
+/// neither `defaults.ticket_summary` does.
 fn want_summary(args: &SetupArgs, cfg: &devkit_config::Config) -> bool {
     if args.summary {
         return true;
@@ -92,7 +110,7 @@ fn want_summary(args: &SetupArgs, cfg: &devkit_config::Config) -> bool {
     if args.no_summary {
         return false;
     }
-    cfg.defaults.issue_summary
+    cfg.defaults.ticket_summary
 }
 
 /// Write each prep file into `app_dir`. `content` is rendered as a minijinja
@@ -176,7 +194,7 @@ pub(crate) fn run_after_worktree_create(
     env: &[(&str, &str)],
     steps: &Steps,
 ) {
-    crate::issue::hooks::run_all(
+    crate::ticket::hooks::run_all(
         worktree,
         "after_worktree_create",
         hooks,
@@ -345,7 +363,7 @@ fn resolve_slug(
     }
     let issue = issue.context("pass an issue or --slug")?;
     if let Some(s) = &issue.slug {
-        return Ok(crate::issue::slug::cap(s, budget));
+        return Ok(crate::ticket::slug::cap(s, budget));
     }
     let title = match details {
         Some(d) => d.title.clone(),
@@ -354,7 +372,8 @@ fn resolve_slug(
             .with_context(|| format!("fetching the title for {}", issue.id))?
             .with_context(|| format!("no issue {} \u{2014} pass --slug", issue.id))?,
     };
-    let slug = crate::issue::slug::cap(&crate::issue::slug::from_title(&issue.id, &title)?, budget);
+    let slug =
+        crate::ticket::slug::cap(&crate::ticket::slug::from_title(&issue.id, &title)?, budget);
     eprintln!("slug from {}: {slug}", t.kind().as_str());
     Ok(slug)
 }
@@ -409,7 +428,7 @@ fn branch_budget(
     issue: &str,
     apps: &[String],
 ) -> Result<usize> {
-    let budget = crate::issue::slug::budget(
+    let budget = crate::ticket::slug::budget(
         cfg.templates.branch(),
         &probe_ctx(cfg, issue, apps, "", ""),
         vars,
@@ -434,7 +453,7 @@ fn short_slug(
     apps: &[String],
     slug: &str,
 ) -> Result<String> {
-    let budget = crate::issue::slug::budget(
+    let budget = crate::ticket::slug::budget(
         cfg.templates.worktree_dir(),
         &probe_ctx(cfg, issue, apps, slug, ""),
         vars,
@@ -444,7 +463,7 @@ fn short_slug(
         None,
     )
     .context("measuring the `worktree_dir` template")?;
-    Ok(crate::issue::slug::cap(slug, budget))
+    Ok(crate::ticket::slug::cap(slug, budget))
 }
 
 /// A declared tracker owns parsing completely. An undeclared one keeps
@@ -454,7 +473,7 @@ fn parse_input(resolved: &Resolved, input: &str) -> Result<IssueRef> {
     if resolved.declared {
         resolved.tracker.issue_ref(input)
     } else {
-        Ok(crate::issue::slug::parse_issue_ref(input))
+        Ok(crate::ticket::slug::parse_issue_ref(input))
     }
 }
 
@@ -582,7 +601,7 @@ fn bind_here(
     let summary = match &details {
         Some(d) => {
             let tracker_summary = read_tracker_summary(t, issue)?;
-            let (path, written) = crate::issue::summary::write(
+            let (path, written) = crate::ticket::summary::write(
                 cfg,
                 d,
                 tracker_summary.as_deref(),
@@ -622,7 +641,7 @@ fn bind_here(
     }
 
     let out = Prepared {
-        issue: Some(issue.to_string()),
+        ticket: Some(issue.to_string()),
         worktree: holder,
         branch,
         summary,
@@ -630,7 +649,7 @@ fn bind_here(
     };
     out.report()?;
     if fires_setup {
-        crate::issue::event::fire_inline(
+        crate::ticket::event::fire_inline(
             Path::new(start),
             args.config.as_deref().map(Path::new),
             IssueEvent::Setup,
@@ -676,12 +695,12 @@ fn dry_run_report(
         apps,
     } = plan;
     let summary = details
-        .map(|d| crate::issue::summary::plan_path(cfg, d, &worktree, &branch, slug, apps))
+        .map(|d| crate::ticket::summary::plan_path(cfg, d, &worktree, &branch, slug, apps))
         .transpose()?;
     let summary_text = match (details.filter(|_| args.summary), issue.as_deref()) {
         (Some(d), Some(id)) => {
             let tracker_summary = read_tracker_summary(t, id)?;
-            Some(crate::issue::summary::text(
+            Some(crate::ticket::summary::text(
                 cfg,
                 d,
                 tracker_summary.as_deref(),
@@ -694,7 +713,7 @@ fn dry_run_report(
         _ => None,
     };
     let out = Prepared {
-        issue,
+        ticket: issue,
         worktree,
         branch,
         summary: summary.map(|p| p.display().to_string()),
@@ -791,7 +810,7 @@ fn setup(
     // Resolved before anything is created, so a summary path that cannot be
     // rendered fails while there is no worktree to clean up.
     if let Some(d) = &details {
-        crate::issue::summary::plan_path(cfg, d, &holder, &branch, &slug, &args.apps)?;
+        crate::ticket::summary::plan_path(cfg, d, &holder, &branch, &slug, &args.apps)?;
     }
     anyhow::ensure!(
         !worktree.exists(),
@@ -818,7 +837,15 @@ fn setup(
     })?;
     let vcs = Vcs::at(&primary);
     if vcs.has_branch(&primary, &branch)? {
-        anyhow::bail!("branch {branch} already exists — let /issue-setup decide how to proceed");
+        let bind = if issue.is_empty() {
+            String::new()
+        } else {
+            format!(", run `workspace setup --here {issue}` in a checkout of it to bind it")
+        };
+        anyhow::bail!(
+            "branch {branch} already exists. `workspace status` shows the worktree that \
+             has it{bind}, or pass another `--slug` for a new branch"
+        );
     }
     steps.during_result("Creating worktree...", || {
         vcs.create_worktree(&NewWorktree {
@@ -835,7 +862,7 @@ fn setup(
     // template said at setup time.
     let summary_path = match &details {
         Some(d) => {
-            let (path, written) = crate::issue::summary::write(
+            let (path, written) = crate::ticket::summary::write(
                 cfg,
                 d,
                 tracker_summary.as_deref(),
@@ -899,7 +926,7 @@ fn setup(
     // and no unused reservation can be reclaimed by another session in the
     // meantime.
     let out = Prepared {
-        issue: issue_ref.map(|r| r.id),
+        ticket: issue_ref.map(|r| r.id),
         worktree: holder,
         branch,
         summary: summary_path,
@@ -920,7 +947,7 @@ fn setup(
         &steps,
     );
     if fires_setup {
-        crate::issue::event::fire_inline(
+        crate::ticket::event::fire_inline(
             Path::new(&start),
             args.config.as_deref().map(Path::new),
             IssueEvent::Setup,
@@ -1041,7 +1068,7 @@ mod tests {
             ..Templates::default()
         });
         let budget = branch_budget(&cfg, &novars(), "142", &[]).unwrap();
-        let slug = crate::issue::slug::cap("group-sync-includes-file-lists-in-the-output", budget);
+        let slug = crate::ticket::slug::cap("group-sync-includes-file-lists-in-the-output", budget);
         assert_eq!(slug, "group-sync-includes-file-lists-in-the");
         let dir_slug = short_slug(&cfg, &novars(), "142", &[], &slug).unwrap();
         assert_eq!(dir_slug, "group-sync-includes-file");
@@ -1271,6 +1298,31 @@ mod tests {
             report.contains("first \\u{1b}]8;;https://evil\\u{7}line\nsecond line"),
             "{report:?}"
         );
+    }
+
+    #[test]
+    fn the_report_names_the_ticket_and_keeps_its_old_issue_field() {
+        let prepared = |ticket: Option<&str>| Prepared {
+            ticket: ticket.map(str::to_owned),
+            worktree: "/w".into(),
+            branch: "b".into(),
+            summary: None,
+            summary_text: None,
+        };
+
+        let json = serde_json::to_value(prepared(Some("ENG-7"))).unwrap();
+        assert_eq!(json["ticket"], "ENG-7", "{json}");
+        assert_eq!(
+            json["issue"], "ENG-7",
+            "older readers parse `issue`: {json}"
+        );
+        let report = prepared(Some("ENG-7")).terminal_report();
+        assert!(report.contains("ticket"), "{report}");
+        assert!(!report.contains("issue"), "{report}");
+
+        let json = serde_json::to_value(prepared(None)).unwrap();
+        assert!(json.get("ticket").is_none(), "{json}");
+        assert!(json.get("issue").is_none(), "{json}");
     }
 
     #[test]

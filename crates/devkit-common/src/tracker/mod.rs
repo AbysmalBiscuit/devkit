@@ -154,7 +154,7 @@ pub trait Tracker: Send + Sync {
     fn title(&self, id: &str) -> Result<Option<String>>;
     fn details(&self, id: &str) -> Result<Option<IssueDetails>>;
     /// The issue's summary as the tracker holds it, written verbatim as the
-    /// issue summary file in place of the `issue_summary` template. `None`
+    /// issue summary file in place of the `ticket_summary` template. `None`
     /// when the tracker keeps no summary.
     fn summary(&self, _id: &str) -> Result<Option<String>> {
         Ok(None)

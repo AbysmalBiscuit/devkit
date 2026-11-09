@@ -13,8 +13,8 @@ use devkit_todo::{
 
 use super::{push, store::Store, tickets};
 use crate::{
-    issue::create::{self, CreateArgs},
     template::{FieldArgs, VarArgs},
+    ticket::create::{self, CreateArgs},
 };
 
 /// Where a promote runs and whom for.

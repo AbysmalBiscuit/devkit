@@ -14,7 +14,7 @@ use devkit_common::{
 };
 use devkit_ticket::status::{IssueWorktree, StatusReport, Tree, gather_with, label, tree_of};
 
-use crate::issue::triage::render;
+use crate::ticket::triage::render;
 
 fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWorktree> {
     let mut chosen = Vec::new();
@@ -68,7 +68,7 @@ fn confirm(label: &str) -> bool {
 /// What the record holds that outlives the worktree, read before the removal
 /// takes the record with it: the summary file `workspace setup` wrote, and the
 /// baseline this worktree compared against. The summary comes from the record
-/// rather than being re-derived, so a `issue_summary_path` template edited
+/// rather than being re-derived, so a `ticket_summary_path` template edited
 /// since setup cannot leave the old file behind.
 /// A record that exists and cannot be read is a refusal, not a worktree
 /// without one. Reading it as "pins nothing" would remove the worktree without
@@ -312,7 +312,7 @@ fn removed_in_order(
 
 /// The `before_worktree_remove` and `after_worktree_remove` render context
 /// for each approved worktree, keyed by its path. Built before the removal
-/// phase: `issue`, `slug` and `apps` come from `.devkit/issue.toml`, which the
+/// phase: `issue`, `slug` and `apps` come from `.devkit/ticket.toml`, which the
 /// removal deletes along with everything else in the worktree.
 fn remove_contexts(
     approved: &[IssueWorktree],
@@ -327,7 +327,7 @@ fn remove_contexts(
             let record = devkit_common::record::read(wt);
             (
                 row.worktree.clone(),
-                crate::issue::preserve::context(
+                crate::ticket::preserve::context(
                     wt,
                     &row.branch,
                     record.as_ref(),
@@ -390,7 +390,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
-            "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
+            "--clean-worktree needs one or more selectors (ticket id, branch, or worktree path)"
         );
         let report = gather_selected(&steps, start, ids, &tracker, &forge, pr_only)?;
         render(&report, false);
@@ -409,7 +409,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
         render(&report, false);
         if pr_only {
             println!(
-                "--pr-only: the {} state and issue-id gates are skipped.",
+                "--pr-only: the {} state and ticket-id gates are skipped.",
                 label(report.tracker.kind)
             );
         }
@@ -457,7 +457,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
     // Phase 2: serial, and complete before the first removal. That ordering is
     // what makes a destination collision resolve in worktree order and a
     // `required` failure surface while every file still exists.
-    let entries = crate::issue::preserve::preserve_entries(sel.config.as_ref(), no_preserve);
+    let entries = crate::ticket::preserve::preserve_entries(sel.config.as_ref(), no_preserve);
     // The status report's spelling of each worktree path, never a canonicalized
     // one. Canonicalizing on Windows yields a verbatim `\\?\` prefix, which
     // compares unequal to the drive prefix a destination carries, so the
@@ -510,7 +510,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
             // preserve nothing from a repository on a network share.
             let wt = Path::new(&row.worktree);
             let record = devkit_common::record::read(wt);
-            let ctx = crate::issue::preserve::context(
+            let ctx = crate::ticket::preserve::context(
                 wt,
                 &row.branch,
                 record.as_ref(),
@@ -520,7 +520,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
             );
             let out = steps.during_ok(&format!("Preserving {label}..."), || {
                 let out =
-                    crate::issue::preserve::run_for(wt, &entries, &ctx, &vars, &removal_roots);
+                    crate::ticket::preserve::run_for(wt, &entries, &ctx, &vars, &removal_roots);
                 let ok = out.required_failure.is_none();
                 (out, ok)
             });
@@ -543,7 +543,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
         let Some(ctx) = remove_ctxs.get(&row.worktree) else {
             continue;
         };
-        crate::issue::hooks::run_all(
+        crate::ticket::hooks::run_all(
             Path::new(&row.worktree),
             "before_worktree_remove",
             before_worktree_remove,
@@ -613,7 +613,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
                     let Some(ctx) = remove_ctxs.get(wt) else {
                         continue;
                     };
-                    crate::issue::hooks::run_all(
+                    crate::ticket::hooks::run_all(
                         root,
                         "after_worktree_remove",
                         after_worktree_remove,
@@ -624,7 +624,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
                     );
                 }
                 let ctx = end_context(&removed, &prefix, &wt_root, Some(root));
-                crate::issue::hooks::run_all(
+                crate::ticket::hooks::run_all(
                     root,
                     "after_end",
                     after_end,
@@ -868,7 +868,7 @@ mod tests {
             wt.to_str().unwrap(),
         ]);
         std::fs::create_dir_all(wt.join(".devkit")).unwrap();
-        std::fs::write(wt.join(".devkit").join("issue.toml"), "issue = \n").unwrap();
+        std::fs::write(wt.join(".devkit").join("ticket.toml"), "issue = \n").unwrap();
         // The self-ignore every real record write drops beside the record.
         // Without it the directory is untracked, the dirty gate answers first,
         // and the refusal under test never runs.
@@ -882,7 +882,7 @@ mod tests {
         )
         .unwrap_err();
         let msg = format!("{err:#}");
-        assert!(msg.contains("issue.toml"), "{msg}");
+        assert!(msg.contains("ticket.toml"), "{msg}");
         assert!(wt.exists(), "the worktree survives a refusal");
 
         cleanup(
@@ -1120,10 +1120,10 @@ mod tests {
             to: "relative/path".into(),
             required: true,
         };
-        let out = crate::issue::preserve::run_for(
+        let out = crate::ticket::preserve::run_for(
             &wt,
             &[("notes".to_string(), &entry)],
-            &crate::issue::preserve::context(&wt, "eng-3", None, "", dir.path(), Some(&main)),
+            &crate::ticket::preserve::context(&wt, "eng-3", None, "", dir.path(), Some(&main)),
             &std::collections::BTreeMap::new(),
             &[],
         );

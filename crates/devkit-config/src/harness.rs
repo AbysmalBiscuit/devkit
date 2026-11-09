@@ -256,12 +256,12 @@ pub struct CommandRule {
     pub severity: Severity,
 }
 
-/// One `[harness.issue_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an
-/// MCP tool that creates or edits issues or PRs, whose title and body the
-/// pre-tool-use hook allows only when `devkit ticket render` (an issue) or
+/// One `[harness.ticket_tools.<name>]` or `[harness.pr_tools.<name>]` entry: an
+/// MCP tool that creates or edits tickets or PRs, whose title and body the
+/// pre-tool-use hook allows only when `devkit ticket render` (a ticket) or
 /// `devkit pr render` (a PR) produced them in the same agent session.
 ///
-/// An issue entry naming its `tracker` also holds the call to that tracker's
+/// A ticket entry naming its `tracker` also holds the call to that tracker's
 /// `[ticket.fields]` levels, reading each field's values from the input keys
 /// `fields` maps it to.
 ///
@@ -269,7 +269,7 @@ pub struct CommandRule {
 /// # use devkit_config::{RenderedToolRule, TrackerKind};
 /// # use serde_json::json;
 /// # let doc: toml::Table = toml::from_str(r#"
-/// [harness.issue_tools.linear]
+/// [harness.ticket_tools.linear]
 /// servers    = ["*linear*"]
 /// tools      = ["save_issue"]
 /// absent     = ["id"]
@@ -279,7 +279,7 @@ pub struct CommandRule {
 /// tracker    = "linear"
 /// fields     = { labels = ["labels", "addLabels"], priority = "priority", team = "team" }
 ///
-/// [harness.issue_tools.github]
+/// [harness.ticket_tools.github]
 /// servers = ["*github*"]
 /// tools   = ["issue_write"]
 /// equals  = { method = "create" }
@@ -304,11 +304,11 @@ pub struct CommandRule {
 /// # let rule = |table: &str, name: &str| -> RenderedToolRule {
 /// #     doc["harness"][table][name].clone().try_into().unwrap()
 /// # };
-/// # assert!(rule("issue_tools", "linear").matches(Some("claude.ai Linear"), "save_issue"));
-/// # assert!(rule("issue_tools", "github").is_create(&json!({"method": "create"})));
-/// # assert_eq!(rule("issue_tools", "linear").tracker, Some(TrackerKind::Linear));
-/// # assert_eq!(rule("issue_tools", "linear").fields["priority"].keys(), ["priority"]);
-/// # assert_eq!(rule("issue_tools", "linear").fields["labels"].keys(), ["labels", "addLabels"]);
+/// # assert!(rule("ticket_tools", "linear").matches(Some("claude.ai Linear"), "save_issue"));
+/// # assert!(rule("ticket_tools", "github").is_create(&json!({"method": "create"})));
+/// # assert_eq!(rule("ticket_tools", "linear").tracker, Some(TrackerKind::Linear));
+/// # assert_eq!(rule("ticket_tools", "linear").fields["priority"].keys(), ["priority"]);
+/// # assert_eq!(rule("ticket_tools", "linear").fields["labels"].keys(), ["labels", "addLabels"]);
 /// # let create = rule("pr_tools", "github-create");
 /// # assert!(!create.matches(Some("github"), "update_pull_request"));
 /// # assert!(create.is_create(&json!({"pullNumber": 5})));
@@ -345,7 +345,7 @@ pub struct RenderedToolRule {
     /// `false` turns off an entry a parent layer declared.
     #[serde(default = "enabled_default")]
     pub enabled: bool,
-    /// The tracker an `issue_tools` entry writes to. Its
+    /// The tracker a `ticket_tools` entry writes to. Its
     /// `[ticket.fields.<tracker>]` levels then apply to the call, unless
     /// `[tracker] kind` names another tracker or, on GitHub, the call's
     /// `owner`/`repo` is not `[github] issues_repo`. Without it the call gets
@@ -581,11 +581,11 @@ pub struct HarnessSection {
     /// layer adds to a built-in rule's `programs` goes unchecked.
     #[serde(default)]
     pub commands: BTreeMap<String, CommandRule>,
-    /// MCP tools that create or edit issues, whose title and body must come
+    /// MCP tools that create or edit tickets, whose title and body must come
     /// from `devkit ticket render`. Merged across config layers by name.
     /// Enforces on its own presence, independent of `enforce_commands`.
     #[serde(default)]
-    pub issue_tools: BTreeMap<String, RenderedToolRule>,
+    pub ticket_tools: BTreeMap<String, RenderedToolRule>,
     /// MCP tools that open or edit PRs, whose title and body must come from
     /// `devkit pr render`. Merged across config layers by name.
     /// Enforces on its own presence, independent of `enforce_commands`.
@@ -619,7 +619,7 @@ impl Default for HarnessSection {
             unsupported_language: PolicyAction::Block,
             script_files: PolicyAction::Allow,
             commands: BTreeMap::new(),
-            issue_tools: BTreeMap::new(),
+            ticket_tools: BTreeMap::new(),
             pr_tools: BTreeMap::new(),
             app_match: AppMatch::default(),
             log: LogSection::default(),

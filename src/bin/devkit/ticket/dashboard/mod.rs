@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use devkit_common::vcs::{Vcs, VersionControl};
 
-use crate::issue::{prs, triage};
+use crate::ticket::{prs, triage};
 
 mod bucket;
 mod cache;
@@ -12,10 +12,10 @@ mod data;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Aggregate {
     /// Everything up to each bucket's end: running totals of commits and PRs,
-    /// and each issue's status as of the bucket's end.
+    /// and each ticket's status as of the bucket's end.
     Cumulative,
     /// Only what happened inside each bucket: commits and PRs in it, and
-    /// issues entering each status in it.
+    /// tickets entering each status in it.
     Period,
 }
 
@@ -45,7 +45,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
 
     // At-a-glance: worktree triage, then my PRs + PRs awaiting my review.
-    let report = crate::issue::status::gather_live(&start, &[], args.config.as_deref())?;
+    let report = crate::ticket::status::gather_live(&start, &[], args.config.as_deref())?;
     triage::render(&report, false);
     println!();
     // The PR tables are a secondary panel; if gh is unavailable the rest of the

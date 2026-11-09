@@ -6,6 +6,7 @@ use devkit_common::{
     slack,
     tracker::{Resolved, TrackerKind, linear},
 };
+use devkit_config::renamed::{self, Renamed};
 use strum::IntoEnumIterator;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -208,10 +209,10 @@ fn tracker_check(r: &Resolved) -> Check {
             if r.declared || r.tracker.ready() {
                 Check::Ok(detail)
             } else if r.unbuilt_reason().is_some() {
-                Check::Warn(format!("{detail}; issue state gates stay closed"))
+                Check::Warn(format!("{detail}; ticket state gates stay closed"))
             } else {
                 Check::Warn(format!(
-                    "{detail}; issue state gates stay closed — set `[tracker] kind` \
+                    "{detail}; ticket state gates stay closed — set `[tracker] kind` \
                      to name this project's tracker"
                 ))
             }
@@ -263,7 +264,7 @@ fn tasks_row(start: &std::path::Path) -> Option<Row> {
 /// that the project and its single-select field exist, hold every status the
 /// events name, and that the token may read them. None when no event is
 /// configured or the config does not load, which the `config` row reports.
-fn issue_events_row(
+fn ticket_events_row(
     start: &std::path::Path,
     selection: &(Resolved, devkit_common::forge::Resolved),
     steps: &Steps,
@@ -305,7 +306,7 @@ fn issue_events_row(
         }
     };
     Some(Row {
-        key: "issue_events",
+        key: "ticket_events",
         data: serde_json::Value::Null,
         source: Source::Unset,
         check,
@@ -589,7 +590,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
         harness_log_row(),
     ];
     rows.extend(tasks_row(std::path::Path::new(".")));
-    rows.extend(issue_events_row(
+    rows.extend(ticket_events_row(
         std::path::Path::new("."),
         &selection,
         steps,
@@ -1151,10 +1152,17 @@ fn print_human(rows: &[Row]) {
     }
 }
 
+/// Rows renamed from their `issue_` spelling. The JSON repeats each under its
+/// old key, so readers of the old key keep working.
+const RENAMED_KEYS: [Renamed; 1] = [Renamed {
+    old: "issue_events",
+    new: "ticket_events",
+}];
+
 fn print_json(rows: &[Row]) {
     let arr: Vec<_> = rows
         .iter()
-        .map(|r| {
+        .flat_map(|r| {
             let (status, detail): (&str, Option<String>) = match &r.check {
                 Check::Ok(d) => ("ok", Some(d.clone())),
                 Check::Warn(d) => ("warn", Some(d.clone())),
@@ -1176,7 +1184,12 @@ fn print_json(rows: &[Row]) {
                     target.insert(k.clone(), v.clone());
                 }
             }
-            obj
+            let old = renamed::old(&RENAMED_KEYS, r.key).map(|old| {
+                let mut alias = obj.clone();
+                alias["key"] = old.into();
+                alias
+            });
+            std::iter::once(obj).chain(old)
         })
         .collect();
     println!("{}", serde_json::to_string_pretty(&arr).unwrap());

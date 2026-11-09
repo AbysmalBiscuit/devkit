@@ -134,7 +134,7 @@ fn up_inside_a_baseline_neither_bootstraps_nor_pins() {
 
     assert_eq!(slots(&root), vec![baseline.clone()], "a baseline nested");
     assert!(
-        !baseline.join(".devkit").join("issue.toml").exists(),
+        !baseline.join(".devkit").join("ticket.toml").exists(),
         "an issue record was written into a baseline"
     );
 }
@@ -163,7 +163,7 @@ fn a_baseline_dry_run_builds_nothing() {
     let root = tmp.path().join("proj_worktrees").join("_baselines");
     assert!(!root.exists(), "a dry run created {}", root.display());
     assert!(
-        !wt.join(".devkit").join("issue.toml").exists(),
+        !wt.join(".devkit").join("ticket.toml").exists(),
         "a dry run pinned the worktree"
     );
     let stdout = String::from_utf8_lossy(&out.stdout);

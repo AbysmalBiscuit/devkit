@@ -1,7 +1,7 @@
 //! Render receipts: an empty file per title and per body `ticket render` or
 //! `pr render` produced in an agent session, named by the digest of its
-//! text. The pre-tool-use hook allows an issue-writing MCP call only when its
-//! text has an issue receipt.
+//! text. The pre-tool-use hook allows a ticket-writing MCP call only when its
+//! text has a ticket receipt.
 
 use std::{
     path::{Path, PathBuf},
@@ -12,20 +12,30 @@ use anyhow::{Context, Result, bail};
 use devkit_common::{caller::HARNESS_SESSION_VARS, digest, gitignore, vcs::Checkout};
 
 /// What a receipt vouches for. Each kind has its own store, so a PR render
-/// never vouches for an issue write.
+/// never vouches for a ticket write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Kind {
-    Issue,
+    Ticket,
     Pr,
 }
 
 impl Kind {
-    pub(crate) const ALL: [Self; 2] = [Self::Issue, Self::Pr];
+    pub(crate) const ALL: [Self; 2] = [Self::Ticket, Self::Pr];
 
     fn dir(self) -> &'static str {
         match self {
-            Self::Issue => "issue-receipts",
+            Self::Ticket => "ticket-receipts",
             Self::Pr => "pr-receipts",
+        }
+    }
+
+    /// Where an older devkit filed this kind's receipts. Lookups, session end
+    /// and the stale sweep still read it, so an upgrade between a render and
+    /// its call passes and leaves nothing behind.
+    fn legacy_dir(self) -> Option<&'static str> {
+        match self {
+            Self::Ticket => Some("issue-receipts"),
+            Self::Pr => None,
         }
     }
 }
@@ -108,16 +118,30 @@ pub(crate) fn store_root(checkout: &Checkout) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+fn store_dir(checkout: &Path, dir: &str) -> PathBuf {
+    checkout.join(".devkit").join(dir)
+}
+
 fn receipts_root(checkout: &Path, kind: Kind) -> PathBuf {
-    checkout.join(".devkit").join(kind.dir())
+    store_dir(checkout, kind.dir())
+}
+
+/// [`receipts_root`], then the store an older devkit filed `kind` under.
+fn receipts_roots(checkout: &Path, kind: Kind) -> impl Iterator<Item = PathBuf> + '_ {
+    std::iter::once(receipts_root(checkout, kind))
+        .chain(kind.legacy_dir().map(|dir| store_dir(checkout, dir)))
 }
 
 pub(crate) fn session_dir(checkout: &Path, kind: Kind, session: &str) -> PathBuf {
     receipts_root(checkout, kind).join(session)
 }
 
+fn receipt_name(field: Field, text: &str) -> String {
+    format!("{}{}", field.prefix(), hex(text))
+}
+
 fn receipt_path(checkout: &Path, kind: Kind, session: &str, field: Field, text: &str) -> PathBuf {
-    session_dir(checkout, kind, session).join(format!("{}{}", field.prefix(), hex(text)))
+    session_dir(checkout, kind, session).join(receipt_name(field, text))
 }
 
 /// Refuse an invalid session id, and a store that is not a plain directory.
@@ -134,7 +158,7 @@ fn check_store(checkout: &Path, kind: Kind, session: &str) -> Result<()> {
 
 fn check_dirs(checkout: &Path, kind: Kind) -> Result<()> {
     let devkit = checkout.join(".devkit");
-    for dir in [devkit.clone(), receipts_root(checkout, kind)] {
+    for dir in std::iter::once(devkit.clone()).chain(receipts_roots(checkout, kind)) {
         let Ok(meta) = std::fs::symlink_metadata(&dir) else {
             continue;
         };
@@ -180,9 +204,17 @@ pub(crate) fn has(
     text: &str,
 ) -> Result<bool> {
     check_store(checkout, kind, session)?;
-    let path = receipt_path(checkout, kind, session, field, text);
-    path.try_exists()
-        .with_context(|| format!("reading {}", path.display()))
+    let name = receipt_name(field, text);
+    for root in receipts_roots(checkout, kind) {
+        let path = root.join(session).join(&name);
+        if path
+            .try_exists()
+            .with_context(|| format!("reading {}", path.display()))?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Record a rendered `title` and `body` for every agent session in the
@@ -220,14 +252,16 @@ pub(crate) fn clear_session(checkout: &Path, session: &str) -> Result<()> {
             first_err.get_or_insert(e);
             continue;
         }
-        let dir = session_dir(checkout, kind, session);
-        match std::fs::remove_dir_all(&dir) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                first_err.get_or_insert_with(|| {
-                    anyhow::Error::new(e).context(format!("removing {}", dir.display()))
-                });
+        for root in receipts_roots(checkout, kind) {
+            let dir = root.join(session);
+            match std::fs::remove_dir_all(&dir) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    first_err.get_or_insert_with(|| {
+                        anyhow::Error::new(e).context(format!("removing {}", dir.display()))
+                    });
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
     first_err.map_or(Ok(()), Err)
@@ -236,19 +270,20 @@ pub(crate) fn clear_session(checkout: &Path, session: &str) -> Result<()> {
 /// Delete every session directory last written to more than `older_than` ago.
 /// One that cannot be read or removed is left for the next sweep.
 pub(crate) fn sweep_stale(checkout: &Path, kind: Kind, older_than: Duration) -> Result<()> {
-    let root = receipts_root(checkout, kind);
-    let entries = match std::fs::read_dir(&root) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", root.display())),
-    };
-    for entry in entries.flatten() {
-        let stale = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > older_than));
-        if stale {
-            let _ = std::fs::remove_dir_all(entry.path());
+    for root in receipts_roots(checkout, kind) {
+        let entries = match std::fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).with_context(|| format!("reading {}", root.display())),
+        };
+        for entry in entries.flatten() {
+            let stale = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > older_than));
+            if stale {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
         }
     }
     Ok(())
@@ -306,11 +341,11 @@ mod tests {
     fn a_written_pair_is_found_field_by_field() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
-        write(d, Kind::Issue, "S", "T", "B").unwrap();
-        assert!(has(d, Kind::Issue, "S", Field::Title, "T").unwrap());
-        assert!(has(d, Kind::Issue, "S", Field::Body, "B ").unwrap());
-        assert!(!has(d, Kind::Issue, "S", Field::Body, "T").unwrap());
-        assert!(!has(d, Kind::Issue, "S2", Field::Title, "T").unwrap());
+        write(d, Kind::Ticket, "S", "T", "B").unwrap();
+        assert!(has(d, Kind::Ticket, "S", Field::Title, "T").unwrap());
+        assert!(has(d, Kind::Ticket, "S", Field::Body, "B ").unwrap());
+        assert!(!has(d, Kind::Ticket, "S", Field::Body, "T").unwrap());
+        assert!(!has(d, Kind::Ticket, "S2", Field::Title, "T").unwrap());
         assert!(!has(d, Kind::Pr, "S", Field::Title, "T").unwrap());
         assert!(d.join(".devkit/.gitignore").exists());
     }
@@ -318,7 +353,7 @@ mod tests {
     #[test]
     fn write_refuses_an_invalid_session() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(write(dir.path(), Kind::Issue, "../x", "T", "B").is_err());
+        assert!(write(dir.path(), Kind::Ticket, "../x", "T", "B").is_err());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
@@ -326,15 +361,15 @@ mod tests {
     fn clear_session_removes_only_that_session() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
-        write(d, Kind::Issue, "S1", "T", "B").unwrap();
+        write(d, Kind::Ticket, "S1", "T", "B").unwrap();
         write(d, Kind::Pr, "S1", "T", "B").unwrap();
-        write(d, Kind::Issue, "S2", "T", "B").unwrap();
+        write(d, Kind::Ticket, "S2", "T", "B").unwrap();
         clear_session(d, "S1").unwrap();
-        assert!(!session_dir(d, Kind::Issue, "S1").exists());
+        assert!(!session_dir(d, Kind::Ticket, "S1").exists());
         assert!(!session_dir(d, Kind::Pr, "S1").exists());
-        assert!(session_dir(d, Kind::Issue, "S2").exists());
+        assert!(session_dir(d, Kind::Ticket, "S2").exists());
         clear_session(d, "..").unwrap();
-        assert!(session_dir(d, Kind::Issue, "S2").exists());
+        assert!(session_dir(d, Kind::Ticket, "S2").exists());
     }
 
     #[cfg(unix)]
@@ -342,36 +377,57 @@ mod tests {
     fn clear_session_reports_a_symlinked_kind_and_clears_the_others() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
-        write(d, Kind::Issue, "S1", "T", "B").unwrap();
+        write(d, Kind::Ticket, "S1", "T", "B").unwrap();
         let outside = tempfile::tempdir().unwrap();
         std::fs::create_dir(outside.path().join("S1")).unwrap();
         std::os::unix::fs::symlink(outside.path(), receipts_root(d, Kind::Pr)).unwrap();
         let err = clear_session(d, "S1").unwrap_err();
         assert!(format!("{err:#}").contains("symlink"), "{err:#}");
         assert!(outside.path().join("S1").exists());
-        assert!(!session_dir(d, Kind::Issue, "S1").exists());
+        assert!(!session_dir(d, Kind::Ticket, "S1").exists());
     }
 
     #[test]
     fn sweep_drops_only_old_sessions() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
-        write(d, Kind::Issue, "old", "T", "B").unwrap();
-        write(d, Kind::Issue, "fresh", "T", "B").unwrap();
+        write(d, Kind::Ticket, "old", "T", "B").unwrap();
+        write(d, Kind::Ticket, "fresh", "T", "B").unwrap();
         backdate(
-            &session_dir(d, Kind::Issue, "old"),
+            &session_dir(d, Kind::Ticket, "old"),
             Duration::from_secs(8 * 24 * 60 * 60),
         );
-        sweep_stale(d, Kind::Issue, STALE_AFTER).unwrap();
-        assert!(!session_dir(d, Kind::Issue, "old").exists());
-        assert!(session_dir(d, Kind::Issue, "fresh").exists());
+        sweep_stale(d, Kind::Ticket, STALE_AFTER).unwrap();
+        assert!(!session_dir(d, Kind::Ticket, "old").exists());
+        assert!(session_dir(d, Kind::Ticket, "fresh").exists());
+    }
+
+    #[test]
+    fn tickets_file_under_ticket_receipts() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), Kind::Ticket, "S", "T", "B").unwrap();
+        assert!(dir.path().join(".devkit/ticket-receipts/S").is_dir());
+        assert!(!dir.path().join(".devkit/issue-receipts").exists());
+    }
+
+    #[test]
+    fn the_sweep_drops_old_sessions_an_older_devkit_filed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let legacy = d.join(".devkit/issue-receipts");
+        std::fs::create_dir_all(legacy.join("old")).unwrap();
+        std::fs::create_dir_all(legacy.join("fresh")).unwrap();
+        backdate(&legacy.join("old"), Duration::from_secs(8 * 24 * 60 * 60));
+        sweep_stale(d, Kind::Ticket, STALE_AFTER).unwrap();
+        assert!(!legacy.join("old").exists());
+        assert!(legacy.join("fresh").exists());
     }
 
     #[test]
     fn a_devkit_file_fails_the_write() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(".devkit"), "").unwrap();
-        let err = write(dir.path(), Kind::Issue, "S", "T", "B").unwrap_err();
+        let err = write(dir.path(), Kind::Ticket, "S", "T", "B").unwrap_err();
         assert!(format!("{err:#}").contains(".devkit"), "{err:#}");
     }
 }

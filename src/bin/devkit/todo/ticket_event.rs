@@ -139,6 +139,6 @@ pub(crate) fn fire_current(
                 "{issue}: todo {todo} has left the status that fires {event}; skipped"
             ));
         }
-        crate::issue::event::fire(dir, config, event, Some(issue))
+        crate::ticket::event::fire(dir, config, event, Some(issue))
     })
 }

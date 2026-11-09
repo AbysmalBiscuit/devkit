@@ -14,7 +14,7 @@ use devkit_common::{
 use devkit_config::expand_tilde;
 use devkit_ports::load;
 
-use crate::issue::slug::{budget, cap, slugify};
+use crate::ticket::slug::{budget, cap, slugify};
 
 pub struct CheckoutArgs {
     pub target: String,
@@ -218,7 +218,7 @@ fn prompt_choice(
     Ok(chosen.cloned())
 }
 
-/// The id stored in `.devkit/issue.toml`: the tracker's id when the input
+/// The id stored in `.devkit/ticket.toml`: the tracker's id when the input
 /// resolved to one, else the id parsed from the PR head ref, else `UNKNOWN`.
 fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
     linear_id.map(str::to_string).unwrap_or_else(|| {
@@ -230,7 +230,7 @@ fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
 
 /// Run `f`; on error, remove the just-created worktree at `worktree` (in
 /// `primary`) before propagating, so a failed checkout or record write never
-/// leaves an orphan worktree with no `.devkit/issue.toml`. Without the record,
+/// leaves an orphan worktree with no `.devkit/ticket.toml`. Without the record,
 /// the worktree is invisible to `workspace status`/`workspace end` yet blocks a
 /// re-run at the path-exists guard. A failure of the removal itself is ignored
 /// — the original error is what propagates.
@@ -331,7 +331,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
 
     let meta: PrBrief = steps
         .during_result(&format!("Fetching PR #{}...", resolved.loc.number), || {
-            crate::issue::pr::resolve::existing(forge, &pr_repo, resolved.loc.number)
+            crate::ticket::pr::resolve::existing(forge, &pr_repo, resolved.loc.number)
         })
         .with_context(|| format!("fetching PR #{}", resolved.loc.number))?;
 
@@ -342,7 +342,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let worktree = match &args.worktree_path {
         Some(p) => absolute(expand_tilde(p))?,
         None => {
-            let wt_root = crate::issue::setup::worktree_root(cfg)?;
+            let wt_root = crate::ticket::setup::worktree_root(cfg)?;
             let ctx = dir_ctx(
                 &cfg.templates,
                 meta.number,
@@ -398,9 +398,9 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         // until the checkout lands — validated immediately after, before the
         // record is written, rather than pre-gated.
         let head = vcs.revision(&worktree)?;
-        let checked_out = crate::issue::pr::resolve::existing(forge, &pr_repo, meta.number)
+        let checked_out = crate::ticket::pr::resolve::existing(forge, &pr_repo, meta.number)
             .with_context(|| format!("verifying PR #{}", meta.number))?;
-        crate::issue::pr::resolve::assert_belongs(&checked_out, &head)?;
+        crate::ticket::pr::resolve::assert_belongs(&checked_out, &head)?;
 
         let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
         devkit_common::record::write(&worktree, &devkit_common::record::IssueRecord {
@@ -428,7 +428,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         Ok(issue)
     })?;
 
-    crate::issue::setup::backfill_includes(
+    crate::ticket::setup::backfill_includes(
         primary_s,
         &worktree,
         &cfg.defaults.worktree_include,
@@ -445,7 +445,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             "role": "issue",
         });
         steps.during_result("Preparing apps...", || {
-            crate::issue::setup::prep_apps(
+            crate::ticket::setup::prep_apps(
                 &worktree,
                 &meta.head_ref_name,
                 &args.apps,
@@ -468,7 +468,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     });
     steps.suspend(|| report(meta.number, &meta.head_ref_name, worktree_s))?;
 
-    crate::issue::setup::run_after_worktree_create(
+    crate::ticket::setup::run_after_worktree_create(
         &worktree,
         &cfg.hooks.after_worktree_create,
         &hook_ctx,

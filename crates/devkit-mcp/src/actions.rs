@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use devkit_config::renamed::{self, Renamed};
 use serde_json::Value;
 
 use crate::ServerCtx;
@@ -23,12 +24,26 @@ pub fn actions() -> Vec<Action> {
     v.extend(crate::ports::actions());
     v.extend(crate::locks::actions());
     v.extend(crate::devrun::actions());
-    v.extend(crate::issue::actions());
+    v.extend(crate::ticket::actions());
     v.extend(crate::templates::actions());
     v
 }
 
+/// Actions renamed from their `issue.` spelling. A call or a describe may
+/// still name the old one; the action list names only the new.
+const RENAMED_ACTIONS: [Renamed; 2] = [
+    Renamed {
+        old: "issue.status",
+        new: "ticket.status",
+    },
+    Renamed {
+        old: "issue.prs",
+        new: "ticket.prs",
+    },
+];
+
 pub fn find(name: &str) -> Option<Action> {
+    let name = renamed::current(&RENAMED_ACTIONS, name);
     actions().into_iter().find(|a| a.name == name)
 }
 
@@ -91,6 +106,18 @@ mod tests {
         for a in actions() {
             let schema = describe(serde_json::json!({ "action": a.name })).unwrap();
             assert_eq!(schema["type"], "object", "{} schema", a.name);
+        }
+    }
+
+    #[test]
+    fn an_old_action_name_finds_its_ticket_action() {
+        for (old, new) in [
+            ("issue.status", "ticket.status"),
+            ("issue.prs", "ticket.prs"),
+        ] {
+            assert_eq!(find(old).map(|a| a.name), Some(new));
+            let schema = describe(serde_json::json!({ "action": old })).unwrap();
+            assert_eq!(schema["type"], "object", "{old} schema");
         }
     }
 

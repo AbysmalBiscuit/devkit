@@ -11,7 +11,7 @@
 devkit is one `devkit` binary, plus an optional `devkitd` daemon, that gives every session on a machine, human or agent, the same view of what they share:
 
 - Registries for what parallel sessions contend for. Allocated ports, advisory file locks over a shared checkout, supervised dev servers, and version-correct library checkouts, each one visible to every other session.
-- An issue-to-PR workflow over workspaces, each a branch's git worktree, its ports and its PR. Tracker-agnostic, from setup through review request to cleanup, split across `workspace`, `devkit pr` and `ticket`.
+- A ticket-to-PR workflow over workspaces, each a branch's git worktree, its ports and its PR. Tracker-agnostic, from setup through review request to cleanup, split across `workspace`, `devkit pr` and `ticket`.
 - Todo lists that agents and their subagents share and claim, kept locally or in a Postgres database that several machines claim against.
 - Agent wiring for Claude Code, Codex and Cursor: an MCP server and a plugin whose hooks can claim a lock on every write, guard shell commands, and inject the project's rules as files are edited.
 
@@ -36,7 +36,7 @@ Running `devkit` once installs the short command names (`ticket`, `workspace`, `
 | Command | What it does |
 |---|---|
 | `devkit ports` / `portm` | Shared port registry. Reserves before anything binds, so concurrent callers never collide. |
-| `devkit run` / `devrun` | Starts and supervises dev servers, with `--role both` for an issue-vs-baseline A/B. Also runs canned `[tasks]`. |
+| `devkit run` / `devrun` | Starts and supervises dev servers, with `--role both` for a workspace-vs-baseline A/B. Also runs canned `[tasks]`. |
 | `devkit workspace` / `workspace` | A branch's worktree, ports and PR as one workspace: setup, triage, cleanup. |
 | `devkit pr` | The workspace's PR: open, mark ready, check out to review, request or finish review, list your PRs. |
 | `devkit ticket` / `ticket` | Tracker tickets: render, create and edit from templates, move their status, dashboard. |

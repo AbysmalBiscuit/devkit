@@ -399,7 +399,7 @@ fn prune_refuses_a_locked_baseline_in_both_modes() {
 #[test]
 fn list_names_the_worktrees_it_could_not_read() {
     let f = fixture();
-    std::fs::write(f.wt.join(".devkit").join("issue.toml"), "not = toml = [").unwrap();
+    std::fs::write(f.wt.join(".devkit").join("ticket.toml"), "not = toml = [").unwrap();
 
     let listed = devkit_ok(&f.repo, &f.state, &["run", "baseline", "list"]);
     let stderr = String::from_utf8_lossy(&listed.stderr);

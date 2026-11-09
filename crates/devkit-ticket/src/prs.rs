@@ -45,12 +45,12 @@ fn merge_linked(ids: &mut Vec<String>, linked: &[String]) {
 fn apply_linked(report: &mut PrsReport, linked: &HashMap<String, Vec<String>>) {
     for pr in &mut report.mine {
         if let Some(ids) = linked.get(&pr.url) {
-            merge_linked(&mut pr.issue_ids, ids);
+            merge_linked(&mut pr.ticket_ids, ids);
         }
     }
     for pr in &mut report.reviews {
         if let Some(ids) = linked.get(&pr.url) {
-            merge_linked(&mut pr.issue_ids, ids);
+            merge_linked(&mut pr.ticket_ids, ids);
         }
     }
 }
@@ -388,7 +388,7 @@ fn classify(data: Sections, want_mine: bool, want_reviews: bool, ignored: &[Stri
             .map(|pr| MinePrView {
                 number: pr.number,
                 url: pr.url.clone(),
-                issue_ids: issue_ids_of(&pr.head_ref_name, &pr.title),
+                ticket_ids: issue_ids_of(&pr.head_ref_name, &pr.title),
                 review_state: review_text(pr).to_string(),
                 check_state: checks_cell(&check_verdict(pr, ignored)),
                 action: mine_action(pr, ignored),
@@ -414,7 +414,7 @@ fn classify(data: Sections, want_mine: bool, want_reviews: bool, ignored: &[Stri
                 ReviewPrView {
                     number: pr.number,
                     url: pr.url.clone(),
-                    issue_ids: issue_ids_of(&pr.head_ref_name, &pr.title),
+                    ticket_ids: issue_ids_of(&pr.head_ref_name, &pr.title),
                     author: pr.author.clone(),
                     my_vote,
                     action,
@@ -435,29 +435,125 @@ fn classify(data: Sections, want_mine: bool, want_reviews: bool, ignored: &[Stri
 // ----------------------------------------------------------------
 
 /// Persisted in the CLI's pr-status snapshot cache; a new field needs
-/// `#[serde(default)]` or old caches read as empty.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `#[serde(default)]` or old caches read as empty. Serialized with
+/// `issue_ids` beside `ticket_ids`, for readers of the old field, and read
+/// from either.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(from = "MinePrWire")]
 pub struct MinePrView {
     pub number: u64,
     pub url: String,
-    #[serde(default)]
-    pub issue_ids: Vec<String>,
+    pub ticket_ids: Vec<String>,
     pub review_state: String,
     pub check_state: String,
     pub action: String,
 }
 
 /// Persisted in the CLI's pr-status snapshot cache; a new field needs
-/// `#[serde(default)]` or old caches read as empty.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `#[serde(default)]` or old caches read as empty. Serialized with
+/// `issue_ids` beside `ticket_ids`, for readers of the old field, and read
+/// from either.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(from = "ReviewPrWire")]
 pub struct ReviewPrView {
     pub number: u64,
     pub url: String,
-    #[serde(default)]
-    pub issue_ids: Vec<String>,
+    pub ticket_ids: Vec<String>,
     pub author: String,
     pub my_vote: String,
     pub action: String,
+}
+
+/// A row's ids as a snapshot holds them: `ticket_ids`, else the `issue_ids`
+/// an older devkit wrote.
+#[derive(Deserialize)]
+struct WireIds {
+    ticket_ids: Option<Vec<String>>,
+    issue_ids: Option<Vec<String>>,
+}
+
+impl WireIds {
+    fn ids(self) -> Vec<String> {
+        self.ticket_ids.or(self.issue_ids).unwrap_or_default()
+    }
+}
+
+#[derive(Deserialize)]
+struct MinePrWire {
+    number: u64,
+    url: String,
+    #[serde(flatten)]
+    ids: WireIds,
+    review_state: String,
+    check_state: String,
+    action: String,
+}
+
+impl From<MinePrWire> for MinePrView {
+    fn from(w: MinePrWire) -> Self {
+        Self {
+            number: w.number,
+            url: w.url,
+            ticket_ids: w.ids.ids(),
+            review_state: w.review_state,
+            check_state: w.check_state,
+            action: w.action,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ReviewPrWire {
+    number: u64,
+    url: String,
+    #[serde(flatten)]
+    ids: WireIds,
+    author: String,
+    my_vote: String,
+    action: String,
+}
+
+impl From<ReviewPrWire> for ReviewPrView {
+    fn from(w: ReviewPrWire) -> Self {
+        Self {
+            number: w.number,
+            url: w.url,
+            ticket_ids: w.ids.ids(),
+            author: w.author,
+            my_vote: w.my_vote,
+            action: w.action,
+        }
+    }
+}
+
+impl Serialize for MinePrView {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("MinePrView", 7)?;
+        st.serialize_field("number", &self.number)?;
+        st.serialize_field("url", &self.url)?;
+        st.serialize_field("ticket_ids", &self.ticket_ids)?;
+        st.serialize_field("issue_ids", &self.ticket_ids)?;
+        st.serialize_field("review_state", &self.review_state)?;
+        st.serialize_field("check_state", &self.check_state)?;
+        st.serialize_field("action", &self.action)?;
+        st.end()
+    }
+}
+
+impl Serialize for ReviewPrView {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("ReviewPrView", 7)?;
+        st.serialize_field("number", &self.number)?;
+        st.serialize_field("url", &self.url)?;
+        st.serialize_field("ticket_ids", &self.ticket_ids)?;
+        st.serialize_field("issue_ids", &self.ticket_ids)?;
+        st.serialize_field("author", &self.author)?;
+        st.serialize_field("my_vote", &self.my_vote)?;
+        st.serialize_field("action", &self.action)?;
+        st.end()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -617,13 +713,50 @@ mod tests {
             mine: vec![MinePrView {
                 number: 1,
                 url: url.to_string(),
-                issue_ids: vec![],
+                ticket_ids: vec![],
                 review_state: "-".into(),
                 check_state: "-".into(),
                 action: "-".into(),
             }],
             reviews: vec![],
         }
+    }
+
+    #[test]
+    fn pr_rows_carry_their_ids_as_ticket_ids_and_as_issue_ids() {
+        let mut report = report_with_pr("u");
+        report.mine[0].ticket_ids = vec!["ENG-1".into()];
+        report.reviews.push(ReviewPrView {
+            number: 2,
+            url: "v".into(),
+            ticket_ids: vec!["ENG-2".into()],
+            author: "a".into(),
+            my_vote: "-".into(),
+            action: "-".into(),
+        });
+        let v = serde_json::to_value(&report).unwrap();
+        assert_eq!(v["mine"][0]["ticket_ids"], serde_json::json!(["ENG-1"]));
+        assert_eq!(v["mine"][0]["issue_ids"], serde_json::json!(["ENG-1"]));
+        assert_eq!(v["reviews"][0]["ticket_ids"], serde_json::json!(["ENG-2"]));
+        assert_eq!(v["reviews"][0]["issue_ids"], serde_json::json!(["ENG-2"]));
+        let back: MinePrView = serde_json::from_value(v["mine"][0].clone()).unwrap();
+        assert_eq!(back.ticket_ids, ["ENG-1"]);
+        let back: ReviewPrView = serde_json::from_value(v["reviews"][0].clone()).unwrap();
+        assert_eq!(back.ticket_ids, ["ENG-2"]);
+    }
+
+    #[test]
+    fn a_snapshot_an_older_devkit_wrote_keeps_its_issue_ids() {
+        let mine: MinePrView = serde_json::from_str(
+            r#"{"number":1,"url":"u","issue_ids":["ENG-1"],"review_state":"-","check_state":"-","action":"-"}"#,
+        )
+        .unwrap();
+        assert_eq!(mine.ticket_ids, ["ENG-1"]);
+        let review: ReviewPrView = serde_json::from_str(
+            r#"{"number":2,"url":"v","issue_ids":["ENG-2"],"author":"a","my_vote":"-","action":"-"}"#,
+        )
+        .unwrap();
+        assert_eq!(review.ticket_ids, ["ENG-2"]);
     }
 
     #[test]
@@ -635,7 +768,7 @@ mod tests {
             .with_links("https://github.com/o/r/pull/7", vec!["ENG-1", "ENG-2"]);
         let mut report = report_with_pr("https://github.com/o/r/pull/7");
         apply_tracker_links(&mut report, &t, true);
-        assert_eq!(report.mine[0].issue_ids, vec!["ENG-1", "ENG-2"]);
+        assert_eq!(report.mine[0].ticket_ids, vec!["ENG-1", "ENG-2"]);
     }
 
     #[test]
@@ -648,14 +781,14 @@ mod tests {
             .with_links("https://github.com/o/r/pull/7", vec!["ENG-1"]);
         let mut report = report_with_pr("https://github.com/o/r/pull/7");
         apply_tracker_links(&mut report, &lin, false);
-        assert!(report.mine[0].issue_ids.is_empty());
+        assert!(report.mine[0].ticket_ids.is_empty());
 
         let gh = fake::FakeTracker::new()
             .with_kind(TrackerKind::Github)
             .with_links("https://github.com/o/r/pull/7", vec!["9"]);
         let mut report = report_with_pr("https://github.com/o/r/pull/7");
         apply_tracker_links(&mut report, &gh, false);
-        assert_eq!(report.mine[0].issue_ids, vec!["9"]);
+        assert_eq!(report.mine[0].ticket_ids, vec!["9"]);
     }
 
     /// A GitHub GraphQL PR node, read through the GitHub forge's own parser,
@@ -696,13 +829,13 @@ mod tests {
         let report = classify(data, true, true, &[]);
         assert_eq!(report.mine.len(), 1);
         assert_eq!(report.mine[0].number, 10);
-        assert_eq!(report.mine[0].issue_ids, vec!["ENG-1"]);
+        assert_eq!(report.mine[0].ticket_ids, vec!["ENG-1"]);
         assert_eq!(report.mine[0].review_state, "approved");
         assert_eq!(report.mine[0].check_state, "ok");
         assert_eq!(report.mine[0].action, "MERGE");
         assert_eq!(report.reviews.len(), 1);
         assert_eq!(report.reviews[0].number, 20);
-        assert_eq!(report.reviews[0].issue_ids, vec!["SWE-2"]);
+        assert_eq!(report.reviews[0].ticket_ids, vec!["SWE-2"]);
         assert_eq!(report.reviews[0].my_vote, "-");
         assert_eq!(report.reviews[0].action, "REVIEW NEEDED");
     }
@@ -1348,7 +1481,7 @@ mod tests {
             mine: vec![MinePrView {
                 number: 1,
                 url: "u1".into(),
-                issue_ids: vec!["ENG-1".into()],
+                ticket_ids: vec!["ENG-1".into()],
                 review_state: "-".into(),
                 check_state: "ok".into(),
                 action: "MERGE".into(),
@@ -1356,7 +1489,7 @@ mod tests {
             reviews: vec![ReviewPrView {
                 number: 2,
                 url: "u2".into(),
-                issue_ids: vec![],
+                ticket_ids: vec![],
                 author: "a".into(),
                 my_vote: "-".into(),
                 action: "REVIEW NEEDED".into(),
@@ -1370,7 +1503,7 @@ mod tests {
             ("u2".to_string(), vec!["SWE-7".to_string()]),
         ]);
         apply_linked(&mut report, &linked);
-        assert_eq!(report.mine[0].issue_ids, vec!["ENG-1", "SWE-6"]);
-        assert_eq!(report.reviews[0].issue_ids, vec!["SWE-7"]);
+        assert_eq!(report.mine[0].ticket_ids, vec!["ENG-1", "SWE-6"]);
+        assert_eq!(report.reviews[0].ticket_ids, vec!["SWE-7"]);
     }
 }

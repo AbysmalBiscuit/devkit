@@ -51,7 +51,7 @@ fn recorded_issue(dir: &Path) -> Result<String> {
     let branch = Vcs::at(&root).branch(&root)?;
     record::read_on(&root, &branch)
         .and_then(|r| r.tracker_issue())
-        .with_context(|| format!("{} records no tracker issue; pass ISSUE", root.display()))
+        .with_context(|| format!("{} records no tracker ticket; pass TICKET", root.display()))
 }
 
 /// Fire `event` for `issue`, or for the issue `dir`'s worktree records:

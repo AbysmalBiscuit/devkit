@@ -274,7 +274,7 @@ fn setup_here_writes_the_default_summary_inside_the_checkout_untracked() {
     let out = fake.issue(&["setup", "--here", "7", "--summary", "--no-gitignore"]);
 
     assert!(out.status.success(), "{}\n{}", stderr(&out), fake.calls());
-    let expected = fake.project().join(".devkit").join("ISSUE_SUMMARY_7.md");
+    let expected = fake.project().join(".devkit").join("TICKET_SUMMARY_7.md");
     assert!(expected.is_file(), "no summary at {}", expected.display());
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let reported = Path::new(report["summary"].as_str().expect("a summary path"));
@@ -323,7 +323,7 @@ fn setup_here_refuses_a_relative_summary_path_without_a_worktree_root() {
     fake.serve_issue("The summary devkit read over REST.");
     let (_scratch, wt) = bare_main_checkout(
         &fake,
-        r#"issue_summary_path = "ISSUE_SUMMARY_{{ issue }}.md""#,
+        r#"ticket_summary_path = "ISSUE_SUMMARY_{{ issue }}.md""#,
     );
 
     let out = fake.devkit_with_stdin(
@@ -376,12 +376,33 @@ fn pr_status_finds_a_primary_checkout_by_the_issue_setup_here_bound() {
 
     assert!(out.status.success(), "{}", stderr(&out));
     let row: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(row["issue_id"], "7", "{row}");
+    assert_eq!(row["ticket_id"], "7", "{row}");
+    assert_eq!(
+        row["issue_id"], "7",
+        "the old field stays for older readers: {row}"
+    );
     assert_eq!(row["branch"], "lev/eng-1-fix", "{row}");
     assert_eq!(
         Path::new(row["worktree"].as_str().unwrap())
             .canonicalize()
             .unwrap(),
         fake.project().canonicalize().unwrap()
+    );
+}
+
+/// Tools that predate the rename, such as workcell, read the record as
+/// `.devkit/issue.toml`, so setup keeps that copy beside `ticket.toml`.
+#[test]
+fn setup_records_into_ticket_toml_with_an_issue_toml_copy() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let devkit = fake.project().join(".devkit");
+    let record = std::fs::read_to_string(devkit.join("ticket.toml")).unwrap();
+    assert!(record.contains("issue = \"7\""), "{record}");
+    assert_eq!(
+        std::fs::read_to_string(devkit.join("issue.toml")).unwrap(),
+        record
     );
 }

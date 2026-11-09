@@ -213,9 +213,9 @@ pub fn run(cli: HookCli, options: Result<()>) -> Result<()> {
 fn clear_receipts(payload: &Payload, checkout: &Checkout) {
     if let (Some(session), Some(root)) = (
         payload.session_id(),
-        crate::issue::receipt::store_root(checkout),
+        crate::ticket::receipt::store_root(checkout),
     ) {
-        let _ = crate::issue::receipt::clear_session(&root, session);
+        let _ = crate::ticket::receipt::clear_session(&root, session);
     }
 }
 

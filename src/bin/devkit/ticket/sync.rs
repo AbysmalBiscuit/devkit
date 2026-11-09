@@ -214,7 +214,7 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
     } = flags;
     anyhow::ensure!(
         !overwrite || dry_run || all || !selectors.is_empty(),
-        "--overwrite needs one or more selectors (issue id, branch, or worktree path), or --all for every worktree"
+        "--overwrite needs one or more selectors (ticket id, branch, or worktree path), or --all for every worktree"
     );
     let loaded = load::load(config.map(Path::new), Path::new(start))?;
     let patterns = &loaded.config.defaults.worktree_include;

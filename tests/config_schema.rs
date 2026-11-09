@@ -174,3 +174,38 @@ fn collect_descriptions(v: &serde_json::Value, out: &mut Vec<String>) {
         _ => {}
     }
 }
+
+#[test]
+fn the_schema_names_the_renamed_keys_by_their_ticket_names_only() {
+    let s: serde_json::Value = serde_json::from_str(&generated()).unwrap();
+    let defs = &s["$defs"];
+    for (def, old, new) in [
+        ("Templates", "issue_summary_path", "ticket_summary_path"),
+        ("Templates", "issue_summary", "ticket_summary"),
+        ("Defaults", "issue_summary", "ticket_summary"),
+        ("HarnessSection", "issue_tools", "ticket_tools"),
+    ] {
+        let props = defs[def]["properties"].as_object().unwrap();
+        assert!(props.contains_key(new), "{def} lacks `{new}`");
+        assert!(!props.contains_key(old), "{def} still shows `{old}`");
+    }
+}
+
+#[test]
+fn the_schema_names_the_ticket_commands_and_not_the_old_issue_command() {
+    let s: serde_json::Value = serde_json::from_str(&generated()).unwrap();
+    let description = s["description"].as_str().unwrap();
+    let commands: Vec<&str> = description
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+        .collect();
+    for current in ["ticket", "workspace"] {
+        assert!(
+            commands.contains(&current),
+            "{description:?} lacks `{current}`"
+        );
+    }
+    assert!(
+        !commands.contains(&"issue"),
+        "{description:?} names `issue`"
+    );
+}

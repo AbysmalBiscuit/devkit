@@ -33,7 +33,7 @@ fn pr_label(row: &IssueWorktree) -> String {
 const BRANCH_MAX: usize = ui::BRANCH_DISPLAY_MAX;
 
 /// Column headers shared by the final render and the live table.
-pub(crate) const HEADERS: [&str; 6] = ["ISSUE", "BRANCH", "TREE", "PR", "STATE", "VERDICT"];
+pub(crate) const HEADERS: [&str; 6] = ["TICKET", "BRANCH", "TREE", "PR", "STATE", "VERDICT"];
 
 /// The issue id, linked when the tracker offers a link base and actually knew
 /// the issue — an id the tracker never answered for has nothing to link to.
@@ -119,7 +119,7 @@ pub(crate) fn verdict_cell(row: &IssueWorktree, offline: bool) -> String {
 /// columns show `—`: both depend on a tracker fetch that the caller skipped, so
 /// any computed value would be stale (e.g. `pr status --cache-only`).
 pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
-    println!("{}", ui::bold_cyan("ISSUE WORKTREES"));
+    println!("{}", ui::bold_cyan("TICKET WORKTREES"));
     if report.worktrees.is_empty() {
         println!("  {}", ui::dim("(none)"));
         return 0;

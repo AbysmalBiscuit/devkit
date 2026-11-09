@@ -277,7 +277,7 @@ fn bare_issue_still_runs_and_matches_bare_workspace() {
         text(&workspace)
     );
     assert!(
-        String::from_utf8_lossy(&workspace.stdout).contains("ISSUE WORKTREES"),
+        String::from_utf8_lossy(&workspace.stdout).contains("TICKET WORKTREES"),
         "bare workspace should render the status table: {}",
         text(&workspace)
     );

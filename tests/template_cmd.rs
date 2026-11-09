@@ -46,7 +46,7 @@ fn setup() -> tempfile::TempDir {
     std::fs::write(dir.path().join("devkit.toml"), CONFIG).expect("write devkit.toml");
     std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
     std::fs::write(
-        dir.path().join(".devkit/issue.toml"),
+        dir.path().join(".devkit/ticket.toml"),
         "issue = \"ENG-1\"\nslug = \"fix\"\napps = []\n",
     )
     .unwrap();
@@ -278,7 +278,7 @@ fn a_setup_built_in_renders_from_the_record_or_from_args() {
         "prefix from config, slug from the record"
     );
 
-    std::fs::remove_file(dir.path().join(".devkit/issue.toml")).unwrap();
+    std::fs::remove_file(dir.path().join(".devkit/ticket.toml")).unwrap();
     let out = run(dir.path(), &["render", "branch"]);
     assert!(!out.status.success(), "{out:?}");
     assert!(stderr(&out).contains("--arg slug=..."), "{out:?}");
@@ -309,7 +309,7 @@ fn a_built_in_renders_what_its_command_would_send() {
     let project = fake.project();
     std::fs::create_dir_all(project.join(".devkit")).unwrap();
     std::fs::write(
-        project.join(".devkit/issue.toml"),
+        project.join(".devkit/ticket.toml"),
         "issue = \"ENG-1\"\nslug = \"fix\"\napps = []\n",
     )
     .unwrap();
@@ -531,4 +531,46 @@ fn the_magic_word_renders_by_either_name() {
     }
     let text = body(&["--arg", "ticket=12"]);
     assert!(text.contains("\nCloses #12\n"), "{text}");
+}
+
+#[test]
+fn the_summary_templates_go_by_their_ticket_names_and_still_by_their_old_ones() {
+    let dir = setup();
+    for name in [
+        "ticket_summary_path",
+        "ticket_summary",
+        "issue_summary_path",
+        "issue_summary",
+    ] {
+        let out = run(dir.path(), &["show", name]);
+        assert!(out.status.success(), "{name}: {out:?}");
+    }
+    let out = run(dir.path(), &["show", "ticket_summary_path", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["source"],
+        "{{ worktree }}/.devkit/TICKET_SUMMARY_{{ ticket }}.md"
+    );
+
+    let list = stdout(&run(dir.path(), &["list"]));
+    assert!(list.contains("ticket_summary_path"), "{list}");
+    assert!(!list.contains("issue_summary"), "{list}");
+}
+
+#[test]
+fn a_config_setting_the_old_summary_path_still_applies_it() {
+    let dir = setup();
+    let config = std::fs::read_to_string(dir.path().join("devkit.toml")).unwrap();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        config.replace(
+            "[templates]\n",
+            "[templates]\nissue_summary_path = \"{{ worktree }}/old.md\"\n",
+        ),
+    )
+    .unwrap();
+    let out = run(dir.path(), &["show", "ticket_summary_path", "--json"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["source"], "{{ worktree }}/old.md");
 }

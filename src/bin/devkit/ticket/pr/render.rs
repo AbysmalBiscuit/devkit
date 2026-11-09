@@ -15,12 +15,12 @@ use devkit_config::{Config, Templates};
 use devkit_ports::templates::worktree_context;
 
 use crate::{
-    issue::{
+    template::VarArgs,
+    ticket::{
         receipt,
         render::Rendered,
         review::{PR_CONTEXT_KEYS, missing_required, parse_args, render_review, with_fields},
     },
-    template::VarArgs,
 };
 
 /// The variable the `pr_body` template reads the PR's title from. An edit

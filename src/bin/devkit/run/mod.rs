@@ -2048,7 +2048,7 @@ mod tests {
     #[test]
     fn an_unreadable_record_leaves_the_baseline_foreign() {
         let f = two_worktrees_naming_one_baseline();
-        std::fs::write(f.b.join(".devkit").join("issue.toml"), "issue = ").unwrap();
+        std::fs::write(f.b.join(".devkit").join("ticket.toml"), "issue = ").unwrap();
         assert_eq!(sole(&f, &f.a), None);
     }
 

@@ -224,6 +224,50 @@ fn issue_setup_rejects_both_positional_and_flag() {
     );
 }
 
+#[test]
+fn workspace_setup_takes_the_ticket_by_flag_and_by_its_old_flag() {
+    let (_dir, link) = shimtest::linked("workspace");
+    let proj = project();
+    let state = tempfile::tempdir().unwrap();
+    for flag in ["--ticket", "--issue"] {
+        let out = run(&link, proj.path(), state.path(), &[
+            "setup",
+            flag,
+            "ABC-123",
+            "--slug",
+            "s",
+            "--dry-run",
+        ]);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_ne!(out.status.code(), Some(2), "{flag} must parse: {err}");
+    }
+
+    let help = run(&link, proj.path(), state.path(), &["setup", "--help"]);
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("--ticket <TICKET>"), "{help}");
+    assert!(help.contains("[TICKET]"), "{help}");
+    assert!(!help.contains("--issue"), "{help}");
+    assert!(!help.contains("ISSUE"), "{help}");
+}
+
+#[test]
+fn a_command_needing_selectors_names_a_ticket_id_as_one() {
+    let (_dir, link) = shimtest::linked("workspace");
+    let proj = project();
+    let state = tempfile::tempdir().unwrap();
+    for args in [
+        &["sync-includes", "--overwrite"][..],
+        &["end", "--clean-worktree"][..],
+    ] {
+        let out = run(&link, proj.path(), state.path(), args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("selectors (ticket id, branch, or worktree path)"),
+            "{args:?}: {err}"
+        );
+    }
+}
+
 /// `devkit` is the one name an agent can guess from a `devkit.toml`. Its help
 /// has to name the shim spellings, because a subcommand list alone never says
 /// that `issue status` also works as a bare command. Asserting on the whole

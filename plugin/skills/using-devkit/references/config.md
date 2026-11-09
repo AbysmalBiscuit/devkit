@@ -17,7 +17,7 @@
 
 The `[harness]` switches and `[harness.log]` resolve across layers by rules of their own, which their descriptions give.
 
-A renamed key still loads under its old name, read as the new one before layers merge, so a layer using the old name overrides a lower layer using the new one and the reverse. `[issue]` reads as `[ticket]`, and `templates.issue_title` and `templates.issue_body` as `templates.ticket_title` and `templates.ticket_body`. One layer setting a key under both names is refused.
+A renamed key still loads under its old name, read as the new one before layers merge, so a layer using the old name overrides a lower layer using the new one and the reverse. `[issue]` reads as `[ticket]`, `defaults.issue_summary` as `defaults.ticket_summary`, and `[harness.issue_tools]` as `[harness.ticket_tools]`. Each `templates.issue_*` key reads as its `templates.ticket_*` key: `issue_title`, `issue_body`, `issue_summary_path` and `issue_summary`. One layer setting a key under both names is refused. The hooks read `[harness]` apart from the rest of the config, so there a layer with both tool tables keeps `ticket_tools` and reports a warning.
 
 ## Before editing a table
 

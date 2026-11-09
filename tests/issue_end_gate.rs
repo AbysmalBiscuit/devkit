@@ -76,7 +76,7 @@ fn an_unreadable_record_holds_the_worktree_in_status_and_end() {
     let (repo, wt) = pushed_worktree(tmp.path());
     let devkit_dir = wt.join(".devkit");
     std::fs::create_dir_all(&devkit_dir).unwrap();
-    std::fs::write(devkit_dir.join("issue.toml"), "issue = \n").unwrap();
+    std::fs::write(devkit_dir.join("ticket.toml"), "issue = \n").unwrap();
     // Every real record write drops this beside the record. Without it the
     // tree is dirty, and that alone would hold the worktree.
     devkit_common::gitignore::write_self_ignore(&devkit_dir);
@@ -84,7 +84,7 @@ fn an_unreadable_record_holds_the_worktree_in_status_and_end() {
     let status = devkit(&repo, &state, &["issue", "status"]);
     let status = String::from_utf8_lossy(&status.stdout);
     assert!(
-        status.contains("issue record unreadable") && !status.contains("FINISHED"),
+        status.contains("ticket record unreadable") && !status.contains("FINISHED"),
         "{status}"
     );
 
@@ -119,5 +119,9 @@ fn pr_only_renders_the_verdict_it_removes_by() {
     assert!(
         output.contains("FINISHED") && !output.contains("no tracker key"),
         "the table disagrees with the removal: {output}"
+    );
+    assert!(
+        output.contains("ticket-id gates are skipped") && !output.contains("issue-id"),
+        "the skipped gates are not named as ticket gates: {output}"
     );
 }

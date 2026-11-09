@@ -105,7 +105,7 @@ fn cache_only_info_selects_by_the_recorded_pr_over_a_stale_cache() {
     write_devkit_file(&fake, "pr.json", CACHED_PR_7);
     write_devkit_file(
         &fake,
-        "issue.toml",
+        "ticket.toml",
         "issue = \"ENG-1\"\nslug = \"fix\"\napps = []\n\n[pr]\nnumber = 9\n",
     );
 

@@ -1,6 +1,6 @@
 //! Named templates a caller renders and reads back instead of a command
-//! rendering them: `[templates.custom]`, and the built-ins the issue commands
-//! render. Shared by `devkit template` and MCP.
+//! rendering them: `[templates.custom]`, and the built-ins the ticket,
+//! workspace and pr commands render. Shared by `devkit template` and MCP.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -46,9 +46,9 @@ pub struct Template {
     pub args: Vec<TaskArg>,
 }
 
-/// A built-in an issue command renders. Every context key the command
-/// computes that [`checkout_context`] does not supply (`input`, `pr_url`,
-/// `short_slug`, ...) is an arg here.
+/// A built-in a ticket, workspace or pr command renders. Every context key
+/// the command computes that [`checkout_context`] does not supply (`input`,
+/// `pr_url`, `short_slug`, ...) is an arg here.
 struct BuiltIn {
     name: &'static str,
     description: &'static str,
@@ -72,14 +72,14 @@ const BUILT_INS: [BuiltIn; 12] = [
         source: Templates::checkout_worktree_dir,
     },
     BuiltIn {
-        name: "issue_summary_path",
+        name: "ticket_summary_path",
         description: "Where `workspace setup --summary` writes the summary",
-        source: Templates::issue_summary_path,
+        source: Templates::ticket_summary_path,
     },
     BuiltIn {
-        name: "issue_summary",
+        name: "ticket_summary",
         description: "Summary file `workspace setup --summary` writes",
-        source: Templates::issue_summary,
+        source: Templates::ticket_summary,
     },
     BuiltIn {
         name: "pr_title",
@@ -492,10 +492,7 @@ fn lookup<'a>(cfg: &'a Config, name: &str) -> Result<(Kind, String, &'a str)> {
             &c.body,
         ));
     }
-    let name = RENAMED_TEMPLATES
-        .iter()
-        .find_map(|(old, new)| (*old == name).then_some(*new))
-        .unwrap_or(name);
+    let name = devkit_config::renamed::current(&RENAMED_TEMPLATES, name);
     BUILT_INS
         .iter()
         .find(|b| b.name == name)

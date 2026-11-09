@@ -1223,7 +1223,7 @@ fn doctor_reports_a_foreign_shim_name() {
         String::from_utf8_lossy(&out.stderr)
     );
     // `issue` alone is not evidence: doctor's tracker row already prints
-    // "issue state gates stay closed". Assert on the shim row's own wording.
+    // "ticket state gates stay closed". Assert on the shim row's own wording.
     assert!(
         text.contains("is not this devkit"),
         "doctor should say the `issue` name is held by something else: {text}"

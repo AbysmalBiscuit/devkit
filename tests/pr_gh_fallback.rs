@@ -34,7 +34,7 @@ fn pr_create_reuses_the_recorded_pr() {
     let record = fake.project().join(".devkit");
     std::fs::create_dir_all(&record).unwrap();
     std::fs::write(
-        record.join("issue.toml"),
+        record.join("ticket.toml"),
         "issue = \"ENG-1\"\nslug = \"fix\"\napps = []\n\n[pr]\nrepo = \"o/r\"\nnumber = 7\n",
     )
     .unwrap();
@@ -70,6 +70,6 @@ fn pr_checkout_records_the_pr_it_checked_out() {
     let out = fake.issue(&["pr", "checkout", "#7", worktree.to_str().unwrap()]);
 
     assert!(out.status.success(), "{out:?}\n{}", fake.calls());
-    let record = std::fs::read_to_string(worktree.join(".devkit").join("issue.toml")).unwrap();
+    let record = std::fs::read_to_string(worktree.join(".devkit").join("ticket.toml")).unwrap();
     assert!(record.contains("number = 7"), "{record}");
 }

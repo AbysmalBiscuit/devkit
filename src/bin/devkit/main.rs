@@ -17,7 +17,6 @@ mod harness;
 mod hook;
 mod hook_log;
 mod install;
-mod issue;
 mod links;
 mod locks;
 mod mcp;
@@ -28,6 +27,7 @@ mod schema;
 mod secret;
 mod shim;
 mod template;
+mod ticket;
 mod todo;
 
 const SHIM_HELP: &str = "\
@@ -199,13 +199,13 @@ enum Cmd {
     Run(run::RunCli),
     /// Create, edit and render tracker tickets.
     #[command(display_name = "devkit ticket")]
-    Ticket(issue::TicketCli),
+    Ticket(ticket::TicketCli),
     /// Set up, report on and retire branch worktrees.
     #[command(display_name = "devkit workspace")]
-    Workspace(issue::WorkspaceCli),
+    Workspace(ticket::WorkspaceCli),
     /// Open, ready, list and review this branch's pull request.
     #[command(display_name = "devkit pr")]
-    Pr(issue::PrCli),
+    Pr(ticket::PrCli),
     /// Serve the devkit MCP tools over stdio.
     #[command(display_name = "devkit mcp")]
     Mcp(mcp::McpCli),
@@ -287,7 +287,7 @@ const DEVKIT_ISSUE: &str = "devkit issue";
 /// `devkit`'s.
 pub(crate) fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::Command {
     let cmd = if subcommand == shim::Shim::Issue.subcommand() {
-        issue::IssueCli::augment_args(clap::Command::new(shim_name))
+        ticket::IssueCli::augment_args(clap::Command::new(shim_name))
             .about("The commands `ticket`, `workspace` and `pr` replace")
             .propagate_version(true)
     } else {
@@ -368,16 +368,16 @@ fn dispatch_shim(s: shim::Shim, name: &'static str, args: Vec<OsString>) -> Resu
         shim::Shim::Locks => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
         shim::Shim::Docs => docs::run(docs::DocsCli::from_arg_matches(&matches)?),
         shim::Shim::Run => run::run(run::RunCli::from_arg_matches(&matches)?),
-        shim::Shim::Ticket => issue::run(
-            issue::TicketCli::from_arg_matches(&matches)?.action(),
+        shim::Shim::Ticket => ticket::run(
+            ticket::TicketCli::from_arg_matches(&matches)?.action(),
             s.name(),
         ),
-        shim::Shim::Workspace => issue::run(
-            issue::WorkspaceCli::from_arg_matches(&matches)?.action(),
+        shim::Shim::Workspace => ticket::run(
+            ticket::WorkspaceCli::from_arg_matches(&matches)?.action(),
             s.name(),
         ),
-        shim::Shim::Issue => issue::run(
-            issue::IssueCli::from_arg_matches(&matches)?.action(),
+        shim::Shim::Issue => ticket::run(
+            ticket::IssueCli::from_arg_matches(&matches)?.action(),
             s.name(),
         ),
         shim::Shim::Mcp => mcp::run(mcp::McpCli::from_arg_matches(&matches)?),
@@ -580,9 +580,9 @@ fn main() -> Result<()> {
                 Cmd::Locks(c) => locks::run(c),
                 Cmd::Docs(c) => docs::run(c),
                 Cmd::Run(c) => run::run(c),
-                Cmd::Ticket(c) => issue::run(c.action(), "ticket"),
-                Cmd::Workspace(c) => issue::run(c.action(), "workspace"),
-                Cmd::Pr(c) => issue::run(c.action(), "pr"),
+                Cmd::Ticket(c) => ticket::run(c.action(), "ticket"),
+                Cmd::Workspace(c) => ticket::run(c.action(), "workspace"),
+                Cmd::Pr(c) => ticket::run(c.action(), "pr"),
                 Cmd::Mcp(c) => mcp::run(c),
                 Cmd::Harness(c) => harness::run(c),
                 Cmd::Hook(c) => run_hook_guarded(c, options),
@@ -637,7 +637,7 @@ mod tests {
     /// `action()` dispatch uses.
     mod spellings {
         use super::*;
-        use crate::issue::{Action, Globals, IssueCli, TicketCli, WorkspaceCli};
+        use crate::ticket::{Action, Globals, IssueCli, TicketCli, WorkspaceCli};
 
         fn action(argv: &[&str]) -> (Globals, Action) {
             if let (Some(s), name, args) = route(argv.iter().map(OsString::from).collect()) {
@@ -709,9 +709,9 @@ mod tests {
 
         #[test]
         fn ticket_verbs() {
-            use crate::issue::TicketCmd as T;
+            use crate::ticket::TicketCmd as T;
             let ticket = |a| match a {
-                Action::Run(crate::issue::Verb::Ticket(t)) => t,
+                Action::Run(crate::ticket::Verb::Ticket(t)) => t,
                 other => panic!("not a ticket verb: {other:?}"),
             };
             assert!(matches!(
@@ -740,9 +740,9 @@ mod tests {
 
         #[test]
         fn workspace_verbs() {
-            use crate::issue::WorkspaceCmd as W;
+            use crate::ticket::WorkspaceCmd as W;
             let workspace = |a| match a {
-                Action::Run(crate::issue::Verb::Workspace(w)) => w,
+                Action::Run(crate::ticket::Verb::Workspace(w)) => w,
                 other => panic!("not a workspace verb: {other:?}"),
             };
             assert!(matches!(
@@ -772,9 +772,9 @@ mod tests {
 
         #[test]
         fn pr_verbs() {
-            use crate::issue::{PrCmd as P, ReviewCmd as R};
+            use crate::ticket::{PrCmd as P, ReviewCmd as R};
             let pr = |a| match a {
-                Action::Run(crate::issue::Verb::Pr(p)) => p,
+                Action::Run(crate::ticket::Verb::Pr(p)) => p,
                 other => panic!("not a pr verb: {other:?}"),
             };
             assert!(matches!(

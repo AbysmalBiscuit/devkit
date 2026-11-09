@@ -40,7 +40,7 @@ fn diff_cell(prev: Option<&str>, cur: &str, paint: impl Fn(&str) -> String) -> S
     }
 }
 
-/// The ISSUE column cell: every id linked through the tracker (plain text
+/// The TICKET column cell: every id linked through the tracker (plain text
 /// when it has no link for that id, or `t` is `None` — the stale block passes
 /// `None` so it never triggers a link lookup of its own), space-joined; dim
 /// `-` when no id resolved.
@@ -148,7 +148,7 @@ fn mine_table_build(
     if prs.is_empty() {
         return (format!("  {}", ui::dim("(none)")), cur);
     }
-    let mut table = ui::table(&["PR", "ISSUE", "REVIEW", "CHECK", "ACTION"]);
+    let mut table = ui::table(&["PR", "TICKET", "REVIEW", "CHECK", "ACTION"]);
     for pr in prs {
         let review = pr.review_state.clone();
         let check = pr.check_state.clone();
@@ -157,7 +157,7 @@ fn mine_table_build(
         let g = |k: &str| was.and_then(|m| m.get(k)).map(|s| s.as_str());
         table.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
-            issue_cell(&pr.issue_ids, t),
+            issue_cell(&pr.ticket_ids, t),
             diff_cell(g("review"), &review, |s| s.to_string()),
             diff_cell(g("check"), &check, |s| s.to_string()),
             diff_cell(g("action"), &action, |s| paint_action(&action, s)),
@@ -238,7 +238,7 @@ fn reviews_table_build(
     if rows.is_empty() {
         return (format!("  {}", ui::dim("(none)")), cur);
     }
-    let mut table = ui::table(&["PR", "ISSUE", "AUTHOR", "MY VOTE", "ACTION"]);
+    let mut table = ui::table(&["PR", "TICKET", "AUTHOR", "MY VOTE", "ACTION"]);
     for pr in rows {
         let vote = pr.my_vote.clone();
         let action = pr.action.clone();
@@ -246,7 +246,7 @@ fn reviews_table_build(
         let g = |k: &str| was.and_then(|m| m.get(k)).map(|s| s.as_str());
         table.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
-            issue_cell(&pr.issue_ids, t),
+            issue_cell(&pr.ticket_ids, t),
             pr.author.clone(),
             diff_cell(g("vote"), &vote, |s| s.to_string()),
             diff_cell(g("action"), &action, |s| paint_action(&action, s)),
@@ -419,7 +419,7 @@ mod tests {
         MinePrView {
             number: n,
             url: format!("https://x/{n}"),
-            issue_ids: vec![],
+            ticket_ids: vec![],
             review_state: "none".into(),
             check_state: "ok".into(),
             action: action.into(),
@@ -438,7 +438,7 @@ mod tests {
         ReviewPrView {
             number: n,
             url: format!("https://x/{n}"),
-            issue_ids: vec!["ENG-9".into()],
+            ticket_ids: vec!["ENG-9".into()],
             author: "alice".into(),
             my_vote: "-".into(),
             action: action.into(),
@@ -453,7 +453,7 @@ mod tests {
             Some(&t),
             &BTreeMap::new(),
         );
-        assert!(body.contains("ISSUE"), "header missing ISSUE: {body}");
+        assert!(body.contains("TICKET"), "header missing TICKET: {body}");
         assert!(body.contains("ENG-9"), "row missing issue id: {body}");
     }
 
@@ -503,13 +503,13 @@ mod tests {
     }
 
     // A pre-issue_ids snapshot (rows carry `issue_id`) still whole-struct
-    // parses; the missing `issue_ids` reads as empty for one run.
+    // parses; the missing `ticket_ids` reads as empty for one run.
     #[test]
     fn old_issue_id_snapshot_reads_with_empty_ids() {
         let old = r#"{"mine":[{"number":1,"url":"u","issue_id":"ENG-1","review_state":"approved","check_state":"ok","action":"MERGE"}],"reviews":[],"diff":{}}"#;
         let snap: Snapshot = serde_json::from_str(old).unwrap();
         assert_eq!(snap.mine.len(), 1);
-        assert!(snap.mine[0].issue_ids.is_empty());
+        assert!(snap.mine[0].ticket_ids.is_empty());
     }
 
     #[test]
@@ -529,7 +529,7 @@ mod tests {
             mine: vec![devkit_ticket::prs::MinePrView {
                 number: 1,
                 url: "https://x/1".into(),
-                issue_ids: vec!["ENG-1".into()],
+                ticket_ids: vec!["ENG-1".into()],
                 review_state: "approved".into(),
                 check_state: "ok".into(),
                 action: "MERGE".into(),
@@ -551,7 +551,7 @@ mod tests {
         let prev_mine = vec![devkit_ticket::prs::MinePrView {
             number: 7,
             url: "https://x/7".into(),
-            issue_ids: vec!["ENG-7".into()],
+            ticket_ids: vec!["ENG-7".into()],
             review_state: "pending".into(),
             check_state: "ok".into(),
             action: "awaiting review".into(),
@@ -561,7 +561,7 @@ mod tests {
             reviews: vec![devkit_ticket::prs::ReviewPrView {
                 number: 9,
                 url: "https://x/9".into(),
-                issue_ids: vec!["ENG-9".into()],
+                ticket_ids: vec!["ENG-9".into()],
                 author: "alice".into(),
                 my_vote: "-".into(),
                 action: "REVIEW NEEDED".into(),

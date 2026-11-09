@@ -14,8 +14,8 @@ use super::{
     resolve_target, target_from_person, with_fields,
 };
 use crate::{
-    issue::pr::resolve::{existing, resolve_acting, resolve_locator},
     template::VarArgs,
+    ticket::pr::resolve::{existing, resolve_acting, resolve_locator},
 };
 
 pub struct Args {

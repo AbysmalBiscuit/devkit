@@ -194,7 +194,7 @@ fn no_tracker_is_an_error_naming_the_key() {
 }
 
 #[test]
-fn a_worktree_without_an_issue_id_is_an_error() {
+fn a_worktree_without_a_ticket_id_is_an_error() {
     let gh = ghfake::Fake::without_pr(&format!(
         "{GITHUB}[ticket.events.start]\nto = \"In progress\"\n"
     ));
@@ -203,7 +203,7 @@ fn a_worktree_without_an_issue_id_is_an_error() {
     let out = gh.issue(&["event", "start"]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("no tracker issue"),
+        stderr(&out).contains("no tracker ticket"),
         "{}",
         stderr(&out)
     );

@@ -340,6 +340,16 @@ fn pr_proof_reads_the_issue_that_issue_names() {
 }
 
 #[test]
+fn pr_proof_reads_the_ticket_that_ticket_names() {
+    let p = project();
+    p.fake.serve_issue(ISSUE);
+
+    let (code, stderr) = p.proof("agent", &["--ticket", "7"], "2. test `opens`");
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("1. A gap is refused"), "{stderr}");
+}
+
+#[test]
 fn pr_proof_outside_an_issue_worktree_passes_naming_the_flag() {
     let p = project();
     p.fake.serve_issue(ISSUE);
@@ -347,7 +357,7 @@ fn pr_proof_outside_an_issue_worktree_passes_naming_the_flag() {
     let (code, stderr) = p.proof("agent", &[], "1. x");
     assert_eq!(code, Some(0), "no issue, nothing to check: {stderr}");
     assert!(
-        stderr.contains("--issue"),
+        stderr.contains("--ticket"),
         "names the way forward: {stderr}"
     );
 }

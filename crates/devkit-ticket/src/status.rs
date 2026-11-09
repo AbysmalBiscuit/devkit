@@ -227,13 +227,15 @@ impl Landed {
 
 impl Serialize for IssueWorktree {
     /// Emits `pr` alongside the three legacy fields, so an MCP consumer reading
-    /// `pr_state` keeps working while a new one can read the candidates.
+    /// `pr_state` keeps working while a new one can read the candidates, and
+    /// `issue_id` beside `ticket_id` for readers of the old field.
     /// `dirty` is true whenever the tree is not known to be clean.
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("IssueWorktree", 12)?;
+        let mut st = s.serialize_struct("IssueWorktree", 13)?;
         st.serialize_field("worktree", &self.worktree)?;
         st.serialize_field("branch", &self.branch)?;
+        st.serialize_field("ticket_id", &self.issue_id)?;
         st.serialize_field("issue_id", &self.issue_id)?;
         st.serialize_field("dirty", &(self.tree != Tree::Clean))?;
         st.serialize_field("pr", &self.pr)?;
@@ -879,9 +881,9 @@ pub fn verdict(wt: &IssueWorktree, tracker: &TrackerInfo, pr_only: bool) -> Verd
         held.push(reason);
     };
     if wt.record_unreadable {
-        doubt(&mut held, "issue record unreadable".into());
+        doubt(&mut held, "ticket record unreadable".into());
     } else if !pr_only && !by_landing && wt.issue_id == IssueId::Unknown {
-        return Verdict::Held(vec!["not an issue worktree".into()]);
+        return Verdict::Held(vec!["not a ticket worktree".into()]);
     }
     if by_landing {
         match &wt.pr {
@@ -1556,7 +1558,7 @@ mod tests {
         };
         assert_eq!(
             reason_of(&detached, &linear, false).as_deref(),
-            Some("not an issue worktree")
+            Some("not a ticket worktree")
         );
         // No PR, HEAD on the default branch, and a tracker with no key.
         assert_eq!(
@@ -1699,7 +1701,7 @@ mod tests {
         };
         assert_eq!(
             verdict(&record, &linear, false),
-            Verdict::Unknown(vec!["issue record unreadable".into()])
+            Verdict::Unknown(vec!["ticket record unreadable".into()])
         );
 
         let tree = IssueWorktree {

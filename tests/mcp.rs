@@ -41,7 +41,7 @@ fn project_with_config() -> tempfile::TempDir {
 }
 
 /// A real (empty) git repo so `git worktree list` resolves with only the main
-/// worktree — `issue.status` then returns empty without needing `gh`.
+/// worktree — `ticket.status` then returns empty without needing `gh`.
 fn git_repo() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
     devkit_git::Git::fixture(p.path())
@@ -337,7 +337,7 @@ fn devrun_up_requires_at_least_one_app() {
 }
 
 #[test]
-fn issue_actions_are_described() {
+fn ticket_actions_are_described() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let resps = mcp(proj.path(), state.path(), &[json!({
@@ -352,26 +352,35 @@ fn issue_actions_are_described() {
         .iter()
         .map(|e| e["action"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"issue.status"), "issue.status is described");
-    assert!(names.contains(&"issue.prs"), "issue.prs is described");
+    assert!(
+        names.contains(&"ticket.status"),
+        "ticket.status is described"
+    );
+    assert!(names.contains(&"ticket.prs"), "ticket.prs is described");
+    assert!(
+        !names.iter().any(|n| n.starts_with("issue.")),
+        "the old names stay undescribed: {names:?}"
+    );
 }
 
 #[test]
-fn issue_status_empty_for_repo_with_no_worktrees() {
-    let proj = git_repo();
-    let state = tempfile::tempdir().unwrap();
-    let root = proj.path().to_str().unwrap();
-    let resps = mcp(proj.path(), state.path(), &[call_req(
-        1,
-        "issue.status",
-        json!({ "root": root }),
-    )]);
-    let report = tool_json(&resps[0], false);
-    assert!(
-        report["worktrees"].as_array().unwrap().is_empty(),
-        "no non-main worktrees -> empty list"
-    );
-    assert_eq!(report["finished_count"], 0);
+fn ticket_status_empty_for_repo_with_no_worktrees_by_either_name() {
+    for action in ["ticket.status", "issue.status"] {
+        let proj = git_repo();
+        let state = tempfile::tempdir().unwrap();
+        let root = proj.path().to_str().unwrap();
+        let resps = mcp(proj.path(), state.path(), &[call_req(
+            1,
+            action,
+            json!({ "root": root }),
+        )]);
+        let report = tool_json(&resps[0], false);
+        assert!(
+            report["worktrees"].as_array().unwrap().is_empty(),
+            "{action}: no non-main worktrees -> empty list"
+        );
+        assert_eq!(report["finished_count"], 0);
+    }
 }
 
 /// The MCP lifecycle a host drives on connect: `initialize` ->

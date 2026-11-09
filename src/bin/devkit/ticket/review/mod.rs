@@ -212,7 +212,7 @@ pub(crate) fn render_review(
     if let Some(worktree) = missing_record_at {
         r = r.with_context(|| {
             format!(
-                "no .devkit/issue.toml found in {worktree} — was it created by `workspace setup`?"
+                "no .devkit/ticket.toml found in {worktree} — was it created by `workspace setup`?"
             )
         });
     }

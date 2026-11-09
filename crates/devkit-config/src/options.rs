@@ -263,7 +263,10 @@ fn check_harness_value(table: &toml::Table, path: &[String]) -> Result<()> {
         return Ok(());
     };
     let mut one = nested(&path[1..], value.clone());
-    for tools in ["issue_tools", "pr_tools"] {
+    if let Some(harness) = one.as_table_mut() {
+        crate::read_renamed_harness_keys(harness)?;
+    }
+    for tools in ["ticket_tools", "pr_tools"] {
         let entries = one.get_mut(tools).and_then(toml::Value::as_table_mut);
         for entry in entries
             .into_iter()

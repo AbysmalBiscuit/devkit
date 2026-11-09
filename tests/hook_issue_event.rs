@@ -66,7 +66,7 @@ fn events(gh: &ghfake::Fake) -> Option<Vec<IssueEvent>> {
 }
 
 fn log(gh: &ghfake::Fake) -> String {
-    std::fs::read_to_string(gh.project().join(".devkit").join("issue-event.log"))
+    std::fs::read_to_string(gh.project().join(".devkit").join("ticket-event.log"))
         .unwrap_or_default()
 }
 

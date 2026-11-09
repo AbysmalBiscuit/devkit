@@ -21,8 +21,8 @@ use super::{
     splice::{section, shown, slot, splice},
 };
 use crate::{
-    issue::review::{guard_branch, parse_args},
     template::VarArgs,
+    ticket::review::{guard_branch, parse_args},
 };
 
 pub struct Args {
