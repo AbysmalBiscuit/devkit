@@ -1,4 +1,4 @@
-//! `issue.status` over the real JSON-RPC surface, against a project whose
+//! `ticket.status` over the real JSON-RPC surface, against a project whose
 //! `devkit.toml` names a tracker.
 
 use std::path::Path;
@@ -101,7 +101,7 @@ fn an_unparseable_doppler_yaml_body() {
     .unwrap();
 
     let report = call(
-        "issue.status",
+        "ticket.status",
         json!({ "root": dir.path().to_str().unwrap(), "ids": ["NOPE-1"] }),
     );
 
@@ -123,7 +123,7 @@ fn the_status_action_body() {
         // No worktree matches the filter, so nothing is fetched over the
         // network.
         let report = call(
-            "issue.status",
+            "ticket.status",
             json!({ "root": dir.path().to_str().unwrap(), "ids": ["NOPE-1"] }),
         );
         assert!(report["worktrees"].as_array().unwrap().is_empty());
@@ -147,7 +147,7 @@ fn the_status_action_body() {
     // The assertion holds whether or not this machine has a LINEAR_API_KEY.
     let dir = fixture(None);
     let report = call(
-        "issue.status",
+        "ticket.status",
         json!({ "root": dir.path().to_str().unwrap(), "ids": ["NOPE-1"] }),
     );
     assert_eq!(

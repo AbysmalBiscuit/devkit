@@ -9,13 +9,13 @@ use crate::{ServerCtx, actions::Action};
 pub fn actions() -> Vec<Action> {
     vec![
         Action {
-            name: "issue.status",
-            summary: "List issue worktrees (optionally filtered by id) with PR/tracker state and a finished verdict.",
+            name: "ticket.status",
+            summary: "List ticket worktrees (optionally filtered by id) with PR/tracker state and a finished verdict.",
             schema: status_schema,
             handler: status,
         },
         Action {
-            name: "issue.prs",
+            name: "ticket.prs",
             summary: "Triage your PRs on the project's forge: the ones you authored and the ones awaiting your review.",
             schema: prs_schema,
             handler: prs_handler,
@@ -36,14 +36,14 @@ fn status_schema() -> Value {
         "type": "object",
         "properties": {
             "root": { "type": "string", "description": "Directory whose worktrees are enumerated (default \".\")." },
-            "ids": { "type": "array", "items": { "type": "string" }, "description": "Filter to the worktrees these issue ids, branches, worktree paths, or PR numbers name (case-insensitive)." }
+            "ids": { "type": "array", "items": { "type": "string" }, "description": "Filter to the worktrees these ticket ids, branches, worktree paths, or PR numbers name (case-insensitive)." }
         },
         "additionalProperties": false
     })
 }
 
 fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
-    let a: StatusArgs = serde_json::from_value(args).context("invalid issue.status arguments")?;
+    let a: StatusArgs = serde_json::from_value(args).context("invalid ticket.status arguments")?;
     let root = a.root.unwrap_or_else(|| ".".to_string());
     let sel = tracker::select(None, &root, None);
     let report = status::gather_with(&root, &a.ids, &sel.tracker, &sel.forge, false)?;
@@ -82,7 +82,7 @@ fn prs_schema() -> Value {
 }
 
 fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
-    let a: PrsArgs = serde_json::from_value(args).context("invalid issue.prs arguments")?;
+    let a: PrsArgs = serde_json::from_value(args).context("invalid ticket.prs arguments")?;
     let root = a.root.unwrap_or_else(|| ".".to_string());
     let sel = tracker::select(None, &root, a.repo.as_deref());
     // Check-name globs to discount from the CHECK verdict, plus the Linear

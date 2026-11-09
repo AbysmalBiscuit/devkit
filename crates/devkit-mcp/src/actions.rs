@@ -28,7 +28,18 @@ pub fn actions() -> Vec<Action> {
     v
 }
 
+/// Actions renamed from their `issue.` spelling, old name first. A call or a
+/// describe may still name the old one; the action list names only the new.
+const RENAMED_ACTIONS: [(&str, &str); 2] = [
+    ("issue.status", "ticket.status"),
+    ("issue.prs", "ticket.prs"),
+];
+
 pub fn find(name: &str) -> Option<Action> {
+    let name = RENAMED_ACTIONS
+        .iter()
+        .find_map(|(old, new)| (*old == name).then_some(*new))
+        .unwrap_or(name);
     actions().into_iter().find(|a| a.name == name)
 }
 
@@ -91,6 +102,15 @@ mod tests {
         for a in actions() {
             let schema = describe(serde_json::json!({ "action": a.name })).unwrap();
             assert_eq!(schema["type"], "object", "{} schema", a.name);
+        }
+    }
+
+    #[test]
+    fn an_old_action_name_finds_its_ticket_action() {
+        for (old, new) in [("issue.status", "ticket.status"), ("issue.prs", "ticket.prs")] {
+            assert_eq!(find(old).map(|a| a.name), Some(new));
+            let schema = describe(serde_json::json!({ "action": old })).unwrap();
+            assert_eq!(schema["type"], "object", "{old} schema");
         }
     }
 
