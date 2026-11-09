@@ -417,7 +417,7 @@ fn issue_shim_defaults_to_status() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("ISSUE WORKTREES"),
+        String::from_utf8_lossy(&out.stdout).contains("TICKET WORKTREES"),
         "bare issue should render the status table: {}",
         String::from_utf8_lossy(&out.stdout)
     );
@@ -443,7 +443,7 @@ fn issue_subcommand_defaults_to_status() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("ISSUE WORKTREES"),
+        String::from_utf8_lossy(&out.stdout).contains("TICKET WORKTREES"),
         "bare `devkit issue` should render the status table: {}",
         String::from_utf8_lossy(&out.stdout)
     );

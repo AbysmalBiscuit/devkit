@@ -263,7 +263,7 @@ fn tasks_row(start: &std::path::Path) -> Option<Row> {
 /// that the project and its single-select field exist, hold every status the
 /// events name, and that the token may read them. None when no event is
 /// configured or the config does not load, which the `config` row reports.
-fn issue_events_row(
+fn ticket_events_row(
     start: &std::path::Path,
     selection: &(Resolved, devkit_common::forge::Resolved),
     steps: &Steps,
@@ -305,7 +305,7 @@ fn issue_events_row(
         }
     };
     Some(Row {
-        key: "issue_events",
+        key: "ticket_events",
         data: serde_json::Value::Null,
         source: Source::Unset,
         check,
@@ -589,7 +589,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
         harness_log_row(),
     ];
     rows.extend(tasks_row(std::path::Path::new(".")));
-    rows.extend(issue_events_row(
+    rows.extend(ticket_events_row(
         std::path::Path::new("."),
         &selection,
         steps,

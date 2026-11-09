@@ -184,7 +184,7 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
     let ids_v: Vec<String> = d.issue_ids().to_vec();
     let disp = display_order(d.rows());
 
-    let mut lt = LiveTable::new("ISSUE WORKTREES", &triage::HEADERS, m);
+    let mut lt = LiveTable::new("TICKET WORKTREES", &triage::HEADERS, m);
     for (i, row) in d.rows().iter().enumerate() {
         // The link base is unknown until the tracker responds; links appear in
         // the final stdout render.

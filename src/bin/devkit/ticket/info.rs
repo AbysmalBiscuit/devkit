@@ -191,9 +191,9 @@ fn live_enrich(
 ) -> Result<Option<String>> {
     let t = resolved.tracker.as_ref();
     let mut lt = if render {
-        LiveTable::new("ISSUE WORKTREES", &crate::ticket::triage::HEADERS, 1)
+        LiveTable::new("TICKET WORKTREES", &crate::ticket::triage::HEADERS, 1)
     } else {
-        LiveTable::hidden("ISSUE WORKTREES", &crate::ticket::triage::HEADERS, 1)
+        LiveTable::hidden("TICKET WORKTREES", &crate::ticket::triage::HEADERS, 1)
     };
     lt.set(
         0,

@@ -227,13 +227,15 @@ impl Landed {
 
 impl Serialize for IssueWorktree {
     /// Emits `pr` alongside the three legacy fields, so an MCP consumer reading
-    /// `pr_state` keeps working while a new one can read the candidates.
+    /// `pr_state` keeps working while a new one can read the candidates, and
+    /// `issue_id` beside `ticket_id` for readers of the old field.
     /// `dirty` is true whenever the tree is not known to be clean.
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("IssueWorktree", 12)?;
+        let mut st = s.serialize_struct("IssueWorktree", 13)?;
         st.serialize_field("worktree", &self.worktree)?;
         st.serialize_field("branch", &self.branch)?;
+        st.serialize_field("ticket_id", &self.issue_id)?;
         st.serialize_field("issue_id", &self.issue_id)?;
         st.serialize_field("dirty", &(self.tree != Tree::Clean))?;
         st.serialize_field("pr", &self.pr)?;

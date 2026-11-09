@@ -376,7 +376,8 @@ fn pr_status_finds_a_primary_checkout_by_the_issue_setup_here_bound() {
 
     assert!(out.status.success(), "{}", stderr(&out));
     let row: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(row["issue_id"], "7", "{row}");
+    assert_eq!(row["ticket_id"], "7", "{row}");
+    assert_eq!(row["issue_id"], "7", "the old field stays for older readers: {row}");
     assert_eq!(row["branch"], "lev/eng-1-fix", "{row}");
     assert_eq!(
         Path::new(row["worktree"].as_str().unwrap())

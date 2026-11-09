@@ -1077,7 +1077,7 @@ pub struct FileCondition {
 #[serde(default)]
 pub struct LinearConfig {
     /// Query Linear for the issues linked to each PR in `pr list` and the
-    /// `issue.prs` MCP action, adding every linked id to the ISSUE column. One
+    /// `ticket.prs` MCP action, adding every linked id to the TICKET column. One
     /// extra batched round trip per 25 PRs. Fail-soft: with no key or on a
     /// Linear error the column keeps the id derived from the PR text. Linear
     /// only; under the GitHub tracker the column carries each PR's closing
@@ -1696,14 +1696,14 @@ impl std::fmt::Display for TrackerKind {
 ///
 /// Every tracker question goes through the resolved tracker: `workspace
 /// setup`'s slug and summary, `pr checkout`'s bare-number disambiguation,
-/// `ticket dashboard`'s timeline, and the ISSUE column of `pr list`.
+/// `ticket dashboard`'s timeline, and the TICKET column of `pr list`.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TrackerConfig {
     /// Force a tracker instead of detecting one. Detection also decides when
     /// no config resolves: outside any devkit project, or when the config
     /// fails to load. Every `ticket`, `workspace` and `pr` command and the
-    /// `issue.status` MCP action read it. `github` authenticates through
+    /// `ticket.status` MCP action read it. `github` authenticates through
     /// `gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN`; under it a bare
     /// number is a PR, since issues and PRs share one numbering, and with
     /// no resolvable `[github] issues_repo` the project runs with no
