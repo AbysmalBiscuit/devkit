@@ -17,7 +17,6 @@ mod harness;
 mod hook;
 mod hook_log;
 mod install;
-mod ticket;
 mod links;
 mod locks;
 mod mcp;
@@ -28,6 +27,7 @@ mod schema;
 mod secret;
 mod shim;
 mod template;
+mod ticket;
 mod todo;
 
 const SHIM_HELP: &str = "\

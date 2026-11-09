@@ -107,7 +107,10 @@ mod tests {
 
     #[test]
     fn an_old_action_name_finds_its_ticket_action() {
-        for (old, new) in [("issue.status", "ticket.status"), ("issue.prs", "ticket.prs")] {
+        for (old, new) in [
+            ("issue.status", "ticket.status"),
+            ("issue.prs", "ticket.prs"),
+        ] {
             assert_eq!(find(old).map(|a| a.name), Some(new));
             let schema = describe(serde_json::json!({ "action": old })).unwrap();
             assert_eq!(schema["type"], "object", "{old} schema");

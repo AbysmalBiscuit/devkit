@@ -19,8 +19,8 @@ use super::{
     reviewer_logins, verify, weakened,
 };
 use crate::{
-    ticket::review::{PrAction, Target, action_for, guard_branch, resolve_target},
     template::VarArgs,
+    ticket::review::{PrAction, Target, action_for, guard_branch, resolve_target},
 };
 
 pub struct Args {

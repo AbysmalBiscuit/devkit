@@ -443,8 +443,8 @@ pub(crate) enum WorkspaceCmd {
     /// clean, its HEAD is on the remote's default branch, and no open PR has
     /// its branch as head.
     End {
-        /// Ticket ids, branches, worktree paths, or PR numbers to consider; omit
-        /// to scan every ticket worktree.
+        /// Ticket ids, branches, worktree paths, or PR numbers to consider;
+        /// omit to scan every ticket worktree.
         ids: Vec<String>,
         /// Remove without asking for confirmation.
         #[arg(short = 'y', long)]

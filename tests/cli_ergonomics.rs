@@ -231,7 +231,12 @@ fn workspace_setup_takes_the_ticket_by_flag_and_by_its_old_flag() {
     let state = tempfile::tempdir().unwrap();
     for flag in ["--ticket", "--issue"] {
         let out = run(&link, proj.path(), state.path(), &[
-            "setup", flag, "ABC-123", "--slug", "s", "--dry-run",
+            "setup",
+            flag,
+            "ABC-123",
+            "--slug",
+            "s",
+            "--dry-run",
         ]);
         let err = String::from_utf8_lossy(&out.stderr);
         assert_ne!(out.status.code(), Some(2), "{flag} must parse: {err}");

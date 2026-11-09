@@ -226,7 +226,10 @@ fn a_worktree_an_older_devkit_made_reports_and_ends_with_its_summary() {
     let status = fake.issue(&["status"]);
     let text = String::from_utf8_lossy(&status.stdout);
     assert!(status.status.success(), "{status:?}");
-    assert!(text.contains("ENG-50"), "the record's id is missing: {text}");
+    assert!(
+        text.contains("ENG-50"),
+        "the record's id is missing: {text}"
+    );
 
     serve_prs(&fake, &[]);
     let output = end(&fake);

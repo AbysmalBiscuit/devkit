@@ -354,7 +354,8 @@ fn resolve_slug(
             .with_context(|| format!("fetching the title for {}", issue.id))?
             .with_context(|| format!("no issue {} \u{2014} pass --slug", issue.id))?,
     };
-    let slug = crate::ticket::slug::cap(&crate::ticket::slug::from_title(&issue.id, &title)?, budget);
+    let slug =
+        crate::ticket::slug::cap(&crate::ticket::slug::from_title(&issue.id, &title)?, budget);
     eprintln!("slug from {}: {slug}", t.kind().as_str());
     Ok(slug)
 }

@@ -352,7 +352,10 @@ fn ticket_actions_are_described() {
         .iter()
         .map(|e| e["action"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"ticket.status"), "ticket.status is described");
+    assert!(
+        names.contains(&"ticket.status"),
+        "ticket.status is described"
+    );
     assert!(names.contains(&"ticket.prs"), "ticket.prs is described");
     assert!(
         !names.iter().any(|n| n.starts_with("issue.")),

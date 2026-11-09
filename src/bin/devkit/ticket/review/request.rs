@@ -14,12 +14,12 @@ use super::{
     parse_args, person_by_login, resolve_target, target_from_person, with_fields,
 };
 use crate::{
+    template::VarArgs,
     ticket::pr::{
         Gate, add_reviewers, gate_ready, require_existing_pr,
         resolve::{Existing, assert_belongs, parse_pr_flag, record_pr, resolve_existing},
         reviewer_logins,
     },
-    template::VarArgs,
 };
 
 pub struct Args {

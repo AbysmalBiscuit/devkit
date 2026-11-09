@@ -1077,11 +1077,11 @@ pub struct FileCondition {
 #[serde(default)]
 pub struct LinearConfig {
     /// Query Linear for the issues linked to each PR in `pr list` and the
-    /// `ticket.prs` MCP action, adding every linked id to the TICKET column. One
-    /// extra batched round trip per 25 PRs. Fail-soft: with no key or on a
-    /// Linear error the column keeps the id derived from the PR text. Linear
-    /// only; under the GitHub tracker the column carries each PR's closing
-    /// issues regardless.
+    /// `ticket.prs` MCP action, adding every linked id to the TICKET column.
+    /// One extra batched round trip per 25 PRs. Fail-soft: with no key or
+    /// on a Linear error the column keeps the id derived from the PR text.
+    /// Linear only; under the GitHub tracker the column carries each PR's
+    /// closing issues regardless.
     pub resolve_pr_links: bool,
 }
 
@@ -2521,7 +2521,8 @@ pub const DEFAULT_COMMIT_MESSAGE: &str = r#"{{- subject | trim }}
 Co-authored-by: {{ c }}
 {%- endfor %}
 {%- endif %}"#;
-pub const DEFAULT_TICKET_SUMMARY_PATH: &str = "{{ worktree }}/.devkit/TICKET_SUMMARY_{{ ticket }}.md";
+pub const DEFAULT_TICKET_SUMMARY_PATH: &str =
+    "{{ worktree }}/.devkit/TICKET_SUMMARY_{{ ticket }}.md";
 pub const DEFAULT_TICKET_SUMMARY: &str = "\
 # {{ ticket }}: {{ title }}\n\
 \n\
