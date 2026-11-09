@@ -390,7 +390,7 @@ fn run_selected(start: &str, ids: &[String], flags: EndFlags, sel: Selected) -> 
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
-            "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
+            "--clean-worktree needs one or more selectors (ticket id, branch, or worktree path)"
         );
         let report = gather_selected(&steps, start, ids, &tracker, &forge, pr_only)?;
         render(&report, false);

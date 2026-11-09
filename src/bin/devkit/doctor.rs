@@ -209,10 +209,10 @@ fn tracker_check(r: &Resolved) -> Check {
             if r.declared || r.tracker.ready() {
                 Check::Ok(detail)
             } else if r.unbuilt_reason().is_some() {
-                Check::Warn(format!("{detail}; issue state gates stay closed"))
+                Check::Warn(format!("{detail}; ticket state gates stay closed"))
             } else {
                 Check::Warn(format!(
-                    "{detail}; issue state gates stay closed — set `[tracker] kind` \
+                    "{detail}; ticket state gates stay closed — set `[tracker] kind` \
                      to name this project's tracker"
                 ))
             }

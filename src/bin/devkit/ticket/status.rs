@@ -284,7 +284,7 @@ fn tracker_hint(t: &TrackerInfo) -> Option<String> {
     }
     if let Some(why) = devkit_common::tracker::unbuilt_reason(t.kind, t.declared, &t.reason) {
         return Some(format!(
-            "{why} — issue state gates stay closed, so nothing reports finished"
+            "{why} — ticket state gates stay closed, so nothing reports finished"
         ));
     }
     let generic = match t.kind {
@@ -298,7 +298,7 @@ fn tracker_hint(t: &TrackerInfo) -> Option<String> {
         }
         TrackerKind::None if t.declared => return None,
         TrackerKind::None => {
-            "No issue tracker devkit can read — issue state gates stay closed, so nothing \
+            "No issue tracker devkit can read — ticket state gates stay closed, so nothing \
              reports finished. Set `[tracker] kind` to name this project's tracker"
         }
     };
