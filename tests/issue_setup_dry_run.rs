@@ -107,3 +107,23 @@ fn a_dry_run_without_summary_prints_no_summary_text_or_reads_the_issue() {
     assert!(!calls.contains("issues/7"), "{calls}");
     assert!(!calls.contains("issue view"), "{calls}");
 }
+
+/// A branch left by an earlier run, with no worktree for it: the refusal
+/// names the ways forward in current commands.
+#[test]
+fn an_existing_branch_is_refused_naming_how_to_go_on() {
+    let fake = ghfake::Fake::without_pr(GITHUB_TRACKER);
+    let _origin = with_origin(&fake);
+    let dry = json(&fake.issue(&["setup", "7", "--slug", "fix", "--dry-run", "--no-gitignore"]));
+    let branch = dry["branch"].as_str().expect("a branch").to_string();
+    git(fake.project(), &["branch", &branch]);
+
+    let out = fake.issue(&["setup", "7", "--slug", "fix", "--no-gitignore"]);
+
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(err.contains(&branch), "{err}");
+    assert!(err.contains("workspace setup --here 7"), "{err}");
+    assert!(err.contains("--slug"), "{err}");
+    assert!(!err.contains("/issue-setup"), "{err}");
+}

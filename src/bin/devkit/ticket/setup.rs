@@ -837,7 +837,15 @@ fn setup(
     })?;
     let vcs = Vcs::at(&primary);
     if vcs.has_branch(&primary, &branch)? {
-        anyhow::bail!("branch {branch} already exists — let /issue-setup decide how to proceed");
+        let bind = if issue.is_empty() {
+            String::new()
+        } else {
+            format!(", run `workspace setup --here {issue}` in a checkout of it to bind it")
+        };
+        anyhow::bail!(
+            "branch {branch} already exists. `workspace status` shows the worktree that \
+             has it{bind}, or pass another `--slug` for a new branch"
+        );
     }
     steps.during_result("Creating worktree...", || {
         vcs.create_worktree(&NewWorktree {
