@@ -312,7 +312,7 @@ fn removed_in_order(
 
 /// The `before_worktree_remove` and `after_worktree_remove` render context
 /// for each approved worktree, keyed by its path. Built before the removal
-/// phase: `issue`, `slug` and `apps` come from `.devkit/issue.toml`, which the
+/// phase: `issue`, `slug` and `apps` come from `.devkit/ticket.toml`, which the
 /// removal deletes along with everything else in the worktree.
 fn remove_contexts(
     approved: &[IssueWorktree],
@@ -868,7 +868,7 @@ mod tests {
             wt.to_str().unwrap(),
         ]);
         std::fs::create_dir_all(wt.join(".devkit")).unwrap();
-        std::fs::write(wt.join(".devkit").join("issue.toml"), "issue = \n").unwrap();
+        std::fs::write(wt.join(".devkit").join("ticket.toml"), "issue = \n").unwrap();
         // The self-ignore every real record write drops beside the record.
         // Without it the directory is untracked, the dirty gate answers first,
         // and the refusal under test never runs.
@@ -882,7 +882,7 @@ mod tests {
         )
         .unwrap_err();
         let msg = format!("{err:#}");
-        assert!(msg.contains("issue.toml"), "{msg}");
+        assert!(msg.contains("ticket.toml"), "{msg}");
         assert!(wt.exists(), "the worktree survives a refusal");
 
         cleanup(

@@ -1569,7 +1569,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(
-            dir.path().join(".devkit").join("issue.toml"),
+            dir.path().join(".devkit").join("ticket.toml"),
             "issue = \"87\"\nslug = \"fix\"\napps = []\n",
         )
         .unwrap();
@@ -1586,7 +1586,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(
-            dir.path().join(".devkit").join("issue.toml"),
+            dir.path().join(".devkit").join("ticket.toml"),
             "issue = \"87\"\nslug = \"fix\"\nbranch = \"lev/87-fix\"\napps = []\n",
         )
         .unwrap();
@@ -1627,7 +1627,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(
-            dir.path().join(".devkit").join("issue.toml"),
+            dir.path().join(".devkit").join("ticket.toml"),
             "issue = \"eng-1234\"\nslug = \"x\"\napps = []\n",
         )
         .unwrap();
@@ -1644,7 +1644,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(
-            dir.path().join(".devkit").join("issue.toml"),
+            dir.path().join(".devkit").join("ticket.toml"),
             "issue = \"\"\nslug = \"x\"\napps = []\n",
         )
         .unwrap();

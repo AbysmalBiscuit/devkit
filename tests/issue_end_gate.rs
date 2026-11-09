@@ -76,7 +76,7 @@ fn an_unreadable_record_holds_the_worktree_in_status_and_end() {
     let (repo, wt) = pushed_worktree(tmp.path());
     let devkit_dir = wt.join(".devkit");
     std::fs::create_dir_all(&devkit_dir).unwrap();
-    std::fs::write(devkit_dir.join("issue.toml"), "issue = \n").unwrap();
+    std::fs::write(devkit_dir.join("ticket.toml"), "issue = \n").unwrap();
     // Every real record write drops this beside the record. Without it the
     // tree is dirty, and that alone would hold the worktree.
     devkit_common::gitignore::write_self_ignore(&devkit_dir);

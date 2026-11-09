@@ -102,7 +102,7 @@ fn a_lowercase_record_id_is_found_by_either_spelling() {
     let wt = base.path().join("eng-1-foo");
     std::fs::create_dir_all(wt.join(".devkit")).unwrap();
     std::fs::write(
-        wt.join(".devkit").join("issue.toml"),
+        wt.join(".devkit").join("ticket.toml"),
         "issue = \"eng-1234\"\nslug = \"fix\"\napps = []\n",
     )
     .unwrap();
@@ -141,7 +141,7 @@ fn an_issueless_record_reads_as_none_not_a_branch_scan() {
     );
     std::fs::create_dir_all(wt.join(".devkit")).unwrap();
     std::fs::write(
-        wt.join(".devkit").join("issue.toml"),
+        wt.join(".devkit").join("ticket.toml"),
         "issue = \"\"\nslug = \"utf-8-fix\"\napps = []\n",
     )
     .unwrap();

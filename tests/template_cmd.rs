@@ -46,7 +46,7 @@ fn setup() -> tempfile::TempDir {
     std::fs::write(dir.path().join("devkit.toml"), CONFIG).expect("write devkit.toml");
     std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
     std::fs::write(
-        dir.path().join(".devkit/issue.toml"),
+        dir.path().join(".devkit/ticket.toml"),
         "issue = \"ENG-1\"\nslug = \"fix\"\napps = []\n",
     )
     .unwrap();
@@ -278,7 +278,7 @@ fn a_setup_built_in_renders_from_the_record_or_from_args() {
         "prefix from config, slug from the record"
     );
 
-    std::fs::remove_file(dir.path().join(".devkit/issue.toml")).unwrap();
+    std::fs::remove_file(dir.path().join(".devkit/ticket.toml")).unwrap();
     let out = run(dir.path(), &["render", "branch"]);
     assert!(!out.status.success(), "{out:?}");
     assert!(stderr(&out).contains("--arg slug=..."), "{out:?}");
@@ -309,7 +309,7 @@ fn a_built_in_renders_what_its_command_would_send() {
     let project = fake.project();
     std::fs::create_dir_all(project.join(".devkit")).unwrap();
     std::fs::write(
-        project.join(".devkit/issue.toml"),
+        project.join(".devkit/ticket.toml"),
         "issue = \"ENG-1\"\nslug = \"fix\"\napps = []\n",
     )
     .unwrap();

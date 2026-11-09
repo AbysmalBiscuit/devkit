@@ -275,7 +275,7 @@ fn a_blank_flag_and_a_worktree_with_untracked_files_are_refused_cleanly() {
 #[test]
 fn a_missing_issue_or_merge_base_names_what_is_missing() {
     let no_issue = project(GATE, FIX);
-    std::fs::remove_file(no_issue.project().join(".devkit/issue.toml")).unwrap();
+    std::fs::remove_file(no_issue.project().join(".devkit/ticket.toml")).unwrap();
     let (ok, stdout, stderr) = repro(&no_issue, &[]);
     assert!(ok, "{stderr}");
     assert!(stdout.contains("no repro check"), "{stdout}");

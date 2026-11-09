@@ -366,7 +366,7 @@ fn issue_fields_render_from_the_record_and_are_undefined_without_one() {
     git(&["switch", "-qc", "feat"]);
     std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
     std::fs::write(
-        dir.path().join(".devkit/issue.toml"),
+        dir.path().join(".devkit/ticket.toml"),
         "issue = \"ENG-42\"\nslug = \"fix-it\"\napps = []\n",
     )
     .unwrap();

@@ -218,7 +218,7 @@ fn prompt_choice(
     Ok(chosen.cloned())
 }
 
-/// The id stored in `.devkit/issue.toml`: the tracker's id when the input
+/// The id stored in `.devkit/ticket.toml`: the tracker's id when the input
 /// resolved to one, else the id parsed from the PR head ref, else `UNKNOWN`.
 fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
     linear_id.map(str::to_string).unwrap_or_else(|| {
@@ -230,7 +230,7 @@ fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
 
 /// Run `f`; on error, remove the just-created worktree at `worktree` (in
 /// `primary`) before propagating, so a failed checkout or record write never
-/// leaves an orphan worktree with no `.devkit/issue.toml`. Without the record,
+/// leaves an orphan worktree with no `.devkit/ticket.toml`. Without the record,
 /// the worktree is invisible to `workspace status`/`workspace end` yet blocks a
 /// re-run at the path-exists guard. A failure of the removal itself is ignored
 /// — the original error is what propagates.

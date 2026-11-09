@@ -117,7 +117,7 @@ pub fn slots(root: &Path) -> Vec<PathBuf> {
 
 /// The `path` under `[baseline]` in a worktree's record.
 pub fn baseline_of(wt: &Path) -> String {
-    let body = std::fs::read_to_string(wt.join(".devkit").join("issue.toml")).unwrap();
+    let body = std::fs::read_to_string(wt.join(".devkit").join("ticket.toml")).unwrap();
     let doc: toml::Value = toml::from_str(&body).unwrap();
     doc["baseline"]["path"].as_str().unwrap().to_string()
 }

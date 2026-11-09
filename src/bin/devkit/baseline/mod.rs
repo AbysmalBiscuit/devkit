@@ -562,7 +562,7 @@ impl References {
 
     /// Why this scan can prove nothing, naming the worktrees to repair. A scan
     /// that stayed silent would leave a user with one corrupt
-    /// `.devkit/issue.toml` watching baselines never get reclaimed, with
+    /// `.devkit/ticket.toml` watching baselines never get reclaimed, with
     /// nothing to point at.
     fn unreadable_note(&self) -> Option<String> {
         if self.unreadable.is_empty() {
@@ -2240,7 +2240,7 @@ mod tests {
     }
 
     fn corrupt_record(wt: &Path) {
-        std::fs::write(wt.join(".devkit").join("issue.toml"), "issue = ").unwrap();
+        std::fs::write(wt.join(".devkit").join("ticket.toml"), "issue = ").unwrap();
     }
 
     /// A worktree whose baseline marker cannot be resolved is filtered out of
@@ -2373,7 +2373,7 @@ mod tests {
     }
 
     /// The refusal is silent to the user unless it says which record it could
-    /// not read: one corrupt `.devkit/issue.toml` otherwise stops every
+    /// not read: one corrupt `.devkit/ticket.toml` otherwise stops every
     /// baseline from ever being reclaimed with nothing to point at.
     #[test]
     fn the_refusal_names_the_worktrees_it_could_not_read() {
@@ -2640,13 +2640,13 @@ mod tests {
     #[test]
     fn an_unparseable_record_refuses_the_pin_and_keeps_the_file() {
         let f = two_worktrees_sharing_one_baseline();
-        let rec = f.a.join(".devkit").join("issue.toml");
+        let rec = f.a.join(".devkit").join("ticket.toml");
         let body = "issue = \"ENG-42\"\nslug = \"important\"\napps = [\"api\"]\nnot toml\n";
         std::fs::write(&rec, body).unwrap();
 
         let err = write_pin(&f.a, "d13d90b724bf8a3c", &f.baseline).unwrap_err();
         let msg = format!("{err:#}");
-        assert!(msg.contains("issue.toml"), "{msg}");
+        assert!(msg.contains("ticket.toml"), "{msg}");
         assert_eq!(
             std::fs::read_to_string(&rec).unwrap(),
             body,

@@ -243,7 +243,7 @@
     },
     "CustomTemplate": {
       "additionalProperties": false,
-      "description": "One `[templates.custom]` entry: a template a project writes once and an\nagent renders with `devkit template render <name> --arg key=value`. It\nreads `[templates.variables]` like every other template, plus `branch`,\nand `ticket` (also named `issue`), `slug` and `apps` from the worktree's\n`.devkit/issue.toml`.\n\n```toml\n[templates.custom.standup]\ndescription = \"Daily update for #eng-standup\"\nbody = \"\"\"\n**Yesterday:** {{ yesterday }}\n**Today:** {{ today }}\n{% if blockers %}**Blocked on:** {{ blockers }}{% endif %}\n\"\"\"\n\n[templates.variables]\nyesterday = { required = \"always\", description = \"what shipped, one line per item\" }\ntoday = { required = \"always\" }\nblockers = { default = \"\" }\n```",
+      "description": "One `[templates.custom]` entry: a template a project writes once and an\nagent renders with `devkit template render <name> --arg key=value`. It\nreads `[templates.variables]` like every other template, plus `branch`,\nand `ticket` (also named `issue`), `slug` and `apps` from the worktree's\n`.devkit/ticket.toml`.\n\n```toml\n[templates.custom.standup]\ndescription = \"Daily update for #eng-standup\"\nbody = \"\"\"\n**Yesterday:** {{ yesterday }}\n**Today:** {{ today }}\n{% if blockers %}**Blocked on:** {{ blockers }}{% endif %}\n\"\"\"\n\n[templates.variables]\nyesterday = { required = \"always\", description = \"what shipped, one line per item\" }\ntoday = { required = \"always\" }\nblockers = { default = \"\" }\n```",
       "properties": {
         "body": {
           "description": "The minijinja source. Rendering is strict: a variable nothing supplies\nis an error, and a trailing newline is kept.",
@@ -351,7 +351,7 @@
         },
         "baseline_dir": {
           "default": "",
-          "description": "Directory baseline worktrees are created under, one per fork-point\ncommit, each made on demand. Anchors like `worktree_root`. Defaults to\n`_baselines` under `worktree_root`. `devrun baseline prune` reclaims\nonly directories carrying devkit's `.devkit/baseline.toml` marker, and\nonly once no worktree's `.devkit/issue.toml` names them. A directory\nhere without that marker is reported and never touched. A baseline\ndevkit expects whose marker is missing is rebuilt in place, and one\nwhose marker cannot be read is refused.",
+          "description": "Directory baseline worktrees are created under, one per fork-point\ncommit, each made on demand. Anchors like `worktree_root`. Defaults to\n`_baselines` under `worktree_root`. `devrun baseline prune` reclaims\nonly directories carrying devkit's `.devkit/baseline.toml` marker, and\nonly once no worktree's `.devkit/ticket.toml` names them. A directory\nhere without that marker is reported and never touched. A baseline\ndevkit expects whose marker is missing is rebuilt in place, and one\nwhose marker cannot be read is refused.",
           "type": "string"
         },
         "baseline_ref": {
@@ -924,7 +924,7 @@
         },
         "after_worktree_remove": {
           "default": [],
-          "description": "Runs once per worktree `workspace end` removed, after every removal in\nthe run has finished, in the main repository root. `ticket`, `slug`\nand `apps` come from the `.devkit/issue.toml` record read before the\nremoval. Rendered over `worktree`, `branch`, `ticket` (also named\n`issue`), `slug`, `apps`, `prefix`, `worktree_root`, `primary`, and\n`[templates.variables]`. A worktree kept back or skipped fires nothing.\nRuns after the run's summary, so a failing hook never un-reports a\nremoval, and is skipped with a warning when the main repository root\ndoes not resolve.",
+          "description": "Runs once per worktree `workspace end` removed, after every removal in\nthe run has finished, in the main repository root. `ticket`, `slug`\nand `apps` come from the `.devkit/ticket.toml` record read before the\nremoval. Rendered over `worktree`, `branch`, `ticket` (also named\n`issue`), `slug`, `apps`, `prefix`, `worktree_root`, `primary`, and\n`[templates.variables]`. A worktree kept back or skipped fires nothing.\nRuns after the run's summary, so a failing hook never un-reports a\nremoval, and is skipped with a warning when the main repository root\ndoes not resolve.",
           "items": {
             "items": {
               "type": "string"
@@ -1496,7 +1496,7 @@
           "type": "boolean"
         },
         "to": {
-          "description": "Destination directory, rendered as minijinja over `worktree`, `branch`,\n`ticket` (also named `issue`), `slug`, `apps`, `prefix`,\n`worktree_root`, `primary` and `[templates.variables]`. Issue fields\ncome from the worktree's `.devkit/issue.toml` and render empty\nwithout one, and `primary` fails when the primary checkout cannot be\nresolved. Must render to a non-empty absolute path outside every\nworktree the run removes; the filesystem decides that, so a symlink,\n`..` or case difference does not slip past. Created when the first\nfile lands. An existing file there is truncated and rewritten, so an\ninterrupted copy leaves a short file. Two worktrees writing one\nfilename into the same `to` collide; render `{{ ticket }}` into it.",
+          "description": "Destination directory, rendered as minijinja over `worktree`, `branch`,\n`ticket` (also named `issue`), `slug`, `apps`, `prefix`,\n`worktree_root`, `primary` and `[templates.variables]`. Issue fields\ncome from the worktree's `.devkit/ticket.toml` and render empty\nwithout one, and `primary` fails when the primary checkout cannot be\nresolved. Must render to a non-empty absolute path outside every\nworktree the run removes; the filesystem decides that, so a symlink,\n`..` or case difference does not slip past. Created when the first\nfile lands. An existing file there is truncated and rewritten, so an\ninterrupted copy leaves a short file. Two worktrees writing one\nfilename into the same `to` collide; render `{{ ticket }}` into it.",
           "type": "string"
         }
       },
@@ -2241,7 +2241,7 @@
           ]
         },
         "review_request": {
-          "description": "Slack message sent by `pr review request`. Rendered once per\nrecipient with `name`, `slack_id` (empty for a channel), `pr_url`,\n`pr_title` (the PR's own title from GitHub), `input`, and `branch`,\n`ticket` (also named `issue`), `slug`, `apps` from the worktree's\n`.devkit/issue.toml`.",
+          "description": "Slack message sent by `pr review request`. Rendered once per\nrecipient with `name`, `slack_id` (empty for a channel), `pr_url`,\n`pr_title` (the PR's own title from GitHub), `input`, and `branch`,\n`ticket` (also named `issue`), `slug`, `apps` from the worktree's\n`.devkit/ticket.toml`.",
           "type": [
             "string",
             "null"

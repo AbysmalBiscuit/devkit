@@ -78,11 +78,19 @@ pub enum RecordState {
     Absent,
 }
 
-/// `<worktree>/.devkit/issue.toml`, the one spelling of the record path, so a
-/// caller reporting a record it refused to touch names the same file the
-/// readers and the writer use.
+/// `<worktree>/.devkit/ticket.toml`, or `issue.toml` in a worktree an older
+/// devkit set up that has no `ticket.toml`. This is the one spelling of the
+/// record path, so a caller reporting a record it refused to touch names the
+/// same file the readers and the writer use.
 pub fn path(worktree: &Path) -> std::path::PathBuf {
-    worktree.join(".devkit").join("issue.toml")
+    let dir = worktree.join(".devkit");
+    let current = dir.join("ticket.toml");
+    let legacy = dir.join("issue.toml");
+    if !current.exists() && legacy.exists() {
+        legacy
+    } else {
+        current
+    }
 }
 
 /// Write the record under `<worktree>/.devkit/`, creating the directory.
@@ -96,14 +104,14 @@ pub fn write(worktree: &Path, rec: &IssueRecord) -> Result<()> {
     let dir = p.parent().expect("path has a parent");
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     crate::gitignore::write_self_ignore(dir);
-    let body = toml::to_string(rec).context("serializing issue record")?;
+    let body = toml::to_string(rec).context("serializing ticket record")?;
     let tmp = p.with_extension("toml.tmp");
     std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, &p).with_context(|| format!("renaming into {}", p.display()))
 }
 
-/// Read, change and write the record under an exclusive lock on
-/// `<worktree>/.devkit/issue.lock`, so concurrent updaters each see the
+/// Read, change and write the record under an exclusive lock on the `.lock`
+/// file beside the record [`path`] names, so concurrent updaters each see the
 /// others' writes. `f` gets `None` when the record is absent or unreadable,
 /// and the record is written when `f` leaves it `Some` and changed.
 ///
@@ -114,7 +122,7 @@ pub fn update<T>(worktree: &Path, f: impl FnOnce(&mut Option<IssueRecord>) -> T)
     let dir = p.parent().expect("path has a parent");
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     crate::gitignore::write_self_ignore(dir);
-    crate::store::with_file_lock(&dir.join("issue.lock"), || {
+    crate::store::with_file_lock(&p.with_extension("lock"), || {
         let (before, unreadable) = match read_state(worktree) {
             RecordState::Ok(rec) => (Some(*rec), false),
             RecordState::Unusable => (None, true),
@@ -175,7 +183,7 @@ impl IssueRecord {
     }
 }
 
-/// Read the record from `<worktree>/.devkit/issue.toml`, or `None` if absent or
+/// Read the record from the file [`path`] names, or `None` if absent or
 /// unparseable.
 pub fn read(worktree: &Path) -> Option<IssueRecord> {
     let body = std::fs::read_to_string(path(worktree)).ok()?;
@@ -209,6 +217,51 @@ pub fn read_state(worktree: &Path) -> RecordState {
 mod tests {
     use super::*;
 
+    fn rec(issue: &str) -> IssueRecord {
+        IssueRecord {
+            issue: issue.into(),
+            ..IssueRecord::default()
+        }
+    }
+
+    #[test]
+    fn a_new_worktree_records_into_ticket_toml_under_ticket_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let devkit = dir.path().join(".devkit");
+        assert_eq!(path(dir.path()), devkit.join("ticket.toml"));
+        update(dir.path(), |r| *r = Some(rec("ENG-1"))).unwrap();
+        assert!(devkit.join("ticket.toml").exists());
+        assert!(devkit.join("ticket.lock").exists());
+        assert!(!devkit.join("issue.toml").exists());
+        assert!(!devkit.join("issue.lock").exists());
+    }
+
+    #[test]
+    fn a_worktree_an_older_devkit_made_keeps_its_issue_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let devkit = dir.path().join(".devkit");
+        std::fs::create_dir_all(&devkit).unwrap();
+        std::fs::write(
+            devkit.join("issue.toml"),
+            "issue = \"ENG-2\"\nslug = \"s\"\napps = []\n",
+        )
+        .unwrap();
+        assert_eq!(path(dir.path()), devkit.join("issue.toml"));
+        let RecordState::Ok(read) = read_state(dir.path()) else {
+            panic!("the old record did not read");
+        };
+        assert_eq!(read.issue, "ENG-2");
+
+        update(dir.path(), |r| r.as_mut().unwrap().slug = "t".into()).unwrap();
+        assert!(!devkit.join("ticket.toml").exists());
+        assert!(devkit.join("issue.lock").exists());
+        assert!(!devkit.join("ticket.lock").exists());
+        let RecordState::Ok(read) = read_state(dir.path()) else {
+            panic!("the updated record did not read");
+        };
+        assert_eq!(read.slug, "t");
+    }
+
     #[test]
     fn write_then_read_round_trips() {
         let dir = tempfile::tempdir().unwrap();
@@ -216,7 +269,7 @@ mod tests {
             issue: "ABC-123".into(),
             slug: "fix-login".into(),
             apps: vec!["web".into(), "api".into()],
-            summary: Some("/w/ISSUE_SUMMARY_ABC-123.md".into()),
+            summary: Some("/w/TICKET_SUMMARY_ABC-123.md".into()),
             pr: Some(crate::forge::PrLocator {
                 repo: Some("acme/web".into()),
                 number: 42,

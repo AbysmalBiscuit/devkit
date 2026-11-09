@@ -106,7 +106,7 @@ fn pr_checkout_checks_out_the_pr_when_graphql_is_refused() {
         "lev/eng-1-fix"
     );
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]).trim(), fake.head());
-    let record = std::fs::read_to_string(worktree.join(".devkit").join("issue.toml")).unwrap();
+    let record = std::fs::read_to_string(worktree.join(".devkit").join("ticket.toml")).unwrap();
     assert!(record.contains("number = 7"), "{record}");
 }
 
@@ -176,7 +176,7 @@ fn pr_checkout_of_an_issue_checks_out_its_closing_pr_when_graphql_is_refused() {
     let reqs = api.requests();
     assert!(out.status.success(), "{out:?}\n{reqs:#?}");
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]).trim(), fake.head());
-    let record = std::fs::read_to_string(worktree.join(".devkit").join("issue.toml")).unwrap();
+    let record = std::fs::read_to_string(worktree.join(".devkit").join("ticket.toml")).unwrap();
     assert!(record.contains("number = 7"), "{record}");
     assert!(
         reqs.iter()

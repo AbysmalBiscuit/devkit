@@ -724,7 +724,7 @@ pub struct HooksConfig {
 
     /// Runs once per worktree `workspace end` removed, after every removal in
     /// the run has finished, in the main repository root. `ticket`, `slug`
-    /// and `apps` come from the `.devkit/issue.toml` record read before the
+    /// and `apps` come from the `.devkit/ticket.toml` record read before the
     /// removal. Rendered over `worktree`, `branch`, `ticket` (also named
     /// `issue`), `slug`, `apps`, `prefix`, `worktree_root`, `primary`, and
     /// `[templates.variables]`. A worktree kept back or skipped fires nothing.
@@ -790,7 +790,7 @@ pub struct PreserveConfig {
     /// Destination directory, rendered as minijinja over `worktree`, `branch`,
     /// `ticket` (also named `issue`), `slug`, `apps`, `prefix`,
     /// `worktree_root`, `primary` and `[templates.variables]`. Issue fields
-    /// come from the worktree's `.devkit/issue.toml` and render empty
+    /// come from the worktree's `.devkit/ticket.toml` and render empty
     /// without one, and `primary` fails when the primary checkout cannot be
     /// resolved. Must render to a non-empty absolute path outside every
     /// worktree the run removes; the filesystem decides that, so a symlink,
@@ -2132,7 +2132,7 @@ pub struct Defaults {
     /// commit, each made on demand. Anchors like `worktree_root`. Defaults to
     /// `_baselines` under `worktree_root`. `devrun baseline prune` reclaims
     /// only directories carrying devkit's `.devkit/baseline.toml` marker, and
-    /// only once no worktree's `.devkit/issue.toml` names them. A directory
+    /// only once no worktree's `.devkit/ticket.toml` names them. A directory
     /// here without that marker is reported and never touched. A baseline
     /// devkit expects whose marker is missing is rebuilt in place, and one
     /// whose marker cannot be read is refused.
@@ -2759,7 +2759,7 @@ pub struct Templates {
     /// recipient with `name`, `slack_id` (empty for a channel), `pr_url`,
     /// `pr_title` (the PR's own title from GitHub), `input`, and `branch`,
     /// `ticket` (also named `issue`), `slug`, `apps` from the worktree's
-    /// `.devkit/issue.toml`.
+    /// `.devkit/ticket.toml`.
     pub review_request: Option<String>,
     /// Slack message sent by `pr review finish`. Same context as
     /// `review_request`, plus `author`.
@@ -2896,7 +2896,7 @@ impl Templates {
 /// agent renders with `devkit template render <name> --arg key=value`. It
 /// reads `[templates.variables]` like every other template, plus `branch`,
 /// and `ticket` (also named `issue`), `slug` and `apps` from the worktree's
-/// `.devkit/issue.toml`.
+/// `.devkit/ticket.toml`.
 ///
 /// ```
 /// # use devkit_config::Config;
