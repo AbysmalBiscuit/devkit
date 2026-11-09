@@ -84,7 +84,7 @@ fn an_unreadable_record_holds_the_worktree_in_status_and_end() {
     let status = devkit(&repo, &state, &["issue", "status"]);
     let status = String::from_utf8_lossy(&status.stdout);
     assert!(
-        status.contains("issue record unreadable") && !status.contains("FINISHED"),
+        status.contains("ticket record unreadable") && !status.contains("FINISHED"),
         "{status}"
     );
 

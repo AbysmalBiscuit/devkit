@@ -2526,7 +2526,7 @@ pub const DEFAULT_TICKET_SUMMARY_PATH: &str =
 pub const DEFAULT_TICKET_SUMMARY: &str = "\
 # {{ ticket }}: {{ title }}\n\
 \n\
-- **Issue:** {{ url }}\n\
+- **Ticket:** {{ url }}\n\
 {% if parent %}- **Parent:** {{ parent }}\n{% endif %}\
 {% if project %}- **Project:** {{ project }}\n{% endif %}\
 - **Worktree:** {{ worktree }}\n\

@@ -148,7 +148,7 @@ fn a_dirty_scratch_checkout_is_held() {
 
     assert!(wt.exists(), "a dirty worktree was removed: {output}");
     assert!(
-        output.contains("dirty") && !output.contains("not an issue worktree"),
+        output.contains("dirty") && !output.contains("not a ticket worktree"),
         "the tree alone holds the row: {output}"
     );
 }

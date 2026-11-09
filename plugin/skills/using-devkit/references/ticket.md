@@ -64,14 +64,14 @@ A tracker MCP write is held to the same levels once its `[harness.ticket_tools]`
 
 | Event | Fires | Where |
 |---|---|---|
-| `setup` | as `workspace setup`'s last step, after the `after_worktree_create` hooks | the worktree it creates, when it names a tracker issue |
+| `setup` | as `workspace setup`'s last step, after the `after_worktree_create` hooks | the worktree it creates, when it names a tracker ticket |
 | `start` | in the background, when the first agent session starts in the worktree | `workspace setup` worktrees only, never `devkit pr checkout` ones, so a reviewer's session cannot pull a ticket back from review |
-| `pr_open` | when `devkit pr create` opens the PR or finds one already open | any worktree whose record names a tracker issue |
+| `pr_open` | when `devkit pr create` opens the PR or finds one already open | any worktree whose record names a tracker ticket |
 | `todo_start` | in the background, when the todo `devkit todo sync` brought in for the ticket becomes in progress | a checkout of the ticket's repository; from anywhere else the ticket is not moved and a warning names it |
 | `todo_done` | in the background, when that todo becomes completed | as `todo_start` |
 | `todo_cancel` | when that todo becomes cancelled by `devkit todo cancel`, only with `"status"` in `[ticket.sync] push` | as `todo_start` |
 
-`setup`, `start` and `pr_open` each fire once per worktree. The worktree's `.devkit/ticket.toml` records it before the tracker is asked, and a failed move keeps that record, so a tracker that is down costs one missed move rather than a retry on every session. `workspace end` removes the record, and the marks go with it. `setup` and `pr_open` print a failed move as a warning and the command still succeeds. The background `start` run appends its outcome or error to `.devkit/issue-event.log` in the worktree.
+`setup`, `start` and `pr_open` each fire once per worktree. The worktree's `.devkit/ticket.toml` records it before the tracker is asked, and a failed move keeps that record, so a tracker that is down costs one missed move rather than a retry on every session. `workspace end` removes the record, and the marks go with it. `setup` and `pr_open` print a failed move as a warning and the command still succeeds. The background `start` run appends its outcome or error to `.devkit/ticket-event.log` in the worktree.
 
 `todo_start` and `todo_done` fire on every change into that status, by an agent, a person or a harness's task tool, and never on a change sync makes as the `tracker` holder, so sync and the events cannot move a ticket back and forth. A harness task names its ticket as `references/todo.md` describes. Their background run skips the move once the todo has left the status that fired it, so a todo started and finished quickly ends with the ticket moved for `todo_done`. It appends its outcome or error to `ticket-event.log` in devkit's state directory, and a failed move leaves the todo as it is.
 

@@ -881,9 +881,9 @@ pub fn verdict(wt: &IssueWorktree, tracker: &TrackerInfo, pr_only: bool) -> Verd
         held.push(reason);
     };
     if wt.record_unreadable {
-        doubt(&mut held, "issue record unreadable".into());
+        doubt(&mut held, "ticket record unreadable".into());
     } else if !pr_only && !by_landing && wt.issue_id == IssueId::Unknown {
-        return Verdict::Held(vec!["not an issue worktree".into()]);
+        return Verdict::Held(vec!["not a ticket worktree".into()]);
     }
     if by_landing {
         match &wt.pr {
@@ -1558,7 +1558,7 @@ mod tests {
         };
         assert_eq!(
             reason_of(&detached, &linear, false).as_deref(),
-            Some("not an issue worktree")
+            Some("not a ticket worktree")
         );
         // No PR, HEAD on the default branch, and a tracker with no key.
         assert_eq!(
@@ -1701,7 +1701,7 @@ mod tests {
         };
         assert_eq!(
             verdict(&record, &linear, false),
-            Verdict::Unknown(vec!["issue record unreadable".into()])
+            Verdict::Unknown(vec!["ticket record unreadable".into()])
         );
 
         let tree = IssueWorktree {

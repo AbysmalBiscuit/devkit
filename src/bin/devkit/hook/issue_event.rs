@@ -18,7 +18,7 @@ use devkit_config::IssueEvent;
 /// The background run's outcome, or its error, is appended here: the one
 /// place a person can see why a move they never ran failed.
 pub(crate) fn log_path(root: &Path) -> std::path::PathBuf {
-    root.join(".devkit").join("issue-event.log")
+    root.join(".devkit").join("ticket-event.log")
 }
 
 /// Whether a session starting in this worktree may fire `start`: a worktree

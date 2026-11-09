@@ -1,4 +1,4 @@
-//! The issue summary file `workspace setup --summary` leaves behind: the
+//! The ticket summary file `workspace setup --summary` leaves behind: the
 //! tracker facts and description as a scaffold, with the sections an agent
 //! fills in.
 
@@ -252,7 +252,7 @@ mod tests {
         .unwrap();
         assert!(out.starts_with("# ENG-42: Fix the login redirect\n"));
         assert!(out.contains(
-            "- **Issue:** https://linear.app/acme/issue/ENG-42/fix-the-login-redirect\n"
+            "- **Ticket:** https://linear.app/acme/issue/ENG-42/fix-the-login-redirect\n"
         ));
         assert!(out.contains("- **Parent:** ENG-1 \u{2014} Login epic\n"));
         assert!(out.contains("- **Project:** Q3 hardening\n"));
