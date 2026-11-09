@@ -653,6 +653,22 @@ pub(crate) enum PrCmd {
         #[arg(long)]
         base: Option<String>,
     },
+    /// Print the Verification section `pr create` writes, for a given head.
+    ///
+    /// Reads the verify gate from the `devkit.toml` committed at the merge
+    /// base of the head with the PR base, and the run ledger, the same way
+    /// `pr create` does. Prints the passed form when a run of the required
+    /// task exited 0 on a clean tree at the head, and the NOT RUN form
+    /// otherwise, for an agent too. Prints nothing when the gate is off.
+    /// Touches no forge.
+    Verification {
+        /// Commit to render the section for, instead of HEAD.
+        #[arg(long)]
+        head: Option<String>,
+        /// PR base branch, instead of `defaults.pr_base`.
+        #[arg(long)]
+        base: Option<String>,
+    },
     /// Run the proof check of `pr create` without opening a PR.
     ///
     /// Checks the `defaults.pr_proof_variable` argument against each item of
@@ -1122,6 +1138,12 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             Path::new(&start(&dir)),
             config.as_deref(),
             json,
+            base.as_deref(),
+        ),
+        PrCmd::Verification { head, base } => pr::verify::run(
+            Path::new(&start(&dir)),
+            config.as_deref(),
+            head.as_deref(),
             base.as_deref(),
         ),
         PrCmd::Proof { issue, vars } => {

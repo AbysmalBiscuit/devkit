@@ -145,15 +145,16 @@ pub(crate) fn check(dir: &Path, base: &str, head: &str, tests: &TestFiles) -> Re
     Ok(flags)
 }
 
-/// The merge base of HEAD with PR base branch `base`, which resolves as
-/// `origin/<base>`, else `<base>`; `None` when neither is a commit here.
-/// `pr create` reads its gates there, and the brief reads them the same way.
-pub(crate) fn merge_base(dir: &Path, base: &str) -> Result<Option<String>> {
+/// The merge base of revision `head` with PR base branch `base`, which
+/// resolves as `origin/<base>`, else `<base>`; `None` when neither is a
+/// commit here. `pr create` reads its gates there, and the brief reads them
+/// the same way.
+pub(crate) fn merge_base(dir: &Path, base: &str, head: &str) -> Result<Option<String>> {
     let vcs = Vcs::at(dir);
     let origin = format!("origin/{base}");
     for rev in [origin.as_str(), base] {
         if vcs.has_revision(dir, rev)? {
-            return vcs.merge_base(dir, rev, "HEAD").map(Some);
+            return vcs.merge_base(dir, rev, head).map(Some);
         }
     }
     Ok(None)

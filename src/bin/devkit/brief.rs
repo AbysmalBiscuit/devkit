@@ -985,7 +985,7 @@ impl GateOn {
 fn gates_on(root: &Path, config: &config::Config) -> Vec<(config::Gate, GateOn)> {
     static GATES: OnceLock<config::PrGates> = OnceLock::new();
     let gates = GATES.get_or_init(|| {
-        weakened::merge_base(root, &config.defaults.pr_base)
+        weakened::merge_base(root, &config.defaults.pr_base, "HEAD")
             .ok()
             .flatten()
             .and_then(|base| weakened::config_at(&Checkout::at(root), &base).ok())

@@ -229,7 +229,7 @@ impl Gates {
             verify: None,
             repro: None,
         };
-        let settings = weakened::merge_base(dir, base).and_then(|merge_base| {
+        let settings = weakened::merge_base(dir, base, head).and_then(|merge_base| {
             merge_base
                 .map(|mb| weakened::config_at(checkout, &mb).map(|cfg| (mb, cfg)))
                 .transpose()
