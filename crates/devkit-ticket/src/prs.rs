@@ -436,12 +436,13 @@ fn classify(data: Sections, want_mine: bool, want_reviews: bool, ignored: &[Stri
 
 /// Persisted in the CLI's pr-status snapshot cache; a new field needs
 /// `#[serde(default)]` or old caches read as empty. Serialized with
-/// `issue_ids` beside `ticket_ids`, for readers of the old field.
+/// `issue_ids` beside `ticket_ids`, for readers of the old field, and read
+/// from either.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(from = "MinePrWire")]
 pub struct MinePrView {
     pub number: u64,
     pub url: String,
-    #[serde(default)]
     pub ticket_ids: Vec<String>,
     pub review_state: String,
     pub check_state: String,
@@ -450,16 +451,79 @@ pub struct MinePrView {
 
 /// Persisted in the CLI's pr-status snapshot cache; a new field needs
 /// `#[serde(default)]` or old caches read as empty. Serialized with
-/// `issue_ids` beside `ticket_ids`, for readers of the old field.
+/// `issue_ids` beside `ticket_ids`, for readers of the old field, and read
+/// from either.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(from = "ReviewPrWire")]
 pub struct ReviewPrView {
     pub number: u64,
     pub url: String,
-    #[serde(default)]
     pub ticket_ids: Vec<String>,
     pub author: String,
     pub my_vote: String,
     pub action: String,
+}
+
+/// A row's ids as a snapshot holds them: `ticket_ids`, else the `issue_ids`
+/// an older devkit wrote.
+#[derive(Deserialize)]
+struct WireIds {
+    ticket_ids: Option<Vec<String>>,
+    issue_ids: Option<Vec<String>>,
+}
+
+impl WireIds {
+    fn ids(self) -> Vec<String> {
+        self.ticket_ids.or(self.issue_ids).unwrap_or_default()
+    }
+}
+
+#[derive(Deserialize)]
+struct MinePrWire {
+    number: u64,
+    url: String,
+    #[serde(flatten)]
+    ids: WireIds,
+    review_state: String,
+    check_state: String,
+    action: String,
+}
+
+impl From<MinePrWire> for MinePrView {
+    fn from(w: MinePrWire) -> Self {
+        Self {
+            number: w.number,
+            url: w.url,
+            ticket_ids: w.ids.ids(),
+            review_state: w.review_state,
+            check_state: w.check_state,
+            action: w.action,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ReviewPrWire {
+    number: u64,
+    url: String,
+    #[serde(flatten)]
+    ids: WireIds,
+    author: String,
+    my_vote: String,
+    action: String,
+}
+
+impl From<ReviewPrWire> for ReviewPrView {
+    fn from(w: ReviewPrWire) -> Self {
+        Self {
+            number: w.number,
+            url: w.url,
+            ticket_ids: w.ids.ids(),
+            author: w.author,
+            my_vote: w.my_vote,
+            action: w.action,
+        }
+    }
 }
 
 impl Serialize for MinePrView {
@@ -677,6 +741,22 @@ mod tests {
         assert_eq!(v["reviews"][0]["issue_ids"], serde_json::json!(["ENG-2"]));
         let back: MinePrView = serde_json::from_value(v["mine"][0].clone()).unwrap();
         assert_eq!(back.ticket_ids, ["ENG-1"]);
+        let back: ReviewPrView = serde_json::from_value(v["reviews"][0].clone()).unwrap();
+        assert_eq!(back.ticket_ids, ["ENG-2"]);
+    }
+
+    #[test]
+    fn a_snapshot_an_older_devkit_wrote_keeps_its_issue_ids() {
+        let mine: MinePrView = serde_json::from_str(
+            r#"{"number":1,"url":"u","issue_ids":["ENG-1"],"review_state":"-","check_state":"-","action":"-"}"#,
+        )
+        .unwrap();
+        assert_eq!(mine.ticket_ids, ["ENG-1"]);
+        let review: ReviewPrView = serde_json::from_str(
+            r#"{"number":2,"url":"v","issue_ids":["ENG-2"],"author":"a","my_vote":"-","action":"-"}"#,
+        )
+        .unwrap();
+        assert_eq!(review.ticket_ids, ["ENG-2"]);
     }
 
     #[test]
