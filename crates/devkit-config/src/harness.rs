@@ -345,7 +345,7 @@ pub struct RenderedToolRule {
     /// `false` turns off an entry a parent layer declared.
     #[serde(default = "enabled_default")]
     pub enabled: bool,
-    /// The tracker an `ticket_tools` entry writes to. Its
+    /// The tracker a `ticket_tools` entry writes to. Its
     /// `[ticket.fields.<tracker>]` levels then apply to the call, unless
     /// `[tracker] kind` names another tracker or, on GitHub, the call's
     /// `owner`/`repo` is not `[github] issues_repo`. Without it the call gets

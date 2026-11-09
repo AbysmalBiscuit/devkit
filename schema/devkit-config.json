@@ -1667,7 +1667,7 @@
             }
           ],
           "default": null,
-          "description": "The tracker an `ticket_tools` entry writes to. Its\n`[ticket.fields.<tracker>]` levels then apply to the call, unless\n`[tracker] kind` names another tracker or, on GitHub, the call's\n`owner`/`repo` is not `[github] issues_repo`. Without it the call gets\nthe render check alone."
+          "description": "The tracker a `ticket_tools` entry writes to. Its\n`[ticket.fields.<tracker>]` levels then apply to the call, unless\n`[tracker] kind` names another tracker or, on GitHub, the call's\n`owner`/`repo` is not `[github] issues_repo`. Without it the call gets\nthe render check alone."
         }
       },
       "required": [
