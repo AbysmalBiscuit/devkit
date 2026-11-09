@@ -272,18 +272,11 @@ pub(crate) fn run(
         }
         None => inputs.head,
     };
-    let Some(merge_base) = super::weakened::merge_base(dir, &inputs.base, &head)? else {
-        bail!(
-            "the verify gate reads its settings from the merge base with `{base}`, and \
-             neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base",
-            base = inputs.base
-        );
-    };
-    let gates = super::weakened::config_at(&checkout, &merge_base)?.gates;
+    let (merge_base, cfg) = super::create::gate_settings(&checkout, &inputs.base, &head)?;
     match Gate::read(
         &checkout,
         &merge_base,
-        &gates,
+        &cfg.gates,
         &head,
         caller,
         &Ledger::live()?,

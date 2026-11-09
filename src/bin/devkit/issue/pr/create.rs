@@ -229,23 +229,8 @@ impl Gates {
             verify: None,
             repro: None,
         };
-        let settings = weakened::merge_base(dir, base, head).and_then(|merge_base| {
-            merge_base
-                .map(|mb| weakened::config_at(checkout, &mb).map(|cfg| (mb, cfg)))
-                .transpose()
-        });
-        let unresolved = anyhow!(
-            "the PR gates read their settings from the merge base with `{base}`, and \
-             neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
-        );
-        let (merge_base, cfg) = match settings {
-            Ok(Some(settings)) => settings,
-            Ok(None) => {
-                return Ok(GateLoad::Unread {
-                    reason: unresolved,
-                    ungated,
-                });
-            }
+        let (merge_base, cfg) = match gate_settings(checkout, base, head) {
+            Ok(settings) => settings,
             Err(reason) => return Ok(GateLoad::Unread { reason, ungated }),
         };
         let weakened = match caller {
@@ -328,6 +313,24 @@ pub(crate) fn gate_inputs(
         head,
         items: Box::new(move || done_when_items(&dir, kind, &repos, issue.as_deref())),
     })
+}
+
+/// The merge base of `head` with PR base branch `base`, and the `[pr]`
+/// settings the `devkit.toml` committed there holds. Every gate reads its
+/// settings there, so a branch cannot change the gates on its own PR.
+pub(crate) fn gate_settings(
+    checkout: &Checkout,
+    base: &str,
+    head: &str,
+) -> Result<(String, devkit_config::PrConfig)> {
+    let merge_base = weakened::merge_base(checkout.dir(), base, head)?.ok_or_else(|| {
+        anyhow!(
+            "the PR gates read their settings from the merge base with `{base}`, and \
+             neither `origin/{base}` nor `{base}` is a commit here: fetch it, or pass --base"
+        )
+    })?;
+    let cfg = weakened::config_at(checkout, &merge_base)?;
+    Ok((merge_base, cfg))
 }
 
 /// The `Done when` items of `issue`, `None` when the worktree has none.
