@@ -68,7 +68,7 @@ fn confirm(label: &str) -> bool {
 /// What the record holds that outlives the worktree, read before the removal
 /// takes the record with it: the summary file `workspace setup` wrote, and the
 /// baseline this worktree compared against. The summary comes from the record
-/// rather than being re-derived, so a `issue_summary_path` template edited
+/// rather than being re-derived, so a `ticket_summary_path` template edited
 /// since setup cannot leave the old file behind.
 /// A record that exists and cannot be read is a refusal, not a worktree
 /// without one. Reading it as "pins nothing" would remove the worktree without

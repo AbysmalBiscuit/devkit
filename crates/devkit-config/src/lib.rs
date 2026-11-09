@@ -784,8 +784,8 @@ pub struct PreserveConfig {
     /// holding `..`, or drive-relative like `C:scratch`) is skipped with a
     /// warning; one that matches nothing is not a failure. The default issue
     /// summary sits under the worktree's `.devkit/`, where a pattern such as
-    /// `.devkit/ISSUE_SUMMARY_*.md` reaches it; a relative
-    /// `templates.issue_summary_path` puts it outside, where no pattern does.
+    /// `.devkit/TICKET_SUMMARY_*.md` reaches it; a relative
+    /// `templates.ticket_summary_path` puts it outside, where no pattern does.
     pub from: Vec<String>,
     /// Destination directory, rendered as minijinja over `worktree`, `branch`,
     /// `ticket` (also named `issue`), `slug`, `apps`, `prefix`,
@@ -2200,10 +2200,10 @@ pub struct Defaults {
     pub worktree_include: Vec<String>,
     /// Write the issue summary file on every `workspace setup`, as though
     /// `--summary` were passed. `--summary` / `--no-summary` still win for one
-    /// run. Its path and body come from `templates.issue_summary_path` and
-    /// `templates.issue_summary`.
+    /// run. Its path and body come from `templates.ticket_summary_path` and
+    /// `templates.ticket_summary`.
     #[serde(default)]
-    pub issue_summary: bool,
+    pub ticket_summary: bool,
 }
 
 /// Written out rather than derived so the defaulted table matches what serde
@@ -2225,7 +2225,7 @@ impl Default for Defaults {
             ignored_checks: Vec::new(),
             stray_scan_width: default_stray_scan_width(),
             worktree_include: Vec::new(),
-            issue_summary: false,
+            ticket_summary: false,
         }
     }
 }
@@ -2521,8 +2521,8 @@ pub const DEFAULT_COMMIT_MESSAGE: &str = r#"{{- subject | trim }}
 Co-authored-by: {{ c }}
 {%- endfor %}
 {%- endif %}"#;
-pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ ticket }}.md";
-pub const DEFAULT_ISSUE_SUMMARY: &str = "\
+pub const DEFAULT_TICKET_SUMMARY_PATH: &str = "{{ worktree }}/.devkit/TICKET_SUMMARY_{{ ticket }}.md";
+pub const DEFAULT_TICKET_SUMMARY: &str = "\
 # {{ ticket }}: {{ title }}\n\
 \n\
 - **Issue:** {{ url }}\n\
@@ -2682,7 +2682,7 @@ impl From<&str> for VariableDecl {
 /// worktree_dir       = "{{ slug }}"
 /// pr_title           = "{{ ticket }}: {{ input }}"
 /// pr_body            = "Closes {{ ticket }}.\n\n{{ input }}"
-/// issue_summary_path = "{{ worktree }}/.devkit/issue.md"
+/// ticket_summary_path = "{{ worktree }}/.devkit/issue.md"
 ///
 /// [templates.variables]
 /// team = "platform"
@@ -2694,7 +2694,7 @@ impl From<&str> for VariableDecl {
 /// # assert_eq!(t.variables["team"].default_value(), Some("platform"));
 /// ```
 ///
-/// `issue_summary_path` renders `{{ worktree }}` here, which keeps the summary
+/// `ticket_summary_path` renders `{{ worktree }}` here, which keeps the summary
 /// inside the worktree where a `[preserve]` pattern can name it; left relative
 /// it is taken from `defaults.worktree_root` instead.
 #[derive(Debug, JsonSchema, Deserialize, Serialize, Default)]
@@ -2772,12 +2772,12 @@ pub struct Templates {
     /// Where `workspace setup --summary` writes the issue summary file. A
     /// relative path is taken from `defaults.worktree_root`, so the file
     /// sits beside the worktree and outlives it, and is refused when there
-    /// is no `worktree_root`. Context: the `issue_summary` context below.
-    /// Defaults to `{{ worktree }}/.devkit/ISSUE_SUMMARY_{{ ticket }}.md`:
+    /// is no `worktree_root`. Context: the `ticket_summary` context below.
+    /// Defaults to `{{ worktree }}/.devkit/TICKET_SUMMARY_{{ ticket }}.md`:
     /// inside the worktree, or the checkout `workspace setup --here` binds,
     /// where it stays untracked and goes when `workspace end` removes the
     /// worktree.
-    pub issue_summary_path: Option<String>,
+    pub ticket_summary_path: Option<String>,
     /// Body of the file `workspace setup --summary` writes when the tracker
     /// keeps no summary of its own; a GitHub issue's non-empty body is
     /// written verbatim instead. Context: `ticket` (also named `issue`),
@@ -2785,7 +2785,7 @@ pub struct Templates {
     /// `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,
     /// `prefix`, `apps`. A field the tracker left empty renders as the empty
     /// string, so `{% if parent %}` drops its line.
-    pub issue_summary: Option<String>,
+    pub ticket_summary: Option<String>,
     /// Templates no command sends, rendered by `devkit template render
     /// <name>` for the caller to deliver itself. A built-in template never
     /// takes one's name: `render` looks here first.
@@ -2850,16 +2850,16 @@ impl Templates {
             .unwrap_or(DEFAULT_REVIEW_REQUEST)
     }
 
-    pub fn issue_summary_path(&self) -> &str {
-        self.issue_summary_path
+    pub fn ticket_summary_path(&self) -> &str {
+        self.ticket_summary_path
             .as_deref()
-            .unwrap_or(DEFAULT_ISSUE_SUMMARY_PATH)
+            .unwrap_or(DEFAULT_TICKET_SUMMARY_PATH)
     }
 
-    pub fn issue_summary(&self) -> &str {
-        self.issue_summary
+    pub fn ticket_summary(&self) -> &str {
+        self.ticket_summary
             .as_deref()
-            .unwrap_or(DEFAULT_ISSUE_SUMMARY)
+            .unwrap_or(DEFAULT_TICKET_SUMMARY)
     }
 
     pub fn review_finish(&self) -> &str {
@@ -3079,9 +3079,11 @@ impl Config {
 
 /// Templates renamed from their `issue_` spelling, old name first. A layer
 /// may still set the old name, and `devkit template` still takes it.
-pub const RENAMED_TEMPLATES: [(&str, &str); 2] = [
+pub const RENAMED_TEMPLATES: [(&str, &str); 4] = [
     ("issue_title", "ticket_title"),
     ("issue_body", "ticket_body"),
+    ("issue_summary_path", "ticket_summary_path"),
+    ("issue_summary", "ticket_summary"),
 ];
 
 /// Move each key a layer sets under its old name to its current one, so
@@ -3095,7 +3097,20 @@ fn read_renamed_keys(layer: &mut toml::Table) -> Result<()> {
             rename_key(templates, "templates.", old, new)?;
         }
     }
+    if let Some(toml::Value::Table(defaults)) = layer.get_mut("defaults") {
+        rename_key(defaults, "defaults.", "issue_summary", "ticket_summary")?;
+    }
+    if let Some(toml::Value::Table(harness)) = layer.get_mut("harness") {
+        read_renamed_harness_keys(harness)?;
+    }
     Ok(())
+}
+
+/// [`read_renamed_keys`] for one layer's `[harness]` table, which the hooks
+/// merge apart from the rest of the config. On a refusal the table keeps the
+/// current spelling and drops the old one.
+pub fn read_renamed_harness_keys(harness: &mut toml::Table) -> Result<()> {
+    rename_key(harness, "harness.", "issue_tools", "ticket_tools")
 }
 
 fn rename_key(table: &mut toml::Table, prefix: &str, old: &str, new: &str) -> Result<()> {
@@ -5933,6 +5948,21 @@ steps = [
     }
 
     #[test]
+    fn the_old_summary_and_tool_keys_load_as_their_ticket_names() {
+        let (cfg, prov) = resolve_two_layers(
+            "[defaults]\nticket_summary = false\n\
+             [templates]\nticket_summary = \"new\"\n",
+            "[defaults]\nissue_summary = true\n\
+             [templates]\nissue_summary_path = \"old.md\"\nissue_summary = \"old\"\n",
+        )
+        .unwrap();
+        assert!(cfg.defaults.ticket_summary);
+        assert_eq!(cfg.templates.ticket_summary_path(), "old.md");
+        assert_eq!(cfg.templates.ticket_summary(), "old");
+        assert!(prov.origin["defaults.ticket_summary"].ends_with("devkit.local.toml"));
+    }
+
+    #[test]
     fn one_layer_setting_a_key_under_both_names_is_refused() {
         for (body, old, new) in [
             (
@@ -5949,6 +5979,27 @@ steps = [
                 "[templates]\nissue_body = \"a\"\nticket_body = \"b\"\n",
                 "templates.issue_body",
                 "templates.ticket_body",
+            ),
+            (
+                "[templates]\nissue_summary_path = \"a\"\nticket_summary_path = \"b\"\n",
+                "templates.issue_summary_path",
+                "templates.ticket_summary_path",
+            ),
+            (
+                "[templates]\nissue_summary = \"a\"\nticket_summary = \"b\"\n",
+                "templates.issue_summary",
+                "templates.ticket_summary",
+            ),
+            (
+                "[defaults]\nissue_summary = true\nticket_summary = false\n",
+                "defaults.issue_summary",
+                "defaults.ticket_summary",
+            ),
+            (
+                "[harness.issue_tools.a]\ntitle = \"t\"\nbody = \"b\"\n\
+                 [harness.ticket_tools.b]\ntitle = \"t\"\nbody = \"b\"\n",
+                "harness.issue_tools",
+                "harness.ticket_tools",
             ),
         ] {
             let msg = format!("{:#}", resolve_two_layers(body, "").unwrap_err());

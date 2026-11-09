@@ -72,14 +72,14 @@ const BUILT_INS: [BuiltIn; 12] = [
         source: Templates::checkout_worktree_dir,
     },
     BuiltIn {
-        name: "issue_summary_path",
+        name: "ticket_summary_path",
         description: "Where `workspace setup --summary` writes the summary",
-        source: Templates::issue_summary_path,
+        source: Templates::ticket_summary_path,
     },
     BuiltIn {
-        name: "issue_summary",
+        name: "ticket_summary",
         description: "Summary file `workspace setup --summary` writes",
-        source: Templates::issue_summary,
+        source: Templates::ticket_summary,
     },
     BuiltIn {
         name: "pr_title",

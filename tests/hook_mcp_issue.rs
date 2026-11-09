@@ -13,7 +13,7 @@ use std::{
 use serde_json::{Value, json};
 
 const CONFIG: &str = r#"
-[harness.issue_tools.linear]
+[harness.ticket_tools.linear]
 servers    = ["*linear*"]
 tools      = ["save_issue"]
 absent     = ["id"]
@@ -21,7 +21,7 @@ title      = "title"
 body       = "description"
 body_patch = ["patch"]
 
-[harness.issue_tools.github]
+[harness.ticket_tools.github]
 servers = ["*github*"]
 tools   = ["issue_write"]
 equals  = { method = "create" }

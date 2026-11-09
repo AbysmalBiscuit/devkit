@@ -532,3 +532,45 @@ fn the_magic_word_renders_by_either_name() {
     let text = body(&["--arg", "ticket=12"]);
     assert!(text.contains("\nCloses #12\n"), "{text}");
 }
+
+#[test]
+fn the_summary_templates_go_by_their_ticket_names_and_still_by_their_old_ones() {
+    let dir = setup();
+    for name in [
+        "ticket_summary_path",
+        "ticket_summary",
+        "issue_summary_path",
+        "issue_summary",
+    ] {
+        let out = run(dir.path(), &["show", name]);
+        assert!(out.status.success(), "{name}: {out:?}");
+    }
+    let out = run(dir.path(), &["show", "ticket_summary_path", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["source"],
+        "{{ worktree }}/.devkit/TICKET_SUMMARY_{{ ticket }}.md"
+    );
+
+    let list = stdout(&run(dir.path(), &["list"]));
+    assert!(list.contains("ticket_summary_path"), "{list}");
+    assert!(!list.contains("issue_summary"), "{list}");
+}
+
+#[test]
+fn a_config_setting_the_old_summary_path_still_applies_it() {
+    let dir = setup();
+    let config = std::fs::read_to_string(dir.path().join("devkit.toml")).unwrap();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        config.replace(
+            "[templates]\n",
+            "[templates]\nissue_summary_path = \"{{ worktree }}/old.md\"\n",
+        ),
+    )
+    .unwrap();
+    let out = run(dir.path(), &["show", "ticket_summary_path", "--json"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["source"], "{{ worktree }}/old.md");
+}

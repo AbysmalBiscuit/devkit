@@ -274,7 +274,7 @@ fn setup_here_writes_the_default_summary_inside_the_checkout_untracked() {
     let out = fake.issue(&["setup", "--here", "7", "--summary", "--no-gitignore"]);
 
     assert!(out.status.success(), "{}\n{}", stderr(&out), fake.calls());
-    let expected = fake.project().join(".devkit").join("ISSUE_SUMMARY_7.md");
+    let expected = fake.project().join(".devkit").join("TICKET_SUMMARY_7.md");
     assert!(expected.is_file(), "no summary at {}", expected.display());
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let reported = Path::new(report["summary"].as_str().expect("a summary path"));
@@ -323,7 +323,7 @@ fn setup_here_refuses_a_relative_summary_path_without_a_worktree_root() {
     fake.serve_issue("The summary devkit read over REST.");
     let (_scratch, wt) = bare_main_checkout(
         &fake,
-        r#"issue_summary_path = "ISSUE_SUMMARY_{{ issue }}.md""#,
+        r#"ticket_summary_path = "ISSUE_SUMMARY_{{ issue }}.md""#,
     );
 
     let out = fake.devkit_with_stdin(

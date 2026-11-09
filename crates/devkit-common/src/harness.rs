@@ -136,7 +136,7 @@ impl Default for HarnessPolicy {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct HarnessRules {
     pub commands: BTreeMap<String, CommandRule>,
-    pub issue_tools: BTreeMap<String, RenderedToolRule>,
+    pub ticket_tools: BTreeMap<String, RenderedToolRule>,
     pub pr_tools: BTreeMap<String, RenderedToolRule>,
     pub app_match: AppMatch,
     pub policy: HarnessPolicy,
@@ -154,19 +154,22 @@ pub struct HarnessRules {
 /// child adds names, and a same-named rule overrides only the keys it sets.
 /// Returns what survived alongside a warning per piece that did not.
 pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<String>) {
+    let mut warnings = Vec::new();
     let projected: Vec<_> = layers
         .iter()
         .map(|(p, t)| {
-            let harness = t
+            let mut harness = t
                 .get("harness")
                 .and_then(toml::Value::as_table)
                 .cloned()
                 .unwrap_or_default();
+            if let Err(e) = devkit_config::read_renamed_harness_keys(&mut harness) {
+                warnings.push(format!("{}: {e}", p.display()));
+            }
             (p.clone(), harness)
         })
         .collect();
     let (merged, ..) = devkit_config::merge_layers(&projected);
-    let mut warnings = Vec::new();
 
     // Each key is deserialized on its own, so one that will not parse costs
     // only itself. A bad `app_match` degrades to the defaults rather than
@@ -247,12 +250,12 @@ pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<Stri
         },
     }
 
-    let issue_tools = rendered_tools(&merged, "issue_tools", &mut warnings);
+    let ticket_tools = rendered_tools(&merged, "ticket_tools", &mut warnings);
     let pr_tools = rendered_tools(&merged, "pr_tools", &mut warnings);
     (
         HarnessRules {
             commands,
-            issue_tools,
+            ticket_tools,
             pr_tools,
             app_match,
             policy,
@@ -737,31 +740,58 @@ programs = "node"
     }
 
     #[test]
-    fn issue_tools_merge_by_name_and_a_child_disables_one() {
+    fn ticket_tools_merge_by_name_and_a_child_disables_one() {
         let (h, warns) = merge_rules(&[
             layer(
                 "root",
-                "[harness.issue_tools.linear]\nservers = [\"*linear*\"]\n\
+                "[harness.ticket_tools.linear]\nservers = [\"*linear*\"]\n\
                  tools = [\"save_issue\"]\nabsent = [\"id\"]\ntitle = \"title\"\n\
                  body = \"description\"\nbody_patch = [\"patch\"]\n",
             ),
-            layer("child", "[harness.issue_tools.linear]\nenabled = false\n"),
+            layer("child", "[harness.ticket_tools.linear]\nenabled = false\n"),
         ]);
         assert!(warns.is_empty(), "{warns:?}");
-        assert_eq!(h.issue_tools["linear"].tools, ["save_issue"]);
-        assert!(!h.issue_tools["linear"].enabled);
+        assert_eq!(h.ticket_tools["linear"].tools, ["save_issue"]);
+        assert!(!h.ticket_tools["linear"].enabled);
     }
 
     #[test]
-    fn a_malformed_issue_tool_is_skipped_with_a_warning() {
+    fn a_layer_naming_the_old_issue_tools_merges_into_ticket_tools() {
+        let (h, warns) = merge_rules(&[
+            layer(
+                "root",
+                "[harness.issue_tools.linear]\ntools = [\"save_issue\"]\n\
+                 title = \"title\"\nbody = \"description\"\n",
+            ),
+            layer("child", "[harness.ticket_tools.linear]\nenabled = false\n"),
+        ]);
+        assert!(warns.is_empty(), "{warns:?}");
+        assert_eq!(h.ticket_tools["linear"].tools, ["save_issue"]);
+        assert!(!h.ticket_tools["linear"].enabled);
+    }
+
+    #[test]
+    fn a_layer_naming_both_tool_tables_keeps_the_new_one_and_warns() {
         let (h, warns) = merge_rules(&[layer(
             "root",
-            "[harness.issue_tools.half]\ntools = [\"save_issue\"]\nbody = \"description\"\n",
+            "[harness.issue_tools.old]\ntitle = \"t\"\nbody = \"b\"\n\
+             [harness.ticket_tools.new]\ntitle = \"t\"\nbody = \"b\"\n",
         )]);
-        assert!(h.issue_tools.is_empty());
+        assert_eq!(h.ticket_tools.keys().collect::<Vec<_>>(), ["new"]);
+        assert_eq!(warns.len(), 1, "{warns:?}");
+        assert!(warns[0].contains("harness.issue_tools"), "{}", warns[0]);
+    }
+
+    #[test]
+    fn a_malformed_ticket_tool_is_skipped_with_a_warning() {
+        let (h, warns) = merge_rules(&[layer(
+            "root",
+            "[harness.ticket_tools.half]\ntools = [\"save_issue\"]\nbody = \"description\"\n",
+        )]);
+        assert!(h.ticket_tools.is_empty());
         assert_eq!(warns.len(), 1);
         assert!(
-            warns[0].contains("[harness.issue_tools.half]"),
+            warns[0].contains("[harness.ticket_tools.half]"),
             "warning names the rule: {}",
             warns[0]
         );

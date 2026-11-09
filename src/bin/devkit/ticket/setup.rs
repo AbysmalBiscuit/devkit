@@ -23,9 +23,9 @@ pub struct SetupArgs {
     pub apps: Vec<String>,
     pub dry_run: bool,
     /// Also write the issue summary file named by
-    /// `templates.issue_summary_path`.
+    /// `templates.ticket_summary_path`.
     pub summary: bool,
-    /// Skip that file for this run even when `defaults.issue_summary` is set.
+    /// Skip that file for this run even when `defaults.ticket_summary` is set.
     pub no_summary: bool,
     pub no_gitignore: bool,
     /// Keep the repository's hooks out of the `git worktree add`.
@@ -84,7 +84,7 @@ impl Prepared {
 }
 
 /// Whether this run writes a summary file: each flag decides outright, and with
-/// neither `defaults.issue_summary` does.
+/// neither `defaults.ticket_summary` does.
 fn want_summary(args: &SetupArgs, cfg: &devkit_config::Config) -> bool {
     if args.summary {
         return true;
@@ -92,7 +92,7 @@ fn want_summary(args: &SetupArgs, cfg: &devkit_config::Config) -> bool {
     if args.no_summary {
         return false;
     }
-    cfg.defaults.issue_summary
+    cfg.defaults.ticket_summary
 }
 
 /// Write each prep file into `app_dir`. `content` is rendered as a minijinja

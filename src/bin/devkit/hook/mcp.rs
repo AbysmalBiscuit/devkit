@@ -119,7 +119,7 @@ fn respond(payload: &Payload, matched: &OnceLock<()>, checkout: &Checkout, cwd: 
         return Verdict::Allow;
     };
     let (rules, _) = harness::resolve_rules_in(checkout, cwd);
-    let Some((rule, gate)) = [(&rules.issue_tools, ISSUE), (&rules.pr_tools, PR)]
+    let Some((rule, gate)) = [(&rules.ticket_tools, ISSUE), (&rules.pr_tools, PR)]
         .into_iter()
         .find_map(|(table, gate)| {
             table

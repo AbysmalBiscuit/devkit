@@ -805,7 +805,7 @@ fn linear_mcp_denial(fake: &ghfake::Fake, input: serde_json::Value) -> Option<St
 #[test]
 fn discovered_linear_labels_pass_the_mcp_gate_by_their_names() {
     let fake = ghfake::Fake::without_pr(
-        "[tracker]\nkind = \"linear\"\n\n[harness.issue_tools.linear]\n\
+        "[tracker]\nkind = \"linear\"\n\n[harness.ticket_tools.linear]\n\
          servers = [\"*linear*\"]\ntools = [\"save_issue\"]\nabsent = [\"id\"]\n\
          title = \"title\"\nbody = \"description\"\ntracker = \"linear\"\n\
          fields = { team = \"team\", labels = [\"labels\", \"addLabels\"] }\n",

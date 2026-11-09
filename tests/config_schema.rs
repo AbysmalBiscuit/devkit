@@ -174,3 +174,19 @@ fn collect_descriptions(v: &serde_json::Value, out: &mut Vec<String>) {
         _ => {}
     }
 }
+
+#[test]
+fn the_schema_names_the_renamed_keys_by_their_ticket_names_only() {
+    let s: serde_json::Value = serde_json::from_str(&generated()).unwrap();
+    let defs = &s["$defs"];
+    for (def, old, new) in [
+        ("Templates", "issue_summary_path", "ticket_summary_path"),
+        ("Templates", "issue_summary", "ticket_summary"),
+        ("Defaults", "issue_summary", "ticket_summary"),
+        ("HarnessSection", "issue_tools", "ticket_tools"),
+    ] {
+        let props = defs[def]["properties"].as_object().unwrap();
+        assert!(props.contains_key(new), "{def} lacks `{new}`");
+        assert!(!props.contains_key(old), "{def} still shows `{old}`");
+    }
+}

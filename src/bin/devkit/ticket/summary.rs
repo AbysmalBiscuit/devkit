@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result};
 use devkit_common::tracker::IssueDetails;
 
-/// Render context for both `issue_summary_path` and `issue_summary`. Every
+/// Render context for both `ticket_summary_path` and `ticket_summary`. Every
 /// field the tracker left empty renders as the empty string, so a template
 /// can branch on it with a plain `{% if %}`.
 fn context(
@@ -69,11 +69,11 @@ fn resolve_path(
     vars: &BTreeMap<String, String>,
 ) -> Result<PathBuf> {
     let rendered = devkit_common::template::render(template, ctx, vars)
-        .context("rendering `issue_summary_path` template")?;
+        .context("rendering `ticket_summary_path` template")?;
     let rendered = rendered.trim();
     anyhow::ensure!(
         !rendered.is_empty(),
-        "`issue_summary_path` rendered to an empty path"
+        "`ticket_summary_path` rendered to an empty path"
     );
     let p = Path::new(rendered);
     Ok(if p.is_absolute() {
@@ -110,7 +110,7 @@ pub(crate) fn plan_path(
 ) -> Result<PathBuf> {
     let (vars, ctx) = render_inputs(cfg, d, worktree, branch, slug, apps);
     resolve_path(
-        cfg.templates.issue_summary_path(),
+        cfg.templates.ticket_summary_path(),
         || crate::ticket::setup::worktree_root(cfg),
         &ctx,
         &vars,
@@ -118,7 +118,7 @@ pub(crate) fn plan_path(
 }
 
 /// The summary file's text: the tracker's own summary verbatim, else the
-/// `issue_summary` template rendered against `ctx`.
+/// `ticket_summary` template rendered against `ctx`.
 fn body(
     cfg: &devkit_config::Config,
     ctx: &serde_json::Value,
@@ -127,8 +127,8 @@ fn body(
 ) -> Result<String> {
     match tracker_summary.filter(|s| !s.trim().is_empty()) {
         Some(s) => Ok(s.to_string()),
-        None => devkit_common::template::render(cfg.templates.issue_summary(), ctx, vars)
-            .context("rendering `issue_summary` template"),
+        None => devkit_common::template::render(cfg.templates.ticket_summary(), ctx, vars)
+            .context("rendering `ticket_summary` template"),
     }
 }
 
@@ -148,7 +148,7 @@ pub(crate) fn text(
 }
 
 /// Write the summary if nothing is there yet: the tracker's own summary
-/// verbatim, else the `issue_summary` template rendered. Returns the path and
+/// verbatim, else the `ticket_summary` template rendered. Returns the path and
 /// whether this run created it. A file under the worktree's `.devkit/` gets
 /// that directory's self-ignore, so it never shows up as untracked.
 pub(crate) fn write(
@@ -162,7 +162,7 @@ pub(crate) fn write(
 ) -> Result<(PathBuf, bool)> {
     let (vars, ctx) = render_inputs(cfg, d, worktree, branch, slug, apps);
     let path = resolve_path(
-        cfg.templates.issue_summary_path(),
+        cfg.templates.ticket_summary_path(),
         || crate::ticket::setup::worktree_root(cfg),
         &ctx,
         &vars,
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn default_template_carries_the_facts_and_the_empty_sections() {
         let out = devkit_common::template::render(
-            devkit_config::DEFAULT_ISSUE_SUMMARY,
+            devkit_config::DEFAULT_TICKET_SUMMARY,
             &ctx(),
             &BTreeMap::new(),
         )
@@ -275,7 +275,7 @@ mod tests {
         d.assignee = String::new();
         let c = context(&d, "/w/eng-42", "b", "s", "lev/", &[]);
         let out = devkit_common::template::render(
-            devkit_config::DEFAULT_ISSUE_SUMMARY,
+            devkit_config::DEFAULT_TICKET_SUMMARY,
             &c,
             &BTreeMap::new(),
         )
