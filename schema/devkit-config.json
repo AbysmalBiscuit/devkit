@@ -1073,7 +1073,7 @@
       "properties": {
         "resolve_pr_links": {
           "default": false,
-          "description": "Query Linear for the issues linked to each PR in `pr list` and the\n`ticket.prs` MCP action, adding every linked id to the TICKET column. One\nextra batched round trip per 25 PRs. Fail-soft: with no key or on a\nLinear error the column keeps the id derived from the PR text. Linear\nonly; under the GitHub tracker the column carries each PR's closing\nissues regardless.",
+          "description": "Query Linear for the issues linked to each PR in `pr list` and the\n`ticket.prs` MCP action, adding every linked id to the TICKET column.\nOne extra batched round trip per 25 PRs. Fail-soft: with no key or\non a Linear error the column keeps the id derived from the PR text.\nLinear only; under the GitHub tracker the column carries each PR's\nclosing issues regardless.",
           "type": "boolean"
         }
       },
