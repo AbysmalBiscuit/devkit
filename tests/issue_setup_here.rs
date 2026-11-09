@@ -389,3 +389,20 @@ fn pr_status_finds_a_primary_checkout_by_the_issue_setup_here_bound() {
         fake.project().canonicalize().unwrap()
     );
 }
+
+/// Tools that predate the rename, such as workcell, read the record as
+/// `.devkit/issue.toml`, so setup keeps that copy beside `ticket.toml`.
+#[test]
+fn setup_records_into_ticket_toml_with_an_issue_toml_copy() {
+    let fake = ghfake::Fake::without_pr(CONFIG);
+    let out = fake.issue(&["setup", "--here", "7", "--slug", "fix", "--no-gitignore"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let devkit = fake.project().join(".devkit");
+    let record = std::fs::read_to_string(devkit.join("ticket.toml")).unwrap();
+    assert!(record.contains("issue = \"7\""), "{record}");
+    assert_eq!(
+        std::fs::read_to_string(devkit.join("issue.toml")).unwrap(),
+        record
+    );
+}
