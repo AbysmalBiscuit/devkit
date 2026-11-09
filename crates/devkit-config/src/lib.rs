@@ -782,14 +782,14 @@ pub struct PreserveConfig {
     /// `.scratch/**` to archive its whole tree; `dir/*` takes direct children
     /// only. A pattern that could reach outside the worktree (absolute, rooted,
     /// holding `..`, or drive-relative like `C:scratch`) is skipped with a
-    /// warning; one that matches nothing is not a failure. The default issue
+    /// warning; one that matches nothing is not a failure. The default ticket
     /// summary sits under the worktree's `.devkit/`, where a pattern such as
     /// `.devkit/TICKET_SUMMARY_*.md` reaches it; a relative
     /// `templates.ticket_summary_path` puts it outside, where no pattern does.
     pub from: Vec<String>,
     /// Destination directory, rendered as minijinja over `worktree`, `branch`,
     /// `ticket` (also named `issue`), `slug`, `apps`, `prefix`,
-    /// `worktree_root`, `primary` and `[templates.variables]`. Issue fields
+    /// `worktree_root`, `primary` and `[templates.variables]`. Ticket fields
     /// come from the worktree's `.devkit/ticket.toml` and render empty
     /// without one, and `primary` fails when the primary checkout cannot be
     /// resolved. Must render to a non-empty absolute path outside every
