@@ -182,6 +182,28 @@ fn render_reports_a_template_that_calls_fail() {
     );
 }
 
+#[test]
+fn create_prints_the_title_it_wrote_beside_the_url() {
+    let fake = ghfake::Fake::without_pr(REFUSING_TITLE);
+    let out = fake.issue(&["create", "--title", "a thing"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        "https://github.com/o/r/issues/42\tfix: a thing"
+    );
+}
+
+#[test]
+fn edit_prints_the_title_it_wrote_beside_the_url() {
+    let fake = ghfake::Fake::without_pr(REFUSING_TITLE);
+    let out = fake.issue(&["edit", "7", "--title", "a thing"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        "https://github.com/o/r/issues/7\tfix: a thing"
+    );
+}
+
 const FIELDS: &str = r#"
 [tracker]
 kind = "github"
