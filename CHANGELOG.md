@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.32](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.31...v0.14.32) (2026-11-11)
+
+
+### Features
+
+* **pr:** let a person waive the verify gate ([36d5cde](https://github.com/AbysmalBiscuit/devkit/commit/36d5cdeb7f146806656b95cd1ed9dec0e3b9a8e1)), closes [#485](https://github.com/AbysmalBiscuit/devkit/issues/485)
+* **templates:** let a template refuse with fail() ([868ae50](https://github.com/AbysmalBiscuit/devkit/commit/868ae505cced3c448b61ea189bd2ac77d3afdd4e)), closes [#482](https://github.com/AbysmalBiscuit/devkit/issues/482)
+
 ## [0.14.31](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.30...v0.14.31) (2026-11-09)
 
 
