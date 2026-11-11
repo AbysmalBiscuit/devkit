@@ -217,19 +217,7 @@ impl Ledger {
 
     /// Write `run` as a new record and return its path.
     pub fn record(&self, run: &Run) -> Result<PathBuf> {
-        std::fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating {}", self.dir.display()))?;
-        let now: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
-        let stamp = now.format("%Y%m%dT%H%M%S%.6fZ");
-        let name = format!("{stamp}-{}.json", std::process::id());
-        let path = self.dir.join(name);
-        let mut tmp = tempfile::NamedTempFile::new_in(&self.dir)
-            .with_context(|| format!("creating a record in {}", self.dir.display()))?;
-        serde_json::to_writer_pretty(&mut tmp, run)?;
-        tmp.write_all(b"\n")?;
-        tmp.persist(&path)
-            .with_context(|| format!("writing {}", path.display()))?;
-        Ok(path)
+        write_record(&self.dir, run)
     }
 
     /// Record that the server `pid` on `port` launched from `origin`,
@@ -324,18 +312,7 @@ impl Ledger {
     /// Write `waiver` as a new record and return its path. It sits in the
     /// `waivers` directory, so [`Self::runs`] never reads it as a run.
     pub fn waive(&self, waiver: &Waiver) -> Result<PathBuf> {
-        let dir = self.dir.join("waivers");
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        let now: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
-        let stamp = now.format("%Y%m%dT%H%M%S%.6fZ");
-        let path = dir.join(format!("{stamp}-{}.json", std::process::id()));
-        let mut tmp = tempfile::NamedTempFile::new_in(&dir)
-            .with_context(|| format!("creating a waiver in {}", dir.display()))?;
-        serde_json::to_writer_pretty(&mut tmp, waiver)?;
-        tmp.write_all(b"\n")?;
-        tmp.persist(&path)
-            .with_context(|| format!("writing {}", path.display()))?;
-        Ok(path)
+        write_record(&self.dir.join("waivers"), waiver)
     }
 
     /// The latest waiver for exactly `head` in `repo`. A waiver that does
@@ -366,6 +343,23 @@ impl Ledger {
             .iter()
             .any(|p| p.starts_with(&dir) || p.starts_with(&dir_real))
     }
+}
+
+/// Write `value` as a new JSON file in `dir`, named by the time and this
+/// process, and return its path. The file is written whole and renamed
+/// into place, so a reader never sees half of it.
+fn write_record(dir: &Path, value: &impl Serialize) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let now: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+    let stamp = now.format("%Y%m%dT%H%M%S%.6fZ");
+    let path = dir.join(format!("{stamp}-{}.json", std::process::id()));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)
+        .with_context(|| format!("creating a record in {}", dir.display()))?;
+    serde_json::to_writer_pretty(&mut tmp, value)?;
+    tmp.write_all(b"\n")?;
+    tmp.persist(&path)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
 }
 
 /// `path` with its longest existing prefix resolved through symlinks, so a
