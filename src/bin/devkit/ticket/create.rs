@@ -179,7 +179,7 @@ fn github(args: &CreateArgs, start: &str, sel: &Selected, cfg: &Config) -> Resul
         .context("`gh issue create` printed no issue URL")?
         .trim()
         .to_string();
-    println!("{url}");
+    println!("{url}\t{}", rendered.title);
     let unread = || {
         let recover = args
             .if_found
@@ -282,7 +282,7 @@ fn linear(args: &CreateArgs, sel: &Selected, cfg: &Config) -> Result<Created> {
         .map_err(|e| field_write::linear_refused(e, decls, &written))?;
     let issue = created.issue;
     let ident = issue.identifier.clone();
-    println!("{}", field_write::linear_link(&issue));
+    println!("{}\t{}", field_write::linear_link(&issue), issue.title);
     match created.origin {
         Origin::This => {}
         Origin::Earlier => eprintln!(

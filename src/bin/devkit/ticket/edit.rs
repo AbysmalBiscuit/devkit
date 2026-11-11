@@ -135,6 +135,7 @@ fn github(args: EditArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<(
     field_write::refuse("ticket edit", decls, &report)?;
 
     let mut url = format!("https://{}/{}/issues/{number}", repo.host, repo.slug);
+    let mut written_title = None;
     if rewrites_text {
         let kept;
         let title = match &args.title {
@@ -168,6 +169,7 @@ fn github(args: EditArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<(
         if let Some(u) = out.lines().rev().find(|l| l.contains("://")) {
             url = u.trim().to_string();
         }
+        written_title = Some(rendered.title);
     }
 
     let problems = if has_fields {
@@ -175,7 +177,10 @@ fn github(args: EditArgs, start: &str, sel: &Selected, cfg: &Config) -> Result<(
     } else {
         Vec::new()
     };
-    println!("{url}");
+    match written_title {
+        Some(title) => println!("{url}\t{title}"),
+        None => println!("{url}"),
+    }
     field_write::warn(decls, &report);
     field_write::fail_on(
         &problems,
@@ -251,7 +256,11 @@ fn linear(args: EditArgs, sel: &Selected, cfg: &Config) -> Result<()> {
     let team_before = before.team.clone();
     let (after, problems) =
         field_write::linear_finish(&writer, before, decls, &resolved, &refs, true);
-    println!("{}", field_write::linear_link(&after));
+    let link = field_write::linear_link(&after);
+    match rendered {
+        Some(_) => println!("{link}\t{}", after.title),
+        None => println!("{link}"),
+    }
     field_write::warn(decls, &report);
     if after.team != team_before {
         let kept = after.current(decls, &cfg.people);

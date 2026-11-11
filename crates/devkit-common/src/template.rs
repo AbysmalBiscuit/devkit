@@ -8,15 +8,54 @@ use std::{
 
 use anyhow::{Context, Result};
 use minijinja::{
-    Environment, UndefinedBehavior,
+    Environment, ErrorKind, UndefinedBehavior,
     value::{Object, Value},
 };
 use serde::Serialize;
 
+/// The message a template passed to `fail`.
+#[derive(Debug)]
+struct Refused(String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// The environment every devkit template compiles in: minijinja's builtins
+/// plus `fail(message)`, which stops the render with `message` as its error.
+fn environment() -> Environment<'static> {
+    let mut env = Environment::new();
+    env.add_function(
+        "fail",
+        |message: String| -> Result<Value, minijinja::Error> {
+            Err(
+                minijinja::Error::new(ErrorKind::InvalidOperation, "the template called `fail`")
+                    .with_source(Refused(message)),
+            )
+        },
+    );
+    env
+}
+
+/// A render error as the caller reads it: the template's own message when it
+/// called `fail`, and minijinja's error otherwise.
+fn render_error(err: minijinja::Error) -> anyhow::Error {
+    let refused = std::iter::successors(Some(&err as &dyn std::error::Error), |e| e.source())
+        .find_map(|e| e.downcast_ref::<Refused>());
+    match refused {
+        Some(Refused(message)) => anyhow::anyhow!("{message}"),
+        None => anyhow::Error::new(err).context("rendering template"),
+    }
+}
+
 /// Render a compiled template against a prebuilt minijinja root value, with the
 /// same strict-undefined and trailing-newline settings as [`render`].
 fn render_value(template: &str, root: Value) -> Result<String> {
-    let mut env = Environment::new();
+    let mut env = environment();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     // Preserve a template's trailing newline so verbatim file content (e.g. an
     // `.env.local` ending in `\n`) round-trips unchanged.
@@ -24,7 +63,7 @@ fn render_value(template: &str, root: Value) -> Result<String> {
     env.add_template("t", template)
         .context("compiling template")?;
     let tmpl = env.get_template("t").expect("template just added");
-    tmpl.render(root).context("rendering template")
+    tmpl.render(root).map_err(render_error)
 }
 
 /// Render a minijinja template with strict undefined handling. `variables`
@@ -117,7 +156,7 @@ pub fn referenced_ports(
 pub fn undeclared(templates: &[&str]) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for t in templates {
-        let mut env = Environment::new();
+        let mut env = environment();
         env.add_template("t", t)
             .with_context(|| format!("compiling template `{t}`"))?;
         let tmpl = env.get_template("t").expect("template just added");
@@ -197,6 +236,24 @@ mod tests {
     #[test]
     fn strict_undefined_is_an_error() {
         assert!(render("{{ missing }}", &json!({}), &novars()).is_err());
+    }
+
+    #[test]
+    fn fail_stops_the_render_with_its_message() {
+        let tmpl =
+            "{% if input is startingwith('fix(') %}{{ fail('drop the type prefix') }}{% endif %}ok";
+        let err = render(tmpl, &json!({"input": "fix(web): x"}), &novars()).unwrap_err();
+        assert_eq!(format!("{err:#}"), "drop the type prefix");
+        assert_eq!(
+            render(tmpl, &json!({"input": "x"}), &novars()).unwrap(),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn fail_is_not_a_name_a_template_reads() {
+        let names = undeclared(&["{{ fail('no') }}{{ input }}"]).unwrap();
+        assert_eq!(names, ["input".to_string()].into_iter().collect());
     }
 
     #[test]
