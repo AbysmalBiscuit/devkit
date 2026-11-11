@@ -30,7 +30,7 @@ devrun runs passed <task> --arg k=v           # the same for a run given exactly
 devrun runs passed <task> --sha <full-id>     # the same question for another commit
 ```
 
-`passed` answers yes only for a run in one of this repository's checkouts at exactly that commit id, given exactly the `--arg` values passed to it: a run at an ancestor, an abbreviated id, a dirty tree, a non-zero exit, other args, or an `up` step that reused a server already running before the run is no, unless that server is under `reused_at_head`. It is the same answer `devkit pr create`'s verify gate reaches. `--json` prints the proving run, or `null`. To claim a check passed, cite `devrun runs passed`, not your own reading of the output.
+`passed` answers yes only for a run in one of this repository's checkouts at exactly that commit id, given exactly the `--arg` values passed to it: a run at an ancestor, an abbreviated id, a dirty tree, a non-zero exit, other args, or an `up` step that reused a server already running before the run is no, unless that server is under `reused_at_head`. It is the run that `devkit pr create`'s verify gate looks for. A person's waiver for a head (`devkit pr waive-verify`) can also pass that gate, but `passed` still answers no for that head, since no run passed there. `--json` prints the proving run, or `null`. To claim a check passed, cite `devrun runs passed`, not your own reading of the output.
 
 ## Args
 
