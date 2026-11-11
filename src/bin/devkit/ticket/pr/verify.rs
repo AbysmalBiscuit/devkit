@@ -279,10 +279,7 @@ pub(crate) fn run(
     let caller = devkit_common::caller::caller();
     let base = base.unwrap_or(&loaded.config.defaults.pr_base);
     let vcs = Vcs::at(dir);
-    let head = match head {
-        Some(rev) => vcs.revision_of(dir, rev)?,
-        None => vcs.revision(dir)?,
-    };
+    let head = full_head(&vcs, dir, head)?;
     let (merge_base, cfg) = super::create::gate_settings(&checkout, base, &head)?;
     match Gate::read(
         &checkout,
@@ -299,6 +296,14 @@ pub(crate) fn run(
         ),
     }
     Ok(())
+}
+
+/// The full commit id `head` names in `dir`, or HEAD's when `None`.
+fn full_head(vcs: &Vcs, dir: &Path, head: Option<&str>) -> Result<String> {
+    match head {
+        Some(rev) => vcs.revision_of(dir, rev),
+        None => vcs.revision(dir),
+    }
 }
 
 /// `pr waive-verify`: record that the person running it accepts `head`,
@@ -318,10 +323,7 @@ pub(crate) fn waive(dir: &Path, head: Option<&str>, reason: &str) -> Result<()> 
         bail!("a waiver needs a reason: pass `--reason <text>`");
     }
     let vcs = Vcs::at(dir);
-    let head = match head {
-        Some(rev) => vcs.revision_of(dir, rev)?,
-        None => vcs.revision(dir)?,
-    };
+    let head = full_head(&vcs, dir, head)?;
     let Some((name, email)) = vcs.author(dir)? else {
         bail!("a waiver names its writer: set the repository's author name and email");
     };
