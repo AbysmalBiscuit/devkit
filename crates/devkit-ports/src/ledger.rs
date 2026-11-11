@@ -263,19 +263,11 @@ impl Ledger {
     /// Every readable record, oldest first. A record that does not parse is
     /// skipped: it can prove nothing.
     pub fn runs(&self) -> Result<Vec<Run>> {
-        let entries = match std::fs::read_dir(&self.dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", self.dir.display())),
-        };
-        let mut runs: Vec<Run> = entries
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
-            .filter_map(|p| {
-                let text = std::fs::read_to_string(&p).ok()?;
-                let mut run: Run = serde_json::from_str(&text).ok()?;
-                run.path = Some(p);
-                Some(run)
+        let mut runs: Vec<Run> = read_records(&self.dir)?
+            .into_iter()
+            .map(|(path, mut run): (PathBuf, Run)| {
+                run.path = Some(path);
+                run
             })
             .collect();
         runs.sort_by(|a, b| (&a.started_at, &a.path).cmp(&(&b.started_at, &b.path)));
@@ -319,16 +311,9 @@ impl Ledger {
     /// not parse, or names a prefix of the id or another repository, does
     /// not count.
     pub fn waiver(&self, repo: &Path, head: &str) -> Result<Option<Waiver>> {
-        let dir = self.dir.join("waivers");
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
-        };
-        Ok(entries
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
-            .filter_map(|p| serde_json::from_str::<Waiver>(&std::fs::read_to_string(p).ok()?).ok())
+        Ok(read_records(&self.dir.join("waivers"))?
+            .into_iter()
+            .map(|(_, waiver): (PathBuf, Waiver)| waiver)
             .filter(|w| w.head == head && paths::same_path(&w.repo, repo))
             .max_by(|a, b| a.at.cmp(&b.at)))
     }
@@ -343,6 +328,33 @@ impl Ledger {
             .iter()
             .any(|p| p.starts_with(&dir) || p.starts_with(&dir_real))
     }
+}
+
+/// Each JSON file in `dir` that parses as a `T`, with its path, in no
+/// order. A missing `dir` holds none, and a file that does not parse is
+/// skipped: it can prove nothing.
+fn read_records<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<Vec<(PathBuf, T)>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
+    };
+    Ok(entries
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|p| {
+            let record = serde_json::from_str(&std::fs::read_to_string(&p).ok()?).ok()?;
+            Some((p, record))
+        })
+        .collect())
+}
+
+/// The path the ledger lists `checkout`'s runs and waivers by: its
+/// repository's primary checkout, else `root`, canonicalized when it
+/// resolves.
+pub fn repo_key(checkout: &Checkout, root: &Path) -> PathBuf {
+    let repo = checkout.primary().unwrap_or(root).to_path_buf();
+    std::fs::canonicalize(&repo).unwrap_or(repo)
 }
 
 /// Write `value` as a new JSON file in `dir`, named by the time and this
@@ -467,7 +479,7 @@ impl Start {
     ) -> Self {
         let root = checkout.root().unwrap_or(checkout.dir());
         let (head, clean) = tree_state(root);
-        let repo = checkout.primary().unwrap_or(root).to_path_buf();
+        let repo = repo_key(checkout, root);
         let worktree = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let dir = std::fs::canonicalize(cwd).ok().and_then(|cwd| {
             let rel = cwd.strip_prefix(&worktree).ok()?;
@@ -480,7 +492,7 @@ impl Start {
             task: task.to_string(),
             args: args.clone(),
             arg_files,
-            repo: std::fs::canonicalize(&repo).unwrap_or(repo),
+            repo,
             worktree,
             dir,
             head,

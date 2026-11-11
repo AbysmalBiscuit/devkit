@@ -16,7 +16,7 @@ use devkit_common::{
 };
 use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask};
 use devkit_ports::{
-    ledger::{Ledger, Run, Step, Waiver},
+    ledger::{self, Ledger, Run, Step, Waiver},
     task,
 };
 
@@ -66,7 +66,7 @@ impl Gate {
             return Ok(None);
         }
         let worktree = checkout.worktree()?;
-        let repo = ledger_repo(checkout)?;
+        let repo = ledger::repo_key(checkout, &worktree.path);
         let runs: Vec<Run> = ledger.runs_in(&repo)?.into_iter().rev().collect();
         let at_head = heads_required(checkout, worktree, head, &required, caller, &runs);
         let (required, moved_from) = match at_head {
@@ -301,14 +301,6 @@ pub(crate) fn run(
     Ok(())
 }
 
-/// The repository's primary checkout as the ledger lists runs and waivers
-/// by it.
-fn ledger_repo(checkout: &Checkout) -> Result<PathBuf> {
-    let worktree = checkout.worktree()?;
-    let repo = checkout.primary().unwrap_or(&worktree.path).to_path_buf();
-    Ok(std::fs::canonicalize(&repo).unwrap_or(repo))
-}
-
 /// `pr waive-verify`: record that the person running it accepts `head`,
 /// HEAD when `None`, with no qualifying run, so the verify gate passes at
 /// that head only. Refuses an agent caller, and any caller without an
@@ -333,13 +325,13 @@ pub(crate) fn waive(dir: &Path, head: Option<&str>, reason: &str) -> Result<()> 
     let Some((name, email)) = vcs.author(dir)? else {
         bail!("a waiver names its writer: set the repository's author name and email");
     };
-    let at: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+    let checkout = Checkout::at(dir);
     let waiver = Waiver {
-        repo: ledger_repo(&Checkout::at(dir))?,
+        repo: ledger::repo_key(&checkout, &checkout.worktree()?.path),
         head,
         by: format!("{name} <{email}>"),
         reason: reason.to_string(),
-        at: at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        at: devkit_common::harness_log::now_rfc3339(),
     };
     let path = Ledger::live()?.waive(&waiver)?;
     eprintln!(
