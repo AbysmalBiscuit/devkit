@@ -1618,6 +1618,13 @@ const WAIVE: [&str; 4] = ["pr", "waive-verify", "--reason", "flaky under host lo
 /// with a pseudoterminal as its standard input.
 #[cfg(unix)]
 fn waive(p: &ghfake::Fake, caller: &str) -> (bool, String) {
+    waive_in(p, caller, None)
+}
+
+/// [`waive`] inside the harness session `session`, or outside any session
+/// when it is `None`.
+#[cfg(unix)]
+fn waive_in(p: &ghfake::Fake, caller: &str, session: Option<&str>) -> (bool, String) {
     let size = nix::pty::Winsize {
         ws_row: 24,
         ws_col: 80,
@@ -1625,7 +1632,7 @@ fn waive(p: &ghfake::Fake, caller: &str) -> (bool, String) {
         ws_ypixel: 0,
     };
     let pair = nix::pty::openpty(&size, None).expect("open a pseudoterminal");
-    let out = p.issue_in_session_with_stdin(caller, None, &WAIVE, pair.slave.into());
+    let out = p.issue_in_session_with_stdin(caller, session, &WAIVE, pair.slave.into());
     drop(pair.master);
     (
         out.status.success(),
@@ -1720,11 +1727,14 @@ fn an_agent_cannot_waive_the_verify_gate() {
         stderr.contains("an agent caller cannot write a waiver"),
         "says why: {stderr}"
     );
-    let out = p.issue_in_session("human", Some("S"), &WAIVE);
+    let (ok, stderr) = waive_in(&p, "human", Some("S"));
     assert!(
-        !out.status.success(),
-        "a human override inside a harness session is an agent: {}",
-        String::from_utf8_lossy(&out.stderr)
+        !ok,
+        "a human override inside a harness session is an agent: {stderr}"
+    );
+    assert!(
+        stderr.contains("an agent caller cannot write a waiver"),
+        "refused as an agent, not for want of a terminal: {stderr}"
     );
     let (ok, stderr) = create(&p, "agent");
     assert!(!ok, "no waiver was written: {stderr}");
