@@ -18,7 +18,9 @@
 //!
 //! A query answers from `graphql.json` and a mutation from
 //! `graphql_mutation.json`, unless a `graphql_<n>.json` or
-//! `graphql_mutation_<n>.json` answers the n-th call of its kind.
+//! `graphql_mutation_<n>.json` answers the n-th call of its kind. The REST
+//! read of PR `<n>` answers from `rest_pull_<n>.json` the same way, unless a
+//! `rest_pull_<n>_<k>.json` answers its k-th read.
 //!
 //! A `hang` file there makes every call, once logged, wait until the file is
 //! removed, as a tracker that stops answering would; it gives up after a
@@ -64,8 +66,8 @@ fn read_or(dir: &Path, file: &str, fallback: &str) -> String {
     std::fs::read_to_string(dir.join(file)).unwrap_or_else(|_| fallback.to_string())
 }
 
-/// The 1-based number of this `kind` of GraphQL call, counted in a file
-/// beside the answers.
+/// The 1-based number of this `kind` of call, counted in a file beside the
+/// answers.
 fn next_count(dir: &Path, kind: &str) -> u64 {
     let counter = dir.join(format!("{kind}.count"));
     let n = read_or(dir, &format!("{kind}.count"), "0")
@@ -124,7 +126,15 @@ fn rest(dir: &Path, args: &[String]) {
             fail_create(dir);
             serve_or_404(dir, "rest_pull_create.json")
         }
-        ("GET", ["repos", _, _, "pulls", n]) => serve_or_404(dir, &format!("rest_pull_{n}.json")),
+        ("GET", ["repos", _, _, "pulls", n]) => {
+            let kind = format!("rest_pull_{n}");
+            let nth = format!("{kind}_{}.json", next_count(dir, &kind));
+            if dir.join(&nth).exists() {
+                serve_or_404(dir, &nth)
+            } else {
+                serve_or_404(dir, &format!("{kind}.json"))
+            }
+        }
         ("PATCH", ["repos", _, _, "pulls", n]) => {
             let _ = std::fs::write(dir.join("rest_pull_patch.args"), args.join("\0"));
             serve_or_404(dir, &format!("rest_pull_{n}.json"))

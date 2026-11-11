@@ -440,6 +440,67 @@ fn an_agents_proof_that_skips_an_item_is_refused() {
     assert!(!wrote(&fake), "{}", fake.calls());
 }
 
+/// A project whose PR is at its first commit, with a second commit that the
+/// bare origin returned beside it has not received. Returns the second commit.
+fn ahead_of_the_pr() -> (ghfake::Fake, tempfile::TempDir, String) {
+    let origin = tempfile::tempdir().expect("origin dir");
+    devkit_git::Git::fixture(origin.path())
+        .args(["init", "-q", "--bare"])
+        .output()
+        .expect("git init --bare");
+    let fake = project("", LIVE);
+    let git = |args: &[&str]| {
+        devkit_git::Git::fixture(fake.project())
+            .args(args.iter().copied())
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?}: {e:#}"))
+    };
+    git(&["remote", "add", "origin", &origin.path().to_string_lossy()]);
+    git(&["commit", "-q", "--allow-empty", "-m", "next"]);
+    let head = git(&["rev-parse", "HEAD"]).trim().to_string();
+    (fake, origin, head)
+}
+
+/// The forge reports a PR's old head for a moment after a push, so the edit
+/// reads the PR again until it carries the pushed commit.
+#[test]
+fn an_edit_waits_for_the_forge_to_report_the_pushed_head() {
+    let (fake, origin, head) = ahead_of_the_pr();
+    fake.serve_pr_nth_at(1, &PR_7, fake.head());
+    fake.serve_pr_at(&PR_7, &head);
+
+    let out = fake.issue(&["pr", "edit", "--pr-title", "feat: a new title"]);
+
+    assert!(out.status.success(), "{out:?}\n{}", fake.calls());
+    let pushed = devkit_git::Git::fixture(origin.path())
+        .args(["rev-parse", "lev/eng-1-fix"])
+        .output()
+        .expect("git rev-parse");
+    assert_eq!(pushed.trim(), head, "the commit is pushed");
+    assert_eq!(
+        fake.patched_pr_field("title").as_deref(),
+        Some("feat: a new title")
+    );
+}
+
+/// A PR that another writer moved never reaches the pushed commit, so the
+/// edit refuses once the wait ends and names both heads.
+#[test]
+fn an_edit_refuses_a_pr_that_never_reaches_the_pushed_head() {
+    let (fake, _origin, head) = ahead_of_the_pr();
+    fake.serve_pr_at(&PR_7, fake.head());
+
+    let out = fake.issue(&["pr", "edit", "--pr-title", "feat: a new title"]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(fake.head()) && stderr.contains(&head),
+        "names both heads: {stderr}"
+    );
+    assert_eq!(fake.patched_pr_field("title"), None, "{}", fake.calls());
+}
+
 #[test]
 fn nothing_to_change_is_refused() {
     let fake = project("", LIVE);

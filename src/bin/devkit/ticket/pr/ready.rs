@@ -55,6 +55,7 @@ pub fn run(args: Args) -> Result<()> {
     let found = resolve_existing(&Existing {
         start: &start,
         branch: &branch,
+        head: &head,
         forge: &forge,
         record: record.as_ref(),
         explicit_pr: args

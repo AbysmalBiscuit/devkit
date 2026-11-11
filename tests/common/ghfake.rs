@@ -161,6 +161,19 @@ github = "sweeper[bot]"
         .expect("write REST pr");
     }
 
+    /// Answer the `n`-th REST read of PR `pr.number` (from 1) with `pr` at
+    /// commit `head`, ahead of [`Fake::serve_pr`], as a forge that has not
+    /// yet seen a push would.
+    pub fn serve_pr_nth_at(&self, n: u64, pr: &Pr, head: &str) {
+        std::fs::write(
+            self.bin
+                .path()
+                .join(format!("rest_pull_{}_{n}.json", pr.number)),
+            rest_pr_json(pr, head),
+        )
+        .expect("write REST pr");
+    }
+
     /// [`Fake::serve_pr`] with `body` as the PR's description.
     pub fn serve_pr_body(&self, pr: &Pr, body: &str) {
         let mut json: serde_json::Value =

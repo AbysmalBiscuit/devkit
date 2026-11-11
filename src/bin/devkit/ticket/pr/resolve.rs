@@ -4,7 +4,10 @@
 //! push the branch, then resolve the PR from `--pr`, the worktree's record, or
 //! the branch. Opening one is `create`'s job alone.
 
-use std::path::Path;
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use devkit_common::{
@@ -137,10 +140,52 @@ pub(crate) fn record_pr(worktree: &Path, loc: PrLocator) -> Result<()> {
     })
 }
 
+/// How long the forge may take to report a pushed commit as its PR's head.
+const PUSHED_HEAD_WAIT: Duration = Duration::from_secs(10);
+
+/// How often the PR is read again during [`PUSHED_HEAD_WAIT`].
+const PUSHED_HEAD_POLL: Duration = Duration::from_millis(500);
+
+/// The forge reports an open PR's old head for a short time after a push.
+/// Read the PR again until it carries `head` or the wait ends. The caller's
+/// [`assert_belongs`] then refuses a PR that still differs, such as one
+/// another writer moved. A closed or merged PR does not follow a push, so it
+/// returns at once.
+fn await_pushed_head(
+    forge: &dyn Forge,
+    repo: &Repo,
+    pr: PrBrief,
+    head: &str,
+    steps: &Steps,
+) -> Result<PrBrief> {
+    if pr.head_ref_oid == head || pr.state != "OPEN" {
+        return Ok(pr);
+    }
+    let number = pr.number;
+    steps.during_result(
+        &format!("Waiting for PR #{number} to reach the pushed commit..."),
+        || {
+            let deadline = Instant::now() + PUSHED_HEAD_WAIT;
+            let mut pr = pr;
+            while pr.head_ref_oid != head {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                std::thread::sleep(PUSHED_HEAD_POLL.min(left));
+                pr = existing(forge, repo, number)?;
+            }
+            Ok(pr)
+        },
+    )
+}
+
 /// Inputs to the push-and-resolve half.
 pub(crate) struct Existing<'a> {
     pub start: &'a str,
     pub branch: &'a str,
+    /// The worktree's head commit, which a pushed PR waits to report.
+    pub head: &'a str,
     pub forge: &'a forge::Resolved,
     pub record: Option<&'a devkit_common::record::IssueRecord>,
     pub explicit_pr: Option<PrLocator>,
@@ -158,8 +203,26 @@ pub(crate) struct Found {
 /// Push the branch, then resolve this run's PR: explicit `--pr`, then the
 /// record, then branch discovery. The repository a locator names wins over
 /// the PR repository, so the fetch that the head-oid gate validates and the
-/// edit it protects read the same repository.
+/// edit it protects read the same repository. After a push, an open PR is
+/// read until it reports the pushed head, for a bounded time.
 pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found> {
+    let mut found = resolve_unwaited(args)?;
+    if !args.no_push
+        && let Some(pr) = found.pr.take()
+    {
+        let forge = args.forge.forge.as_ref();
+        found.pr = Some(await_pushed_head(
+            forge,
+            &found.repo,
+            pr,
+            args.head,
+            args.steps,
+        )?);
+    }
+    Ok(found)
+}
+
+fn resolve_unwaited(args: &Existing<'_>) -> Result<Found> {
     if !args.no_push {
         args.steps
             .during_result("Pushing branch...", || {
