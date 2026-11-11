@@ -1622,9 +1622,12 @@ fn waive(p: &ghfake::Fake, caller: &str) -> (bool, String) {
 }
 
 /// [`waive`] inside the harness session `session`, or outside any session
-/// when it is `None`.
+/// when it is `None`. The repository gets its own author, since a waiver
+/// names its writer and the test must not depend on the host's identity.
 #[cfg(unix)]
 fn waive_in(p: &ghfake::Fake, caller: &str, session: Option<&str>) -> (bool, String) {
+    git(p, &["config", "user.name", "Pat Person"]);
+    git(p, &["config", "user.email", "pat@example.com"]);
     let size = nix::pty::Winsize {
         ws_row: 24,
         ws_col: 80,
