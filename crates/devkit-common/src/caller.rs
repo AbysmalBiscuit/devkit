@@ -89,6 +89,22 @@ pub fn resolve_caller(over: Option<Caller>, harness_session: bool, is_tty: bool)
     }
 }
 
+/// Refuse `action` unless stdin is an interactive terminal. No flag or
+/// variable bypasses it, so an agent, which has no terminal, cannot pass it
+/// even when it unsets the harness session variables and sets
+/// `DEVKIT_CALLER=human`.
+pub fn require_terminal(action: &str) -> anyhow::Result<()> {
+    terminal_gate(action, std::io::stdin().is_terminal())
+}
+
+fn terminal_gate(action: &str, is_tty: bool) -> anyhow::Result<()> {
+    if is_tty {
+        Ok(())
+    } else {
+        anyhow::bail!("{action} requires an interactive terminal")
+    }
+}
+
 /// Resolve once per command at the CLI edge and pass the result down.
 pub fn caller() -> Caller {
     let over = parse_caller_override(std::env::var("DEVKIT_CALLER").ok().as_deref());
@@ -101,6 +117,13 @@ pub fn caller() -> Caller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_terminal_gate_refuses_without_a_terminal_naming_the_action() {
+        assert!(terminal_gate("reap", true).is_ok());
+        let err = terminal_gate("reap", false).unwrap_err();
+        assert_eq!(err.to_string(), "reap requires an interactive terminal");
+    }
 
     #[test]
     fn a_harness_session_means_agent_whatever_the_terminal_says() {

@@ -171,7 +171,8 @@ pub fn ledger_blocks(claims: &Claims, ledger: &Ledger, cwd: &Path) -> Vec<String
         .filter(|target| ledger.contains(Path::new(target), cwd))
         .map(|target| {
             format!(
-                "{PREFIX} `{target}` is in devrun's run ledger, which only devrun writes. \
+                "{PREFIX} `{target}` is in devrun's run ledger, which only devrun and a person's \
+                 `devkit pr waive-verify` write. \
                  Run the task to record a run; `devrun runs list` reads them."
             )
         })
