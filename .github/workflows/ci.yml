@@ -17,8 +17,35 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # A pull request that changes only the files `skip` matches skips the Rust
+  # jobs. Every other path, a new one included, runs them.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - id: diff
+        env:
+          skip: '^(docs/|evals/|\.github/workflows/(release|release-please|codeql|nightly|nightly-target)\.yml$|dist-workspace\.toml$|release-please-config\.json$|\.release-please-manifest\.json$|(README|CHANGELOG|CODING_STANDARDS|AGENTS|CLAUDE)\.md$|LICENSE$)'
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo code=true >> "$GITHUB_OUTPUT"
+          elif git diff --name-only HEAD^1 HEAD | grep -qvE "$skip"; then
+            echo code=true >> "$GITHUB_OUTPUT"
+          else
+            echo code=false >> "$GITHUB_OUTPUT"
+          fi
+
   fmt:
     name: rustfmt
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -32,6 +59,8 @@ jobs:
 
   audit:
     name: cargo audit
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -51,6 +80,8 @@ jobs:
 
   clippy:
     name: clippy (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     strategy:
@@ -69,6 +100,8 @@ jobs:
 
   test:
     name: test (${{ matrix.os }}${{ matrix.partition && format(', {0}', matrix.partition) || '' }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 15 || 10 }}
     strategy:
@@ -115,6 +148,8 @@ jobs:
 
   postgres:
     name: postgres todo backend and rules source
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -128,3 +163,15 @@ jobs:
         run: crates/devkit-todo-postgres/testdb/up.sh | sed 's/^export //' >> "$GITHUB_ENV"
       - name: Test the postgres todo backend and rules source
         run: cargo nextest run --workspace --no-fail-fast -E 'package(devkit-todo-postgres) | package(devkit-todo-supabase) | binary(todo_postgres) | binary(todo_supabase) | binary(source_parity) | binary(rules_postgres)'
+
+  # The one required check. A skipped matrix job reports no check under its
+  # expanded names, so branch protection requires this job instead.
+  ci:
+    name: ci
+    if: always()
+    needs: [changes, fmt, audit, plugin, clippy, test, postgres]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
