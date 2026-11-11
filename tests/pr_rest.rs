@@ -294,6 +294,47 @@ fn a_created_pr_that_fails_verification_gets_no_reviewers() {
     assert!(!calls.contains("requested_reviewers"), "{calls}");
 }
 
+/// The forge can report a new PR at an older head for a moment after the
+/// push, so `create` reads it again until it carries the pushed commit.
+#[test]
+fn a_created_pr_is_read_again_until_it_reports_the_pushed_head() {
+    let fake = ghfake::Fake::without_pr("");
+    fake.create_opens(&ready_pr(7));
+    fake.serve_pr_nth_at(1, &ready_pr(7), "0000000000000000000000000000000000000000");
+    let _origin = with_origin(&fake);
+
+    let out = fake.issue(&["pr", "create", "--to", "lev", "--pr-title", "t"]);
+
+    let calls = fake.calls();
+    assert!(out.status.success(), "{out:?}\n{calls}");
+    assert!(
+        calls.contains("requested_reviewers -f reviewers[]=LevValle"),
+        "{calls}"
+    );
+}
+
+/// A new PR that never reaches the pushed commit is refused once the wait
+/// ends, naming both heads, and gets no reviewers.
+#[test]
+fn a_created_pr_that_never_reports_the_pushed_head_is_refused() {
+    let stale = "0000000000000000000000000000000000000000";
+    let fake = ghfake::Fake::without_pr("");
+    fake.create_opens(&ready_pr(7));
+    fake.serve_pr_at(&ready_pr(7), stale);
+    let _origin = with_origin(&fake);
+
+    let out = fake.issue(&["pr", "create", "--to", "lev", "--pr-title", "t"]);
+
+    let calls = fake.calls();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}\n{calls}");
+    assert!(
+        stderr.contains(stale) && stderr.contains(fake.head()),
+        "names both heads: {stderr}"
+    );
+    assert!(!calls.contains("requested_reviewers"), "{calls}");
+}
+
 /// A PR as GitHub's REST API returns it, at `head` on this project's branch.
 fn rest_pr(number: u64, head: &str) -> String {
     serde_json::json!({

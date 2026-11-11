@@ -117,15 +117,16 @@ pub(crate) fn assert_belongs(pr: &PrBrief, head: &str) -> Result<()> {
 /// A PR that was just created must carry this worktree's commits, which can
 /// only be checked once it exists, so this runs after the call rather than
 /// before it. A failure here leaves the PR open on the forge, which is why the
-/// caller says so in the error.
-pub(crate) fn verify_created(
-    forge: &dyn Forge,
-    repo: &Repo,
-    number: u64,
-    head: &str,
-) -> Result<()> {
-    let created = existing(forge, repo, number).context("fetching the PR just created")?;
-    assert_belongs(&created, head)
+/// caller says so in the error. After a push, the PR is read until it
+/// reports the pushed head, as in [`resolve_existing`].
+pub(crate) fn verify_created(args: &Existing<'_>, repo: &Repo, number: u64) -> Result<()> {
+    let forge = args.forge.forge.as_ref();
+    let mut created = existing(forge, repo, number).context("fetching the PR just created")?;
+    if !args.no_push {
+        created = await_pushed_head(forge, repo, created, args.head, args.steps)
+            .context("fetching the PR just created")?;
+    }
+    assert_belongs(&created, args.head)
         .context("the PR just created does not carry this worktree's commits")
 }
 

@@ -453,7 +453,7 @@ where
             let created_repo = locator.resolve(&args.existing.forge.repos)?;
             // The gate runs before anyone is asked to review, before the
             // record is written and before any notification goes out.
-            verify_created(forge, &created_repo, locator.number, args.existing.head)
+            verify_created(&args.existing, &created_repo, locator.number)
                 .with_context(|| format!("{url} is open with nothing recorded"))?;
             add_reviewers(forge, &created_repo, locator.number, &args.reviewers, steps)
                 .with_context(|| format!("{url} is open with nothing recorded"))?;
