@@ -154,6 +154,22 @@ fn a_render_outside_a_session_says_no_receipt_was_written() {
 }
 
 #[test]
+fn a_template_that_calls_fail_is_reported_and_renders_nothing() {
+    let fake = ghfake::Fake::without_pr(
+        "[templates]\npr_body = \"{{ fail('the body needs a Why section') }}\"\n",
+    );
+    fake.record_issue("ENG-1");
+    let out = render(&fake, Some("S1"), &["--pr-title", "t", "--pr-body", "b"]);
+
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty(), "nothing rendered");
+    let err = stderr(&out);
+    assert!(err.contains("the body needs a Why section"), "{err}");
+    assert!(err.contains("pr_body"), "{err}");
+    assert!(receipts(fake.project(), "S1").is_empty());
+}
+
+#[test]
 fn a_missing_required_arg_is_refused_by_name_before_rendering() {
     let fake = project();
     let without_proof: Vec<&str> = ARGS

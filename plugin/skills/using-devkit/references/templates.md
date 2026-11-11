@@ -15,3 +15,24 @@ devkit template render <name> --arg-file k=notes.md  # a multi-line value from a
 - The built-ins are every template `workspace`, `ticket` and `devkit pr` render, `branch`, `worktree_dir`, `checkout_worktree_dir`, `ticket_summary_path`, `ticket_summary`, `pr_title`, `pr_body`, `ticket_title`, `ticket_body` (each of the four `ticket_` templates also renders by its old `issue_` name), `review_request` and `review_finish`, plus `commit_message`, which `devkit commit` renders. `render` applies no length limit, so `branch_max` and the other `*_max` settings do not shorten its output, and `short_slug` is an arg.
 - A project's own templates live under `[templates.custom.<name>]`, with a `body` and a `description`; `devkit schema` has the details. A custom template wins over a built-in of the same name.
 - MCP has the same three as `templates.list`, `templates.show` and `templates.render`, with `args` as a JSON object, so a multi-line value needs no file. `templates.render` takes the `commit_message` parts `templates.show` names by flag as parameters of the same name, `subject`, `body` and a `coauthor` array, not inside `args`.
+
+## Refusing an input: `fail`
+
+A template can refuse its input. `fail("message")` stops the render, and the command prints `message` as its error and writes nothing. Every command that renders a template has the same check: `ticket create`, `ticket edit`, `ticket render`, `pr create`, `pr render`, `template render` and the rest. devkit adds no rules of its own: each template decides what to refuse.
+
+This `ticket_title` refuses a `--title` that already starts with a type prefix, such as `fix(web): ...`, and a `type` outside its list:
+
+```toml
+[templates]
+ticket_title = """
+{%- set head = input | split(":") | first -%}
+{%- if ":" in input and " " not in head -%}
+  {{ fail("--title starts with the prefix `" ~ head ~ ":`. Pass the description alone, and the type as --arg type=...") }}
+{%- endif -%}
+{%- if type not in ["feat", "fix", "docs", "refactor", "test", "chore"] -%}
+  {{ fail("`" ~ type ~ "` is not a Conventional Commits type") }}
+{%- endif -%}
+{{ type }}: {{ input }}"""
+```
+
+When you get a refusal, correct the input and run the command again. A refusal from `ticket create` creates no ticket, so the next run does not file a second one.

@@ -124,6 +124,64 @@ fn edit_refuses_a_missing_required_arg_before_gh_runs() {
     assert!(!fake.calls().contains("issue edit"), "{}", fake.calls());
 }
 
+/// The `ticket_title` of `references/templates.md`, which refuses an input
+/// that already carries a type prefix and a `type` outside its list.
+const REFUSING_TITLE: &str = r#"
+[tracker]
+kind = "github"
+
+[templates]
+ticket_title = """
+{%- set head = input | split(":") | first -%}
+{%- if ":" in input and " " not in head -%}
+  {{ fail("--title starts with the prefix `" ~ head ~ ":`. Pass the description alone, and the type as --arg type=...") }}
+{%- endif -%}
+{%- if type not in ["feat", "fix", "docs", "refactor", "test", "chore"] -%}
+  {{ fail("`" ~ type ~ "` is not a Conventional Commits type") }}
+{%- endif -%}
+{{ type }}: {{ input }}"""
+
+[templates.variables]
+type = { default = "fix" }
+"#;
+
+#[test]
+fn a_template_that_calls_fail_refuses_the_create_before_gh_runs() {
+    let fake = ghfake::Fake::without_pr(REFUSING_TITLE);
+    for (args, message) in [
+        (
+            &["create", "--title", "fix(web): a thing"][..],
+            "--title starts with the prefix `fix(web):`",
+        ),
+        (
+            &["create", "--title", "a thing", "--arg", "type=bug"][..],
+            "`bug` is not a Conventional Commits type",
+        ),
+    ] {
+        let out = fake.issue(args);
+        assert!(!out.status.success(), "{args:?}");
+        assert!(stderr(&out).contains(message), "{}", stderr(&out));
+    }
+    assert!(
+        !fake.calls().contains("issue create"),
+        "gh must not run: {}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn render_reports_a_template_that_calls_fail() {
+    let fake = ghfake::Fake::without_pr(REFUSING_TITLE);
+    let out = fake.issue(&["render", "--title", "fix(web): a thing"]);
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty(), "nothing rendered");
+    assert!(
+        stderr(&out).contains("--title starts with the prefix `fix(web):`"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 const FIELDS: &str = r#"
 [tracker]
 kind = "github"
