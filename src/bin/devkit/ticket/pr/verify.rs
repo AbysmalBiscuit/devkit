@@ -1,6 +1,8 @@
 //! The verify gate: a PR opens at a commit the project's required task is
 //! recorded passing on. Only devrun writes the run ledger, so the
-//! record is evidence an agent cannot type into the PR body itself.
+//! record is evidence an agent cannot type into the PR body itself. A
+//! person can waive the gate for one head with `pr waive-verify`, which
+//! refuses an agent caller.
 
 use std::{
     collections::BTreeMap,
@@ -14,7 +16,7 @@ use devkit_common::{
 };
 use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask};
 use devkit_ports::{
-    ledger::{Ledger, Run, Step},
+    ledger::{Ledger, Run, Step, Waiver},
     task,
 };
 
@@ -37,6 +39,8 @@ pub(crate) struct Gate {
     /// The steps `run` executed, when they differ from what HEAD's committed
     /// config defines.
     ran: String,
+    /// A person's waiver for `head`, when no run qualifies.
+    waiver: Option<Waiver>,
 }
 
 impl Gate {
@@ -62,8 +66,7 @@ impl Gate {
             return Ok(None);
         }
         let worktree = checkout.worktree()?;
-        let repo = checkout.primary().unwrap_or(&worktree.path).to_path_buf();
-        let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
+        let repo = ledger_repo(checkout)?;
         let runs: Vec<Run> = ledger.runs_in(&repo)?.into_iter().rev().collect();
         let at_head = heads_required(checkout, worktree, head, &required, caller, &runs);
         let (required, moved_from) = match at_head {
@@ -116,6 +119,10 @@ impl Gate {
             .as_ref()
             .map(|r| ran_note(checkout, worktree, head, r, &required))
             .unwrap_or_default();
+        let waiver = match run {
+            Some(_) => None,
+            None => ledger.waiver(&repo, head)?,
+        };
         Ok(Some(Self {
             mode,
             required,
@@ -126,13 +133,14 @@ impl Gate {
             failed,
             change,
             ran,
+            waiver,
         }))
     }
 
     /// `body` with the Verification section appended, or a refusal when an
-    /// agent's PR under `require` has no qualifying run.
+    /// agent's PR under `require` has no qualifying run and no waiver.
     pub(crate) fn apply(&self, body: String) -> Result<String> {
-        if self.run.is_none() {
+        if self.run.is_none() && self.waiver.is_none() {
             match (self.mode, self.caller) {
                 (GateMode::Require, Caller::Agent) => bail!(
                     "refusing to open the PR: the `verify` gate needs a run of `{task}` that \
@@ -156,13 +164,30 @@ impl Gate {
         })
     }
 
-    /// The Verification section: the qualifying run, or NOT RUN when the
-    /// ledger has none.
+    /// The Verification section: the qualifying run, else the waiver, else
+    /// NOT RUN.
     fn section(&self) -> String {
-        match &self.run {
-            Some(run) => self.passed(run),
-            None => self.not_run(),
+        match (&self.run, &self.waiver) {
+            (Some(run), _) => self.passed(run),
+            (None, Some(waiver)) => self.waived(waiver),
+            (None, None) => self.not_run(),
         }
+    }
+
+    fn waived(&self, waiver: &Waiver) -> String {
+        format!(
+            "### Verification\n\n\
+             WAIVED: {by} accepted `{head}` at {at} with no run of `{command}` that exited 0 \
+             on a clean tree there.\n\n\
+             Reason: {reason}\n{failed}{change}",
+            by = waiver.by,
+            head = self.head,
+            at = waiver.at,
+            command = self.required.command(),
+            reason = waiver.reason,
+            failed = self.failed_note(),
+            change = self.change.as_deref().unwrap_or_default(),
+        )
     }
 
     fn passed(&self, run: &Run) -> String {
@@ -273,6 +298,53 @@ pub(crate) fn run(
              verify gate off or names no `verify_task`"
         ),
     }
+    Ok(())
+}
+
+/// The repository's primary checkout as the ledger lists runs and waivers
+/// by it.
+fn ledger_repo(checkout: &Checkout) -> Result<PathBuf> {
+    let worktree = checkout.worktree()?;
+    let repo = checkout.primary().unwrap_or(&worktree.path).to_path_buf();
+    Ok(std::fs::canonicalize(&repo).unwrap_or(repo))
+}
+
+/// `pr waive-verify`: record that the person running it accepts `head`,
+/// HEAD when `None`, with no qualifying run, so the verify gate passes at
+/// that head only. Refuses an agent caller.
+pub(crate) fn waive(dir: &Path, head: Option<&str>, reason: &str) -> Result<()> {
+    if devkit_common::caller::caller() == Caller::Agent {
+        bail!(
+            "refusing to waive the verify gate: an agent caller cannot write a waiver. A person \
+             runs `devkit pr waive-verify` in a terminal"
+        );
+    }
+    let reason = reason.trim();
+    if reason.is_empty() {
+        bail!("a waiver needs a reason: pass `--reason <text>`");
+    }
+    let vcs = Vcs::at(dir);
+    let head = match head {
+        Some(rev) => vcs.revision_of(dir, rev)?,
+        None => vcs.revision(dir)?,
+    };
+    let Some((name, email)) = vcs.author(dir)? else {
+        bail!("a waiver names its writer: set the repository's author name and email");
+    };
+    let at: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+    let waiver = Waiver {
+        repo: ledger_repo(&Checkout::at(dir))?,
+        head,
+        by: format!("{name} <{email}>"),
+        reason: reason.to_string(),
+        at: at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+    let path = Ledger::live()?.waive(&waiver)?;
+    eprintln!(
+        "Waived the verify gate at `{}`: {}",
+        waiver.head,
+        path.display()
+    );
     Ok(())
 }
 
@@ -740,6 +812,7 @@ mod tests {
             failed: None,
             change: None,
             ran: String::new(),
+            waiver: None,
         };
         for body in ["", "  \n\n"] {
             let out = gate.apply(body.into()).unwrap();

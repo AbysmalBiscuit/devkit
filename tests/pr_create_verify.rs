@@ -33,15 +33,33 @@ fn git(p: &ghfake::Fake, args: &[&str]) -> String {
 /// A project whose `main` commits `devkit.toml` with the tasks and `gates`
 /// appended, and whose branch adds one commit on top.
 fn project(gates: &str) -> ghfake::Fake {
-    let fake = ghfake::Fake::without_pr("");
+    project_with("", gates, false)
+}
+
+/// [`project`] with `defaults` appended to the config's defaults. With
+/// `drop_test`, `main` also commits a test file that the branch deletes.
+fn project_with(defaults: &str, gates: &str, drop_test: bool) -> ghfake::Fake {
+    let fake = ghfake::Fake::without_pr(defaults);
     let config = fake.project().join("devkit.toml");
     let mut toml = std::fs::read_to_string(&config).unwrap();
     toml.push_str(TASKS);
     toml.push_str(gates);
     std::fs::write(&config, toml).unwrap();
+    let suite = fake.project().join("tests/math.rs");
+    if drop_test {
+        std::fs::create_dir_all(suite.parent().unwrap()).unwrap();
+        std::fs::write(
+            &suite,
+            "#[test]\nfn adds() {\n    assert_eq!(1 + 2, 3);\n}\n",
+        )
+        .unwrap();
+    }
     git(&fake, &["add", "-A"]);
     git(&fake, &["commit", "-q", "-m", "tasks"]);
     git(&fake, &["branch", "-f", "main", "HEAD"]);
+    if drop_test {
+        std::fs::remove_file(&suite).unwrap();
+    }
     std::fs::write(fake.project().join("feature.txt"), "a thing\n").unwrap();
     git(&fake, &["add", "-A"]);
     git(&fake, &["commit", "-q", "-m", "a thing"]);
@@ -1590,4 +1608,111 @@ fn pr_verification_renders_the_head_it_is_given() {
     let now = verification(&p, "agent", &[]);
     assert!(now.contains("NOT RUN"), "{now}");
     assert!(now.contains(&head(&p)), "{now}");
+}
+
+const BROKEN_GATE: &str = "\n[pr.gates]\nverify_task = \"broken\"\n";
+
+const WAIVE: [&str; 4] = ["pr", "waive-verify", "--reason", "flaky under host load"];
+
+/// `pr waive-verify` for HEAD as `caller`, outside any harness session.
+fn waive(p: &ghfake::Fake, caller: &str) -> (bool, String) {
+    let out = p.issue_in_session(caller, None, &WAIVE);
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn a_persons_waiver_passes_the_verify_gate_at_that_head_only() {
+    let p = project(BROKEN_GATE);
+    task(&p, &["broken"]);
+    let (ok, stderr) = waive(&p, "human");
+    assert!(ok, "{stderr}");
+
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "the waived head opens: {stderr}");
+    let body = body(&p);
+    assert!(
+        body.starts_with("Adds a thing.\n\n### Verification\n\nWAIVED: "),
+        "{body}"
+    );
+    assert!(
+        body.contains("flaky under host load"),
+        "names the reason: {body}"
+    );
+    assert!(body.contains(&head(&p)), "names the head: {body}");
+    assert!(
+        body.contains("\nOutput tail:\n\n```text\ngoing down\n```\n"),
+        "shows the failed run: {body}"
+    );
+
+    git(&p, &["commit", "-q", "--allow-empty", "-m", "another head"]);
+    serve_head(&p);
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "a new head needs a new waiver: {stderr}");
+    assert!(stderr.contains("`verify` gate"), "{stderr}");
+    assert!(stderr.contains(&head(&p)), "{stderr}");
+}
+
+#[test]
+fn a_waived_head_still_runs_the_weakened_tests_gate() {
+    let p = project_with("", BROKEN_GATE, true);
+    let (ok, stderr) = waive(&p, "human");
+    assert!(ok, "{stderr}");
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(stderr.contains("tests/math.rs"), "names the flag: {stderr}");
+    assert!(!opened(&p), "{}", p.calls());
+}
+
+#[test]
+fn a_waived_head_still_runs_the_proof_check() {
+    let p = project_with(
+        "pr_proof_variable = \"proof\"\n\n[tracker]\nkind = \"github\"\n\n\
+         [templates.variables]\nproof = { default = \"\", required = \"agents\" }\n",
+        BROKEN_GATE,
+        false,
+    );
+    p.record_issue("7");
+    p.serve_issue("Why.\n\n## Done when\n\n- [ ] One (proof: test)\n- [ ] Two (proof: test)\n");
+    let (ok, stderr) = waive(&p, "human");
+    assert!(ok, "{stderr}");
+    let out = p.issue_as("agent", &[
+        "pr",
+        "create",
+        "--no-push",
+        "--pr-title",
+        "feat: a thing",
+        "--arg",
+        "proof=1. test `one`",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("2. Two (proof: test)"),
+        "names the gap: {stderr}"
+    );
+    assert!(!opened(&p), "{}", p.calls());
+}
+
+#[test]
+fn an_agent_cannot_waive_the_verify_gate() {
+    let p = project(BROKEN_GATE);
+    task(&p, &["broken"]);
+    let (ok, stderr) = waive(&p, "agent");
+    assert!(!ok, "{stderr}");
+    assert!(
+        stderr.contains("an agent caller cannot write a waiver"),
+        "says why: {stderr}"
+    );
+    let out = p.issue_in_session("human", Some("S"), &WAIVE);
+    assert!(
+        !out.status.success(),
+        "a human override inside a harness session is an agent: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "no waiver was written: {stderr}");
+    assert!(!opened(&p), "{}", p.calls());
 }

@@ -671,6 +671,22 @@ pub(crate) enum PrCmd {
         #[arg(long)]
         base: Option<String>,
     },
+    /// Waive the verify gate of `pr create` for one head.
+    ///
+    /// Records in the run ledger that you accept the head with no run of
+    /// the required task that exited 0 on a clean tree there, such as after
+    /// a flaky failure. An agent's `pr create` then passes the verify gate
+    /// at that head, and its Verification section shows the waiver, the
+    /// reason and the latest failed run. Every other gate still runs. A new
+    /// head needs a new waiver. Refused for an agent caller.
+    WaiveVerify {
+        /// Why the head is accepted. The PR body quotes it.
+        #[arg(long)]
+        reason: String,
+        /// Commit to waive the gate for, instead of HEAD.
+        #[arg(long)]
+        head: Option<String>,
+    },
     /// Run the proof check of `pr create` without opening a PR.
     ///
     /// Checks the `defaults.pr_proof_variable` argument against each item of
@@ -1148,6 +1164,9 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
             head.as_deref(),
             base.as_deref(),
         ),
+        PrCmd::WaiveVerify { reason, head } => {
+            pr::verify::waive(Path::new(&start(&dir)), head.as_deref(), &reason)
+        }
         PrCmd::Proof { ticket, vars } => {
             pr::proof::run(&here, config.as_deref(), ticket, &vars.under(&here))
         }

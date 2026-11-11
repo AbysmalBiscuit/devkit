@@ -183,6 +183,23 @@ struct OriginRecord {
     origin: Origin,
 }
 
+/// A person's acceptance of a head that has no qualifying run, so the
+/// verify gate passes at that head. Only a person writes one: `devkit pr
+/// waive-verify` refuses an agent caller, and the write gate keeps agents'
+/// tools out of the ledger.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Waiver {
+    /// The repository's primary checkout, which waivers are listed by.
+    pub repo: PathBuf,
+    /// The full commit id the waiver covers.
+    pub head: String,
+    /// The person who wrote it, as `Name <email>`.
+    pub by: String,
+    pub reason: String,
+    /// When it was written, as RFC 3339 UTC.
+    pub at: String,
+}
+
 /// The directory holding the records.
 #[derive(Debug, Clone)]
 pub struct Ledger {
@@ -302,6 +319,41 @@ impl Ledger {
             .into_iter()
             .rev()
             .find(|r| r.qualifies(task, args, sha)))
+    }
+
+    /// Write `waiver` as a new record and return its path. It sits in the
+    /// `waivers` directory, so [`Self::runs`] never reads it as a run.
+    pub fn waive(&self, waiver: &Waiver) -> Result<PathBuf> {
+        let dir = self.dir.join("waivers");
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let now: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+        let stamp = now.format("%Y%m%dT%H%M%S%.6fZ");
+        let path = dir.join(format!("{stamp}-{}.json", std::process::id()));
+        let mut tmp = tempfile::NamedTempFile::new_in(&dir)
+            .with_context(|| format!("creating a waiver in {}", dir.display()))?;
+        serde_json::to_writer_pretty(&mut tmp, waiver)?;
+        tmp.write_all(b"\n")?;
+        tmp.persist(&path)
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(path)
+    }
+
+    /// The latest waiver for exactly `head` in `repo`. A waiver that does
+    /// not parse, or names a prefix of the id or another repository, does
+    /// not count.
+    pub fn waiver(&self, repo: &Path, head: &str) -> Result<Option<Waiver>> {
+        let dir = self.dir.join("waivers");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
+        };
+        Ok(entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|p| serde_json::from_str::<Waiver>(&std::fs::read_to_string(p).ok()?).ok())
+            .filter(|w| w.head == head && paths::same_path(&w.repo, repo))
+            .max_by(|a, b| a.at.cmp(&b.at)))
     }
 
     /// Whether `path` names something inside the ledger, however it is
@@ -647,6 +699,38 @@ impl Read for Follow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_waiver_covers_its_head_in_its_repo_and_is_no_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::at(dir.path());
+        let waiver = |head: &str, at: &str| Waiver {
+            repo: PathBuf::from("/repo"),
+            head: head.into(),
+            by: "Lev <lev@example.com>".into(),
+            reason: format!("flaky {at}"),
+            at: at.into(),
+        };
+        ledger
+            .waive(&waiver("abc123", "2026-01-01T00:00:00Z"))
+            .unwrap();
+        ledger
+            .waive(&waiver("abc123", "2026-01-02T00:00:00Z"))
+            .unwrap();
+        let found = ledger.waiver(Path::new("/repo"), "abc123").unwrap();
+        assert_eq!(
+            found.map(|w| w.reason).as_deref(),
+            Some("flaky 2026-01-02T00:00:00Z")
+        );
+        assert!(ledger.waiver(Path::new("/repo"), "abc").unwrap().is_none());
+        assert!(
+            ledger
+                .waiver(Path::new("/other"), "abc123")
+                .unwrap()
+                .is_none()
+        );
+        assert!(ledger.runs().unwrap().is_empty());
+    }
 
     fn run(task: &str, head: &str, clean: bool, exit_code: Option<i32>) -> Run {
         Run {
