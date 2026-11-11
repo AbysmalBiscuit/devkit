@@ -79,6 +79,17 @@ fn next_count(dir: &Path, kind: &str) -> u64 {
     n
 }
 
+/// The file that answers this call of `kind`: `<kind>_<n>.json` for its
+/// n-th call when the test wrote one, else `<kind>.json`.
+fn answer_for(dir: &Path, kind: &str) -> String {
+    let nth = format!("{kind}_{}.json", next_count(dir, kind));
+    if dir.join(&nth).exists() {
+        nth
+    } else {
+        format!("{kind}.json")
+    }
+}
+
 fn uses_graphql(args: &str) -> bool {
     args.starts_with("api graphql") || args.starts_with("pr ")
 }
@@ -127,13 +138,7 @@ fn rest(dir: &Path, args: &[String]) {
             serve_or_404(dir, "rest_pull_create.json")
         }
         ("GET", ["repos", _, _, "pulls", n]) => {
-            let kind = format!("rest_pull_{n}");
-            let nth = format!("{kind}_{}.json", next_count(dir, &kind));
-            if dir.join(&nth).exists() {
-                serve_or_404(dir, &nth)
-            } else {
-                serve_or_404(dir, &format!("{kind}.json"))
-            }
+            serve_or_404(dir, &answer_for(dir, &format!("rest_pull_{n}")))
         }
         ("PATCH", ["repos", _, _, "pulls", n]) => {
             let _ = std::fs::write(dir.join("rest_pull_patch.args"), args.join("\0"));
@@ -234,13 +239,7 @@ fn main() {
         } else {
             "graphql"
         };
-        let nth = dir.join(format!("{kind}_{}.json", next_count(&dir, kind)));
-        let file = if nth.exists() {
-            nth
-        } else {
-            dir.join(format!("{kind}.json"))
-        };
-        match std::fs::read_to_string(file) {
+        match std::fs::read_to_string(dir.join(answer_for(&dir, kind))) {
             Ok(answer) => print!("{answer}"),
             Err(_) => std::process::exit(1),
         }
