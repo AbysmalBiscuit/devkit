@@ -1614,15 +1614,26 @@ const BROKEN_GATE: &str = "\n[pr.gates]\nverify_task = \"broken\"\n";
 
 const WAIVE: [&str; 4] = ["pr", "waive-verify", "--reason", "flaky under host load"];
 
-/// `pr waive-verify` for HEAD as `caller`, outside any harness session.
+/// `pr waive-verify` for HEAD as `caller`, outside any harness session,
+/// with a pseudoterminal as its standard input.
+#[cfg(unix)]
 fn waive(p: &ghfake::Fake, caller: &str) -> (bool, String) {
-    let out = p.issue_in_session(caller, None, &WAIVE);
+    let size = nix::pty::Winsize {
+        ws_row: 24,
+        ws_col: 80,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let pair = nix::pty::openpty(&size, None).expect("open a pseudoterminal");
+    let out = p.issue_in_session_with_stdin(caller, None, &WAIVE, pair.slave.into());
+    drop(pair.master);
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
 }
 
+#[cfg(unix)]
 #[test]
 fn a_persons_waiver_passes_the_verify_gate_at_that_head_only() {
     let p = project(BROKEN_GATE);
@@ -1655,6 +1666,7 @@ fn a_persons_waiver_passes_the_verify_gate_at_that_head_only() {
     assert!(stderr.contains(&head(&p)), "{stderr}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_waived_head_still_runs_the_weakened_tests_gate() {
     let p = project_with("", BROKEN_GATE, true);
@@ -1666,6 +1678,7 @@ fn a_waived_head_still_runs_the_weakened_tests_gate() {
     assert!(!opened(&p), "{}", p.calls());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_waived_head_still_runs_the_proof_check() {
     let p = project_with(
@@ -1696,6 +1709,7 @@ fn a_waived_head_still_runs_the_proof_check() {
     assert!(!opened(&p), "{}", p.calls());
 }
 
+#[cfg(unix)]
 #[test]
 fn an_agent_cannot_waive_the_verify_gate() {
     let p = project(BROKEN_GATE);
@@ -1711,6 +1725,22 @@ fn an_agent_cannot_waive_the_verify_gate() {
         !out.status.success(),
         "a human override inside a harness session is an agent: {}",
         String::from_utf8_lossy(&out.stderr)
+    );
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "no waiver was written: {stderr}");
+    assert!(!opened(&p), "{}", p.calls());
+}
+
+#[test]
+fn a_human_override_without_a_terminal_cannot_waive_the_verify_gate() {
+    let p = project(BROKEN_GATE);
+    task(&p, &["broken"]);
+    let out = p.issue_in_session("human", None, &WAIVE);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("interactive terminal"),
+        "says why: {stderr}"
     );
     let (ok, stderr) = create(&p, "agent");
     assert!(!ok, "no waiver was written: {stderr}");

@@ -311,7 +311,8 @@ fn ledger_repo(checkout: &Checkout) -> Result<PathBuf> {
 
 /// `pr waive-verify`: record that the person running it accepts `head`,
 /// HEAD when `None`, with no qualifying run, so the verify gate passes at
-/// that head only. Refuses an agent caller.
+/// that head only. Refuses an agent caller, and any caller without an
+/// interactive terminal.
 pub(crate) fn waive(dir: &Path, head: Option<&str>, reason: &str) -> Result<()> {
     if devkit_common::caller::caller() == Caller::Agent {
         bail!(
@@ -319,6 +320,7 @@ pub(crate) fn waive(dir: &Path, head: Option<&str>, reason: &str) -> Result<()> 
              runs `devkit pr waive-verify` in a terminal"
         );
     }
+    devkit_common::caller::require_terminal("waiving the verify gate")?;
     let reason = reason.trim();
     if reason.is_empty() {
         bail!("a waiver needs a reason: pass `--reason <text>`");

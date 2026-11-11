@@ -678,7 +678,8 @@ pub(crate) enum PrCmd {
     /// a flaky failure. An agent's `pr create` then passes the verify gate
     /// at that head, and its Verification section shows the waiver, the
     /// reason and the latest failed run. Every other gate still runs. A new
-    /// head needs a new waiver. Refused for an agent caller.
+    /// head needs a new waiver. Refused for an agent caller and without an
+    /// interactive terminal.
     WaiveVerify {
         /// Why the head is accepted. The PR body quotes it.
         #[arg(long)]

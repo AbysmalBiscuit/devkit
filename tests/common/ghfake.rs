@@ -396,8 +396,20 @@ github = "sweeper[bot]"
         session: Option<&str>,
         args: &[&str],
     ) -> std::process::Output {
+        self.issue_in_session_with_stdin(caller, session, args, std::process::Stdio::null())
+    }
+
+    /// [`Fake::issue_in_session`] with `stdin` as the run's standard input,
+    /// such as a pseudoterminal.
+    pub fn issue_in_session_with_stdin(
+        &self,
+        caller: &str,
+        session: Option<&str>,
+        args: &[&str],
+        stdin: std::process::Stdio,
+    ) -> std::process::Output {
         let mut cmd = self.issue_cmd(args);
-        cmd.env("DEVKIT_CALLER", caller);
+        cmd.env("DEVKIT_CALLER", caller).stdin(stdin);
         for var in devkit_common::caller::HARNESS_SESSION_VARS {
             cmd.env_remove(var);
         }

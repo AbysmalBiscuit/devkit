@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    io::{IsTerminal, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -1418,10 +1418,9 @@ fn down_selection(current: &str, args: &DownArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Foreign holders present: require an interactive terminal.
-    if !std::io::stdin().is_terminal() {
+    if let Err(refusal) = devkit_common::caller::require_terminal("cross-worktree down") {
         eprintln!("{}", preview_table(&data, &ports));
-        anyhow::bail!("cross-worktree down requires an interactive terminal");
+        return Err(refusal);
     }
 
     let batch = args.batch || args.all;
@@ -1510,13 +1509,6 @@ fn render_strays(strays: &[devkit_ports::strays::Stray]) -> String {
         ]);
     }
     format!("untracked (outside the registry):\n{t}")
-}
-
-/// Reap refuses to do anything destructive without an interactive terminal —
-/// the same gate that protects cross-worktree `down`. There is deliberately no
-/// flag that bypasses this, so an agent (no PTY) can never reap.
-fn reap_allowed(is_tty: bool) -> bool {
-    is_tty
 }
 
 /// Roots to kill from a scoped stray set: the resolved launch-root pids.
@@ -1681,9 +1673,7 @@ fn cmd_reap(cwd: &str, all: bool) -> Result<()> {
     }
     println!("{}", render_strays(&scoped));
 
-    if !reap_allowed(std::io::stdin().is_terminal()) {
-        anyhow::bail!("reap requires an interactive terminal");
-    }
+    devkit_common::caller::require_terminal("reap")?;
     let roots = reap_roots(&scoped);
     if roots.is_empty() {
         println!("no killable strays (port-only, no resolved pid) — investigate manually");
@@ -1733,13 +1723,6 @@ mod tests {
     use devkit_ports::registry;
 
     use super::{apps_from_diff, available_apps};
-
-    #[test]
-    fn reap_refused_without_tty() {
-        use super::reap_allowed;
-        assert!(!reap_allowed(false));
-        assert!(reap_allowed(true));
-    }
 
     #[test]
     fn reap_roots_are_resolved_pids_only() {
