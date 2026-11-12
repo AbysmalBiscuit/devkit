@@ -1759,3 +1759,237 @@ fn a_human_override_without_a_terminal_cannot_waive_the_verify_gate() {
     assert!(!ok, "no waiver was written: {stderr}");
     assert!(!opened(&p), "{}", p.calls());
 }
+
+/// Run `program args` in `dir`, panicking with its stderr when it fails.
+#[cfg(unix)]
+fn run_in(dir: &std::path::Path, program: &str, args: &[&str]) {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap_or_else(|e| panic!("{program}: {e}"));
+    assert!(
+        out.status.success(),
+        "{program} {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Write `[pr.signed_waivers]` to the user-level config of `p`'s run.
+#[cfg(unix)]
+fn trust_signers(p: &ghfake::Fake, format: &str, trusted_keys: &std::path::Path) {
+    let dir = p.state().join(".config/devkit");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        format!(
+            "[pr.signed_waivers]\nformat = \"{format}\"\ntrusted_keys = \"{}\"\n",
+            trusted_keys.display()
+        ),
+    )
+    .unwrap();
+}
+
+/// A waiver record for `p`'s HEAD, written to `dir/waiver.json`.
+#[cfg(unix)]
+fn waiver_record(
+    p: &ghfake::Fake,
+    dir: &std::path::Path,
+    repo: &std::path::Path,
+) -> std::path::PathBuf {
+    let record = serde_json::json!({
+        "repo": repo,
+        "head": head(p),
+        "by": "Owen Owner <owen@example.com>",
+        "reason": "accepted on the PR by its owner",
+        "at": "2026-11-12T10:00:00Z",
+    });
+    let path = dir.join("waiver.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    path
+}
+
+/// An ssh key pair at `dir/<name>`, and an `allowed_signers` file at
+/// `dir/allowed_signers` that trusts it for waivers.
+#[cfg(unix)]
+fn ssh_signer(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    run_in(dir, "ssh-keygen", &[
+        "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", name,
+    ]);
+    let public = std::fs::read_to_string(dir.join(format!("{name}.pub"))).unwrap();
+    let allowed = dir.join("allowed_signers");
+    std::fs::write(
+        &allowed,
+        format!("owen@example.com namespaces=\"devkit-waiver\" {public}"),
+    )
+    .unwrap();
+    allowed
+}
+
+/// Sign `record` with the ssh key `dir/<key>`, writing `<record>.sig`.
+#[cfg(unix)]
+fn ssh_sign(dir: &std::path::Path, key: &str, record: &std::path::Path) {
+    run_in(dir, "ssh-keygen", &[
+        "-q",
+        "-Y",
+        "sign",
+        "-f",
+        key,
+        "-n",
+        "devkit-waiver",
+        record.to_str().unwrap(),
+    ]);
+}
+
+/// `pr waive-verify --signed <record>` as an agent inside a harness
+/// session, with no terminal.
+#[cfg(unix)]
+fn waive_signed(p: &ghfake::Fake, record: &std::path::Path) -> (bool, String) {
+    let out = p.issue_in_session("agent", Some("S"), &[
+        "pr",
+        "waive-verify",
+        "--signed",
+        record.to_str().unwrap(),
+    ]);
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn an_agent_with_a_record_signed_by_a_trusted_ssh_key_waives_the_head() {
+    let p = project(BROKEN_GATE);
+    task(&p, &["broken"]);
+    let keys = tempfile::tempdir().unwrap();
+    let allowed = ssh_signer(keys.path(), "owner");
+    trust_signers(&p, "ssh", &allowed);
+    let record = waiver_record(
+        &p,
+        keys.path(),
+        &std::fs::canonicalize(p.project()).unwrap(),
+    );
+    ssh_sign(keys.path(), "owner", &record);
+
+    let (ok, stderr) = waive_signed(&p, &record);
+    assert!(ok, "{stderr}");
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "the waived head opens: {stderr}");
+    let body = body(&p);
+    assert!(body.contains("WAIVED: "), "{body}");
+    assert!(
+        body.contains("Owen Owner <owen@example.com>"),
+        "names the signer: {body}"
+    );
+    assert!(
+        body.contains("accepted on the PR by its owner"),
+        "names the reason: {body}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_agent_with_a_record_signed_by_a_trusted_openpgp_key_waives_the_head() {
+    let p = project(BROKEN_GATE);
+    task(&p, &["broken"]);
+    let keys = tempfile::tempdir().unwrap();
+    let home = keys.path().join("gnupg");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::set_permissions(&home, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let gpg = |args: &[&str]| {
+        let mut argv = vec!["--homedir", home.to_str().unwrap(), "--batch", "--quiet"];
+        argv.extend_from_slice(args);
+        run_in(keys.path(), "gpg", &argv);
+    };
+    gpg(&[
+        "--passphrase",
+        "",
+        "--quick-gen-key",
+        "Owen Owner <owen@example.com>",
+        "ed25519",
+        "sign",
+        "never",
+    ]);
+    let keyring = keys.path().join("trusted.gpg");
+    gpg(&[
+        "--output",
+        keyring.to_str().unwrap(),
+        "--export",
+        "owen@example.com",
+    ]);
+    trust_signers(&p, "openpgp", &keyring);
+    let record = waiver_record(
+        &p,
+        keys.path(),
+        &std::fs::canonicalize(p.project()).unwrap(),
+    );
+    gpg(&["--detach-sign", record.to_str().unwrap()]);
+
+    let (ok, stderr) = waive_signed(&p, &record);
+    assert!(ok, "{stderr}");
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "the waived head opens: {stderr}");
+    assert!(
+        body(&p).contains("Owen Owner <owen@example.com>"),
+        "{}",
+        body(&p)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_agent_without_a_trusted_signature_cannot_waive_the_verify_gate() {
+    let p = project(BROKEN_GATE);
+    task(&p, &["broken"]);
+    let keys = tempfile::tempdir().unwrap();
+    let allowed = ssh_signer(keys.path(), "agent");
+    let record = waiver_record(
+        &p,
+        keys.path(),
+        &std::fs::canonicalize(p.project()).unwrap(),
+    );
+    ssh_sign(keys.path(), "agent", &record);
+
+    let config = p.project().join("devkit.toml");
+    let mut toml = std::fs::read_to_string(&config).unwrap();
+    toml.push_str(&format!(
+        "\n[pr.signed_waivers]\nformat = \"ssh\"\ntrusted_keys = \"{}\"\n",
+        allowed.display()
+    ));
+    std::fs::write(&config, toml).unwrap();
+    git(&p, &["commit", "-q", "-am", "trust my own key"]);
+    serve_head(&p);
+    let record = waiver_record(
+        &p,
+        keys.path(),
+        &std::fs::canonicalize(p.project()).unwrap(),
+    );
+    ssh_sign(keys.path(), "agent", &record);
+    let (ok, stderr) = waive_signed(&p, &record);
+    assert!(!ok, "a project layer cannot trust a key: {stderr}");
+    assert!(
+        stderr.contains("no trusted waiver signers"),
+        "says why: {stderr}"
+    );
+
+    let owner = tempfile::tempdir().unwrap();
+    trust_signers(&p, "ssh", &ssh_signer(owner.path(), "owner"));
+    let (ok, stderr) = waive_signed(&p, &record);
+    assert!(!ok, "a key the user does not trust signs nothing: {stderr}");
+    assert!(stderr.contains("does not verify"), "says why: {stderr}");
+
+    let elsewhere = waiver_record(&p, owner.path(), std::path::Path::new("/some/other/repo"));
+    ssh_sign(owner.path(), "owner", &elsewhere);
+    let (ok, stderr) = waive_signed(&p, &elsewhere);
+    assert!(
+        !ok,
+        "a record for another repository waives nothing here: {stderr}"
+    );
+    assert!(stderr.contains("/some/other/repo"), "names it: {stderr}");
+
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "no waiver was written: {stderr}");
+    assert!(!opened(&p), "{}", p.calls());
+}

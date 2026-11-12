@@ -59,6 +59,20 @@ pub fn capture_env(
     if let Some(d) = cwd {
         c.current_dir(d);
     }
+    output(c, program, args)
+}
+
+/// Run a command with `stdin` as its standard input, capture stdout; the
+/// error is a [`CommandFailed`] carrying stderr on non-zero exit. For a tool
+/// that reads its input only from stdin, such as `ssh-keygen -Y verify`.
+pub fn capture_stdin(program: &str, args: &[&str], stdin: std::fs::File) -> Result<String> {
+    let _span = devkit_timing::subprocess_span(program, args).entered();
+    let mut c = Command::new(program);
+    c.args(args).stdin(stdin);
+    output(c, program, args)
+}
+
+fn output(mut c: Command, program: &str, args: &[&str]) -> Result<String> {
     let out = c
         .output()
         .with_context(|| format!("failed to spawn `{program}`"))?;

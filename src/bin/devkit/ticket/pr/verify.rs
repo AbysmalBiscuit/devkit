@@ -2,19 +2,19 @@
 //! recorded passing on. Only devrun writes the run ledger, so the
 //! record is evidence an agent cannot type into the PR body itself. A
 //! person can waive the gate for one head with `pr waive-verify`, which
-//! refuses an agent caller.
+//! refuses an agent caller unless a trusted key signs the waiver.
 
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use devkit_common::{
     caller::Caller,
     vcs::{Checkout, Vcs, VersionControl, Worktree},
 };
-use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask};
+use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask, SignatureFormat};
 use devkit_ports::{
     ledger::{self, Ledger, Run, Step, Waiver},
     task,
@@ -342,6 +342,68 @@ pub(crate) fn waive(dir: &Path, head: Option<&str>, reason: &str) -> Result<()> 
         path.display()
     );
     Ok(())
+}
+
+/// `pr waive-verify --signed`: write the waiver that `record` holds, once
+/// `signature` signs it with a key that the user-level config trusts. No
+/// terminal is needed and an agent may run it, since only a holder of a
+/// trusted key can sign. `signature` is `<record>.sig` when `None`.
+pub(crate) fn waive_signed(dir: &Path, record: &Path, signature: Option<&Path>) -> Result<()> {
+    let signature = signature.map_or_else(
+        || {
+            let mut sig = record.as_os_str().to_owned();
+            sig.push(".sig");
+            PathBuf::from(sig)
+        },
+        Path::to_path_buf,
+    );
+    let (format, trusted) = trusted_signers()?;
+    super::signature::verify(format, &trusted, record, &signature)?;
+    let text =
+        std::fs::read_to_string(record).with_context(|| format!("reading {}", record.display()))?;
+    let mut waiver: Waiver = serde_json::from_str(&text)
+        .with_context(|| format!("{} is no waiver record", record.display()))?;
+    let checkout = Checkout::at(dir);
+    let repo = ledger::repo_key(&checkout, &checkout.worktree()?.path);
+    if !devkit_common::paths::same_path(&waiver.repo, &repo) {
+        bail!(
+            "the signed record waives `{}`, not this repository `{}`",
+            waiver.repo.display(),
+            repo.display()
+        );
+    }
+    if waiver.reason.trim().is_empty() {
+        bail!("the signed record gives no reason");
+    }
+    waiver.repo = repo;
+    waiver.head = full_head(&Vcs::at(dir), dir, Some(&waiver.head))?;
+    let path = Ledger::live()?.waive(&waiver)?;
+    eprintln!(
+        "Waived the verify gate at `{}` for {}: {}",
+        waiver.head,
+        waiver.by,
+        path.display()
+    );
+    Ok(())
+}
+
+/// `[pr.signed_waivers]` as the user-level config sets it. A project
+/// layer's is ignored, so a checkout cannot trust a key of its own.
+fn trusted_signers() -> Result<(SignatureFormat, PathBuf)> {
+    let global = |key| crate::secret::global_setting(&["pr", "signed_waivers", key]);
+    let Some(trusted) = global("trusted_keys") else {
+        bail!(
+            "no trusted waiver signers: set `[pr.signed_waivers] trusted_keys` in \
+             `~/.config/devkit/config.toml`"
+        );
+    };
+    let format = match global("format") {
+        None => SignatureFormat::default(),
+        Some(name) => toml::Value::String(name.clone())
+            .try_into()
+            .with_context(|| format!("`[pr.signed_waivers] format` names no format: `{name}`"))?,
+    };
+    Ok((format, devkit_config::expand_tilde(&trusted)))
 }
 
 /// Why `run`, which passed at the PR's head with the required args, does

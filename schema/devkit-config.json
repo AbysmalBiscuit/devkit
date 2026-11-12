@@ -1365,6 +1365,14 @@
           },
           "description": "One key per PR gate."
         },
+        "signed_waivers": {
+          "$ref": "#/$defs/SignedWaivers",
+          "default": {
+            "format": "ssh",
+            "trusted_keys": null
+          },
+          "description": "The keys whose signature on a waiver record lets `pr waive-verify\n--signed` write the waiver without a terminal, for an agent caller\ntoo. Read from `~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`)\nalone and ignored in a project's `devkit.toml`, so a checkout cannot\ntrust a key of its own."
+        },
         "test_files": {
           "default": [
             "**/tests/**",
@@ -1992,6 +2000,41 @@
         "powershell"
       ],
       "type": "string"
+    },
+    "SignatureFormat": {
+      "description": "How a waiver record is signed. devkit runs the format's own tool to\nverify it.",
+      "oneOf": [
+        {
+          "const": "ssh",
+          "description": "An ssh signature from `ssh-keygen -Y sign -n devkit-waiver`,\nchecked with `ssh-keygen -Y verify`.",
+          "type": "string"
+        },
+        {
+          "const": "openpgp",
+          "description": "An OpenPGP detached signature from `gpg --detach-sign`, checked with\n`gpgv`.",
+          "type": "string"
+        }
+      ]
+    },
+    "SignedWaivers": {
+      "additionalProperties": false,
+      "description": "The signers `pr waive-verify --signed` trusts.\n\n```toml\n[pr.signed_waivers]\nformat = \"ssh\"\ntrusted_keys = \"~/.config/devkit/allowed_signers\"\n```",
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/SignatureFormat",
+          "default": "ssh",
+          "description": "The format of the detached signature beside each record."
+        },
+        "trusted_keys": {
+          "default": null,
+          "description": "The trusted keys. For `ssh`, an `allowed_signers` file, whose\nprincipals must allow the `devkit-waiver` namespace. For `openpgp`,\na keyring that `gpgv` reads, such as the output of `gpg --export`.\nNo waiver verifies while it is unset. A leading `~/` is your home.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "Step": {
       "description": "One step of a sequence task: run a sibling command task, or bring an app up.\n\n```toml\n[tasks.stack]\nsteps = [{ task = \"api-build\" }, { up = \"api\" }]\n```",
@@ -2843,6 +2886,10 @@
           "verify_args": {},
           "verify_task": null,
           "weakened_tests": "require"
+        },
+        "signed_waivers": {
+          "format": "ssh",
+          "trusted_keys": null
         },
         "test_files": [
           "**/tests/**",

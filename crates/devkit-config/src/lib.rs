@@ -1776,6 +1776,12 @@ pub struct PrConfig {
     pub test_files: Vec<String>,
     /// One key per PR gate.
     pub gates: PrGates,
+    /// The keys whose signature on a waiver record lets `pr waive-verify
+    /// --signed` write the waiver without a terminal, for an agent caller
+    /// too. Read from `~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`)
+    /// alone and ignored in a project's `devkit.toml`, so a checkout cannot
+    /// trust a key of its own.
+    pub signed_waivers: SignedWaivers,
 }
 
 impl Default for PrConfig {
@@ -1783,8 +1789,51 @@ impl Default for PrConfig {
         Self {
             test_files: default_test_files(),
             gates: PrGates::default(),
+            signed_waivers: SignedWaivers::default(),
         }
     }
+}
+
+/// The signers `pr waive-verify --signed` trusts.
+///
+/// ```
+/// # use devkit_config::{Config, SignatureFormat};
+/// # let cfg = Config::parse(r#"
+/// [pr.signed_waivers]
+/// format = "ssh"
+/// trusted_keys = "~/.config/devkit/allowed_signers"
+/// # "#).unwrap();
+/// # let signers = &cfg.pr.signed_waivers;
+/// # assert_eq!(signers.format, SignatureFormat::Ssh);
+/// # assert_eq!(signers.trusted_keys.as_deref(), Some("~/.config/devkit/allowed_signers"));
+/// # let pgp = Config::parse("[pr.signed_waivers]\nformat = \"openpgp\"\n").unwrap();
+/// # assert_eq!(pgp.pr.signed_waivers.format, SignatureFormat::Openpgp);
+/// # assert!(Config::parse("[pr.signed_waivers]\nformat = \"x509\"\n").is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SignedWaivers {
+    /// The format of the detached signature beside each record.
+    pub format: SignatureFormat,
+    /// The trusted keys. For `ssh`, an `allowed_signers` file, whose
+    /// principals must allow the `devkit-waiver` namespace. For `openpgp`,
+    /// a keyring that `gpgv` reads, such as the output of `gpg --export`.
+    /// No waiver verifies while it is unset. A leading `~/` is your home.
+    pub trusted_keys: Option<String>,
+}
+
+/// How a waiver record is signed. devkit runs the format's own tool to
+/// verify it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SignatureFormat {
+    /// An ssh signature from `ssh-keygen -Y sign -n devkit-waiver`,
+    /// checked with `ssh-keygen -Y verify`.
+    #[default]
+    Ssh,
+    /// An OpenPGP detached signature from `gpg --detach-sign`, checked with
+    /// `gpgv`.
+    Openpgp,
 }
 
 impl PrConfig {
