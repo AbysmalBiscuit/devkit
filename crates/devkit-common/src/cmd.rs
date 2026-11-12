@@ -62,15 +62,23 @@ pub fn capture_env(
     output(c, program, args)
 }
 
-/// Run a command with `stdin` as its standard input, capture stdout; the
-/// error is a [`CommandFailed`] carrying stderr on non-zero exit. For a tool
-/// that reads its input only from stdin, such as `ssh-keygen -Y verify`, or
-/// input that must not be read twice from a file another process can change.
-pub fn capture_stdin(program: &str, args: &[&str], stdin: &[u8]) -> Result<String> {
+/// Run `program` with `stdin` as its standard input and an empty
+/// environment, capture stdout; the error is a [`CommandFailed`] carrying
+/// stderr on non-zero exit. For a check whose answer the caller's variables
+/// must not steer, such as a signature check that `GNUPGHOME` could point
+/// at other keys. Windows keeps `SystemRoot`, without which a process cannot
+/// load its system libraries.
+pub fn capture_isolated(path: &std::path::Path, args: &[&str], stdin: &[u8]) -> Result<String> {
     use std::io::Write;
 
+    let program = path.display().to_string();
+    let program = program.as_str();
     let _span = devkit_timing::subprocess_span(program, args).entered();
-    let mut child = Command::new(program)
+    let mut command = Command::new(path);
+    command.env_clear();
+    #[cfg(windows)]
+    command.env("SystemRoot", r"C:\Windows");
+    let mut child = command
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

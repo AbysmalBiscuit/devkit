@@ -14,13 +14,16 @@ use devkit_common::{
     caller::Caller,
     vcs::{Checkout, Vcs, VersionControl, Worktree},
 };
-use devkit_config::{Gate as GateKey, GateMode, PrConfig, PrGates, RequiredTask};
+use devkit_config::{
+    Gate as GateKey, GateMode, PrConfig, PrGates, RequiredTask, SignatureFormat, SignatureTools,
+    SignatureVerifier,
+};
 use devkit_ports::{
     ledger::{self, Ledger, Run, Step, Waiver},
     task,
 };
 
-use super::signature::{SignatureVerifier, Verifier};
+use super::signature::AccountTools;
 
 /// The verify gate for one `pr create`: the required run and the run that
 /// satisfies it, if the ledger has one.
@@ -371,7 +374,17 @@ pub(crate) fn waive_signed(
         },
         Path::to_path_buf,
     );
-    write_signed(dir, record, &signature, &trusted_signers(home)?, ledger)
+    let tools = AccountTools {
+        home: home.to_path_buf(),
+    };
+    write_signed(
+        dir,
+        record,
+        &signature,
+        &trusted_signers(home)?,
+        &tools,
+        ledger,
+    )
 }
 
 /// Write the waiver that `record` holds, once `verifier` finds that
@@ -381,10 +394,11 @@ fn write_signed(
     record: &Path,
     signature: &Path,
     verifier: &impl SignatureVerifier,
+    tools: &dyn SignatureTools,
     ledger: &Ledger,
 ) -> Result<()> {
     let bytes = std::fs::read(record).with_context(|| format!("reading {}", record.display()))?;
-    let signer = verifier.verify(&bytes, signature).with_context(|| {
+    let signer = verifier.verify(tools, &bytes, signature).with_context(|| {
         format!(
             "the signature `{}` on `{}` does not verify against the trusted keys",
             signature.display(),
@@ -430,11 +444,11 @@ fn write_signed(
 /// `<home>/.config/devkit/config.toml`, where `home` comes from the account
 /// database. Neither `$DEVKIT_CONFIG`, `$HOME` nor a project layer moves it,
 /// so a caller cannot trust a key of its own.
-fn trusted_signers(home: &Path) -> Result<Verifier> {
+fn trusted_signers(home: &Path) -> Result<SignatureFormat> {
     let path = home.join(".config/devkit/config.toml");
     let unset = || {
         anyhow::anyhow!(
-            "no trusted waiver signers: set `[pr.signed_waivers] trusted_keys` in `{}`",
+            "no trusted waiver signers: set `[pr.signed_waivers]` in `{}`",
             path.display()
         )
     };
@@ -443,14 +457,10 @@ fn trusted_signers(home: &Path) -> Result<Verifier> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(unset()),
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
-    let signers = PrConfig::from_layer(&text)
+    PrConfig::from_layer(&text)
         .with_context(|| format!("reading `[pr]` in {}", path.display()))?
-        .signed_waivers;
-    let trusted = signers.trusted_keys.ok_or_else(unset)?;
-    let trusted = trusted
-        .strip_prefix("~/")
-        .map_or_else(|| PathBuf::from(&trusted), |rest| home.join(rest));
-    Ok(Verifier::new(signers.format, trusted))
+        .signed_waivers
+        .ok_or_else(unset)
 }
 
 /// Why `run`, which passed at the PR's head with the required args, does
@@ -1083,15 +1093,30 @@ mod signed_waiver_tests {
 
     /// `<home>/.config/devkit/config.toml` trusting `trusted_keys`.
     fn trust(home: &Path, format: &str, trusted_keys: &str) {
+        trust_with(home, format, trusted_keys, "");
+    }
+
+    /// [`trust`] with `extra` lines in the table, such as a `program`.
+    fn trust_with(home: &Path, format: &str, trusted_keys: &str, extra: &str) {
         let dir = home.join(".config/devkit");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("config.toml"),
             format!(
-                "[pr.signed_waivers]\nformat = \"{format}\"\ntrusted_keys = \"{trusted_keys}\"\n"
+                "[pr.signed_waivers]\nformat = \"{format}\"\ntrusted_keys = \"{trusted_keys}\"\n{extra}"
             ),
         )
         .unwrap();
+    }
+
+    /// The absolute path of `tool` on this machine, as an owner would write
+    /// it into `program` where the system directories lack the tool.
+    fn installed(tool: &str) -> String {
+        let out = Command::new("sh")
+            .args(["-c", &format!("command -v {tool}")])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
     }
 
     /// An ssh key at `dir/<name>`, and `dir/allowed_signers` trusting it as
@@ -1122,7 +1147,7 @@ mod signed_waiver_tests {
         ]);
     }
 
-    use super::super::signature::SSH_NAMESPACE;
+    use devkit_config::SSH_NAMESPACE;
 
     #[test]
     fn a_record_signed_by_a_trusted_ssh_key_passes_the_verify_gate() {
@@ -1177,7 +1202,12 @@ mod signed_waiver_tests {
             "--export",
             "release-bot@example.com",
         ]);
-        trust(home.path(), "openpgp", "~/trusted.gpg");
+        trust_with(
+            home.path(),
+            "openpgp",
+            "~/trusted.gpg",
+            &format!("program = \"{}\"\n", installed("gpgv")),
+        );
         let record = repo.record(home.path(), &repo.key(), &repo.head);
         gpg(&["--detach-sign", record.to_str().unwrap()]);
         let ledger = Ledger::at(home.path().join("runs"));
@@ -1220,7 +1250,12 @@ mod signed_waiver_tests {
     }
 
     impl SignatureVerifier for Swapping<'_> {
-        fn verify(&self, message: &[u8], _signature: &Path) -> Result<String> {
+        fn verify(
+            &self,
+            _tools: &dyn SignatureTools,
+            message: &[u8],
+            _signature: &Path,
+        ) -> Result<String> {
             let text = std::str::from_utf8(message)?;
             assert!(text.contains(ACCEPTED), "{text}");
             std::fs::write(
@@ -1243,6 +1278,9 @@ mod signed_waiver_tests {
             &record,
             Path::new("unused.sig"),
             &Swapping { record: &record },
+            &AccountTools {
+                home: home.path().to_path_buf(),
+            },
             &ledger,
         )
         .unwrap();
@@ -1291,5 +1329,50 @@ mod signed_waiver_tests {
             "a record for another repository waives nothing here: {err:#}"
         );
         assert!(repo.section(&ledger).is_err(), "no waiver was written");
+    }
+
+    #[test]
+    fn a_relative_trusted_key_path_is_refused_for_either_format() {
+        let repo = Repo::new();
+        let home = tempfile::tempdir().unwrap();
+        ssh_signer(home.path(), "owner");
+        let record = repo.record(home.path(), &repo.key(), &repo.head);
+        ssh_sign(home.path(), "owner", &record);
+        let ledger = Ledger::at(home.path().join("runs"));
+        for format in ["ssh", "openpgp"] {
+            trust_with(
+                home.path(),
+                format,
+                "allowed_signers",
+                "program = \"/bin/sh\"\n",
+            );
+            let err = waive_signed(repo.path(), &record, None, home.path(), &ledger).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("`allowed_signers` is relative"),
+                "{format}: the caller's directory would pick the keys: {err:#}"
+            );
+        }
+        assert!(repo.section(&ledger).is_err(), "no waiver was written");
+    }
+
+    #[test]
+    fn the_verifier_program_comes_from_the_config_or_the_system_directories() {
+        let tools = AccountTools {
+            home: PathBuf::from("/home/owner"),
+        };
+        let found = tools.program("ssh-keygen", None).unwrap();
+        assert!(
+            ["/usr/bin", "/bin"]
+                .iter()
+                .any(|dir| found.parent() == Some(Path::new(dir))),
+            "{}",
+            found.display()
+        );
+        assert_eq!(
+            tools.program("gpgv", Some("/opt/gnupg/bin/gpgv")).unwrap(),
+            PathBuf::from("/opt/gnupg/bin/gpgv")
+        );
+        let err = tools.program("gpgv", Some("bin/gpgv")).unwrap_err();
+        assert!(err.to_string().contains("relative"), "{err:#}");
     }
 }
