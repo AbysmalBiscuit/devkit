@@ -1862,3 +1862,296 @@ fn home_cannot_point_waiver_trust_at_an_agents_key() {
     std::fs::copy(&config, user.join("config.toml")).unwrap();
     assert_signed_waiver_refused(&p, &record, &[("HOME", p.state().to_str().unwrap())]);
 }
+
+/// devkit trusts waiver signers only under the home that the account
+/// database records, so these tests run it in a user namespace as its root
+/// account, whose home is `home` bind-mounted over the real one.
+#[cfg(target_os = "linux")]
+mod account_home {
+    use std::{
+        path::{Path, PathBuf},
+        process::{Command, Output, Stdio},
+    };
+
+    use super::*;
+
+    const ACCEPTED: &str = "accepted on the PR by its owner";
+
+    /// `devkit issue <args>` against `p`, inside a harness session with no
+    /// terminal, as an agent whose account home is `home`, with `env` set.
+    fn run(p: &ghfake::Fake, home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let root_home = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(0))
+            .unwrap()
+            .expect("the account database lists root")
+            .dir;
+        let mut inner = p.issue_cmd(args);
+        inner
+            .env("DEVKIT_CALLER", "agent")
+            .env("CLAUDE_CODE_SESSION_ID", "S");
+        let mut outer = Command::new("unshare");
+        outer
+            .args(["--user", "--map-root-user", "--mount", "sh", "-c"])
+            .arg(r#"mount --bind "$1" "$2" && shift 2 && exec "$@""#)
+            .arg("sh")
+            .arg(home)
+            .arg(root_home)
+            .arg(inner.get_program())
+            .args(inner.get_args())
+            .stdin(Stdio::null());
+        for (key, value) in inner.get_envs() {
+            match value {
+                Some(value) => outer.env(key, value),
+                None => outer.env_remove(key),
+            };
+        }
+        outer.envs(env.iter().copied());
+        outer.output().expect("spawn unshare")
+    }
+
+    fn waive(p: &ghfake::Fake, home: &Path, record: &Path, env: &[(&str, &str)]) -> Output {
+        run(
+            p,
+            home,
+            &["pr", "waive-verify", "--signed", record.to_str().unwrap()],
+            env,
+        )
+    }
+
+    fn keygen(dir: &Path, args: &[&str]) {
+        let out = Command::new("ssh-keygen")
+            .args(args)
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .output()
+            .expect("spawn ssh-keygen");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// An account home whose user config trusts the ssh key `home/owner` as
+    /// `release-bot@example.com`.
+    fn trusting_home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        keygen(home.path(), &[
+            "-q", "-t", "ed25519", "-N", "", "-C", "owner", "-f", "owner",
+        ]);
+        let public = std::fs::read_to_string(home.path().join("owner.pub")).unwrap();
+        std::fs::write(
+            home.path().join("allowed_signers"),
+            format!("release-bot@example.com namespaces=\"devkit-waiver\" {public}"),
+        )
+        .unwrap();
+        let config = home.path().join(".config/devkit");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("config.toml"),
+            "[pr.signed_waivers]\nformat = \"ssh\"\ntrusted_keys = \"~/allowed_signers\"\n",
+        )
+        .unwrap();
+        home
+    }
+
+    /// A record for `p`'s HEAD in `dir`, signed with the ssh key `dir/<key>`.
+    fn signed_record(p: &ghfake::Fake, dir: &Path, key: &str) -> PathBuf {
+        let record = dir.join("waiver.json");
+        let body = serde_json::json!({
+            "repo": std::fs::canonicalize(p.project()).unwrap(),
+            "head": head(p),
+            "by": "Owen Owner <owen@example.com>",
+            "reason": ACCEPTED,
+            "at": "2026-11-12T10:00:00Z",
+        });
+        std::fs::write(&record, body.to_string()).unwrap();
+        let _ = std::fs::remove_file(dir.join("waiver.json.sig"));
+        keygen(dir, &[
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            key,
+            "-n",
+            "devkit-waiver",
+            "waiver.json",
+        ]);
+        record
+    }
+
+    fn stderr(out: &Output) -> String {
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    }
+
+    #[test]
+    fn a_signed_waiver_written_without_a_terminal_opens_the_pr_at_that_head_only() {
+        let p = project(BROKEN_GATE);
+        task(&p, &["broken"]);
+        let home = trusting_home();
+        let record = signed_record(&p, home.path(), "owner");
+
+        let out = waive(&p, home.path(), &record, &[]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let (ok, err) = create(&p, "agent");
+        assert!(ok, "the waived head opens: {err}");
+        let body = body(&p);
+        assert!(
+            body.contains("WAIVED: Owen Owner <owen@example.com> accepted"),
+            "{body}"
+        );
+        assert!(
+            body.contains("attested by release-bot@example.com"),
+            "{body}"
+        );
+        assert!(body.contains(ACCEPTED), "{body}");
+
+        git(&p, &["commit", "-q", "--allow-empty", "-m", "another head"]);
+        serve_head(&p);
+        let (ok, err) = create(&p, "agent");
+        assert!(!ok, "a new head needs a new waiver: {err}");
+        assert!(err.contains(&head(&p)), "{err}");
+    }
+
+    /// A fake `ssh-keygen` or `gpgv` first on `PATH` that accepts any
+    /// signature, as a trusted principal.
+    fn accepting_verifiers() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        for (tool, script) in [
+            (
+                "ssh-keygen",
+                "#!/bin/sh\necho release-bot@example.com\nexit 0\n",
+            ),
+            (
+                "gpgv",
+                "#!/bin/sh\necho '[GNUPG:] GOODSIG 0 Release Bot <release-bot@example.com>'\n\
+                 echo '[GNUPG:] VALIDSIG 0 0 0 0 0 0 0 0 0 FAKE'\nexit 0\n",
+            ),
+        ] {
+            let path = dir.path().join(tool);
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_verifier_first_on_path_cannot_accept_an_untrusted_signature() {
+        let p = project(BROKEN_GATE);
+        task(&p, &["broken"]);
+        let home = trusting_home();
+        let agent = tempfile::tempdir().unwrap();
+        keygen(agent.path(), &[
+            "-q", "-t", "ed25519", "-N", "", "-C", "agent", "-f", "agent",
+        ]);
+        let record = signed_record(&p, agent.path(), "agent");
+        let fakes = accepting_verifiers();
+        let path = std::env::join_paths(
+            std::iter::once(fakes.path().to_path_buf())
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+
+        let out = waive(&p, home.path(), &record, &[(
+            "PATH",
+            path.to_str().unwrap(),
+        )]);
+        assert!(!out.status.success(), "{}", stderr(&out));
+        assert!(stderr(&out).contains("does not verify"), "{}", stderr(&out));
+        let (ok, err) = create(&p, "agent");
+        assert!(!ok, "no waiver was written: {err}");
+        assert!(!opened(&p), "{}", p.calls());
+    }
+
+    #[test]
+    fn gnupghome_cannot_add_a_trusted_openpgp_key() {
+        let p = project(BROKEN_GATE);
+        task(&p, &["broken"]);
+        let gpg = |homedir: &Path, cwd: &Path, args: &[&str]| {
+            let out = Command::new("gpg")
+                .arg("--homedir")
+                .arg(homedir)
+                .args(["--batch", "--quiet"])
+                .args(args)
+                .current_dir(cwd)
+                .stdin(Stdio::null())
+                .output()
+                .expect("spawn gpg");
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        let new_homedir = |root: &Path| {
+            let dir = root.join("gnupg");
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+                .unwrap();
+            dir
+        };
+        let home = tempfile::tempdir().unwrap();
+        let owner = new_homedir(home.path());
+        gpg(&owner, home.path(), &[
+            "--passphrase",
+            "",
+            "--quick-gen-key",
+            "Owen Owner <owen@example.com>",
+            "ed25519",
+            "sign",
+            "never",
+        ]);
+        gpg(&owner, home.path(), &[
+            "--output",
+            "trusted.gpg",
+            "--export",
+            "owen@example.com",
+        ]);
+        let config = home.path().join(".config/devkit");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("config.toml"),
+            "[pr.signed_waivers]\nformat = \"openpgp\"\ntrusted_keys = \"~/trusted.gpg\"\n",
+        )
+        .unwrap();
+
+        let agent = tempfile::tempdir().unwrap();
+        let mine = new_homedir(agent.path());
+        gpg(&mine, agent.path(), &[
+            "--passphrase",
+            "",
+            "--quick-gen-key",
+            "Agent <agent@example.com>",
+            "ed25519",
+            "sign",
+            "never",
+        ]);
+        let trustedkeys = mine.join("trustedkeys.gpg");
+        gpg(&mine, agent.path(), &[
+            "--output",
+            trustedkeys.to_str().unwrap(),
+            "--export",
+            "agent@example.com",
+        ]);
+        let record = agent.path().join("waiver.json");
+        let body = serde_json::json!({
+            "repo": std::fs::canonicalize(p.project()).unwrap(),
+            "head": head(&p),
+            "by": "Agent <agent@example.com>",
+            "reason": "trust me",
+            "at": "2026-11-12T10:00:00Z",
+        });
+        std::fs::write(&record, body.to_string()).unwrap();
+        gpg(&mine, agent.path(), &["--detach-sign", "waiver.json"]);
+
+        let out = waive(&p, home.path(), &record, &[(
+            "GNUPGHOME",
+            mine.to_str().unwrap(),
+        )]);
+        assert!(!out.status.success(), "{}", stderr(&out));
+        let (ok, err) = create(&p, "agent");
+        assert!(!ok, "no waiver was written: {err}");
+        assert!(!opened(&p), "{}", p.calls());
+    }
+}

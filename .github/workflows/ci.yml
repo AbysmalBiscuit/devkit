@@ -131,6 +131,16 @@ jobs:
           brew install task
           task --version
           task --version | awk -F. '{ exit !($1 > 3 || ($1 == 3 && $2 >= 5)) }'
+      # The signed-waiver tests run devkit in a user namespace, so that the
+      # account home it trusts can be a test directory. Ubuntu's AppArmor
+      # refuses unprivileged user namespaces by default.
+      - name: Allow unprivileged user namespaces
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          unshare --user --map-root-user --mount true
       - name: Test workspace
         run: cargo nextest run --workspace --no-fail-fast ${{ matrix.partition && format('--partition count:{0}', matrix.partition) || '' }}
       # nextest does not run doctests. The workspace has none today, so this

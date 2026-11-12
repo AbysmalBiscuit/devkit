@@ -495,7 +495,10 @@ github = "sweeper[bot]"
             .success()
     }
 
-    fn issue_cmd(&self, args: &[&str]) -> Command {
+    /// The command [`Fake::issue`] runs, for a test that runs it through
+    /// another program, such as `unshare`.
+    #[allow(dead_code)]
+    pub fn issue_cmd(&self, args: &[&str]) -> Command {
         let mut cmd = self.devkit_cmd();
         cmd.args(["issue", "-C"])
             .arg(self.project.path())
