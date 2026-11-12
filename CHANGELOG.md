@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.33](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.32...v0.14.33) (2026-11-12)
+
+
+### Features
+
+* **pr:** let a signed record waive verify without a tty ([526722b](https://github.com/AbysmalBiscuit/devkit/commit/526722b896390b9e9444daac8b49793def258452))
+
+
+### Bug Fixes
+
+* **pr:** wait for the pushed head before the check ([c3aac04](https://github.com/AbysmalBiscuit/devkit/commit/c3aac04d36dd479753b1f2a8a764ad5285367f60)), closes [#491](https://github.com/AbysmalBiscuit/devkit/issues/491)
+
 ## [0.14.32](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.31...v0.14.32) (2026-11-11)
 
 
