@@ -131,7 +131,6 @@ type RenderBody<'a> = Box<dyn FnOnce(&str) -> Result<String> + 'a>;
 
 pub(crate) struct Ensure<'a, G> {
     pub existing: Existing<'a>,
-    pub head: &'a str,
     pub state: PrCreateState,
     /// The explicit `--draft` / `--ready`, or `None` when neither was passed.
     /// `reuse_note` reports only a flag the user actually typed.
@@ -403,7 +402,7 @@ where
                 .expect("AddReviewer implies a resolved locator");
             // Mutating an existing PR is gated before the call: a mismatch here
             // is refused before a single reviewer is added.
-            assert_belongs(&pr, args.head)?;
+            assert_belongs(&pr, args.existing.head)?;
             if !args.attachments.is_empty() {
                 bail!(
                     "PR #{n} already exists, and --attach uploads only into a PR this run opens.\n\
@@ -454,7 +453,7 @@ where
             let created_repo = locator.resolve(&args.existing.forge.repos)?;
             // The gate runs before anyone is asked to review, before the
             // record is written and before any notification goes out.
-            verify_created(forge, &created_repo, locator.number, args.head)
+            verify_created(&args.existing, &created_repo, locator.number)
                 .with_context(|| format!("{url} is open with nothing recorded"))?;
             add_reviewers(forge, &created_repo, locator.number, &args.reviewers, steps)
                 .with_context(|| format!("{url} is open with nothing recorded"))?;
@@ -549,6 +548,7 @@ pub fn run(args: Args) -> Result<()> {
         existing: Existing {
             start: &start,
             branch: &branch,
+            head: &head,
             forge: &forge,
             record: record.as_ref(),
             explicit_pr: args
@@ -559,7 +559,6 @@ pub fn run(args: Args) -> Result<()> {
             no_push: args.no_push,
             steps: &steps,
         },
-        head: &head,
         state: wanted_state(
             args.draft,
             args.ready,
