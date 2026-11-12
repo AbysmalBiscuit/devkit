@@ -393,12 +393,9 @@ fn write_signed(
     })?;
     let mut waiver: Waiver = serde_json::from_slice(&bytes)
         .with_context(|| format!("{} is no waiver record", record.display()))?;
-    let is_full_id = matches!(waiver.head.len(), 40 | 64)
-        && waiver
-            .head
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-    if !is_full_id || full_head(&Vcs::at(dir), dir, Some(&waiver.head))? != waiver.head {
+    if !devkit_common::vcs::is_object_id(&waiver.head)
+        || full_head(&Vcs::at(dir), dir, Some(&waiver.head))? != waiver.head
+    {
         bail!(
             "the signed record names `{}`: a waiver covers one commit, so its head is a full \
              commit id",

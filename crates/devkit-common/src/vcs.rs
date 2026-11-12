@@ -285,7 +285,7 @@ impl Checkout {
 }
 
 /// A full SHA-1 or SHA-256 object id, which no ref can move.
-fn is_object_id(rev: &str) -> bool {
+pub fn is_object_id(rev: &str) -> bool {
     matches!(rev.len(), 40 | 64) && rev.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
