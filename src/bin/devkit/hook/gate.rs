@@ -9,7 +9,7 @@
 
 use std::{
     cell::Cell,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, mpsc},
     time::Duration,
 };
@@ -159,15 +159,7 @@ impl Claims {
 /// servers it launches, so this holds whether or not the project enforces
 /// write locks.
 pub fn ledger_blocks(claims: &Claims, ledger: &Ledger, cwd: &Path) -> Vec<String> {
-    let scopes = claims.scopes.iter().map(|check| match check {
-        ScopeCheck::Tree { dir, .. } | ScopeCheck::Fresh { dir } => dir,
-        ScopeCheck::Covering { path } => path,
-    });
-    claims
-        .paths
-        .iter()
-        .chain(&claims.trees)
-        .chain(scopes)
+    targets(claims)
         .filter(|target| ledger.contains(Path::new(target), cwd))
         .map(|target| {
             format!(
@@ -177,6 +169,56 @@ pub fn ledger_blocks(claims: &Claims, ledger: &Ledger, cwd: &Path) -> Vec<String
             )
         })
         .collect()
+}
+
+/// Every path, tree and scope that `claims` writes.
+fn targets(claims: &Claims) -> impl Iterator<Item = &String> {
+    let scopes = claims.scopes.iter().map(|check| match check {
+        ScopeCheck::Tree { dir, .. } | ScopeCheck::Fresh { dir } => dir,
+        ScopeCheck::Covering { path } => path,
+    });
+    claims.paths.iter().chain(&claims.trees).chain(scopes)
+}
+
+/// A refusal for each of `claims`' targets that is one of `files`, or a
+/// directory that holds one, so a write that replaces the directory is
+/// refused too.
+pub fn trust_blocks(claims: &Claims, files: &[PathBuf], cwd: &Path) -> Vec<String> {
+    let spellings = |path: &Path| {
+        let lexical = devkit_config::normalize_lexically(&cwd.join(path));
+        let real = std::fs::canonicalize(&lexical).ok();
+        std::iter::once(lexical).chain(real).collect::<Vec<_>>()
+    };
+    let files: Vec<PathBuf> = files.iter().flat_map(|file| spellings(file)).collect();
+    targets(claims)
+        .filter(|target| {
+            let target = spellings(Path::new(target));
+            files
+                .iter()
+                .any(|file| target.iter().any(|t| file.starts_with(t)))
+        })
+        .map(|target| {
+            format!(
+                "{PREFIX} `{target}` decides which keys `devkit pr waive-verify --signed` trusts \
+                 for a waiver, so only a person changes it."
+            )
+        })
+        .collect()
+}
+
+/// The refusals that hold whether or not the project enforces write locks:
+/// writes into the run ledger and into the files that decide which signed
+/// waivers verify.
+pub fn protected_blocks(claims: &Claims, cwd: &Path) -> Vec<String> {
+    // With no state directory there is no ledger to write into.
+    let mut blocks = Ledger::live()
+        .map(|ledger| ledger_blocks(claims, &ledger, cwd))
+        .unwrap_or_default();
+    if let Some(home) = devkit_common::sys::account_home() {
+        let files = crate::ticket::pr::signature::trust_files(&home);
+        blocks.extend(trust_blocks(claims, &files, cwd));
+    }
+    blocks
 }
 
 /// What the gate found: blocks deny the call, warnings ride along with it.

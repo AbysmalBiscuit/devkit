@@ -15,15 +15,14 @@ use devkit_common::{
     vcs::{Checkout, Vcs, VersionControl, Worktree},
 };
 use devkit_config::{
-    Gate as GateKey, GateMode, PrConfig, PrGates, RequiredTask, SignatureFormat, SignatureTools,
-    SignatureVerifier,
+    Gate as GateKey, GateMode, PrGates, RequiredTask, SignatureTools, SignatureVerifier,
 };
 use devkit_ports::{
     ledger::{self, Ledger, Run, Step, Waiver},
     task,
 };
 
-use super::signature::AccountTools;
+use super::signature::{AccountTools, trusted_signers};
 
 /// The verify gate for one `pr create`: the required run and the run that
 /// satisfies it, if the ledger has one.
@@ -438,29 +437,6 @@ fn write_signed(
         path.display()
     );
     Ok(())
-}
-
-/// The verifier that `[pr.signed_waivers]` configures in
-/// `<home>/.config/devkit/config.toml`, where `home` comes from the account
-/// database. Neither `$DEVKIT_CONFIG`, `$HOME` nor a project layer moves it,
-/// so a caller cannot trust a key of its own.
-fn trusted_signers(home: &Path) -> Result<SignatureFormat> {
-    let path = home.join(".config/devkit/config.toml");
-    let unset = || {
-        anyhow::anyhow!(
-            "no trusted waiver signers: set `[pr.signed_waivers]` in `{}`",
-            path.display()
-        )
-    };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(unset()),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-    };
-    PrConfig::from_layer(&text)
-        .with_context(|| format!("reading `[pr]` in {}", path.display()))?
-        .signed_waivers
-        .ok_or_else(unset)
 }
 
 /// Why `run`, which passed at the PR's head with the required args, does
@@ -1263,6 +1239,10 @@ mod signed_waiver_tests {
                 text.replace(ACCEPTED, "forged after the check"),
             )?;
             Ok("swapper".into())
+        }
+
+        fn configured_paths(&self) -> Vec<&str> {
+            Vec::new()
         }
     }
 

@@ -37,6 +37,9 @@ pub trait SignatureVerifier {
         message: &[u8],
         signature: &Path,
     ) -> Result<String>;
+    /// The trusted keys and the program, as the config writes them. Whoever
+    /// changes one of these files decides what verifies.
+    fn configured_paths(&self) -> Vec<&str>;
 }
 
 /// How a waiver record is signed, and the keys that devkit trusts for it.
@@ -126,6 +129,12 @@ impl SignatureVerifier for SshVerifier {
         }
         Err(last)
     }
+
+    fn configured_paths(&self) -> Vec<&str> {
+        std::iter::once(self.trusted_keys.as_str())
+            .chain(self.program.as_deref())
+            .collect()
+    }
 }
 
 /// `gpgv` against a keyring. The signer is the signing key's user id and
@@ -164,6 +173,12 @@ impl SignatureVerifier for GpgVerifier {
             message,
         )?;
         signer_of(&status)
+    }
+
+    fn configured_paths(&self) -> Vec<&str> {
+        std::iter::once(self.trusted_keys.as_str())
+            .chain(self.program.as_deref())
+            .collect()
     }
 }
 

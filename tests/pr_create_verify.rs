@@ -1880,11 +1880,24 @@ mod account_home {
     /// `devkit issue <args>` against `p`, inside a harness session with no
     /// terminal, as an agent whose account home is `home`, with `env` set.
     fn run(p: &ghfake::Fake, home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
-        let root_home = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(0))
+        let mut inner = p.issue_cmd(args);
+        inner.envs(env.iter().copied());
+        in_namespace(home, inner, b"")
+    }
+
+    /// The account home inside the namespace: root's, which `home` covers.
+    fn root_home() -> PathBuf {
+        nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(0))
             .unwrap()
             .expect("the account database lists root")
-            .dir;
-        let mut inner = p.issue_cmd(args);
+            .dir
+    }
+
+    /// `inner` as an agent in harness session S, with `stdin`, inside a user
+    /// namespace whose account home is `home`.
+    fn in_namespace(home: &Path, mut inner: Command, stdin: &[u8]) -> Output {
+        use std::io::Write;
+
         inner
             .env("DEVKIT_CALLER", "agent")
             .env("CLAUDE_CODE_SESSION_ID", "S");
@@ -1894,18 +1907,101 @@ mod account_home {
             .arg(r#"mount --bind "$1" "$2" && shift 2 && exec "$@""#)
             .arg("sh")
             .arg(home)
-            .arg(root_home)
+            .arg(root_home())
             .arg(inner.get_program())
             .args(inner.get_args())
-            .stdin(Stdio::null());
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(dir) = inner.get_current_dir() {
+            outer.current_dir(dir);
+        }
         for (key, value) in inner.get_envs() {
             match value {
                 Some(value) => outer.env(key, value),
                 None => outer.env_remove(key),
             };
         }
-        outer.envs(env.iter().copied());
-        outer.output().expect("spawn unshare")
+        let mut child = outer.spawn().expect("spawn unshare");
+        child.stdin.take().unwrap().write_all(stdin).unwrap();
+        child.wait_with_output().expect("wait for unshare")
+    }
+
+    /// The reason the pre-tool-use hook gives for denying `call`, run as an
+    /// agent whose account home is `home`. `None` when it allows the call.
+    fn hook_denial(p: &ghfake::Fake, home: &Path, call: serde_json::Value) -> Option<String> {
+        let mut payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "S",
+            "cwd": p.project().to_string_lossy(),
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(call.as_object().unwrap().clone());
+        let mut hook = p.devkit_cmd();
+        hook.args(["hook", "pre-tool-use", "--harness", "claude-code"])
+            .current_dir(p.project());
+        let out = in_namespace(home, hook, payload.to_string().as_bytes());
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+        let output = &envelope["hookSpecificOutput"];
+        (output["permissionDecision"] == "deny").then(|| {
+            output["permissionDecisionReason"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+    }
+
+    #[test]
+    fn an_agent_cannot_edit_or_replace_the_waiver_trust_files() {
+        let p = project(BROKEN_GATE);
+        let home = trusting_home();
+        let root = root_home();
+        let config = root.join(".config/devkit/config.toml");
+        let keys = root.join("allowed_signers");
+        for target in [&config, &keys] {
+            let target = target.to_str().unwrap();
+            for call in [
+                serde_json::json!({
+                    "tool_name": "Write",
+                    "tool_input": { "file_path": target, "content": "x" }
+                }),
+                serde_json::json!({
+                    "tool_name": "Bash",
+                    "tool_input": { "command": format!("echo x >> '{target}'") }
+                }),
+            ] {
+                let reason = hook_denial(&p, home.path(), call.clone())
+                    .unwrap_or_else(|| panic!("allowed: {call}"));
+                assert!(reason.contains("waiver"), "{reason}");
+            }
+        }
+        for command in [
+            format!("rm -rf '{}'", root.join(".config").display()),
+            format!(
+                "mv /tmp/elsewhere '{}'",
+                root.join(".config/devkit").display()
+            ),
+        ] {
+            let call = serde_json::json!({
+                "tool_name": "Bash",
+                "tool_input": { "command": command }
+            });
+            assert!(
+                hook_denial(&p, home.path(), call.clone()).is_some(),
+                "a directory over a trust file is replaced: {call}"
+            );
+        }
+        let beside = serde_json::json!({
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": root.join(".config/devkit/notes.txt").to_str().unwrap(),
+                "content": "x"
+            }
+        });
+        assert_eq!(hook_denial(&p, home.path(), beside), None);
     }
 
     fn waive(p: &ghfake::Fake, home: &Path, record: &Path, env: &[(&str, &str)]) -> Output {

@@ -4,9 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use devkit_common::cmd;
-use devkit_config::SignatureTools;
+use devkit_config::{PrConfig, SignatureFormat, SignatureTools, SignatureVerifier};
 
 /// The directories a verifier program comes from when the config names none.
 /// `PATH` is the caller's, so it never picks the program.
@@ -61,4 +61,51 @@ impl SignatureTools for AccountTools {
             )
         })
     }
+}
+
+/// The user config under the account `home` that holds `[pr.signed_waivers]`.
+pub(crate) fn trust_config(home: &Path) -> PathBuf {
+    home.join(".config/devkit/config.toml")
+}
+
+/// The verifier that `[pr.signed_waivers]` configures in [`trust_config`],
+/// where `home` comes from the account database. Neither `$DEVKIT_CONFIG`,
+/// `$HOME` nor a project layer moves it, so a caller cannot trust a key of
+/// its own.
+pub(crate) fn trusted_signers(home: &Path) -> Result<SignatureFormat> {
+    let path = trust_config(home);
+    let unset = || {
+        anyhow!(
+            "no trusted waiver signers: set `[pr.signed_waivers]` in `{}`",
+            path.display()
+        )
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(unset()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    PrConfig::from_layer(&text)
+        .with_context(|| format!("reading `[pr]` in {}", path.display()))?
+        .signed_waivers
+        .ok_or_else(unset)
+}
+
+/// Every file that decides what a signed waiver verifies against: the trust
+/// config, whether or not it exists, and the trusted keys and program it
+/// names.
+pub(crate) fn trust_files(home: &Path) -> Vec<PathBuf> {
+    let tools = AccountTools {
+        home: home.to_path_buf(),
+    };
+    let named: Vec<PathBuf> = trusted_signers(home)
+        .map(|signers| {
+            signers
+                .configured_paths()
+                .into_iter()
+                .filter_map(|path| tools.path(path).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    std::iter::once(trust_config(home)).chain(named).collect()
 }

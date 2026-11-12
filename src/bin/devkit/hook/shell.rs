@@ -295,7 +295,7 @@ fn respond(
             cfg!(windows),
         );
         let analysis = devkit_command::analyze(command, &context(dialect, shell_cwd));
-        let blocks = ledger_blocks(&analysis, &cwd);
+        let blocks = protected_blocks(&analysis, &cwd);
         if !blocks.is_empty() {
             return deny(which, &blocks);
         }
@@ -327,7 +327,7 @@ fn respond(
     let analysis = devkit_command::analyze(command, &context(dialect, shell_cwd));
     let analyze_micros = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
 
-    let mut blocks = ledger_blocks(&analysis, &cwd);
+    let mut blocks = protected_blocks(&analysis, &cwd);
     let mut notes = super::record_warnings();
     let own = devkit_common::shim::OwnBinary::current();
     let verdict = if commands_on {
@@ -438,14 +438,13 @@ fn context(dialect: Dialect, cwd: Option<&Path>) -> Context {
     }
 }
 
-/// A refusal for each write the analysis names inside devrun's run ledger,
-/// whatever the project's gates and policy say. A target the analysis cannot
-/// name is not refused here: the guard fails open.
-fn ledger_blocks(analysis: &Analysis, cwd: &Path) -> Vec<String> {
+/// A refusal for each write the analysis names inside devrun's run ledger or
+/// the files that decide which signed waivers verify, whatever the project's
+/// gates and policy say. A target the analysis cannot name is not refused
+/// here: the guard fails open.
+fn protected_blocks(analysis: &Analysis, cwd: &Path) -> Vec<String> {
     let claims = writes::evaluate(analysis, &HarnessPolicy::default()).claims;
-    devkit_ports::ledger::Ledger::live()
-        .map(|ledger| gate::ledger_blocks(&claims, &ledger, cwd))
-        .unwrap_or_default()
+    gate::protected_blocks(&claims, cwd)
 }
 
 /// The write stage: the evaluation's own findings, then, when nothing has
