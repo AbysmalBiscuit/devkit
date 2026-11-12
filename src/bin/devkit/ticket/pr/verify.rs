@@ -2,23 +2,27 @@
 //! recorded passing on. Only devrun writes the run ledger, so the
 //! record is evidence an agent cannot type into the PR body itself. A
 //! person can waive the gate for one head with `pr waive-verify`, which
-//! refuses an agent caller.
+//! refuses an agent caller unless a trusted key signs the waiver.
 
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use devkit_common::{
     caller::Caller,
     vcs::{Checkout, Vcs, VersionControl, Worktree},
 };
-use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask};
+use devkit_config::{
+    Gate as GateKey, GateMode, PrGates, RequiredTask, SignatureTools, SignatureVerifier,
+};
 use devkit_ports::{
     ledger::{self, Ledger, Run, Step, Waiver},
     task,
 };
+
+use super::signature::{AccountTools, trusted_signers};
 
 /// The verify gate for one `pr create`: the required run and the run that
 /// satisfies it, if the ledger has one.
@@ -177,12 +181,17 @@ impl Gate {
     fn waived(&self, waiver: &Waiver) -> String {
         format!(
             "### Verification\n\n\
-             WAIVED: {by} accepted `{head}` at {at} with no run of `{command}` that exited 0 \
-             on a clean tree there.\n\n\
+             WAIVED: {by} accepted `{head}` at {at}{attested} with no run of `{command}` that \
+             exited 0 on a clean tree there.\n\n\
              Reason: {reason}\n{failed}{change}",
             by = waiver.by,
             head = self.head,
             at = waiver.at,
+            attested = waiver
+                .signer
+                .as_deref()
+                .map(|signer| format!(", attested by {signer},"))
+                .unwrap_or_default(),
             command = self.required.command(),
             reason = waiver.reason,
             failed = self.failed_note(),
@@ -334,11 +343,97 @@ pub(crate) fn waive(dir: &Path, head: Option<&str>, reason: &str) -> Result<()> 
         by: format!("{name} <{email}>"),
         reason: reason.to_string(),
         at: devkit_common::harness_log::now_rfc3339(),
+        signer: None,
     };
     let path = Ledger::live()?.waive(&waiver)?;
     eprintln!(
         "Waived the verify gate at `{}`: {}",
         waiver.head,
+        path.display()
+    );
+    Ok(())
+}
+
+/// `pr waive-verify --signed`: write the waiver that `record` holds, once
+/// `signature` signs it with a key that the user-level config trusts. No
+/// terminal is needed and an agent may run it, since only a holder of a
+/// trusted key can sign. `signature` is `<record>.sig` when `None`.
+pub(crate) fn waive_signed(
+    dir: &Path,
+    record: &Path,
+    signature: Option<&Path>,
+    home: &Path,
+    ledger: &Ledger,
+) -> Result<()> {
+    let signature = signature.map_or_else(
+        || {
+            let mut sig = record.as_os_str().to_owned();
+            sig.push(".sig");
+            PathBuf::from(sig)
+        },
+        Path::to_path_buf,
+    );
+    let tools = AccountTools {
+        home: home.to_path_buf(),
+    };
+    write_signed(
+        dir,
+        record,
+        &signature,
+        &trusted_signers(home)?,
+        &tools,
+        ledger,
+    )
+}
+
+/// Write the waiver that `record` holds, once `verifier` finds that
+/// `signature` signs the bytes of `record` read here.
+fn write_signed(
+    dir: &Path,
+    record: &Path,
+    signature: &Path,
+    verifier: &impl SignatureVerifier,
+    tools: &dyn SignatureTools,
+    ledger: &Ledger,
+) -> Result<()> {
+    let bytes = std::fs::read(record).with_context(|| format!("reading {}", record.display()))?;
+    let signer = verifier.verify(tools, &bytes, signature).with_context(|| {
+        format!(
+            "the signature `{}` on `{}` does not verify against the trusted keys",
+            signature.display(),
+            record.display()
+        )
+    })?;
+    let mut waiver: Waiver = serde_json::from_slice(&bytes)
+        .with_context(|| format!("{} is no waiver record", record.display()))?;
+    if !devkit_common::vcs::is_object_id(&waiver.head)
+        || full_head(&Vcs::at(dir), dir, Some(&waiver.head))? != waiver.head
+    {
+        bail!(
+            "the signed record names `{}`: a waiver covers one commit, so its head is a full \
+             commit id",
+            waiver.head
+        );
+    }
+    let checkout = Checkout::at(dir);
+    let repo = ledger::repo_key(&checkout, &checkout.worktree()?.path);
+    if !devkit_common::paths::same_path(&waiver.repo, &repo) {
+        bail!(
+            "the signed record waives `{}`, not this repository `{}`",
+            waiver.repo.display(),
+            repo.display()
+        );
+    }
+    if waiver.reason.trim().is_empty() {
+        bail!("the signed record gives no reason");
+    }
+    waiver.repo = repo;
+    waiver.signer = Some(signer);
+    let path = ledger.waive(&waiver)?;
+    eprintln!(
+        "Waived the verify gate at `{}` for {}: {}",
+        waiver.head,
+        waiver.by,
         path.display()
     );
     Ok(())
@@ -880,5 +975,384 @@ mod tests {
             output_tail(&lines),
             "\nOutput tail:\n\n````text\none\n```two\n````\n"
         );
+    }
+}
+
+/// `pr waive-verify --signed` below the CLI: the trusted home comes from the
+/// account database, which a test cannot point at a temporary directory, so
+/// these tests pass the home in. The real `ssh-keygen` and `gpgv` run.
+#[cfg(all(test, unix))]
+mod signed_waiver_tests {
+    use std::process::{Command, Stdio};
+
+    use super::*;
+
+    const ACCEPTED: &str = "accepted on the PR by its owner";
+
+    /// A repository with one commit on `main`, and that commit's full id.
+    struct Repo {
+        dir: tempfile::TempDir,
+        head: String,
+    }
+
+    impl Repo {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let git = |args: &[&str]| {
+                devkit_git::Git::fixture(dir.path())
+                    .args(args.iter().copied())
+                    .output()
+                    .unwrap_or_else(|e| panic!("git {args:?}: {e:#}"))
+            };
+            git(&["init", "-q", "-b", "main"]);
+            std::fs::write(dir.path().join("feature.txt"), "a thing\n").unwrap();
+            git(&["add", "-A"]);
+            git(&["commit", "-q", "-m", "a thing"]);
+            let head = git(&["rev-parse", "HEAD"]).trim().to_string();
+            Self { dir, head }
+        }
+
+        fn path(&self) -> &Path {
+            self.dir.path()
+        }
+
+        fn key(&self) -> PathBuf {
+            std::fs::canonicalize(self.path()).unwrap()
+        }
+
+        /// A record for `rev` in `repo`, written to `dir/waiver.json`.
+        fn record(&self, dir: &Path, repo: &Path, rev: &str) -> PathBuf {
+            let record = serde_json::json!({
+                "repo": repo,
+                "head": rev,
+                "by": "Owen Owner <owen@example.com>",
+                "reason": ACCEPTED,
+                "at": "2026-11-12T10:00:00Z",
+            });
+            let path = dir.join("waiver.json");
+            std::fs::write(&path, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+            path
+        }
+
+        /// The Verification section an agent's `pr create` writes at HEAD.
+        fn section(&self, ledger: &Ledger) -> Result<String> {
+            let gates = PrGates {
+                verify_task: Some("verify".into()),
+                ..PrGates::default()
+            };
+            let gate = Gate::read(
+                &Checkout::at(self.path()),
+                &self.head,
+                &gates,
+                &self.head,
+                Caller::Agent,
+                ledger,
+            )?
+            .expect("the gate is on");
+            gate.apply(String::new())
+        }
+    }
+
+    fn run_in(dir: &Path, program: &str, args: &[&str]) {
+        let out = Command::new(program)
+            .args(args)
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap_or_else(|e| panic!("{program}: {e}"));
+        assert!(
+            out.status.success(),
+            "{program} {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// `<home>/.config/devkit/config.toml` trusting `trusted_keys`.
+    fn trust(home: &Path, format: &str, trusted_keys: &str) {
+        trust_with(home, format, trusted_keys, "");
+    }
+
+    /// [`trust`] with `extra` lines in the table, such as a `program`.
+    fn trust_with(home: &Path, format: &str, trusted_keys: &str, extra: &str) {
+        let dir = home.join(".config/devkit");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.toml"),
+            format!(
+                "[pr.signed_waivers]\nformat = \"{format}\"\ntrusted_keys = \"{trusted_keys}\"\n{extra}"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// The absolute path of `tool` on this machine, as an owner would write
+    /// it into `program` where the system directories lack the tool.
+    fn installed(tool: &str) -> String {
+        let out = Command::new("sh")
+            .args(["-c", &format!("command -v {tool}")])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    /// An ssh key at `dir/<name>`, and `dir/allowed_signers` trusting it as
+    /// `release-bot@example.com` for waivers.
+    fn ssh_signer(dir: &Path, name: &str) {
+        run_in(dir, "ssh-keygen", &[
+            "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", name,
+        ]);
+        let public = std::fs::read_to_string(dir.join(format!("{name}.pub"))).unwrap();
+        std::fs::write(
+            dir.join("allowed_signers"),
+            format!("release-bot@example.com namespaces=\"{SSH_NAMESPACE}\" {public}"),
+        )
+        .unwrap();
+    }
+
+    fn ssh_sign(dir: &Path, key: &str, record: &Path) {
+        let _ = std::fs::remove_file(format!("{}.sig", record.display()));
+        run_in(dir, "ssh-keygen", &[
+            "-q",
+            "-Y",
+            "sign",
+            "-f",
+            key,
+            "-n",
+            SSH_NAMESPACE,
+            record.to_str().unwrap(),
+        ]);
+    }
+
+    use devkit_config::SSH_NAMESPACE;
+
+    #[test]
+    fn a_record_signed_by_a_trusted_ssh_key_passes_the_verify_gate() {
+        let repo = Repo::new();
+        let home = tempfile::tempdir().unwrap();
+        ssh_signer(home.path(), "owner");
+        trust(home.path(), "ssh", "~/allowed_signers");
+        let record = repo.record(home.path(), &repo.key(), &repo.head);
+        ssh_sign(home.path(), "owner", &record);
+        let ledger = Ledger::at(home.path().join("runs"));
+        assert!(repo.section(&ledger).is_err(), "no run and no waiver");
+
+        waive_signed(repo.path(), &record, None, home.path(), &ledger).unwrap();
+        let section = repo.section(&ledger).unwrap();
+        assert!(section.contains("WAIVED: "), "{section}");
+        assert!(
+            section.contains("Owen Owner <owen@example.com> accepted"),
+            "names the person who accepted: {section}"
+        );
+        assert!(
+            section.contains("attested by release-bot@example.com"),
+            "names the verified signer: {section}"
+        );
+        assert!(section.contains(ACCEPTED), "{section}");
+    }
+
+    #[test]
+    fn a_record_signed_by_a_trusted_openpgp_key_passes_the_verify_gate() {
+        let repo = Repo::new();
+        let home = tempfile::tempdir().unwrap();
+        let gnupg = home.path().join("gnupg");
+        std::fs::create_dir(&gnupg).unwrap();
+        std::fs::set_permissions(&gnupg, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
+        let gpg = |args: &[&str]| {
+            let mut argv = vec!["--homedir", gnupg.to_str().unwrap(), "--batch", "--quiet"];
+            argv.extend_from_slice(args);
+            run_in(home.path(), "gpg", &argv);
+        };
+        gpg(&[
+            "--passphrase",
+            "",
+            "--quick-gen-key",
+            "Release Bot <release-bot@example.com>",
+            "ed25519",
+            "sign",
+            "never",
+        ]);
+        gpg(&[
+            "--output",
+            "trusted.gpg",
+            "--export",
+            "release-bot@example.com",
+        ]);
+        trust_with(
+            home.path(),
+            "openpgp",
+            "~/trusted.gpg",
+            &format!("program = \"{}\"\n", installed("gpgv")),
+        );
+        let record = repo.record(home.path(), &repo.key(), &repo.head);
+        gpg(&["--detach-sign", record.to_str().unwrap()]);
+        let ledger = Ledger::at(home.path().join("runs"));
+
+        waive_signed(repo.path(), &record, None, home.path(), &ledger).unwrap();
+        let section = repo.section(&ledger).unwrap();
+        assert!(
+            section.contains("Owen Owner <owen@example.com> accepted"),
+            "{section}"
+        );
+        assert!(
+            section.contains("attested by Release Bot <release-bot@example.com> ("),
+            "names the verified signer and its fingerprint: {section}"
+        );
+    }
+
+    #[test]
+    fn a_signed_record_must_name_a_full_commit_id() {
+        let repo = Repo::new();
+        let home = tempfile::tempdir().unwrap();
+        ssh_signer(home.path(), "owner");
+        trust(home.path(), "ssh", "~/allowed_signers");
+        let ledger = Ledger::at(home.path().join("runs"));
+        for rev in ["HEAD", "main", &repo.head[..12]] {
+            let record = repo.record(home.path(), &repo.key(), rev);
+            ssh_sign(home.path(), "owner", &record);
+            let err = waive_signed(repo.path(), &record, None, home.path(), &ledger).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("full commit id"),
+                "`{rev}` could name a later commit: {err:#}"
+            );
+        }
+        assert!(repo.section(&ledger).is_err(), "no waiver was written");
+    }
+
+    /// Swaps the record file for a forgery once it has checked the bytes it
+    /// was given, so a second read of the file sees the forgery.
+    struct Swapping<'a> {
+        record: &'a Path,
+    }
+
+    impl SignatureVerifier for Swapping<'_> {
+        fn verify(
+            &self,
+            _tools: &dyn SignatureTools,
+            message: &[u8],
+            _signature: &Path,
+        ) -> Result<String> {
+            let text = std::str::from_utf8(message)?;
+            assert!(text.contains(ACCEPTED), "{text}");
+            std::fs::write(
+                self.record,
+                text.replace(ACCEPTED, "forged after the check"),
+            )?;
+            Ok("swapper".into())
+        }
+
+        fn configured_paths(&self) -> Vec<&str> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn the_waiver_holds_the_record_bytes_that_the_signature_verified() {
+        let repo = Repo::new();
+        let home = tempfile::tempdir().unwrap();
+        let record = repo.record(home.path(), &repo.key(), &repo.head);
+        let ledger = Ledger::at(home.path().join("runs"));
+
+        write_signed(
+            repo.path(),
+            &record,
+            Path::new("unused.sig"),
+            &Swapping { record: &record },
+            &AccountTools {
+                home: home.path().to_path_buf(),
+            },
+            &ledger,
+        )
+        .unwrap();
+        let section = repo.section(&ledger).unwrap();
+        assert!(section.contains(ACCEPTED), "{section}");
+        assert!(!section.contains("forged after the check"), "{section}");
+    }
+
+    #[test]
+    fn a_record_writes_nothing_unless_a_trusted_key_signs_it_for_this_repository() {
+        let repo = Repo::new();
+        let home = tempfile::tempdir().unwrap();
+        let ledger = Ledger::at(home.path().join("runs"));
+        let agent = tempfile::tempdir().unwrap();
+        ssh_signer(agent.path(), "agent");
+        let record = repo.record(agent.path(), &repo.key(), &repo.head);
+        ssh_sign(agent.path(), "agent", &record);
+
+        std::fs::write(
+            repo.path().join("devkit.toml"),
+            format!(
+                "[pr.signed_waivers]\nformat = \"ssh\"\ntrusted_keys = \"{}\"\n",
+                agent.path().join("allowed_signers").display()
+            ),
+        )
+        .unwrap();
+        let err = waive_signed(repo.path(), &record, None, home.path(), &ledger).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no trusted waiver signers"),
+            "a project layer cannot trust a key: {err:#}"
+        );
+
+        ssh_signer(home.path(), "owner");
+        trust(home.path(), "ssh", "~/allowed_signers");
+        let err = waive_signed(repo.path(), &record, None, home.path(), &ledger).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("does not verify"),
+            "a key the account does not trust signs nothing: {err:#}"
+        );
+
+        let elsewhere = repo.record(home.path(), Path::new("/some/other/repo"), &repo.head);
+        ssh_sign(home.path(), "owner", &elsewhere);
+        let err = waive_signed(repo.path(), &elsewhere, None, home.path(), &ledger).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("/some/other/repo"),
+            "a record for another repository waives nothing here: {err:#}"
+        );
+        assert!(repo.section(&ledger).is_err(), "no waiver was written");
+    }
+
+    #[test]
+    fn a_relative_trusted_key_path_is_refused_for_either_format() {
+        let repo = Repo::new();
+        let home = tempfile::tempdir().unwrap();
+        ssh_signer(home.path(), "owner");
+        let record = repo.record(home.path(), &repo.key(), &repo.head);
+        ssh_sign(home.path(), "owner", &record);
+        let ledger = Ledger::at(home.path().join("runs"));
+        for format in ["ssh", "openpgp"] {
+            trust_with(
+                home.path(),
+                format,
+                "allowed_signers",
+                "program = \"/bin/sh\"\n",
+            );
+            let err = waive_signed(repo.path(), &record, None, home.path(), &ledger).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("`allowed_signers` is relative"),
+                "{format}: the caller's directory would pick the keys: {err:#}"
+            );
+        }
+        assert!(repo.section(&ledger).is_err(), "no waiver was written");
+    }
+
+    #[test]
+    fn the_verifier_program_comes_from_the_config_or_the_system_directories() {
+        let tools = AccountTools {
+            home: PathBuf::from("/home/owner"),
+        };
+        let found = tools.program("ssh-keygen", None).unwrap();
+        assert!(
+            ["/usr/bin", "/bin"]
+                .iter()
+                .any(|dir| found.parent() == Some(Path::new(dir))),
+            "{}",
+            found.display()
+        );
+        assert_eq!(
+            tools.program("gpgv", Some("/opt/gnupg/bin/gpgv")).unwrap(),
+            PathBuf::from("/opt/gnupg/bin/gpgv")
+        );
+        let err = tools.program("gpgv", Some("bin/gpgv")).unwrap_err();
+        assert!(err.to_string().contains("relative"), "{err:#}");
     }
 }

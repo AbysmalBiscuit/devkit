@@ -620,6 +620,7 @@ dependencies = [
 name = "devkit-config"
 version = "0.14.32"
 dependencies = [
+ "ambassador",
  "anyhow",
  "devkit-common",
  "devkit-git",

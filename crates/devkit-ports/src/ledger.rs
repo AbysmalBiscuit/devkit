@@ -184,20 +184,25 @@ struct OriginRecord {
 }
 
 /// A person's acceptance of a head that has no qualifying run, so the
-/// verify gate passes at that head. Only a person writes one: `devkit pr
-/// waive-verify` refuses an agent caller, and the write gate keeps agents'
-/// tools out of the ledger.
+/// verify gate passes at that head. Only a person, or a record a trusted key
+/// signs, writes one: `devkit pr waive-verify` refuses an agent caller that
+/// has no signed record, and the write gate keeps agents' tools out of the
+/// ledger.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Waiver {
     /// The repository's primary checkout, which waivers are listed by.
     pub repo: PathBuf,
     /// The full commit id the waiver covers.
     pub head: String,
-    /// The person who wrote it, as `Name <email>`.
+    /// The person who accepted the head, as `Name <email>`.
     pub by: String,
     pub reason: String,
     /// When it was written, as RFC 3339 UTC.
     pub at: String,
+    /// The verified identity of the trusted key that signed the record, when
+    /// `pr waive-verify --signed` wrote the waiver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
 }
 
 /// The directory holding the records.
@@ -716,6 +721,7 @@ mod tests {
             by: "Lev <lev@example.com>".into(),
             reason: format!("flaky {at}"),
             at: at.into(),
+            signer: None,
         };
         ledger
             .waive(&waiver("abc123", "2026-01-01T00:00:00Z"))

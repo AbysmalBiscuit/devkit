@@ -12,6 +12,13 @@ pub(super) fn localhost_accepts(port: u16, timeout: Duration) -> bool {
     TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), timeout).is_ok()
 }
 
+pub(super) fn account_home() -> Option<std::path::PathBuf> {
+    nix::unistd::User::from_uid(nix::unistd::Uid::current())
+        .ok()
+        .flatten()
+        .map(|user| user.dir)
+}
+
 pub(super) fn process_alive(pid: u32) -> bool {
     use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
     // Pids that do not fit in a positive i32 are invalid on Linux/macOS.

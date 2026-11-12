@@ -59,9 +59,53 @@ pub fn capture_env(
     if let Some(d) = cwd {
         c.current_dir(d);
     }
+    output(c, program, args)
+}
+
+/// Run `program` with `stdin` as its standard input and an empty
+/// environment, capture stdout; the error is a [`CommandFailed`] carrying
+/// stderr on non-zero exit. For a check whose answer the caller's variables
+/// must not steer, such as a signature check that `GNUPGHOME` could point
+/// at other keys. Windows keeps `SystemRoot`, without which a process cannot
+/// load its system libraries.
+pub fn capture_isolated(path: &std::path::Path, args: &[&str], stdin: &[u8]) -> Result<String> {
+    use std::io::Write;
+
+    let program = path.display().to_string();
+    let program = program.as_str();
+    let _span = devkit_timing::subprocess_span(program, args).entered();
+    let mut command = Command::new(path);
+    command.env_clear();
+    #[cfg(windows)]
+    if let Some(root) = crate::sys::windows_dir() {
+        command.env("SystemRoot", root);
+    }
+    let mut child = command
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn `{program}`"))?;
+    let mut pipe = child.stdin.take().context("child stdin")?;
+    let out = thread::scope(|scope| {
+        // A child that exits before reading all of stdin closes the pipe;
+        // its exit status, not the write error, says what went wrong.
+        scope.spawn(move || pipe.write_all(stdin));
+        child.wait_with_output()
+    })
+    .with_context(|| format!("waiting for `{program}`"))?;
+    checked(out, program, args)
+}
+
+fn output(mut c: Command, program: &str, args: &[&str]) -> Result<String> {
     let out = c
         .output()
         .with_context(|| format!("failed to spawn `{program}`"))?;
+    checked(out, program, args)
+}
+
+fn checked(out: std::process::Output, program: &str, args: &[&str]) -> Result<String> {
     if !out.status.success() {
         return Err(CommandFailed {
             program: program.to_string(),

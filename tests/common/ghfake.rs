@@ -495,7 +495,10 @@ github = "sweeper[bot]"
             .success()
     }
 
-    fn issue_cmd(&self, args: &[&str]) -> Command {
+    /// The command [`Fake::issue`] runs, for a test that runs it through
+    /// another program, such as `unshare`.
+    #[allow(dead_code)]
+    pub fn issue_cmd(&self, args: &[&str]) -> Command {
         let mut cmd = self.devkit_cmd();
         cmd.args(["issue", "-C"])
             .arg(self.project.path())
@@ -503,7 +506,10 @@ github = "sweeper[bot]"
         cmd
     }
 
-    fn devkit_cmd(&self) -> Command {
+    /// The `devkit` command every other runner starts from, against the
+    /// fake `gh`, for a test that runs it through another program.
+    #[allow(dead_code)]
+    pub fn devkit_cmd(&self) -> Command {
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         let path = std::env::join_paths(
             std::iter::once(self.bin.path().to_path_buf()).chain(std::env::split_paths(&inherited)),

@@ -1365,6 +1365,18 @@
           },
           "description": "One key per PR gate."
         },
+        "signed_waivers": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignatureFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The keys whose signature on a waiver record lets `pr waive-verify\n--signed` write the waiver without a terminal, for an agent caller\ntoo. Read only from `.config/devkit/config.toml` under the home that\nthe account database records, never through `$DEVKIT_CONFIG`, `$HOME`\nor a project's `devkit.toml`, so a caller cannot trust a key of its\nown."
+        },
         "test_files": {
           "default": [
             "**/tests/**",
@@ -1992,6 +2004,63 @@
         "powershell"
       ],
       "type": "string"
+    },
+    "SignatureFormat": {
+      "description": "How a waiver record is signed, and the keys that devkit trusts for it.\n\n```toml\n[pr.signed_waivers]\nformat = \"ssh\"\ntrusted_keys = \"~/.config/devkit/allowed_signers\"\n```",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "An ssh signature from `ssh-keygen -Y sign -n devkit-waiver`,\nchecked with `ssh-keygen -Y verify`.",
+          "properties": {
+            "format": {
+              "const": "ssh",
+              "type": "string"
+            },
+            "program": {
+              "description": "The `ssh-keygen` to run, as an absolute path. When unset, devkit\nruns the one in the system directories (`/usr/bin`, `/bin`, or\nWindows' `System32\\OpenSSH`), never one that `PATH` names.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trusted_keys": {
+              "description": "The `allowed_signers` file. Its principals must allow the\n`devkit-waiver` namespace. An absolute path, or `~/` for the account\nhome.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "format",
+            "trusted_keys"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An OpenPGP detached signature from `gpg --detach-sign`, checked with\n`gpgv`.",
+          "properties": {
+            "format": {
+              "const": "openpgp",
+              "type": "string"
+            },
+            "program": {
+              "description": "The `gpgv` to run, as an absolute path. When unset, devkit runs the\none in the system directories (`/usr/bin` or `/bin`), never one that\n`PATH` names.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trusted_keys": {
+              "description": "The keyring that `gpgv` reads, such as the output of `gpg --export`.\nAn absolute path, or `~/` for the account home.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "format",
+            "trusted_keys"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Step": {
       "description": "One step of a sequence task: run a sibling command task, or bring an app up.\n\n```toml\n[tasks.stack]\nsteps = [{ task = \"api-build\" }, { up = \"api\" }]\n```",
@@ -2844,6 +2913,7 @@
           "verify_task": null,
           "weakened_tests": "require"
         },
+        "signed_waivers": null,
         "test_files": [
           "**/tests/**",
           "**/test/**",

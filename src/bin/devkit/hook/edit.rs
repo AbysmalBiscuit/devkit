@@ -16,7 +16,6 @@ use devkit_common::{
 };
 use devkit_config::PolicyAction;
 use devkit_locks::Registry;
-use devkit_ports::ledger::Ledger;
 use pabal::Tool;
 
 use super::{
@@ -114,12 +113,7 @@ fn respond(
         armed.arm(harness);
     }
     let mut blocks = match &write {
-        Write::Targets { paths, .. } => {
-            // With no state directory there is no ledger to write into.
-            Ledger::live()
-                .map(|ledger| gate::ledger_blocks(&Claims::paths(paths.clone()), &ledger, cwd))
-                .unwrap_or_default()
-        }
+        Write::Targets { paths, .. } => gate::protected_blocks(&Claims::paths(paths.clone()), cwd),
         Write::Unusable(_) => Vec::new(),
     };
     if enabled {
