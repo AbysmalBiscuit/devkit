@@ -168,8 +168,11 @@ pub(crate) fn global_ca_file(table: &str) -> Option<PathBuf> {
 /// The string at `path` in the global config, whatever a project layer sets
 /// there.
 pub(crate) fn global_setting(path: &[&str]) -> Option<String> {
-    let body = std::fs::read_to_string(devkit_common::harness::global_config_path()?).ok()?;
-    let config: toml::Value = toml::from_str(&body).ok()?;
-    let value = path.iter().try_fold(&config, |value, key| value.get(key))?;
+    let config =
+        devkit_config::read_user_layer(&devkit_common::harness::global_config_path()?).ok()??;
+    let (first, rest) = path.split_first()?;
+    let value = rest
+        .iter()
+        .try_fold(config.get(*first)?, |value, key| value.get(key))?;
     value.as_str().map(str::to_string)
 }

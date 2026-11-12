@@ -1804,11 +1804,29 @@ impl PrConfig {
     /// it has none. The rest of the layer is not read, so a key this build
     /// does not know elsewhere in it does not stop the gates loading.
     pub fn from_layer(text: &str) -> Result<Self> {
-        let mut table: toml::Table = toml::from_str(text).context("parsing devkit.toml")?;
+        Self::from_table(toml::from_str(text).context("parsing devkit.toml")?)
+    }
+
+    /// The `[pr]` table of one parsed layer, as [`PrConfig::from_layer`]
+    /// reads it.
+    pub fn from_table(mut table: toml::Table) -> Result<Self> {
         match table.remove("pr") {
             None => Ok(Self::default()),
             Some(pr) => pr.try_into().context("parsing devkit.toml's [pr] table"),
         }
+    }
+}
+
+/// The parsed config layer at `path`, `None` when no file is there. For a
+/// setting that only one named file may set, read apart from the merged
+/// layers.
+pub fn read_user_layer(path: &Path) -> Result<Option<toml::Table>> {
+    match std::fs::read_to_string(path) {
+        Ok(body) => toml::from_str(&body)
+            .map(Some)
+            .with_context(|| format!("parsing config layer {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading config layer {}", path.display())),
     }
 }
 
@@ -4120,6 +4138,19 @@ mod tests {
     use devkit_git::child_env::child_env;
 
     use super::*;
+
+    #[test]
+    fn a_user_layer_is_absent_parsed_or_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert_eq!(read_user_layer(&path).unwrap(), None);
+        std::fs::write(&path, "[pr]\nbase = \"main\"\n").unwrap();
+        let layer = read_user_layer(&path).unwrap().unwrap();
+        assert_eq!(layer["pr"]["base"].as_str(), Some("main"));
+        std::fs::write(&path, "[pr\n").unwrap();
+        assert!(read_user_layer(&path).is_err());
+    }
+
     pub(crate) const SAMPLE: &str = r#"
 [defaults]
 worktree_root = "~/git/example"

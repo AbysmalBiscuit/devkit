@@ -86,12 +86,8 @@ pub(crate) fn trusted_signers(home: &Path) -> Result<SignatureFormat> {
             path.display()
         )
     };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(unset()),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-    };
-    PrConfig::from_layer(&text)
+    let layer = devkit_config::read_user_layer(&path)?.ok_or_else(unset)?;
+    PrConfig::from_table(layer)
         .with_context(|| format!("reading `[pr]` in {}", path.display()))?
         .signed_waivers
         .ok_or_else(unset)
