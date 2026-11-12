@@ -690,10 +690,12 @@ pub(crate) enum PrCmd {
         head: Option<String>,
         /// Write the waiver that this JSON record holds, with no terminal and
         /// for an agent caller too: `{repo, head, by, reason, at}`, where
-        /// `repo` is the primary checkout's path. It counts only when its
-        /// detached signature verifies against `[pr.signed_waivers]` in
-        /// `~/.config/devkit/config.toml`. Sign it with `ssh-keygen -Y sign
-        /// -n devkit-waiver` or `gpg --detach-sign`.
+        /// `repo` is the primary checkout's path and `head` a full commit id.
+        /// It counts only when its detached signature verifies against
+        /// `[pr.signed_waivers]` in `.config/devkit/config.toml` under the
+        /// account's home, which `$HOME` and `$DEVKIT_CONFIG` do not move.
+        /// Sign it with `ssh-keygen -Y sign -n devkit-waiver` or `gpg
+        /// --detach-sign`.
         #[arg(long, value_name = "FILE")]
         signed: Option<PathBuf>,
         /// The detached signature of the `--signed` record, instead of
@@ -1186,9 +1188,14 @@ fn run_pr(dir: Option<String>, config: Option<String>, cmd: PrCmd) -> Result<()>
         } => {
             let dir = start(&dir);
             match (signed, reason) {
-                (Some(record), _) => {
-                    pr::verify::waive_signed(Path::new(&dir), &record, signature.as_deref())
-                }
+                (Some(record), _) => pr::verify::waive_signed(
+                    Path::new(&dir),
+                    &record,
+                    signature.as_deref(),
+                    &devkit_common::sys::account_home()
+                        .context("the account database records no home directory")?,
+                    &devkit_ports::ledger::Ledger::live()?,
+                ),
                 (None, reason) => pr::verify::waive(
                     Path::new(&dir),
                     head.as_deref(),

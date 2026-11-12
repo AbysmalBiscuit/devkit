@@ -84,6 +84,39 @@ pub(super) fn localhost_accepts(port: u16, timeout: Duration) -> bool {
 
 #[allow(
     unsafe_code,
+    reason = "std reads the profile folder only from the environment, so only \
+              SHGetKnownFolderPath reads it from the account"
+)]
+pub(super) fn account_home() -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+
+    use windows_sys::Win32::{
+        System::Com::CoTaskMemFree,
+        UI::Shell::{FOLDERID_Profile, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
+    };
+
+    let mut raw: *mut u16 = std::ptr::null_mut();
+    // SAFETY: SHGetKnownFolderPath writes a NUL-terminated wide string that
+    // the caller frees with CoTaskMemFree, on failure too. The string is
+    // read up to its NUL before it is freed, and freed exactly once.
+    unsafe {
+        let status = SHGetKnownFolderPath(
+            &FOLDERID_Profile,
+            KF_FLAG_DEFAULT as u32,
+            std::ptr::null_mut(),
+            &mut raw,
+        );
+        let home = (status >= 0 && !raw.is_null()).then(|| {
+            let len = (0..).take_while(|&i| *raw.add(i) != 0).count();
+            std::ffi::OsString::from_wide(std::slice::from_raw_parts(raw, len))
+        });
+        CoTaskMemFree(raw.cast_const().cast());
+        home.map(std::path::PathBuf::from)
+    }
+}
+
+#[allow(
+    unsafe_code,
     reason = "std reads an exit status only from a Child it spawned, so only OpenProcess and \
               GetExitCodeProcess can query an arbitrary pid"
 )]

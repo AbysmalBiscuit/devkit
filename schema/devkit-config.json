@@ -1371,7 +1371,7 @@
             "format": "ssh",
             "trusted_keys": null
           },
-          "description": "The keys whose signature on a waiver record lets `pr waive-verify\n--signed` write the waiver without a terminal, for an agent caller\ntoo. Read from `~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`)\nalone and ignored in a project's `devkit.toml`, so a checkout cannot\ntrust a key of its own."
+          "description": "The keys whose signature on a waiver record lets `pr waive-verify\n--signed` write the waiver without a terminal, for an agent caller\ntoo. Read only from `.config/devkit/config.toml` under the home that\nthe account database records, never through `$DEVKIT_CONFIG`, `$HOME`\nor a project's `devkit.toml`, so a caller cannot trust a key of its\nown."
         },
         "test_files": {
           "default": [
@@ -2027,7 +2027,7 @@
         },
         "trusted_keys": {
           "default": null,
-          "description": "The trusted keys. For `ssh`, an `allowed_signers` file, whose\nprincipals must allow the `devkit-waiver` namespace. For `openpgp`,\na keyring that `gpgv` reads, such as the output of `gpg --export`.\nNo waiver verifies while it is unset. A leading `~/` is your home.",
+          "description": "The trusted keys. For `ssh`, an `allowed_signers` file, whose\nprincipals must allow the `devkit-waiver` namespace. For `openpgp`,\na keyring that `gpgv` reads, such as the output of `gpg --export`.\nNo waiver verifies while it is unset. A leading `~/` is that account\nhome.",
           "type": [
             "string",
             "null"

@@ -1778,9 +1778,10 @@ pub struct PrConfig {
     pub gates: PrGates,
     /// The keys whose signature on a waiver record lets `pr waive-verify
     /// --signed` write the waiver without a terminal, for an agent caller
-    /// too. Read from `~/.config/devkit/config.toml` (or `$DEVKIT_CONFIG`)
-    /// alone and ignored in a project's `devkit.toml`, so a checkout cannot
-    /// trust a key of its own.
+    /// too. Read only from `.config/devkit/config.toml` under the home that
+    /// the account database records, never through `$DEVKIT_CONFIG`, `$HOME`
+    /// or a project's `devkit.toml`, so a caller cannot trust a key of its
+    /// own.
     pub signed_waivers: SignedWaivers,
 }
 
@@ -1818,7 +1819,8 @@ pub struct SignedWaivers {
     /// The trusted keys. For `ssh`, an `allowed_signers` file, whose
     /// principals must allow the `devkit-waiver` namespace. For `openpgp`,
     /// a keyring that `gpgv` reads, such as the output of `gpg --export`.
-    /// No waiver verifies while it is unset. A leading `~/` is your home.
+    /// No waiver verifies while it is unset. A leading `~/` is that account
+    /// home.
     pub trusted_keys: Option<String>,
 }
 
