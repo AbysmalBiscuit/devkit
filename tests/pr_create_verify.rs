@@ -2160,6 +2160,54 @@ mod account_home {
         assert!(!opened(&p), "{}", p.calls());
     }
 
+    /// The configured `program` is a probe that fails when a variable of
+    /// the caller reaches it, then runs the real `ssh-keygen`.
+    #[test]
+    fn the_verifier_runs_without_the_callers_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let p = project(BROKEN_GATE);
+        task(&p, &["broken"]);
+        let home = trusting_home();
+        let real = Command::new("sh")
+            .args(["-c", "command -v ssh-keygen"])
+            .output()
+            .unwrap()
+            .stdout;
+        let probe = home.path().join("probe-ssh-keygen");
+        std::fs::write(
+            &probe,
+            format!(
+                "#!/bin/sh\nif [ -n \"${{GNUPGHOME+set}}\" ]; then\n  \
+                 echo 'GNUPGHOME reached the verifier' >&2\n  exit 2\nfi\nexec {} \"$@\"\n",
+                String::from_utf8_lossy(&real).trim()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            home.path().join(".config/devkit/config.toml"),
+            "[pr.signed_waivers]\nformat = \"ssh\"\ntrusted_keys = \"~/allowed_signers\"\n\
+             program = \"/root/probe-ssh-keygen\"\n"
+                .replace("/root", root_home().to_str().unwrap()),
+        )
+        .unwrap();
+        let record = signed_record(&p, home.path(), "owner");
+
+        let out = waive(&p, home.path(), &record, &[(
+            "GNUPGHOME",
+            "/nonexistent-gnupg",
+        )]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(
+            !stderr(&out).contains("reached the verifier"),
+            "{}",
+            stderr(&out)
+        );
+        let (ok, err) = create(&p, "agent");
+        assert!(ok, "the waived head opens: {err}");
+    }
+
     #[test]
     fn gnupghome_cannot_add_a_trusted_openpgp_key() {
         let p = project(BROKEN_GATE);
@@ -2246,6 +2294,11 @@ mod account_home {
             mine.to_str().unwrap(),
         )]);
         assert!(!out.status.success(), "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains("does not verify against the trusted keys"),
+            "refused by the signature check: {}",
+            stderr(&out)
+        );
         let (ok, err) = create(&p, "agent");
         assert!(!ok, "no waiver was written: {err}");
         assert!(!opened(&p), "{}", p.calls());
