@@ -14,11 +14,13 @@ use devkit_common::{
     caller::Caller,
     vcs::{Checkout, Vcs, VersionControl, Worktree},
 };
-use devkit_config::{Gate as GateKey, GateMode, PrGates, RequiredTask, SignatureFormat};
+use devkit_config::{Gate as GateKey, GateMode, PrConfig, PrGates, RequiredTask};
 use devkit_ports::{
     ledger::{self, Ledger, Run, Step, Waiver},
     task,
 };
+
+use super::signature::{SignatureVerifier, Verifier};
 
 /// The verify gate for one `pr create`: the required run and the run that
 /// satisfies it, if the ledger has one.
@@ -177,12 +179,17 @@ impl Gate {
     fn waived(&self, waiver: &Waiver) -> String {
         format!(
             "### Verification\n\n\
-             WAIVED: {by} accepted `{head}` at {at} with no run of `{command}` that exited 0 \
-             on a clean tree there.\n\n\
+             WAIVED: {by} accepted `{head}` at {at}{attested} with no run of `{command}` that \
+             exited 0 on a clean tree there.\n\n\
              Reason: {reason}\n{failed}{change}",
             by = waiver.by,
             head = self.head,
             at = waiver.at,
+            attested = waiver
+                .signer
+                .as_deref()
+                .map(|signer| format!(", attested by {signer},"))
+                .unwrap_or_default(),
             command = self.required.command(),
             reason = waiver.reason,
             failed = self.failed_note(),
@@ -334,6 +341,7 @@ pub(crate) fn waive(dir: &Path, head: Option<&str>, reason: &str) -> Result<()> 
         by: format!("{name} <{email}>"),
         reason: reason.to_string(),
         at: devkit_common::harness_log::now_rfc3339(),
+        signer: None,
     };
     let path = Ledger::live()?.waive(&waiver)?;
     eprintln!(
@@ -357,12 +365,29 @@ pub(crate) fn waive_signed(dir: &Path, record: &Path, signature: Option<&Path>) 
         },
         Path::to_path_buf,
     );
-    let (format, trusted) = trusted_signers()?;
-    super::signature::verify(format, &trusted, record, &signature)?;
-    let text =
-        std::fs::read_to_string(record).with_context(|| format!("reading {}", record.display()))?;
-    let mut waiver: Waiver = serde_json::from_str(&text)
+    let verifier = trusted_signers()?;
+    let bytes = std::fs::read(record).with_context(|| format!("reading {}", record.display()))?;
+    let signer = verifier.verify(&bytes, &signature).with_context(|| {
+        format!(
+            "the signature `{}` on `{}` does not verify against the trusted keys",
+            signature.display(),
+            record.display()
+        )
+    })?;
+    let mut waiver: Waiver = serde_json::from_slice(&bytes)
         .with_context(|| format!("{} is no waiver record", record.display()))?;
+    let is_full_id = matches!(waiver.head.len(), 40 | 64)
+        && waiver
+            .head
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if !is_full_id || full_head(&Vcs::at(dir), dir, Some(&waiver.head))? != waiver.head {
+        bail!(
+            "the signed record names `{}`: a waiver covers one commit, so its head is a full \
+             commit id",
+            waiver.head
+        );
+    }
     let checkout = Checkout::at(dir);
     let repo = ledger::repo_key(&checkout, &checkout.worktree()?.path);
     if !devkit_common::paths::same_path(&waiver.repo, &repo) {
@@ -376,7 +401,7 @@ pub(crate) fn waive_signed(dir: &Path, record: &Path, signature: Option<&Path>) 
         bail!("the signed record gives no reason");
     }
     waiver.repo = repo;
-    waiver.head = full_head(&Vcs::at(dir), dir, Some(&waiver.head))?;
+    waiver.signer = Some(signer);
     let path = Ledger::live()?.waive(&waiver)?;
     eprintln!(
         "Waived the verify gate at `{}` for {}: {}",
@@ -387,23 +412,30 @@ pub(crate) fn waive_signed(dir: &Path, record: &Path, signature: Option<&Path>) 
     Ok(())
 }
 
-/// `[pr.signed_waivers]` as the user-level config sets it. A project
-/// layer's is ignored, so a checkout cannot trust a key of its own.
-fn trusted_signers() -> Result<(SignatureFormat, PathBuf)> {
-    let global = |key| crate::secret::global_setting(&["pr", "signed_waivers", key]);
-    let Some(trusted) = global("trusted_keys") else {
-        bail!(
+/// The verifier `[pr.signed_waivers]` configures in the user-level config.
+/// A project layer's table is ignored, so a checkout cannot trust a key of
+/// its own.
+fn trusted_signers() -> Result<Verifier> {
+    let unset = || {
+        anyhow::anyhow!(
             "no trusted waiver signers: set `[pr.signed_waivers] trusted_keys` in \
              `~/.config/devkit/config.toml`"
-        );
+        )
     };
-    let format = match global("format") {
-        None => SignatureFormat::default(),
-        Some(name) => toml::Value::String(name.clone())
-            .try_into()
-            .with_context(|| format!("`[pr.signed_waivers] format` names no format: `{name}`"))?,
+    let path = devkit_common::harness::global_config_path().ok_or_else(unset)?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(unset()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
-    Ok((format, devkit_config::expand_tilde(&trusted)))
+    let signers = PrConfig::from_layer(&text)
+        .with_context(|| format!("reading `[pr]` in {}", path.display()))?
+        .signed_waivers;
+    let trusted = signers.trusted_keys.ok_or_else(unset)?;
+    Ok(Verifier::new(
+        signers.format,
+        devkit_config::expand_tilde(&trusted),
+    ))
 }
 
 /// Why `run`, which passed at the PR's head with the required args, does

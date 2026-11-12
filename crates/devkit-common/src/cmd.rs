@@ -64,18 +64,38 @@ pub fn capture_env(
 
 /// Run a command with `stdin` as its standard input, capture stdout; the
 /// error is a [`CommandFailed`] carrying stderr on non-zero exit. For a tool
-/// that reads its input only from stdin, such as `ssh-keygen -Y verify`.
-pub fn capture_stdin(program: &str, args: &[&str], stdin: std::fs::File) -> Result<String> {
+/// that reads its input only from stdin, such as `ssh-keygen -Y verify`, or
+/// input that must not be read twice from a file another process can change.
+pub fn capture_stdin(program: &str, args: &[&str], stdin: &[u8]) -> Result<String> {
+    use std::io::Write;
+
     let _span = devkit_timing::subprocess_span(program, args).entered();
-    let mut c = Command::new(program);
-    c.args(args).stdin(stdin);
-    output(c, program, args)
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn `{program}`"))?;
+    let mut pipe = child.stdin.take().context("child stdin")?;
+    let out = thread::scope(|scope| {
+        // A child that exits before reading all of stdin closes the pipe;
+        // its exit status, not the write error, says what went wrong.
+        scope.spawn(move || pipe.write_all(stdin));
+        child.wait_with_output()
+    })
+    .with_context(|| format!("waiting for `{program}`"))?;
+    checked(out, program, args)
 }
 
 fn output(mut c: Command, program: &str, args: &[&str]) -> Result<String> {
     let out = c
         .output()
         .with_context(|| format!("failed to spawn `{program}`"))?;
+    checked(out, program, args)
+}
+
+fn checked(out: std::process::Output, program: &str, args: &[&str]) -> Result<String> {
     if !out.status.success() {
         return Err(CommandFailed {
             program: program.to_string(),

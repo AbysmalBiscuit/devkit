@@ -1798,9 +1798,19 @@ fn waiver_record(
     dir: &std::path::Path,
     repo: &std::path::Path,
 ) -> std::path::PathBuf {
+    waiver_record_at(dir, repo, &head(p))
+}
+
+/// A waiver record for the commit `rev` names, written to `dir/waiver.json`.
+#[cfg(unix)]
+fn waiver_record_at(
+    dir: &std::path::Path,
+    repo: &std::path::Path,
+    rev: &str,
+) -> std::path::PathBuf {
     let record = serde_json::json!({
         "repo": repo,
-        "head": head(p),
+        "head": rev,
         "by": "Owen Owner <owen@example.com>",
         "reason": "accepted on the PR by its owner",
         "at": "2026-11-12T10:00:00Z",
@@ -1821,7 +1831,7 @@ fn ssh_signer(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
     let allowed = dir.join("allowed_signers");
     std::fs::write(
         &allowed,
-        format!("owen@example.com namespaces=\"devkit-waiver\" {public}"),
+        format!("release-bot@example.com namespaces=\"devkit-waiver\" {public}"),
     )
     .unwrap();
     allowed
@@ -1830,6 +1840,7 @@ fn ssh_signer(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
 /// Sign `record` with the ssh key `dir/<key>`, writing `<record>.sig`.
 #[cfg(unix)]
 fn ssh_sign(dir: &std::path::Path, key: &str, record: &std::path::Path) {
+    let _ = std::fs::remove_file(format!("{}.sig", record.display()));
     run_in(dir, "ssh-keygen", &[
         "-q",
         "-Y",
@@ -1880,8 +1891,12 @@ fn an_agent_with_a_record_signed_by_a_trusted_ssh_key_waives_the_head() {
     let body = body(&p);
     assert!(body.contains("WAIVED: "), "{body}");
     assert!(
-        body.contains("Owen Owner <owen@example.com>"),
-        "names the signer: {body}"
+        body.contains("Owen Owner <owen@example.com> accepted"),
+        "names the person who accepted: {body}"
+    );
+    assert!(
+        body.contains("attested by release-bot@example.com"),
+        "names the verified signer: {body}"
     );
     assert!(
         body.contains("accepted on the PR by its owner"),
@@ -1907,7 +1922,7 @@ fn an_agent_with_a_record_signed_by_a_trusted_openpgp_key_waives_the_head() {
         "--passphrase",
         "",
         "--quick-gen-key",
-        "Owen Owner <owen@example.com>",
+        "Release Bot <release-bot@example.com>",
         "ed25519",
         "sign",
         "never",
@@ -1917,7 +1932,7 @@ fn an_agent_with_a_record_signed_by_a_trusted_openpgp_key_waives_the_head() {
         "--output",
         keyring.to_str().unwrap(),
         "--export",
-        "owen@example.com",
+        "release-bot@example.com",
     ]);
     trust_signers(&p, "openpgp", &keyring);
     let record = waiver_record(
@@ -1931,10 +1946,14 @@ fn an_agent_with_a_record_signed_by_a_trusted_openpgp_key_waives_the_head() {
     assert!(ok, "{stderr}");
     let (ok, stderr) = create(&p, "agent");
     assert!(ok, "the waived head opens: {stderr}");
+    let body = body(&p);
     assert!(
-        body(&p).contains("Owen Owner <owen@example.com>"),
-        "{}",
-        body(&p)
+        body.contains("Owen Owner <owen@example.com> accepted"),
+        "{body}"
+    );
+    assert!(
+        body.contains("attested by Release Bot <release-bot@example.com> ("),
+        "names the verified signer and its fingerprint: {body}"
     );
 }
 
@@ -1992,4 +2011,90 @@ fn an_agent_without_a_trusted_signature_cannot_waive_the_verify_gate() {
     let (ok, stderr) = create(&p, "agent");
     assert!(!ok, "no waiver was written: {stderr}");
     assert!(!opened(&p), "{}", p.calls());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_signed_record_must_name_a_full_commit_id() {
+    let p = project(BROKEN_GATE);
+    task(&p, &["broken"]);
+    let keys = tempfile::tempdir().unwrap();
+    trust_signers(&p, "ssh", &ssh_signer(keys.path(), "owner"));
+    let repo = std::fs::canonicalize(p.project()).unwrap();
+    let short = head(&p)[..12].to_string();
+    for rev in ["HEAD", "main", short.as_str()] {
+        let record = waiver_record_at(keys.path(), &repo, rev);
+        ssh_sign(keys.path(), "owner", &record);
+        let (ok, stderr) = waive_signed(&p, &record);
+        assert!(!ok, "`{rev}` could name a later commit: {stderr}");
+        assert!(stderr.contains("full commit id"), "says why: {stderr}");
+    }
+    let (ok, stderr) = create(&p, "agent");
+    assert!(!ok, "no waiver was written: {stderr}");
+}
+
+/// A wrapper around `ssh-keygen` swaps `record` for `forged` once
+/// `-Y verify` has read it, so a second read of the record sees the forgery.
+#[cfg(unix)]
+#[test]
+fn the_waiver_holds_the_record_bytes_that_the_signature_verified() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let p = project(BROKEN_GATE);
+    task(&p, &["broken"]);
+    let keys = tempfile::tempdir().unwrap();
+    trust_signers(&p, "ssh", &ssh_signer(keys.path(), "owner"));
+    let record = waiver_record(
+        &p,
+        keys.path(),
+        &std::fs::canonicalize(p.project()).unwrap(),
+    );
+    ssh_sign(keys.path(), "owner", &record);
+    let forged = keys.path().join("forged.json");
+    std::fs::write(
+        &forged,
+        std::fs::read_to_string(&record)
+            .unwrap()
+            .replace("accepted on the PR by its owner", "forged after the check"),
+    )
+    .unwrap();
+
+    let real = std::process::Command::new("sh")
+        .args(["-c", "command -v ssh-keygen"])
+        .output()
+        .unwrap()
+        .stdout;
+    let swap = tempfile::tempdir().unwrap();
+    let wrapper = swap.path().join("ssh-keygen");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\n{real} \"$@\"\nstatus=$?\ncase \"$*\" in *\"-Y verify\"*) cp '{forged}' '{record}' ;; esac\nexit $status\n",
+            real = String::from_utf8_lossy(&real).trim(),
+            forged = forged.display(),
+            record = record.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(swap.path().to_path_buf())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let out = p.issue_with_env(
+        &["pr", "waive-verify", "--signed", record.to_str().unwrap()],
+        &[("DEVKIT_CALLER", "agent"), ("PATH", path.to_str().unwrap())],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let (ok, stderr) = create(&p, "agent");
+    assert!(ok, "{stderr}");
+    let body = body(&p);
+    assert!(body.contains("accepted on the PR by its owner"), "{body}");
+    assert!(!body.contains("forged after the check"), "{body}");
 }
