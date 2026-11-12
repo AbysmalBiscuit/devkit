@@ -61,6 +61,14 @@ pub fn account_home() -> Option<PathBuf> {
     imp::account_home()
 }
 
+/// The Windows directory, such as `C:\Windows`, as the system records it.
+/// The caller cannot redirect it through `%SystemRoot%` or `%windir%`.
+/// `None` when the lookup fails.
+#[cfg(windows)]
+pub fn windows_dir() -> Option<PathBuf> {
+    imp::windows_dir()
+}
+
 /// True if a process with `pid` currently exists.
 pub fn process_alive(pid: u32) -> bool {
     imp::process_alive(pid)

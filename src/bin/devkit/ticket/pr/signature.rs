@@ -10,10 +10,15 @@ use devkit_config::{PrConfig, SignatureFormat, SignatureTools, SignatureVerifier
 
 /// The directories a verifier program comes from when the config names none.
 /// `PATH` is the caller's, so it never picks the program.
-#[cfg(unix)]
-const SYSTEM_DIRS: &[&str] = &["/usr/bin", "/bin"];
-#[cfg(windows)]
-const SYSTEM_DIRS: &[&str] = &[r"C:\Windows\System32\OpenSSH"];
+fn system_dirs() -> Vec<PathBuf> {
+    #[cfg(unix)]
+    return ["/usr/bin", "/bin"].map(PathBuf::from).to_vec();
+    #[cfg(windows)]
+    return devkit_common::sys::windows_dir()
+        .map(|dir| dir.join("System32").join("OpenSSH"))
+        .into_iter()
+        .collect();
+}
 
 /// [`SignatureTools`] for the account whose home is `home`.
 pub(crate) struct AccountTools {
@@ -40,15 +45,16 @@ impl SignatureTools for AccountTools {
             return Ok(PathBuf::from(configured));
         }
         let name = format!("{tool}{}", std::env::consts::EXE_SUFFIX);
-        SYSTEM_DIRS
-            .iter()
-            .map(|dir| Path::new(dir).join(&name))
+        let dirs = system_dirs();
+        dirs.iter()
+            .map(|dir| dir.join(&name))
             .find(|path| path.is_file())
             .ok_or_else(|| {
+                let dirs: Vec<_> = dirs.iter().map(|dir| dir.display().to_string()).collect();
                 anyhow!(
                     "no `{name}` in {}: set `program` in `[pr.signed_waivers]` to its absolute \
                      path",
-                    SYSTEM_DIRS.join(", ")
+                    dirs.join(", ")
                 )
             })
     }

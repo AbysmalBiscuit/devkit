@@ -77,7 +77,9 @@ pub fn capture_isolated(path: &std::path::Path, args: &[&str], stdin: &[u8]) -> 
     let mut command = Command::new(path);
     command.env_clear();
     #[cfg(windows)]
-    command.env("SystemRoot", r"C:\Windows");
+    if let Some(root) = crate::sys::windows_dir() {
+        command.env("SystemRoot", root);
+    }
     let mut child = command
         .args(args)
         .stdin(Stdio::piped())
